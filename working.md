@@ -53,3 +53,11 @@ The active root-cause remediation is an uncommitted, unpushed worktree based on 
 2. With the owner present, unlock the headed macOS session and run `apps/apple/Scripts/macos-ui-test.sh`.
 3. After review, commit as `thekozugroup <thekozugroup@gmail.com>` without co-author tags and push through the preserved owner direct-main bypass.
 4. Supply signing/notary secrets to the guarded workflows, promote immutable artifacts, then perform the documented physical Unraid and Tailnet drills.
+
+## Release-prep iteration 2 (2026-08-16)
+
+- `./scripts/check-artifact-budgets.sh --image-only covalent:ci` passed. Image size was 33,632,384 bytes; the explicit image-only mode intentionally did not require host release binaries.
+- `mobilecli device info --device Covalent_API_37` and `adb -s emulator-5570` confirmed the only operated Android device was headed `Covalent_API_37` / API 37. No Bloop device was targeted.
+- The API 37 gate now serializes the AVD, rejects active instrumentation, enables the exact test package, and invokes instrumentation directly with the packaged TLS inputs. The fresh headed run completed 15 tests in 674.742 seconds: 14 passed and `largeTextToolbarUsesStableIconFirstAccessibleActions` failed because its full-app fixture had no Compose hierarchy. The test now isolates the compact toolbar under large text, and the harness fails closed on any nonzero `INSTRUMENTATION_CODE`. The one-test rerun exited and released its lock, but its terminal result was not retained by the local wrapper; it is not recorded as passed. Hosted/full device validation remains required.
+- The arm64 macOS UI harness built and re-sealed successfully, but its fresh `xcresult` creation aborted before any verdict. The harness now fails closed unless its result bundle parses and proves all three named UI tests passed with no failures or skips. The last complete unfiltered audit remains red for the host-offscreen status item and one unlabeled `NavigationSplitView` wrapper.
+- Local CI checks passed: actionlint, OpenAPI route coverage (30 operations), Redocly lint, Git diff check, and the image-only budget. Hosted CI and CodeQL for the published commit remain pending.

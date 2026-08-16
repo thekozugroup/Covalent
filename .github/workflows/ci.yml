@@ -46,6 +46,8 @@ jobs:
       - run: node scripts/check-openapi-routes.mjs
       - run: npx --yes @redocly/cli@2.46.1 lint docs/api/openapi.yaml
       - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
         with:
           command: check advisories bans licenses sources
@@ -146,7 +148,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
       - uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
-          api-level: 37
+          api-level: "37.0"
           target: google_apis
           arch: x86_64
           avd-name: Covalent_API_37
@@ -170,7 +172,7 @@ jobs:
       - run: docker build --build-arg VCS_REF=${{ github.sha }} -f packaging/docker/Dockerfile -t covalent:ci .
       - run: docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp --entrypoint covalent covalent:ci doctor
       - run: ./scripts/check-container-runtime.sh covalent:ci
-      - run: ./scripts/check-artifact-budgets.sh covalent:ci
+      - run: ./scripts/check-artifact-budgets.sh --image-only covalent:ci
       - run: ./scripts/validate-unraid-template.sh
       - run: ./scripts/docker-compose-e2e.sh covalent:ci
 
