@@ -18,10 +18,15 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.Future
 import java.util.concurrent.FutureTask
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import life.michaelwong.covalent.data.SecureNodeStore
+import life.michaelwong.covalent.model.TransferState
+import life.michaelwong.covalent.R
 
 internal enum class TransferExecutionModel {
     LEGACY_WORK_MANAGER,
@@ -50,12 +55,20 @@ internal object TransferScheduler {
      * whose encrypted pending records still exist; normal process death needs no intervention.
      */
     fun requeuePending(context: Context, store: SecureNodeStore) {
-        store.pendingJobIds().forEach { jobId ->
+        store.runnablePendingJobIds().forEach { jobId ->
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 WorkManager.getInstance(context).cancelUniqueWork(workName(jobId))
             }
             enqueue(context, jobId)
         }
+    }
+
+    fun cancelScheduled(context: Context, jobId: String) {
+        WorkManager.getInstance(context).cancelUniqueWork(workName(jobId))
+        val scheduler = context.getSystemService(JobScheduler::class.java)
+        scheduler.allPendingJobs
+            .filter { it.extras.getString(TransferWorker.KEY_JOB_ID) == jobId }
+            .forEach { scheduler.cancel(it.id) }
     }
 
     @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
@@ -120,7 +133,14 @@ internal object TransferScheduler {
  * lifecycle and notification, so background execution never starts a forbidden foreground service.
  */
 class TransferJobService : JobService() {
-    private val executor = Executors.newCachedThreadPool()
+    private val executor = ThreadPoolExecutor(
+        1,
+        MAX_CONCURRENT_TRANSFERS,
+        30,
+        TimeUnit.SECONDS,
+        ArrayBlockingQueue(MAX_QUEUED_TRANSFERS),
+        ThreadPoolExecutor.AbortPolicy(),
+    ).apply { allowCoreThreadTimeOut(true) }
     private val running = ConcurrentHashMap<JobParameters, Future<*>>()
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -142,14 +162,42 @@ class TransferJobService : JobService() {
             }
         }
         running[params] = task
-        executor.execute(task)
+        try {
+            executor.execute(task)
+        } catch (_: RejectedExecutionException) {
+            running.remove(params)
+            SecureNodeStore(applicationContext).updateTransfer(jobId) {
+                it.copy(
+                    state = TransferState.QUEUED,
+                    detail = getString(R.string.transfer_waiting_capacity_detail),
+                    retryable = true,
+                )
+            }
+            mainHandler.post { jobFinished(params, true) }
+        }
         return true
     }
 
     override fun onStopJob(params: JobParameters): Boolean {
         running.remove(params)?.cancel(true)
         val jobId = params.extras.getString(TransferWorker.KEY_JOB_ID) ?: return false
-        return SecureNodeStore(applicationContext).pending(jobId) != null
+        val store = SecureNodeStore(applicationContext)
+        val record = store.transfer(jobId)
+        if (record?.state == TransferState.RUNNING) {
+            store.updateTransfer(jobId) {
+                it.copy(
+                    state = TransferState.QUEUED,
+                    detail = getString(R.string.transfer_system_paused_detail),
+                    retryable = true,
+                )
+            }
+        }
+        return store.pending(jobId) != null && record?.state !in setOf(
+            TransferState.PAUSED,
+            TransferState.CANCELLED,
+            TransferState.FAILED,
+            TransferState.COMPLETED,
+        )
     }
 
     override fun onNetworkChanged(params: JobParameters) {
@@ -166,5 +214,7 @@ class TransferJobService : JobService() {
 
     private companion object {
         const val NOTIFICATION_ID_MASK = 0x0fff
+        const val MAX_CONCURRENT_TRANSFERS = 2
+        const val MAX_QUEUED_TRANSFERS = 16
     }
 }

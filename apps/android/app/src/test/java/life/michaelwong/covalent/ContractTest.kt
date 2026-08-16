@@ -32,8 +32,8 @@ class ContractTest {
 
     @Test
     fun primaryToolbarHasOnlyLockedScopeActions() {
-        assertEquals(listOf("Pair", "Backup", "Restore"), PrimaryAction.entries.map { it.label })
-        assertFalse(PrimaryAction.entries.any { it.label.contains("Sync") })
+        assertEquals(listOf("PAIR", "BACKUP", "RESTORE"), PrimaryAction.entries.map { it.name })
+        assertFalse(PrimaryAction.entries.any { it.name.contains("SYNC") })
     }
 
     @Test

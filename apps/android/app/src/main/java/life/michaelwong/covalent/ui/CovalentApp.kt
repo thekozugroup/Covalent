@@ -1,13 +1,20 @@
 package life.michaelwong.covalent.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.text.format.DateUtils
+import android.text.format.Formatter
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -20,34 +27,49 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AddLink
 import androidx.compose.material.icons.rounded.Backup
+import androidx.compose.material.icons.rounded.Cancel
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.CloudOff
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Storage
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -59,33 +81,66 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
-import kotlinx.coroutines.Dispatchers
+import androidx.lifecycle.viewmodel.compose.viewModel
+import java.net.URI
+import java.net.InetAddress
+import java.net.URLDecoder
+import java.nio.charset.StandardCharsets
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import life.michaelwong.covalent.R
 import life.michaelwong.covalent.data.CovalentNodeClient
+import life.michaelwong.covalent.data.EnrolledTrust
 import life.michaelwong.covalent.data.NodeApiException
 import life.michaelwong.covalent.data.SecureNodeStore
+import life.michaelwong.covalent.data.encodeEnrolledCertificate
 import life.michaelwong.covalent.data.newId
+import life.michaelwong.covalent.data.normalizeSha256Pin
+import life.michaelwong.covalent.data.restoreTransferPayload
 import life.michaelwong.covalent.model.DiscoveryCandidate
 import life.michaelwong.covalent.model.NodeStatus
 import life.michaelwong.covalent.model.PrimaryAction
 import life.michaelwong.covalent.model.Provider
+import life.michaelwong.covalent.model.ProviderReachability
 import life.michaelwong.covalent.model.RememberedBackup
+import life.michaelwong.covalent.model.RestorePlanPage
+import life.michaelwong.covalent.model.TransferKind
+import life.michaelwong.covalent.model.TransferRecord
+import life.michaelwong.covalent.model.TransferState
 import life.michaelwong.covalent.ui.theme.CovalentTheme
 import life.michaelwong.covalent.work.TransferScheduler
+import life.michaelwong.covalent.work.TransferExecution
 import life.michaelwong.covalent.work.TransferWorker
 import org.json.JSONArray
 import org.json.JSONObject
@@ -100,8 +155,6 @@ internal fun Screen.systemBackTarget(): Screen? = when (this) {
 internal val pairingInvitationKeyboardOptions = KeyboardOptions(
     capitalization = KeyboardCapitalization.None,
     autoCorrectEnabled = false,
-    // Password keyboards disable IME suggestions and composition entirely. The field remains
-    // visibly plain text because keyboard type and visual transformation are independent.
     keyboardType = KeyboardType.Password,
     imeAction = ImeAction.Done,
 )
@@ -117,12 +170,15 @@ internal fun validateAndPersistSetup(
     displayName: String,
     address: String,
     token: String,
+    enrolledTrust: EnrolledTrust? = null,
 ): ValidatedSetup {
-    val status = node.status(address)
-    val backups = node.backups(address, token)
+    val normalizedAddress = normalizeEndpointInput(address)
+    val status = node.status(normalizedAddress)
+    val backups = node.backups(normalizedAddress, token)
     store.displayName = displayName
-    store.baseUrl = address
+    store.baseUrl = normalizedAddress
     store.token = token
+    store.saveEnrolledTrust(enrolledTrust)
     store.replaceBackups(backups)
     return ValidatedSetup(status, backups)
 }
@@ -132,102 +188,323 @@ internal fun shouldReturnToSetupAfterRefreshFailure(error: Throwable): Boolean =
 
 internal fun startupRefreshDispatcher(): CoroutineDispatcher = Dispatchers.IO
 
-private const val LOCAL_NETWORK_PERMISSION = "android.permission.ACCESS_LOCAL_NETWORK"
+internal enum class AddressIssue { NONE, MISSING, MALFORMED, INSECURE_REMOTE }
 
-private class AppState(private val store: SecureNodeStore) {
-    var screen by mutableStateOf(if (store.baseUrl.isBlank()) Screen.SETUP else Screen.HOME)
-    var status by mutableStateOf<NodeStatus?>(null)
-    var message by mutableStateOf<String?>(null)
-    var busy by mutableStateOf(false)
-    var providers by mutableStateOf(emptyList<Provider>())
-    var discovered by mutableStateOf(emptyList<DiscoveryCandidate>())
-    var backups by mutableStateOf(store.rememberedBackups())
-    var selectedSource by mutableStateOf<Uri?>(null)
-    var selectedTarget by mutableStateOf<Uri?>(null)
-    var restorePlan by mutableStateOf<JSONObject?>(null)
-    var pairingSession by mutableStateOf<JSONObject?>(null)
-    fun refreshBackups() { backups = store.rememberedBackups() }
+internal fun validateNodeAddress(raw: String): AddressIssue {
+    val value = normalizeEndpointInput(raw)
+    if (value.isBlank()) return AddressIssue.MISSING
+    val uri = runCatching { URI(value) }.getOrNull() ?: return AddressIssue.MALFORMED
+    val scheme = uri.scheme?.lowercase()
+    val host = uri.host?.lowercase()
+    if (
+        scheme !in setOf("http", "https") || host.isNullOrBlank() || uri.userInfo != null ||
+        (uri.rawPath?.takeIf(String::isNotEmpty) ?: "/") != "/" || uri.rawQuery != null ||
+        uri.rawFragment != null || (uri.port != -1 && uri.port !in 1..65_535)
+    ) {
+        return AddressIssue.MALFORMED
+    }
+    if (scheme == "http" && !isLoopbackHost(host)) return AddressIssue.INSECURE_REMOTE
+    return AddressIssue.NONE
 }
+
+internal fun normalizeEndpointInput(raw: String): String {
+    val trimmed = raw.trim().removeSuffix("/")
+    if (!trimmed.startsWith("covalent://connect?")) return trimmed
+    return trimmed.substringAfter('?').split('&')
+        .mapNotNull { item ->
+            val parts = item.split('=', limit = 2)
+            if (parts.size == 2 && parts[0] == "endpoint") {
+                URLDecoder.decode(parts[1], StandardCharsets.UTF_8.name())
+            } else null
+        }
+        .firstOrNull()
+        .orEmpty()
+        .trim()
+        .removeSuffix("/")
+}
+
+internal fun requiresLocalNetworkPermission(raw: String, sdkInt: Int): Boolean {
+    if (sdkInt < 37) return false
+    val host = runCatching { URI(normalizeEndpointInput(raw)).host?.lowercase() }.getOrNull() ?: return false
+    if (isLoopbackHost(host)) return false
+    return host.endsWith(".local") || '.' !in host || isPrivateIpv4(host) ||
+        host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80:")
+}
+
+private fun isPrivateIpv4(host: String): Boolean {
+    val octets = host.split('.').mapNotNull(String::toIntOrNull)
+    if (octets.size != 4 || octets.any { it !in 0..255 }) return false
+    return octets[0] == 10 ||
+        octets[0] == 127 ||
+        octets[0] == 169 && octets[1] == 254 ||
+        octets[0] == 192 && octets[1] == 168 ||
+        octets[0] == 172 && octets[1] in 16..31 ||
+        octets[0] == 100 && octets[1] in 64..127
+}
+
+private fun isLoopbackHost(host: String): Boolean =
+    host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
+
+private const val LOCAL_NETWORK_PERMISSION = "android.permission.ACCESS_LOCAL_NETWORK"
+private const val STATUS_POLL_MILLIS = 4_000L
+private const val TRANSFER_POLL_MILLIS = 750L
+private val ALL_PAIRING_ROLES = listOf("storage_provider", "backup_reader", "backup_writer")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CovalentApp(storeOverride: SecureNodeStore? = null) {
+internal fun CovalentApp(
+    storeOverride: SecureNodeStore? = null,
+    stateOverride: CovalentViewModel? = null,
+) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val store = remember(storeOverride) { storeOverride ?: SecureNodeStore(context.applicationContext) }
-    val node = remember { CovalentNodeClient() }
-    val state = remember { AppState(store) }
+    val state = stateOverride ?: viewModel()
+    val node = remember(store, state) { CovalentNodeClient(state::pendingEnrolledTrust) }
     val scope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
+
+    fun submitSetup() {
+        api(context, state, scope, onError = { error ->
+            state.setupConnectionError = error.message ?: resources.getString(R.string.error_connection_failed)
+        }) {
+            val validated = validateAndPersistSetup(
+                node,
+                store,
+                state.setupName.trim(),
+                state.setupAddress,
+                state.setupToken,
+                state.pendingEnrolledTrust(),
+            )
+            state.status = validated.status
+            state.backups = validated.backups
+            state.connectionHealth = ConnectionHealth.READY
+            state.connectionError = null
+            state.lastConnectedAtUnixMs = System.currentTimeMillis()
+            state.setupConnectionError = ""
+            state.screen = Screen.HOME
+        }
+    }
+
+    fun setLan(enabled: Boolean) {
+        api(context, state, scope) {
+            setLanDiscovery(context, state, node, store, enabled)
+        }
+    }
+
+    fun discover() {
+        state.discoveryRunning = true
+        state.discoveryCompleted = false
+        state.discoveryError = null
+        api(context, state, scope, onError = { error ->
+            state.discoveryRunning = false
+            state.discoveryCompleted = true
+            state.discoveryError = error.message ?: resources.getString(R.string.discovery_error)
+        }) {
+            state.discovered = node.discovery(store.baseUrl, store.token)
+            state.discoveryRunning = false
+            state.discoveryCompleted = true
+        }
+    }
+
+    val localNetworkPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        when {
+            granted && state.pendingPermissionSetup -> {
+                state.pendingPermissionSetup = false
+                state.localPermissionDenied = false
+                submitSetup()
+            }
+            granted && state.pendingPermissionLanEnable -> {
+                state.pendingPermissionLanEnable = false
+                state.localPermissionDenied = false
+                setLan(true)
+            }
+            granted && state.pendingPermissionDiscovery -> {
+                state.pendingPermissionDiscovery = false
+                state.localPermissionDenied = false
+                discover()
+            }
+            else -> {
+                val deniedSetup = state.pendingPermissionSetup
+                val deniedDiscovery = state.pendingPermissionDiscovery
+                state.pendingPermissionSetup = false
+                state.pendingPermissionLanEnable = false
+                state.pendingPermissionDiscovery = false
+                state.localPermissionDenied = true
+                if (deniedSetup) {
+                    state.setupConnectionError = resources.getString(R.string.lan_permission_denied)
+                }
+                if (deniedDiscovery) {
+                    state.discoveryRunning = false
+                    state.discoveryCompleted = true
+                    state.discoveryError = resources.getString(R.string.lan_permission_denied)
+                }
+                state.notice = resources.getString(R.string.lan_permission_denied)
+            }
+        }
+    }
+
+    fun requestSetup() {
+        state.setupNameError = if (state.setupName.trim().isEmpty()) {
+            resources.getString(R.string.error_device_name_required)
+        } else ""
+        state.setupAddressError = when (validateNodeAddress(state.setupAddress)) {
+            AddressIssue.NONE -> ""
+            AddressIssue.MISSING -> resources.getString(R.string.error_node_address_required)
+            AddressIssue.MALFORMED -> resources.getString(R.string.error_node_address_invalid)
+            AddressIssue.INSECURE_REMOTE -> resources.getString(R.string.error_node_address_insecure)
+        }
+        state.setupTokenError = if (state.setupToken.isBlank()) {
+            resources.getString(R.string.error_node_token_required)
+        } else ""
+        state.setupCertificatePinError = if (runCatching {
+            if (state.setupCertificatePin.isNotBlank()) normalizeSha256Pin(state.setupCertificatePin)
+        }.isFailure) resources.getString(R.string.error_certificate_pin_invalid) else ""
+        if (state.setupNameError.isNotEmpty() || state.setupAddressError.isNotEmpty() || state.setupTokenError.isNotEmpty()) {
+            return
+        }
+        if (state.setupCertificatePinError.isNotEmpty()) return
+        if (
+            requiresLocalNetworkPermission(state.setupAddress, Build.VERSION.SDK_INT) &&
+            ContextCompat.checkSelfPermission(context, LOCAL_NETWORK_PERMISSION) != PackageManager.PERMISSION_GRANTED
+        ) {
+            state.pendingPermissionSetup = true
+            localNetworkPermission.launch(LOCAL_NETWORK_PERMISSION)
+        } else {
+            submitSetup()
+        }
+    }
+
     val sourcePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri?.let {
             context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             state.selectedSource = it
-            state.message = "Folder access saved. Covalent will report if this access is later revoked."
+            state.notice = resources.getString(R.string.source_access_saved)
+        }
+    }
+    val caCertificatePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        runCatching {
+            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                ?: error(resources.getString(R.string.error_file_not_readable))
+            state.setupCaCertificateDer = encodeEnrolledCertificate(bytes)
+            state.setupCaCertificateLabel = DocumentFile.fromSingleUri(context, uri)?.name ?: "saved"
+            state.setupCertificatePin = ""
+            state.setupCertificatePinError = ""
+        }.onFailure {
+            state.setupConnectionError = it.message ?: resources.getString(R.string.error_ca_certificate_invalid)
         }
     }
     val targetPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri?.let {
-            context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            context.contentResolver.takePersistableUriPermission(
+                it,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
             state.selectedTarget = it
+            state.persistRestorePlan(null)
         }
     }
-    val createSettings = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+    val createSettings = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        api(state, scope) {
+        api(context, state, scope) {
             val exported = node.post(store.baseUrl, store.token, "/api/v1/config/export", JSONObject())
             context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(exported.toString(2)) }
-                ?: error("The selected file is not writable.")
-            state.message = "Safe settings exported. Private identity keys were not included."
+                ?: error(resources.getString(R.string.error_file_not_writable))
+            state.notice = resources.getString(R.string.settings_exported)
         }
     }
     val importSettings = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        api(state, scope) {
+        api(context, state, scope) {
             val text = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-                ?: error("The selected file cannot be read.")
-            node.postNoContent(store.baseUrl, store.token, "/api/v1/config/import", JSONObject()
-                .put("confirmed", true).put("settings", JSONObject(text)))
-            state.message = "Settings imported after explicit confirmation. Keys and credentials remain local."
-            refreshStatus(state, node, store)
+                ?: error(resources.getString(R.string.error_file_not_readable))
+            check(text.encodeToByteArray().size <= 4 * 1_024 * 1_024) {
+                resources.getString(R.string.error_settings_file_too_large)
+            }
+            val candidate = JSONObject(text)
+            val current = node.post(store.baseUrl, store.token, "/api/v1/config/export", JSONObject())
+            validateSettingsCandidate(context, candidate)
+            state.setImportCandidate(candidate, current)
         }
     }
-    val localNetworkPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) {
-            api(state, scope) { setLanDiscovery(state, node, store, true) }
-        } else {
-            state.message = "Local network access was not granted. Discovery remains off; manual pairing still works."
-        }
+
+    LaunchedEffect(store, state) {
+        state.initialize(store)
     }
-    LaunchedEffect(store.baseUrl) {
-        if (store.baseUrl.isNotBlank()) {
+    LaunchedEffect(state.screen, store.baseUrl) {
+        if (store.baseUrl.isBlank()) return@LaunchedEffect
+        while (isActive) {
+            if (state.connectionHealth != ConnectionHealth.READY) {
+                state.connectionHealth = ConnectionHealth.CONNECTING
+            }
             runCatching {
-                withContext(startupRefreshDispatcher()) { refreshStatus(state, node, store) }
+                withContext(startupRefreshDispatcher()) {
+                    refreshStatus(state, node, store)
+                    TransferExecution.reconcileAcknowledgements(store, node)
+                }
+            }.onSuccess {
+                state.connectionHealth = ConnectionHealth.READY
+                state.connectionError = null
+                state.lastConnectedAtUnixMs = System.currentTimeMillis()
             }.onFailure { error ->
+                state.connectionHealth = ConnectionHealth.STALE
+                state.connectionError = error.message
                 if (shouldReturnToSetupAfterRefreshFailure(error)) state.screen = Screen.SETUP
             }
+            delay(STATUS_POLL_MILLIS)
         }
     }
     LaunchedEffect(Unit) {
         runCatching {
-            withContext(Dispatchers.IO) { TransferScheduler.requeuePending(context, store) }
+            withContext(Dispatchers.IO) {
+                TransferExecution.reconcileAcknowledgements(
+                    store,
+                    CovalentNodeClient(store::enrolledTrust),
+                )
+                TransferScheduler.requeuePending(context, store)
+            }
         }.onFailure {
-            state.message = it.message ?: "Android could not resume a pending transfer."
+            state.notice = it.message ?: resources.getString(R.string.error_resume_transfer)
         }
+        while (isActive) {
+            state.refreshDurableState()
+            delay(TRANSFER_POLL_MILLIS)
+        }
+    }
+    LaunchedEffect(state.notice) {
+        val notice = state.notice ?: return@LaunchedEffect
+        snackbar.showSnackbar(notice)
+        state.notice = null
     }
     BackHandler(enabled = state.screen.systemBackTarget() != null) {
         state.screen.systemBackTarget()?.let { state.screen = it }
     }
 
+    val compactActions = LocalDensity.current.fontScale >= 1.3f
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
-                title = { Text(if (state.screen == Screen.HOME) "Covalent" else state.screen.name.lowercase().replaceFirstChar(Char::titlecase)) },
+                title = { Text(stringResource(R.string.app_name)) },
                 navigationIcon = if (state.screen != Screen.HOME && state.screen != Screen.SETUP) {
-                    { IconButton(onClick = { state.screen = Screen.HOME }) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } }
+                    {
+                        IconButton(onClick = { state.screen = Screen.HOME }) {
+                            Icon(
+                                Icons.AutoMirrored.Rounded.ArrowBack,
+                                stringResource(R.string.action_back),
+                            )
+                        }
+                    }
                 } else ({}) ,
                 actions = {
                     if (state.screen == Screen.HOME) {
                         IconButton(onClick = { state.screen = Screen.SETTINGS }) {
-                            Icon(Icons.Rounded.Settings, "Settings")
+                            Icon(Icons.Rounded.Settings, stringResource(R.string.action_settings))
                         }
                     }
                 },
@@ -236,7 +513,10 @@ fun CovalentApp(storeOverride: SecureNodeStore? = null) {
         },
         floatingActionButton = {
             if (state.screen == Screen.HOME) {
-                PrimaryActionToolbar(enabled = state.status?.state == "ready") { action ->
+                PrimaryActionToolbar(
+                    enabled = state.connectionHealth == ConnectionHealth.READY,
+                    compact = compactActions,
+                ) { action ->
                     state.screen = when (action) {
                         PrimaryAction.PAIR -> Screen.PAIR
                         PrimaryAction.BACKUP -> Screen.BACKUP
@@ -251,322 +531,1945 @@ fun CovalentApp(storeOverride: SecureNodeStore? = null) {
             val page = Modifier.widthIn(max = 860.dp).fillMaxSize()
             when (state.screen) {
                 Screen.HOME -> Home(state, node, store, scope, page)
-                Screen.SETUP -> Setup(state, node, store, scope, page)
-                Screen.PAIR -> Pair(state, node, store, scope, page)
+                Screen.SETUP -> Setup(
+                    state,
+                    page,
+                    ::requestSetup,
+                    pickCaCertificate = { caCertificatePicker.launch(arrayOf("application/x-x509-ca-cert", "application/pkix-cert", "text/plain")) },
+                )
+                Screen.PAIR -> Pair(state, node, store, scope, page) {
+                    if (
+                        Build.VERSION.SDK_INT >= 37 &&
+                        ContextCompat.checkSelfPermission(context, LOCAL_NETWORK_PERMISSION) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        state.pendingPermissionDiscovery = true
+                        localNetworkPermission.launch(LOCAL_NETWORK_PERMISSION)
+                    } else {
+                        discover()
+                    }
+                }
                 Screen.BACKUP -> Backup(state, node, store, scope, page) { sourcePicker.launch(null) }
                 Screen.RESTORE -> Restore(state, node, store, scope, page) { targetPicker.launch(null) }
-                Screen.SETTINGS -> Settings(state, node, store, scope, page, createSettings::launch, importSettings::launch) { enabled ->
-                    if (enabled && Build.VERSION.SDK_INT >= 37) localNetworkPermission.launch(LOCAL_NETWORK_PERMISSION)
-                    else api(state, scope) { setLanDiscovery(state, node, store, enabled) }
-                }
+                Screen.SETTINGS -> Settings(
+                    state,
+                    node,
+                    store,
+                    scope,
+                    page,
+                    createSettings::launch,
+                    importSettings::launch,
+                    onLanChange = { enabled ->
+                        if (
+                            enabled && Build.VERSION.SDK_INT >= 37 &&
+                            ContextCompat.checkSelfPermission(context, LOCAL_NETWORK_PERMISSION) != PackageManager.PERMISSION_GRANTED
+                        ) {
+                            state.pendingPermissionLanEnable = true
+                            localNetworkPermission.launch(LOCAL_NETWORK_PERMISSION)
+                        } else {
+                            setLan(enabled)
+                        }
+                    },
+                )
             }
         }
-    }
-    state.message?.let { message ->
-        AlertDialog(onDismissRequest = { state.message = null }, confirmButton = {
-            FilledTonalButton(onClick = { state.message = null }) { Text("OK") }
-        }, title = { Text("Covalent") }, text = { Text(message) })
     }
 }
 
 @Composable
-private fun Home(state: AppState, node: CovalentNodeClient, store: SecureNodeStore, scope: kotlinx.coroutines.CoroutineScope, modifier: Modifier) {
-    LazyColumn(modifier, contentPadding = PaddingValues(20.dp, 14.dp, 20.dp, 112.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        item { Column {
-            Text("Your copies. Your devices.", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(8.dp))
-            Text("Pair directly, choose every replica, and restore only beneath a folder you authorize.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        } }
-        item { StatusCard("Local node", state.status?.deviceName ?: "Not connected", state.status?.let { "Ready on protocol ${it.protocolVersion}." } ?: "Connect to a running local Covalent node to enable actions.", Icons.Rounded.Storage) }
-        item { StatusCard("Replica policy", "Explicit selection", "Covalent never selects a storage device for you.", Icons.Rounded.Security) }
-        item { Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Text("Remembered backups", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-            IconButton(onClick = { api(state, scope) { refreshStatus(state, node, store); state.refreshBackups() } }) { Icon(Icons.Rounded.Refresh, "Refresh") }
-        } }
-        if (state.backups.isEmpty()) item { EmptyState("No completed backups remembered on this device.", "Create a backup after choosing a folder and replicas.") }
-        items(state.backups.size) { index ->
-            val backup = state.backups[index]
-            Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(backup.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+private fun Home(
+    state: CovalentViewModel,
+    node: CovalentNodeClient,
+    store: SecureNodeStore,
+    scope: kotlinx.coroutines.CoroutineScope,
+    modifier: Modifier,
+) {
+    val context = LocalContext.current
+    val resources = LocalResources.current
+    LazyColumn(
+        modifier,
+        contentPadding = PaddingValues(20.dp, 14.dp, 20.dp, 104.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        item {
+            Column {
                 Text(
-                    backup.latestSnapshotId?.let { "Latest snapshot $it · ${backup.snapshotCount} retained" }
-                        ?: "Remembered definition · no local snapshot",
+                    stringResource(R.string.home_title),
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.semantics { heading() },
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    stringResource(R.string.home_subtitle),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        item {
+            ConnectionCard(state) {
+                reconnectNode(context, state, node, store, scope)
+            }
+        }
+        if (state.transfers.isNotEmpty()) {
+            item { SectionTitle(stringResource(R.string.transfers_title)) }
+            items(state.transfers, key = TransferRecord::jobId) { record ->
+                TransferCard(record) { action ->
+                    controlTransfer(context, state, node, store, scope, record, action)
+                }
+            }
+        }
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                SectionTitle(stringResource(R.string.remembered_backups), Modifier.weight(1f))
+                IconButton(
+                    enabled = state.connectionHealth == ConnectionHealth.READY && !state.busy,
+                    onClick = { reconnectNode(context, state, node, store, scope) },
+                ) {
+                    Icon(Icons.Rounded.Refresh, stringResource(R.string.action_refresh_backups))
+                }
+            }
+        }
+        if (state.backups.isEmpty()) {
+            item {
+                EmptyState(
+                    stringResource(R.string.no_backups_title),
+                    stringResource(R.string.no_backups_detail),
+                )
+            }
+        }
+        items(state.backups, key = RememberedBackup::backupId) { backup ->
+            BackupSummaryCard(backup) {
+                api(context, state, scope) {
+                    val snapshotId = backup.latestSnapshotId ?: return@api
+                    val response = node.post(
+                        store.baseUrl,
+                        store.token,
+                        "/api/v1/backups/verify",
+                        JSONObject()
+                            .put("backupId", backup.backupId)
+                            .put("snapshotId", snapshotId)
+                            .put("verifyProviders", true),
+                    )
+                    state.notice = resources.getString(
+                        if (response.getBoolean("intact")) R.string.verify_intact else R.string.verify_damaged,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConnectionCard(state: CovalentViewModel, reconnect: () -> Unit) {
+    val ready = state.connectionHealth == ConnectionHealth.READY
+    val lastVerified = state.lastConnectedAtUnixMs
+    val title = when (state.connectionHealth) {
+        ConnectionHealth.READY -> stringResource(R.string.connection_ready)
+        ConnectionHealth.CONNECTING -> stringResource(R.string.connection_checking)
+        ConnectionHealth.STALE -> stringResource(R.string.connection_stale)
+        ConnectionHealth.DISCONNECTED -> stringResource(R.string.connection_disconnected)
+    }
+    val detail = when {
+        ready && state.status != null -> stringResource(
+            R.string.connection_ready_detail,
+            state.status!!.deviceName,
+            state.status!!.protocolVersion.toInt(),
+        )
+        state.connectionError != null -> state.connectionError.orEmpty()
+        else -> stringResource(R.string.connection_actions_disabled)
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.padding(18.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Surface(
+                shape = MaterialTheme.shapes.medium,
+                color = if (ready) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.errorContainer,
+            ) {
+                Icon(
+                    if (ready) Icons.Rounded.Storage else Icons.Rounded.CloudOff,
+                    null,
+                    Modifier.padding(12.dp),
+                )
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (!ready && lastVerified != null) {
+                    Text(
+                        stringResource(
+                            R.string.connection_last_verified,
+                            DateUtils.getRelativeTimeSpanString(lastVerified),
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (!ready) {
+                    OutlinedButton(onClick = reconnect, enabled = !state.busy) {
+                        Icon(Icons.Rounded.Refresh, null)
+                        Text(stringResource(R.string.action_reconnect), Modifier.padding(start = 8.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BackupSummaryCard(backup: RememberedBackup, verify: () -> Unit) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text(backup.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(
+                if (backup.latestSnapshotId != null) {
+                    pluralStringResource(
+                        R.plurals.backup_snapshot_count,
+                        backup.snapshotCount.toInt(),
+                        backup.snapshotCount,
+                    )
+                } else {
+                    stringResource(R.string.backup_no_snapshot)
+                },
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (backup.selectedProviderIds.isEmpty()) {
+                Text(stringResource(R.string.backup_local_only), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                Text(
+                    pluralStringResource(
+                        R.plurals.backup_replica_count,
+                        backup.selectedProviderIds.size,
+                        backup.selectedProviderIds.size,
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (backup.latestSnapshotId != null) {
+                OutlinedButton(onClick = verify) { Text(stringResource(R.string.action_verify)) }
+            }
+        }
+    }
+}
+
+private enum class TransferAction { PAUSE, RESUME, RETRY, CANCEL }
+
+@Composable
+private fun TransferCard(record: TransferRecord, onAction: (TransferAction) -> Unit) {
+    val context = LocalContext.current
+    val stateText = when (record.state) {
+        TransferState.QUEUED -> stringResource(R.string.transfer_state_queued)
+        TransferState.RUNNING -> stringResource(R.string.transfer_state_running)
+        TransferState.PAUSED -> stringResource(R.string.transfer_state_paused)
+        TransferState.COMPLETED -> stringResource(R.string.transfer_state_completed)
+        TransferState.FAILED -> stringResource(R.string.transfer_state_failed)
+        TransferState.CANCELLED -> stringResource(R.string.transfer_state_cancelled)
+    }
+    OutlinedCard(
+        Modifier.fillMaxWidth().semantics(mergeDescendants = true) {
+            contentDescription = "$stateText, ${record.label}"
+        },
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    if (record.state == TransferState.FAILED) Icons.Rounded.ErrorOutline else Icons.Rounded.Backup,
+                    null,
+                )
+                Text(
+                    record.label,
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(start = 10.dp).weight(1f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(stateText, style = MaterialTheme.typography.labelLarge)
+            }
+            if (record.state == TransferState.RUNNING || record.state == TransferState.QUEUED) {
+                val total = record.totalBytes
+                if (total != null && total > 0) {
+                    LinearProgressIndicator(
+                        progress = { (record.completedBytes.toFloat() / total).coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+            }
+            if (record.completedBytes > 0 || record.completedEntries > 0) {
+                Text(
+                    pluralStringResource(
+                        R.plurals.transfer_progress_detail,
+                        record.completedEntries.toInt(),
+                        record.completedEntries,
+                        Formatter.formatShortFileSize(context, record.completedBytes),
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                 )
-                backup.latestSnapshotId?.let { snapshotId ->
-                    OutlinedButton(onClick = {
-                        api(state, scope) {
-                            val response = node.post(store.baseUrl, store.token, "/api/v1/backups/verify", JSONObject()
-                                .put("backupId", backup.backupId).put("snapshotId", snapshotId).put("verifyProviders", true))
-                            state.message = if (response.getBoolean("intact")) "Verified: all checked chunks are intact." else "Verification found unavailable or damaged chunks."
-                        }
-                    }) { Text("Verify") }
-                }
-            } }
-        }
-    }
-}
-
-@Composable
-private fun Setup(state: AppState, node: CovalentNodeClient, store: SecureNodeStore, scope: kotlinx.coroutines.CoroutineScope, modifier: Modifier) {
-    var name by remember { mutableStateOf(store.displayName) }
-    var address by remember { mutableStateOf(store.baseUrl) }
-    var token by remember { mutableStateOf(store.token) }
-    FormPage(modifier, "Connect your local node", "Covalent talks directly to a node you control. The bearer token stays encrypted on this Android device.") {
-        OutlinedTextField(name, { name = it }, label = { Text("This device name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(address, { address = it }, label = { Text("Node address") }, placeholder = { Text("http://192.168.1.20:8787") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(token, { token = it }, label = { Text("Local node token") }, visualTransformation = PasswordVisualTransformation(), singleLine = true, modifier = Modifier.fillMaxWidth())
-        Text("Use HTTPS for a network node. Plain HTTP is accepted only on this device's loopback address, so your API token is never sent across a cleartext network.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        FilledTonalButton(enabled = !state.busy, onClick = {
-            api(state, scope) {
-                val validated = validateAndPersistSetup(node, store, name, address, token)
-                state.status = validated.status
-                state.backups = validated.backups
-                state.screen = Screen.HOME
             }
-        }) { Text(if (state.busy) "Checking…" else "Connect") }
+            if (record.detail.isNotBlank()) {
+                Text(record.detail, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                when (record.state) {
+                    TransferState.RUNNING, TransferState.QUEUED -> {
+                        TextButton(onClick = { onAction(TransferAction.PAUSE) }) {
+                            Icon(Icons.Rounded.Pause, null)
+                            Text(stringResource(R.string.action_pause))
+                        }
+                        TextButton(onClick = { onAction(TransferAction.CANCEL) }) {
+                            Icon(Icons.Rounded.Cancel, null)
+                            Text(stringResource(R.string.action_cancel))
+                        }
+                    }
+                    TransferState.PAUSED -> {
+                        TextButton(onClick = { onAction(TransferAction.RESUME) }) {
+                            Icon(Icons.Rounded.PlayArrow, null)
+                            Text(stringResource(R.string.action_resume))
+                        }
+                        TextButton(onClick = { onAction(TransferAction.CANCEL) }) {
+                            Icon(Icons.Rounded.Cancel, null)
+                            Text(stringResource(R.string.action_cancel))
+                        }
+                    }
+                    TransferState.FAILED -> if (record.retryable) {
+                        TextButton(onClick = { onAction(TransferAction.RETRY) }) {
+                            Icon(Icons.Rounded.Refresh, null)
+                            Text(stringResource(R.string.action_retry))
+                        }
+                    }
+                    TransferState.COMPLETED, TransferState.CANCELLED -> Unit
+                }
+            }
+        }
+    }
+}
+
+private fun controlTransfer(
+    context: Context,
+    state: CovalentViewModel,
+    node: CovalentNodeClient,
+    store: SecureNodeStore,
+    scope: kotlinx.coroutines.CoroutineScope,
+    record: TransferRecord,
+    action: TransferAction,
+) {
+    api(context, state, scope) {
+        when (action) {
+            TransferAction.PAUSE -> {
+                runCatching { node.controlJob(store.baseUrl, store.token, record.jobId, "pause") }
+                store.updateTransfer(record.jobId) {
+                    it.copy(
+                        state = TransferState.PAUSED,
+                        detail = context.getString(R.string.transfer_paused_detail),
+                        retryable = true,
+                    )
+                }
+                TransferScheduler.cancelScheduled(context, record.jobId)
+            }
+            TransferAction.RESUME, TransferAction.RETRY -> {
+                runCatching { node.controlJob(store.baseUrl, store.token, record.jobId, "resume") }
+                check(store.pending(record.jobId) != null) {
+                    context.getString(R.string.error_transfer_request_missing)
+                }
+                store.updateTransfer(record.jobId) {
+                    it.copy(
+                        state = TransferState.QUEUED,
+                        detail = context.getString(R.string.transfer_queued_detail),
+                        retryable = false,
+                    )
+                }
+                TransferScheduler.enqueue(context, record.jobId)
+            }
+            TransferAction.CANCEL -> {
+                runCatching {
+                    node.controlJob(store.baseUrl, store.token, record.jobId, "cancel")
+                }
+                TransferScheduler.cancelScheduled(context, record.jobId)
+                val discarded = runCatching {
+                    node.discardJob(store.baseUrl, store.token, record.jobId)
+                }
+                val confirmedDetail = context.getString(R.string.transfer_cancelled_detail)
+                if (discarded.isSuccess) {
+                    store.removePendingDiscard(record.jobId)
+                } else {
+                    store.savePendingDiscard(record.jobId, confirmedDetail)
+                }
+                store.updateTransfer(record.jobId) {
+                    it.copy(
+                        state = TransferState.CANCELLED,
+                        detail = if (discarded.isSuccess) confirmedDetail else {
+                            context.getString(R.string.transfer_cancelled_unconfirmed_detail)
+                        },
+                        retryable = false,
+                    )
+                }
+                store.removePending(record.jobId)
+                store.removePendingAcknowledgement(record.jobId)
+            }
+        }
+        state.refreshDurableState()
     }
 }
 
 @Composable
-private fun Pair(state: AppState, node: CovalentNodeClient, store: SecureNodeStore, scope: kotlinx.coroutines.CoroutineScope, modifier: Modifier) {
-    val focusManager = LocalFocusManager.current
-    var invitation by remember { mutableStateOf("") }
-    var responderName by remember { mutableStateOf(store.displayName.ifBlank { "Android" }) }
-    FormPage(modifier, "Pair a device", "Discovery is only a reachability hint. Compare the four-part security code on both devices before trusting either one.") {
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            OutlinedButton(enabled = !state.busy, onClick = { api(state, scope) { state.discovered = node.discovery(store.baseUrl, store.token) } }) { Text("Find devices") }
-            OutlinedButton(enabled = !state.busy, onClick = { api(state, scope) { state.providers = node.providers(store.baseUrl, store.token) } }) { Text("Refresh trusted") }
-        }
-        state.discovered.forEach { candidate -> AssistChip(onClick = { state.message = "Found ${candidate.endpoint}. Ask that device to share a pairing invitation; discovery alone never grants access." }, label = { Text("${candidate.source}: ${candidate.endpoint}") }) }
-        OutlinedTextField(responderName, { responderName = it }, label = { Text("Your display name") }, modifier = Modifier.fillMaxWidth())
+private fun Setup(
+    state: CovalentViewModel,
+    modifier: Modifier,
+    connect: () -> Unit,
+    pickCaCertificate: () -> Unit,
+) {
+    val nameFocus = remember { FocusRequester() }
+    val addressFocus = remember { FocusRequester() }
+    val tokenFocus = remember { FocusRequester() }
+    val canSubmit = !state.busy
+    FormPage(
+        modifier,
+        stringResource(R.string.setup_title),
+        stringResource(R.string.setup_subtitle),
+    ) {
+        OnboardingChoice(
+            icon = Icons.Rounded.Search,
+            title = stringResource(R.string.setup_nearby_title),
+            detail = stringResource(R.string.setup_nearby_detail),
+        )
+        OnboardingChoice(
+            icon = Icons.Rounded.ContentCopy,
+            title = stringResource(R.string.setup_handoff_title),
+            detail = stringResource(R.string.setup_handoff_detail),
+        )
         OutlinedTextField(
-            invitation,
-            { invitation = it },
-            label = { Text("Pairing invitation JSON") },
-            minLines = 4,
-            maxLines = 6,
+            state.setupName,
+            {
+                state.setupName = it
+                state.setupNameError = ""
+            },
+            label = { Text(stringResource(R.string.field_device_name)) },
+            isError = state.setupNameError.isNotEmpty(),
+            supportingText = state.setupNameError.takeIf(String::isNotEmpty)?.let { error -> ({ Text(error) }) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().focusRequester(nameFocus),
+        )
+        OutlinedTextField(
+            state.setupAddress,
+            {
+                state.setupAddress = it
+                state.setupAddressError = ""
+            },
+            label = { Text(stringResource(R.string.field_node_address)) },
+            placeholder = { Text(stringResource(R.string.node_address_example)) },
+            isError = state.setupAddressError.isNotEmpty(),
+            supportingText = state.setupAddressError.takeIf(String::isNotEmpty)?.let { error -> ({ Text(error) }) },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.None,
+                autoCorrectEnabled = false,
+                keyboardType = KeyboardType.Uri,
+                imeAction = ImeAction.Next,
+            ),
+            modifier = Modifier.fillMaxWidth().focusRequester(addressFocus),
+        )
+        OutlinedTextField(
+            state.setupToken,
+            {
+                state.setupToken = it
+                state.setupTokenError = ""
+            },
+            label = { Text(stringResource(R.string.field_node_token)) },
+            visualTransformation = PasswordVisualTransformation(),
+            isError = state.setupTokenError.isNotEmpty(),
+            supportingText = state.setupTokenError.takeIf(String::isNotEmpty)?.let { error -> ({ Text(error) }) },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.None,
+                autoCorrectEnabled = false,
+                keyboardType = KeyboardType.Password,
+                imeAction = ImeAction.Done,
+            ),
+            keyboardActions = KeyboardActions(onDone = { if (canSubmit) connect() }),
+            modifier = Modifier.fillMaxWidth().focusRequester(tokenFocus),
+        )
+        Text(
+            stringResource(R.string.setup_transport_policy),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        SectionTitle(stringResource(R.string.tls_enrollment_title))
+        Text(
+            stringResource(R.string.tls_enrollment_detail),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedButton(onClick = pickCaCertificate) {
+            Icon(Icons.Rounded.Security, null)
+            Text(stringResource(R.string.action_choose_ca_certificate), Modifier.padding(start = 8.dp))
+        }
+        if (state.setupCaCertificateDer.isNotBlank()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (state.setupCaCertificateLabel == "saved") {
+                        stringResource(R.string.ca_certificate_enrolled)
+                    } else {
+                        state.setupCaCertificateLabel
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = {
+                    state.setupCaCertificateDer = ""
+                    state.setupCaCertificateLabel = ""
+                }) { Text(stringResource(R.string.action_clear)) }
+            }
+        }
+        Text(
+            stringResource(R.string.tls_enrollment_or_pin),
+            style = MaterialTheme.typography.labelLarge,
+        )
+        OutlinedTextField(
+            state.setupCertificatePin,
+            {
+                state.setupCertificatePin = it
+                state.setupCertificatePinError = ""
+                if (it.isNotBlank()) {
+                    state.setupCaCertificateDer = ""
+                    state.setupCaCertificateLabel = ""
+                }
+            },
+            label = { Text(stringResource(R.string.field_certificate_pin)) },
+            placeholder = { Text(stringResource(R.string.certificate_pin_example)) },
+            supportingText = if (state.setupCertificatePinError.isNotBlank()) {
+                { Text(state.setupCertificatePinError) }
+            } else {
+                { Text(stringResource(R.string.certificate_pin_detail)) }
+            },
+            isError = state.setupCertificatePinError.isNotBlank(),
             keyboardOptions = pairingInvitationKeyboardOptions,
-            keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
             modifier = Modifier.fillMaxWidth(),
         )
-        if (state.pairingSession == null) FilledTonalButton(enabled = invitation.isNotBlank() && !state.busy, onClick = {
-            api(state, scope) {
-                state.pairingSession = node.post(store.baseUrl, store.token, "/api/v1/pair/accept", JSONObject()
-                    .put("invitation", JSONObject(invitation)).put("responderName", responderName)
-                    .put("responderRoles", JSONArray().put("backup_writer")).put("inviterRoles", JSONArray().put("storage_provider")))
-            }
-        }) { Text("Show security code") }
-        state.pairingSession?.let { session ->
-            SecurityConfirmation(session.getString("authenticationString"), onConfirm = {
-                api(state, scope) {
-                    val confirmed = node.post(store.baseUrl, store.token, "/api/v1/pair/confirm/responder", JSONObject()
-                        .put("session", session).put("displayedCode", session.getString("authenticationString")))
-                    state.pairingSession = confirmed
-                    state.message = "Responder confirmation sent. Complete inviter confirmation on the other device, then exchange the updated signed session to finalize."
-                }
-            })
+        Text(
+            stringResource(R.string.caddy_ca_guidance),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (requiresLocalNetworkPermission(state.setupAddress, Build.VERSION.SDK_INT)) {
+            Text(
+                stringResource(R.string.setup_lan_permission_rationale),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
         }
+        if (state.setupConnectionError.isNotBlank()) {
+            InlineError(state.setupConnectionError)
+        }
+        FilledTonalButton(enabled = canSubmit, onClick = {
+            when {
+                state.setupName.isBlank() -> nameFocus.requestFocus()
+                validateNodeAddress(state.setupAddress) != AddressIssue.NONE -> addressFocus.requestFocus()
+                state.setupToken.isBlank() -> tokenFocus.requestFocus()
+            }
+            connect()
+        }) {
+            if (state.busy) CircularProgressIndicator(Modifier.padding(end = 8.dp))
+            Text(stringResource(if (state.busy) R.string.action_checking else R.string.action_connect))
+        }
+    }
+}
+
+@Composable
+private fun OnboardingChoice(icon: ImageVector, title: String, detail: String) {
+    OutlinedCard(Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Icon(icon, null)
+            Column {
+                Text(title, fontWeight = FontWeight.SemiBold)
+                Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun Pair(
+    state: CovalentViewModel,
+    node: CovalentNodeClient,
+    store: SecureNodeStore,
+    scope: kotlinx.coroutines.CoroutineScope,
+    modifier: Modifier,
+    discover: () -> Unit,
+) {
+    val resources = LocalResources.current
+    val focusManager = LocalFocusManager.current
+    FormPage(
+        modifier,
+        stringResource(R.string.pair_title),
+        stringResource(R.string.pair_subtitle),
+    ) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = state.pairingRole == PairingRole.INVITER,
+                onClick = {
+                    if (state.pairingRole != PairingRole.INVITER) state.clearPairing()
+                    state.pairingRole = PairingRole.INVITER
+                },
+                label = { Text(stringResource(R.string.pair_invite_device)) },
+            )
+            FilterChip(
+                selected = state.pairingRole == PairingRole.RESPONDER,
+                onClick = {
+                    if (state.pairingRole != PairingRole.RESPONDER) state.clearPairing()
+                    state.pairingRole = PairingRole.RESPONDER
+                },
+                label = { Text(stringResource(R.string.pair_join_device)) },
+            )
+        }
+        DiscoverySection(state, discover)
+        HorizontalDivider()
+        if (state.pairingRole == PairingRole.INVITER) {
+            InviterPairing(state, node, store, scope)
+        } else {
+            ResponderPairing(state, node, store, scope, focusManager)
+        }
+        if (state.pairingError.isNotBlank()) InlineError(state.pairingError)
+        if (state.pairingConfirmation != null) {
+            ProviderExchange(state, node, store, scope)
+        }
+        TextButton(onClick = {
+            state.clearPairing()
+            state.notice = resources.getString(R.string.pair_local_state_cleared)
+        }) {
+            Icon(Icons.Rounded.Cancel, null)
+            Text(stringResource(R.string.action_cancel_pairing))
+        }
+    }
+}
+
+@Composable
+private fun DiscoverySection(
+    state: CovalentViewModel,
+    discover: () -> Unit,
+) {
+    val resources = LocalResources.current
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+        OutlinedButton(
+            enabled = !state.busy && state.connectionHealth == ConnectionHealth.READY,
+            onClick = discover,
+        ) {
+            Icon(Icons.Rounded.Search, null)
+            Text(stringResource(R.string.action_find_devices), Modifier.padding(start = 8.dp))
+        }
+        if (state.discoveryRunning) {
+            CircularProgressIndicator()
+            Text(stringResource(R.string.discovery_searching))
+        }
+    }
+    state.discoveryError?.let { InlineError(it) }
+    if (state.discoveryCompleted && state.discovered.isEmpty() && state.discoveryError == null) {
+        EmptyState(
+            stringResource(R.string.discovery_empty_title),
+            stringResource(R.string.discovery_empty_detail),
+        )
+    }
+    state.discovered.forEach { candidate ->
+        DiscoveryCandidateRow(candidate) {
+            state.pairingEndpoint = candidate.endpoint
+            state.notice = resources.getString(R.string.discovery_candidate_selected)
+        }
+    }
+}
+
+@Composable
+private fun DiscoveryCandidateRow(candidate: DiscoveryCandidate, select: () -> Unit) {
+    AssistChip(
+        onClick = select,
+        label = {
+            Text(
+                stringResource(R.string.discovery_candidate, candidate.source, candidate.endpoint),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        },
+    )
+}
+
+@Composable
+private fun InviterPairing(
+    state: CovalentViewModel,
+    node: CovalentNodeClient,
+    store: SecureNodeStore,
+    scope: kotlinx.coroutines.CoroutineScope,
+) {
+    val context = LocalContext.current
+    val resources = LocalResources.current
+    if (state.pairingInvitation == null) {
+        OutlinedTextField(
+            state.pairingEndpoint,
+            { state.pairingEndpoint = it },
+            label = { Text(stringResource(R.string.field_reachable_endpoint)) },
+            placeholder = { Text(stringResource(R.string.pair_endpoint_example)) },
+            supportingText = { Text(stringResource(R.string.pair_endpoint_support)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        FilledTonalButton(
+            enabled = state.pairingEndpoint.isNotBlank() && !state.busy,
+            onClick = {
+                api(context, state, scope, pairingError = true) {
+                    val invitation = node.post(
+                        store.baseUrl,
+                        store.token,
+                        "/api/v1/pair/invitations",
+                        JSONObject()
+                            .put("lifetimeMs", 15 * 60 * 1_000)
+                            .put("endpoints", JSONArray().put(state.pairingEndpoint.trim())),
+                    )
+                    state.persistPairingInvitation(invitation)
+                }
+            },
+        ) { Text(stringResource(R.string.action_create_invitation)) }
+    }
+    state.pairingInvitation?.let { invitation ->
+        ExchangeCard(
+            title = stringResource(R.string.pair_invitation_ready),
+            detail = remainingMinutes(invitation).let { minutes ->
+                pluralStringResource(R.plurals.pair_invitation_expiry, minutes.toInt(), minutes)
+            },
+            json = invitation,
+            shareLabel = stringResource(R.string.action_share_invitation),
+        )
+        PairingInput(
+            value = state.pairingInput,
+            onValueChange = { state.pairingInput = it; state.pairingError = "" },
+            label = stringResource(R.string.field_responder_session),
+            actionLabel = stringResource(R.string.action_load_session),
+            enabled = !state.busy,
+        ) {
+            runCatching {
+                val session = parseBoundedJson(state.pairingInput)
+                requireSameInvitation(invitation, session)
+                state.persistPairingSession(session)
+                state.pairingError = ""
+            }.onFailure { state.pairingError = it.message ?: resources.getString(R.string.error_invalid_pairing_exchange) }
+        }
+    }
+    state.pairingSession?.let { session ->
+        PairingConsent(session)
+        val inviterConfirmed = !session.isNull("inviterConfirmationSignature")
+        val responderConfirmed = !session.isNull("responderConfirmationSignature")
+        when {
+            !responderConfirmed -> InlineError(stringResource(R.string.pair_wait_responder_confirmation))
+            !inviterConfirmed -> FilledTonalButton(enabled = !state.busy && !isExpired(session), onClick = {
+                api(context, state, scope, pairingError = true) {
+                    val confirmed = node.post(
+                        store.baseUrl,
+                        store.token,
+                        "/api/v1/pair/confirm/inviter",
+                        JSONObject()
+                            .put("session", session)
+                            .put("displayedCode", session.getString("authenticationString")),
+                    )
+                    state.persistPairingSession(confirmed)
+                }
+            }) {
+                Icon(Icons.Rounded.Security, null)
+                Text(stringResource(R.string.action_confirm_inviter), Modifier.padding(start = 8.dp))
+            }
+            state.pairingConfirmation == null -> {
+                ExchangeCard(
+                    title = stringResource(R.string.pair_mutual_session_ready),
+                    detail = stringResource(R.string.pair_return_session_detail),
+                    json = session,
+                    shareLabel = stringResource(R.string.action_share_signed_session),
+                )
+                FilledTonalButton(enabled = !state.busy && !isExpired(session), onClick = {
+                    api(context, state, scope, pairingError = true) {
+                        state.persistPairingConfirmation(
+                            node.post(
+                                store.baseUrl,
+                                store.token,
+                                "/api/v1/pair/finalize/inviter",
+                                JSONObject().put("session", session),
+                            ),
+                        )
+                    }
+                }) { Text(stringResource(R.string.action_finalize_inviter)) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ResponderPairing(
+    state: CovalentViewModel,
+    node: CovalentNodeClient,
+    store: SecureNodeStore,
+    scope: kotlinx.coroutines.CoroutineScope,
+    focusManager: androidx.compose.ui.focus.FocusManager,
+) {
+    val context = LocalContext.current
+    val resources = LocalResources.current
+    if (state.pairingSession == null) {
+        OutlinedTextField(
+            state.pairingDisplayName,
+            { state.pairingDisplayName = it },
+            label = { Text(stringResource(R.string.field_pairing_display_name)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        RoleSelector(
+            title = stringResource(R.string.roles_for_responder),
+            detail = stringResource(R.string.roles_for_responder_detail),
+            selected = roleSet(state.responderRolesText),
+        ) { state.responderRolesText = it.sorted().joinToString(",") }
+        RoleSelector(
+            title = stringResource(R.string.roles_for_inviter),
+            detail = stringResource(R.string.roles_for_inviter_detail),
+            selected = roleSet(state.inviterRolesText),
+        ) { state.inviterRolesText = it.sorted().joinToString(",") }
+        PairingInput(
+            value = state.pairingInput,
+            onValueChange = { state.pairingInput = it; state.pairingError = "" },
+            label = stringResource(R.string.field_pairing_invitation),
+            actionLabel = stringResource(R.string.action_accept_invitation),
+            enabled = state.pairingDisplayName.isNotBlank() && !state.busy,
+        ) {
+            focusManager.clearFocus()
+            api(context, state, scope, pairingError = true) {
+                val invitation = parseBoundedJson(state.pairingInput)
+                check(!isExpiredInvitation(invitation)) { resources.getString(R.string.error_invitation_expired) }
+                state.persistPairingInvitation(invitation)
+                state.persistPairingSession(
+                    node.post(
+                        store.baseUrl,
+                        store.token,
+                        "/api/v1/pair/accept",
+                        JSONObject()
+                            .put("invitation", invitation)
+                            .put("responderName", state.pairingDisplayName.trim())
+                            .put("responderRoles", JSONArray(roleSet(state.responderRolesText).sorted()))
+                            .put("inviterRoles", JSONArray(roleSet(state.inviterRolesText).sorted())),
+                    ),
+                )
+            }
+        }
+    }
+    state.pairingSession?.let { session ->
+        PairingConsent(session)
+        val responderConfirmed = !session.isNull("responderConfirmationSignature")
+        val inviterConfirmed = !session.isNull("inviterConfirmationSignature")
+        when {
+            !responderConfirmed -> FilledTonalButton(enabled = !state.busy && !isExpired(session), onClick = {
+                api(context, state, scope, pairingError = true) {
+                    val confirmed = node.post(
+                        store.baseUrl,
+                        store.token,
+                        "/api/v1/pair/confirm/responder",
+                        JSONObject()
+                            .put("session", session)
+                            .put("displayedCode", session.getString("authenticationString")),
+                    )
+                    state.persistPairingSession(confirmed)
+                }
+            }) {
+                Icon(Icons.Rounded.Security, null)
+                Text(stringResource(R.string.action_confirm_responder), Modifier.padding(start = 8.dp))
+            }
+            !inviterConfirmed -> {
+                ExchangeCard(
+                    title = stringResource(R.string.pair_responder_session_ready),
+                    detail = stringResource(R.string.pair_send_to_inviter_detail),
+                    json = session,
+                    shareLabel = stringResource(R.string.action_share_signed_session),
+                )
+                PairingInput(
+                    value = state.pairingInput,
+                    onValueChange = { state.pairingInput = it; state.pairingError = "" },
+                    label = stringResource(R.string.field_mutual_session),
+                    actionLabel = stringResource(R.string.action_load_updated_session),
+                    enabled = !state.busy,
+                ) {
+                    runCatching {
+                        val updated = parseBoundedJson(state.pairingInput)
+                        requireSameSession(session, updated)
+                        check(!updated.isNull("inviterConfirmationSignature")) {
+                            resources.getString(R.string.error_inviter_not_confirmed)
+                        }
+                        state.persistPairingSession(updated)
+                        state.pairingError = ""
+                    }.onFailure {
+                        state.pairingError = it.message ?: resources.getString(R.string.error_invalid_pairing_exchange)
+                    }
+                }
+            }
+            state.pairingConfirmation == null -> FilledTonalButton(
+                enabled = !state.busy && !isExpired(session),
+                onClick = {
+                    api(context, state, scope, pairingError = true) {
+                        state.persistPairingConfirmation(
+                            node.post(
+                                store.baseUrl,
+                                store.token,
+                                "/api/v1/pair/finalize/responder",
+                                JSONObject().put("session", session),
+                            ),
+                        )
+                    }
+                },
+            ) { Text(stringResource(R.string.action_finalize_responder)) }
+        }
+    }
+}
+
+@Composable
+private fun RoleSelector(title: String, detail: String, selected: Set<String>, onChange: (Set<String>) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(title, style = MaterialTheme.typography.titleMedium)
+        Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        ALL_PAIRING_ROLES.forEach { roleName ->
+            val checked = roleName in selected
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .toggleable(
+                        value = checked,
+                        role = Role.Checkbox,
+                        onValueChange = { enabled ->
+                            onChange(if (enabled) selected + roleName else selected - roleName)
+                        },
+                    )
+                    .semantics(mergeDescendants = true) {}
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(checked = checked, onCheckedChange = null)
+                Column(Modifier.padding(start = 10.dp)) {
+                    Text(roleTitle(roleName))
+                    Text(roleName, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun roleTitle(role: String): String = when (role) {
+    "storage_provider" -> stringResource(R.string.role_storage_provider)
+    "backup_reader" -> stringResource(R.string.role_backup_reader)
+    "backup_writer" -> stringResource(R.string.role_backup_writer)
+    else -> role
+}
+
+@Composable
+private fun PairingInput(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    actionLabel: String,
+    enabled: Boolean,
+    onAction: () -> Unit,
+) {
+    val focusManager = LocalFocusManager.current
+    OutlinedTextField(
+        value,
+        onValueChange,
+        label = { Text(label) },
+        minLines = 3,
+        maxLines = 6,
+        keyboardOptions = pairingInvitationKeyboardOptions,
+        keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    FilledTonalButton(enabled = enabled && value.isNotBlank(), onClick = onAction) { Text(actionLabel) }
+}
+
+@Composable
+private fun PairingConsent(session: JSONObject) {
+    val invitation = session.getJSONObject("invitation")
+    val none = stringResource(R.string.value_none)
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.pair_compare_code), style = MaterialTheme.typography.titleMedium)
+            Text(
+                session.getString("authenticationString"),
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+            )
+            Text(stringResource(R.string.pair_inviter_identity), fontWeight = FontWeight.SemiBold)
+            Text(invitation.getString("inviterDeviceName"))
+            Text(invitation.getString("inviterDeviceId"), fontFamily = FontFamily.Monospace)
+            Text(
+                stringResource(
+                    R.string.pair_exact_roles,
+                    jsonStrings(session.getJSONArray("inviterRoles")).joinToString(", ").ifBlank { none },
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(stringResource(R.string.pair_responder_identity), fontWeight = FontWeight.SemiBold)
+            Text(session.getString("responderName"))
+            Text(session.getString("responderDeviceId"), fontFamily = FontFamily.Monospace)
+            Text(
+                stringResource(
+                    R.string.pair_exact_roles,
+                    jsonStrings(session.getJSONArray("responderRoles")).joinToString(", ").ifBlank { none },
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                stringResource(R.string.pair_consent_warning),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (isExpired(session)) InlineError(stringResource(R.string.error_invitation_expired))
+        }
+    }
+}
+
+@Composable
+private fun ExchangeCard(title: String, detail: String, json: JSONObject, shareLabel: String) {
+    val context = LocalContext.current
+    val serialized = remember(json.toString()) { json.toString() }
+    OutlinedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                serialized,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis,
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { copyText(context, title, serialized) }) {
+                    Icon(Icons.Rounded.ContentCopy, null)
+                    Text(stringResource(R.string.action_copy), Modifier.padding(start = 8.dp))
+                }
+                OutlinedButton(onClick = { shareText(context, title, serialized) }) {
+                    Icon(Icons.Rounded.AddLink, null)
+                    Text(shareLabel, Modifier.padding(start = 8.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProviderExchange(
+    state: CovalentViewModel,
+    node: CovalentNodeClient,
+    store: SecureNodeStore,
+    scope: kotlinx.coroutines.CoroutineScope,
+) {
+    val context = LocalContext.current
+    val resources = LocalResources.current
+    val confirmation = state.pairingConfirmation ?: return
+    val peerGrant = confirmation.getJSONObject(
+        if (state.pairingRole == PairingRole.INVITER) "inviterGrant" else "responderGrant",
+    )
+    val roles = jsonStrings(peerGrant.getJSONArray("roles"))
+    val none = stringResource(R.string.value_none)
+    StatusCard(
+        stringResource(R.string.pairing_complete),
+        peerGrant.getString("displayName"),
+        stringResource(R.string.pair_exact_roles, roles.joinToString(", ").ifBlank { none }),
+        Icons.Rounded.CheckCircle,
+    )
+    OutlinedTextField(
+        state.providerAddress,
+        { state.providerAddress = it },
+        label = { Text(stringResource(R.string.field_provider_address)) },
+        placeholder = { Text(stringResource(R.string.provider_address_example)) },
+        supportingText = { Text(stringResource(R.string.provider_address_detail)) },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedButton(enabled = state.providerAddress.isNotBlank() && !state.busy, onClick = {
+        api(context, state, scope, pairingError = true) {
+            val identity = node.transportIdentity(store.baseUrl, store.token)
+            val packet = JSONObject()
+                .put("protocolVersion", 1)
+                .put("peerId", identity.deviceId)
+                .put("deviceName", state.status?.deviceName ?: store.displayName)
+                .put("address", state.providerAddress.trim())
+                .put("certificateDer", identity.certificateDer)
+                .put("certificateFingerprint", identity.certificateFingerprint)
+            state.localIdentityPacket = packet.toString()
+        }
+    }) { Text(stringResource(R.string.action_prepare_identity)) }
+    if (state.localIdentityPacket.isNotBlank()) {
+        val packet = runCatching { JSONObject(state.localIdentityPacket) }.getOrNull()
+        if (packet != null) {
+            ExchangeCard(
+                title = stringResource(R.string.provider_identity_ready),
+                detail = stringResource(R.string.provider_identity_detail),
+                json = packet,
+                shareLabel = stringResource(R.string.action_share_identity),
+            )
+        }
+    }
+    if ("storage_provider" !in roles) {
+        Text(
+            stringResource(R.string.provider_role_not_granted),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    } else {
+        OutlinedTextField(
+            state.providerIdentityInput,
+            { state.providerIdentityInput = it; state.pairingError = "" },
+            label = { Text(stringResource(R.string.field_peer_identity)) },
+            minLines = 3,
+            maxLines = 6,
+            keyboardOptions = pairingInvitationKeyboardOptions,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        FilledTonalButton(
+            enabled = state.providerIdentityInput.isNotBlank() && !state.busy,
+            onClick = {
+                api(context, state, scope, pairingError = true) {
+                    val identity = parseBoundedJson(state.providerIdentityInput)
+                    val expectedPeerId = peerGrant.getString("peerDeviceId")
+                    val peerId = identity.optString("peerId", identity.optString("deviceId"))
+                    check(peerId == expectedPeerId) {
+                        resources.getString(R.string.error_provider_identity_mismatch)
+                    }
+                    val address = identity.optString("address").ifBlank { state.providerAddress.trim() }
+                    check(validProviderSocketAddress(address)) {
+                        resources.getString(R.string.error_provider_address_invalid)
+                    }
+                    val expectedFingerprint = identity.getString("certificateFingerprint")
+                    val connected = node.connectProvider(
+                        store.baseUrl,
+                        store.token,
+                        peerId,
+                        address,
+                        identity.getString("certificateDer"),
+                    )
+                    check(connected.fingerprint == expectedFingerprint) {
+                        resources.getString(R.string.error_provider_fingerprint_mismatch)
+                    }
+                    state.providers = node.providers(store.baseUrl, store.token)
+                    state.notice = resources.getString(R.string.provider_connected, peerGrant.getString("displayName"))
+                }
+            },
+        ) { Text(stringResource(R.string.action_connect_provider)) }
     }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun Backup(state: AppState, node: CovalentNodeClient, store: SecureNodeStore, scope: kotlinx.coroutines.CoroutineScope, modifier: Modifier, pickSource: () -> Unit) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    var name by remember { mutableStateOf("") }
-    var selected by remember { mutableStateOf(setOf<String>()) }
-    LaunchedEffect(Unit) { if (state.providers.isEmpty()) api(state, scope) { state.providers = node.providers(store.baseUrl, store.token) } }
-    FormPage(modifier, "Create a backup", "Pick a folder, then explicitly choose each device that may store an extra encrypted copy.") {
-        OutlinedButton(onClick = pickSource) { Icon(Icons.Rounded.FolderOpen, null); Text(" Choose source folder") }
-        Text(state.selectedSource?.let { DocumentFile.fromTreeUri(context, it)?.name ?: it.toString() } ?: "No folder selected")
-        OutlinedTextField(name, { name = it }, label = { Text("Backup name") }, modifier = Modifier.fillMaxWidth())
-        Text("Extra copies", style = MaterialTheme.typography.titleMedium)
-        if (state.providers.isEmpty()) Text("No connected providers. This backup will remain local unless you pair and connect a device.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            state.providers.forEach { provider ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(provider.peerId in selected, { checked -> selected = if (checked) selected + provider.peerId else selected - provider.peerId })
-                    Text(provider.address, style = MaterialTheme.typography.bodyMedium)
+private fun Backup(
+    state: CovalentViewModel,
+    node: CovalentNodeClient,
+    store: SecureNodeStore,
+    scope: kotlinx.coroutines.CoroutineScope,
+    modifier: Modifier,
+    pickSource: () -> Unit,
+) {
+    val context = LocalContext.current
+    val resources = LocalResources.current
+    LaunchedEffect(Unit) {
+        if (state.providers.isEmpty() && state.connectionHealth == ConnectionHealth.READY) {
+            runCatching { withContext(Dispatchers.IO) { node.providers(store.baseUrl, store.token) } }
+                .onSuccess { state.providers = it }
+                .onFailure { state.notice = it.message }
+        }
+    }
+    FormPage(
+        modifier,
+        stringResource(R.string.backup_title),
+        stringResource(R.string.backup_subtitle),
+    ) {
+        OutlinedButton(onClick = pickSource) {
+            Icon(Icons.Rounded.FolderOpen, null)
+            Text(stringResource(R.string.action_choose_source), Modifier.padding(start = 8.dp))
+        }
+        Text(
+            state.selectedSource?.let { DocumentFile.fromTreeUri(context, it)?.name ?: it.toString() }
+                ?: stringResource(R.string.no_source_selected),
+        )
+        OutlinedTextField(
+            state.backupName,
+            { state.backupName = it },
+            label = { Text(stringResource(R.string.field_backup_name)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        SectionTitle(stringResource(R.string.extra_copies))
+        Text(
+            stringResource(R.string.extra_copies_detail),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (state.providers.isEmpty()) {
+            EmptyState(
+                stringResource(R.string.no_providers_title),
+                stringResource(R.string.no_providers_detail),
+            )
+        }
+        state.providers.forEach { provider ->
+            ProviderSelectionRow(
+                provider,
+                selected = provider.peerId in state.selectedProviderIds,
+            ) { checked ->
+                state.selectedProviderIds = if (checked) {
+                    state.selectedProviderIds + provider.peerId
+                } else {
+                    state.selectedProviderIds - provider.peerId
                 }
             }
         }
-        FilledTonalButton(enabled = state.selectedSource != null && name.isNotBlank() && !state.busy, onClick = {
-            val source = state.selectedSource ?: return@FilledTonalButton
-            api(state, scope) {
-                ensureReadableSource(context, source)
-                val jobId = newId("backup")
-                val snapshotId = newId("snapshot")
-                val payload = JSONObject().put("displayName", name).put("snapshotId", snapshotId).put("jobId", jobId)
-                    .put("selectedProviderIds", JSONArray(selected.toList()))
-                queueTransfer(
-                    context,
-                    store,
-                    jobId,
-                    "/api/v1/backups/archive",
-                    payload,
-                    TransferWorker.MODE_SAF_BACKUP,
-                    source,
-                )
-                state.message = "Backup queued. Android will stream the selected folder through protected file descriptors; its content URI never leaves this device."
-                state.screen = Screen.HOME
-            }
-        }) { Icon(Icons.Rounded.Backup, null); Text(" Queue backup") }
-    }
-}
-
-@Composable
-private fun Restore(state: AppState, node: CovalentNodeClient, store: SecureNodeStore, scope: kotlinx.coroutines.CoroutineScope, modifier: Modifier, pickTarget: () -> Unit) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    var backupId by remember { mutableStateOf(state.backups.firstOrNull()?.backupId.orEmpty()) }
-    var snapshotId by remember { mutableStateOf(state.backups.firstNotNullOfOrNull { it.latestSnapshotId }.orEmpty()) }
-    FormPage(modifier, "Restore safely", "Covalent asks the node for a signed no-write preview before any restore work is queued.") {
-        OutlinedTextField(backupId, { backupId = it }, label = { Text("Backup ID") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(snapshotId, { snapshotId = it }, label = { Text("Snapshot ID") }, modifier = Modifier.fillMaxWidth())
-        OutlinedButton(onClick = pickTarget) { Icon(Icons.Rounded.FolderOpen, null); Text(" Choose restore folder") }
-        Text(state.selectedTarget?.toString() ?: "No authorized target selected")
-        OutlinedButton(enabled = state.selectedTarget != null && backupId.isNotBlank() && snapshotId.isNotBlank() && !state.busy, onClick = {
-            val target = state.selectedTarget ?: return@OutlinedButton
-            api(state, scope) {
-                ensureWritableTarget(context, target)
-                state.restorePlan = node.post(store.baseUrl, store.token, "/api/v1/restores/archive/preview", JSONObject()
-                    .put("backupId", backupId).put("snapshotId", snapshotId)
-                    .put("conflictPolicy", "fail").put("jobId", newId("restore")))
-            }
-        }) { Text("Preview restore") }
-        state.restorePlan?.let { plan ->
-            val entries = plan.getJSONArray("entries")
-            StatusCard("Signed preview", "${entries.length()} changes", "The node signed these exact contents. Android confines writes to your authorized empty folder.", Icons.Rounded.CheckCircle)
-            FilledTonalButton(enabled = !state.busy, onClick = {
-                val target = state.selectedTarget ?: return@FilledTonalButton
-                api(state, scope) {
+        FilledTonalButton(
+            enabled = state.selectedSource != null && state.backupName.isNotBlank() && !state.busy &&
+                state.connectionHealth == ConnectionHealth.READY,
+            onClick = {
+                val source = state.selectedSource ?: return@FilledTonalButton
+                api(context, state, scope) {
+                    ensureReadableSource(context, source)
+                    val jobId = newId("backup")
+                    val payload = JSONObject()
+                        .put("displayName", state.backupName.trim())
+                        .put("snapshotId", newId("snapshot"))
+                        .put("jobId", jobId)
+                        .put("selectedProviderIds", JSONArray(state.selectedProviderIds.sorted()))
                     queueTransfer(
                         context,
                         store,
-                        plan.getString("jobId"),
-                        "/api/v1/restores/archive/execute",
-                        JSONObject().put("plan", plan),
-                        TransferWorker.MODE_SAF_RESTORE,
-                        target,
+                        TransferRecord(
+                            jobId = jobId,
+                            label = state.backupName.trim(),
+                            kind = TransferKind.BACKUP,
+                            state = TransferState.QUEUED,
+                            detail = resources.getString(R.string.transfer_queued_detail),
+                        ),
+                        "/api/v1/backups/archive",
+                        payload,
+                        TransferWorker.MODE_SAF_BACKUP,
+                        source,
                     )
-                    state.message = "Restore queued from the signed preview. Android will stream files into the authorized folder through protected file descriptors."
+                    state.refreshDurableState()
+                    state.notice = resources.getString(R.string.backup_queued)
+                    state.backupName = ""
                     state.screen = Screen.HOME
                 }
-            }) { Icon(Icons.Rounded.FolderOpen, null); Text(" Queue restore") }
+            },
+        ) {
+            Icon(Icons.Rounded.Backup, null)
+            Text(stringResource(R.string.action_queue_backup), Modifier.padding(start = 8.dp))
         }
     }
 }
 
 @Composable
-private fun Settings(state: AppState, node: CovalentNodeClient, store: SecureNodeStore, scope: kotlinx.coroutines.CoroutineScope, modifier: Modifier, export: (String) -> Unit, import: (Array<String>) -> Unit, onLanChange: (Boolean) -> Unit) {
-    var lanEnabled by remember { mutableStateOf(state.status?.lanDiscovery ?: false) }
-    FormPage(modifier, "Settings", "Settings export includes your device name and remembered backups, never private identity keys or provider credentials.") {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) { Text("LAN discovery", style = MaterialTheme.typography.titleMedium); Text("Show nearby node hints. Pairing still requires code confirmation.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            Switch(lanEnabled, onCheckedChange = { enabled -> lanEnabled = enabled; onLanChange(enabled) })
+private fun ProviderSelectionRow(provider: Provider, selected: Boolean, onSelected: (Boolean) -> Unit) {
+    val title = provider.displayName ?: stringResource(R.string.provider_unnamed)
+    val reachability = when (provider.reachability) {
+        ProviderReachability.CONNECTED -> stringResource(R.string.provider_connected_state)
+        ProviderReachability.OFFLINE -> stringResource(R.string.provider_offline_state)
+        ProviderReachability.UNKNOWN -> stringResource(R.string.provider_unknown_state)
+    }
+    val roles = provider.roles.sorted().joinToString(", ").ifBlank { stringResource(R.string.provider_roles_unavailable) }
+    OutlinedCard(
+        Modifier
+            .fillMaxWidth()
+            .toggleable(value = selected, role = Role.Checkbox, onValueChange = onSelected)
+            .semantics(mergeDescendants = true) {},
+    ) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(selected, onCheckedChange = null)
+            Column(Modifier.padding(start = 10.dp).weight(1f)) {
+                Text(title, fontWeight = FontWeight.SemiBold)
+                Text(provider.address)
+                Text(
+                    stringResource(R.string.provider_metadata, reachability, roles),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    stringResource(R.string.provider_fingerprint, shortFingerprint(provider.fingerprint)),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                )
+                Text(
+                    stringResource(R.string.provider_capacity_unavailable),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
-        OutlinedButton(enabled = !state.busy, onClick = { export("covalent-settings.json") }) { Text("Export safe settings") }
-        OutlinedButton(enabled = !state.busy, onClick = { import(arrayOf("application/json", "text/json")) }) { Text("Import settings") }
-        OutlinedButton(onClick = { state.screen = Screen.SETUP }) { Text("Change node connection") }
-        Text("If folder access is revoked in Android system settings, a backup or restore stops safely and asks you to choose the folder again.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
 @Composable
-private fun SecurityConfirmation(code: String, onConfirm: () -> Unit) {
-    Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("Compare this code on both devices", style = MaterialTheme.typography.titleMedium)
-        Text(code, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Text("Only confirm when every group matches. This does not trust a discovered device automatically.")
-        FilledTonalButton(onClick = onConfirm) { Icon(Icons.Rounded.Security, null); Text(" Codes match") }
-    } }
+private fun Restore(
+    state: CovalentViewModel,
+    node: CovalentNodeClient,
+    store: SecureNodeStore,
+    scope: kotlinx.coroutines.CoroutineScope,
+    modifier: Modifier,
+    pickTarget: () -> Unit,
+) {
+    val context = LocalContext.current
+    val resources = LocalResources.current
+    val available = state.backups.filter { it.latestSnapshotId != null }
+    LaunchedEffect(available.map(RememberedBackup::backupId)) {
+        if (available.none { it.backupId == state.selectedRestoreBackupId }) {
+            state.selectedRestoreBackupId = available.firstOrNull()?.backupId.orEmpty()
+            state.persistRestorePlan(null)
+        }
+    }
+    val selected = available.firstOrNull { it.backupId == state.selectedRestoreBackupId }
+    FormPage(
+        modifier,
+        stringResource(R.string.restore_title),
+        stringResource(R.string.restore_subtitle),
+    ) {
+        SectionTitle(stringResource(R.string.restore_choose_backup))
+        if (available.isEmpty()) {
+            EmptyState(
+                stringResource(R.string.restore_no_backups_title),
+                stringResource(R.string.restore_no_backups_detail),
+            )
+        }
+        available.forEach { backup ->
+            val chosen = backup.backupId == state.selectedRestoreBackupId
+            OutlinedCard(
+                Modifier
+                    .fillMaxWidth()
+                    .toggleable(value = chosen, role = Role.RadioButton) {
+                        state.selectedRestoreBackupId = backup.backupId
+                        state.persistRestorePlan(null)
+                    }
+                    .semantics(mergeDescendants = true) {},
+            ) {
+                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    androidx.compose.material3.RadioButton(chosen, onClick = null)
+                    Column(Modifier.padding(start = 10.dp)) {
+                        Text(backup.name, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            pluralStringResource(
+                                R.plurals.restore_latest_snapshot,
+                                backup.snapshotCount.toInt(),
+                                backup.snapshotCount,
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+        }
+        OutlinedButton(onClick = pickTarget) {
+            Icon(Icons.Rounded.FolderOpen, null)
+            Text(stringResource(R.string.action_choose_restore_folder), Modifier.padding(start = 8.dp))
+        }
+        Text(
+            state.selectedTarget?.let { DocumentFile.fromTreeUri(context, it)?.name ?: it.toString() }
+                ?: stringResource(R.string.no_restore_target),
+        )
+        OutlinedButton(
+            enabled = selected != null && state.selectedTarget != null && !state.busy &&
+                state.connectionHealth == ConnectionHealth.READY,
+            onClick = {
+                val target = state.selectedTarget ?: return@OutlinedButton
+                val backup = selected ?: return@OutlinedButton
+                api(context, state, scope) {
+                    ensureWritableTarget(context, target)
+                    state.persistRestorePlan(
+                        node.previewArchiveRestore(
+                            store.baseUrl,
+                            store.token,
+                            JSONObject()
+                                .put("backupId", backup.backupId)
+                                .put("snapshotId", backup.latestSnapshotId)
+                                .put("conflictPolicy", "fail")
+                                .put("jobId", newId("restore")),
+                        ),
+                    )
+                }
+            },
+        ) { Text(stringResource(R.string.action_preview_restore)) }
+        state.restorePlan?.let { plan ->
+            RestorePlanPreview(
+                plan = plan,
+                busy = state.busy,
+                onNextPage = plan.nextCursor?.let { cursor ->
+                    {
+                        api(context, state, scope) {
+                            state.persistRestorePlan(
+                                node.restorePlanPage(
+                                    store.baseUrl,
+                                    store.token,
+                                    plan.reference,
+                                    cursor,
+                                ),
+                            )
+                        }
+                    }
+                },
+            )
+            FilledTonalButton(
+                enabled = !state.busy && state.connectionHealth == ConnectionHealth.READY,
+                onClick = {
+                    val target = state.selectedTarget ?: return@FilledTonalButton
+                    api(context, state, scope) {
+                        ensureWritableTarget(context, target)
+                        val reference = plan.reference
+                        queueTransfer(
+                            context,
+                            store,
+                            TransferRecord(
+                                jobId = reference.jobId,
+                                label = selected?.name ?: resources.getString(R.string.restore_title),
+                                kind = TransferKind.RESTORE,
+                                state = TransferState.QUEUED,
+                                detail = resources.getString(R.string.transfer_queued_detail),
+                                totalEntries = reference.totalEntries,
+                            ),
+                            "/api/v1/restores/archive/execute",
+                            restoreTransferPayload(reference),
+                            TransferWorker.MODE_SAF_RESTORE,
+                            target,
+                        )
+                        state.persistRestorePlan(null)
+                        state.refreshDurableState()
+                        state.notice = resources.getString(R.string.restore_queued)
+                        state.screen = Screen.HOME
+                    }
+                },
+            ) {
+                Icon(Icons.Rounded.FolderOpen, null)
+                Text(stringResource(R.string.action_queue_restore), Modifier.padding(start = 8.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun RestorePlanPreview(plan: RestorePlanPage, busy: Boolean, onNextPage: (() -> Unit)?) {
+    val pageStart = plan.entryOffset + 1
+    val pageEnd = plan.entryOffset + plan.entries.size
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.restore_signed_preview), style = MaterialTheme.typography.titleMedium)
+            Text(
+                pluralStringResource(
+                    R.plurals.restore_change_count,
+                    plan.reference.totalEntries.toInt(),
+                    plan.reference.totalEntries,
+                ),
+            )
+            if (plan.entries.isNotEmpty()) {
+                Text(
+                    stringResource(R.string.restore_preview_range, pageStart, pageEnd),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                stringResource(R.string.restore_preview_policy),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            plan.entries.forEach { entry ->
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
+                    Icon(
+                        if (entry.kind == "directory") Icons.Rounded.FolderOpen else Icons.Rounded.Storage,
+                        null,
+                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(entry.destinationPath, fontFamily = FontFamily.Monospace)
+                        Text(
+                            stringResource(
+                                R.string.restore_entry_metadata,
+                                entry.kind,
+                                entry.action,
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            if (onNextPage != null) {
+                OutlinedButton(enabled = !busy, onClick = onNextPage) {
+                    Text(stringResource(R.string.action_next_restore_paths))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun Settings(
+    state: CovalentViewModel,
+    node: CovalentNodeClient,
+    store: SecureNodeStore,
+    scope: kotlinx.coroutines.CoroutineScope,
+    modifier: Modifier,
+    export: (String) -> Unit,
+    import: (Array<String>) -> Unit,
+    onLanChange: (Boolean) -> Unit,
+) {
+    val context = LocalContext.current
+    val resources = LocalResources.current
+    val lanEnabled = state.status?.lanDiscovery == true
+    FormPage(
+        modifier,
+        stringResource(R.string.settings_title),
+        stringResource(R.string.settings_subtitle),
+    ) {
+        val lanDescription = stringResource(if (lanEnabled) R.string.covalent_state_on else R.string.covalent_state_off)
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .toggleable(
+                    value = lanEnabled,
+                    enabled = !state.busy && state.connectionHealth == ConnectionHealth.READY,
+                    role = Role.Switch,
+                    onValueChange = onLanChange,
+                )
+                .semantics(mergeDescendants = true) { stateDescription = lanDescription }
+                .padding(vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(stringResource(R.string.lan_discovery), style = MaterialTheme.typography.titleMedium)
+                Text(
+                    stringResource(R.string.lan_discovery_detail),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                lanEnabled,
+                onCheckedChange = null,
+                modifier = Modifier.clearAndSetSemantics {},
+            )
+        }
+        OutlinedButton(enabled = !state.busy, onClick = { export("covalent-settings.json") }) {
+            Text(stringResource(R.string.action_export_settings))
+        }
+        OutlinedButton(enabled = !state.busy, onClick = {
+            state.setImportCandidate(null)
+            import(arrayOf("application/json", "text/json"))
+        }) { Text(stringResource(R.string.action_import_settings)) }
+        state.importCandidate?.let { candidate ->
+            val preview = settingsPreview(state.currentExportedSettings, candidate)
+            SettingsImportPreview(preview)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilledTonalButton(enabled = !state.busy, onClick = {
+                    api(context, state, scope) {
+                        node.postNoContent(
+                            store.baseUrl,
+                            store.token,
+                            "/api/v1/config/import",
+                            JSONObject().put("confirmed", true).put("settings", candidate),
+                        )
+                        state.setImportCandidate(null)
+                        refreshStatus(state, node, store)
+                        state.notice = resources.getString(R.string.settings_imported)
+                    }
+                }) { Text(stringResource(R.string.action_confirm_import)) }
+                TextButton(onClick = { state.setImportCandidate(null) }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        }
+        OutlinedButton(onClick = { state.screen = Screen.SETUP }) {
+            Text(stringResource(R.string.action_change_connection))
+        }
+        Text(
+            stringResource(R.string.folder_revocation_policy),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+internal data class SettingsPreview(
+    val oldName: String,
+    val newName: String,
+    val oldLan: Boolean,
+    val newLan: Boolean,
+    val oldBackups: Int,
+    val newBackups: Int,
+) {
+    val removesBackups: Boolean get() = newBackups < oldBackups
+}
+
+internal fun settingsPreview(current: JSONObject?, candidate: JSONObject): SettingsPreview = SettingsPreview(
+    oldName = current?.optString("deviceName").orEmpty(),
+    newName = candidate.getString("deviceName"),
+    oldLan = current?.optBoolean("lanDiscoveryEnabled") ?: false,
+    newLan = candidate.getBoolean("lanDiscoveryEnabled"),
+    oldBackups = current?.optJSONArray("rememberedBackups")?.length() ?: 0,
+    newBackups = candidate.getJSONArray("rememberedBackups").length(),
+)
+
+private fun validateSettingsCandidate(context: Context, candidate: JSONObject) {
+    check(candidate.getInt("schemaVersion") == 1) {
+        context.getString(R.string.error_settings_schema_unsupported)
+    }
+    check(candidate.getString("deviceName").isNotBlank()) {
+        context.getString(R.string.error_settings_device_name_missing)
+    }
+    candidate.getBoolean("lanDiscoveryEnabled")
+    candidate.getJSONArray("rememberedBackups")
+}
+
+@Composable
+private fun SettingsImportPreview(preview: SettingsPreview) {
+    val none = stringResource(R.string.value_none)
+    OutlinedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(stringResource(R.string.settings_import_preview), style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.settings_name_change, preview.oldName.ifBlank { none }, preview.newName))
+            Text(
+                stringResource(
+                    R.string.settings_lan_change,
+                    stringResource(if (preview.oldLan) R.string.covalent_state_on else R.string.covalent_state_off),
+                    stringResource(if (preview.newLan) R.string.covalent_state_on else R.string.covalent_state_off),
+                ),
+            )
+            Text(stringResource(R.string.settings_backup_change, preview.oldBackups, preview.newBackups))
+            if (preview.removesBackups) InlineError(stringResource(R.string.settings_backup_removal_warning))
+            Text(
+                stringResource(R.string.settings_import_keys_excluded),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
 }
 
 @Composable
 private fun FormPage(modifier: Modifier, title: String, subtitle: String, content: @Composable () -> Unit) {
-    LazyColumn(modifier, contentPadding = PaddingValues(20.dp, 14.dp, 20.dp, 32.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        item { Text(title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold) }
+    LazyColumn(
+        modifier,
+        contentPadding = PaddingValues(20.dp, 14.dp, 20.dp, 32.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        item {
+            Text(
+                title,
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.semantics { heading() },
+            )
+        }
         item { Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         item { Column(verticalArrangement = Arrangement.spacedBy(14.dp), content = { content() }) }
     }
 }
 
 @Composable
-private fun StatusCard(title: String, value: String, detail: String, icon: androidx.compose.ui.graphics.vector.ImageVector) {
-    Card(Modifier.fillMaxWidth()) { Row(Modifier.padding(18.dp), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.Top) {
-        Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.secondaryContainer) { Icon(icon, null, Modifier.padding(12.dp)) }
-        Column { Text(title, style = MaterialTheme.typography.labelLarge); Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold); Spacer(Modifier.height(5.dp)); Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-    } }
-}
-
-@Composable
-private fun EmptyState(title: String, detail: String) { Card(Modifier.fillMaxWidth()) { Row(Modifier.padding(18.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) { Icon(Icons.Rounded.CloudOff, null); Column { Text(title, fontWeight = FontWeight.SemiBold); Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant) } } } }
-
-@Composable
-fun PrimaryActionToolbar(enabled: Boolean, onAction: (PrimaryAction) -> Unit) {
-    Surface(modifier = Modifier.semantics { contentDescription = "Primary actions" }.padding(horizontal = 12.dp), shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.surfaceContainerHigh, tonalElevation = 6.dp, shadowElevation = 3.dp) {
-        Row(Modifier.padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            ToolbarButton(PrimaryAction.PAIR, enabled, onAction, Icons.Rounded.AddLink)
-            ToolbarButton(PrimaryAction.BACKUP, enabled, onAction, Icons.Rounded.Backup)
-            ToolbarButton(PrimaryAction.RESTORE, enabled, onAction, Icons.Rounded.FolderOpen)
+private fun StatusCard(title: String, value: String, detail: String, icon: ImageVector) {
+    Card(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.padding(18.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.secondaryContainer) {
+                Icon(icon, null, Modifier.padding(12.dp))
+            }
+            Column {
+                Text(title, style = MaterialTheme.typography.labelLarge)
+                Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(5.dp))
+                Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }
 }
 
 @Composable
-private fun ToolbarButton(action: PrimaryAction, enabled: Boolean, onAction: (PrimaryAction) -> Unit, icon: androidx.compose.ui.graphics.vector.ImageVector) {
-    FilledTonalButton(onClick = { onAction(action) }, enabled = enabled, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp)) { Icon(icon, null); Text(action.label, Modifier.padding(start = 7.dp)) }
+private fun EmptyState(title: String, detail: String) {
+    Card(Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(18.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Icon(Icons.Rounded.CloudOff, null)
+            Column {
+                Text(title, fontWeight = FontWeight.SemiBold)
+                Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
 }
 
-private fun api(state: AppState, scope: kotlinx.coroutines.CoroutineScope, work: suspend () -> Unit) {
+@Composable
+private fun InlineError(message: String) {
+    Row(
+        Modifier.fillMaxWidth().semantics { contentDescription = message },
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Icon(Icons.Rounded.ErrorOutline, null, tint = MaterialTheme.colorScheme.error)
+        Text(message, color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun SectionTitle(title: String, modifier: Modifier = Modifier) {
+    Text(
+        title,
+        style = MaterialTheme.typography.titleLarge,
+        modifier = modifier.semantics { heading() },
+    )
+}
+
+@Composable
+fun PrimaryActionToolbar(
+    enabled: Boolean,
+    compact: Boolean = false,
+    onAction: (PrimaryAction) -> Unit,
+) {
+    val description = stringResource(R.string.primary_actions)
+    BoxWithConstraints {
+        val iconOnly = compact || maxWidth < 340.dp
+        Surface(
+            modifier = Modifier
+                .semantics { contentDescription = description }
+                .padding(horizontal = 12.dp),
+            shape = MaterialTheme.shapes.extraLarge,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            tonalElevation = 6.dp,
+            shadowElevation = 3.dp,
+        ) {
+            Row(
+                Modifier.padding(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ToolbarButton(PrimaryAction.PAIR, enabled, iconOnly, onAction, Icons.Rounded.AddLink)
+                ToolbarButton(PrimaryAction.BACKUP, enabled, iconOnly, onAction, Icons.Rounded.Backup)
+                ToolbarButton(PrimaryAction.RESTORE, enabled, iconOnly, onAction, Icons.Rounded.FolderOpen)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ToolbarButton(
+    action: PrimaryAction,
+    enabled: Boolean,
+    iconOnly: Boolean,
+    onAction: (PrimaryAction) -> Unit,
+    icon: ImageVector,
+) {
+    val label = when (action) {
+        PrimaryAction.PAIR -> stringResource(R.string.action_pair)
+        PrimaryAction.BACKUP -> stringResource(R.string.action_backup)
+        PrimaryAction.RESTORE -> stringResource(R.string.action_restore)
+    }
+    if (iconOnly) {
+        IconButton(onClick = { onAction(action) }, enabled = enabled) {
+            Icon(icon, contentDescription = label)
+        }
+    } else {
+        FilledTonalButton(
+            onClick = { onAction(action) },
+            enabled = enabled,
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+        ) {
+            Icon(icon, null)
+            Text(label, Modifier.padding(start = 7.dp))
+        }
+    }
+}
+
+private fun api(
+    context: Context,
+    state: CovalentViewModel,
+    scope: kotlinx.coroutines.CoroutineScope,
+    onError: ((Throwable) -> Unit)? = null,
+    pairingError: Boolean = false,
+    work: suspend () -> Unit,
+) {
     scope.launch {
         state.busy = true
-        runCatching { withContext(Dispatchers.IO) { work() } }.onFailure { state.message = it.message ?: "The node could not complete that action." }
+        if (pairingError) state.pairingError = ""
+        runCatching { withContext(Dispatchers.IO) { work() } }.onFailure { error ->
+            when {
+                onError != null -> onError(error)
+                pairingError -> state.pairingError = error.message ?: context.getString(R.string.error_pairing_failed)
+                else -> state.notice = error.message ?: context.getString(R.string.error_node_action_failed)
+            }
+        }
         state.busy = false
     }
 }
 
-private fun refreshStatus(state: AppState, node: CovalentNodeClient, store: SecureNodeStore) {
-    state.status = node.status(store.baseUrl)
-    if (store.token.isNotBlank()) {
-        val backups = node.backups(store.baseUrl, store.token)
-        store.replaceBackups(backups)
-        state.backups = backups
+private fun refreshStatus(state: CovalentViewModel, node: CovalentNodeClient, store: SecureNodeStore) {
+    val status = node.status(store.baseUrl)
+    val backups = if (store.token.isNotBlank()) node.backups(store.baseUrl, store.token) else emptyList()
+    state.status = status
+    store.replaceBackups(backups)
+    state.backups = backups
+    state.transfers = store.transfers()
+}
+
+private fun reconnectNode(
+    context: Context,
+    state: CovalentViewModel,
+    node: CovalentNodeClient,
+    store: SecureNodeStore,
+    scope: kotlinx.coroutines.CoroutineScope,
+) {
+    state.connectionHealth = ConnectionHealth.CONNECTING
+    api(context, state, scope, onError = { error ->
+        state.connectionHealth = ConnectionHealth.STALE
+        state.connectionError = error.message ?: context.getString(R.string.error_connection_failed)
+        if (shouldReturnToSetupAfterRefreshFailure(error)) state.screen = Screen.SETUP
+    }) {
+        refreshStatus(state, node, store)
+        TransferExecution.reconcileAcknowledgements(store, node)
+        state.connectionHealth = ConnectionHealth.READY
+        state.connectionError = null
+        state.lastConnectedAtUnixMs = System.currentTimeMillis()
     }
 }
 
-private fun setLanDiscovery(state: AppState, node: CovalentNodeClient, store: SecureNodeStore, enabled: Boolean) {
+private fun setLanDiscovery(
+    context: Context,
+    state: CovalentViewModel,
+    node: CovalentNodeClient,
+    store: SecureNodeStore,
+    enabled: Boolean,
+) {
     val settings = node.post(store.baseUrl, store.token, "/api/v1/config/export", JSONObject())
     settings.put("lanDiscoveryEnabled", enabled)
-    node.postNoContent(store.baseUrl, store.token, "/api/v1/config/import", JSONObject().put("confirmed", true).put("settings", settings))
+    node.postNoContent(
+        store.baseUrl,
+        store.token,
+        "/api/v1/config/import",
+        JSONObject().put("confirmed", true).put("settings", settings),
+    )
     refreshStatus(state, node, store)
-    state.message = if (enabled) "LAN discovery enabled after local-network permission and explicit settings confirmation." else "LAN discovery disabled. Manual and Tailnet pairing remain available."
+    state.notice = if (enabled) {
+        context.getString(R.string.lan_discovery_enabled)
+    } else {
+        context.getString(R.string.lan_discovery_disabled)
+    }
 }
 
-private fun ensureReadableSource(context: android.content.Context, uri: Uri) {
-    check(context.contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission }) { "Folder access was revoked. Choose the source folder again." }
+private fun ensureReadableSource(context: Context, uri: Uri) {
+    check(context.contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission }) {
+        context.getString(R.string.error_source_access_revoked)
+    }
 }
 
-private fun ensureWritableTarget(context: android.content.Context, uri: Uri) {
-    check(context.contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission && it.isWritePermission }) { "Folder write access was revoked. Choose the restore folder again." }
+private fun ensureWritableTarget(context: Context, uri: Uri) {
+    check(
+        context.contentResolver.persistedUriPermissions.any {
+            it.uri == uri && it.isReadPermission && it.isWritePermission
+        },
+    ) { context.getString(R.string.error_target_access_revoked) }
     val target = DocumentFile.fromTreeUri(context, uri)
-    check(target != null && target.exists() && target.isDirectory) { "The selected restore folder is unavailable." }
-    check(target.listFiles().isEmpty()) { "Choose an empty restore folder so the signed no-write preview remains exact." }
+    check(target != null && target.exists() && target.isDirectory) {
+        context.getString(R.string.error_target_unavailable)
+    }
+    check(target.listFiles().isEmpty()) { context.getString(R.string.error_target_not_empty) }
 }
 
 private fun queueTransfer(
-    context: android.content.Context,
+    context: Context,
     store: SecureNodeStore,
-    jobId: String,
+    record: TransferRecord,
     path: String,
     payload: JSONObject,
     mode: String = "json",
     treeUri: Uri? = null,
 ) {
-    store.savePending(jobId, path, payload, mode, treeUri?.toString())
-    TransferScheduler.enqueue(context, jobId)
+    store.savePending(record.jobId, path, payload, mode, treeUri?.toString())
+    store.saveTransfer(record)
+    try {
+        TransferScheduler.enqueue(context, record.jobId)
+    } catch (error: Exception) {
+        store.updateTransfer(record.jobId) {
+            it.copy(state = TransferState.FAILED, detail = error.message.orEmpty(), retryable = true)
+        }
+        throw error
+    }
+}
+
+private fun parseBoundedJson(raw: String): JSONObject {
+    val bytes = raw.trim().encodeToByteArray()
+    check(bytes.isNotEmpty() && bytes.size <= 512 * 1_024) { "Pairing exchange size is invalid." }
+    return JSONObject(bytes.decodeToString())
+}
+
+private fun requireSameInvitation(invitation: JSONObject, session: JSONObject) {
+    val returned = session.getJSONObject("invitation")
+    check(returned.getString("invitationId") == invitation.getString("invitationId")) {
+        "The returned session belongs to a different invitation."
+    }
+}
+
+private fun requireSameSession(current: JSONObject, updated: JSONObject) {
+    requireSameInvitation(current.getJSONObject("invitation"), updated)
+    check(updated.getString("responderDeviceId") == current.getString("responderDeviceId")) {
+        "The returned session belongs to a different responder."
+    }
+    check(updated.getString("authenticationString") == current.getString("authenticationString")) {
+        "The returned session changed the comparison code."
+    }
+}
+
+internal fun isExpired(session: JSONObject, nowUnixMs: Long = System.currentTimeMillis()): Boolean =
+    isExpiredInvitation(session.getJSONObject("invitation"), nowUnixMs)
+
+internal fun isExpiredInvitation(invitation: JSONObject, nowUnixMs: Long = System.currentTimeMillis()): Boolean =
+    invitation.optLong("expiresAtUnixMs", 0) <= nowUnixMs
+
+private fun remainingMinutes(invitation: JSONObject): Long =
+    ((invitation.optLong("expiresAtUnixMs") - System.currentTimeMillis()).coerceAtLeast(0) + 59_999) / 60_000
+
+private fun roleSet(serialized: String): Set<String> = serialized.split(',').filter { it in ALL_PAIRING_ROLES }.toSet()
+
+private fun jsonStrings(values: JSONArray): Set<String> = buildSet {
+    repeat(values.length()) { add(values.getString(it)) }
+}
+
+internal fun validProviderSocketAddress(value: String): Boolean {
+    val trimmed = value.trim()
+    val (host, port) = when {
+        trimmed.startsWith('[') && "]:" in trimmed -> {
+            val close = trimmed.indexOf(']')
+            if (close <= 1 || close != trimmed.lastIndexOf(']')) return false
+            trimmed.substring(1, close) to trimmed.substring(close + 2).toIntOrNull()
+        }
+        trimmed.count { it == ':' } == 1 ->
+            trimmed.substringBefore(':') to trimmed.substringAfter(':').toIntOrNull()
+        else -> return false
+    }
+    if (port !in 1..65_535) return false
+    if (':' in host) {
+        if ('%' in host || host.any { !it.isDigit() && it.lowercaseChar() !in 'a'..'f' && it !in setOf(':', '.') }) {
+            return false
+        }
+        return runCatching { InetAddress.getByName(host).hostAddress?.contains(':') == true }.getOrDefault(false)
+    }
+    val octets = host.split('.').mapNotNull(String::toIntOrNull)
+    return octets.size == 4 && octets.all { it in 0..255 }
+}
+
+private fun shortFingerprint(value: String): String = if (value.length <= 20) value else {
+    "${value.take(10)}…${value.takeLast(10)}"
+}
+
+private fun copyText(context: Context, label: String, value: String) {
+    context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText(label, value))
+}
+
+private fun shareText(context: Context, title: String, value: String) {
+    val intent = Intent(Intent.ACTION_SEND)
+        .setType("text/plain")
+        .putExtra(Intent.EXTRA_TEXT, value)
+    context.startActivity(Intent.createChooser(intent, title))
 }
 
 @Preview(showBackground = true, widthDp = 420, heightDp = 820)
 @Composable
-private fun AppPreview() { CovalentTheme { CovalentApp() } }
+private fun AppPreview() {
+    CovalentTheme {
+        CovalentApp()
+    }
+}

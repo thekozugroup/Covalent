@@ -10,7 +10,7 @@ import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import life.michaelwong.covalent.R
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.runInterruptible
 
 /** Legacy scheduler for Android 13 and earlier. Newer releases use a user-initiated transfer job. */
 class TransferWorker(appContext: Context, parameters: WorkerParameters) : CoroutineWorker(appContext, parameters) {
@@ -22,7 +22,7 @@ class TransferWorker(appContext: Context, parameters: WorkerParameters) : Corout
             return Result.failure()
         }
         setForeground(ForegroundInfo(TRANSFER_NOTIFICATION_ID, TransferNotification.create(applicationContext)))
-        return when (withContext(Dispatchers.IO) { TransferExecution.run(applicationContext, jobId) }) {
+        return when (runInterruptible(Dispatchers.IO) { TransferExecution.run(applicationContext, jobId) }) {
             TransferOutcome.SUCCESS -> Result.success()
             TransferOutcome.RETRY -> Result.retry()
             TransferOutcome.FAILURE -> Result.failure()

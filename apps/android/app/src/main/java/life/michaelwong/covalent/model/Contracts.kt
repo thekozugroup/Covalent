@@ -29,6 +29,26 @@ data class Provider(
     val peerId: String,
     val address: String,
     val fingerprint: String,
+    val displayName: String? = null,
+    val roles: Set<String> = emptySet(),
+    val reachability: ProviderReachability = ProviderReachability.UNKNOWN,
+    val capacityBytes: Long? = null,
+)
+
+enum class ProviderReachability { CONNECTED, OFFLINE, UNKNOWN }
+
+data class TransportIdentity(
+    val deviceId: String,
+    val peerPort: Int,
+    val certificateDer: String,
+    val certificateFingerprint: String,
+)
+
+data class PeerGrant(
+    val peerDeviceId: String,
+    val displayName: String,
+    val roles: Set<String>,
+    val revoked: Boolean,
 )
 
 data class RememberedBackup(
@@ -39,6 +59,39 @@ data class RememberedBackup(
     val latestCommittedAtUnixMs: Long?,
     val snapshotCount: Long,
     val selectedProviderIds: Set<String>,
+)
+
+/**
+ * Small, durable handle returned by restore preview. The complete signed entry list stays on the
+ * node and is fetched in bounded pages; legacyPlanJson exists only for a compatibility window with
+ * nodes that still return the former inline plan contract.
+ */
+data class RestorePlanReference(
+    val planId: String?,
+    val planDigest: String,
+    val backupId: String,
+    val snapshotId: String,
+    val authorizedRoot: String,
+    val manifestDigest: String,
+    val conflictPolicy: String,
+    val jobId: String,
+    val signerDeviceId: String,
+    val signature: String,
+    val totalEntries: Long,
+    val legacyPlanJson: String? = null,
+)
+
+data class RestorePreviewEntry(
+    val destinationPath: String,
+    val kind: String,
+    val action: String,
+)
+
+data class RestorePlanPage(
+    val reference: RestorePlanReference,
+    val entryOffset: Long,
+    val entries: List<RestorePreviewEntry>,
+    val nextCursor: String?,
 )
 
 data class ApiErrorPayload(
@@ -76,14 +129,16 @@ data class TransferRecord(
     val kind: TransferKind,
     val state: TransferState,
     val detail: String = "",
+    val completedBytes: Long = 0,
+    val totalBytes: Long? = null,
+    val completedEntries: Long = 0,
+    val totalEntries: Long? = null,
+    val updatedAtUnixMs: Long = System.currentTimeMillis(),
+    val retryable: Boolean = false,
 )
 
 enum class TransferKind { BACKUP, VERIFICATION, RESTORE }
 
 enum class TransferState { QUEUED, RUNNING, PAUSED, COMPLETED, FAILED, CANCELLED }
 
-enum class PrimaryAction(val label: String) {
-    PAIR("Pair"),
-    BACKUP("Backup"),
-    RESTORE("Restore"),
-}
+enum class PrimaryAction { PAIR, BACKUP, RESTORE }
