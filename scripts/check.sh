@@ -9,6 +9,8 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 cargo run --quiet -p covalent-cli -- doctor >/dev/null
+./scripts/smoke.sh
+cargo bench -p covalent-core --bench engine_smoke
 
 swift test --package-path apps/apple
 (cd apps/apple && xcodegen generate --quiet)

@@ -2,6 +2,7 @@ use covalent_protocol::{
     ExportedDeviceSettings, Manifest, PROTOCOL_VERSION, PairingInvitation, RelativePath,
     SETTINGS_SCHEMA_VERSION,
 };
+use proptest::prelude::*;
 
 #[test]
 fn versioned_json_fixtures_match_rust_contracts() {
@@ -28,5 +29,28 @@ fn versioned_json_fixtures_match_rust_contracts() {
 fn adversarial_restore_path_fixture_is_rejected() {
     for value in include_str!("../../../fixtures/security/invalid-restore-paths.txt").lines() {
         assert!(RelativePath::new(value).is_err(), "accepted {value:?}");
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 512,
+        failure_persistence: None,
+        ..ProptestConfig::default()
+    })]
+
+    #[test]
+    fn accepted_relative_paths_always_satisfy_confinement_invariants(value in ".{0,5000}") {
+        if let Ok(path) = RelativePath::new(value.clone()) {
+            prop_assert!(!path.as_str().is_empty());
+            prop_assert!(path.as_str().len() <= 4_096);
+            prop_assert!(!path.as_str().starts_with('/'));
+            prop_assert!(!path.as_str().contains(['\\', '\0']));
+            for component in path.components() {
+                prop_assert!(!component.is_empty());
+                prop_assert!(component != "." && component != "..");
+                prop_assert!(component.len() <= 255);
+            }
+        }
     }
 }

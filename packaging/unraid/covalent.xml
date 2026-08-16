@@ -26,5 +26,6 @@
   <Config Name="Optional boot backup" Target="/boot-source" Default="" Mode="ro" Description="Optional read-only /boot mapping for boot-drive backup." Type="Path" Display="advanced" Required="false" Mask="false"/>
   <Config Name="Restore target" Target="/restore" Default="" Mode="rw" Description="Explicit writable target used only after restore preview and confirmation." Type="Path" Display="always" Required="false" Mask="false"/>
   <Config Name="Device name" Target="COVALENT_DEVICE_NAME" Default="Covalent Unraid" Mode="" Description="Name shown during pairing." Type="Variable" Display="always" Required="true" Mask="false"/>
+  <Config Name="Peer listen address" Target="COVALENT_PEER_LISTEN" Default="0.0.0.0:8787" Mode="" Description="Authenticated QUIC bind address and port." Type="Variable" Display="advanced" Required="true" Mask="false"/>
   <Config Name="LAN discovery" Target="COVALENT_LAN_DISCOVERY" Default="false" Mode="" Description="Enable mDNS advertisements. Pairing remains required." Type="Variable" Display="always" Required="true" Mask="false"/>
 </Container>

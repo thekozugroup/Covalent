@@ -1,0 +1,1779 @@
+use std::collections::{BTreeMap, BTreeSet};
+#[cfg(not(unix))]
+use std::fs::OpenOptions;
+use std::fs::{self, File};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Mutex};
+
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use covalent_protocol::{
+    BackupId, DeviceId, ExportedDeviceSettings, Manifest, PairingInvitation, PeerGrant, PeerRole,
+    RememberedBackup, ReplicaAvailability, ReplicaIntent, SignedRoster,
+};
+use fs2::FileExt as _;
+use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
+
+use crate::atomic::{read_json_bounded, sync_directory, write_atomic, write_json_atomic};
+use crate::backup::{BackupProgress, scan_source};
+use crate::manifest::{SignedRosterBuilder, roster_digest, verify_roster};
+use crate::replication::ProviderFailure;
+use crate::restore::{execute_restore, preview_restore};
+use crate::{
+    AuthorizedRoot, BackupKey, BackupOptions, BackupResult, ChunkProvider, ChunkStore, CoreError,
+    DeviceIdentity, IntegrityReport, PairingConfirmation, PairingManager, PairingSession,
+    PublicIdentity, ReplicationScheduler, RestoreOptions, RestorePlan, RestoreReport,
+    StoreProvider, StoredSnapshot, decrypt_manifest, encrypt_manifest, export_settings,
+    import_settings,
+};
+
+const NODE_CONFIG_SCHEMA_VERSION: u16 = 1;
+const BACKUP_KEY_SCHEMA_VERSION: u16 = 1;
+const MAX_NODE_CONFIG_BYTES: usize = 16 * 1_024 * 1_024;
+const MAX_BACKUP_KEY_BYTES: usize = 16 * 1_024;
+const MAX_ROSTER_BYTES: usize = 1_048_576;
+const BACKUP_TRANSACTION_SCHEMA_VERSION: u16 = 1;
+const MAX_BACKUP_TRANSACTION_BYTES: usize = 256 * 1_024 * 1_024;
+
+/// Persisted non-key backup state.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RememberedBackupState {
+    /// Export-safe descriptor.
+    pub descriptor: RememberedBackup,
+    /// Active local content-key epoch, without the key itself.
+    pub key_epoch: u64,
+    /// Latest locally committed snapshot.
+    pub latest_snapshot_id: Option<String>,
+    /// Exact latest explicit provider intent.
+    pub replica_intent: ReplicaIntent,
+}
+
+/// Durable anti-rollback cursor for one remembered peer's signed roster chain.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RosterCursor {
+    /// Highest sequential epoch accepted from this signer.
+    pub epoch: u64,
+    /// Digest the next epoch must name as its predecessor.
+    pub digest: String,
+}
+
+/// Authenticated local and explicit-provider availability for one snapshot.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SnapshotAvailabilityReport {
+    /// Local authenticated object verification.
+    pub local: IntegrityReport,
+    /// Availability of every provider explicitly selected for this snapshot.
+    pub providers: BTreeMap<DeviceId, ReplicaAvailability>,
+    /// Safe per-object failure categories for diagnostics.
+    pub failures: Vec<ProviderFailure>,
+}
+
+/// Versioned durable node configuration. Private identity and backup keys live separately.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NodeConfig {
+    /// Persisted schema version.
+    pub schema_version: u16,
+    /// User-facing device name.
+    pub device_name: String,
+    /// Persistent multicast discovery preference.
+    pub lan_discovery_enabled: bool,
+    /// Remembered backups keyed by stable identifier.
+    pub remembered_backups: BTreeMap<BackupId, RememberedBackupState>,
+    /// Explicitly confirmed peer grants, including revocation tombstones.
+    pub trusted_peers: BTreeMap<DeviceId, PeerGrant>,
+    /// Highest locally issued roster epoch.
+    pub roster_epoch: u64,
+    /// Digest chained by the next roster.
+    pub roster_digest: String,
+    /// High-water cursors for remote signed roster gossip; never implicit trust.
+    #[serde(default)]
+    pub peer_roster_cursors: BTreeMap<DeviceId, RosterCursor>,
+}
+
+impl NodeConfig {
+    /// Creates a validated schema-v1 configuration.
+    pub fn new(
+        device_name: impl Into<String>,
+        lan_discovery_enabled: bool,
+    ) -> Result<Self, CoreError> {
+        let settings =
+            ExportedDeviceSettings::new(device_name.into(), lan_discovery_enabled, Vec::new())?;
+        Ok(Self {
+            schema_version: NODE_CONFIG_SCHEMA_VERSION,
+            device_name: settings.device_name,
+            lan_discovery_enabled,
+            remembered_backups: BTreeMap::new(),
+            trusted_peers: BTreeMap::new(),
+            roster_epoch: 0,
+            roster_digest: String::new(),
+            peer_roster_cursors: BTreeMap::new(),
+        })
+    }
+
+    fn validate(&self) -> Result<(), CoreError> {
+        if self.schema_version != NODE_CONFIG_SCHEMA_VERSION {
+            return Err(CoreError::InvalidState(
+                "unsupported node config schema".to_owned(),
+            ));
+        }
+        let remembered_backups: Vec<_> = self
+            .remembered_backups
+            .values()
+            .map(|state| state.descriptor.clone())
+            .collect();
+        ExportedDeviceSettings::new(
+            self.device_name.clone(),
+            self.lan_discovery_enabled,
+            remembered_backups,
+        )?;
+        for (backup_id, state) in &self.remembered_backups {
+            if *backup_id != state.descriptor.backup_id
+                || state.key_epoch == 0
+                || state.replica_intent.selected_providers.len() > 128
+                || state
+                    .latest_snapshot_id
+                    .as_ref()
+                    .is_some_and(|value| !valid_identifier(value))
+            {
+                return Err(CoreError::InvalidState(
+                    "inconsistent remembered backup".to_owned(),
+                ));
+            }
+        }
+        for (peer_id, grant) in &self.trusted_peers {
+            if *peer_id != grant.peer_device_id
+                || grant.display_name.trim().is_empty()
+                || grant.display_name.len() > 80
+                || grant.display_name.chars().any(char::is_control)
+            {
+                return Err(CoreError::InvalidState(
+                    "inconsistent trusted peer".to_owned(),
+                ));
+            }
+            PublicIdentity::from_encoded(grant.peer_device_id, grant.public_key.clone())?;
+        }
+        if self.trusted_peers.len() > 128 || self.peer_roster_cursors.len() > 128 {
+            return Err(CoreError::InvalidState(
+                "excessive trusted peer state".to_owned(),
+            ));
+        }
+        if (self.roster_epoch == 0 && !self.roster_digest.is_empty())
+            || (self.roster_epoch > 0 && !valid_lower_hex_digest(&self.roster_digest))
+        {
+            return Err(CoreError::InvalidState(
+                "invalid local roster cursor".to_owned(),
+            ));
+        }
+        for (signer_id, cursor) in &self.peer_roster_cursors {
+            if !self.trusted_peers.contains_key(signer_id)
+                || cursor.epoch == 0
+                || !valid_lower_hex_digest(&cursor.digest)
+            {
+                return Err(CoreError::InvalidState(
+                    "invalid peer roster cursor".to_owned(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn safe_export(&self) -> Result<ExportedDeviceSettings, CoreError> {
+        let mut remembered_backups: Vec<_> = self
+            .remembered_backups
+            .values()
+            .map(|state| state.descriptor.clone())
+            .collect();
+        remembered_backups.sort_by_key(|backup| backup.backup_id);
+        Ok(ExportedDeviceSettings::new(
+            self.device_name.clone(),
+            self.lan_discovery_enabled,
+            remembered_backups,
+        )?)
+    }
+}
+
+fn valid_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn valid_lower_hex_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+/// Engine construction and resource limits.
+#[derive(Clone, Debug)]
+pub struct EngineOptions {
+    /// Durable state directory.
+    pub data_directory: PathBuf,
+    /// Initial name used only when no config exists.
+    pub initial_device_name: String,
+    /// Initial discovery preference used only when no config exists.
+    pub initial_lan_discovery_enabled: bool,
+    /// Hard maximum plaintext chunk size.
+    pub maximum_chunk_size: usize,
+    /// Hard maximum concurrent provider operations.
+    pub maximum_parallel_transfers: usize,
+}
+
+impl EngineOptions {
+    /// Production-safe local defaults.
+    #[must_use]
+    pub fn new(data_directory: impl Into<PathBuf>) -> Self {
+        Self {
+            data_directory: data_directory.into(),
+            initial_device_name: "Covalent node".to_owned(),
+            initial_lan_discovery_enabled: false,
+            maximum_chunk_size: 1_024 * 1_024,
+            maximum_parallel_transfers: 8,
+        }
+    }
+}
+
+/// Resumable job lifecycle state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum JobState {
+    /// Work may proceed.
+    Running = 0,
+    /// Work returns a checkpoint-preserving pause.
+    Paused = 1,
+    /// Work must stop and remain visibly cancelled.
+    Cancelled = 2,
+}
+
+/// Thread-safe pause/resume/cancel signal.
+#[derive(Clone, Debug)]
+pub struct JobControl {
+    state: Arc<AtomicU8>,
+}
+
+impl JobControl {
+    /// Starts in running state.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            state: Arc::new(AtomicU8::new(JobState::Running as u8)),
+        }
+    }
+
+    /// Requests a resumable pause.
+    pub fn pause(&self) {
+        self.state.store(JobState::Paused as u8, Ordering::Release);
+    }
+
+    /// Allows a subsequent invocation to resume from its durable checkpoint.
+    pub fn resume(&self) {
+        self.state.store(JobState::Running as u8, Ordering::Release);
+    }
+
+    /// Requests cancellation.
+    pub fn cancel(&self) {
+        self.state
+            .store(JobState::Cancelled as u8, Ordering::Release);
+    }
+
+    /// Current lifecycle state.
+    #[must_use]
+    pub fn state(&self) -> JobState {
+        match self.state.load(Ordering::Acquire) {
+            1 => JobState::Paused,
+            2 => JobState::Cancelled,
+            _ => JobState::Running,
+        }
+    }
+
+    pub(crate) fn check(&self) -> Result<(), CoreError> {
+        match self.state() {
+            JobState::Running => Ok(()),
+            JobState::Paused => Err(CoreError::Paused),
+            JobState::Cancelled => Err(CoreError::Cancelled),
+        }
+    }
+}
+
+impl Default for JobControl {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Stateful shared engine used by native, CLI, and daemon surfaces.
+pub struct Engine {
+    options: EngineOptions,
+    _state_lock: File,
+    identity: Arc<DeviceIdentity>,
+    pairing: Arc<PairingManager>,
+    store: ChunkStore,
+    config_path: PathBuf,
+    key_directory: PathBuf,
+    config: Mutex<NodeConfig>,
+    keys: Mutex<BTreeMap<BackupId, BackupKey>>,
+    scheduler: Mutex<ReplicationScheduler>,
+    backup_lock: Mutex<()>,
+}
+
+impl Engine {
+    /// Opens, migrates, validates, and recovers durable state.
+    pub fn open(mut options: EngineOptions) -> Result<Self, CoreError> {
+        if !(1..=32).contains(&options.maximum_parallel_transfers) {
+            return Err(CoreError::ResourceLimit("maximum parallel transfers"));
+        }
+        fs::create_dir_all(&options.data_directory).map_err(|source| CoreError::Io {
+            operation: "create engine data directory",
+            path: options.data_directory.clone(),
+            source,
+        })?;
+        let data_metadata =
+            fs::symlink_metadata(&options.data_directory).map_err(|source| CoreError::Io {
+                operation: "inspect engine data directory",
+                path: options.data_directory.clone(),
+                source,
+            })?;
+        if data_metadata.file_type().is_symlink() || !data_metadata.is_dir() {
+            return Err(CoreError::InvalidState(
+                "engine data directory is not a real directory".to_owned(),
+            ));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&options.data_directory, fs::Permissions::from_mode(0o700))
+                .map_err(|source| CoreError::Io {
+                    operation: "protect engine data directory",
+                    path: options.data_directory.clone(),
+                    source,
+                })?;
+        }
+        options.data_directory =
+            fs::canonicalize(&options.data_directory).map_err(|source| CoreError::Io {
+                operation: "canonicalize engine data directory",
+                path: options.data_directory.clone(),
+                source,
+            })?;
+        let state_lock = acquire_state_lock(&options.data_directory)?;
+        let identity = Arc::new(DeviceIdentity::load_or_create(
+            options.data_directory.join("identity.json"),
+        )?);
+        let config_path = options.data_directory.join("config.json");
+        let mut config = load_or_create_config(&config_path, &options)?;
+        let key_directory = options.data_directory.join("keys");
+        fs::create_dir_all(&key_directory).map_err(|source| CoreError::Io {
+            operation: "create backup key directory",
+            path: key_directory.clone(),
+            source,
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&key_directory, fs::Permissions::from_mode(0o700)).map_err(
+                |source| CoreError::Io {
+                    operation: "protect backup key directory",
+                    path: key_directory.clone(),
+                    source,
+                },
+            )?;
+        }
+        let store = ChunkStore::open(
+            options.data_directory.join("store"),
+            options.maximum_chunk_size,
+        )?;
+        recover_backup_transactions(
+            &options.data_directory,
+            &store,
+            &config_path,
+            &mut config,
+            &identity,
+        )?;
+        let pairing = Arc::new(PairingManager::open(
+            Arc::clone(&identity),
+            config.device_name.clone(),
+            options.data_directory.join("pairing-state.json"),
+        )?);
+        let local_provider = Arc::new(StoreProvider::new(identity.device_id(), store.clone()))
+            as Arc<dyn ChunkProvider>;
+        let scheduler =
+            ReplicationScheduler::new([local_provider], options.maximum_parallel_transfers)?;
+        Ok(Self {
+            scheduler: Mutex::new(scheduler),
+            options,
+            _state_lock: state_lock,
+            identity,
+            pairing,
+            store,
+            config_path,
+            key_directory,
+            config: Mutex::new(config),
+            keys: Mutex::new(BTreeMap::new()),
+            backup_lock: Mutex::new(()),
+        })
+    }
+
+    /// Public local identity.
+    #[must_use]
+    pub fn public_identity(&self) -> PublicIdentity {
+        self.identity.public_identity()
+    }
+
+    /// Stable local device identifier.
+    #[must_use]
+    pub fn device_id(&self) -> DeviceId {
+        self.identity.device_id()
+    }
+
+    /// Local encrypted store.
+    #[must_use]
+    pub const fn store(&self) -> &ChunkStore {
+        &self.store
+    }
+
+    /// Shared invitation manager.
+    #[must_use]
+    pub fn pairing_manager(&self) -> Arc<PairingManager> {
+        Arc::clone(&self.pairing)
+    }
+
+    /// Accepts a transferred invitation using this node's protected identity.
+    pub fn accept_pairing(
+        &self,
+        invitation: PairingInvitation,
+        responder_name: impl Into<String>,
+        responder_roles: BTreeSet<PeerRole>,
+        inviter_roles: BTreeSet<PeerRole>,
+        now_unix_ms: u64,
+    ) -> Result<PairingSession, CoreError> {
+        PairingSession::accept_with_roles(
+            invitation,
+            &self.identity,
+            responder_name,
+            responder_roles,
+            inviter_roles,
+            now_unix_ms,
+        )
+    }
+
+    /// Records the responder user's explicit short-code confirmation.
+    pub fn confirm_pairing_as_responder(
+        &self,
+        session: &mut PairingSession,
+        displayed: &str,
+        now_unix_ms: u64,
+    ) -> Result<(), CoreError> {
+        session.confirm_responder(displayed, &self.identity, now_unix_ms)
+    }
+
+    /// Records the inviter user's explicit short-code confirmation.
+    pub fn confirm_pairing_as_inviter(
+        &self,
+        session: &mut PairingSession,
+        displayed: &str,
+        now_unix_ms: u64,
+    ) -> Result<(), CoreError> {
+        self.pairing
+            .confirm_inviter(session, displayed, now_unix_ms)
+    }
+
+    /// Consumes an invitation and durably trusts the confirmed responder grant.
+    pub fn finalize_pairing_as_inviter(
+        &self,
+        session: &PairingSession,
+        now_unix_ms: u64,
+    ) -> Result<PairingConfirmation, CoreError> {
+        let confirmation = self.pairing.finalize(session, now_unix_ms)?;
+        self.trust_peer(confirmation.inviter_grant.clone())?;
+        Ok(confirmation)
+    }
+
+    /// Verifies the inviter approval and durably trusts the confirmed inviter grant.
+    pub fn finalize_pairing_as_responder(
+        &self,
+        session: &PairingSession,
+        now_unix_ms: u64,
+    ) -> Result<PairingConfirmation, CoreError> {
+        let confirmation = session.finalize_for_responder(&self.identity, now_unix_ms)?;
+        self.trust_peer(confirmation.responder_grant.clone())?;
+        Ok(confirmation)
+    }
+
+    /// Signs a transport transcript without exposing the private identity key.
+    #[must_use]
+    pub fn sign_transport_transcript(&self, transcript: &[u8]) -> String {
+        self.identity
+            .sign(b"covalent/authenticated-quic/v1", transcript)
+    }
+
+    /// Resolves one non-revoked peer with an exact required role.
+    pub fn authorized_peer(
+        &self,
+        peer_id: DeviceId,
+        required_role: PeerRole,
+    ) -> Result<PublicIdentity, CoreError> {
+        let config = self.config.lock().map_err(|_| CoreError::Synchronization)?;
+        let grant = config
+            .trusted_peers
+            .get(&peer_id)
+            .ok_or(CoreError::IdentityMismatch)?;
+        if grant.revoked {
+            return Err(CoreError::PeerRevoked);
+        }
+        if !grant.roles.contains(&required_role) {
+            return Err(CoreError::UnselectedProvider);
+        }
+        PublicIdentity::from_encoded(grant.peer_device_id, grant.public_key.clone())
+    }
+
+    /// Resolves one non-revoked remembered peer without expanding its roles.
+    pub fn trusted_peer_identity(&self, peer_id: DeviceId) -> Result<PublicIdentity, CoreError> {
+        let config = self.config.lock().map_err(|_| CoreError::Synchronization)?;
+        let grant = config
+            .trusted_peers
+            .get(&peer_id)
+            .ok_or(CoreError::IdentityMismatch)?;
+        if grant.revoked {
+            return Err(CoreError::PeerRevoked);
+        }
+        PublicIdentity::from_encoded(grant.peer_device_id, grant.public_key.clone())
+    }
+
+    /// Returns the latest locally issued signed roster, if pairing has created one.
+    pub fn current_roster(&self) -> Result<Option<SignedRoster>, CoreError> {
+        let config = self.config.lock().map_err(|_| CoreError::Synchronization)?;
+        if config.roster_epoch == 0 {
+            return Ok(None);
+        }
+        drop(config);
+        let path = self.options.data_directory.join("roster.json");
+        let roster: SignedRoster = read_json_bounded(&path, MAX_ROSTER_BYTES)?;
+        if roster.signer_device_id != self.device_id() {
+            return Err(CoreError::InvalidState(
+                "local roster signer mismatch".to_owned(),
+            ));
+        }
+        Ok(Some(roster))
+    }
+
+    /// Snapshot of validated non-key config.
+    pub fn config(&self) -> Result<NodeConfig, CoreError> {
+        Ok(self
+            .config
+            .lock()
+            .map_err(|_| CoreError::Synchronization)?
+            .clone())
+    }
+
+    /// Persists one mutually confirmed grant.
+    pub fn trust_peer(&self, grant: PeerGrant) -> Result<SignedRoster, CoreError> {
+        if grant.revoked {
+            return Err(CoreError::InvalidState(
+                "new trust grant cannot already be revoked".to_owned(),
+            ));
+        }
+        PublicIdentity::from_encoded(grant.peer_device_id, grant.public_key.clone())?;
+        let mut config = self.config.lock().map_err(|_| CoreError::Synchronization)?;
+        let mut candidate = config.clone();
+        if candidate.trusted_peers.len() >= 128
+            && !candidate.trusted_peers.contains_key(&grant.peer_device_id)
+        {
+            return Err(CoreError::ResourceLimit("trusted peers"));
+        }
+        candidate.trusted_peers.insert(grant.peer_device_id, grant);
+        let roster = self.issue_roster_locked(&mut candidate)?;
+        *config = candidate;
+        Ok(roster)
+    }
+
+    /// Verifies and durably advances one peer's sequential signed roster gossip.
+    /// The roster is informational and never grants local trust automatically.
+    pub fn accept_peer_roster(&self, roster: SignedRoster) -> Result<RosterCursor, CoreError> {
+        let mut config = self.config.lock().map_err(|_| CoreError::Synchronization)?;
+        let grant = config
+            .trusted_peers
+            .get(&roster.signer_device_id)
+            .ok_or(CoreError::IdentityMismatch)?;
+        if grant.revoked {
+            return Err(CoreError::PeerRevoked);
+        }
+        let signer = PublicIdentity::from_encoded(grant.peer_device_id, grant.public_key.clone())?;
+        let previous = config
+            .peer_roster_cursors
+            .get(&roster.signer_device_id)
+            .cloned()
+            .unwrap_or_default();
+        verify_roster(&roster, &signer, previous.epoch, &previous.digest)?;
+        let cursor = RosterCursor {
+            epoch: roster.epoch,
+            digest: roster_digest(&roster)?,
+        };
+        write_json_atomic(
+            &self
+                .options
+                .data_directory
+                .join("peer-rosters")
+                .join(format!("{}.json", roster.signer_device_id)),
+            &roster,
+            false,
+        )?;
+        let mut candidate = config.clone();
+        candidate
+            .peer_roster_cursors
+            .insert(roster.signer_device_id, cursor.clone());
+        write_json_atomic(&self.config_path, &candidate, true)?;
+        *config = candidate;
+        Ok(cursor)
+    }
+
+    /// Revokes a peer with a signed persistent tombstone.
+    pub fn revoke_peer(&self, peer_id: DeviceId) -> Result<SignedRoster, CoreError> {
+        let mut config = self.config.lock().map_err(|_| CoreError::Synchronization)?;
+        let mut candidate = config.clone();
+        let grant = candidate
+            .trusted_peers
+            .get_mut(&peer_id)
+            .ok_or(CoreError::IdentityMismatch)?;
+        grant.revoked = true;
+        let roster = self.issue_roster_locked(&mut candidate)?;
+        *config = candidate;
+        drop(config);
+        let mut scheduler = self
+            .scheduler
+            .lock()
+            .map_err(|_| CoreError::Synchronization)?;
+        *scheduler = scheduler.without_provider(peer_id);
+        Ok(roster)
+    }
+
+    /// Registers connected providers only when their storage role is explicitly trusted.
+    pub fn set_connected_providers(
+        &self,
+        mut providers: Vec<Arc<dyn ChunkProvider>>,
+    ) -> Result<(), CoreError> {
+        if !providers
+            .iter()
+            .any(|provider| provider.device_id() == self.device_id())
+        {
+            providers.push(Arc::new(StoreProvider::new(
+                self.device_id(),
+                self.store.clone(),
+            )));
+        }
+        let config = self.config.lock().map_err(|_| CoreError::Synchronization)?;
+        for provider in &providers {
+            if provider.device_id() == self.device_id() {
+                continue;
+            }
+            let grant = config
+                .trusted_peers
+                .get(&provider.device_id())
+                .ok_or(CoreError::IdentityMismatch)?;
+            if grant.revoked || !grant.roles.contains(&PeerRole::StorageProvider) {
+                return Err(if grant.revoked {
+                    CoreError::PeerRevoked
+                } else {
+                    CoreError::UnselectedProvider
+                });
+            }
+        }
+        drop(config);
+        *self
+            .scheduler
+            .lock()
+            .map_err(|_| CoreError::Synchronization)? =
+            ReplicationScheduler::new(providers, self.options.maximum_parallel_transfers)?;
+        Ok(())
+    }
+
+    /// Exports only device name, discovery preference, and remembered descriptors.
+    pub fn export_settings(&self) -> Result<Vec<u8>, CoreError> {
+        let config = self.config.lock().map_err(|_| CoreError::Synchronization)?;
+        export_settings(&config.safe_export()?)
+    }
+
+    /// Imports safe settings only after explicit confirmation; keys and trust remain untouched.
+    pub fn import_settings(&self, bytes: &[u8], confirmed: bool) -> Result<(), CoreError> {
+        if !confirmed {
+            return Err(CoreError::SettingsImportNotConfirmed);
+        }
+        let imported = import_settings(bytes)?;
+        let mut config = self.config.lock().map_err(|_| CoreError::Synchronization)?;
+        let mut candidate = config.clone();
+        candidate.device_name = imported.device_name;
+        candidate.lan_discovery_enabled = imported.lan_discovery_enabled;
+        let existing = std::mem::take(&mut candidate.remembered_backups);
+        candidate.remembered_backups = imported
+            .remembered_backups
+            .into_iter()
+            .map(|descriptor| {
+                let state = existing
+                    .get(&descriptor.backup_id)
+                    .cloned()
+                    .map(|mut state| {
+                        state.descriptor = descriptor.clone();
+                        state
+                    })
+                    .unwrap_or_else(|| RememberedBackupState {
+                        descriptor: descriptor.clone(),
+                        key_epoch: 1,
+                        latest_snapshot_id: None,
+                        replica_intent: ReplicaIntent::default(),
+                    });
+                (descriptor.backup_id, state)
+            })
+            .collect();
+        candidate.validate()?;
+        write_json_atomic(&self.config_path, &candidate, true)?;
+        let device_name = candidate.device_name.clone();
+        *config = candidate;
+        drop(config);
+        self.pairing.update_device_name(device_name)
+    }
+
+    /// Runs a complete local encrypted backup and explicit provider replication.
+    pub fn backup(
+        &self,
+        source_root: impl AsRef<Path>,
+        options: &BackupOptions,
+        control: &JobControl,
+        mut progress_callback: impl FnMut(&BackupProgress),
+    ) -> Result<BackupResult, CoreError> {
+        let _backup_guard = self
+            .backup_lock
+            .lock()
+            .map_err(|_| CoreError::Synchronization)?;
+        self.validate_backup_transition(options)?;
+        {
+            let config = self.config.lock().map_err(|_| CoreError::Synchronization)?;
+            for provider_id in &options.replica_intent.selected_providers {
+                if *provider_id == self.device_id() {
+                    continue;
+                }
+                let grant = config
+                    .trusted_peers
+                    .get(provider_id)
+                    .ok_or(CoreError::IdentityMismatch)?;
+                if grant.revoked {
+                    return Err(CoreError::PeerRevoked);
+                }
+                if !grant.roles.contains(&PeerRole::StorageProvider) {
+                    return Err(CoreError::UnselectedProvider);
+                }
+            }
+        }
+        let key = self.load_or_create_backup_key(options.backup_id)?;
+        let scanned = scan_source(
+            source_root.as_ref(),
+            options,
+            &key,
+            &self.store,
+            control,
+            &mut progress_callback,
+        )?;
+        control.check()?;
+        let scheduler = self
+            .scheduler
+            .lock()
+            .map_err(|_| CoreError::Synchronization)?
+            .clone();
+        let replication = scheduler.replicate(
+            &self.store,
+            &options.replica_intent,
+            &scanned.chunk_locators,
+        )?;
+        let mut manifest = scanned.manifest;
+        manifest.provider_acknowledgements = replication.acknowledgements.clone();
+        manifest.validate()?;
+        let envelope = encrypt_manifest(&manifest, options.key_epoch, &key, &self.identity)?;
+        let stored_snapshot = StoredSnapshot::new(
+            options.backup_id,
+            options.snapshot_id.clone(),
+            envelope,
+            scanned.chunk_locators,
+            options.created_at_unix_ms,
+        )?;
+        let remembered = remembered_backup_state(options, self.device_id())?;
+        let transaction = PendingBackupCommit {
+            schema_version: BACKUP_TRANSACTION_SCHEMA_VERSION,
+            snapshot: stored_snapshot.clone(),
+            remembered: remembered.clone(),
+        };
+        let transaction_path = self
+            .options
+            .data_directory
+            .join("transactions")
+            .join(format!("{}.json", options.job_id));
+        write_json_atomic(&transaction_path, &transaction, true)?;
+        self.store.commit_snapshot(&stored_snapshot)?;
+        self.remember_backup_state(options.backup_id, remembered)?;
+        fs::remove_file(&transaction_path).map_err(|source| CoreError::Io {
+            operation: "complete backup transaction",
+            path: transaction_path.clone(),
+            source,
+        })?;
+        sync_directory(
+            transaction_path
+                .parent()
+                .ok_or_else(|| CoreError::InvalidState("transaction has no parent".to_owned()))?,
+        )?;
+        self.store.remove_checkpoint(&options.job_id)?;
+        Ok(BackupResult {
+            manifest,
+            stored_snapshot,
+            progress: scanned.progress,
+            replication,
+        })
+    }
+
+    /// Loads, authenticates, and decrypts a committed snapshot.
+    pub fn load_manifest(
+        &self,
+        backup_id: BackupId,
+        snapshot_id: &str,
+    ) -> Result<Manifest, CoreError> {
+        let snapshot = self.store.load_snapshot(backup_id, snapshot_id)?;
+        let key = self.load_backup_key(backup_id)?;
+        let signer = self.signer_identity(snapshot.envelope.signer_device_id)?;
+        decrypt_manifest(&snapshot.envelope, &key, &signer)
+    }
+
+    /// Authenticates every local chunk in one committed snapshot.
+    pub fn verify_snapshot(
+        &self,
+        backup_id: BackupId,
+        snapshot_id: &str,
+    ) -> Result<IntegrityReport, CoreError> {
+        let manifest = self.load_manifest(backup_id, snapshot_id)?;
+        let key = self.load_backup_key(backup_id)?;
+        self.store.verify_manifest(&manifest, &key)
+    }
+
+    /// Verifies local objects plus every acknowledged copy on connected selected providers.
+    pub fn verify_snapshot_availability(
+        &self,
+        backup_id: BackupId,
+        snapshot_id: &str,
+    ) -> Result<SnapshotAvailabilityReport, CoreError> {
+        let manifest = self.load_manifest(backup_id, snapshot_id)?;
+        let key = self.load_backup_key(backup_id)?;
+        let local = self.store.verify_manifest(&manifest, &key)?;
+        let scheduler = self
+            .scheduler
+            .lock()
+            .map_err(|_| CoreError::Synchronization)?
+            .clone();
+        let revoked: BTreeSet<_> = self
+            .config
+            .lock()
+            .map_err(|_| CoreError::Synchronization)?
+            .trusted_peers
+            .values()
+            .filter(|grant| grant.revoked)
+            .map(|grant| grant.peer_device_id)
+            .collect();
+        let references: BTreeMap<_, _> = manifest
+            .entries
+            .iter()
+            .flat_map(|entry| &entry.chunks)
+            .map(|reference| (reference.opaque_locator.clone(), reference))
+            .collect();
+        let mut report = SnapshotAvailabilityReport {
+            local,
+            ..SnapshotAvailabilityReport::default()
+        };
+        let mut provider_copies = Vec::new();
+        for provider_id in &manifest.replica_intent.selected_providers {
+            if revoked.contains(provider_id) {
+                report
+                    .providers
+                    .insert(*provider_id, ReplicaAvailability::Revoked);
+                continue;
+            }
+            match scheduler.provider_health(*provider_id) {
+                Some(crate::ProviderHealth::Online) => {}
+                Some(crate::ProviderHealth::Corrupt) => {
+                    report
+                        .providers
+                        .insert(*provider_id, ReplicaAvailability::Corrupt);
+                    continue;
+                }
+                Some(crate::ProviderHealth::Offline) | None => {
+                    report
+                        .providers
+                        .insert(*provider_id, ReplicaAvailability::Offline);
+                    continue;
+                }
+            }
+            let acknowledged = manifest
+                .provider_acknowledgements
+                .get(provider_id)
+                .cloned()
+                .unwrap_or_default();
+            let availability = if acknowledged.len() == references.len() {
+                ReplicaAvailability::Complete
+            } else {
+                ReplicaAvailability::Degraded
+            };
+            for locator in acknowledged {
+                let reference = references
+                    .get(&locator)
+                    .ok_or(CoreError::RestorePlanMismatch)?;
+                provider_copies.push((*provider_id, *reference));
+            }
+            report.providers.insert(*provider_id, availability);
+        }
+        for failure in
+            scheduler.verify_provider_copies_parallel(&provider_copies, backup_id, &key)?
+        {
+            if let Some(availability) = report.providers.get_mut(&failure.provider_id) {
+                match failure.reason.as_str() {
+                    "corrupt_chunk" => *availability = ReplicaAvailability::Corrupt,
+                    "missing_chunk" if *availability != ReplicaAvailability::Corrupt => {
+                        *availability = ReplicaAvailability::Degraded;
+                    }
+                    _ if *availability != ReplicaAvailability::Corrupt => {
+                        *availability = ReplicaAvailability::Offline;
+                    }
+                    _ => {}
+                }
+            }
+            report.failures.push(failure);
+        }
+        report.failures.sort_by(|left, right| {
+            (left.provider_id, &left.locator).cmp(&(right.provider_id, &right.locator))
+        });
+        Ok(report)
+    }
+
+    /// Builds a signed no-write restore preview.
+    pub fn preview_restore(
+        &self,
+        backup_id: BackupId,
+        snapshot_id: &str,
+        authorized_root: impl AsRef<Path>,
+        options: &RestoreOptions,
+    ) -> Result<RestorePlan, CoreError> {
+        let manifest = self.load_manifest(backup_id, snapshot_id)?;
+        let root = AuthorizedRoot::open(authorized_root)?;
+        preview_restore(&manifest, &root, options, &self.identity)
+    }
+
+    /// Executes only the exact signed preview under the same authorized root.
+    pub fn restore(
+        &self,
+        plan: &RestorePlan,
+        control: &JobControl,
+    ) -> Result<RestoreReport, CoreError> {
+        let manifest = self.load_manifest(plan.backup_id, &plan.snapshot_id)?;
+        let key = self.load_backup_key(plan.backup_id)?;
+        let root = AuthorizedRoot::open(&plan.authorized_root)?;
+        let scheduler = self
+            .scheduler
+            .lock()
+            .map_err(|_| CoreError::Synchronization)?
+            .clone();
+        execute_restore(
+            &manifest,
+            plan,
+            &root,
+            &key,
+            &scheduler,
+            &self.store,
+            &self.identity.public_identity(),
+            self.device_id(),
+            control,
+        )
+    }
+
+    /// Durably discards a cancelled backup or restore checkpoint.
+    pub fn discard_job_checkpoint(&self, job_id: &str) -> Result<(), CoreError> {
+        self.store.remove_checkpoint(job_id)
+    }
+
+    /// Repairs missing or corrupt local objects only from an authenticated authorized copy.
+    pub fn repair_snapshot(
+        &self,
+        backup_id: BackupId,
+        snapshot_id: &str,
+    ) -> Result<IntegrityReport, CoreError> {
+        let snapshot = self.store.load_snapshot(backup_id, snapshot_id)?;
+        let key = self.load_backup_key(backup_id)?;
+        let signer = self.signer_identity(snapshot.envelope.signer_device_id)?;
+        let manifest = decrypt_manifest(&snapshot.envelope, &key, &signer)?;
+        let initial = self.store.verify_manifest(&manifest, &key)?;
+        let targets: BTreeSet<_> = initial
+            .missing
+            .iter()
+            .chain(&initial.corrupt)
+            .cloned()
+            .collect();
+        if targets.is_empty() {
+            return Ok(initial);
+        }
+        let scheduler = self
+            .scheduler
+            .lock()
+            .map_err(|_| CoreError::Synchronization)?
+            .clone();
+        for reference in manifest
+            .entries
+            .iter()
+            .flat_map(|entry| &entry.chunks)
+            .filter(|reference| targets.contains(&reference.opaque_locator))
+        {
+            let mut providers = BTreeSet::from([self.device_id()]);
+            providers.extend(
+                manifest
+                    .provider_acknowledgements
+                    .iter()
+                    .filter(|(_, locators)| locators.contains(&reference.opaque_locator))
+                    .map(|(provider_id, _)| *provider_id),
+            );
+            let fetched = scheduler.fetch_plaintext(reference, backup_id, &key, &providers)?;
+            let repaired =
+                key.encrypt_chunk(backup_id, snapshot.envelope.key_epoch, &fetched.plaintext)?;
+            if repaired.opaque_locator != reference.opaque_locator {
+                return Err(CoreError::CorruptChunk(reference.opaque_locator.clone()));
+            }
+            self.store.put(&repaired)?;
+        }
+        self.store.verify_manifest(&manifest, &key)
+    }
+
+    fn remember_backup_state(
+        &self,
+        backup_id: BackupId,
+        state: RememberedBackupState,
+    ) -> Result<(), CoreError> {
+        let mut config = self.config.lock().map_err(|_| CoreError::Synchronization)?;
+        let mut candidate = config.clone();
+        candidate.remembered_backups.insert(backup_id, state);
+        candidate.validate()?;
+        write_json_atomic(&self.config_path, &candidate, true)?;
+        *config = candidate;
+        Ok(())
+    }
+
+    fn validate_backup_transition(&self, options: &BackupOptions) -> Result<(), CoreError> {
+        let config = self.config.lock().map_err(|_| CoreError::Synchronization)?;
+        if let Some(previous) = config.remembered_backups.get(&options.backup_id) {
+            if previous.descriptor.owner_device_id != self.device_id()
+                || options.key_epoch < previous.key_epoch
+                || previous
+                    .latest_snapshot_id
+                    .as_ref()
+                    .is_some_and(|snapshot| options.snapshot_id <= *snapshot)
+            {
+                return Err(CoreError::InvalidState(
+                    "backup snapshot or key epoch is not monotonic".to_owned(),
+                ));
+            }
+        } else if options.key_epoch != 1 {
+            return Err(CoreError::InvalidState(
+                "a new backup must begin at key epoch 1".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn load_or_create_backup_key(&self, backup_id: BackupId) -> Result<BackupKey, CoreError> {
+        if let Ok(keys) = self.keys.lock() {
+            if let Some(key) = keys.get(&backup_id) {
+                return Ok(key.clone());
+            }
+        } else {
+            return Err(CoreError::Synchronization);
+        }
+        let path = self.key_path(backup_id);
+        let key = match fs::symlink_metadata(&path) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_file() {
+                    return Err(CoreError::InvalidState(
+                        "backup key path is not a regular file".to_owned(),
+                    ));
+                }
+                load_backup_key_file(&path)?
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let key = BackupKey::generate();
+                persist_backup_key_file(&path, &key)?;
+                key
+            }
+            Err(source) => {
+                return Err(CoreError::Io {
+                    operation: "inspect backup key",
+                    path,
+                    source,
+                });
+            }
+        };
+        self.keys
+            .lock()
+            .map_err(|_| CoreError::Synchronization)?
+            .insert(backup_id, key.clone());
+        Ok(key)
+    }
+
+    fn load_backup_key(&self, backup_id: BackupId) -> Result<BackupKey, CoreError> {
+        if let Some(key) = self
+            .keys
+            .lock()
+            .map_err(|_| CoreError::Synchronization)?
+            .get(&backup_id)
+            .cloned()
+        {
+            return Ok(key);
+        }
+        let key = load_backup_key_file(&self.key_path(backup_id))?;
+        self.keys
+            .lock()
+            .map_err(|_| CoreError::Synchronization)?
+            .insert(backup_id, key.clone());
+        Ok(key)
+    }
+
+    fn key_path(&self, backup_id: BackupId) -> PathBuf {
+        self.key_directory.join(format!("{backup_id}.json"))
+    }
+
+    fn signer_identity(&self, signer_id: DeviceId) -> Result<PublicIdentity, CoreError> {
+        if signer_id == self.device_id() {
+            return Ok(self.identity.public_identity());
+        }
+        let config = self.config.lock().map_err(|_| CoreError::Synchronization)?;
+        let grant = config
+            .trusted_peers
+            .get(&signer_id)
+            .ok_or(CoreError::IdentityMismatch)?;
+        if grant.revoked {
+            return Err(CoreError::PeerRevoked);
+        }
+        PublicIdentity::from_encoded(grant.peer_device_id, grant.public_key.clone())
+    }
+
+    fn issue_roster_locked(&self, config: &mut NodeConfig) -> Result<SignedRoster, CoreError> {
+        let next_epoch = config
+            .roster_epoch
+            .checked_add(1)
+            .ok_or(CoreError::ResourceLimit("roster epoch"))?;
+        let mut builder = SignedRosterBuilder::new(next_epoch, config.roster_digest.clone());
+        for grant in config.trusted_peers.values() {
+            builder = builder.grant(grant.clone());
+        }
+        let roster = builder.sign(&self.identity)?;
+        write_json_atomic(
+            &self.options.data_directory.join("roster.json"),
+            &roster,
+            false,
+        )?;
+        config.roster_epoch = next_epoch;
+        config.roster_digest = roster_digest(&roster)?;
+        config.validate()?;
+        write_json_atomic(&self.config_path, config, true)?;
+        Ok(roster)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PendingBackupCommit {
+    schema_version: u16,
+    snapshot: StoredSnapshot,
+    remembered: RememberedBackupState,
+}
+
+fn acquire_state_lock(data_directory: &Path) -> Result<File, CoreError> {
+    let path = data_directory.join(".engine.lock");
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            return Err(CoreError::InvalidState(
+                "engine lock path is not a regular file".to_owned(),
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(source) => {
+            return Err(CoreError::Io {
+                operation: "inspect engine state lock",
+                path,
+                source,
+            });
+        }
+    }
+    #[cfg(unix)]
+    let file = {
+        use rustix::fs::{Mode, OFlags, open};
+
+        let descriptor = open(
+            &path,
+            OFlags::CREATE | OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NOCTTY,
+            Mode::RUSR | Mode::WUSR,
+        )
+        .map_err(|error| CoreError::Io {
+            operation: "open engine state lock without following links",
+            path: path.clone(),
+            source: std::io::Error::from_raw_os_error(error.raw_os_error()),
+        })?;
+        File::from(descriptor)
+    };
+    #[cfg(not(unix))]
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|source| CoreError::Io {
+            operation: "open engine state lock",
+            path: path.clone(),
+            source,
+        })?;
+    let metadata = file.metadata().map_err(|source| CoreError::Io {
+        operation: "inspect opened engine state lock",
+        path: path.clone(),
+        source,
+    })?;
+    if !metadata.is_file() {
+        return Err(CoreError::InvalidState(
+            "engine lock path is not a regular file".to_owned(),
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .map_err(|source| CoreError::Io {
+                operation: "protect engine state lock",
+                path: path.clone(),
+                source,
+            })?;
+    }
+    file.try_lock_exclusive().map_err(|source| {
+        if source.kind() == std::io::ErrorKind::WouldBlock {
+            CoreError::StateLocked
+        } else {
+            CoreError::Io {
+                operation: "lock engine state",
+                path,
+                source,
+            }
+        }
+    })?;
+    Ok(file)
+}
+
+fn remembered_backup_state(
+    options: &BackupOptions,
+    owner_device_id: DeviceId,
+) -> Result<RememberedBackupState, CoreError> {
+    let descriptor = RememberedBackup {
+        backup_id: options.backup_id,
+        name: options.display_name.clone(),
+        owner_device_id,
+    };
+    ExportedDeviceSettings::new("Recovery validation", false, vec![descriptor.clone()])?;
+    Ok(RememberedBackupState {
+        descriptor,
+        key_epoch: options.key_epoch,
+        latest_snapshot_id: Some(options.snapshot_id.clone()),
+        replica_intent: options.replica_intent.clone(),
+    })
+}
+
+fn recover_backup_transactions(
+    data_directory: &Path,
+    store: &ChunkStore,
+    config_path: &Path,
+    config: &mut NodeConfig,
+    identity: &DeviceIdentity,
+) -> Result<(), CoreError> {
+    let directory = data_directory.join("transactions");
+    ensure_private_state_directory(&directory)?;
+    let mut entries = fs::read_dir(&directory)
+        .map_err(|source| CoreError::Io {
+            operation: "read backup transaction directory",
+            path: directory.clone(),
+            source,
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|source| CoreError::Io {
+            operation: "read backup transaction entry",
+            path: directory.clone(),
+            source,
+        })?;
+    if entries.len() > 64 {
+        return Err(CoreError::ResourceLimit("pending backup transactions"));
+    }
+    entries.sort_by_key(fs::DirEntry::file_name);
+    for entry in entries {
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|source| CoreError::Io {
+            operation: "inspect backup transaction",
+            path: path.clone(),
+            source,
+        })?;
+        let stem = path.file_stem().and_then(|value| value.to_str());
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || path.extension().and_then(|value| value.to_str()) != Some("json")
+            || !stem.is_some_and(valid_identifier)
+        {
+            return Err(CoreError::InvalidState(
+                "unexpected backup transaction entry".to_owned(),
+            ));
+        }
+        let transaction: PendingBackupCommit =
+            read_json_bounded(&path, MAX_BACKUP_TRANSACTION_BYTES)?;
+        validate_pending_backup_commit(&transaction, data_directory, identity)?;
+
+        let backup_id = transaction.snapshot.backup_id;
+        let should_advance = match config.remembered_backups.get(&backup_id) {
+            None => {
+                if transaction.remembered.key_epoch != 1 {
+                    return Err(CoreError::InvalidState(
+                        "recovered backup does not begin at key epoch 1".to_owned(),
+                    ));
+                }
+                true
+            }
+            Some(previous) => {
+                if previous.descriptor.owner_device_id != identity.device_id()
+                    || transaction.remembered.key_epoch < previous.key_epoch
+                {
+                    return Err(CoreError::InvalidState(
+                        "recovered backup violates owner or key epoch".to_owned(),
+                    ));
+                }
+                match previous.latest_snapshot_id.as_deref() {
+                    None => true,
+                    Some(previous_snapshot) => {
+                        match transaction
+                            .snapshot
+                            .snapshot_id
+                            .as_str()
+                            .cmp(previous_snapshot)
+                        {
+                            std::cmp::Ordering::Greater => true,
+                            std::cmp::Ordering::Equal => {
+                                if previous != &transaction.remembered {
+                                    return Err(CoreError::InvalidState(
+                                        "recovered backup conflicts with committed config"
+                                            .to_owned(),
+                                    ));
+                                }
+                                false
+                            }
+                            std::cmp::Ordering::Less => {
+                                if transaction.remembered.key_epoch > previous.key_epoch {
+                                    return Err(CoreError::InvalidState(
+                                        "stale transaction has a future key epoch".to_owned(),
+                                    ));
+                                }
+                                false
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        store.commit_snapshot(&transaction.snapshot)?;
+        if should_advance {
+            let mut candidate = config.clone();
+            candidate
+                .remembered_backups
+                .insert(backup_id, transaction.remembered);
+            candidate.validate()?;
+            write_json_atomic(config_path, &candidate, true)?;
+            *config = candidate;
+        }
+        fs::remove_file(&path).map_err(|source| CoreError::Io {
+            operation: "complete recovered backup transaction",
+            path: path.clone(),
+            source,
+        })?;
+        sync_directory(&directory)?;
+    }
+    Ok(())
+}
+
+fn validate_pending_backup_commit(
+    transaction: &PendingBackupCommit,
+    data_directory: &Path,
+    identity: &DeviceIdentity,
+) -> Result<(), CoreError> {
+    if transaction.schema_version != BACKUP_TRANSACTION_SCHEMA_VERSION
+        || transaction.remembered.descriptor.backup_id != transaction.snapshot.backup_id
+        || transaction.remembered.descriptor.owner_device_id != identity.device_id()
+        || transaction.remembered.latest_snapshot_id.as_deref()
+            != Some(transaction.snapshot.snapshot_id.as_str())
+        || transaction.remembered.key_epoch != transaction.snapshot.envelope.key_epoch
+        || transaction.snapshot.envelope.signer_device_id != identity.device_id()
+    {
+        return Err(CoreError::InvalidState(
+            "inconsistent backup transaction".to_owned(),
+        ));
+    }
+    ExportedDeviceSettings::new(
+        "Recovery validation",
+        false,
+        vec![transaction.remembered.descriptor.clone()],
+    )?;
+    let key = load_backup_key_file(
+        &data_directory
+            .join("keys")
+            .join(format!("{}.json", transaction.snapshot.backup_id)),
+    )?;
+    let manifest = decrypt_manifest(
+        &transaction.snapshot.envelope,
+        &key,
+        &identity.public_identity(),
+    )?;
+    let expected_locators: BTreeSet<_> = manifest
+        .entries
+        .iter()
+        .flat_map(|entry| &entry.chunks)
+        .map(|reference| reference.opaque_locator.clone())
+        .collect();
+    if manifest.backup_id != transaction.snapshot.backup_id
+        || manifest.snapshot_id != transaction.snapshot.snapshot_id
+        || manifest.created_at_unix_ms != transaction.snapshot.committed_at_unix_ms
+        || manifest.replica_intent != transaction.remembered.replica_intent
+        || expected_locators != transaction.snapshot.chunk_locators
+    {
+        return Err(CoreError::InvalidState(
+            "backup transaction does not match its authenticated manifest".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_private_state_directory(path: &Path) -> Result<(), CoreError> {
+    fs::create_dir_all(path).map_err(|source| CoreError::Io {
+        operation: "create private state directory",
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let metadata = fs::symlink_metadata(path).map_err(|source| CoreError::Io {
+        operation: "inspect private state directory",
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(CoreError::InvalidState(
+            "private state path is not a real directory".to_owned(),
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|source| {
+            CoreError::Io {
+                operation: "protect private state directory",
+                path: path.to_path_buf(),
+                source,
+            }
+        })?;
+    }
+    Ok(())
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PersistedBackupKey {
+    schema_version: u16,
+    key: Zeroizing<String>,
+}
+
+fn persist_backup_key_file(path: &Path, key: &BackupKey) -> Result<(), CoreError> {
+    let encoded = PersistedBackupKey {
+        schema_version: BACKUP_KEY_SCHEMA_VERSION,
+        key: Zeroizing::new(URL_SAFE_NO_PAD.encode(key.to_bytes().as_ref())),
+    };
+    write_atomic(path, &serde_json::to_vec_pretty(&encoded)?, true)
+}
+
+fn load_backup_key_file(path: &Path) -> Result<BackupKey, CoreError> {
+    let metadata = fs::symlink_metadata(path).map_err(|source| CoreError::Io {
+        operation: "inspect backup key file",
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(CoreError::InvalidState(
+            "backup key path is not a regular file".to_owned(),
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(CoreError::InvalidState(
+                "backup key permissions are too broad".to_owned(),
+            ));
+        }
+    }
+    let persisted: PersistedBackupKey = read_json_bounded(path, MAX_BACKUP_KEY_BYTES)?;
+    if persisted.schema_version != BACKUP_KEY_SCHEMA_VERSION {
+        return Err(CoreError::InvalidState(
+            "unsupported backup key schema".to_owned(),
+        ));
+    }
+    let decoded = Zeroizing::new(
+        URL_SAFE_NO_PAD
+            .decode(persisted.key.as_bytes())
+            .map_err(|_| CoreError::InvalidKeyMaterial)?,
+    );
+    let bytes: [u8; 32] = decoded
+        .as_slice()
+        .try_into()
+        .map_err(|_| CoreError::InvalidKeyMaterial)?;
+    Ok(BackupKey::from_bytes(bytes))
+}
+
+fn load_or_create_config(path: &Path, options: &EngineOptions) -> Result<NodeConfig, CoreError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(CoreError::InvalidState(
+                    "config path is not a regular file".to_owned(),
+                ));
+            }
+            let bytes = crate::atomic::read_bounded(path, MAX_NODE_CONFIG_BYTES)?;
+            let config = decode_or_migrate_config(&bytes)?;
+            config.validate()?;
+            write_json_atomic(path, &config, true)?;
+            Ok(config)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let config = NodeConfig::new(
+                options.initial_device_name.clone(),
+                options.initial_lan_discovery_enabled,
+            )?;
+            write_json_atomic(path, &config, true)?;
+            Ok(config)
+        }
+        Err(source) => Err(CoreError::Io {
+            operation: "inspect node config",
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+fn decode_or_migrate_config(bytes: &[u8]) -> Result<NodeConfig, CoreError> {
+    let value: serde_json::Value = serde_json::from_slice(bytes)?;
+    let schema_version = value
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if schema_version == u64::from(NODE_CONFIG_SCHEMA_VERSION) {
+        return Ok(serde_json::from_value(value)?);
+    }
+    if schema_version == 0 {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct LegacyConfig {
+            #[serde(default)]
+            schema_version: u16,
+            name: String,
+            #[serde(default)]
+            lan_discovery: bool,
+        }
+        let legacy: LegacyConfig = serde_json::from_value(value)?;
+        if legacy.schema_version != 0 {
+            return Err(CoreError::InvalidState(
+                "unsupported legacy config".to_owned(),
+            ));
+        }
+        return NodeConfig::new(legacy.name, legacy.lan_discovery);
+    }
+    Err(CoreError::InvalidState(
+        "unsupported node config schema".to_owned(),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use covalent_protocol::PeerRole;
+    use tempfile::tempdir;
+
+    use crate::replication::StoreProvider;
+
+    use super::*;
+
+    #[test]
+    fn legacy_config_migrates_without_identity_material() {
+        let migrated = decode_or_migrate_config(br#"{"name":"Old node","lanDiscovery":true}"#)
+            .expect("migration");
+        assert_eq!(migrated.schema_version, 1);
+        assert_eq!(migrated.device_name, "Old node");
+        assert!(migrated.lan_discovery_enabled);
+    }
+
+    #[test]
+    fn settings_import_requires_confirmation_and_preserves_trust() {
+        let directory = tempdir().expect("directory");
+        let engine = Engine::open(EngineOptions::new(directory.path())).expect("engine");
+        let peer = DeviceIdentity::generate().public_identity();
+        engine
+            .trust_peer(PeerGrant {
+                peer_device_id: peer.device_id,
+                public_key: peer.public_key,
+                display_name: "Provider".to_owned(),
+                roles: BTreeSet::from([PeerRole::StorageProvider]),
+                confirmed_at_unix_ms: 1,
+                revoked: false,
+            })
+            .expect("trust");
+        let settings = ExportedDeviceSettings::new("Imported", true, Vec::new()).expect("settings");
+        let bytes = export_settings(&settings).expect("export");
+        assert!(matches!(
+            engine.import_settings(&bytes, false),
+            Err(CoreError::SettingsImportNotConfirmed)
+        ));
+        engine.import_settings(&bytes, true).expect("import");
+        assert_eq!(engine.config().expect("config").trusted_peers.len(), 1);
+    }
+
+    #[test]
+    fn end_to_end_backup_verify_and_restore() {
+        let node_data = tempdir().expect("node data");
+        let provider_data = tempdir().expect("provider data");
+        let source = tempdir().expect("source");
+        let restore = tempdir().expect("restore");
+        fs::create_dir(source.path().join("empty")).expect("empty directory");
+        fs::write(source.path().join("hello.txt"), b"hello engine").expect("source file");
+        let engine = Engine::open(EngineOptions::new(node_data.path())).expect("engine");
+        let provider_identity = DeviceIdentity::generate().public_identity();
+        engine
+            .trust_peer(PeerGrant {
+                peer_device_id: provider_identity.device_id,
+                public_key: provider_identity.public_key,
+                display_name: "Provider".to_owned(),
+                roles: BTreeSet::from([PeerRole::StorageProvider]),
+                confirmed_at_unix_ms: 1,
+                revoked: false,
+            })
+            .expect("trust");
+        let provider_store = ChunkStore::open(provider_data.path(), 1_048_576).expect("provider");
+        let local_provider = Arc::new(StoreProvider::new(engine.device_id(), engine.store.clone()));
+        let remote_provider = Arc::new(StoreProvider::new(
+            provider_identity.device_id,
+            provider_store,
+        ));
+        engine
+            .set_connected_providers(vec![
+                local_provider as Arc<dyn ChunkProvider>,
+                remote_provider as Arc<dyn ChunkProvider>,
+            ])
+            .expect("providers");
+        let backup_id = BackupId::new();
+        let mut options = BackupOptions::new(backup_id, "snapshot-1", "backup-job");
+        options.created_at_unix_ms = 1;
+        options.replica_intent = ReplicaIntent::explicit([provider_identity.device_id]);
+        let result = engine
+            .backup(source.path(), &options, &JobControl::new(), |_| {})
+            .expect("backup");
+        assert!(
+            result
+                .replication
+                .is_complete(result.stored_snapshot.chunk_locators.len())
+        );
+        assert!(
+            engine
+                .verify_snapshot(backup_id, "snapshot-1")
+                .expect("verify")
+                .is_intact()
+        );
+        let plan = engine
+            .preview_restore(
+                backup_id,
+                "snapshot-1",
+                restore.path(),
+                &RestoreOptions::all("restore-job"),
+            )
+            .expect("preview");
+        engine.restore(&plan, &JobControl::new()).expect("restore");
+        assert_eq!(
+            fs::read(restore.path().join("hello.txt")).expect("restored"),
+            b"hello engine"
+        );
+        assert!(restore.path().join("empty").is_dir());
+    }
+
+    #[test]
+    fn startup_recovers_an_authenticated_backup_commit_transaction() {
+        let node_data = tempdir().expect("node data");
+        let source = tempdir().expect("source");
+        fs::write(source.path().join("recover.txt"), b"recover me").expect("source file");
+        let engine = Engine::open(EngineOptions::new(node_data.path())).expect("engine");
+        let backup_id = BackupId::new();
+        let mut options = BackupOptions::new(backup_id, "0001", "recovery-job");
+        options.display_name = "Recovery".to_owned();
+        options.created_at_unix_ms = 42;
+        let result = engine
+            .backup(source.path(), &options, &JobControl::new(), |_| {})
+            .expect("backup");
+        let remembered = engine
+            .config()
+            .expect("config")
+            .remembered_backups
+            .get(&backup_id)
+            .expect("remembered backup")
+            .clone();
+        drop(engine);
+
+        let config_path = node_data.path().join("config.json");
+        let mut config: NodeConfig =
+            read_json_bounded(&config_path, MAX_NODE_CONFIG_BYTES).expect("persisted config");
+        config.remembered_backups.remove(&backup_id);
+        write_json_atomic(&config_path, &config, true).expect("rewind config");
+        fs::remove_file(
+            node_data
+                .path()
+                .join("store/snapshots")
+                .join(backup_id.to_string())
+                .join("0001.json"),
+        )
+        .expect("remove visible snapshot");
+        let transaction_path = node_data.path().join("transactions/recovery-job.json");
+        write_json_atomic(
+            &transaction_path,
+            &PendingBackupCommit {
+                schema_version: BACKUP_TRANSACTION_SCHEMA_VERSION,
+                snapshot: result.stored_snapshot,
+                remembered,
+            },
+            true,
+        )
+        .expect("stage recovery transaction");
+
+        let recovered = Engine::open(EngineOptions::new(node_data.path())).expect("recover engine");
+        assert!(
+            recovered
+                .verify_snapshot(backup_id, "0001")
+                .expect("recovered snapshot")
+                .is_intact()
+        );
+        assert_eq!(
+            recovered
+                .config()
+                .expect("recovered config")
+                .remembered_backups
+                .get(&backup_id)
+                .and_then(|state| state.latest_snapshot_id.as_deref()),
+            Some("0001")
+        );
+        assert!(!transaction_path.exists());
+    }
+}

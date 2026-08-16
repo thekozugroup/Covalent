@@ -22,15 +22,19 @@ The Rust workspace owns protocol types, identity, pairing, backup traversal, chu
 
 ## Data flow
 
-1. A platform grants a source directory and passes an opaque grant plus selected relative roots to the engine.
-2. The engine traverses without following symlinks, streams file content into bounded chunks, hashes plaintext, encrypts each chunk, and writes it to a staging area.
-3. A signed encrypted manifest commits only after required local data is durable.
+1. A platform obtains durable access to a selected source and passes the authorized local path or platform-resolved access to the engine facade.
+2. The engine anchors a source directory handle, traverses without following symlinks, streams file content into bounded chunks, hashes plaintext, encrypts each chunk, and checkpoints completed entries.
+3. A signed encrypted manifest commits through a restart-recoverable transaction only after required local data is durable. Snapshot IDs are immutable and monotonic per backup.
 4. The user selects provider device IDs. The scheduler sends only to those providers and records acknowledgements; it never fills a desired count by choosing peers.
-5. Restore fetches verified ciphertext concurrently from every authorized provider that advertises the exact chunk, decrypts and re-verifies it, then stages writes beneath an authorized root.
+5. Restore fetches verified ciphertext concurrently from the local store and acknowledged connected providers, decrypts and re-verifies it, then stages writes beneath a handle-anchored authorized root. Files use temporary write, metadata application, fsync, and atomic rename; completed entries are checkpointed for resume.
 
 ## Discovery and transport
 
-LAN discovery is mDNS-based and separately disableable from inbound service operation. Tailnet candidates come from local interfaces, explicit addresses, MagicDNS hints, or remembered signed peer gossip. Tailscale supplies routing only; Covalent still performs its own authenticated pairing. Data uses authenticated encrypted QUIC with negotiated protocol versions and resource limits.
+LAN discovery is mDNS-based and separately disableable from inbound service operation. When disabled, no mDNS daemon is created and browsing returns no LAN results. Tailnet candidates come from bounded local `tailscale status --json` results or explicit remembered addresses. Tailscale supplies routing only; Covalent still requires its own confirmed identity roles and pinned certificate. Data uses TLS 1.3 QUIC with signed request/response binding, strict v1 negotiation, freshness/replay windows, per-peer request limits, bounded frames, and bounded concurrent streams.
+
+## Durable state
+
+One process owns a node state directory through an exclusive lock. Identity, backup keys, pairing state, provider pins, and the local API token are owner-only files under owner-only directories on Unix. Chunk objects are content-addressed by keyed opaque locators; snapshot metadata is immutable. Active checkpoints conservatively block garbage collection. Startup authenticates and completes any backup transaction journal before serving requests.
 
 ## Platform boundaries
 

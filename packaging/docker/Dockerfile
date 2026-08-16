@@ -18,6 +18,7 @@ COPY --from=builder /source/target/release/covalent-node /usr/local/bin/covalent
 COPY --from=builder /source/target/release/covalent /usr/local/bin/covalent
 
 ENV COVALENT_LISTEN=0.0.0.0:8787 \
+    COVALENT_PEER_LISTEN=0.0.0.0:8787 \
     COVALENT_DATA_DIR=/data \
     COVALENT_DEVICE_NAME="Covalent node" \
     COVALENT_LAN_DISCOVERY=false \

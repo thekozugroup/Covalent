@@ -15,6 +15,7 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 covalent-core = { path = "../covalent-core" }
 covalent-protocol = { path = "../covalent-protocol" }
 serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

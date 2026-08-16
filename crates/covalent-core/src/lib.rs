@@ -1,10 +1,40 @@
-//! Shared Covalent engine foundations.
+//! Memory-safe Covalent backup, storage, verification, restore, and trust engine.
+#![forbid(unsafe_code)]
+
+mod atomic;
+mod backup;
+mod chunker;
+mod crypto;
+mod engine;
+mod identity;
+mod manifest;
+mod pairing;
+mod replication;
+mod restore;
+mod storage;
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use covalent_protocol::{ContractError, ExportedDeviceSettings, RelativePath, ReplicaIntent};
 use thiserror::Error;
+
+pub use backup::{BackupOptions, BackupProgress, BackupResult, ExclusionRules, SymlinkPolicy};
+pub use chunker::{ChunkingConfig, ContentDefinedChunker, DEFAULT_AVERAGE_CHUNK_SIZE};
+pub use crypto::{BackupKey, EncryptedChunk};
+pub use engine::{
+    Engine, EngineOptions, JobControl, JobState, NodeConfig, RememberedBackupState, RosterCursor,
+    SnapshotAvailabilityReport,
+};
+pub use identity::{DeviceIdentity, PublicIdentity};
+pub use manifest::{SignedRosterBuilder, decrypt_manifest, encrypt_manifest, verify_roster};
+pub use pairing::{PairingConfirmation, PairingManager, PairingSession, ShortAuthenticationString};
+pub use replication::{
+    ChunkProvider, ProviderFailure, ProviderHealth, ReplicationReport, ReplicationScheduler,
+    StoreProvider,
+};
+pub use restore::{PreviewAction, RestoreOptions, RestorePlan, RestorePreviewEntry, RestoreReport};
+pub use storage::{ChunkStore, GarbageCollectionReport, IntegrityReport, StoredSnapshot};
 
 /// A canonical directory explicitly authorized as one restore boundary.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -39,9 +69,6 @@ impl AuthorizedRoot {
     }
 
     /// Resolves a validated protocol path while rejecting every existing symlink.
-    ///
-    /// Production writes additionally use directory-handle no-follow operations and
-    /// recheck identity at commit to close filesystem races.
     pub fn resolve(&self, relative: &RelativePath) -> Result<PathBuf, CoreError> {
         let mut destination = self.canonical.clone();
         let mut missing_ancestor = false;
@@ -99,6 +126,7 @@ pub fn export_settings(settings: &ExportedDeviceSettings) -> Result<Vec<u8>, Cor
 }
 
 /// Computes a deterministic BLAKE3 digest for integrity verification.
+#[must_use]
 pub fn digest_bytes(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
 }
@@ -123,7 +151,7 @@ impl BackupPlan {
     }
 }
 
-/// Engine foundation error.
+/// Shared engine error with stable safety-relevant categories.
 #[derive(Debug, Error)]
 pub enum CoreError {
     /// The authorized root does not exist as a real directory.
@@ -141,6 +169,81 @@ pub enum CoreError {
     /// Settings imports are bounded before decoding.
     #[error("settings import exceeds 1 MiB")]
     SettingsTooLarge,
+    /// A key, nonce, signature, or authenticated record is invalid.
+    #[error("cryptographic authentication failed")]
+    AuthenticationFailed,
+    /// Key material had an invalid encoded length.
+    #[error("invalid cryptographic key material")]
+    InvalidKeyMaterial,
+    /// A record used an unsupported algorithm or version.
+    #[error("unsupported cryptographic suite: {0}")]
+    UnsupportedCipherSuite(String),
+    /// A persisted state file has invalid invariants.
+    #[error("invalid persisted state: {0}")]
+    InvalidState(String),
+    /// A requested encrypted chunk is absent.
+    #[error("chunk is missing: {0}")]
+    MissingChunk(String),
+    /// A provider returned corrupt or mismatched content.
+    #[error("chunk verification failed: {0}")]
+    CorruptChunk(String),
+    /// An opaque locator was malformed.
+    #[error("invalid opaque chunk locator")]
+    InvalidLocator,
+    /// The source changed while it was being read.
+    #[error("source changed during backup: {0}")]
+    SourceChanged(PathBuf),
+    /// Source content cannot be represented under the selected policy.
+    #[error("unsupported source entry: {0}")]
+    UnsupportedSourceEntry(PathBuf),
+    /// A permission failure was reported without silently skipping content.
+    #[error("source permission denied: {0}")]
+    SourcePermissionDenied(PathBuf),
+    /// A pairing invitation is invalid, expired, or already consumed.
+    #[error("pairing invitation is unavailable")]
+    InvitationUnavailable,
+    /// Pairing still needs explicit user confirmation.
+    #[error("pairing requires explicit confirmation")]
+    PairingNotConfirmed,
+    /// Settings replacement needs an explicit local confirmation.
+    #[error("settings import requires explicit confirmation")]
+    SettingsImportNotConfirmed,
+    /// The remote identity did not match the confirmed invitation.
+    #[error("paired identity mismatch")]
+    IdentityMismatch,
+    /// A revoked peer attempted an operation.
+    #[error("peer is revoked")]
+    PeerRevoked,
+    /// A provider was not present in the exact explicit replica intent.
+    #[error("provider was not explicitly selected")]
+    UnselectedProvider,
+    /// No mutually supported non-downgraded protocol exists.
+    #[error("protocol negotiation failed")]
+    ProtocolNegotiationFailed,
+    /// An operation exceeded an explicit resource limit.
+    #[error("resource limit exceeded: {0}")]
+    ResourceLimit(&'static str),
+    /// A resumable job is currently paused.
+    #[error("job paused")]
+    Paused,
+    /// A job was explicitly cancelled.
+    #[error("job cancelled")]
+    Cancelled,
+    /// Restore execution did not match the immutable preview.
+    #[error("restore plan changed after preview")]
+    RestorePlanMismatch,
+    /// Restore conflict policy prohibited a write.
+    #[error("restore conflict at {0}")]
+    RestoreConflict(PathBuf),
+    /// No intact authorized provider could supply an object.
+    #[error("no intact authorized provider could supply {0}")]
+    ProvidersExhausted(String),
+    /// A synchronization primitive was poisoned.
+    #[error("engine synchronization state is unavailable")]
+    Synchronization,
+    /// Another process already owns this durable engine state directory.
+    #[error("engine state is already open by another process")]
+    StateLocked,
     /// A filesystem operation failed.
     #[error("could not {operation} at {path}: {source}")]
     Io {
@@ -155,7 +258,7 @@ pub enum CoreError {
     /// A protocol contract was invalid.
     #[error(transparent)]
     Contract(#[from] ContractError),
-    /// Settings JSON did not match the strict contract.
+    /// JSON did not match a strict persisted contract.
     #[error(transparent)]
     Json(#[from] serde_json::Error),
 }
@@ -215,7 +318,10 @@ mod tests {
     }
 
     #[test]
-    fn digest_detects_content_change() {
-        assert_ne!(digest_bytes(b"covalent"), digest_bytes(b"Covalent"));
+    fn settings_import_is_bounded_before_parsing() {
+        assert!(matches!(
+            import_settings(&vec![b' '; 1_048_577]),
+            Err(CoreError::SettingsTooLarge)
+        ));
     }
 }

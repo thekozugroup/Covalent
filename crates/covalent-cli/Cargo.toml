@@ -17,8 +17,10 @@ anyhow.workspace = true
 clap.workspace = true
 covalent-core = { path = "../covalent-core" }
 covalent-protocol = { path = "../covalent-protocol" }
+rand_core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

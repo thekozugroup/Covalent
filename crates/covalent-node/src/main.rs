@@ -1,12 +1,16 @@
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
-use covalent_node::{AppState, router};
-use covalent_protocol::{NodeStatus, PROTOCOL_VERSION, PlatformTier};
+use covalent_core::{Engine, EngineOptions};
+use covalent_node::discovery::LanDiscovery;
+use covalent_node::transport::{QuicNode, TlsIdentity};
+use covalent_node::{AppState, load_or_create_local_api_token, router};
+use covalent_protocol::PlatformTier;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -24,6 +28,9 @@ enum Command {
         /// Socket exposed to native clients or the container network.
         #[arg(long, env = "COVALENT_LISTEN", default_value = "127.0.0.1:8787")]
         listen: SocketAddr,
+        /// QUIC peer socket. UDP may share the same port number as the HTTP TCP socket.
+        #[arg(long, env = "COVALENT_PEER_LISTEN", default_value = "127.0.0.1:8787")]
+        peer_listen: SocketAddr,
         /// Durable node state directory.
         #[arg(long, env = "COVALENT_DATA_DIR", default_value = ".covalent-data")]
         data_dir: PathBuf,
@@ -76,6 +83,7 @@ async fn main() -> Result<()> {
 
     match Arguments::parse().command.unwrap_or(Command::Serve {
         listen: "127.0.0.1:8787".parse().expect("static socket address"),
+        peer_listen: "127.0.0.1:8787".parse().expect("static socket address"),
         data_dir: PathBuf::from(".covalent-data"),
         device_name: "Covalent node".to_owned(),
         lan_discovery: false,
@@ -83,6 +91,7 @@ async fn main() -> Result<()> {
     }) {
         Command::Serve {
             listen,
+            peer_listen,
             data_dir,
             device_name,
             lan_discovery,
@@ -90,6 +99,7 @@ async fn main() -> Result<()> {
         } => {
             serve(
                 listen,
+                peer_listen,
                 data_dir,
                 device_name,
                 lan_discovery,
@@ -103,6 +113,7 @@ async fn main() -> Result<()> {
 
 async fn serve(
     listen: SocketAddr,
+    peer_listen: SocketAddr,
     data_dir: PathBuf,
     device_name: String,
     lan_discovery: bool,
@@ -113,20 +124,41 @@ async fn serve(
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .with_context(|| format!("bind {listen}"))?;
-    let state = AppState {
-        status: NodeStatus {
-            device_name,
-            protocol_version: PROTOCOL_VERSION,
-            lan_discovery,
-            platform_tier,
-            state: "foundation".to_owned(),
-        },
-    };
-    info!(%listen, data_dir = %data_dir.display(), "Covalent node ready");
-    axum::serve(listener, router(state))
+    let mut engine_options = EngineOptions::new(&data_dir);
+    engine_options.initial_device_name = device_name;
+    engine_options.initial_lan_discovery_enabled = lan_discovery;
+    let engine = Arc::new(Engine::open(engine_options).context("open Covalent engine")?);
+    let token = load_or_create_local_api_token(data_dir.join("local-api-token"))
+        .context("load local API token")?;
+    let state = AppState::new(Arc::clone(&engine), platform_tier, token)
+        .context("create local API state")?;
+    let tls_identity =
+        TlsIdentity::load_or_create(data_dir.join("tls")).context("load QUIC identity")?;
+    let discovery_enabled = engine
+        .config()
+        .context("load persisted discovery preference")?
+        .lan_discovery_enabled;
+    let quic_node =
+        QuicNode::bind(peer_listen, engine, &tls_identity).context("bind QUIC peer endpoint")?;
+    let peer_address = quic_node
+        .local_addr()
+        .context("inspect QUIC peer endpoint")?;
+    let state = state
+        .with_peer_port(peer_address.port())
+        .with_transport_certificate(tls_identity.certificate_der().to_vec())
+        .with_provider_state(data_dir.join("provider-connections.json"))
+        .context("load remembered provider connections")?;
+    let quic_task = tokio::spawn(quic_node.run());
+    let discovery = LanDiscovery::start(discovery_enabled, peer_address.port())
+        .context("start LAN discovery")?;
+    info!(%listen, %peer_address, data_dir = %data_dir.display(), "Covalent node ready");
+    let result = axum::serve(listener, router(state))
         .with_graceful_shutdown(shutdown_signal())
         .await
-        .context("serve local API")
+        .context("serve local API");
+    quic_task.abort();
+    discovery.stop();
+    result
 }
 
 async fn shutdown_signal() {

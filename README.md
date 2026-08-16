@@ -36,7 +36,9 @@ cargo run -p covalent-node -- serve --listen 127.0.0.1:8787
 
 Open `http://127.0.0.1:8787` for the local status console. No secret or external account is required for bootstrap or core workflows.
 
-The protocol is pre-1.0 and incompatible changes remain possible. See [product requirements](docs/product/requirements.md), [architecture](docs/architecture/overview.md), [threat model](docs/security/threat-model.md), and [validation matrix](docs/release/validation-matrix.md).
+The implemented Rust vertical slice includes signed pairing and revocation, streaming encrypted backup, exact explicit replicas, authenticated QUIC providers, corruption repair, signed restore preview, crash recovery, and resumable root-confined restore. A direct CLI disaster-recovery drill is available through `./scripts/smoke.sh`; the full property/adversarial/multi-node suite runs with `cargo test --workspace --all-features`.
+
+Protocol v1 is strict and version-negotiated; incompatible wire changes require a new protocol version. See [local API](docs/api/openapi.yaml), [protocol](docs/protocol/protocol.md), [architecture](docs/architecture/overview.md), [threat model](docs/security/threat-model.md), and [validation matrix](docs/release/validation-matrix.md).
 
 ## License
 

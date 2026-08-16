@@ -17,6 +17,6 @@ Security fixes target the latest release and current `main`. This pre-1.0 founda
 - A provider is used for an extra copy only after explicit user selection.
 - Restore paths are normalized relative paths and remain beneath the authorized root. Absolute paths, parent traversal, and symlink traversal fail closed.
 - LAN discovery can be disabled. Tailscale connectivity does not replace Covalent authentication or pairing.
-- Revoked devices cannot receive new credentials or manifests; key rotation and re-replication are required after compromise.
+- Revoked devices are rejected by new peer operations and removed from active provider scheduling. If a backup master key was stolen, incrementing its epoch is insufficient; create a new backup ID/master key and fresh replicas.
 
 The detailed assumptions and abuse cases are in [docs/security/threat-model.md](docs/security/threat-model.md).

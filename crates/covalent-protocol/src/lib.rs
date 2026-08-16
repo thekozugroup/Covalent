@@ -1,7 +1,8 @@
 //! Versioned Covalent wire and persisted contract types.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -11,6 +12,22 @@ use uuid::Uuid;
 pub const PROTOCOL_VERSION: u16 = 1;
 /// Current safe settings export schema.
 pub const SETTINGS_SCHEMA_VERSION: u16 = 1;
+/// Maximum protocol frame accepted before allocation.
+pub const MAX_FRAME_BYTES: usize = 8 * 1_024 * 1_024;
+/// Maximum entries accepted in one manifest.
+pub const MAX_MANIFEST_ENTRIES: usize = 1_000_000;
+/// Largest plaintext chunk accepted by the version-1 contract.
+pub const MAX_CHUNK_PLAINTEXT_BYTES: u32 = 8 * 1_024 * 1_024;
+/// Largest remembered-backup collection accepted in a settings import.
+pub const MAX_REMEMBERED_BACKUPS: usize = 100_000;
+
+const fn protocol_version_one() -> u16 {
+    PROTOCOL_VERSION
+}
+
+const fn is_false(value: &bool) -> bool {
+    !*value
+}
 
 /// A stable public device identifier bound to a signing identity.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -43,6 +60,14 @@ impl fmt::Display for DeviceId {
     }
 }
 
+impl FromStr for DeviceId {
+    type Err = uuid::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Uuid::parse_str(value).map(Self)
+    }
+}
+
 /// A stable logical backup identifier.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -53,6 +78,12 @@ impl BackupId {
     #[must_use]
     pub fn new() -> Self {
         Self(Uuid::new_v4())
+    }
+
+    /// Constructs an identifier from a known UUID.
+    #[must_use]
+    pub const fn from_uuid(value: Uuid) -> Self {
+        Self(value)
     }
 }
 
@@ -65,6 +96,14 @@ impl Default for BackupId {
 impl fmt::Display for BackupId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(formatter)
+    }
+}
+
+impl FromStr for BackupId {
+    type Err = uuid::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Uuid::parse_str(value).map(Self)
     }
 }
 
@@ -201,13 +240,14 @@ impl ExportedDeviceSettings {
         remembered_backups: Vec<RememberedBackup>,
     ) -> Result<Self, ContractError> {
         let device_name = device_name.into();
-        validate_device_name(&device_name)?;
-        Ok(Self {
+        let settings = Self {
             schema_version: SETTINGS_SCHEMA_VERSION,
             device_name,
             lan_discovery_enabled,
             remembered_backups,
-        })
+        };
+        settings.validate()?;
+        Ok(settings)
     }
 
     /// Validates a decoded import before it reaches local state.
@@ -217,7 +257,18 @@ impl ExportedDeviceSettings {
                 self.schema_version,
             ));
         }
-        validate_device_name(&self.device_name)
+        validate_device_name(&self.device_name)?;
+        if self.remembered_backups.len() > MAX_REMEMBERED_BACKUPS {
+            return Err(ContractError::SettingsTooLarge);
+        }
+        let mut backup_ids = BTreeSet::new();
+        for backup in &self.remembered_backups {
+            validate_backup_name(&backup.name)?;
+            if !backup_ids.insert(backup.backup_id) {
+                return Err(ContractError::DuplicateRememberedBackup);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -229,22 +280,45 @@ fn validate_device_name(value: &str) -> Result<(), ContractError> {
     Ok(())
 }
 
+fn validate_backup_name(value: &str) -> Result<(), ContractError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > 120 || trimmed.chars().any(char::is_control) {
+        return Err(ContractError::InvalidBackupName);
+    }
+    Ok(())
+}
+
 /// An expiring, single-use pairing invitation.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PairingInvitation {
     /// Invitation format version.
     pub protocol_version: u16,
+    /// Lowest protocol version the inviter will accept.
+    #[serde(default = "protocol_version_one")]
+    pub minimum_protocol_version: u16,
     /// Inviting device identifier.
     pub inviter_device_id: DeviceId,
     /// Base64url-encoded public signing key.
     pub inviter_public_key: String,
+    /// User-visible inviter name bound into the signed invitation.
+    #[serde(default)]
+    pub inviter_device_name: String,
     /// Opaque random invitation identifier.
     pub invitation_id: String,
+    /// Base64url invitation secret used only while the invitation is pending.
+    #[serde(default)]
+    pub invitation_secret: String,
+    /// BLAKE3 commitment to the decoded invitation secret.
+    #[serde(default)]
+    pub invitation_secret_commitment: String,
     /// Unix timestamp in milliseconds after which pairing must fail.
     pub expires_at_unix_ms: u64,
     /// Candidate connection hints; never trusted as identity.
     pub endpoints: Vec<String>,
+    /// Base64url Ed25519 signature over all preceding invitation fields.
+    #[serde(default)]
+    pub signature: String,
 }
 
 /// A content chunk reference held inside an encrypted manifest.
@@ -283,6 +357,45 @@ pub struct ManifestEntry {
     pub length: u64,
     /// Ordered content chunks; empty for directories and empty files.
     pub chunks: Vec<ChunkReference>,
+    /// Portable metadata restored on a best-effort, platform-safe basis.
+    #[serde(default, skip_serializing_if = "EntryMetadata::is_empty")]
+    pub metadata: EntryMetadata,
+    /// Data extents for sparse files. Empty means dense content.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sparse_extents: Vec<SparseExtent>,
+}
+
+/// Portable filesystem metadata captured without following links.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EntryMetadata {
+    /// Last modification timestamp when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified_at_unix_ms: Option<u64>,
+    /// Unix permission bits when captured on a Unix source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unix_mode: Option<u32>,
+    /// True when holes must be reconstructed even if no data extent exists.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub sparse: bool,
+}
+
+impl EntryMetadata {
+    /// Returns whether no portable metadata is present.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.modified_at_unix_ms.is_none() && self.unix_mode.is_none() && !self.sparse
+    }
+}
+
+/// One logical data extent in a sparse file.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SparseExtent {
+    /// Logical byte offset in the restored file.
+    pub offset: u64,
+    /// Number of plaintext data bytes represented by this extent.
+    pub length: u64,
 }
 
 /// Decrypted manifest payload.
@@ -301,6 +414,248 @@ pub struct Manifest {
     pub replica_intent: ReplicaIntent,
     /// Sorted filesystem entries.
     pub entries: Vec<ManifestEntry>,
+    /// Durable provider acknowledgements, separate from requested intent.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub provider_acknowledgements: BTreeMap<DeviceId, BTreeSet<String>>,
+}
+
+impl Manifest {
+    /// Validates size, ordering, paths, chunk digests, and explicit placement.
+    pub fn validate(&self) -> Result<(), ContractError> {
+        if self.protocol_version != PROTOCOL_VERSION {
+            return Err(ContractError::UnsupportedProtocol(self.protocol_version));
+        }
+        if self.entries.len() > MAX_MANIFEST_ENTRIES {
+            return Err(ContractError::ManifestTooLarge);
+        }
+        if self.snapshot_id.is_empty()
+            || self.snapshot_id.len() > 128
+            || !self
+                .snapshot_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            || self.replica_intent.selected_providers.len() > 128
+        {
+            return Err(ContractError::InvalidManifestEntry);
+        }
+        let mut previous: Option<&RelativePath> = None;
+        let mut manifest_locators = BTreeSet::new();
+        for entry in &self.entries {
+            if previous.is_some_and(|path| path >= &entry.path) {
+                return Err(ContractError::ManifestEntriesNotSorted);
+            }
+            previous = Some(&entry.path);
+            if entry.kind == EntryKind::Directory && (entry.length != 0 || !entry.chunks.is_empty())
+            {
+                return Err(ContractError::InvalidManifestEntry);
+            }
+            if entry.kind == EntryKind::Directory
+                && (entry.metadata.sparse || !entry.sparse_extents.is_empty())
+            {
+                return Err(ContractError::InvalidManifestEntry);
+            }
+            let chunk_length: u64 = entry
+                .chunks
+                .iter()
+                .map(|chunk| u64::from(chunk.plaintext_length))
+                .sum();
+            if entry.kind == EntryKind::File
+                && !entry.metadata.sparse
+                && entry.sparse_extents.is_empty()
+                && chunk_length != entry.length
+            {
+                return Err(ContractError::InvalidManifestEntry);
+            }
+            if !entry.metadata.sparse && !entry.sparse_extents.is_empty() {
+                return Err(ContractError::InvalidManifestEntry);
+            }
+            if entry.metadata.sparse {
+                let extent_length: u64 = entry
+                    .sparse_extents
+                    .iter()
+                    .map(|extent| extent.length)
+                    .sum();
+                let mut previous_end = 0_u64;
+                if extent_length != chunk_length
+                    || entry.sparse_extents.iter().any(|extent| {
+                        let invalid = extent.length == 0
+                            || extent.offset < previous_end
+                            || extent.offset.checked_add(extent.length).is_none()
+                            || extent.offset.saturating_add(extent.length) > entry.length;
+                        previous_end = extent.offset.saturating_add(extent.length);
+                        invalid
+                    })
+                {
+                    return Err(ContractError::InvalidManifestEntry);
+                }
+            }
+            for chunk in &entry.chunks {
+                if chunk.plaintext_digest.len() != 64
+                    || chunk.opaque_locator.len() != 64
+                    || !chunk
+                        .plaintext_digest
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit())
+                    || !chunk
+                        .opaque_locator
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit())
+                    || chunk
+                        .plaintext_digest
+                        .bytes()
+                        .any(|byte| byte.is_ascii_uppercase())
+                    || chunk
+                        .opaque_locator
+                        .bytes()
+                        .any(|byte| byte.is_ascii_uppercase())
+                    || chunk.plaintext_length == 0
+                    || chunk.plaintext_length > MAX_CHUNK_PLAINTEXT_BYTES
+                    || chunk.ciphertext_length != chunk.plaintext_length.saturating_add(16)
+                {
+                    return Err(ContractError::InvalidChunkReference);
+                }
+                manifest_locators.insert(chunk.opaque_locator.clone());
+            }
+        }
+        if self
+            .provider_acknowledgements
+            .keys()
+            .any(|provider| !self.replica_intent.contains(provider))
+        {
+            return Err(ContractError::UnselectedProviderAcknowledgement);
+        }
+        if self
+            .provider_acknowledgements
+            .values()
+            .flatten()
+            .any(|locator| {
+                locator.len() != 64
+                    || locator
+                        .bytes()
+                        .any(|byte| !byte.is_ascii_hexdigit() || byte.is_ascii_uppercase())
+                    || !manifest_locators.contains(locator)
+            })
+        {
+            return Err(ContractError::InvalidProviderAcknowledgement);
+        }
+        Ok(())
+    }
+}
+
+/// Signed, independently encrypted manifest record.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ManifestEnvelope {
+    /// Envelope format version.
+    pub protocol_version: u16,
+    /// Backup whose epoch key decrypts this record.
+    pub backup_id: BackupId,
+    /// Monotonic content-key epoch.
+    pub key_epoch: u64,
+    /// Fixed cipher suite identifier.
+    pub cipher_suite: String,
+    /// Base64url XChaCha20 nonce.
+    pub nonce: String,
+    /// Base64url authenticated ciphertext.
+    pub ciphertext: String,
+    /// Identity that signed the envelope fields.
+    pub signer_device_id: DeviceId,
+    /// Base64url Ed25519 signature over canonical envelope signing bytes.
+    pub signature: String,
+}
+
+/// Roles granted to one explicitly trusted peer.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PeerRole {
+    /// May provide encrypted chunk storage.
+    StorageProvider,
+    /// May read authorized encrypted backup objects.
+    BackupReader,
+    /// May submit encrypted chunks for explicitly selected backups.
+    BackupWriter,
+}
+
+/// Persisted peer authorization created only after explicit confirmation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PeerGrant {
+    /// Authorized peer identity.
+    pub peer_device_id: DeviceId,
+    /// Base64url Ed25519 public key.
+    pub public_key: String,
+    /// Human-readable name last confirmed by the user.
+    pub display_name: String,
+    /// Exact allowed roles.
+    pub roles: BTreeSet<PeerRole>,
+    /// Unix timestamp of explicit confirmation.
+    pub confirmed_at_unix_ms: u64,
+    /// Whether this grant has been revoked.
+    pub revoked: bool,
+}
+
+/// Signed monotonic roster shared only among remembered peers.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SignedRoster {
+    /// Protocol version.
+    pub protocol_version: u16,
+    /// Strictly increasing local roster epoch.
+    pub epoch: u64,
+    /// Digest of the preceding accepted roster, or empty for genesis.
+    pub previous_digest: String,
+    /// Complete grants, including revocation tombstones.
+    pub grants: Vec<PeerGrant>,
+    /// Device authorized to sign this epoch.
+    pub signer_device_id: DeviceId,
+    /// Base64url Ed25519 signature over canonical roster fields.
+    pub signature: String,
+}
+
+/// Restore behavior when a destination already exists.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictPolicy {
+    /// Abort before changing any conflicting entry.
+    Fail,
+    /// Leave existing entries unchanged.
+    Skip,
+    /// Atomically replace regular files; never replace directories with files.
+    Replace,
+    /// Select a deterministic available sibling name.
+    Rename,
+}
+
+/// Availability of an explicitly selected replica.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplicaAvailability {
+    /// Every required encrypted object is durably acknowledged.
+    Complete,
+    /// Some objects are missing.
+    Degraded,
+    /// Provider is not currently reachable.
+    Offline,
+    /// Provider returned corrupt or unauthenticated content.
+    Corrupt,
+    /// Peer has been revoked and may not serve new requests.
+    Revoked,
+}
+
+/// Protocol negotiation hello authenticated by the paired transport.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PeerHello {
+    /// Stable identity.
+    pub device_id: DeviceId,
+    /// Minimum accepted protocol version.
+    pub minimum_protocol_version: u16,
+    /// Maximum accepted protocol version.
+    pub maximum_protocol_version: u16,
+    /// Random replay-resistant connection nonce.
+    pub nonce: String,
+    /// Base64url Ed25519 signature over the hello transcript.
+    pub signature: String,
 }
 
 /// Product platform readiness tier exposed in local status.
@@ -338,9 +693,39 @@ pub enum ContractError {
     /// A device name is empty, too long, or contains control characters.
     #[error("device name must be 1-80 printable characters")]
     InvalidDeviceName,
+    /// A remembered backup name is empty, too long, or contains control characters.
+    #[error("backup name must be 1-120 printable characters")]
+    InvalidBackupName,
+    /// A settings import contains too many remembered backups.
+    #[error("settings contain too many remembered backups")]
+    SettingsTooLarge,
+    /// A settings import repeats one logical backup identifier.
+    #[error("settings contain duplicate remembered backups")]
+    DuplicateRememberedBackup,
     /// The imported settings schema is not supported.
     #[error("unsupported settings schema version {0}")]
     UnsupportedSettingsSchema(u16),
+    /// A persisted or wire object uses an unsupported protocol.
+    #[error("unsupported protocol version {0}")]
+    UnsupportedProtocol(u16),
+    /// A manifest exceeds the bounded entry count.
+    #[error("manifest exceeds the entry limit")]
+    ManifestTooLarge,
+    /// Manifest entries must be unique and strictly sorted.
+    #[error("manifest entries are not strictly sorted")]
+    ManifestEntriesNotSorted,
+    /// File lengths, extents, or directory content are inconsistent.
+    #[error("manifest entry is internally inconsistent")]
+    InvalidManifestEntry,
+    /// A chunk digest, locator, or length is malformed.
+    #[error("manifest chunk reference is invalid")]
+    InvalidChunkReference,
+    /// An acknowledgement names a provider the user did not select.
+    #[error("manifest acknowledges an unselected provider")]
+    UnselectedProviderAcknowledgement,
+    /// A provider acknowledgement does not name an object in this manifest.
+    #[error("manifest provider acknowledgement is invalid")]
+    InvalidProviderAcknowledgement,
 }
 
 #[cfg(test)]

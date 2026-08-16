@@ -1,14 +1,20 @@
 openapi: 3.1.0
 info:
   title: Covalent local node API
-  version: 0.1.0
-  description: Loopback or explicitly protected local API. Remote peers use the Covalent QUIC protocol.
+  version: 1.0.0
+  description: >-
+    Versioned API for a locally controlled Covalent node. Except for health and
+    coarse status, every route requires the bearer token stored in the node data
+    directory. Remote storage peers use the separately authenticated QUIC protocol.
 servers:
   - url: http://127.0.0.1:8787
+security:
+  - localToken: []
 paths:
   /healthz:
     get:
       operationId: health
+      security: []
       responses:
         "200":
           description: Node process is ready.
@@ -19,35 +25,968 @@ paths:
   /api/v1/status:
     get:
       operationId: status
+      security: []
       responses:
         "200":
-          description: Non-sensitive local node status.
+          description: Coarse non-secret node status.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Status"
+  /api/v1/transport/identity:
+    get:
+      operationId: transportIdentity
+      responses:
+        "200":
+          description: Public identity and certificate used for an explicitly confirmed provider connection.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransportIdentity"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/v1/discovery:
+    get:
+      operationId: discoveryCandidates
+      responses:
+        "200":
+          description: Untrusted LAN and Tailscale reachability hints. An empty list is valid when discovery is disabled.
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 1024
+                items:
+                  $ref: "#/components/schemas/DiscoveryCandidate"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/v1/config/export:
+    post:
+      operationId: exportConfig
+      responses:
+        "200":
+          description: Export-safe settings without identity keys, backup keys, grants, or provider credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportedSettings"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/v1/config/import:
+    post:
+      operationId: importConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [confirmed, settings]
+              properties:
+                confirmed:
+                  type: boolean
+                settings:
+                  $ref: "#/components/schemas/ExportedSettings"
+      responses:
+        "204":
+          description: Safe settings replaced after explicit confirmation.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/pair/invitations:
+    post:
+      operationId: createPairingInvitation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [lifetimeMs, endpoints]
+              properties:
+                lifetimeMs:
+                  type: integer
+                  minimum: 1
+                  maximum: 900000
+                endpoints:
+                  type: array
+                  maxItems: 16
+                  items:
+                    type: string
+                    minLength: 1
+                    maxLength: 512
+      responses:
+        "200":
+          description: Signed, expiring, single-use invitation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairingInvitation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/v1/pair/accept:
+    post:
+      operationId: acceptPairingInvitation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PairAcceptRequest"
+      responses:
+        "200":
+          description: Signed role-bound session containing the comparison code.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairingSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/v1/pair/confirm/responder:
+    post:
+      operationId: confirmPairingResponder
+      requestBody:
+        $ref: "#/components/requestBodies/PairConfirmation"
+      responses:
+        "200":
+          $ref: "#/components/responses/PairingSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/pair/confirm/inviter:
+    post:
+      operationId: confirmPairingInviter
+      requestBody:
+        $ref: "#/components/requestBodies/PairConfirmation"
+      responses:
+        "200":
+          $ref: "#/components/responses/PairingSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/pair/finalize/responder:
+    post:
+      operationId: finalizePairingResponder
+      requestBody:
+        $ref: "#/components/requestBodies/PairFinalization"
+      responses:
+        "200":
+          $ref: "#/components/responses/PairingConfirmation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/v1/pair/finalize/inviter:
+    post:
+      operationId: finalizePairingInviter
+      requestBody:
+        $ref: "#/components/requestBodies/PairFinalization"
+      responses:
+        "200":
+          $ref: "#/components/responses/PairingConfirmation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/v1/peers/revoke:
+    post:
+      operationId: revokePeer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [peerId]
+              properties:
+                peerId:
+                  $ref: "#/components/schemas/DeviceId"
+      responses:
+        "204":
+          description: Revocation tombstone committed and provider disconnected.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/v1/providers:
+    get:
+      operationId: listProviders
+      responses:
+        "200":
+          description: Explicitly connected provider endpoints and public certificate fingerprints.
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 128
+                items:
+                  $ref: "#/components/schemas/ProviderConnection"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/v1/providers/connect:
+    post:
+      operationId: connectProvider
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [peerId, address, certificateDer]
+              properties:
+                peerId:
+                  $ref: "#/components/schemas/DeviceId"
+                address:
+                  type: string
+                  description: Numeric socket address, including port.
+                certificateDer:
+                  type: string
+                  maxLength: 131072
+                  description: Base64url DER certificate transferred through the confirmed pairing channel.
+      responses:
+        "200":
+          description: Provider connection persisted after role and certificate validation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnection"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/v1/providers/disconnect:
+    post:
+      operationId: disconnectProvider
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [peerId]
+              properties:
+                peerId:
+                  $ref: "#/components/schemas/DeviceId"
+      responses:
+        "204":
+          description: Provider endpoint disconnected without revoking trust.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/v1/rosters/current:
+    get:
+      operationId: currentRoster
+      responses:
+        "200":
+          description: Latest locally signed roster, or null before the first peer grant.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/SignedRoster"
+                  - type: "null"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/v1/rosters/accept:
+    post:
+      operationId: acceptRoster
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignedRoster"
+      responses:
+        "200":
+          description: Advanced anti-rollback cursor. Roster gossip never grants trust automatically.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RosterCursor"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/v1/jobs/control:
+    post:
+      operationId: controlJob
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [jobId, action]
+              properties:
+                jobId:
+                  $ref: "#/components/schemas/JobId"
+                action:
+                  enum: [pause, resume, cancel]
+      responses:
+        "200":
+          description: Current in-process job signal state.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [jobId, state]
+                properties:
+                  jobId:
+                    $ref: "#/components/schemas/JobId"
+                  state:
+                    enum: [running, paused, cancelled]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/v1/backups:
+    post:
+      operationId: createBackup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BackupRequest"
+      responses:
+        "200":
+          description: Locally committed encrypted backup and exact explicit replication outcome.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/backups/verify:
+    post:
+      operationId: verifyBackup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SnapshotRequest"
+      responses:
+        "200":
+          description: Authenticated local integrity and optional explicit-provider availability.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerifyResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /api/v1/restores/preview:
+    post:
+      operationId: previewRestore
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RestorePreviewRequest"
+      responses:
+        "200":
+          description: Signed immutable no-write plan bound to the authorized root identity.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RestorePlan"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/restores/execute:
+    post:
+      operationId: executeRestore
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [plan]
+              properties:
+                plan:
+                  $ref: "#/components/schemas/RestorePlan"
+      responses:
+        "200":
+          description: Atomic restore result for the exact signed plan.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RestoreResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Unavailable"
 components:
+  securitySchemes:
+    localToken:
+      type: http
+      scheme: bearer
+      bearerFormat: random-256-bit-local-token
+  requestBodies:
+    PairConfirmation:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [session, displayedCode]
+            properties:
+              session:
+                $ref: "#/components/schemas/PairingSession"
+              displayedCode:
+                type: string
+                pattern: "^[0-9]{4}(-[0-9]{4}){3}$"
+    PairFinalization:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [session]
+            properties:
+              session:
+                $ref: "#/components/schemas/PairingSession"
+  responses:
+    Unauthorized:
+      description: Missing or invalid local bearer token.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    Forbidden:
+      description: Peer is unknown, revoked, or lacks the required role.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    Conflict:
+      description: Confirmation, resume, or restore conflict requires local action.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    Unavailable:
+      description: No intact authorized copy is currently available.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    PairingSession:
+      description: Updated signed pairing exchange.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/PairingSession"
+    PairingConfirmation:
+      description: Both role-scoped grants after mutual confirmation.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/PairingConfirmation"
   schemas:
+    DeviceId:
+      type: string
+      format: uuid
+    BackupId:
+      type: string
+      format: uuid
+    SnapshotId:
+      type: string
+      minLength: 1
+      maxLength: 128
+      pattern: "^[A-Za-z0-9_-]+$"
+    JobId:
+      type: string
+      minLength: 1
+      maxLength: 128
+      pattern: "^[A-Za-z0-9_-]+$"
+    Role:
+      enum: [storage_provider, backup_reader, backup_writer]
     Health:
       type: object
+      additionalProperties: false
       required: [status, protocolVersion]
       properties:
         status:
           const: ok
         protocolVersion:
-          type: integer
-          minimum: 1
+          const: 1
     Status:
       type: object
+      additionalProperties: false
       required: [deviceName, protocolVersion, lanDiscovery, platformTier, state]
       properties:
         deviceName:
           type: string
+          minLength: 1
+          maxLength: 80
         protocolVersion:
-          type: integer
+          const: 1
         lanDiscovery:
           type: boolean
         platformTier:
-          type: string
+          enum: [tier1, tier2]
         state:
-          enum: [foundation, ready, degraded, offline]
+          const: ready
+    TransportIdentity:
+      type: object
+      additionalProperties: false
+      required: [deviceId, peerPort, certificateDer, certificateFingerprint]
+      properties:
+        deviceId:
+          $ref: "#/components/schemas/DeviceId"
+        peerPort:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        certificateDer:
+          type: string
+        certificateFingerprint:
+          $ref: "#/components/schemas/HexDigest"
+    DiscoveryCandidate:
+      type: object
+      additionalProperties: false
+      required: [source, endpoint, serviceId, minimumProtocolVersion, maximumProtocolVersion]
+      properties:
+        source:
+          enum: [lan_mdns, tailscale]
+        endpoint:
+          type: string
+        serviceId:
+          type: string
+        minimumProtocolVersion:
+          type: integer
+          minimum: 1
+        maximumProtocolVersion:
+          type: integer
+          minimum: 1
+    RememberedBackup:
+      type: object
+      additionalProperties: false
+      required: [backupId, name, ownerDeviceId]
+      properties:
+        backupId:
+          $ref: "#/components/schemas/BackupId"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        ownerDeviceId:
+          $ref: "#/components/schemas/DeviceId"
+    ExportedSettings:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, deviceName, lanDiscoveryEnabled, rememberedBackups]
+      properties:
+        schemaVersion:
+          const: 1
+        deviceName:
+          type: string
+          minLength: 1
+          maxLength: 80
+        lanDiscoveryEnabled:
+          type: boolean
+        rememberedBackups:
+          type: array
+          maxItems: 100000
+          items:
+            $ref: "#/components/schemas/RememberedBackup"
+    PairingInvitation:
+      type: object
+      additionalProperties: false
+      required:
+        - protocolVersion
+        - minimumProtocolVersion
+        - inviterDeviceId
+        - inviterPublicKey
+        - inviterDeviceName
+        - invitationId
+        - invitationSecret
+        - invitationSecretCommitment
+        - expiresAtUnixMs
+        - endpoints
+        - signature
+      properties:
+        protocolVersion:
+          const: 1
+        minimumProtocolVersion:
+          const: 1
+        inviterDeviceId:
+          $ref: "#/components/schemas/DeviceId"
+        inviterPublicKey:
+          type: string
+        inviterDeviceName:
+          type: string
+          minLength: 1
+          maxLength: 80
+        invitationId:
+          type: string
+          maxLength: 128
+        invitationSecret:
+          type: string
+        invitationSecretCommitment:
+          $ref: "#/components/schemas/HexDigest"
+        expiresAtUnixMs:
+          type: integer
+          minimum: 1
+        endpoints:
+          type: array
+          maxItems: 16
+          items:
+            type: string
+            maxLength: 512
+        signature:
+          type: string
+    PairAcceptRequest:
+      type: object
+      additionalProperties: false
+      required: [invitation, responderName]
+      properties:
+        invitation:
+          $ref: "#/components/schemas/PairingInvitation"
+        responderName:
+          type: string
+          minLength: 1
+          maxLength: 80
+        responderRoles:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/Role"
+        inviterRoles:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/Role"
+    PairingSession:
+      type: object
+      description: Strict serialized role-bound exchange. Fields are signed; clients must round-trip them unchanged.
+      additionalProperties: false
+      required:
+        - invitation
+        - responderDeviceId
+        - responderPublicKey
+        - responderName
+        - responderRoles
+        - inviterRoles
+        - authenticationString
+        - responderAcceptanceSignature
+        - responderConfirmationSignature
+        - inviterConfirmationSignature
+      properties:
+        invitation:
+          $ref: "#/components/schemas/PairingInvitation"
+        responderDeviceId:
+          $ref: "#/components/schemas/DeviceId"
+        responderPublicKey:
+          type: string
+        responderName:
+          type: string
+        responderRoles:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/Role"
+        inviterRoles:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/Role"
+        authenticationString:
+          type: string
+        responderAcceptanceSignature:
+          type: string
+        responderConfirmationSignature:
+          type: [string, "null"]
+        inviterConfirmationSignature:
+          type: [string, "null"]
+    PeerGrant:
+      type: object
+      additionalProperties: false
+      required: [peerDeviceId, publicKey, displayName, roles, confirmedAtUnixMs, revoked]
+      properties:
+        peerDeviceId:
+          $ref: "#/components/schemas/DeviceId"
+        publicKey:
+          type: string
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 80
+        roles:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/Role"
+        confirmedAtUnixMs:
+          type: integer
+          minimum: 0
+        revoked:
+          type: boolean
+    PairingConfirmation:
+      type: object
+      additionalProperties: false
+      required: [inviterGrant, responderGrant]
+      properties:
+        inviterGrant:
+          $ref: "#/components/schemas/PeerGrant"
+        responderGrant:
+          $ref: "#/components/schemas/PeerGrant"
+    ProviderConnection:
+      type: object
+      additionalProperties: false
+      required: [peerId, address, certificateFingerprint]
+      properties:
+        peerId:
+          $ref: "#/components/schemas/DeviceId"
+        address:
+          type: string
+        certificateFingerprint:
+          $ref: "#/components/schemas/HexDigest"
+    SignedRoster:
+      type: object
+      additionalProperties: false
+      required: [protocolVersion, epoch, previousDigest, grants, signerDeviceId, signature]
+      properties:
+        protocolVersion:
+          const: 1
+        epoch:
+          type: integer
+          minimum: 1
+        previousDigest:
+          type: string
+        grants:
+          type: array
+          maxItems: 128
+          items:
+            $ref: "#/components/schemas/PeerGrant"
+        signerDeviceId:
+          $ref: "#/components/schemas/DeviceId"
+        signature:
+          type: string
+    RosterCursor:
+      type: object
+      additionalProperties: false
+      required: [epoch, digest]
+      properties:
+        epoch:
+          type: integer
+          minimum: 1
+        digest:
+          $ref: "#/components/schemas/HexDigest"
+    BackupRequest:
+      type: object
+      additionalProperties: false
+      required: [sourceRoot, displayName, snapshotId, jobId]
+      properties:
+        sourceRoot:
+          type: string
+        backupId:
+          oneOf:
+            - $ref: "#/components/schemas/BackupId"
+            - type: "null"
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 120
+        snapshotId:
+          $ref: "#/components/schemas/SnapshotId"
+        jobId:
+          $ref: "#/components/schemas/JobId"
+        selectedProviderIds:
+          type: array
+          maxItems: 128
+          uniqueItems: true
+          description: Exact explicit set. Omitted or empty means local-only; the node never adds peers.
+          items:
+            $ref: "#/components/schemas/DeviceId"
+    BackupResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - backupId
+        - snapshotId
+        - entries
+        - bytesRead
+        - chunksStored
+        - chunksDeduplicated
+        - selectedProviders
+        - degradedFailures
+      properties:
+        backupId:
+          $ref: "#/components/schemas/BackupId"
+        snapshotId:
+          $ref: "#/components/schemas/SnapshotId"
+        entries:
+          type: integer
+          minimum: 0
+        bytesRead:
+          type: integer
+          minimum: 0
+        chunksStored:
+          type: integer
+          minimum: 0
+        chunksDeduplicated:
+          type: integer
+          minimum: 0
+        selectedProviders:
+          type: integer
+          minimum: 0
+        degradedFailures:
+          type: integer
+          minimum: 0
+    SnapshotRequest:
+      type: object
+      additionalProperties: false
+      required: [backupId, snapshotId]
+      properties:
+        backupId:
+          $ref: "#/components/schemas/BackupId"
+        snapshotId:
+          $ref: "#/components/schemas/SnapshotId"
+        verifyProviders:
+          type: boolean
+          default: false
+        repair:
+          type: boolean
+          default: false
+    VerifyResponse:
+      type: object
+      additionalProperties: false
+      required: [verified, missing, corrupt, intact, providerAvailability]
+      properties:
+        verified:
+          type: integer
+          minimum: 0
+        missing:
+          type: array
+          items:
+            $ref: "#/components/schemas/HexDigest"
+        corrupt:
+          type: array
+          items:
+            $ref: "#/components/schemas/HexDigest"
+        intact:
+          type: boolean
+        providerAvailability:
+          type: object
+          additionalProperties:
+            enum: [complete, degraded, offline, corrupt, revoked]
+    RestorePreviewRequest:
+      type: object
+      additionalProperties: false
+      required: [backupId, snapshotId, targetRoot, conflictPolicy, jobId]
+      properties:
+        backupId:
+          $ref: "#/components/schemas/BackupId"
+        snapshotId:
+          $ref: "#/components/schemas/SnapshotId"
+        targetRoot:
+          type: string
+        conflictPolicy:
+          enum: [fail, skip, replace, rename]
+        jobId:
+          $ref: "#/components/schemas/JobId"
+    RestorePreviewEntry:
+      type: object
+      additionalProperties: false
+      required: [sourcePath, destinationPath, kind, action]
+      properties:
+        sourcePath:
+          type: string
+        destinationPath:
+          type: string
+        kind:
+          enum: [file, directory]
+        action:
+          enum: [create_file, create_directory, keep_directory, skip_file, replace_file, rename_file]
+    RestorePlan:
+      type: object
+      additionalProperties: false
+      required:
+        - backupId
+        - snapshotId
+        - authorizedRoot
+        - rootDevice
+        - rootInode
+        - manifestDigest
+        - conflictPolicy
+        - jobId
+        - entries
+        - planDigest
+        - signerDeviceId
+        - signature
+      properties:
+        backupId:
+          $ref: "#/components/schemas/BackupId"
+        snapshotId:
+          $ref: "#/components/schemas/SnapshotId"
+        authorizedRoot:
+          type: string
+        rootDevice:
+          type: integer
+        rootInode:
+          type: integer
+        manifestDigest:
+          $ref: "#/components/schemas/HexDigest"
+        conflictPolicy:
+          enum: [fail, skip, replace, rename]
+        jobId:
+          $ref: "#/components/schemas/JobId"
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/RestorePreviewEntry"
+        planDigest:
+          $ref: "#/components/schemas/HexDigest"
+        signerDeviceId:
+          $ref: "#/components/schemas/DeviceId"
+        signature:
+          type: string
+    RestoreResponse:
+      type: object
+      additionalProperties: false
+      required: [filesRestored, directoriesCreated, filesSkipped, bytesWritten, rejectedProviderCopies]
+      properties:
+        filesRestored:
+          type: integer
+          minimum: 0
+        directoriesCreated:
+          type: integer
+          minimum: 0
+        filesSkipped:
+          type: integer
+          minimum: 0
+        bytesWritten:
+          type: integer
+          minimum: 0
+        rejectedProviderCopies:
+          type: integer
+          minimum: 0
+    HexDigest:
+      type: string
+      pattern: "^[0-9a-f]{64}$"
+    ApiError:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string

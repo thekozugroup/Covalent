@@ -6,7 +6,7 @@ Contracts, threat model, protocol, Rust boundaries, native project roots, Docker
 
 ## 0.2 Tier 1 vertical slice
 
-Real pairing, encrypted backup, explicit replica copies, verified multi-source restore, device settings transfer, and recovery drills across macOS, Android, Docker, and Unraid.
+The shared Rust implementation now has real pairing, encrypted backup, explicit replica copies, verified multi-source restore, device settings transfer, crash recovery, and local multi-node recovery drills. Completion still requires the native macOS/Android and packaged Docker/Unraid surfaces to drive these contracts end to end.
 
 ## 0.3 Tier 1 production readiness
 
