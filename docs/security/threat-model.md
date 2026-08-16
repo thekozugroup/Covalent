@@ -26,7 +26,7 @@ Plaintext file contents and paths, backup/content keys, long-lived device identi
 | Symlink or TOCTOU escape | Do not follow source symlinks by default. Restore uses directory handles and no-follow operations where available, rechecks before commit, and fails closed on links. |
 | Partial or torn writes | Same-filesystem staging, file sync, metadata transaction, parent-directory sync where supported, atomic rename, startup recovery journal. |
 | Unbounded resource use | Framed message limits, bounded chunk size/queues, per-peer concurrency and bandwidth limits, disk reservation, cancellation and backpressure. |
-| Discovery privacy | LAN discovery off switch, minimal advertisements, no backup names or paths, rate limits, manual/Tailnet alternatives. |
+| Discovery privacy | LAN discovery off switch, minimal advertisements, no backup names or paths, rate limits, manual/Tailnet alternatives, and Android local-network permission requested only after opt-in. |
 | Unsafe settings import | Version/schema validation, size limits, reject unknown key-like fields, never deserialize identity keys from normal export. |
 | Unraid mount mistake | Read-only sources by default; `/boot` optional and read-only for backup; restore requires a separate explicit writable target and preview. |
 

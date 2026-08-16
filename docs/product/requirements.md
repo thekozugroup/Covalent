@@ -46,7 +46,7 @@ The user exports a versioned file containing the device name, LAN discovery pref
 ### PR-07 Platform-native access
 
 - macOS Tier 1 uses open panels, security-scoped bookmarks in sandboxed builds, and coordinated file access.
-- Android Tier 1 uses the Storage Access Framework and persisted URI grants.
+- Android Tier 1 targets the current stable Android API, uses the Storage Access Framework and persisted URI grants, and requests local-network permission only when the user enables LAN discovery.
 - Docker and Unraid Tier 1 use explicit mounts. Backup sources are read-only by default; restore targets require explicit writable mounts and confirmation.
 - iOS Tier 2 uses document pickers, security-scoped URLs/bookmarks, coordinated access, and resumable work within platform background limits. It never claims full-device access.
 

@@ -25,7 +25,7 @@ iOS protects user-selected directories through document pickers and security-sco
 
 ## Start
 
-Prerequisites: Rust 1.97.1, Swift 6.3/Xcode 26 for Apple work, JDK 17 or 21 with Android SDK 36 for Android, and Docker for container checks.
+Prerequisites: Rust 1.97.1, Swift 6.3/Xcode 26 for Apple work, JDK 17 or 21 with Android SDK 37.0 for Android, and Docker for container checks.
 
 ```sh
 ./scripts/bootstrap.sh

@@ -35,7 +35,7 @@ LAN discovery is mDNS-based and separately disableable from inbound service oper
 ## Platform boundaries
 
 - macOS Tier 1: sandbox-aware folder selection, security-scoped bookmarks, `NSFileCoordinator`, menus, keyboard, and supported background work.
-- Android Tier 1: SAF tree URIs, persisted grants, foreground/resumable work, Compose Material 3, and a restrained floating action toolbar.
+- Android Tier 1: current stable API targeting, SAF tree URIs, persisted grants, opt-in local-network permission for LAN discovery, foreground/resumable work, Compose Material 3, and a restrained floating action toolbar.
 - Docker/Unraid Tier 1: explicit read-only source mounts, durable config/data, explicit writable restore roots, rootless runtime, and clear network mode tradeoffs.
 - iOS Tier 2: selected directories only, coordinated access, resumable jobs within iOS scheduling limits. Full-device backup is neither designed nor claimed.
 

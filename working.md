@@ -39,5 +39,5 @@ This milestone is a foundation, not a production release. Passing foundation che
 - `./scripts/smoke.sh`: daemon health and authorized-root path smoke passed.
 - `swift test --package-path apps/apple`: two shared contract tests passed.
 - Generated native `CovalentMac` and `CovalentIOS` Xcode schemes built with signing disabled. macOS is Tier 1; the iOS result is reported separately as Tier 2.
-- `./scripts/check-android.sh`: unit tests, strict lint, and debug APK assembly passed.
+- `./scripts/check-android.sh`: Android 17/API 37 unit tests, strict lint, and debug APK assembly passed with AGP 9.2.1, built-in Kotlin, and Gradle 9.7.0; the minified, resource-shrunk unsigned release APK also assembled.
 - Docker image built from the lockfile; rootless, read-only, capability-dropped runtime health passed. Unraid XML and safe mount defaults validated.
