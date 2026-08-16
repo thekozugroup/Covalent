@@ -5,13 +5,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use covalent_core::{Engine, EngineOptions};
-use covalent_node::discovery::LanDiscovery;
+use covalent_node::discovery::DiscoveryController;
 use covalent_node::transport::{QuicNode, TlsIdentity};
 use covalent_node::{
-    AppState, NodeReadyInfo, load_or_create_local_api_token, remove_node_ready_file, router,
-    write_node_ready_file,
+    AppState, ArchiveLimits, NodeReadyInfo, load_or_create_local_api_token, remove_node_ready_file,
+    router, validate_cleartext_api_bind, write_node_ready_file,
 };
 use covalent_protocol::PlatformTier;
 use tracing::info;
@@ -28,7 +28,7 @@ struct Arguments {
 enum Command {
     /// Runs the local API, console, and engine service.
     Serve {
-        /// Socket exposed to native clients or the container network.
+        /// Loopback-only cleartext management socket; network access must use a local TLS proxy.
         #[arg(long, env = "COVALENT_LISTEN", default_value = "127.0.0.1:8787")]
         listen: SocketAddr,
         /// QUIC peer socket. UDP may share the same port number as the HTTP TCP socket.
@@ -49,6 +49,9 @@ enum Command {
         /// Optional private readiness JSON for an app that owns this process.
         #[arg(long, env = "COVALENT_READY_FILE")]
         ready_file: Option<PathBuf>,
+        /// Streamed archive admission and capacity limits.
+        #[command(flatten)]
+        archive_limits: ArchiveLimitArguments,
     },
     /// Checks an already-running node without curl.
     Healthcheck {
@@ -68,6 +71,44 @@ enum Tier {
     Tier2,
 }
 
+#[derive(Clone, Copy, Debug, ClapArgs)]
+struct ArchiveLimitArguments {
+    #[arg(
+        long,
+        env = "COVALENT_ARCHIVE_MAX_COMPRESSED_BYTES",
+        default_value_t = 64_u64 << 30
+    )]
+    archive_max_compressed_bytes: u64,
+    #[arg(
+        long,
+        env = "COVALENT_ARCHIVE_MAX_UNCOMPRESSED_BYTES",
+        default_value_t = 256_u64 << 30
+    )]
+    archive_max_uncompressed_bytes: u64,
+    #[arg(long, env = "COVALENT_ARCHIVE_MAX_ENTRIES", default_value_t = 250_000)]
+    archive_max_entries: usize,
+    #[arg(long, env = "COVALENT_ARCHIVE_MAX_JOBS", default_value_t = 256)]
+    archive_max_jobs: usize,
+    #[arg(
+        long,
+        env = "COVALENT_ARCHIVE_FREE_SPACE_RESERVE_BYTES",
+        default_value_t = 512_u64 << 20
+    )]
+    archive_free_space_reserve_bytes: u64,
+}
+
+impl From<ArchiveLimitArguments> for ArchiveLimits {
+    fn from(value: ArchiveLimitArguments) -> Self {
+        Self {
+            maximum_compressed_bytes: value.archive_max_compressed_bytes,
+            maximum_uncompressed_bytes: value.archive_max_uncompressed_bytes,
+            maximum_entries: value.archive_max_entries,
+            maximum_jobs: value.archive_max_jobs,
+            free_space_reserve_bytes: value.archive_free_space_reserve_bytes,
+        }
+    }
+}
+
 impl From<Tier> for PlatformTier {
     fn from(value: Tier) -> Self {
         match value {
@@ -75,6 +116,17 @@ impl From<Tier> for PlatformTier {
             Tier::Tier2 => Self::Tier2,
         }
     }
+}
+
+struct ServeConfiguration {
+    listen: SocketAddr,
+    peer_listen: SocketAddr,
+    data_dir: PathBuf,
+    device_name: String,
+    lan_discovery: bool,
+    platform_tier: PlatformTier,
+    ready_file: Option<PathBuf>,
+    archive_limits: ArchiveLimits,
 }
 
 #[tokio::main]
@@ -95,6 +147,13 @@ async fn main() -> Result<()> {
         lan_discovery: false,
         platform_tier: Tier::Tier1,
         ready_file: None,
+        archive_limits: ArchiveLimitArguments {
+            archive_max_compressed_bytes: 64_u64 << 30,
+            archive_max_uncompressed_bytes: 256_u64 << 30,
+            archive_max_entries: 250_000,
+            archive_max_jobs: 256,
+            archive_free_space_reserve_bytes: 512_u64 << 20,
+        },
     }) {
         Command::Serve {
             listen,
@@ -104,33 +163,38 @@ async fn main() -> Result<()> {
             lan_discovery,
             platform_tier,
             ready_file,
+            archive_limits,
         } => {
-            serve(
+            serve(ServeConfiguration {
                 listen,
                 peer_listen,
                 data_dir,
                 device_name,
                 lan_discovery,
-                platform_tier.into(),
+                platform_tier: platform_tier.into(),
                 ready_file,
-            )
+                archive_limits: archive_limits.into(),
+            })
             .await
         }
         Command::Healthcheck { url } => healthcheck(&url),
     }
 }
 
-async fn serve(
-    listen: SocketAddr,
-    peer_listen: SocketAddr,
-    data_dir: PathBuf,
-    device_name: String,
-    lan_discovery: bool,
-    platform_tier: PlatformTier,
-    ready_file: Option<PathBuf>,
-) -> Result<()> {
+async fn serve(configuration: ServeConfiguration) -> Result<()> {
+    let ServeConfiguration {
+        listen,
+        peer_listen,
+        data_dir,
+        device_name,
+        lan_discovery,
+        platform_tier,
+        ready_file,
+        archive_limits,
+    } = configuration;
     std::fs::create_dir_all(&data_dir)
         .with_context(|| format!("create data directory {}", data_dir.display()))?;
+    validate_cleartext_api_bind(listen).context("validate local API transport")?;
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .with_context(|| format!("bind {listen}"))?;
@@ -146,27 +210,31 @@ async fn serve(
     let engine = Arc::new(Engine::open(engine_options).context("open Covalent engine")?);
     let token = load_or_create_local_api_token(data_dir.join("local-api-token"))
         .context("load local API token")?;
-    let state = AppState::new(Arc::clone(&engine), platform_tier, token)
-        .context("create local API state")?;
     let tls_identity =
         TlsIdentity::load_or_create(data_dir.join("tls")).context("load QUIC identity")?;
     let discovery_enabled = engine
         .config()
         .context("load persisted discovery preference")?
         .lan_discovery_enabled;
-    let quic_node =
-        QuicNode::bind(peer_listen, engine, &tls_identity).context("bind QUIC peer endpoint")?;
+    let quic_node = QuicNode::bind(peer_listen, Arc::clone(&engine), &tls_identity)
+        .context("bind QUIC peer endpoint")?;
     let peer_address = quic_node
         .local_addr()
         .context("inspect QUIC peer endpoint")?;
-    let state = state
+    let discovery = Arc::new(
+        DiscoveryController::new(discovery_enabled, peer_address.port())
+            .context("start LAN discovery controller")?,
+    );
+    let state = AppState::new(Arc::clone(&engine), platform_tier, token)
+        .context("create local API state")?
+        .with_archive_limits(archive_limits)
+        .context("validate archive resource limits")?
         .with_peer_port(peer_address.port())
         .with_transport_certificate(tls_identity.certificate_der().to_vec())
+        .with_discovery_controller(Arc::clone(&discovery))
         .with_provider_state(data_dir.join("provider-connections.json"))
         .context("load remembered provider connections")?;
     let quic_task = tokio::spawn(quic_node.run());
-    let discovery = LanDiscovery::start(discovery_enabled, peer_address.port())
-        .context("start LAN discovery")?;
     if let Some(path) = ready_file.as_deref() {
         write_node_ready_file(
             path,
@@ -185,7 +253,7 @@ async fn serve(
         .await
         .context("serve local API");
     quic_task.abort();
-    discovery.stop();
+    discovery.set_enabled(false).context("stop LAN discovery")?;
     if let Some(path) = ready_file.as_deref() {
         remove_node_ready_file(path, std::process::id()).context("remove node readiness")?;
     }

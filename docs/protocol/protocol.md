@@ -1,6 +1,6 @@
 # Covalent protocol 1
 
-Status: implemented v1 contract. Additive local-client fields require defaults; incompatible wire changes require a negotiated protocol version.
+Status: implemented persisted/local API v1 contract and independently negotiated QUIC transport v2. Additive local-client fields require defaults; incompatible peer framing changes require a new QUIC transport ALPN, version range, and signature domain.
 
 ## Principles
 
@@ -12,7 +12,7 @@ Every object carries `protocolVersion`, canonical encoding rules, bounded sizes,
 2. The responder signs a role-bound acceptance. Both devices derive and display the same secret-bound short authentication string.
 3. Each user explicitly confirms that string on their own device. The invitation is consumed durably only after both signed confirmations verify.
 4. Each device stores the exact confirmed peer roles and a signed roster epoch. Revocation creates a persistent tombstone and immediately removes active provider access.
-5. Subsequent QUIC requests pin the transferred TLS certificate and bind request/response digests, protocol version, freshness timestamp, nonce, certificate fingerprint, and peer identity signatures.
+5. Subsequent QUIC requests pin the transferred TLS certificate and bind request/response digests, negotiated transport version, freshness timestamp, nonce, certificate fingerprint, and peer identity signatures. Transport v2 uses ALPN `covalent-quic/2` and signature domain `covalent/authenticated-quic/v2`; v1/v2 mismatches fail as `protocol_incompatible` before application framing.
 
 Discovery advertisements contain only protocol range, ephemeral service identifier, port, and capability bits. Backup names, paths, device identity keys, and user data are not advertised. LAN advertisements stop when LAN discovery is disabled. Tailnet reachability is only a candidate transport path.
 
@@ -43,7 +43,7 @@ Normal export contains only schema version, device name, LAN discovery preferenc
 
 ## Limits
 
-Implementations enforce maximum frame, provider record, invitation, roster, manifest-entry, path, pending-job, and concurrent-stream sizes before allocation. Provider operations are request-rate limited per remembered peer. Local API bodies are capped at 2 MiB. Peer errors are stable, non-secret categories; detailed local filesystem errors stay on the local control surface.
+Implementations enforce maximum frame, provider record, invitation, roster, manifest-entry, path, pending-job, and concurrent-stream sizes before allocation. Provider traffic uses byte-aware per-peer pacing with bounded global/stream work and deadlines. Local API bodies are capped at 2 MiB; durable restore plans are paged and executed by opaque ID instead of echoing their entries through that limit. Peer errors are stable, non-secret categories; detailed local filesystem errors stay on the local control surface.
 
 ## Chunk cryptography
 

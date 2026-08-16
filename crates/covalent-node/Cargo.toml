@@ -14,9 +14,10 @@ axum.workspace = true
 base64.workspace = true
 blake3.workspace = true
 clap.workspace = true
-covalent-core = { path = "../covalent-core" }
-covalent-protocol = { path = "../covalent-protocol" }
+covalent-core = { version = "0.1.0", path = "../covalent-core" }
+covalent-protocol = { version = "0.1.0", path = "../covalent-protocol" }
 ed25519-dalek.workspace = true
+fs2.workspace = true
 http-body-util.workspace = true
 mdns-sd.workspace = true
 quinn.workspace = true

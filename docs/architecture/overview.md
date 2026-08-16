@@ -30,7 +30,7 @@ The Rust workspace owns protocol types, identity, pairing, backup traversal, chu
 
 ## Discovery and transport
 
-LAN discovery is mDNS-based and separately disableable from inbound service operation. When disabled, no mDNS daemon is created and browsing returns no LAN results. Tailnet candidates come from bounded local `tailscale status --json` results or explicit remembered addresses. Tailscale supplies routing only; Covalent still requires its own confirmed identity roles and pinned certificate. Data uses TLS 1.3 QUIC with signed request/response binding, strict v1 negotiation, freshness/replay windows, per-peer request limits, bounded frames, and bounded concurrent streams.
+LAN discovery is mDNS-based and separately disableable from inbound service operation. When disabled, no mDNS daemon is created and browsing returns no LAN results. Tailnet candidates come from the bounded Tailscale LocalAPI socket contract or explicit remembered addresses. Tailscale supplies routing only; Covalent still requires its own confirmed identity roles and pinned certificate. Data uses TLS 1.3 QUIC with signed request/response binding, strict transport-v2 ALPN/range negotiation, freshness/replay windows, byte-aware per-peer pacing, deadlines, bounded frames, and bounded global/stream work. HTTP/archive contracts remain protocol v1 and are versioned independently from QUIC framing.
 
 ## Durable state
 
@@ -41,7 +41,7 @@ One process owns a node state directory through an exclusive lock. Identity, bac
 - macOS Tier 1: bundled app-owned loopback node, private readiness/token files, inheritance-only helper entitlements, security-scoped and coordinated archive streaming without forwarding PowerBox paths, menus, keyboard, and supported background work.
 - Android Tier 1: API 37 targeting, persisted SAF tree grants, file-descriptor archive streaming without forwarding content URIs, exact create-only restore into an empty tree, opt-in local-network permission for LAN discovery, foreground/resumable work, Compose Material 3, and a restrained floating action toolbar.
 - Docker/Unraid Tier 1: explicit read-only source mounts, durable config/data, explicit writable restore roots, rootless runtime, and clear network mode tradeoffs.
-- iOS Tier 2: selected directories only, coordinated access, resumable jobs within iOS scheduling limits. Full-device backup is neither designed nor claimed.
+- iOS Tier 2: selected directories only and coordinated access. Expiration pauses durable node checkpoints and schedules supported refresh work, but process-termination rehydration of the original security-scoped archive request still requires physical-device completion. Full-device backup is neither designed nor claimed.
 
 ## Readiness isolation
 

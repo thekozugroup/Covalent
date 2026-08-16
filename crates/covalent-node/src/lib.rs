@@ -6,17 +6,16 @@ pub mod transport;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs::{self, File};
-use std::io::{Seek, SeekFrom};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use axum::Router;
 use axum::body::Body;
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{DefaultBodyLimit, FromRequest, Request, State};
+use axum::extract::{DefaultBodyLimit, FromRequest, Path as AxumPath, Query, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
@@ -24,7 +23,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use covalent_core::{
     BackupOptions, ChunkProvider, CoreError, Engine, JobControl, JobState, PairingConfirmation,
-    PairingSession, PreviewAction, RestoreOptions, RestorePlan, RosterCursor,
+    PairingSession, PreviewAction, RestoreOptions, RestorePlan, RestorePreviewEntry, RosterCursor,
 };
 use covalent_protocol::{
     ApiErrorBody, BackupId, BackupSummary, ConflictPolicy, DeviceId, EntryKind, NodeStatus,
@@ -36,6 +35,7 @@ use rand_core::{OsRng, RngCore};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt as _;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::io::ReaderStream;
 use walkdir::WalkDir;
 use zeroize::Zeroizing;
@@ -45,17 +45,159 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 const INDEX_HTML: &str = include_str!("../../../packaging/web/index.html");
 const APP_CSS: &str = include_str!("../../../packaging/web/app.css");
 const APP_JS: &str = include_str!("../../../packaging/web/app.js");
+const PAIRING_FLOW_JS: &str = include_str!("../../../packaging/web/pairing-flow.js");
+const RESTORE_PLAN_FLOW_JS: &str = include_str!("../../../packaging/web/restore-plan-flow.js");
 const MAX_LOCAL_API_BODY_BYTES: usize = 2 * 1_024 * 1_024;
 const PROVIDER_CONNECTION_SCHEMA_VERSION: u16 = 1;
 const MAX_PROVIDER_CONNECTION_STATE_BYTES: usize = 16 * 1_024 * 1_024;
 const ARCHIVE_METADATA_HEADER: &str = "x-covalent-archive-metadata";
 const ARCHIVE_RESULT_HEADER: &str = "x-covalent-restore-result";
 const MAX_ARCHIVE_METADATA_BYTES: usize = 32 * 1_024;
-const MAX_ARCHIVE_COMPRESSED_BYTES: u64 = 1_u64 << 40;
-const MAX_ARCHIVE_UNCOMPRESSED_BYTES: u64 = 16_u64 << 40;
-const MAX_ARCHIVE_ENTRIES: usize = 1_000_000;
-const MAX_ARCHIVE_RESTORE_TARGETS: usize = 1_024;
+const DEFAULT_MAX_ARCHIVE_COMPRESSED_BYTES: u64 = 64_u64 << 30;
+const DEFAULT_MAX_ARCHIVE_UNCOMPRESSED_BYTES: u64 = 256_u64 << 30;
+const DEFAULT_MAX_ARCHIVE_ENTRIES: usize = 250_000;
+const DEFAULT_MAX_ARCHIVE_JOBS: usize = 256;
+const DEFAULT_ARCHIVE_FREE_SPACE_RESERVE_BYTES: u64 = 512_u64 << 20;
+const ARCHIVE_UPLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+const ARCHIVE_UPLOAD_MAX_DURATION: Duration = Duration::from_secs(24 * 60 * 60);
+const MIN_ARCHIVE_UPLOAD_BYTES_PER_SECOND: u64 = 16 * 1_024;
+const ARCHIVE_PROCESSING_MAX_DURATION: Duration = Duration::from_secs(6 * 60 * 60);
+const MIN_ARCHIVE_PROCESS_BYTES_PER_SECOND: u64 = 64 * 1_024;
+const MAX_ARCHIVE_COMPRESSION_RATIO: u64 = 1_000;
 const ARCHIVE_RESTORE_MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+const MAX_LOCAL_JOBS: usize = 1_024;
+const LOCAL_JOB_IDLE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+const MAX_CONCURRENT_ENGINE_JOBS: usize = 1;
+const MAX_RESTORE_PLANS: usize = 1_024;
+const MAX_RESTORE_PLAN_BYTES: u64 = 256 * 1_024 * 1_024;
+const RESTORE_PLAN_MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+const RESTORE_PLAN_ID_HEADER: &str = "x-covalent-restore-plan-id";
+const RESTORE_PLAN_DIGEST_HEADER: &str = "x-covalent-restore-plan-digest";
+const RESTORE_PLAN_ID_DOMAIN: &[u8] = b"covalent/restore-plan-id/v1";
+const JOB_ACK_REQUIRED_HEADER: &str = "x-covalent-job-ack-required";
+
+/// Configurable admission limits for streamed mobile archives.
+#[derive(Clone, Copy, Debug)]
+pub struct ArchiveLimits {
+    /// Maximum compressed request bytes.
+    pub maximum_compressed_bytes: u64,
+    /// Maximum declared expanded bytes across ZIP entries.
+    pub maximum_uncompressed_bytes: u64,
+    /// Maximum ZIP entries.
+    pub maximum_entries: usize,
+    /// Maximum durable staged archive jobs.
+    pub maximum_jobs: usize,
+    /// Free space that must remain after admission.
+    pub free_space_reserve_bytes: u64,
+}
+
+impl Default for ArchiveLimits {
+    fn default() -> Self {
+        Self {
+            maximum_compressed_bytes: DEFAULT_MAX_ARCHIVE_COMPRESSED_BYTES,
+            maximum_uncompressed_bytes: DEFAULT_MAX_ARCHIVE_UNCOMPRESSED_BYTES,
+            maximum_entries: DEFAULT_MAX_ARCHIVE_ENTRIES,
+            maximum_jobs: DEFAULT_MAX_ARCHIVE_JOBS,
+            free_space_reserve_bytes: DEFAULT_ARCHIVE_FREE_SPACE_RESERVE_BYTES,
+        }
+    }
+}
+
+impl ArchiveLimits {
+    fn validate(self) -> Result<Self, CoreError> {
+        if !(1 << 20..=1_u64 << 40).contains(&self.maximum_compressed_bytes)
+            || self.maximum_uncompressed_bytes < self.maximum_compressed_bytes
+            || self.maximum_uncompressed_bytes > 4_u64 << 40
+            || !(1..=1_000_000).contains(&self.maximum_entries)
+            || !(1..=4_096).contains(&self.maximum_jobs)
+        {
+            return Err(CoreError::InvalidState(
+                "invalid archive resource limits".to_owned(),
+            ));
+        }
+        Ok(self)
+    }
+}
+
+struct JobEntry {
+    control: JobControl,
+    active: bool,
+    last_touched: SystemTime,
+}
+
+#[derive(Default)]
+struct JobRegistry {
+    entries: BTreeMap<String, JobEntry>,
+}
+
+impl JobRegistry {
+    fn expired_job_ids(&self, now: SystemTime) -> Vec<String> {
+        self.entries
+            .iter()
+            .filter(|(_, entry)| {
+                !entry.active
+                    && now
+                        .duration_since(entry.last_touched)
+                        .is_ok_and(|age| age >= LOCAL_JOB_IDLE_TTL)
+            })
+            .map(|(job_id, _)| job_id.clone())
+            .collect()
+    }
+}
+
+struct JobLease {
+    registry: Arc<Mutex<JobRegistry>>,
+    job_id: String,
+    control: JobControl,
+    settled: bool,
+}
+
+impl JobLease {
+    fn control(&self) -> JobControl {
+        self.control.clone()
+    }
+
+    fn preserve_for_resume(&mut self) -> Result<(), CoreError> {
+        let mut registry = self
+            .registry
+            .lock()
+            .map_err(|_| CoreError::Synchronization)?;
+        let entry = registry.entries.get_mut(&self.job_id).ok_or_else(|| {
+            CoreError::InvalidState("active job disappeared from registry".to_owned())
+        })?;
+        entry.active = false;
+        entry.last_touched = SystemTime::now();
+        self.settled = true;
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), CoreError> {
+        self.registry
+            .lock()
+            .map_err(|_| CoreError::Synchronization)?
+            .entries
+            .remove(&self.job_id);
+        self.settled = true;
+        Ok(())
+    }
+}
+
+impl Drop for JobLease {
+    fn drop(&mut self) {
+        if self.settled {
+            return;
+        }
+        // Dropping an HTTP handler while its blocking worker is still running must stop the
+        // worker and leave a resumable registry entry instead of orphaning background work.
+        self.control.pause();
+        if let Ok(mut registry) = self.registry.lock()
+            && let Some(entry) = registry.entries.get_mut(&self.job_id)
+        {
+            entry.active = false;
+            entry.last_touched = SystemTime::now();
+        }
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -87,13 +229,20 @@ pub struct AppState {
     engine: Arc<Engine>,
     platform_tier: PlatformTier,
     api_token: Arc<Zeroizing<String>>,
-    jobs: Arc<Mutex<BTreeMap<String, JobControl>>>,
+    jobs: Arc<Mutex<JobRegistry>>,
     peer_port: u16,
     provider_connections: Arc<Mutex<BTreeMap<DeviceId, ProviderConnection>>>,
     provider_state_path: Option<Arc<PathBuf>>,
     transport_certificate: Option<Arc<Vec<u8>>>,
+    discovery_controller: Option<Arc<discovery::DiscoveryController>>,
+    archive_limits: ArchiveLimits,
+    archive_backup_root: Arc<PathBuf>,
+    archive_backup_lock: Arc<Mutex<()>>,
     archive_restore_root: Arc<PathBuf>,
     archive_restore_lock: Arc<Mutex<()>>,
+    restore_plan_root: Arc<PathBuf>,
+    restore_plan_lock: Arc<Mutex<()>>,
+    engine_job_permits: Arc<Semaphore>,
 }
 
 impl AppState {
@@ -114,17 +263,33 @@ impl AppState {
         let archive_restore_root =
             create_private_directory(data_directory.join("archive-restores"))?;
         prune_stale_archive_restore_targets(&archive_restore_root)?;
+        let archive_backup_root = create_private_directory(data_directory.join("archive-backups"))?;
+        prune_stale_archive_restore_targets(&archive_backup_root)?;
+        let restore_plan_root = create_private_directory(data_directory.join("restore-plans"))?;
+        prune_stale_private_files(
+            &restore_plan_root,
+            RESTORE_PLAN_MAX_AGE,
+            MAX_RESTORE_PLAN_BYTES,
+            valid_plan_identifier,
+        )?;
         Ok(Self {
             engine,
             platform_tier,
             api_token: Arc::new(Zeroizing::new(api_token)),
-            jobs: Arc::new(Mutex::new(BTreeMap::new())),
+            jobs: Arc::new(Mutex::new(JobRegistry::default())),
             peer_port: 8787,
             provider_connections: Arc::new(Mutex::new(BTreeMap::new())),
             provider_state_path: None,
             transport_certificate: None,
+            discovery_controller: None,
+            archive_limits: ArchiveLimits::default(),
+            archive_backup_root: Arc::new(archive_backup_root),
+            archive_backup_lock: Arc::new(Mutex::new(())),
             archive_restore_root: Arc::new(archive_restore_root),
             archive_restore_lock: Arc::new(Mutex::new(())),
+            restore_plan_root: Arc::new(restore_plan_root),
+            restore_plan_lock: Arc::new(Mutex::new(())),
+            engine_job_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_ENGINE_JOBS)),
         })
     }
 
@@ -140,6 +305,22 @@ impl AppState {
     pub fn with_transport_certificate(mut self, certificate_der: Vec<u8>) -> Self {
         self.transport_certificate = Some(Arc::new(certificate_der));
         self
+    }
+
+    /// Connects persisted discovery settings to the live network advertiser.
+    #[must_use]
+    pub fn with_discovery_controller(
+        mut self,
+        controller: Arc<discovery::DiscoveryController>,
+    ) -> Self {
+        self.discovery_controller = Some(controller);
+        self
+    }
+
+    /// Overrides streamed archive admission limits after validating safe bounds.
+    pub fn with_archive_limits(mut self, limits: ArchiveLimits) -> Result<Self, CoreError> {
+        self.archive_limits = limits.validate()?;
+        Ok(self)
     }
 
     /// Loads pinned remembered provider connections and activates them.
@@ -214,23 +395,81 @@ impl AppState {
         Arc::clone(&self.engine)
     }
 
-    fn job_control(&self, job_id: &str) -> Result<JobControl, CoreError> {
-        let mut jobs = self.jobs.lock().map_err(|_| CoreError::Synchronization)?;
-        if jobs.len() >= 1_024 && !jobs.contains_key(job_id) {
-            return Err(CoreError::ResourceLimit("active local jobs"));
+    fn prune_expired_jobs(&self) -> Result<(), ApiError> {
+        let mut jobs = self
+            .jobs
+            .lock()
+            .map_err(|_| ApiError::from_core(CoreError::Synchronization))?;
+        for job_id in jobs.expired_job_ids(SystemTime::now()) {
+            // Hold the registry lock so a retry cannot reactivate a job while its durable
+            // checkpoint and staging are being evicted.
+            discard_job_artifacts(self, &job_id)?;
+            jobs.entries.remove(&job_id);
         }
-        Ok(jobs
-            .entry(job_id.to_owned())
-            .or_insert_with(JobControl::new)
-            .clone())
+        Ok(())
     }
 
-    fn finish_job(&self, job_id: &str) -> Result<(), CoreError> {
-        self.jobs
+    fn start_job(&self, job_id: &str) -> Result<JobLease, ApiError> {
+        if !valid_job_identifier(job_id) {
+            return Err(ApiError::bad_request(
+                "invalid_job_id",
+                "The job ID is invalid.",
+            ));
+        }
+        self.prune_expired_jobs()?;
+        let mut jobs = self
+            .jobs
             .lock()
-            .map_err(|_| CoreError::Synchronization)?
-            .remove(job_id);
-        Ok(())
+            .map_err(|_| ApiError::from_core(CoreError::Synchronization))?;
+        if jobs.entries.len() >= MAX_LOCAL_JOBS && !jobs.entries.contains_key(job_id) {
+            let eviction = jobs
+                .entries
+                .iter()
+                .filter(|(_, entry)| !entry.active)
+                .min_by_key(|(_, entry)| entry.last_touched)
+                .map(|(job_id, _)| job_id.clone());
+            let Some(eviction) = eviction else {
+                return Err(ApiError::from_core(CoreError::ResourceLimit(
+                    "active local jobs",
+                )));
+            };
+            // Keep the registry locked so an inactive job cannot be resumed while its durable
+            // state is evicted to make room for newer work.
+            discard_job_artifacts(self, &eviction)?;
+            jobs.entries.remove(&eviction);
+        }
+        let entry = jobs
+            .entries
+            .entry(job_id.to_owned())
+            .or_insert_with(|| JobEntry {
+                control: JobControl::new(),
+                active: false,
+                last_touched: SystemTime::now(),
+            });
+        if entry.active {
+            return Err(ApiError::conflict(
+                "job_active",
+                "The job is already executing.",
+            ));
+        }
+        entry.active = true;
+        entry.last_touched = SystemTime::now();
+        Ok(JobLease {
+            registry: Arc::clone(&self.jobs),
+            job_id: job_id.to_owned(),
+            control: entry.control.clone(),
+            settled: false,
+        })
+    }
+
+    fn admit_engine_job(&self) -> Result<OwnedSemaphorePermit, ApiError> {
+        Arc::clone(&self.engine_job_permits)
+            .try_acquire_owned()
+            .map_err(|_| {
+                ApiError::too_many_requests(
+                    "The node is already processing another storage job. Retry shortly.",
+                )
+            })
     }
 
     fn activate_provider_connections(
@@ -340,12 +579,30 @@ impl fmt::Debug for AppState {
     }
 }
 
+/// Cleartext bearer APIs are confined to device loopback. Network access must terminate TLS in
+/// a same-host proxy that forwards only to this loopback listener.
+pub fn validate_cleartext_api_bind(address: SocketAddr) -> Result<(), CoreError> {
+    if address.ip().is_loopback() {
+        Ok(())
+    } else {
+        Err(CoreError::InvalidState(
+            "cleartext bearer API must bind to loopback; terminate verified TLS in a same-host proxy"
+                .to_owned(),
+        ))
+    }
+}
+
 /// Builds the stable versioned local API and static console router.
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/assets/app.css", get(css))
         .route("/assets/app.js", get(javascript))
+        .route("/assets/pairing-flow.js", get(pairing_flow_javascript))
+        .route(
+            "/assets/restore-plan-flow.js",
+            get(restore_plan_flow_javascript),
+        )
         .route("/healthz", get(health))
         .route("/api/v1/status", get(status))
         .route("/api/v1/transport/identity", get(transport_identity))
@@ -370,12 +627,16 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/providers/disconnect", post(disconnect_provider))
         .route("/api/v1/rosters/current", get(current_roster))
         .route("/api/v1/rosters/accept", post(accept_roster))
+        .route("/api/v1/jobs", get(list_jobs))
         .route("/api/v1/jobs/control", post(job_control))
+        .route("/api/v1/jobs/discard", post(discard_job))
+        .route("/api/v1/jobs/acknowledge", post(acknowledge_job))
         .route("/api/v1/backups", get(list_backups).post(backup))
         .route("/api/v1/backups/archive", post(backup_archive))
         .route("/api/v1/backups/verify", post(verify_backup))
         .route("/api/v1/restores/preview", post(restore_preview))
         .route("/api/v1/restores/execute", post(restore_execute))
+        .route("/api/v1/restores/plans/{plan_id}", get(restore_plan_page))
         .route(
             "/api/v1/restores/archive/preview",
             post(restore_archive_preview),
@@ -712,6 +973,64 @@ fn prune_stale_archive_restore_targets(root: &Path) -> Result<(), CoreError> {
     Ok(())
 }
 
+fn prune_stale_private_files(
+    root: &Path,
+    maximum_age: Duration,
+    maximum_size: u64,
+    valid_name: fn(&str) -> bool,
+) -> Result<(), CoreError> {
+    let mut removed = false;
+    for entry in fs::read_dir(root).map_err(|source| CoreError::Io {
+        operation: "read private state directory",
+        path: root.to_path_buf(),
+        source,
+    })? {
+        let entry = entry.map_err(|source| CoreError::Io {
+            operation: "read private state entry",
+            path: root.to_path_buf(),
+            source,
+        })?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|source| CoreError::Io {
+            operation: "inspect private state entry",
+            path: path.clone(),
+            source,
+        })?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.len() > maximum_size
+            || !entry.file_name().to_str().is_some_and(valid_name)
+        {
+            return Err(CoreError::InvalidState(
+                "invalid private state entry".to_owned(),
+            ));
+        }
+        let stale = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+            .is_some_and(|age| age >= maximum_age);
+        if stale {
+            fs::remove_file(&path).map_err(|source| CoreError::Io {
+                operation: "remove stale private state entry",
+                path,
+                source,
+            })?;
+            removed = true;
+        }
+    }
+    if removed {
+        File::open(root)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|source| CoreError::Io {
+                operation: "sync private state directory",
+                path: root.to_path_buf(),
+                source,
+            })?;
+    }
+    Ok(())
+}
+
 async fn index() -> Html<&'static str> {
     Html(INDEX_HTML)
 }
@@ -722,8 +1041,31 @@ async fn css() -> impl IntoResponse {
 
 async fn javascript() -> impl IntoResponse {
     (
-        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
         APP_JS,
+    )
+}
+
+async fn pairing_flow_javascript() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        PAIRING_FLOW_JS,
+    )
+}
+
+async fn restore_plan_flow_javascript() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        RESTORE_PLAN_FLOW_JS,
     )
 }
 
@@ -887,10 +1229,28 @@ async fn config_import(
 ) -> Result<StatusCode, ApiError> {
     authorize(&state, &headers)?;
     let bytes = serde_json::to_vec(&request.settings).map_err(ApiError::from_json)?;
+    let previous = state
+        .engine
+        .export_settings()
+        .map_err(ApiError::from_core)?;
     state
         .engine
         .import_settings(&bytes, request.confirmed)
         .map_err(ApiError::from_core)?;
+    if let Some(controller) = &state.discovery_controller {
+        let enabled = state
+            .engine
+            .config()
+            .map_err(ApiError::from_core)?
+            .lan_discovery_enabled;
+        if let Err(error) = controller.set_enabled(enabled) {
+            state
+                .engine
+                .import_settings(&previous, true)
+                .map_err(ApiError::from_core)?;
+            return Err(ApiError::from_core(error));
+        }
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1030,6 +1390,31 @@ struct JobControlRequest {
 struct JobControlResponse {
     job_id: String,
     state: &'static str,
+    active: bool,
+    last_touched_unix_ms: u64,
+}
+
+async fn list_jobs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<axum::Json<Vec<JobControlResponse>>, ApiError> {
+    authorize(&state, &headers)?;
+    state.prune_expired_jobs()?;
+    let jobs = state
+        .jobs
+        .lock()
+        .map_err(|_| ApiError::from_core(CoreError::Synchronization))?;
+    let entries = jobs
+        .entries
+        .iter()
+        .map(|(job_id, entry)| JobControlResponse {
+            job_id: job_id.clone(),
+            state: job_state_name(entry.control.state()),
+            active: entry.active,
+            last_touched_unix_ms: unix_ms(entry.last_touched),
+        })
+        .collect();
+    Ok(axum::Json(entries))
 }
 
 async fn job_control(
@@ -1038,23 +1423,137 @@ async fn job_control(
     ContractJson(request): ContractJson<JobControlRequest>,
 ) -> Result<axum::Json<JobControlResponse>, ApiError> {
     authorize(&state, &headers)?;
-    let control = state
-        .job_control(&request.job_id)
-        .map_err(ApiError::from_core)?;
+    state.prune_expired_jobs()?;
+    let (control, active, last_touched) = {
+        let mut jobs = state
+            .jobs
+            .lock()
+            .map_err(|_| ApiError::from_core(CoreError::Synchronization))?;
+        let entry = jobs.entries.get_mut(&request.job_id).ok_or_else(|| {
+            ApiError::not_found("job_not_found", "The requested job is not registered.")
+        })?;
+        entry.last_touched = SystemTime::now();
+        (entry.control.clone(), entry.active, entry.last_touched)
+    };
     match request.action {
         JobAction::Pause => control.pause(),
         JobAction::Resume => control.resume(),
         JobAction::Cancel => control.cancel(),
     }
-    let state_name = match control.state() {
-        JobState::Running => "running",
-        JobState::Paused => "paused",
-        JobState::Cancelled => "cancelled",
-    };
+    if matches!(request.action, JobAction::Cancel) && !active {
+        state
+            .jobs
+            .lock()
+            .map_err(|_| ApiError::from_core(CoreError::Synchronization))?
+            .entries
+            .remove(&request.job_id);
+        discard_job_artifacts(&state, &request.job_id)?;
+    }
+    let state_name = job_state_name(control.state());
     Ok(axum::Json(JobControlResponse {
         job_id: request.job_id,
         state: state_name,
+        active,
+        last_touched_unix_ms: unix_ms(last_touched),
     }))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct JobDiscardRequest {
+    job_id: String,
+}
+
+async fn discard_job(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ContractJson(request): ContractJson<JobDiscardRequest>,
+) -> Result<StatusCode, ApiError> {
+    authorize(&state, &headers)?;
+    if !valid_job_identifier(&request.job_id) {
+        return Err(ApiError::bad_request(
+            "invalid_job_id",
+            "The job ID is invalid.",
+        ));
+    }
+    {
+        let mut jobs = state
+            .jobs
+            .lock()
+            .map_err(|_| ApiError::from_core(CoreError::Synchronization))?;
+        if jobs
+            .entries
+            .get(&request.job_id)
+            .is_some_and(|entry| entry.active)
+        {
+            return Err(ApiError::conflict(
+                "job_active",
+                "Cancel the active job before discarding it.",
+            ));
+        }
+        jobs.entries.remove(&request.job_id);
+    }
+    discard_job_artifacts(&state, &request.job_id)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn acknowledge_job(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ContractJson(request): ContractJson<JobDiscardRequest>,
+) -> Result<StatusCode, ApiError> {
+    authorize(&state, &headers)?;
+    if !valid_job_identifier(&request.job_id) {
+        return Err(ApiError::bad_request(
+            "invalid_job_id",
+            "The job ID is invalid.",
+        ));
+    }
+    if state
+        .jobs
+        .lock()
+        .map_err(|_| ApiError::from_core(CoreError::Synchronization))?
+        .entries
+        .get(&request.job_id)
+        .is_some_and(|entry| entry.active)
+    {
+        return Err(ApiError::conflict(
+            "job_active",
+            "An active job cannot be acknowledged.",
+        ));
+    }
+    let backup_completed = state
+        .archive_backup_root
+        .join(&request.job_id)
+        .join("result.json")
+        .is_file();
+    let restore_completed = state
+        .archive_restore_root
+        .join(&request.job_id)
+        .join("result.json")
+        .is_file();
+    if !backup_completed && !restore_completed {
+        return Err(ApiError::conflict(
+            "job_not_complete",
+            "Only a retained completed archive job can be acknowledged.",
+        ));
+    }
+    state
+        .jobs
+        .lock()
+        .map_err(|_| ApiError::from_core(CoreError::Synchronization))?
+        .entries
+        .remove(&request.job_id);
+    discard_job_artifacts(&state, &request.job_id)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn job_state_name(state: JobState) -> &'static str {
+    match state {
+        JobState::Running => "running",
+        JobState::Paused => "paused",
+        JobState::Cancelled => "cancelled",
+    }
 }
 
 #[derive(Deserialize)]
@@ -1204,7 +1703,7 @@ struct BackupRequest {
     selected_provider_ids: Vec<DeviceId>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BackupResponse {
     backup_id: BackupId,
@@ -1217,7 +1716,7 @@ struct BackupResponse {
     degraded_failures: usize,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ArchiveBackupMetadata {
     protocol_version: u16,
@@ -1258,10 +1757,13 @@ async fn backup(
     ContractJson(request): ContractJson<BackupRequest>,
 ) -> Result<axum::Json<BackupResponse>, ApiError> {
     authorize(&state, &headers)?;
+    let admission = state.admit_engine_job()?;
     let engine = Arc::clone(&state.engine);
     let job_id = request.job_id.clone();
-    let control = state.job_control(&job_id).map_err(ApiError::from_core)?;
+    let mut lease = state.start_job(&job_id)?;
+    let control = lease.control();
     let result = tokio::task::spawn_blocking(move || {
+        let _admission = admission;
         let backup_id = request.backup_id.unwrap_or_default();
         let mut options = BackupOptions::new(backup_id, request.snapshot_id, request.job_id);
         options.display_name = request.display_name;
@@ -1274,15 +1776,22 @@ async fn backup(
     .await
     .map_err(|_| ApiError::internal("backup worker failed"))?;
     match &result {
-        Ok(_) => state.finish_job(&job_id).map_err(ApiError::from_core)?,
+        Ok(_) => lease.finish().map_err(ApiError::from_core)?,
         Err(CoreError::Cancelled) => {
+            lease.finish().map_err(ApiError::from_core)?;
             state
                 .engine
                 .discard_job_checkpoint(&job_id)
                 .map_err(ApiError::from_core)?;
-            state.finish_job(&job_id).map_err(ApiError::from_core)?;
         }
-        Err(_) => {}
+        Err(CoreError::Paused) => lease.preserve_for_resume().map_err(ApiError::from_core)?,
+        Err(_) => {
+            lease.finish().map_err(ApiError::from_core)?;
+            state
+                .engine
+                .discard_job_checkpoint(&job_id)
+                .map_err(ApiError::from_core)?;
+        }
     }
     let result = result.map_err(ApiError::from_core)?;
     Ok(axum::Json(BackupResponse {
@@ -1301,7 +1810,7 @@ async fn backup_archive(
     State(state): State<AppState>,
     headers: HeaderMap,
     body: Body,
-) -> Result<axum::Json<BackupResponse>, ApiError> {
+) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     require_archive_content_type(&headers)?;
     let metadata: ArchiveBackupMetadata = decode_archive_metadata(&headers)?;
@@ -1311,49 +1820,111 @@ async fn backup_archive(
             "Archive metadata uses an unsupported protocol version.",
         ));
     }
-    let (staging, archive_path) = receive_archive(body, &headers).await?;
-    let source_root = staging.path().join("source");
+    if !valid_job_identifier(&metadata.job_id) {
+        return Err(ApiError::bad_request(
+            "invalid_job_id",
+            "The backup job ID is invalid.",
+        ));
+    }
+    let admission = state.admit_engine_job()?;
+    let (job_directory, completed, existed) = prepare_archive_backup_job(&state, &metadata)?;
+    if let Some(completed) = completed {
+        return Ok(acknowledgement_required_json(completed));
+    }
+    let job_id = metadata.job_id.clone();
+    let mut lease = match state.start_job(&job_id) {
+        Ok(lease) => lease,
+        Err(error) => {
+            if !existed {
+                let _ = remove_private_job_directory(
+                    state.archive_backup_root.as_path(),
+                    &job_directory,
+                );
+            }
+            return Err(error);
+        }
+    };
+    let control = lease.control();
+    let archive_path =
+        match receive_archive(body, &headers, &job_directory, state.archive_limits).await {
+            Ok(path) => path,
+            Err(error) => {
+                if !existed {
+                    let _ = remove_private_job_directory(
+                        state.archive_backup_root.as_path(),
+                        &job_directory,
+                    );
+                    lease.finish().map_err(ApiError::from_core)?;
+                } else {
+                    lease.preserve_for_resume().map_err(ApiError::from_core)?;
+                }
+                return Err(error);
+            }
+        };
+    let source_root = job_directory.join("source");
     let request = metadata.with_source_root(source_root.clone());
-    let job_id = request.job_id.clone();
-    let control = state.job_control(&job_id).map_err(ApiError::from_core)?;
+    let worker_job_directory = job_directory.clone();
     let engine = Arc::clone(&state.engine);
+    let limits = state.archive_limits;
     let result = tokio::task::spawn_blocking(move || {
-        let _staging = staging;
-        extract_backup_archive(&archive_path, &source_root)?;
+        let _admission = admission;
+        if !source_root.exists() {
+            extract_backup_archive(&archive_path, &source_root, limits, &control)?;
+        }
         let backup_id = request.backup_id.unwrap_or_default();
         let mut options = BackupOptions::new(backup_id, request.snapshot_id, request.job_id);
         options.display_name = request.display_name;
         options.created_at_unix_ms = now_unix_ms();
         options.replica_intent = ReplicaIntent::explicit(request.selected_provider_ids);
-        engine
+        let result = engine
             .backup(request.source_root, &options, &control, |_| {})
-            .map(|result| (backup_id, result))
-            .map_err(ApiError::from_core)
+            .map_err(ApiError::from_core)?;
+        let response = BackupResponse {
+            backup_id,
+            snapshot_id: result.manifest.snapshot_id.clone(),
+            entries: result.manifest.entries.len(),
+            bytes_read: result.progress.bytes_read,
+            chunks_stored: result.progress.chunks_stored,
+            chunks_deduplicated: result.progress.chunks_deduplicated,
+            selected_providers: result.manifest.replica_intent.selected_providers.len(),
+            degraded_failures: result.replication.failures.len(),
+        };
+        persist_private_file(
+            &worker_job_directory.join("result.json"),
+            &serde_json::to_vec(&response).map_err(ApiError::from_json)?,
+        )
+        .map_err(ApiError::from_core)?;
+        Ok::<_, ApiError>(response)
     })
     .await
     .map_err(|_| ApiError::internal("archive backup worker failed"))?;
     match &result {
-        Ok(_) => state.finish_job(&job_id).map_err(ApiError::from_core)?,
+        Ok(_) => lease.finish().map_err(ApiError::from_core)?,
         Err(error) if error.code == "job_cancelled" => {
-            state
-                .engine
-                .discard_job_checkpoint(&job_id)
-                .map_err(ApiError::from_core)?;
-            state.finish_job(&job_id).map_err(ApiError::from_core)?;
+            lease.finish().map_err(ApiError::from_core)?;
+            discard_job_artifacts(&state, &job_id)?;
         }
-        Err(_) => {}
+        Err(error) if error.code == "job_paused" => {
+            lease.preserve_for_resume().map_err(ApiError::from_core)?;
+        }
+        Err(_) => {
+            lease.finish().map_err(ApiError::from_core)?;
+            discard_job_artifacts(&state, &job_id)?;
+        }
     }
-    let (backup_id, result) = result?;
-    Ok(axum::Json(BackupResponse {
-        backup_id,
-        snapshot_id: result.manifest.snapshot_id.clone(),
-        entries: result.manifest.entries.len(),
-        bytes_read: result.progress.bytes_read,
-        chunks_stored: result.progress.chunks_stored,
-        chunks_deduplicated: result.progress.chunks_deduplicated,
-        selected_providers: result.manifest.replica_intent.selected_providers.len(),
-        degraded_failures: result.replication.failures.len(),
-    }))
+    let response = result?;
+    Ok(acknowledgement_required_json(response))
+}
+
+fn acknowledgement_required_json<T: Serialize>(value: T) -> Response {
+    let mut response = axum::Json(value).into_response();
+    response
+        .headers_mut()
+        .insert(JOB_ACK_REQUIRED_HEADER, HeaderValue::from_static("true"));
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 #[derive(Deserialize)]
@@ -1383,8 +1954,10 @@ async fn verify_backup(
     ContractJson(request): ContractJson<SnapshotRequest>,
 ) -> Result<axum::Json<VerifyResponse>, ApiError> {
     authorize(&state, &headers)?;
+    let admission = state.admit_engine_job()?;
     let engine = Arc::clone(&state.engine);
     let report = tokio::task::spawn_blocking(move || {
+        let _admission = admission;
         if request.repair {
             engine.repair_snapshot(request.backup_id, &request.snapshot_id)?;
         }
@@ -1424,23 +1997,32 @@ async fn restore_preview(
     State(state): State<AppState>,
     headers: HeaderMap,
     ContractJson(request): ContractJson<RestorePreviewRequest>,
-) -> Result<axum::Json<RestorePlan>, ApiError> {
+) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
+    let admission = state.admit_engine_job()?;
     let options = RestoreOptions {
         conflict_policy: request.conflict_policy,
         selected_paths: Default::default(),
         job_id: request.job_id,
     };
-    let plan = state
-        .engine
-        .preview_restore(
-            request.backup_id,
-            &request.snapshot_id,
-            request.target_root,
-            &options,
-        )
-        .map_err(ApiError::from_core)?;
-    Ok(axum::Json(plan))
+    let engine = Arc::clone(&state.engine);
+    let worker_state = state.clone();
+    let plan = tokio::task::spawn_blocking(move || {
+        let _admission = admission;
+        let plan = engine
+            .preview_restore(
+                request.backup_id,
+                &request.snapshot_id,
+                request.target_root,
+                &options,
+            )
+            .map_err(ApiError::from_core)?;
+        persist_restore_plan(&worker_state, &plan)?;
+        Ok::<_, ApiError>(plan)
+    })
+    .await
+    .map_err(|_| ApiError::internal("restore preview worker failed"))??;
+    persisted_plan_response(&state, plan)
 }
 
 #[derive(Deserialize)]
@@ -1456,7 +2038,7 @@ async fn restore_archive_preview(
     State(state): State<AppState>,
     headers: HeaderMap,
     ContractJson(request): ContractJson<RestoreArchivePreviewRequest>,
-) -> Result<axum::Json<RestorePlan>, ApiError> {
+) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     if request.conflict_policy != ConflictPolicy::Fail {
         return Err(ApiError::bad_request(
@@ -1464,33 +2046,246 @@ async fn restore_archive_preview(
             "Streamed restores require fail-on-conflict and an empty client-authorized destination.",
         ));
     }
+    if let Some(plan) = find_restore_plan_by_job(&state, &request.job_id)? {
+        if plan.backup_id != request.backup_id
+            || plan.snapshot_id != request.snapshot_id
+            || plan.conflict_policy != request.conflict_policy
+            || validate_archive_restore_plan(&state, &plan).is_err()
+        {
+            return Err(ApiError::conflict(
+                "job_conflict",
+                "This archive restore job ID is bound to a different preview.",
+            ));
+        }
+        return persisted_plan_response(&state, plan);
+    }
+    let admission = state.admit_engine_job()?;
     let target_root = create_archive_restore_target(&state, &request.job_id)?;
     let options = RestoreOptions {
         conflict_policy: request.conflict_policy,
         selected_paths: Default::default(),
         job_id: request.job_id,
     };
-    match state.engine.preview_restore(
-        request.backup_id,
-        &request.snapshot_id,
-        &target_root,
-        &options,
-    ) {
-        Ok(plan) => Ok(axum::Json(plan)),
-        Err(error) => {
-            let _ = fs::remove_dir(&target_root);
-            Err(ApiError::from_core(error))
+    let engine = Arc::clone(&state.engine);
+    let worker_target_root = target_root.clone();
+    let worker_state = state.clone();
+    let outcome = match tokio::task::spawn_blocking(move || {
+        let _admission = admission;
+        let outcome = engine
+            .preview_restore(
+                request.backup_id,
+                &request.snapshot_id,
+                &worker_target_root,
+                &options,
+            )
+            .map_err(ApiError::from_core);
+        match outcome {
+            Ok(plan) => {
+                persist_restore_plan(&worker_state, &plan)?;
+                Ok(plan)
+            }
+            Err(error) => {
+                if let Some(job_directory) = worker_target_root.parent() {
+                    let _ = remove_private_job_directory(
+                        worker_state.archive_restore_root.as_path(),
+                        job_directory,
+                    );
+                }
+                Err(error)
+            }
         }
+    })
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(_) => {
+            if let Some(job_directory) = target_root.parent() {
+                let _ = remove_private_job_directory(
+                    state.archive_restore_root.as_path(),
+                    job_directory,
+                );
+            }
+            return Err(ApiError::internal("archive restore preview worker failed"));
+        }
+    };
+    match outcome {
+        Ok(plan) => persisted_plan_response(&state, plan),
+        Err(error) => Err(error),
     }
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RestoreExecuteRequest {
-    plan: RestorePlan,
+    #[serde(default)]
+    plan: Option<RestorePlan>,
+    #[serde(default)]
+    plan_id: Option<String>,
+}
+
+impl RestoreExecuteRequest {
+    fn resolve(self, state: &AppState) -> Result<(String, RestorePlan), ApiError> {
+        match (self.plan, self.plan_id) {
+            (Some(plan), None) => {
+                let plan_id = persist_restore_plan(state, &plan)?;
+                Ok((plan_id, plan))
+            }
+            (None, Some(plan_id)) => {
+                let plan = load_restore_plan(state, &plan_id)?;
+                Ok((plan_id, plan))
+            }
+            _ => Err(ApiError::bad_request(
+                "invalid_restore_execute_request",
+                "Provide exactly one signed plan or durable plan ID.",
+            )),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RestorePlanPageQuery {
+    #[serde(default)]
+    cursor: Option<String>,
+    #[serde(default = "default_restore_plan_page_size")]
+    limit: usize,
+}
+
+const fn default_restore_plan_page_size() -> usize {
+    100
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RestorePlanPage {
+    plan_id: String,
+    backup_id: BackupId,
+    snapshot_id: String,
+    authorized_root: String,
+    manifest_digest: String,
+    conflict_policy: ConflictPolicy,
+    job_id: String,
+    plan_digest: String,
+    signer_device_id: DeviceId,
+    signature: String,
+    entry_offset: usize,
+    total_entries: usize,
+    entries: Vec<RestorePreviewEntry>,
+    next_cursor: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RestorePlanReference {
+    plan_id: String,
+    plan_digest: String,
+    backup_id: BackupId,
+    snapshot_id: String,
+    authorized_root: String,
+    manifest_digest: String,
+    conflict_policy: ConflictPolicy,
+    job_id: String,
+    signer_device_id: DeviceId,
+    signature: String,
+    total_entries: usize,
+}
+
+async fn restore_plan_page(
+    State(state): State<AppState>,
+    AxumPath(plan_id): AxumPath<String>,
+    Query(query): Query<RestorePlanPageQuery>,
+    headers: HeaderMap,
+) -> Result<axum::Json<RestorePlanPage>, ApiError> {
+    authorize(&state, &headers)?;
+    if query.limit == 0 || query.limit > 1_000 {
+        return Err(ApiError::bad_request(
+            "invalid_page_limit",
+            "Restore plan pages must contain between 1 and 1,000 entries.",
+        ));
+    }
+    let plan = load_restore_plan(&state, &plan_id)?;
+    let cursor = match query.cursor.as_deref() {
+        Some(cursor) if !cursor.is_empty() && cursor.bytes().all(|byte| byte.is_ascii_digit()) => {
+            cursor.parse::<usize>().map_err(|_| {
+                ApiError::bad_request("invalid_page_cursor", "The restore plan cursor is invalid.")
+            })?
+        }
+        None => 0,
+        Some(_) => {
+            return Err(ApiError::bad_request(
+                "invalid_page_cursor",
+                "The restore plan cursor is invalid.",
+            ));
+        }
+    };
+    if cursor > plan.entries.len() {
+        return Err(ApiError::bad_request(
+            "invalid_page_cursor",
+            "The restore plan cursor is outside the plan.",
+        ));
+    }
+    let end = cursor.saturating_add(query.limit).min(plan.entries.len());
+    let next_cursor = (end < plan.entries.len()).then(|| end.to_string());
+    Ok(axum::Json(RestorePlanPage {
+        plan_id,
+        backup_id: plan.backup_id,
+        snapshot_id: plan.snapshot_id,
+        authorized_root: plan.authorized_root,
+        manifest_digest: plan.manifest_digest,
+        conflict_policy: plan.conflict_policy,
+        job_id: plan.job_id,
+        plan_digest: plan.plan_digest,
+        signer_device_id: plan.signer_device_id,
+        signature: plan.signature,
+        entry_offset: cursor,
+        total_entries: plan.entries.len(),
+        entries: plan.entries[cursor..end].to_vec(),
+        next_cursor,
+    }))
+}
+
+fn persisted_plan_response(state: &AppState, plan: RestorePlan) -> Result<Response, ApiError> {
+    let plan_id = persist_restore_plan(state, &plan)?;
+    let summary = RestorePlanReference {
+        plan_id: plan_id.clone(),
+        plan_digest: plan.plan_digest.clone(),
+        backup_id: plan.backup_id,
+        snapshot_id: plan.snapshot_id,
+        authorized_root: plan.authorized_root,
+        manifest_digest: plan.manifest_digest,
+        conflict_policy: plan.conflict_policy,
+        job_id: plan.job_id,
+        signer_device_id: plan.signer_device_id,
+        signature: plan.signature,
+        total_entries: plan.entries.len(),
+    };
+    let mut response = axum::Json(summary).into_response();
+    insert_restore_plan_headers(&mut response, &plan_id, &plan.plan_digest)?;
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+fn insert_restore_plan_headers(
+    response: &mut Response,
+    plan_id: &str,
+    plan_digest: &str,
+) -> Result<(), ApiError> {
+    response.headers_mut().insert(
+        RESTORE_PLAN_ID_HEADER,
+        HeaderValue::from_str(plan_id)
+            .map_err(|_| ApiError::internal("restore plan ID header is invalid"))?,
+    );
+    response.headers_mut().insert(
+        RESTORE_PLAN_DIGEST_HEADER,
+        HeaderValue::from_str(plan_digest)
+            .map_err(|_| ApiError::internal("restore plan digest header is invalid"))?,
+    );
+    Ok(())
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RestoreResponse {
     files_restored: usize,
@@ -1500,37 +2295,56 @@ struct RestoreResponse {
     rejected_provider_copies: usize,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ArchiveRestoreCompletion {
+    plan_id: String,
+    plan_digest: String,
+    result: RestoreResponse,
+}
+
 async fn restore_execute(
     State(state): State<AppState>,
     headers: HeaderMap,
     ContractJson(request): ContractJson<RestoreExecuteRequest>,
-) -> Result<axum::Json<RestoreResponse>, ApiError> {
+) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
+    let (plan_id, plan) = request.resolve(&state)?;
+    let plan_digest = plan.plan_digest.clone();
+    let admission = state.admit_engine_job()?;
     let engine = Arc::clone(&state.engine);
-    let job_id = request.plan.job_id.clone();
-    let control = state.job_control(&job_id).map_err(ApiError::from_core)?;
-    let report = tokio::task::spawn_blocking(move || engine.restore(&request.plan, &control))
-        .await
-        .map_err(|_| ApiError::internal("restore worker failed"))?;
+    let job_id = plan.job_id.clone();
+    let mut lease = state.start_job(&job_id)?;
+    let control = lease.control();
+    let report = tokio::task::spawn_blocking(move || {
+        let _admission = admission;
+        engine.restore(&plan, &control)
+    })
+    .await
+    .map_err(|_| ApiError::internal("restore worker failed"))?;
     match &report {
-        Ok(_) => state.finish_job(&job_id).map_err(ApiError::from_core)?,
+        Ok(_) => lease.finish().map_err(ApiError::from_core)?,
         Err(CoreError::Cancelled) => {
-            state
-                .engine
-                .discard_job_checkpoint(&job_id)
-                .map_err(ApiError::from_core)?;
-            state.finish_job(&job_id).map_err(ApiError::from_core)?;
+            lease.finish().map_err(ApiError::from_core)?;
+            discard_job_artifacts(&state, &job_id)?;
         }
-        Err(_) => {}
+        Err(CoreError::Paused) => lease.preserve_for_resume().map_err(ApiError::from_core)?,
+        Err(_) => {
+            lease.finish().map_err(ApiError::from_core)?;
+            discard_job_artifacts(&state, &job_id)?;
+        }
     }
     let report = report.map_err(ApiError::from_core)?;
-    Ok(axum::Json(RestoreResponse {
+    let mut response = axum::Json(RestoreResponse {
         files_restored: report.files_restored,
         directories_created: report.directories_created,
         files_skipped: report.files_skipped,
         bytes_written: report.bytes_written,
         rejected_provider_copies: report.rejected_provider_copies.len(),
-    }))
+    })
+    .into_response();
+    insert_restore_plan_headers(&mut response, &plan_id, &plan_digest)?;
+    Ok(response)
 }
 
 async fn restore_archive_execute(
@@ -1539,8 +2353,10 @@ async fn restore_archive_execute(
     ContractJson(request): ContractJson<RestoreExecuteRequest>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    if request.plan.conflict_policy != ConflictPolicy::Fail
-        || request.plan.entries.iter().any(|entry| {
+    let (plan_id, plan) = request.resolve(&state)?;
+    let plan_digest = plan.plan_digest.clone();
+    if plan.conflict_policy != ConflictPolicy::Fail
+        || plan.entries.iter().any(|entry| {
             !matches!(
                 (entry.kind, entry.action),
                 (EntryKind::Directory, PreviewAction::CreateDirectory)
@@ -1553,12 +2369,27 @@ async fn restore_archive_execute(
             "A streamed restore plan may only create content in an empty destination.",
         ));
     }
-    let target_root = validate_archive_restore_plan(&state, &request.plan)?;
+    let target_root = validate_archive_restore_plan(&state, &plan)?;
+    if let Some(response) = completed_archive_restore_response(&plan_id, &plan).await? {
+        return Ok(response);
+    }
+    let admission = state.admit_engine_job()?;
+    let job_directory = target_root
+        .parent()
+        .ok_or_else(|| ApiError::internal("archive restore job has no parent"))?
+        .to_path_buf();
+    let result_archive_path = job_directory.join("result.zip");
+    let result_json_path = job_directory.join("result.json");
+    let worker_result_archive_path = result_archive_path.clone();
+    let worker_result_json_path = result_json_path.clone();
+    let worker_plan_id = plan_id.clone();
     let engine = Arc::clone(&state.engine);
-    let job_id = request.plan.job_id.clone();
-    let control = state.job_control(&job_id).map_err(ApiError::from_core)?;
-    let plan = request.plan;
+    let limits = state.archive_limits;
+    let job_id = plan.job_id.clone();
+    let mut lease = state.start_job(&job_id)?;
+    let control = lease.control();
     let outcome = tokio::task::spawn_blocking(move || {
+        let _admission = admission;
         let report = engine
             .restore(&plan, &control)
             .map_err(ApiError::from_core)?;
@@ -1569,51 +2400,45 @@ async fn restore_archive_execute(
             bytes_written: report.bytes_written,
             rejected_provider_copies: report.rejected_provider_copies.len(),
         };
-        let (archive, length) = zip_restore_directory(&target_root)?;
-        remove_archive_restore_target(&target_root)?;
-        Ok::<_, ApiError>((archive, length, response))
+        let length =
+            zip_restore_directory(&target_root, &worker_result_archive_path, &control, limits)?;
+        let completion = ArchiveRestoreCompletion {
+            plan_id: worker_plan_id,
+            plan_digest: plan.plan_digest.clone(),
+            result: response.clone(),
+        };
+        persist_private_file(
+            &worker_result_json_path,
+            &serde_json::to_vec(&completion).map_err(ApiError::from_json)?,
+        )
+        .map_err(ApiError::from_core)?;
+        Ok::<_, ApiError>((length, response))
     })
     .await
     .map_err(|_| ApiError::internal("archive restore worker failed"))?;
     match &outcome {
-        Ok(_) => state.finish_job(&job_id).map_err(ApiError::from_core)?,
+        Ok(_) => lease.finish().map_err(ApiError::from_core)?,
         Err(error) if error.code == "job_cancelled" => {
-            state
-                .engine
-                .discard_job_checkpoint(&job_id)
-                .map_err(ApiError::from_core)?;
-            state.finish_job(&job_id).map_err(ApiError::from_core)?;
+            lease.finish().map_err(ApiError::from_core)?;
+            discard_job_artifacts(&state, &job_id)?;
         }
-        Err(_) => {}
+        Err(error) if error.code == "job_paused" => {
+            lease.preserve_for_resume().map_err(ApiError::from_core)?;
+        }
+        Err(_) => {
+            lease.finish().map_err(ApiError::from_core)?;
+            discard_job_artifacts(&state, &job_id)?;
+        }
     }
-    let (archive, length, result) = outcome?;
-    let encoded_result =
-        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&result).map_err(ApiError::from_json)?);
-    let mut response = Response::new(Body::from_stream(ReaderStream::new(
-        tokio::fs::File::from_std(archive),
-    )));
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/vnd.covalent.restore+zip"),
-    );
-    response.headers_mut().insert(
-        header::CONTENT_DISPOSITION,
-        HeaderValue::from_static("attachment; filename=\"covalent-restore.zip\""),
-    );
-    response.headers_mut().insert(
-        header::CONTENT_LENGTH,
-        HeaderValue::from_str(&length.to_string())
-            .map_err(|_| ApiError::internal("archive length header is invalid"))?,
-    );
-    response.headers_mut().insert(
-        ARCHIVE_RESULT_HEADER,
-        HeaderValue::from_str(&encoded_result)
-            .map_err(|_| ApiError::internal("archive result header is invalid"))?,
-    );
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    Ok(response)
+    let (length, result) = outcome?;
+    archive_restore_response(
+        &result_archive_path,
+        length,
+        &result,
+        &plan_id,
+        &plan_digest,
+    )
+    .await
 }
 
 fn require_archive_content_type(headers: &HeaderMap) -> Result<(), ApiError> {
@@ -1662,30 +2487,143 @@ fn decode_archive_metadata<T: for<'de> Deserialize<'de>>(
     serde_json::from_slice(&bytes).map_err(ApiError::from_json)
 }
 
+fn prepare_archive_backup_job(
+    state: &AppState,
+    metadata: &ArchiveBackupMetadata,
+) -> Result<(PathBuf, Option<BackupResponse>, bool), ApiError> {
+    let _guard = state
+        .archive_backup_lock
+        .lock()
+        .map_err(|_| ApiError::internal("archive backup staging lock failed"))?;
+    prune_stale_archive_restore_targets(state.archive_backup_root.as_path())
+        .map_err(ApiError::from_core)?;
+    let job_directory = state.archive_backup_root.join(&metadata.job_id);
+    let metadata_bytes = serde_json::to_vec(metadata).map_err(ApiError::from_json)?;
+    let existed = match fs::symlink_metadata(&job_directory) {
+        Ok(existing) => {
+            if existing.file_type().is_symlink() || !existing.is_dir() {
+                return Err(ApiError::internal("archive backup staging is invalid"));
+            }
+            true
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let count = fs::read_dir(state.archive_backup_root.as_path())
+                .map_err(|_| ApiError::internal("archive backup staging could not be inspected"))?
+                .count();
+            if count >= state.archive_limits.maximum_jobs
+                && !evict_oldest_incomplete_archive_job(state, &state.archive_backup_root)?
+            {
+                return Err(ApiError::payload_too_large(
+                    "Too many archive jobs are waiting for completion or acknowledgement.",
+                ));
+            }
+            fs::create_dir(&job_directory)
+                .map_err(|_| ApiError::internal("archive backup staging could not be created"))?;
+            create_private_directory(job_directory.clone()).map_err(ApiError::from_core)?;
+            false
+        }
+        Err(_) => {
+            return Err(ApiError::internal(
+                "archive backup staging could not be inspected",
+            ));
+        }
+    };
+    let stored_metadata_path = job_directory.join("metadata.json");
+    if existed {
+        let stored = fs::read(&stored_metadata_path)
+            .map_err(|_| ApiError::internal("archive backup metadata is unavailable"))?;
+        if stored != metadata_bytes {
+            return Err(ApiError::conflict(
+                "job_conflict",
+                "This archive job ID is bound to different metadata.",
+            ));
+        }
+    } else {
+        persist_private_file(&stored_metadata_path, &metadata_bytes)
+            .map_err(ApiError::from_core)?;
+    }
+    let result_path = job_directory.join("result.json");
+    let completed = match fs::read(&result_path) {
+        Ok(bytes) => Some(serde_json::from_slice(&bytes).map_err(ApiError::from_json)?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => {
+            return Err(ApiError::internal(
+                "archive backup result could not be read",
+            ));
+        }
+    };
+    Ok((job_directory, completed, existed))
+}
+
 async fn receive_archive(
+    body: Body,
+    headers: &HeaderMap,
+    job_directory: &Path,
+    limits: ArchiveLimits,
+) -> Result<PathBuf, ApiError> {
+    let temporary_path = job_directory.join("upload.part");
+    let result = receive_archive_inner(body, headers, job_directory, limits).await;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(temporary_path).await;
+    }
+    result
+}
+
+async fn receive_archive_inner(
     mut body: Body,
     headers: &HeaderMap,
-) -> Result<(tempfile::TempDir, PathBuf), ApiError> {
-    if headers
-        .get(header::CONTENT_LENGTH)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok())
-        .is_some_and(|length| length > MAX_ARCHIVE_COMPRESSED_BYTES)
-    {
+    job_directory: &Path,
+    limits: ArchiveLimits,
+) -> Result<PathBuf, ApiError> {
+    let expected_length = match headers.get(header::CONTENT_LENGTH) {
+        Some(value) => Some(
+            value
+                .to_str()
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .filter(|length| *length > 0)
+                .ok_or_else(|| {
+                    ApiError::bad_request(
+                        "invalid_content_length",
+                        "Archive Content-Length is invalid.",
+                    )
+                })?,
+        ),
+        None => None,
+    };
+    if expected_length.is_some_and(|length| length > limits.maximum_compressed_bytes) {
         return Err(ApiError::payload_too_large(
             "Archive exceeds the streamed transfer limit.",
         ));
     }
-    let staging = tempfile::Builder::new()
-        .prefix("covalent-saf-backup-")
-        .tempdir()
-        .map_err(|_| ApiError::internal("archive staging directory could not be created"))?;
-    let archive_path = staging.path().join("upload.zip");
-    let mut archive = tokio::fs::File::create(&archive_path)
+    if let Some(length) = expected_length {
+        ensure_archive_capacity(job_directory, length, limits.free_space_reserve_bytes)?;
+    }
+    let temporary_path = job_directory.join("upload.part");
+    let mut archive = tokio::fs::File::create(&temporary_path)
         .await
         .map_err(|_| ApiError::internal("archive staging file could not be created"))?;
     let mut received = 0_u64;
-    while let Some(frame) = body.frame().await {
+    let started = Instant::now();
+    let mut hasher = blake3::Hasher::new();
+    loop {
+        if started.elapsed() > ARCHIVE_UPLOAD_MAX_DURATION {
+            let _ = tokio::fs::remove_file(&temporary_path).await;
+            return Err(ApiError::payload_too_large(
+                "Archive upload exceeded the maximum duration.",
+            ));
+        }
+        let next = tokio::time::timeout(ARCHIVE_UPLOAD_IDLE_TIMEOUT, body.frame())
+            .await
+            .map_err(|_| {
+                ApiError::bad_request(
+                    "archive_upload_stalled",
+                    "Archive upload stopped making progress.",
+                )
+            })?;
+        let Some(frame) = next else {
+            break;
+        };
         let frame = frame.map_err(|_| {
             ApiError::bad_request(
                 "invalid_archive",
@@ -1698,11 +2636,28 @@ async fn receive_archive(
         received = received
             .checked_add(u64::try_from(data.len()).unwrap_or(u64::MAX))
             .ok_or_else(|| ApiError::payload_too_large("Archive size overflowed."))?;
-        if received > MAX_ARCHIVE_COMPRESSED_BYTES {
+        if received > limits.maximum_compressed_bytes {
             return Err(ApiError::payload_too_large(
                 "Archive exceeds the streamed transfer limit.",
             ));
         }
+        if started.elapsed() >= Duration::from_secs(60)
+            && received / started.elapsed().as_secs().max(1) < MIN_ARCHIVE_UPLOAD_BYTES_PER_SECOND
+        {
+            let _ = tokio::fs::remove_file(&temporary_path).await;
+            return Err(ApiError::bad_request(
+                "archive_upload_too_slow",
+                "Archive upload remained below the minimum transfer rate.",
+            ));
+        }
+        if expected_length.is_none() {
+            ensure_archive_capacity(
+                job_directory,
+                u64::try_from(data.len()).unwrap_or(u64::MAX),
+                limits.free_space_reserve_bytes,
+            )?;
+        }
+        hasher.update(&data);
         archive
             .write_all(&data)
             .await
@@ -1712,24 +2667,177 @@ async fn receive_archive(
         .sync_all()
         .await
         .map_err(|_| ApiError::internal("archive staging sync failed"))?;
-    Ok((staging, archive_path))
+    drop(archive);
+    if received == 0 || expected_length.is_some_and(|length| length != received) {
+        let _ = tokio::fs::remove_file(&temporary_path).await;
+        return Err(ApiError::bad_request(
+            "invalid_archive",
+            "Archive length did not match the request.",
+        ));
+    }
+    let digest = hasher.finalize().to_hex().to_string();
+    let archive_path = job_directory.join(format!("upload-{digest}.zip"));
+    match existing_archive_upload(job_directory, limits.maximum_compressed_bytes)? {
+        Some((stored, existing_path)) if stored == digest => {
+            tokio::fs::remove_file(&temporary_path)
+                .await
+                .map_err(|_| ApiError::internal("duplicate archive staging cleanup failed"))?;
+            return Ok(existing_path);
+        }
+        Some(_) => {
+            let _ = tokio::fs::remove_file(&temporary_path).await;
+            return Err(ApiError::conflict(
+                "job_conflict",
+                "This archive job ID is bound to different content.",
+            ));
+        }
+        None => {
+            tokio::fs::rename(&temporary_path, &archive_path)
+                .await
+                .map_err(|_| ApiError::internal("archive staging commit failed"))?;
+            File::open(job_directory)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|_| ApiError::internal("archive staging commit could not be synced"))?;
+        }
+    }
+    Ok(archive_path)
 }
 
-fn extract_backup_archive(archive_path: &Path, source_root: &Path) -> Result<(), ApiError> {
-    create_private_directory(source_root.to_path_buf()).map_err(ApiError::from_core)?;
+fn existing_archive_upload(
+    job_directory: &Path,
+    maximum_bytes: u64,
+) -> Result<Option<(String, PathBuf)>, ApiError> {
+    let mut found = None;
+    for entry in fs::read_dir(job_directory)
+        .map_err(|_| ApiError::internal("archive staging could not be inspected"))?
+    {
+        let entry = entry.map_err(|_| ApiError::internal("archive staging entry is invalid"))?;
+        let name = entry.file_name();
+        let Some(digest) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix("upload-"))
+            .and_then(|name| name.strip_suffix(".zip"))
+        else {
+            continue;
+        };
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|_| ApiError::internal("archive upload could not be inspected"))?;
+        if !valid_lowercase_digest(digest)
+            || metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.len() == 0
+            || metadata.len() > maximum_bytes
+            || found.is_some()
+        {
+            return Err(ApiError::internal("durable archive upload is invalid"));
+        }
+        found = Some((digest.to_owned(), path));
+    }
+    Ok(found)
+}
+
+fn ensure_archive_capacity(
+    path: &Path,
+    required_bytes: u64,
+    reserve_bytes: u64,
+) -> Result<(), ApiError> {
+    let available = fs2::available_space(path)
+        .map_err(|_| ApiError::internal("archive staging capacity is unavailable"))?;
+    if available < required_bytes.saturating_add(reserve_bytes) {
+        return Err(ApiError {
+            status: StatusCode::INSUFFICIENT_STORAGE,
+            code: "insufficient_storage",
+            message: "The node does not have enough reserved capacity for this archive.",
+            retryable: true,
+        });
+    }
+    Ok(())
+}
+
+fn remove_private_job_directory(root: &Path, job_directory: &Path) -> Result<(), ApiError> {
+    if job_directory.parent() != Some(root) {
+        return Err(ApiError::internal("archive job escaped its staging root"));
+    }
+    match fs::symlink_metadata(job_directory) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+            fs::remove_dir_all(job_directory)
+                .map_err(|_| ApiError::internal("archive job cleanup failed"))?;
+            File::open(root)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|_| ApiError::internal("archive job cleanup could not be synced"))
+        }
+        Ok(_) => Err(ApiError::internal("archive job staging is invalid")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(ApiError::internal(
+            "archive job staging could not be inspected",
+        )),
+    }
+}
+
+fn extract_backup_archive(
+    archive_path: &Path,
+    source_root: &Path,
+    limits: ArchiveLimits,
+    control: &JobControl,
+) -> Result<(), ApiError> {
+    let started = Instant::now();
     let file = File::open(archive_path)
         .map_err(|_| ApiError::internal("archive staging file could not be opened"))?;
     let mut archive = ZipArchive::new(file).map_err(|_| {
         ApiError::bad_request("invalid_archive", "The streamed ZIP archive is invalid.")
     })?;
-    if archive.len() > MAX_ARCHIVE_ENTRIES {
+    if archive.len() > limits.maximum_entries {
         return Err(ApiError::payload_too_large(
             "Archive contains too many entries.",
         ));
     }
-    let mut seen = BTreeSet::new();
-    let mut total_size = 0_u64;
+    let mut declared_expanded = 0_u64;
+    let mut declared_compressed = 0_u64;
     for index in 0..archive.len() {
+        check_archive_control(control, started)?;
+        let entry = archive.by_index(index).map_err(|_| {
+            ApiError::bad_request("invalid_archive", "An archive entry is invalid.")
+        })?;
+        declared_expanded = declared_expanded
+            .checked_add(entry.size())
+            .ok_or_else(|| ApiError::payload_too_large("Archive expansion size overflowed."))?;
+        declared_compressed = declared_compressed
+            .checked_add(entry.compressed_size())
+            .ok_or_else(|| ApiError::payload_too_large("Archive compressed size overflowed."))?;
+        if declared_expanded > limits.maximum_uncompressed_bytes {
+            return Err(ApiError::payload_too_large(
+                "Archive expands beyond the configured limit.",
+            ));
+        }
+    }
+    if declared_expanded
+        > declared_compressed
+            .max(1)
+            .saturating_mul(MAX_ARCHIVE_COMPRESSION_RATIO)
+    {
+        return Err(ApiError::payload_too_large(
+            "Archive compression ratio exceeds the configured limit.",
+        ));
+    }
+    ensure_archive_capacity(
+        source_root
+            .parent()
+            .ok_or_else(|| ApiError::internal("archive source has no parent"))?,
+        declared_expanded.saturating_mul(2),
+        limits.free_space_reserve_bytes,
+    )?;
+    drop(archive);
+    create_private_directory(source_root.to_path_buf()).map_err(ApiError::from_core)?;
+    let file = File::open(archive_path)
+        .map_err(|_| ApiError::internal("archive staging file could not be reopened"))?;
+    let mut archive = ZipArchive::new(file).map_err(|_| {
+        ApiError::bad_request("invalid_archive", "The streamed ZIP archive is invalid.")
+    })?;
+    let mut seen = BTreeSet::new();
+    let mut total_processed = 0_u64;
+    for index in 0..archive.len() {
+        check_archive_progress(control, started, total_processed)?;
         let mut entry = archive.by_index(index).map_err(|_| {
             ApiError::bad_request("invalid_archive", "An archive entry is invalid.")
         })?;
@@ -1762,14 +2870,6 @@ fn extract_backup_archive(archive_path: &Path, source_root: &Path) -> Result<(),
                 "Archive entry paths must be unique.",
             ));
         }
-        total_size = total_size
-            .checked_add(entry.size())
-            .ok_or_else(|| ApiError::payload_too_large("Archive size overflowed."))?;
-        if total_size > MAX_ARCHIVE_UNCOMPRESSED_BYTES {
-            return Err(ApiError::payload_too_large(
-                "Archive expands beyond the transfer limit.",
-            ));
-        }
         let destination = relative
             .components()
             .fold(source_root.to_path_buf(), |path, component| {
@@ -1795,9 +2895,15 @@ fn extract_backup_archive(archive_path: &Path, source_root: &Path) -> Result<(),
                     "Archive files may not replace staged entries.",
                 )
             })?;
-        let copied = std::io::copy(&mut entry, &mut output).map_err(|_| {
-            ApiError::bad_request("invalid_archive", "Archive content failed validation.")
-        })?;
+        let copied = copy_archive_bytes(
+            &mut entry,
+            &mut output,
+            control,
+            started,
+            &mut total_processed,
+            limits.maximum_uncompressed_bytes,
+            true,
+        )?;
         if copied != entry.size() {
             return Err(ApiError::bad_request(
                 "invalid_archive",
@@ -1811,12 +2917,450 @@ fn extract_backup_archive(archive_path: &Path, source_root: &Path) -> Result<(),
     Ok(())
 }
 
+fn check_archive_control(control: &JobControl, started: Instant) -> Result<(), ApiError> {
+    match control.state() {
+        JobState::Running => {}
+        JobState::Paused => return Err(ApiError::from_core(CoreError::Paused)),
+        JobState::Cancelled => return Err(ApiError::from_core(CoreError::Cancelled)),
+    }
+    if started.elapsed() > ARCHIVE_PROCESSING_MAX_DURATION {
+        return Err(ApiError {
+            status: StatusCode::REQUEST_TIMEOUT,
+            code: "archive_processing_timeout",
+            message: "Archive processing exceeded the maximum duration.",
+            retryable: true,
+        });
+    }
+    Ok(())
+}
+
+fn check_archive_progress(
+    control: &JobControl,
+    started: Instant,
+    processed: u64,
+) -> Result<(), ApiError> {
+    check_archive_control(control, started)?;
+    if started.elapsed() >= Duration::from_secs(60)
+        && processed / started.elapsed().as_secs().max(1) < MIN_ARCHIVE_PROCESS_BYTES_PER_SECOND
+    {
+        return Err(ApiError::bad_request(
+            "archive_processing_too_slow",
+            "Archive processing remained below the minimum safe rate.",
+        ));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn copy_archive_bytes<R: std::io::Read, W: std::io::Write>(
+    input: &mut R,
+    output: &mut W,
+    control: &JobControl,
+    started: Instant,
+    total_processed: &mut u64,
+    maximum_bytes: u64,
+    untrusted_input: bool,
+) -> Result<u64, ApiError> {
+    let mut copied = 0_u64;
+    let mut buffer = [0_u8; 64 * 1_024];
+    loop {
+        check_archive_progress(control, started, *total_processed)?;
+        let read = input.read(&mut buffer).map_err(|_| {
+            if untrusted_input {
+                ApiError::bad_request("invalid_archive", "Archive content failed validation.")
+            } else {
+                ApiError::internal("restored file could not be read")
+            }
+        })?;
+        if read == 0 {
+            return Ok(copied);
+        }
+        copied = copied
+            .checked_add(read as u64)
+            .ok_or_else(|| ApiError::payload_too_large("Archive size overflowed."))?;
+        *total_processed = total_processed
+            .checked_add(read as u64)
+            .ok_or_else(|| ApiError::payload_too_large("Archive size overflowed."))?;
+        if *total_processed > maximum_bytes {
+            return Err(ApiError::payload_too_large(
+                "Archive content exceeds the configured limit.",
+            ));
+        }
+        output.write_all(&buffer[..read]).map_err(|_| {
+            if untrusted_input {
+                ApiError::internal("archive staging write failed")
+            } else {
+                ApiError::internal("restore archive write failed")
+            }
+        })?;
+    }
+}
+
 fn valid_job_identifier(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn valid_plan_identifier(value: &str) -> bool {
+    value
+        .strip_suffix(".json")
+        .is_some_and(valid_lowercase_digest)
+}
+
+fn valid_lowercase_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn restore_plan_identifier(plan_digest: &str) -> Result<String, ApiError> {
+    if !valid_lowercase_digest(plan_digest) {
+        return Err(ApiError::internal("restore plan digest is invalid"));
+    }
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(RESTORE_PLAN_ID_DOMAIN);
+    hasher.update(&[0]);
+    hasher.update(plan_digest.as_bytes());
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+fn persist_restore_plan(state: &AppState, plan: &RestorePlan) -> Result<String, ApiError> {
+    let plan_id = restore_plan_identifier(&plan.plan_digest)?;
+    let _guard = state
+        .restore_plan_lock
+        .lock()
+        .map_err(|_| ApiError::internal("restore plan lock failed"))?;
+    prune_stale_private_files(
+        state.restore_plan_root.as_path(),
+        RESTORE_PLAN_MAX_AGE,
+        MAX_RESTORE_PLAN_BYTES,
+        valid_plan_identifier,
+    )
+    .map_err(ApiError::from_core)?;
+    let path = state.restore_plan_root.join(format!("{plan_id}.json"));
+    for entry in fs::read_dir(state.restore_plan_root.as_path())
+        .map_err(|_| ApiError::internal("restore plan store could not be inspected"))?
+    {
+        let entry = entry.map_err(|_| ApiError::internal("restore plan entry is invalid"))?;
+        if entry.path() == path {
+            continue;
+        }
+        let existing: RestorePlan = serde_json::from_slice(
+            &fs::read(entry.path())
+                .map_err(|_| ApiError::internal("restore plan could not be read"))?,
+        )
+        .map_err(ApiError::from_json)?;
+        if existing.job_id == plan.job_id {
+            return Err(ApiError::conflict(
+                "job_conflict",
+                "This job ID is already bound to a different signed restore plan.",
+            ));
+        }
+    }
+    if !path.exists()
+        && fs::read_dir(state.restore_plan_root.as_path())
+            .map_err(|_| ApiError::internal("restore plan store could not be inspected"))?
+            .count()
+            >= MAX_RESTORE_PLANS
+    {
+        return Err(ApiError::payload_too_large(
+            "Too many restore plans are waiting for execution.",
+        ));
+    }
+    let bytes = serde_json::to_vec(plan).map_err(ApiError::from_json)?;
+    if bytes.len() as u64 > MAX_RESTORE_PLAN_BYTES {
+        return Err(ApiError::payload_too_large(
+            "The restore plan exceeds the durable plan limit.",
+        ));
+    }
+    if path.exists() {
+        let existing =
+            fs::read(&path).map_err(|_| ApiError::internal("restore plan could not be read"))?;
+        if existing == bytes {
+            return Ok(plan_id);
+        }
+        return Err(ApiError::internal(
+            "restore plan ID is bound to different content",
+        ));
+    }
+    persist_private_file(&path, &bytes).map_err(ApiError::from_core)?;
+    Ok(plan_id)
+}
+
+fn load_restore_plan(state: &AppState, plan_id: &str) -> Result<RestorePlan, ApiError> {
+    if !valid_lowercase_digest(plan_id) {
+        return Err(ApiError::bad_request(
+            "invalid_restore_plan_id",
+            "The restore plan ID is invalid.",
+        ));
+    }
+    let path = state.restore_plan_root.join(format!("{plan_id}.json"));
+    let metadata = fs::symlink_metadata(&path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            ApiError::not_found(
+                "restore_plan_not_found",
+                "The restore plan is unavailable or expired.",
+            )
+        } else {
+            ApiError::internal("restore plan could not be inspected")
+        }
+    })?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > MAX_RESTORE_PLAN_BYTES
+    {
+        return Err(ApiError::internal("stored restore plan is invalid"));
+    }
+    let plan: RestorePlan = serde_json::from_slice(
+        &fs::read(&path).map_err(|_| ApiError::internal("restore plan could not be read"))?,
+    )
+    .map_err(ApiError::from_json)?;
+    if restore_plan_identifier(&plan.plan_digest)? != plan_id {
+        return Err(ApiError::internal("stored restore plan ID mismatch"));
+    }
+    Ok(plan)
+}
+
+fn find_restore_plan_by_job(
+    state: &AppState,
+    job_id: &str,
+) -> Result<Option<RestorePlan>, ApiError> {
+    let _guard = state
+        .restore_plan_lock
+        .lock()
+        .map_err(|_| ApiError::internal("restore plan lock failed"))?;
+    let mut found = None;
+    for entry in fs::read_dir(state.restore_plan_root.as_path())
+        .map_err(|_| ApiError::internal("restore plan store could not be inspected"))?
+    {
+        let entry = entry.map_err(|_| ApiError::internal("restore plan entry is invalid"))?;
+        let metadata = entry
+            .metadata()
+            .map_err(|_| ApiError::internal("restore plan entry could not be inspected"))?;
+        if !metadata.is_file()
+            || metadata.len() > MAX_RESTORE_PLAN_BYTES
+            || !entry
+                .file_name()
+                .to_str()
+                .is_some_and(valid_plan_identifier)
+        {
+            return Err(ApiError::internal("restore plan entry is invalid"));
+        }
+        let plan: RestorePlan = serde_json::from_slice(
+            &fs::read(entry.path())
+                .map_err(|_| ApiError::internal("restore plan could not be read"))?,
+        )
+        .map_err(ApiError::from_json)?;
+        if plan.job_id == job_id {
+            if found.is_some() {
+                return Err(ApiError::internal(
+                    "multiple restore plans are bound to one job",
+                ));
+            }
+            found = Some(plan);
+        }
+    }
+    Ok(found)
+}
+
+async fn completed_archive_restore_response(
+    plan_id: &str,
+    plan: &RestorePlan,
+) -> Result<Option<Response>, ApiError> {
+    let target = PathBuf::from(&plan.authorized_root);
+    let job_directory = target
+        .parent()
+        .ok_or_else(|| ApiError::internal("archive restore job has no parent"))?;
+    let archive_path = job_directory.join("result.zip");
+    let result_path = job_directory.join("result.json");
+    let completion = match fs::symlink_metadata(&result_path) {
+        Ok(metadata)
+            if metadata.is_file()
+                && !metadata.file_type().is_symlink()
+                && metadata.len() <= MAX_ARCHIVE_METADATA_BYTES as u64 =>
+        {
+            serde_json::from_slice::<ArchiveRestoreCompletion>(
+                &fs::read(&result_path)
+                    .map_err(|_| ApiError::internal("restore result could not be read"))?,
+            )
+            .map_err(ApiError::from_json)?
+        }
+        Ok(_) => return Err(ApiError::internal("retained restore result is invalid")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if archive_path.exists() {
+                fs::remove_file(&archive_path)
+                    .map_err(|_| ApiError::internal("incomplete restore archive cleanup failed"))?;
+            }
+            return Ok(None);
+        }
+        Err(_) => return Err(ApiError::internal("restore result could not be read")),
+    };
+    if completion.plan_id != plan_id || completion.plan_digest != plan.plan_digest {
+        return Err(ApiError::conflict(
+            "restore_plan_mismatch",
+            "The retained restore result belongs to a different signed plan.",
+        ));
+    }
+    let archive_metadata = fs::symlink_metadata(&archive_path)
+        .map_err(|_| ApiError::internal("retained restore archive is unavailable"))?;
+    if !archive_metadata.is_file() || archive_metadata.file_type().is_symlink() {
+        return Err(ApiError::internal("retained restore archive is invalid"));
+    }
+    let length = archive_metadata.len();
+    Ok(Some(
+        archive_restore_response(
+            &archive_path,
+            length,
+            &completion.result,
+            &completion.plan_id,
+            &completion.plan_digest,
+        )
+        .await?,
+    ))
+}
+
+async fn archive_restore_response(
+    archive_path: &Path,
+    length: u64,
+    result: &RestoreResponse,
+    plan_id: &str,
+    plan_digest: &str,
+) -> Result<Response, ApiError> {
+    let file = tokio::fs::File::open(archive_path)
+        .await
+        .map_err(|_| ApiError::internal("retained restore archive could not be opened"))?;
+    let encoded_result =
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(result).map_err(ApiError::from_json)?);
+    let mut response = Response::new(Body::from_stream(ReaderStream::new(file)));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/vnd.covalent.restore+zip"),
+    );
+    response.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_static("attachment; filename=\"covalent-restore.zip\""),
+    );
+    response.headers_mut().insert(
+        header::CONTENT_LENGTH,
+        HeaderValue::from_str(&length.to_string())
+            .map_err(|_| ApiError::internal("archive length header is invalid"))?,
+    );
+    response.headers_mut().insert(
+        ARCHIVE_RESULT_HEADER,
+        HeaderValue::from_str(&encoded_result)
+            .map_err(|_| ApiError::internal("archive result header is invalid"))?,
+    );
+    response
+        .headers_mut()
+        .insert(JOB_ACK_REQUIRED_HEADER, HeaderValue::from_static("true"));
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    insert_restore_plan_headers(&mut response, plan_id, plan_digest)?;
+    Ok(response)
+}
+
+fn discard_job_artifacts(state: &AppState, job_id: &str) -> Result<(), ApiError> {
+    state
+        .engine
+        .discard_job_checkpoint(job_id)
+        .map_err(ApiError::from_core)?;
+    let archive_backup = state.archive_backup_root.join(job_id);
+    remove_private_job_directory(state.archive_backup_root.as_path(), &archive_backup)?;
+    let archive_target = state.archive_restore_root.join(job_id);
+    match fs::symlink_metadata(&archive_target) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+            fs::remove_dir_all(&archive_target)
+                .map_err(|_| ApiError::internal("archive job could not be discarded"))?;
+        }
+        Ok(_) => return Err(ApiError::internal("archive job staging is invalid")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(ApiError::internal("archive job could not be inspected")),
+    }
+    let _guard = state
+        .restore_plan_lock
+        .lock()
+        .map_err(|_| ApiError::internal("restore plan lock failed"))?;
+    let mut removed_plan = false;
+    for entry in fs::read_dir(state.restore_plan_root.as_path())
+        .map_err(|_| ApiError::internal("restore plan store could not be inspected"))?
+    {
+        let entry = entry.map_err(|_| ApiError::internal("restore plan entry is invalid"))?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|_| ApiError::internal("restore plan entry could not be inspected"))?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.len() > MAX_RESTORE_PLAN_BYTES
+            || !entry
+                .file_name()
+                .to_str()
+                .is_some_and(valid_plan_identifier)
+        {
+            return Err(ApiError::internal("restore plan entry is invalid"));
+        }
+        let plan: RestorePlan = serde_json::from_slice(
+            &fs::read(&path).map_err(|_| ApiError::internal("restore plan could not be read"))?,
+        )
+        .map_err(ApiError::from_json)?;
+        if plan.job_id == job_id {
+            fs::remove_file(&path)
+                .map_err(|_| ApiError::internal("restore plan could not be discarded"))?;
+            removed_plan = true;
+        }
+    }
+    if removed_plan {
+        File::open(state.restore_plan_root.as_path())
+            .and_then(|directory| directory.sync_all())
+            .map_err(|_| ApiError::internal("restore plan discard could not be synced"))?;
+    }
+    Ok(())
+}
+
+fn evict_oldest_incomplete_archive_job(state: &AppState, root: &Path) -> Result<bool, ApiError> {
+    let mut jobs = state
+        .jobs
+        .lock()
+        .map_err(|_| ApiError::from_core(CoreError::Synchronization))?;
+    let mut eviction = None::<(SystemTime, String)>;
+    for entry in fs::read_dir(root)
+        .map_err(|_| ApiError::internal("archive staging could not be inspected"))?
+    {
+        let entry = entry.map_err(|_| ApiError::internal("archive staging entry is invalid"))?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|_| ApiError::internal("archive staging entry could not be inspected"))?;
+        let job_id = entry
+            .file_name()
+            .to_str()
+            .filter(|job_id| valid_job_identifier(job_id))
+            .ok_or_else(|| ApiError::internal("archive staging entry is invalid"))?
+            .to_owned();
+        if metadata.file_type().is_symlink()
+            || !metadata.is_dir()
+            || path.join("result.json").exists()
+            || jobs.entries.get(&job_id).is_some_and(|job| job.active)
+        {
+            continue;
+        }
+        let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
+        if eviction
+            .as_ref()
+            .is_none_or(|(oldest, _)| modified < *oldest)
+        {
+            eviction = Some((modified, job_id));
+        }
+    }
+    let Some((_, job_id)) = eviction else {
+        return Ok(false);
+    };
+    discard_job_artifacts(state, &job_id)?;
+    jobs.entries.remove(&job_id);
+    Ok(true)
 }
 
 fn create_archive_restore_target(state: &AppState, job_id: &str) -> Result<PathBuf, ApiError> {
@@ -1833,14 +3377,23 @@ fn create_archive_restore_target(state: &AppState, job_id: &str) -> Result<PathB
     let target_count = fs::read_dir(state.archive_restore_root.as_path())
         .map_err(|_| ApiError::internal("archive restore staging could not be inspected"))?
         .count();
-    if target_count >= MAX_ARCHIVE_RESTORE_TARGETS {
+    if target_count >= state.archive_limits.maximum_jobs
+        && !evict_oldest_incomplete_archive_job(state, &state.archive_restore_root)?
+    {
         return Err(ApiError::payload_too_large(
             "Too many archive restore previews are waiting for execution.",
         ));
     }
-    let target = state.archive_restore_root.join(job_id);
-    match fs::create_dir(&target) {
-        Ok(()) => create_private_directory(target).map_err(ApiError::from_core),
+    let job_directory = state.archive_restore_root.join(job_id);
+    match fs::create_dir(&job_directory) {
+        Ok(()) => {
+            let job_directory =
+                create_private_directory(job_directory).map_err(ApiError::from_core)?;
+            let target = job_directory.join("target");
+            fs::create_dir(&target)
+                .map_err(|_| ApiError::internal("archive restore target could not be created"))?;
+            create_private_directory(target).map_err(ApiError::from_core)
+        }
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Err(ApiError::conflict(
             "job_conflict",
             "This archive restore job ID already exists.",
@@ -1867,8 +3420,12 @@ fn validate_archive_restore_plan(
             "The archive restore staging root is unavailable.",
         )
     })?;
-    if target.parent() != Some(state.archive_restore_root.as_path())
-        || target.file_name().and_then(|name| name.to_str()) != Some(plan.job_id.as_str())
+    let job_directory = target
+        .parent()
+        .ok_or_else(|| ApiError::internal("archive restore target has no job directory"))?;
+    if job_directory.parent() != Some(state.archive_restore_root.as_path())
+        || job_directory.file_name().and_then(|name| name.to_str()) != Some(plan.job_id.as_str())
+        || target.file_name().and_then(|name| name.to_str()) != Some("target")
     {
         return Err(ApiError::bad_request(
             "restore_plan_mismatch",
@@ -1878,8 +3435,51 @@ fn validate_archive_restore_plan(
     Ok(target)
 }
 
-fn zip_restore_directory(root: &Path) -> Result<(File, u64), ApiError> {
-    let archive = tempfile::tempfile()
+fn zip_restore_directory(
+    root: &Path,
+    result_path: &Path,
+    control: &JobControl,
+    limits: ArchiveLimits,
+) -> Result<u64, ApiError> {
+    let started = Instant::now();
+    let mut entry_count = 0_usize;
+    let mut total_uncompressed = 0_u64;
+    for entry in WalkDir::new(root).follow_links(false) {
+        check_archive_control(control, started)?;
+        let entry =
+            entry.map_err(|_| ApiError::internal("restored entry could not be inspected"))?;
+        if entry.path() == root {
+            continue;
+        }
+        entry_count = entry_count.saturating_add(1);
+        if entry_count > limits.maximum_entries || entry.file_type().is_symlink() {
+            return Err(ApiError::payload_too_large(
+                "Restored content exceeds archive output limits.",
+            ));
+        }
+        if entry.file_type().is_file() {
+            total_uncompressed = total_uncompressed
+                .checked_add(
+                    entry
+                        .metadata()
+                        .map_err(|_| ApiError::internal("restored file metadata is unavailable"))?
+                        .len(),
+                )
+                .ok_or_else(|| ApiError::payload_too_large("Archive size overflowed."))?;
+            if total_uncompressed > limits.maximum_uncompressed_bytes {
+                return Err(ApiError::payload_too_large(
+                    "Restored content exceeds the archive output limit.",
+                ));
+            }
+        } else if !entry.file_type().is_dir() {
+            return Err(ApiError::internal(
+                "restore staging contained an unsupported entry",
+            ));
+        }
+    }
+    ensure_archive_capacity(root, total_uncompressed, limits.free_space_reserve_bytes)?;
+    let temporary_path = result_path.with_extension("part");
+    let archive = File::create(&temporary_path)
         .map_err(|_| ApiError::internal("restore archive file could not be created"))?;
     let mut writer = ZipWriter::new(archive);
     let file_options = SimpleFileOptions::default()
@@ -1893,7 +3493,9 @@ fn zip_restore_directory(root: &Path) -> Result<(File, u64), ApiError> {
         .follow_links(false)
         .sort_by_file_name()
         .into_iter();
+    let mut total_processed = 0_u64;
     for entry in entries {
+        check_archive_progress(control, started, total_processed)?;
         let entry =
             entry.map_err(|_| ApiError::internal("restored entry could not be inspected"))?;
         if entry.path() == root {
@@ -1926,15 +3528,23 @@ fn zip_restore_directory(root: &Path) -> Result<(File, u64), ApiError> {
                 .map_err(|_| ApiError::internal("restore file could not be archived"))?;
             let mut input = File::open(entry.path())
                 .map_err(|_| ApiError::internal("restored file could not be opened"))?;
-            std::io::copy(&mut input, &mut writer)
-                .map_err(|_| ApiError::internal("restored file could not be archived"))?;
+            copy_archive_bytes(
+                &mut input,
+                &mut writer,
+                control,
+                started,
+                &mut total_processed,
+                limits.maximum_uncompressed_bytes,
+                false,
+            )?;
         } else {
             return Err(ApiError::internal(
                 "restore staging contained an unsupported entry",
             ));
         }
     }
-    let mut archive = writer
+    check_archive_control(control, started)?;
+    let archive = writer
         .finish()
         .map_err(|_| ApiError::internal("restore archive could not be finalized"))?;
     archive
@@ -1944,21 +3554,22 @@ fn zip_restore_directory(root: &Path) -> Result<(File, u64), ApiError> {
         .metadata()
         .map_err(|_| ApiError::internal("restore archive size is unavailable"))?
         .len();
-    archive
-        .seek(SeekFrom::Start(0))
-        .map_err(|_| ApiError::internal("restore archive could not be rewound"))?;
-    Ok((archive, length))
-}
-
-fn remove_archive_restore_target(target: &Path) -> Result<(), ApiError> {
-    let parent = target
+    if length > limits.maximum_compressed_bytes {
+        return Err(ApiError::payload_too_large(
+            "Restore archive exceeds the compressed output limit.",
+        ));
+    }
+    drop(archive);
+    check_archive_control(control, started)?;
+    fs::rename(&temporary_path, result_path)
+        .map_err(|_| ApiError::internal("restore archive could not be committed"))?;
+    let parent = result_path
         .parent()
-        .ok_or_else(|| ApiError::internal("archive restore target has no parent"))?;
-    fs::remove_dir_all(target)
-        .map_err(|_| ApiError::internal("archive restore staging cleanup failed"))?;
+        .ok_or_else(|| ApiError::internal("restore archive has no parent"))?;
     File::open(parent)
         .and_then(|directory| directory.sync_all())
-        .map_err(|_| ApiError::internal("archive restore cleanup sync failed"))
+        .map_err(|_| ApiError::internal("restore archive commit could not be synced"))?;
+    Ok(length)
 }
 
 fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
@@ -1991,13 +3602,17 @@ fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
 }
 
 fn now_unix_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+    unix_ms(SystemTime::now())
+}
+
+fn unix_ms(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH)
         .ok()
         .and_then(|duration| u64::try_from(duration.as_millis()).ok())
         .unwrap_or(0)
 }
 
+#[derive(Debug)]
 struct ApiError {
     status: StatusCode,
     code: &'static str,
@@ -2159,12 +3774,30 @@ impl ApiError {
         }
     }
 
+    const fn not_found(code: &'static str, message: &'static str) -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            code,
+            message,
+            retryable: false,
+        }
+    }
+
     const fn payload_too_large(message: &'static str) -> Self {
         Self {
             status: StatusCode::PAYLOAD_TOO_LARGE,
             code: "resource_limit",
             message,
             retryable: false,
+        }
+    }
+
+    const fn too_many_requests(message: &'static str) -> Self {
+        Self {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            code: "node_busy",
+            message,
+            retryable: true,
         }
     }
 
@@ -2180,7 +3813,8 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (
+        let retry_after = self.status == StatusCode::TOO_MANY_REQUESTS;
+        let mut response = (
             self.status,
             axum::Json(ApiErrorBody {
                 protocol_version: PROTOCOL_VERSION,
@@ -2189,7 +3823,13 @@ impl IntoResponse for ApiError {
                 retryable: self.retryable,
             }),
         )
-            .into_response()
+            .into_response();
+        if retry_after {
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+        }
+        response
     }
 }
 
@@ -2409,6 +4049,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn console_scripts_are_served_as_non_stale_javascript() {
+        let directory = TempDir::new().expect("directory");
+        let app = router(test_state(&directory));
+        for path in [
+            "/assets/app.js",
+            "/assets/pairing-flow.js",
+            "/assets/restore-plan-flow.js",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            assert_eq!(
+                response.headers()[header::CONTENT_TYPE],
+                "text/javascript; charset=utf-8",
+                "{path}"
+            );
+            assert_eq!(
+                response.headers()[header::CACHE_CONTROL],
+                "no-cache",
+                "{path}"
+            );
+            assert!(
+                !response
+                    .into_body()
+                    .collect()
+                    .await
+                    .expect("script body")
+                    .to_bytes()
+                    .is_empty(),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn cleartext_bearer_api_is_loopback_only() {
+        assert!(validate_cleartext_api_bind("127.0.0.1:8787".parse().expect("loopback")).is_ok());
+        assert!(validate_cleartext_api_bind("[::1]:8787".parse().expect("IPv6 loopback")).is_ok());
+        assert!(validate_cleartext_api_bind("0.0.0.0:8787".parse().expect("wildcard")).is_err());
+        assert!(validate_cleartext_api_bind("192.0.2.1:8787".parse().expect("network")).is_err());
+    }
+
+    #[tokio::test]
     async fn mutation_api_requires_bearer_token() {
         let directory = TempDir::new().expect("directory");
         let app = router(test_state(&directory));
@@ -2442,6 +4133,52 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn settings_import_reconfigures_live_discovery_without_restart() {
+        let directory = TempDir::new().expect("directory");
+        let state = test_state(&directory);
+        let engine = state.engine();
+        let controller = Arc::new(
+            discovery::DiscoveryController::new(false, 4433).expect("discovery controller"),
+        );
+        let app = router(state.with_discovery_controller(Arc::clone(&controller)));
+
+        for enabled in [true, false] {
+            let mut settings: serde_json::Value =
+                serde_json::from_slice(&engine.export_settings().expect("export settings"))
+                    .expect("settings JSON");
+            settings["lanDiscoveryEnabled"] = enabled.into();
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/v1/config/import")
+                        .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::json!({"confirmed": true, "settings": settings})
+                                .to_string(),
+                        ))
+                        .expect("request"),
+                )
+                .await
+                .expect("settings import response");
+            assert_eq!(response.status(), StatusCode::NO_CONTENT);
+            assert_eq!(
+                controller.is_active().expect("live discovery state"),
+                enabled
+            );
+            assert_eq!(
+                engine
+                    .config()
+                    .expect("persisted settings")
+                    .lan_discovery_enabled,
+                enabled
+            );
+        }
+    }
+
     #[test]
     fn failed_provider_activation_does_not_mutate_connection_state() {
         let directory = TempDir::new().expect("directory");
@@ -2458,6 +4195,295 @@ mod tests {
                 .lock()
                 .expect("connections")
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn abandoned_job_lease_pauses_and_ttl_evicts_staging() {
+        let directory = TempDir::new().expect("directory");
+        let state = test_state(&directory);
+        let job_id = "abandoned-job";
+        let staging = state.archive_backup_root.join(job_id);
+        fs::create_dir(&staging).expect("staging directory");
+        fs::write(staging.join("upload.part"), b"partial").expect("partial upload");
+
+        let lease = state.start_job(job_id).expect("start job");
+        drop(lease);
+        {
+            let mut jobs = state.jobs.lock().expect("jobs");
+            let entry = jobs.entries.get_mut(job_id).expect("retained job");
+            assert!(!entry.active);
+            assert_eq!(entry.control.state(), JobState::Paused);
+            entry.last_touched = UNIX_EPOCH;
+        }
+
+        state.prune_expired_jobs().expect("prune expired job");
+        assert!(state.jobs.lock().expect("jobs").entries.is_empty());
+        assert!(!staging.exists());
+    }
+
+    #[test]
+    fn full_registry_evicts_the_oldest_inactive_resumable_job() {
+        let directory = TempDir::new().expect("directory");
+        let state = test_state(&directory);
+        for index in 0..=MAX_LOCAL_JOBS {
+            let lease = state
+                .start_job(&format!("resumable-{index:04}"))
+                .expect("admit resumable job");
+            drop(lease);
+        }
+        let jobs = state.jobs.lock().expect("jobs");
+        assert_eq!(jobs.entries.len(), MAX_LOCAL_JOBS);
+        assert!(!jobs.entries.contains_key("resumable-0000"));
+        assert!(
+            jobs.entries
+                .contains_key(&format!("resumable-{MAX_LOCAL_JOBS:04}"))
+        );
+    }
+
+    #[tokio::test]
+    async fn resumable_jobs_can_be_listed_and_explicitly_discarded() {
+        let directory = TempDir::new().expect("directory");
+        let state = test_state(&directory);
+        let lease = state.start_job("paused-job").expect("start job");
+        drop(lease);
+        let app = router(state.clone());
+
+        let list = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/jobs")
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("list jobs");
+        assert_eq!(list.status(), StatusCode::OK);
+        let jobs: serde_json::Value = serde_json::from_slice(
+            &list
+                .into_body()
+                .collect()
+                .await
+                .expect("list body")
+                .to_bytes(),
+        )
+        .expect("jobs JSON");
+        assert_eq!(jobs[0]["jobId"], "paused-job");
+        assert_eq!(jobs[0]["state"], "paused");
+        assert_eq!(jobs[0]["active"], false);
+
+        let discard = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/jobs/discard")
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"jobId":"paused-job"}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("discard job");
+        assert_eq!(discard.status(), StatusCode::NO_CONTENT);
+        assert!(state.jobs.lock().expect("jobs").entries.is_empty());
+
+        let unknown = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/jobs/control")
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"jobId":"not-registered","action":"pause"}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("unknown control");
+        assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn terminal_failures_do_not_exhaust_the_job_registry() {
+        let directory = TempDir::new().expect("directory");
+        let valid_source = TempDir::new().expect("valid source");
+        fs::write(valid_source.path().join("content.txt"), b"still admitted")
+            .expect("source content");
+        let state = test_state(&directory);
+        let jobs = Arc::clone(&state.jobs);
+        let app = router(state);
+        for index in 0..=MAX_LOCAL_JOBS {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/v1/backups")
+                        .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "sourceRoot": directory.path().join("missing"),
+                                "displayName": "Invalid source",
+                                "snapshotId": format!("failed-snapshot-{index}"),
+                                "jobId": format!("failed-job-{index}"),
+                                "selectedProviderIds": []
+                            })
+                            .to_string(),
+                        ))
+                        .expect("request"),
+                )
+                .await
+                .expect("terminal response");
+            assert_ne!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        }
+        assert!(jobs.lock().expect("jobs").entries.is_empty());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/backups")
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "sourceRoot": valid_source.path(),
+                            "displayName": "Valid source",
+                            "snapshotId": "valid-after-terminal-failures",
+                            "jobId": "valid-after-terminal-failures",
+                            "selectedProviderIds": []
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("valid response");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn concurrent_storage_jobs_are_backpressured_with_retry_guidance() {
+        let directory = TempDir::new().expect("directory");
+        let state = test_state(&directory);
+        let _active_job = state.admit_engine_job().expect("first admission");
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/backups")
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "sourceRoot": directory.path(),
+                            "displayName": "Backpressured",
+                            "snapshotId": "backpressured-snapshot",
+                            "jobId": "backpressured-job",
+                            "selectedProviderIds": []
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.headers()[header::RETRY_AFTER], "1");
+        assert_contract_error(response, StatusCode::TOO_MANY_REQUESTS, "node_busy", true).await;
+    }
+
+    #[test]
+    fn archive_capacity_evicts_incomplete_jobs_but_retains_acknowledgeable_results() {
+        let directory = TempDir::new().expect("directory");
+        let state = test_state(&directory)
+            .with_archive_limits(ArchiveLimits {
+                maximum_jobs: 1,
+                ..ArchiveLimits::default()
+            })
+            .expect("archive limits");
+        let metadata = |job_id: &str| ArchiveBackupMetadata {
+            protocol_version: PROTOCOL_VERSION,
+            backup_id: None,
+            display_name: "Capacity".to_owned(),
+            snapshot_id: format!("{job_id}-snapshot"),
+            job_id: job_id.to_owned(),
+            selected_provider_ids: Vec::new(),
+        };
+
+        let first = prepare_archive_backup_job(&state, &metadata("first-job"))
+            .expect("first staging")
+            .0;
+        fs::write(first.join("upload.part"), b"partial").expect("partial upload");
+        let second = prepare_archive_backup_job(&state, &metadata("second-job"))
+            .expect("evict first staging")
+            .0;
+        assert!(!first.exists());
+        assert!(second.exists());
+
+        fs::write(
+            second.join("result.json"),
+            b"retained until acknowledgement",
+        )
+        .expect("retained result marker");
+        let error = prepare_archive_backup_job(&state, &metadata("third-job"))
+            .expect_err("completed result must not be evicted");
+        assert_eq!(error.status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(second.exists());
+    }
+
+    #[tokio::test]
+    async fn archive_upload_size_is_rejected_before_body_consumption() {
+        let directory = TempDir::new().expect("directory");
+        let state = test_state(&directory)
+            .with_archive_limits(ArchiveLimits {
+                maximum_compressed_bytes: 1 << 20,
+                maximum_uncompressed_bytes: 1 << 20,
+                free_space_reserve_bytes: 0,
+                ..ArchiveLimits::default()
+            })
+            .expect("archive limits");
+        let jobs = Arc::clone(&state.jobs);
+        let archive_root = Arc::clone(&state.archive_backup_root);
+        let metadata = URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&serde_json::json!({
+                "protocolVersion": PROTOCOL_VERSION,
+                "displayName": "Oversized",
+                "snapshotId": "oversized-snapshot",
+                "jobId": "oversized-job",
+                "selectedProviderIds": []
+            }))
+            .expect("metadata"),
+        );
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/backups/archive")
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/vnd.covalent.backup+zip")
+                    .header(ARCHIVE_METADATA_HEADER, metadata)
+                    .header(header::CONTENT_LENGTH, ((1_u64 << 20) + 1).to_string())
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_contract_error(
+            response,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "resource_limit",
+            false,
+        )
+        .await;
+        assert!(jobs.lock().expect("jobs").entries.is_empty());
+        assert_eq!(
+            fs::read_dir(archive_root.as_path())
+                .expect("staging")
+                .count(),
+            0
         );
     }
 
@@ -2567,6 +4593,10 @@ mod tests {
             .await
             .expect("preview response");
         let preview_status = preview_response.status();
+        let plan_id = preview_response.headers()[RESTORE_PLAN_ID_HEADER]
+            .to_str()
+            .expect("plan ID")
+            .to_owned();
         let preview_bytes = preview_response
             .into_body()
             .collect()
@@ -2580,20 +4610,81 @@ mod tests {
             String::from_utf8_lossy(&preview_bytes)
         );
         let plan: serde_json::Value = serde_json::from_slice(&preview_bytes).expect("preview JSON");
+        let plan_digest = plan["planDigest"].as_str().expect("plan digest").to_owned();
+        assert_eq!(plan["planId"], plan_id);
+        assert_ne!(plan_digest, plan_id);
+        assert!(plan.get("entries").is_none());
+        assert!(plan["totalEntries"].as_u64().expect("entry count") > 1);
+
+        let page_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/restores/plans/{plan_id}?limit=1"))
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("plan page response");
+        assert_eq!(page_response.status(), StatusCode::OK);
+        let page: serde_json::Value = serde_json::from_slice(
+            &page_response
+                .into_body()
+                .collect()
+                .await
+                .expect("plan page")
+                .to_bytes(),
+        )
+        .expect("plan page JSON");
+        assert_eq!(page["planId"], plan_id);
+        assert_eq!(page["planDigest"], plan_digest);
+        assert_eq!(page["entryOffset"], 0);
+        assert_eq!(page["entries"].as_array().expect("entries").len(), 1);
+        let next_cursor = page["nextCursor"]
+            .as_str()
+            .expect("opaque next cursor")
+            .to_owned();
+
+        let second_page = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/restores/plans/{plan_id}?cursor={next_cursor}&limit=1"
+                    ))
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("second plan page response");
+        assert_eq!(second_page.status(), StatusCode::OK);
 
         let restore_response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri("/api/v1/restores/execute")
                     .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
                     .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(serde_json::json!({ "plan": plan }).to_string()))
+                    .body(Body::from(
+                        serde_json::json!({ "planId": plan_id.clone() }).to_string(),
+                    ))
                     .expect("request"),
             )
             .await
             .expect("restore response");
         assert_eq!(restore_response.status(), StatusCode::OK);
+        assert_eq!(
+            restore_response.headers()[RESTORE_PLAN_ID_HEADER],
+            plan_id.as_str()
+        );
+        assert_eq!(
+            restore_response.headers()[RESTORE_PLAN_DIGEST_HEADER],
+            plan_digest.as_str()
+        );
         assert_eq!(
             fs::read(restore.join("nested/data.bin")).expect("restored file"),
             b"api vertical slice\0payload"
@@ -2606,6 +4697,7 @@ mod tests {
         let directory = TempDir::new().expect("directory");
         let state = test_state(&directory);
         let archive_root = state.archive_restore_root.clone();
+        let archive_backup_root = state.archive_backup_root.clone();
         let app = router(state);
         let expected = vec![0x5a_u8; 3 * 1_024 * 1_024];
         let mut archive = ZipWriter::new(Cursor::new(Vec::new()));
@@ -2640,13 +4732,14 @@ mod tests {
                     .uri("/api/v1/backups/archive")
                     .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
                     .header(header::CONTENT_TYPE, "application/vnd.covalent.backup+zip")
-                    .header(ARCHIVE_METADATA_HEADER, metadata)
-                    .body(Body::from(archive))
+                    .header(ARCHIVE_METADATA_HEADER, metadata.clone())
+                    .body(Body::from(archive.clone()))
                     .expect("request"),
             )
             .await
             .expect("backup response");
         let status = backup_response.status();
+        assert_eq!(backup_response.headers()[JOB_ACK_REQUIRED_HEADER], "true");
         let backup_bytes = backup_response
             .into_body()
             .collect()
@@ -2660,6 +4753,32 @@ mod tests {
             String::from_utf8_lossy(&backup_bytes)
         );
         let backup: serde_json::Value = serde_json::from_slice(&backup_bytes).expect("backup JSON");
+
+        let backup_retry = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/backups/archive")
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/vnd.covalent.backup+zip")
+                    .header(ARCHIVE_METADATA_HEADER, metadata)
+                    .body(Body::from(archive))
+                    .expect("retry request"),
+            )
+            .await
+            .expect("backup retry response");
+        assert_eq!(backup_retry.status(), StatusCode::OK);
+        assert_eq!(backup_retry.headers()[JOB_ACK_REQUIRED_HEADER], "true");
+        assert_eq!(
+            backup_retry
+                .into_body()
+                .collect()
+                .await
+                .expect("backup retry body")
+                .to_bytes(),
+            backup_bytes
+        );
 
         let list_response = app
             .clone()
@@ -2707,6 +4826,10 @@ mod tests {
             .await
             .expect("preview response");
         assert_eq!(preview_response.status(), StatusCode::OK);
+        let plan_id = preview_response.headers()[RESTORE_PLAN_ID_HEADER]
+            .to_str()
+            .expect("plan ID")
+            .to_owned();
         let plan: serde_json::Value = serde_json::from_slice(
             &preview_response
                 .into_body()
@@ -2716,6 +4839,9 @@ mod tests {
                 .to_bytes(),
         )
         .expect("preview JSON");
+        let plan_digest = plan["planDigest"].as_str().expect("plan digest").to_owned();
+        assert_eq!(plan["planId"], plan_id);
+        assert_ne!(plan_digest, plan_id);
         assert!(
             !plan["authorizedRoot"]
                 .as_str()
@@ -2724,13 +4850,16 @@ mod tests {
         );
 
         let restore_response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri("/api/v1/restores/archive/execute")
                     .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
                     .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(serde_json::json!({ "plan": plan }).to_string()))
+                    .body(Body::from(
+                        serde_json::json!({ "planId": plan_id.clone() }).to_string(),
+                    ))
                     .expect("request"),
             )
             .await
@@ -2741,12 +4870,55 @@ mod tests {
                 .headers()
                 .contains_key(ARCHIVE_RESULT_HEADER)
         );
+        assert_eq!(restore_response.headers()[JOB_ACK_REQUIRED_HEADER], "true");
+        assert_eq!(
+            restore_response.headers()[RESTORE_PLAN_ID_HEADER],
+            plan_id.as_str()
+        );
+        assert_eq!(
+            restore_response.headers()[RESTORE_PLAN_DIGEST_HEADER],
+            plan_digest.as_str()
+        );
         let restored_archive = restore_response
             .into_body()
             .collect()
             .await
             .expect("restore archive")
             .to_bytes();
+
+        let restore_retry = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/restores/archive/execute")
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "planId": plan_id.clone() }).to_string(),
+                    ))
+                    .expect("retry request"),
+            )
+            .await
+            .expect("restore retry response");
+        assert_eq!(restore_retry.status(), StatusCode::OK);
+        assert_eq!(restore_retry.headers()[JOB_ACK_REQUIRED_HEADER], "true");
+        assert_eq!(
+            restore_retry.headers()[RESTORE_PLAN_ID_HEADER],
+            plan_id.as_str()
+        );
+        assert_eq!(
+            restore_retry.headers()[RESTORE_PLAN_DIGEST_HEADER],
+            plan_digest.as_str()
+        );
+        let restored_archive_retry = restore_retry
+            .into_body()
+            .collect()
+            .await
+            .expect("restore retry archive")
+            .to_bytes();
+        assert_eq!(restored_archive_retry, restored_archive);
+
         let mut restored = ZipArchive::new(Cursor::new(restored_archive)).expect("restore ZIP");
         let mut file = restored
             .by_name("Documents/large.bin")
@@ -2754,6 +4926,36 @@ mod tests {
         let mut actual = Vec::new();
         file.read_to_end(&mut actual).expect("restored content");
         assert_eq!(actual, expected);
+        assert!(
+            archive_root
+                .join("android-saf-restore-job/result.zip")
+                .is_file()
+        );
+        assert!(
+            archive_backup_root
+                .join("android-saf-backup-job/result.json")
+                .is_file()
+        );
+
+        for job_id in ["android-saf-restore-job", "android-saf-backup-job"] {
+            let acknowledge = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/v1/jobs/acknowledge")
+                        .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::json!({ "jobId": job_id }).to_string(),
+                        ))
+                        .expect("request"),
+                )
+                .await
+                .expect("acknowledge response");
+            assert_eq!(acknowledge.status(), StatusCode::NO_CONTENT);
+        }
         assert!(!archive_root.join("android-saf-restore-job").exists());
+        assert!(!archive_backup_root.join("android-saf-backup-job").exists());
     }
 }

@@ -1,6 +1,6 @@
 //! Authenticated, pinned-certificate QUIC encrypted-object transport.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -11,20 +11,50 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use covalent_core::{ChunkProvider, CoreError, Engine, ProviderHealth, PublicIdentity};
-use covalent_protocol::{DeviceId, MAX_FRAME_BYTES, PROTOCOL_VERSION, PeerRole, SignedRoster};
-use quinn::{ClientConfig, Endpoint, ServerConfig, TransportConfig, VarInt};
+use covalent_protocol::{DeviceId, PeerRole, SignedRoster};
+use quinn::{
+    ClientConfig, ConnectionError, Endpoint, ServerConfig, TransportConfig, TransportErrorCode,
+    VarInt,
+};
 use rand_core::{OsRng, RngCore};
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use zeroize::Zeroizing;
 
-const ALPN: &[u8] = b"covalent/1";
-const TRANSPORT_SIGNATURE_DOMAIN: &[u8] = b"covalent/authenticated-quic/v1";
+/// Version of the authenticated, two-frame QUIC storage transport.
+///
+/// This is intentionally independent from the local HTTP/archive API version.
+pub const QUIC_TRANSPORT_VERSION: u16 = 2;
+const ALPN: &[u8] = b"covalent-quic/2";
+const TRANSPORT_SIGNATURE_DOMAIN: &[u8] = b"covalent/authenticated-quic/v2";
+const TLS_ALERT_NO_APPLICATION_PROTOCOL: u8 = 0x78;
 const MAX_REPLAY_NONCES_PER_PEER: usize = 4_096;
 const MAX_REQUEST_CLOCK_SKEW: Duration = Duration::from_secs(5 * 60);
 const MAX_PROVIDER_RECORD_BYTES: usize = 8 * 1_024 * 1_024 + 128;
-const MAX_REQUESTS_PER_PEER_WINDOW: u32 = 512;
-const REQUEST_RATE_WINDOW: Duration = Duration::from_secs(60);
+const MAX_HELLO_FRAME_BYTES: usize = 8 * 1_024;
+const MAX_OPERATION_FRAME_BYTES: usize = 12 * 1_024 * 1_024;
+const MAX_RESPONSE_FRAME_BYTES: usize = 12 * 1_024 * 1_024;
+const MAX_GLOBAL_CONNECTIONS: usize = 64;
+const MAX_CONNECTIONS_PER_SOURCE: usize = 8;
+const MAX_GLOBAL_STREAMS: usize = 256;
+const MAX_BLOCKING_OPERATIONS: usize = 16;
+const CONNECTION_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+const STREAM_OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
+const PEER_REQUEST_BURST: f64 = 4_096.0;
+const PEER_REQUESTS_PER_SECOND: f64 = 256.0;
+const PEER_BYTE_BURST: f64 = 512.0 * 1_024.0 * 1_024.0;
+const PEER_BYTES_PER_SECOND: f64 = 256.0 * 1_024.0 * 1_024.0;
+const TLS_IDENTITY_SCHEMA_VERSION: u16 = 1;
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PersistedTlsIdentity {
+    schema_version: u16,
+    certificate_der: String,
+    private_key_der: String,
+}
 
 /// Stable self-signed TLS certificate persisted independently from app identity.
 pub struct TlsIdentity {
@@ -52,70 +82,138 @@ impl TlsIdentity {
                 },
             )?;
         }
+        let bundle_path = directory.join("identity.json");
+        if bundle_path.exists() {
+            return Self::load_bundle(&bundle_path);
+        }
+
         let certificate_path = directory.join("certificate.der");
         let key_path = directory.join("private-key.der");
-        match (
+        let legacy = match (
             fs::symlink_metadata(&certificate_path),
             fs::symlink_metadata(&key_path),
         ) {
-            (Ok(certificate), Ok(key)) => {
-                if certificate.file_type().is_symlink()
-                    || key.file_type().is_symlink()
-                    || !certificate.is_file()
-                    || !key.is_file()
-                    || certificate.len() > 64 * 1_024
-                    || key.len() > 64 * 1_024
-                {
-                    return Err(CoreError::InvalidState(
-                        "invalid QUIC identity files".to_owned(),
-                    ));
-                }
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    if key.permissions().mode() & 0o077 != 0 {
-                        return Err(CoreError::InvalidState(
-                            "QUIC private key permissions are too broad".to_owned(),
-                        ));
-                    }
-                }
-                Ok(Self {
-                    certificate_der: fs::read(&certificate_path).map_err(|source| {
-                        CoreError::Io {
-                            operation: "read QUIC certificate",
-                            path: certificate_path,
-                            source,
-                        }
-                    })?,
-                    private_key_der: Zeroizing::new(fs::read(&key_path).map_err(|source| {
-                        CoreError::Io {
-                            operation: "read QUIC private key",
-                            path: key_path,
-                            source,
-                        }
-                    })?),
-                })
-            }
+            (Ok(certificate), Ok(key)) => Some(Self::load_legacy(
+                certificate_path,
+                certificate,
+                key_path,
+                key,
+            )?),
             (Err(certificate_error), Err(key_error))
                 if certificate_error.kind() == std::io::ErrorKind::NotFound
                     && key_error.kind() == std::io::ErrorKind::NotFound =>
             {
-                let generated = rcgen::generate_simple_self_signed(vec!["covalent.local".into()])
-                    .map_err(|error| {
-                    CoreError::InvalidState(format!("generate QUIC certificate: {error}"))
-                })?;
-                let identity = Self {
-                    certificate_der: generated.cert.der().to_vec(),
-                    private_key_der: Zeroizing::new(generated.signing_key.serialize_der()),
-                };
-                persist_private(&certificate_path, &identity.certificate_der, false)?;
-                persist_private(&key_path, identity.private_key_der.as_ref(), true)?;
-                Ok(identity)
+                None
             }
-            _ => Err(CoreError::InvalidState(
-                "incomplete QUIC identity files".to_owned(),
-            )),
+            // A first-run interruption may leave one legacy file. It never formed a
+            // publishable identity, so recovery creates a complete atomic bundle.
+            (Ok(_), Err(key_error)) if key_error.kind() == std::io::ErrorKind::NotFound => None,
+            (Err(certificate_error), Ok(_))
+                if certificate_error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                None
+            }
+            (_, _) => {
+                return Err(CoreError::InvalidState(
+                    "invalid QUIC identity files".to_owned(),
+                ));
+            }
+        };
+        let identity = match legacy {
+            Some(identity) => identity,
+            None => Self::generate()?,
+        };
+        identity.persist_bundle(&bundle_path)?;
+        Ok(identity)
+    }
+
+    fn generate() -> Result<Self, CoreError> {
+        let generated =
+            rcgen::generate_simple_self_signed(vec!["covalent.local".into()]).map_err(|error| {
+                CoreError::InvalidState(format!("generate QUIC certificate: {error}"))
+            })?;
+        Ok(Self {
+            certificate_der: generated.cert.der().to_vec(),
+            private_key_der: Zeroizing::new(generated.signing_key.serialize_der()),
+        })
+    }
+
+    fn load_bundle(path: &Path) -> Result<Self, CoreError> {
+        let metadata = fs::symlink_metadata(path).map_err(|source| CoreError::Io {
+            operation: "inspect QUIC identity bundle",
+            path: path.to_path_buf(),
+            source,
+        })?;
+        validate_private_identity_file(&metadata, 256 * 1_024)?;
+        let bytes = fs::read(path).map_err(|source| CoreError::Io {
+            operation: "read QUIC identity bundle",
+            path: path.to_path_buf(),
+            source,
+        })?;
+        let bundle: PersistedTlsIdentity = serde_json::from_slice(&bytes)?;
+        if bundle.schema_version != TLS_IDENTITY_SCHEMA_VERSION {
+            return Err(CoreError::InvalidState(
+                "unsupported QUIC identity schema".to_owned(),
+            ));
         }
+        let certificate_der = URL_SAFE_NO_PAD
+            .decode(bundle.certificate_der)
+            .map_err(|_| CoreError::InvalidKeyMaterial)?;
+        let private_key_der = URL_SAFE_NO_PAD
+            .decode(bundle.private_key_der)
+            .map_err(|_| CoreError::InvalidKeyMaterial)?;
+        let identity = Self {
+            certificate_der,
+            private_key_der: Zeroizing::new(private_key_der),
+        };
+        identity.validate()?;
+        Ok(identity)
+    }
+
+    fn load_legacy(
+        certificate_path: PathBuf,
+        certificate: fs::Metadata,
+        key_path: PathBuf,
+        key: fs::Metadata,
+    ) -> Result<Self, CoreError> {
+        validate_identity_file(&certificate, 64 * 1_024)?;
+        validate_private_identity_file(&key, 64 * 1_024)?;
+        let identity = Self {
+            certificate_der: fs::read(&certificate_path).map_err(|source| CoreError::Io {
+                operation: "read QUIC certificate",
+                path: certificate_path,
+                source,
+            })?,
+            private_key_der: Zeroizing::new(fs::read(&key_path).map_err(|source| {
+                CoreError::Io {
+                    operation: "read QUIC private key",
+                    path: key_path,
+                    source,
+                }
+            })?),
+        };
+        identity.validate()?;
+        Ok(identity)
+    }
+
+    fn persist_bundle(&self, path: &Path) -> Result<(), CoreError> {
+        let bytes = serde_json::to_vec(&PersistedTlsIdentity {
+            schema_version: TLS_IDENTITY_SCHEMA_VERSION,
+            certificate_der: URL_SAFE_NO_PAD.encode(&self.certificate_der),
+            private_key_der: URL_SAFE_NO_PAD.encode(&self.private_key_der[..]),
+        })?;
+        persist_private(path, &bytes, true)
+    }
+
+    fn validate(&self) -> Result<(), CoreError> {
+        if self.certificate_der.is_empty()
+            || self.certificate_der.len() > 64 * 1_024
+            || self.private_key_der.is_empty()
+            || self.private_key_der.len() > 64 * 1_024
+        {
+            return Err(CoreError::InvalidKeyMaterial);
+        }
+        self.server_config().map(|_| ())
     }
 
     /// DER certificate used in pairing and pinning.
@@ -131,13 +229,17 @@ impl TlsIdentity {
     }
 
     fn server_config(&self) -> Result<ServerConfig, CoreError> {
+        self.server_config_with_alpn(ALPN)
+    }
+
+    fn server_config_with_alpn(&self, alpn: &[u8]) -> Result<ServerConfig, CoreError> {
         let certificate = CertificateDer::from(self.certificate_der.clone());
         let key = PrivatePkcs8KeyDer::from(self.private_key_der.to_vec());
         let mut crypto = rustls::ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(vec![certificate], key.into())
             .map_err(|error| CoreError::InvalidState(format!("configure QUIC TLS: {error}")))?;
-        crypto.alpn_protocols = vec![ALPN.to_vec()];
+        crypto.alpn_protocols = vec![alpn.to_vec()];
         let quic_crypto = quinn::crypto::rustls::QuicServerConfig::try_from(crypto)
             .map_err(|error| CoreError::InvalidState(format!("configure QUIC crypto: {error}")))?;
         let mut config = ServerConfig::with_crypto(Arc::new(quic_crypto));
@@ -163,6 +265,10 @@ pub struct QuicNode {
     certificate_fingerprint: String,
     replay_window: Arc<Mutex<ReplayWindow>>,
     rate_limiter: Arc<Mutex<PeerRateLimiter>>,
+    connection_limit: Arc<Semaphore>,
+    stream_limit: Arc<Semaphore>,
+    blocking_limit: Arc<Semaphore>,
+    source_connections: Arc<Mutex<BTreeMap<IpAddr, usize>>>,
 }
 
 impl QuicNode {
@@ -186,6 +292,10 @@ impl QuicNode {
             certificate_fingerprint: tls_identity.certificate_fingerprint(),
             replay_window: Arc::new(Mutex::new(ReplayWindow::default())),
             rate_limiter: Arc::new(Mutex::new(PeerRateLimiter::default())),
+            connection_limit: Arc::new(Semaphore::new(MAX_GLOBAL_CONNECTIONS)),
+            stream_limit: Arc::new(Semaphore::new(MAX_GLOBAL_STREAMS)),
+            blocking_limit: Arc::new(Semaphore::new(MAX_BLOCKING_OPERATIONS)),
+            source_connections: Arc::new(Mutex::new(BTreeMap::new())),
         })
     }
 
@@ -201,16 +311,39 @@ impl QuicNode {
     /// Accepts connections until the endpoint is closed or the task is cancelled.
     pub async fn run(self) {
         while let Some(incoming) = self.endpoint.accept().await {
+            if !incoming.remote_address_validated() {
+                let _ = incoming.retry();
+                continue;
+            }
+            let remote_ip = incoming.remote_address().ip();
+            let Some(source_permit) = SourceConnectionPermit::try_acquire(
+                Arc::clone(&self.source_connections),
+                remote_ip,
+            ) else {
+                incoming.refuse();
+                continue;
+            };
+            let Ok(connection_permit) = Arc::clone(&self.connection_limit).try_acquire_owned()
+            else {
+                incoming.refuse();
+                continue;
+            };
             let engine = Arc::clone(&self.engine);
             let fingerprint = self.certificate_fingerprint.clone();
             let replay_window = Arc::clone(&self.replay_window);
             let rate_limiter = Arc::clone(&self.rate_limiter);
+            let stream_limit = Arc::clone(&self.stream_limit);
+            let blocking_limit = Arc::clone(&self.blocking_limit);
             tokio::spawn(async move {
-                let Ok(connection) = incoming.await else {
+                let _connection_permit = connection_permit;
+                let _source_permit = source_permit;
+                let Ok(Ok(connection)) =
+                    tokio::time::timeout(CONNECTION_HANDSHAKE_TIMEOUT, incoming).await
+                else {
                     return;
                 };
                 loop {
-                    let streams = match connection.accept_bi().await {
+                    let mut streams = match connection.accept_bi().await {
                         Ok(streams) => streams,
                         Err(_) => break,
                     };
@@ -218,18 +351,61 @@ impl QuicNode {
                     let fingerprint = fingerprint.clone();
                     let replay_window = Arc::clone(&replay_window);
                     let rate_limiter = Arc::clone(&rate_limiter);
+                    let Ok(stream_permit) = Arc::clone(&stream_limit).try_acquire_owned() else {
+                        streams.0.reset(VarInt::from_u32(1)).ok();
+                        streams.1.stop(VarInt::from_u32(1)).ok();
+                        continue;
+                    };
+                    let blocking_limit = Arc::clone(&blocking_limit);
                     tokio::spawn(async move {
-                        let _ = handle_stream(
-                            streams,
-                            engine,
-                            &fingerprint,
-                            replay_window,
-                            rate_limiter,
+                        let _stream_permit = stream_permit;
+                        let _ = tokio::time::timeout(
+                            STREAM_OPERATION_TIMEOUT,
+                            handle_stream(
+                                streams,
+                                engine,
+                                &fingerprint,
+                                replay_window,
+                                rate_limiter,
+                                blocking_limit,
+                            ),
                         )
                         .await;
                     });
                 }
             });
+        }
+    }
+}
+
+struct SourceConnectionPermit {
+    counts: Arc<Mutex<BTreeMap<IpAddr, usize>>>,
+    source: IpAddr,
+}
+
+impl SourceConnectionPermit {
+    fn try_acquire(counts: Arc<Mutex<BTreeMap<IpAddr, usize>>>, source: IpAddr) -> Option<Self> {
+        {
+            let mut guard = counts.lock().ok()?;
+            let count = guard.entry(source).or_default();
+            if *count >= MAX_CONNECTIONS_PER_SOURCE {
+                return None;
+            }
+            *count += 1;
+        }
+        Some(Self { counts, source })
+    }
+}
+
+impl Drop for SourceConnectionPermit {
+    fn drop(&mut self) {
+        if let Ok(mut counts) = self.counts.lock()
+            && let Some(count) = counts.get_mut(&self.source)
+        {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                counts.remove(&self.source);
+            }
         }
     }
 }
@@ -308,9 +484,7 @@ impl QuicProvider {
         let connection = tokio::time::timeout(self.request_timeout, connecting)
             .await
             .map_err(|_| CoreError::ResourceLimit("QUIC connection timeout"))?
-            .map_err(|error| {
-                CoreError::InvalidState(format!("complete QUIC connection: {error}"))
-            })?;
+            .map_err(map_quic_connection_error)?;
         *state = Some(QuicClientState {
             _endpoint: endpoint,
             connection: connection.clone(),
@@ -323,6 +497,9 @@ impl QuicProvider {
             CoreError::InvalidState("local engine is no longer available".to_owned())
         })?;
         let operation_bytes = serde_json::to_vec(&operation)?;
+        if operation_bytes.len() > MAX_OPERATION_FRAME_BYTES {
+            return Err(CoreError::ResourceLimit("QUIC operation frame"));
+        }
         let operation_digest = blake3::hash(&operation_bytes).to_hex().to_string();
         let mut nonce = [0_u8; 24];
         OsRng.fill_bytes(&mut nonce);
@@ -331,35 +508,37 @@ impl QuicProvider {
             blake3::hash(&self.remote_certificate).to_hex().to_string();
         let mut hello = ClientHello {
             device_id: local_engine.device_id(),
-            minimum_protocol_version: PROTOCOL_VERSION,
-            maximum_protocol_version: PROTOCOL_VERSION,
+            minimum_transport_version: QUIC_TRANSPORT_VERSION,
+            maximum_transport_version: QUIC_TRANSPORT_VERSION,
             issued_at_unix_ms: current_unix_ms()?,
             nonce,
             expected_certificate_fingerprint,
+            operation_type: operation.kind(),
+            operation_bytes: operation_bytes.len() as u64,
             operation_digest,
             signature: String::new(),
         };
-        hello.signature = local_engine.sign_transport_transcript(&client_hello_bytes(&hello)?);
+        hello.signature = local_engine.sign_transport_transcript_with_domain(
+            TRANSPORT_SIGNATURE_DOMAIN,
+            &client_hello_bytes(&hello)?,
+        );
         let request = WireRequest { hello, operation };
-        let request_bytes = serde_json::to_vec(&request)?;
-        if request_bytes.len() > MAX_FRAME_BYTES {
-            return Err(CoreError::ResourceLimit("QUIC request frame"));
-        }
-
         let connection = self.connection().await?;
         let (mut send, mut receive) = connection
             .open_bi()
             .await
             .map_err(|error| CoreError::InvalidState(format!("open QUIC stream: {error}")))?;
-        send.write_all(&request_bytes)
-            .await
-            .map_err(|error| CoreError::InvalidState(format!("write QUIC request: {error}")))?;
-        send.finish()
-            .map_err(|error| CoreError::InvalidState(format!("finish QUIC request: {error}")))?;
-        let response_bytes = receive
-            .read_to_end(MAX_FRAME_BYTES)
-            .await
-            .map_err(|error| CoreError::InvalidState(format!("read QUIC response: {error}")))?;
+        let hello_bytes = serde_json::to_vec(&request.hello)?;
+        let response_bytes = tokio::time::timeout(self.request_timeout, async {
+            write_frame(&mut send, &hello_bytes).await?;
+            write_frame(&mut send, &operation_bytes).await?;
+            send.finish().map_err(|error| {
+                CoreError::InvalidState(format!("finish QUIC request: {error}"))
+            })?;
+            read_frame(&mut receive, MAX_RESPONSE_FRAME_BYTES).await
+        })
+        .await
+        .map_err(|_| CoreError::ResourceLimit("QUIC operation timeout"))??;
         let response: WireResponse = serde_json::from_slice(&response_bytes)?;
         let remote_certificate_fingerprint = blake3::hash(&self.remote_certificate).to_hex();
         verify_server_response(
@@ -376,6 +555,7 @@ impl QuicProvider {
                 Some("peer_revoked") => CoreError::PeerRevoked,
                 Some("not_authorized") => CoreError::UnselectedProvider,
                 Some("resource_limit") => CoreError::ResourceLimit("remote provider"),
+                Some("protocol_incompatible") => CoreError::ProtocolNegotiationFailed,
                 _ => CoreError::AuthenticationFailed,
             })
         }
@@ -413,6 +593,24 @@ fn quic_runtime() -> Result<&'static tokio::runtime::Runtime, CoreError> {
             "create shared QUIC runtime: {error}"
         ))),
     }
+}
+
+fn map_quic_connection_error(error: ConnectionError) -> CoreError {
+    let no_application_protocol = TransportErrorCode::crypto(TLS_ALERT_NO_APPLICATION_PROTOCOL);
+    if matches!(error, ConnectionError::VersionMismatch)
+        || matches!(
+            &error,
+            ConnectionError::TransportError(error) if error.code == no_application_protocol
+        )
+        || matches!(
+            &error,
+            ConnectionError::ConnectionClosed(error)
+                if error.error_code == no_application_protocol
+        )
+    {
+        return CoreError::ProtocolNegotiationFailed;
+    }
+    CoreError::InvalidState(format!("complete QUIC connection: {error}"))
 }
 
 impl fmt::Debug for QuicProvider {
@@ -482,11 +680,13 @@ impl ChunkProvider for QuicProvider {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ClientHello {
     device_id: DeviceId,
-    minimum_protocol_version: u16,
-    maximum_protocol_version: u16,
+    minimum_transport_version: u16,
+    maximum_transport_version: u16,
     issued_at_unix_ms: u64,
     nonce: String,
     expected_certificate_fingerprint: String,
+    operation_type: OperationType,
+    operation_bytes: u64,
     operation_digest: String,
     signature: String,
 }
@@ -495,7 +695,7 @@ struct ClientHello {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ServerHello {
     device_id: DeviceId,
-    negotiated_protocol_version: u16,
+    negotiated_transport_version: u16,
     request_nonce: String,
     response_nonce: String,
     certificate_fingerprint: String,
@@ -529,6 +729,28 @@ enum Operation {
     SubmitRoster { roster: SignedRoster },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum OperationType {
+    Put,
+    Get,
+    Contains,
+    GetRoster,
+    SubmitRoster,
+}
+
+impl Operation {
+    const fn kind(&self) -> OperationType {
+        match self {
+            Self::Put { .. } => OperationType::Put,
+            Self::Get { .. } => OperationType::Get,
+            Self::Contains { .. } => OperationType::Contains,
+            Self::GetRoster => OperationType::GetRoster,
+            Self::SubmitRoster { .. } => OperationType::SubmitRoster,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum ResponsePayload {
@@ -553,23 +775,93 @@ struct ReplayWindow {
 
 #[derive(Default)]
 struct PeerRateLimiter {
-    windows: std::collections::BTreeMap<DeviceId, (Instant, u32)>,
+    peers: BTreeMap<DeviceId, PeerBudget>,
+}
+
+struct PeerBudget {
+    request_tokens: f64,
+    byte_tokens: f64,
+    last_refill: Instant,
+}
+
+impl PeerBudget {
+    fn new(now: Instant) -> Self {
+        Self {
+            request_tokens: PEER_REQUEST_BURST,
+            byte_tokens: PEER_BYTE_BURST,
+            last_refill: now,
+        }
+    }
+
+    fn refill(&mut self, now: Instant) {
+        let elapsed = now
+            .saturating_duration_since(self.last_refill)
+            .as_secs_f64();
+        self.request_tokens =
+            (self.request_tokens + elapsed * PEER_REQUESTS_PER_SECOND).min(PEER_REQUEST_BURST);
+        self.byte_tokens =
+            (self.byte_tokens + elapsed * PEER_BYTES_PER_SECOND).min(PEER_BYTE_BURST);
+        self.last_refill = now;
+    }
 }
 
 impl PeerRateLimiter {
-    fn check(&mut self, peer_id: DeviceId, now: Instant) -> bool {
-        self.windows.retain(|_, (started, _)| {
-            now.saturating_duration_since(*started) < REQUEST_RATE_WINDOW
+    fn admission_delay(
+        &mut self,
+        peer_id: DeviceId,
+        bytes: usize,
+        charge_request: bool,
+        now: Instant,
+    ) -> Option<Duration> {
+        self.peers.retain(|_, budget| {
+            now.saturating_duration_since(budget.last_refill) < Duration::from_secs(10 * 60)
         });
-        let entry = self.windows.entry(peer_id).or_insert((now, 0));
-        if now.saturating_duration_since(entry.0) >= REQUEST_RATE_WINDOW {
-            *entry = (now, 0);
+        let budget = self
+            .peers
+            .entry(peer_id)
+            .or_insert_with(|| PeerBudget::new(now));
+        budget.refill(now);
+        let byte_cost = bytes as f64;
+        let request_delay = if charge_request && budget.request_tokens < 1.0 {
+            (1.0 - budget.request_tokens) / PEER_REQUESTS_PER_SECOND
+        } else {
+            0.0
+        };
+        let byte_delay = if budget.byte_tokens < byte_cost {
+            (byte_cost - budget.byte_tokens) / PEER_BYTES_PER_SECOND
+        } else {
+            0.0
+        };
+        let delay = request_delay.max(byte_delay);
+        if delay > 0.0 {
+            return Some(Duration::from_secs_f64(delay));
         }
-        if entry.1 >= MAX_REQUESTS_PER_PEER_WINDOW {
-            return false;
+        if charge_request {
+            budget.request_tokens -= 1.0;
         }
-        entry.1 += 1;
-        true
+        budget.byte_tokens -= byte_cost;
+        None
+    }
+}
+
+async fn wait_for_peer_budget(
+    rate_limiter: &Mutex<PeerRateLimiter>,
+    peer_id: DeviceId,
+    bytes: usize,
+    charge_request: bool,
+) -> Result<(), CoreError> {
+    if bytes as f64 > PEER_BYTE_BURST {
+        return Err(CoreError::ResourceLimit("peer byte burst"));
+    }
+    loop {
+        let delay = rate_limiter
+            .lock()
+            .map_err(|_| CoreError::Synchronization)?
+            .admission_delay(peer_id, bytes, charge_request, Instant::now());
+        let Some(delay) = delay else {
+            return Ok(());
+        };
+        tokio::time::sleep(delay.max(Duration::from_millis(1))).await;
     }
 }
 
@@ -589,39 +881,93 @@ impl ReplayWindow {
     }
 }
 
+async fn write_frame(send: &mut quinn::SendStream, bytes: &[u8]) -> Result<(), CoreError> {
+    let length =
+        u32::try_from(bytes.len()).map_err(|_| CoreError::ResourceLimit("QUIC frame length"))?;
+    send.write_u32(length)
+        .await
+        .map_err(|_| CoreError::AuthenticationFailed)?;
+    send.write_all(bytes)
+        .await
+        .map_err(|_| CoreError::AuthenticationFailed)
+}
+
+async fn read_frame(receive: &mut quinn::RecvStream, maximum: usize) -> Result<Vec<u8>, CoreError> {
+    let length = receive
+        .read_u32()
+        .await
+        .map_err(|_| CoreError::AuthenticationFailed)? as usize;
+    if length == 0 || length > maximum {
+        return Err(CoreError::ResourceLimit("QUIC frame"));
+    }
+    let mut bytes = vec![0_u8; length];
+    receive
+        .read_exact(&mut bytes)
+        .await
+        .map_err(|_| CoreError::AuthenticationFailed)?;
+    Ok(bytes)
+}
+
 async fn handle_stream(
     (mut send, mut receive): (quinn::SendStream, quinn::RecvStream),
     engine: Arc<Engine>,
     certificate_fingerprint: &str,
     replay_window: Arc<Mutex<ReplayWindow>>,
     rate_limiter: Arc<Mutex<PeerRateLimiter>>,
+    blocking_limit: Arc<Semaphore>,
 ) -> Result<(), CoreError> {
-    let request_bytes = receive
-        .read_to_end(MAX_FRAME_BYTES)
-        .await
-        .map_err(|_| CoreError::ResourceLimit("QUIC request frame"))?;
-    let request: WireRequest = serde_json::from_slice(&request_bytes)?;
-    verify_client_request(
-        &request,
-        &engine,
-        certificate_fingerprint,
-        &replay_window,
+    let hello_bytes = read_frame(&mut receive, MAX_HELLO_FRAME_BYTES).await?;
+    let hello: ClientHello = serde_json::from_slice(&hello_bytes)?;
+    authenticate_client_hello(&hello, &engine, certificate_fingerprint, &replay_window)?;
+    let operation_bytes = usize::try_from(hello.operation_bytes)
+        .map_err(|_| CoreError::ResourceLimit("QUIC operation frame"))?;
+    wait_for_peer_budget(
         &rate_limiter,
-    )?;
-    let (ok, payload, error_code) = process_operation(&request.operation, &engine);
+        hello.device_id,
+        hello_bytes.len().saturating_add(operation_bytes),
+        true,
+    )
+    .await?;
+    // Authenticate and pace first, then bound the number of streams allowed to allocate a
+    // large operation/response frame. Retain the permit through the response write so an
+    // authorized peer cannot multiply the frame ceiling by the global stream count.
+    let permit = blocking_limit
+        .acquire_owned()
+        .await
+        .map_err(|_| CoreError::ResourceLimit("QUIC storage workers"))?;
+    let operation_bytes = read_frame(&mut receive, MAX_OPERATION_FRAME_BYTES).await?;
+    if operation_bytes.len() as u64 != hello.operation_bytes
+        || blake3::hash(&operation_bytes).to_hex().as_str() != hello.operation_digest
+    {
+        return Err(CoreError::AuthenticationFailed);
+    }
+    let operation: Operation = serde_json::from_slice(&operation_bytes)?;
+    if operation.kind() != hello.operation_type {
+        return Err(CoreError::AuthenticationFailed);
+    }
+    let worker_engine = Arc::clone(&engine);
+    let (permit, (ok, payload, error_code)) = tokio::task::spawn_blocking(move || {
+        (permit, process_operation(&operation, &worker_engine))
+    })
+    .await
+    .map_err(|_| CoreError::InvalidState("QUIC storage worker failed".to_owned()))?;
+    let _permit: OwnedSemaphorePermit = permit;
     let payload_digest = response_payload_digest(ok, &payload, error_code.as_deref())?;
     let mut response_nonce = [0_u8; 24];
     OsRng.fill_bytes(&mut response_nonce);
     let mut server_hello = ServerHello {
         device_id: engine.device_id(),
-        negotiated_protocol_version: PROTOCOL_VERSION,
-        request_nonce: request.hello.nonce.clone(),
+        negotiated_transport_version: QUIC_TRANSPORT_VERSION,
+        request_nonce: hello.nonce.clone(),
         response_nonce: URL_SAFE_NO_PAD.encode(response_nonce),
         certificate_fingerprint: certificate_fingerprint.to_owned(),
         response_digest: payload_digest,
         signature: String::new(),
     };
-    server_hello.signature = engine.sign_transport_transcript(&server_hello_bytes(&server_hello)?);
+    server_hello.signature = engine.sign_transport_transcript_with_domain(
+        TRANSPORT_SIGNATURE_DOMAIN,
+        &server_hello_bytes(&server_hello)?,
+    );
     let response = WireResponse {
         ok,
         payload,
@@ -629,67 +975,74 @@ async fn handle_stream(
         server_hello,
     };
     let bytes = serde_json::to_vec(&response)?;
-    if bytes.len() > MAX_FRAME_BYTES {
+    if bytes.len() > MAX_RESPONSE_FRAME_BYTES {
         return Err(CoreError::ResourceLimit("QUIC response frame"));
     }
-    send.write_all(&bytes)
-        .await
-        .map_err(|_| CoreError::AuthenticationFailed)?;
+    wait_for_peer_budget(&rate_limiter, hello.device_id, bytes.len(), false).await?;
+    write_frame(&mut send, &bytes).await?;
     send.finish().map_err(|_| CoreError::AuthenticationFailed)
 }
 
-fn verify_client_request(
-    request: &WireRequest,
+fn authenticate_client_hello(
+    hello: &ClientHello,
     engine: &Engine,
     certificate_fingerprint: &str,
     replay_window: &Mutex<ReplayWindow>,
-    rate_limiter: &Mutex<PeerRateLimiter>,
 ) -> Result<(), CoreError> {
-    if request.hello.minimum_protocol_version > PROTOCOL_VERSION
-        || request.hello.maximum_protocol_version < PROTOCOL_VERSION
-        || request.hello.expected_certificate_fingerprint != certificate_fingerprint
-        || request.hello.operation_digest
-            != blake3::hash(&serde_json::to_vec(&request.operation)?)
-                .to_hex()
-                .to_string()
+    negotiate_transport_version(
+        hello.minimum_transport_version,
+        hello.maximum_transport_version,
+    )?;
+    if hello.expected_certificate_fingerprint != certificate_fingerprint
+        || hello.operation_bytes == 0
+        || hello.operation_bytes > MAX_OPERATION_FRAME_BYTES as u64
         || !matches!(
-            URL_SAFE_NO_PAD.decode(&request.hello.nonce),
+            URL_SAFE_NO_PAD.decode(&hello.nonce),
             Ok(nonce) if nonce.len() == 24
         )
-        || current_unix_ms()?.abs_diff(request.hello.issued_at_unix_ms)
+        || current_unix_ms()?.abs_diff(hello.issued_at_unix_ms)
             > MAX_REQUEST_CLOCK_SKEW.as_millis() as u64
     {
         return Err(CoreError::ProtocolNegotiationFailed);
     }
-    let peer = match request.operation {
-        Operation::Put { .. } => {
-            engine.authorized_peer(request.hello.device_id, PeerRole::BackupWriter)?
+    let peer = match hello.operation_type {
+        OperationType::Put => engine.authorized_peer(hello.device_id, PeerRole::BackupWriter)?,
+        OperationType::Get | OperationType::Contains => {
+            engine.authorized_peer(hello.device_id, PeerRole::BackupReader)?
         }
-        Operation::Get { .. } | Operation::Contains { .. } => {
-            engine.authorized_peer(request.hello.device_id, PeerRole::BackupReader)?
-        }
-        Operation::GetRoster | Operation::SubmitRoster { .. } => {
-            engine.trusted_peer_identity(request.hello.device_id)?
+        OperationType::GetRoster | OperationType::SubmitRoster => {
+            engine.trusted_peer_identity(hello.device_id)?
         }
     };
     peer.verify(
         TRANSPORT_SIGNATURE_DOMAIN,
-        &client_hello_bytes(&request.hello)?,
-        &request.hello.signature,
+        &client_hello_bytes(hello)?,
+        &hello.signature,
     )?;
     if !replay_window
         .lock()
         .map_err(|_| CoreError::Synchronization)?
-        .insert_fresh(request.hello.device_id, request.hello.nonce.clone())
+        .insert_fresh(hello.device_id, hello.nonce.clone())
     {
         return Err(CoreError::AuthenticationFailed);
     }
-    if !rate_limiter
-        .lock()
-        .map_err(|_| CoreError::Synchronization)?
-        .check(request.hello.device_id, Instant::now())
-    {
-        return Err(CoreError::ResourceLimit("peer request rate"));
+    Ok(())
+}
+
+fn negotiate_transport_version(minimum: u16, maximum: u16) -> Result<u16, CoreError> {
+    if minimum > maximum || minimum > QUIC_TRANSPORT_VERSION || maximum < QUIC_TRANSPORT_VERSION {
+        return Err(CoreError::ProtocolNegotiationFailed);
+    }
+    Ok(QUIC_TRANSPORT_VERSION)
+}
+
+fn validate_negotiated_transport_version(
+    minimum: u16,
+    maximum: u16,
+    negotiated: u16,
+) -> Result<(), CoreError> {
+    if negotiated != negotiate_transport_version(minimum, maximum)? {
+        return Err(CoreError::ProtocolNegotiationFailed);
     }
     Ok(())
 }
@@ -746,8 +1099,12 @@ fn verify_server_response(
     remote_identity: &PublicIdentity,
     expected_certificate_fingerprint: &str,
 ) -> Result<(), CoreError> {
+    validate_negotiated_transport_version(
+        request.hello.minimum_transport_version,
+        request.hello.maximum_transport_version,
+        response.server_hello.negotiated_transport_version,
+    )?;
     if response.server_hello.device_id != remote_identity.device_id
-        || response.server_hello.negotiated_protocol_version != PROTOCOL_VERSION
         || response.server_hello.request_nonce != request.hello.nonce
         || response.server_hello.certificate_fingerprint != expected_certificate_fingerprint
         || response.server_hello.response_digest
@@ -770,22 +1127,26 @@ fn verify_server_response(
 #[serde(rename_all = "camelCase")]
 struct ClientHelloFields<'a> {
     device_id: DeviceId,
-    minimum_protocol_version: u16,
-    maximum_protocol_version: u16,
+    minimum_transport_version: u16,
+    maximum_transport_version: u16,
     issued_at_unix_ms: u64,
     nonce: &'a str,
     expected_certificate_fingerprint: &'a str,
+    operation_type: OperationType,
+    operation_bytes: u64,
     operation_digest: &'a str,
 }
 
 fn client_hello_bytes(hello: &ClientHello) -> Result<Vec<u8>, CoreError> {
     Ok(serde_json::to_vec(&ClientHelloFields {
         device_id: hello.device_id,
-        minimum_protocol_version: hello.minimum_protocol_version,
-        maximum_protocol_version: hello.maximum_protocol_version,
+        minimum_transport_version: hello.minimum_transport_version,
+        maximum_transport_version: hello.maximum_transport_version,
         issued_at_unix_ms: hello.issued_at_unix_ms,
         nonce: &hello.nonce,
         expected_certificate_fingerprint: &hello.expected_certificate_fingerprint,
+        operation_type: hello.operation_type,
+        operation_bytes: hello.operation_bytes,
         operation_digest: &hello.operation_digest,
     })?)
 }
@@ -802,7 +1163,7 @@ fn current_unix_ms() -> Result<u64, CoreError> {
 #[serde(rename_all = "camelCase")]
 struct ServerHelloFields<'a> {
     device_id: DeviceId,
-    negotiated_protocol_version: u16,
+    negotiated_transport_version: u16,
     request_nonce: &'a str,
     response_nonce: &'a str,
     certificate_fingerprint: &'a str,
@@ -812,7 +1173,7 @@ struct ServerHelloFields<'a> {
 fn server_hello_bytes(hello: &ServerHello) -> Result<Vec<u8>, CoreError> {
     Ok(serde_json::to_vec(&ServerHelloFields {
         device_id: hello.device_id,
-        negotiated_protocol_version: hello.negotiated_protocol_version,
+        negotiated_transport_version: hello.negotiated_transport_version,
         request_nonce: &hello.request_nonce,
         response_nonce: &hello.response_nonce,
         certificate_fingerprint: &hello.certificate_fingerprint,
@@ -845,8 +1206,9 @@ fn transport_limits() -> Result<TransportConfig, CoreError> {
     let mut transport = TransportConfig::default();
     transport.max_concurrent_bidi_streams(VarInt::from_u32(32));
     transport.max_concurrent_uni_streams(VarInt::from_u32(0));
-    transport.stream_receive_window(VarInt::from_u32(MAX_FRAME_BYTES as u32));
-    transport.receive_window(VarInt::from_u32((MAX_FRAME_BYTES * 4) as u32));
+    let stream_window = MAX_OPERATION_FRAME_BYTES.max(MAX_RESPONSE_FRAME_BYTES) as u32;
+    transport.stream_receive_window(VarInt::from_u32(stream_window));
+    transport.receive_window(VarInt::from_u32(stream_window.saturating_mul(4)));
     transport.max_idle_timeout(Some(
         Duration::from_secs(30)
             .try_into()
@@ -862,9 +1224,37 @@ fn error_code(error: &CoreError) -> &'static str {
         CoreError::PeerRevoked => "peer_revoked",
         CoreError::UnselectedProvider | CoreError::IdentityMismatch => "not_authorized",
         CoreError::ResourceLimit(_) => "resource_limit",
+        CoreError::ProtocolNegotiationFailed => "protocol_incompatible",
         CoreError::CorruptChunk(_) | CoreError::AuthenticationFailed => "authentication_failed",
         _ => "provider_error",
     }
+}
+
+fn validate_identity_file(metadata: &fs::Metadata, maximum: u64) -> Result<(), CoreError> {
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() == 0
+        || metadata.len() > maximum
+    {
+        return Err(CoreError::InvalidState(
+            "invalid QUIC identity file".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_private_identity_file(metadata: &fs::Metadata, maximum: u64) -> Result<(), CoreError> {
+    validate_identity_file(metadata, maximum)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(CoreError::InvalidState(
+                "QUIC private identity permissions are too broad".to_owned(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn persist_private(path: &Path, bytes: &[u8], private: bool) -> Result<(), CoreError> {
@@ -1042,15 +1432,158 @@ mod tests {
     }
 
     #[test]
+    fn tls_identity_recovers_from_partial_legacy_creation_with_one_atomic_bundle() {
+        let directory = tempdir().expect("directory");
+        let tls_directory = directory.path().join("tls");
+        fs::create_dir_all(&tls_directory).expect("TLS directory");
+        fs::write(tls_directory.join("certificate.der"), b"interrupted")
+            .expect("partial legacy certificate");
+
+        let first = TlsIdentity::load_or_create(&tls_directory).expect("recover identity");
+        let fingerprint = first.certificate_fingerprint();
+        assert!(tls_directory.join("identity.json").is_file());
+        drop(first);
+
+        let second = TlsIdentity::load_or_create(&tls_directory).expect("reload identity");
+        assert_eq!(second.certificate_fingerprint(), fingerprint);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(tls_directory.join("identity.json"))
+                    .expect("bundle metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[test]
+    fn transport_v2_rejects_old_and_future_framing_as_protocol_incompatible() {
+        assert_eq!(covalent_protocol::PROTOCOL_VERSION, 1);
+        assert_eq!(QUIC_TRANSPORT_VERSION, 2);
+        assert_ne!(ALPN, b"covalent/1");
+
+        let old_client = negotiate_transport_version(1, 1).expect_err("v1 client on v2 server");
+        assert!(matches!(&old_client, CoreError::ProtocolNegotiationFailed));
+        assert_eq!(error_code(&old_client), "protocol_incompatible");
+
+        let old_server = validate_negotiated_transport_version(
+            QUIC_TRANSPORT_VERSION,
+            QUIC_TRANSPORT_VERSION,
+            1,
+        )
+        .expect_err("v2 client with v1 server selection");
+        assert!(matches!(&old_server, CoreError::ProtocolNegotiationFailed));
+        assert_eq!(error_code(&old_server), "protocol_incompatible");
+
+        let future_client =
+            negotiate_transport_version(3, 3).expect_err("future client on v2 server");
+        assert!(matches!(
+            future_client,
+            CoreError::ProtocolNegotiationFailed
+        ));
+        assert_eq!(
+            negotiate_transport_version(QUIC_TRANSPORT_VERSION, QUIC_TRANSPORT_VERSION)
+                .expect("current framing"),
+            QUIC_TRANSPORT_VERSION
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn legacy_alpn_mismatch_maps_to_explicit_protocol_error() {
+        let local_data = tempdir().expect("local");
+        let remote_data = tempdir().expect("remote");
+        let local = Arc::new(Engine::open(EngineOptions::new(local_data.path())).expect("local"));
+        let remote =
+            Arc::new(Engine::open(EngineOptions::new(remote_data.path())).expect("remote"));
+        let tls = TlsIdentity::load_or_create(remote_data.path().join("tls")).expect("TLS");
+        let endpoint = Endpoint::server(
+            tls.server_config_with_alpn(b"covalent/1")
+                .expect("legacy server config"),
+            "127.0.0.1:0".parse().expect("address"),
+        )
+        .expect("legacy endpoint");
+        let address = endpoint.local_addr().expect("legacy address");
+        let server = tokio::spawn(async move {
+            if let Some(incoming) = endpoint.accept().await {
+                let _ = incoming.await;
+            }
+        });
+
+        let mut provider = QuicProvider::new(
+            address,
+            remote.public_identity(),
+            tls.certificate_der().to_vec(),
+            local,
+        )
+        .expect("provider");
+        provider.request_timeout = Duration::from_secs(2);
+        let error = provider
+            .connection()
+            .await
+            .expect_err("legacy ALPN must be rejected");
+        assert!(matches!(&error, CoreError::ProtocolNegotiationFailed));
+        assert_eq!(error_code(&error), "protocol_incompatible");
+        server.abort();
+    }
+
+    #[test]
     fn per_peer_rate_limiter_is_bounded_and_resets() {
         let peer = DeviceId::new();
         let start = Instant::now();
         let mut limiter = PeerRateLimiter::default();
-        for _ in 0..MAX_REQUESTS_PER_PEER_WINDOW {
-            assert!(limiter.check(peer, start));
+        for _ in 0..PEER_REQUEST_BURST as usize {
+            assert!(limiter.admission_delay(peer, 1, true, start).is_none());
         }
-        assert!(!limiter.check(peer, start));
-        assert!(limiter.check(peer, start + REQUEST_RATE_WINDOW));
+        assert!(limiter.admission_delay(peer, 1, true, start).is_some());
+        assert!(
+            limiter
+                .admission_delay(peer, 1, true, start + Duration::from_secs(1))
+                .is_none()
+        );
+
+        let other = DeviceId::new();
+        assert!(
+            limiter
+                .admission_delay(other, PEER_BYTE_BURST as usize + 1, true, start)
+                .is_some()
+        );
+        assert!(limiter.admission_delay(other, 1_024, true, start).is_none());
+    }
+
+    #[test]
+    fn ten_gibibyte_transfer_is_paced_without_a_fixed_operation_ceiling() {
+        const CHUNK_BYTES: usize = 256 * 1_024;
+        const WIRE_CHUNK_BYTES: usize = CHUNK_BYTES * 4 / 3 + 1_024;
+        const TEN_GIBIBYTES: u64 = 10 * 1_024 * 1_024 * 1_024;
+        let peer = DeviceId::new();
+        let start = Instant::now();
+        let mut now = start;
+        let mut limiter = PeerRateLimiter::default();
+        for _ in 0..TEN_GIBIBYTES / CHUNK_BYTES as u64 {
+            while let Some(delay) = limiter.admission_delay(peer, WIRE_CHUNK_BYTES, true, now) {
+                now += delay + Duration::from_nanos(1);
+            }
+        }
+        assert!(now.saturating_duration_since(start) < Duration::from_secs(3 * 60));
+    }
+
+    #[test]
+    fn source_connection_admission_is_bounded_and_released_by_raii() {
+        let counts = Arc::new(Mutex::new(BTreeMap::new()));
+        let source = "192.0.2.1".parse().expect("source IP");
+        let permits = (0..MAX_CONNECTIONS_PER_SOURCE)
+            .map(|_| {
+                SourceConnectionPermit::try_acquire(Arc::clone(&counts), source)
+                    .expect("source permit")
+            })
+            .collect::<Vec<_>>();
+        assert!(SourceConnectionPermit::try_acquire(Arc::clone(&counts), source).is_none());
+        drop(permits);
+        assert!(SourceConnectionPermit::try_acquire(counts, source).is_some());
     }
 
     #[test]

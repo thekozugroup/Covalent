@@ -1,8 +1,12 @@
 //! Opt-in minimal LAN advertisements and untrusted Tailnet candidate discovery.
 
 use std::collections::BTreeSet;
+use std::env;
+use std::io::{Read as _, Write as _};
 use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
@@ -16,6 +20,8 @@ use serde::{Deserialize, Serialize};
 const SERVICE_TYPE: &str = "_covalent._udp.local.";
 const MAX_DISCOVERY_RESULTS: usize = 256;
 const MAX_TAILSCALE_STATUS_BYTES: usize = 4 * 1_024 * 1_024;
+const MAX_TAILSCALE_HTTP_BYTES: usize = MAX_TAILSCALE_STATUS_BYTES + 64 * 1_024;
+const DEFAULT_TAILSCALE_SOCKET: &str = "/var/run/tailscale/tailscaled.sock";
 
 /// Untrusted connection hint. Pairing identity validation remains mandatory.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -164,8 +170,52 @@ impl Drop for LanDiscovery {
     }
 }
 
-/// Reads bounded Tailscale CLI status as routing hints. No Tailscale identity is trusted.
+/// Reconfigures the live mDNS advertiser when the persisted privacy setting changes.
+pub struct DiscoveryController {
+    peer_port: u16,
+    current: Mutex<LanDiscovery>,
+}
+
+impl DiscoveryController {
+    /// Starts the controller in the persisted state.
+    pub fn new(enabled: bool, peer_port: u16) -> Result<Self, CoreError> {
+        Ok(Self {
+            peer_port,
+            current: Mutex::new(LanDiscovery::start(enabled, peer_port)?),
+        })
+    }
+
+    /// Applies a setting change immediately. A failed enable leaves the old state active.
+    pub fn set_enabled(&self, enabled: bool) -> Result<(), CoreError> {
+        let mut current = self
+            .current
+            .lock()
+            .map_err(|_| CoreError::Synchronization)?;
+        if current.is_active() == enabled {
+            return Ok(());
+        }
+        let replacement = LanDiscovery::start(enabled, self.peer_port)?;
+        let previous = std::mem::replace(&mut *current, replacement);
+        drop(current);
+        previous.stop();
+        Ok(())
+    }
+
+    /// Whether the network-visible advertisement is active now.
+    pub fn is_active(&self) -> Result<bool, CoreError> {
+        Ok(self
+            .current
+            .lock()
+            .map_err(|_| CoreError::Synchronization)?
+            .is_active())
+    }
+}
+
+/// Reads bounded Tailscale LocalAPI or CLI status as routing hints. No Tailscale identity is trusted.
 pub fn discover_tailscale_candidates(peer_port: u16) -> Result<Vec<DiscoveryCandidate>, CoreError> {
+    if let Some(bytes) = tailscale_localapi_status()? {
+        return parse_tailscale_status(&bytes, peer_port);
+    }
     let output = match Command::new("tailscale")
         .args(["status", "--json", "--timeout=2s"])
         .output()
@@ -187,6 +237,172 @@ pub fn discover_tailscale_candidates(peer_port: u16) -> Result<Vec<DiscoveryCand
         return Err(CoreError::ResourceLimit("Tailscale status"));
     }
     parse_tailscale_status(&output.stdout, peer_port)
+}
+
+#[cfg(unix)]
+fn tailscale_localapi_status() -> Result<Option<Vec<u8>>, CoreError> {
+    let socket = env::var_os("COVALENT_TAILSCALE_SOCKET")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_TAILSCALE_SOCKET));
+    tailscale_localapi_status_at(&socket)
+}
+
+#[cfg(unix)]
+fn tailscale_localapi_status_at(socket: &std::path::Path) -> Result<Option<Vec<u8>>, CoreError> {
+    use std::os::unix::net::UnixStream;
+
+    let mut stream = match UnixStream::connect(socket) {
+        Ok(stream) => stream,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+            ) =>
+        {
+            return Ok(None);
+        }
+        Err(source) => {
+            return Err(CoreError::Io {
+                operation: "connect to Tailscale LocalAPI",
+                path: socket.to_path_buf(),
+                source,
+            });
+        }
+    };
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .and_then(|()| stream.set_write_timeout(Some(Duration::from_secs(2))))
+        .map_err(|source| CoreError::Io {
+            operation: "configure Tailscale LocalAPI timeout",
+            path: socket.to_path_buf(),
+            source,
+        })?;
+    stream
+        .write_all(
+            b"GET /localapi/v0/status HTTP/1.1\r\nHost: local-tailscaled.sock\r\nSec-Tailscale: localapi\r\nConnection: close\r\n\r\n",
+        )
+        .map_err(|source| CoreError::Io {
+            operation: "query Tailscale LocalAPI",
+            path: socket.to_path_buf(),
+            source,
+        })?;
+    let mut response = Vec::new();
+    stream
+        .take(MAX_TAILSCALE_HTTP_BYTES as u64 + 1)
+        .read_to_end(&mut response)
+        .map_err(|source| CoreError::Io {
+            operation: "read Tailscale LocalAPI",
+            path: socket.to_path_buf(),
+            source,
+        })?;
+    if response.len() > MAX_TAILSCALE_HTTP_BYTES {
+        return Err(CoreError::ResourceLimit("Tailscale LocalAPI response"));
+    }
+    let header_end = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or_else(|| CoreError::InvalidState("invalid Tailscale LocalAPI response".to_owned()))?;
+    if header_end > 64 * 1_024 {
+        return Err(CoreError::ResourceLimit("Tailscale LocalAPI headers"));
+    }
+    let headers = &response[..header_end];
+    if !headers.starts_with(b"HTTP/1.1 200 ") && !headers.starts_with(b"HTTP/1.0 200 ") {
+        return Ok(None);
+    }
+    let body = decode_http_body(headers, &response[(header_end + 4)..])?;
+    if body.len() > MAX_TAILSCALE_STATUS_BYTES {
+        return Err(CoreError::ResourceLimit("Tailscale status"));
+    }
+    Ok(Some(body))
+}
+
+#[cfg(unix)]
+fn decode_http_body(headers: &[u8], body: &[u8]) -> Result<Vec<u8>, CoreError> {
+    let headers = std::str::from_utf8(headers)
+        .map_err(|_| CoreError::InvalidState("invalid Tailscale LocalAPI headers".to_owned()))?;
+    let mut content_length = None;
+    let mut chunked = false;
+    for line in headers.lines().skip(1) {
+        let Some((name, value)) = line.split_once(':') else {
+            return Err(CoreError::InvalidState(
+                "invalid Tailscale LocalAPI header".to_owned(),
+            ));
+        };
+        let value = value.trim();
+        if name.eq_ignore_ascii_case("content-length") {
+            let length = value.parse::<usize>().map_err(|_| {
+                CoreError::InvalidState("invalid Tailscale content length".to_owned())
+            })?;
+            if content_length.replace(length).is_some() {
+                return Err(CoreError::InvalidState(
+                    "duplicate Tailscale content length".to_owned(),
+                ));
+            }
+        } else if name.eq_ignore_ascii_case("transfer-encoding") {
+            if !value.eq_ignore_ascii_case("chunked") {
+                return Err(CoreError::InvalidState(
+                    "unsupported Tailscale transfer encoding".to_owned(),
+                ));
+            }
+            chunked = true;
+        }
+    }
+    if chunked && content_length.is_some() {
+        return Err(CoreError::InvalidState(
+            "ambiguous Tailscale LocalAPI body framing".to_owned(),
+        ));
+    }
+    if chunked {
+        return decode_chunked_body(body);
+    }
+    if let Some(content_length) = content_length
+        && (content_length != body.len() || content_length > MAX_TAILSCALE_STATUS_BYTES)
+    {
+        return Err(CoreError::InvalidState(
+            "invalid Tailscale LocalAPI body length".to_owned(),
+        ));
+    }
+    Ok(body.to_vec())
+}
+
+#[cfg(unix)]
+fn decode_chunked_body(body: &[u8]) -> Result<Vec<u8>, CoreError> {
+    let mut cursor = 0_usize;
+    let mut decoded = Vec::new();
+    loop {
+        let line_end = body[cursor..]
+            .windows(2)
+            .position(|window| window == b"\r\n")
+            .map(|offset| cursor + offset)
+            .ok_or_else(|| CoreError::InvalidState("invalid Tailscale chunk framing".to_owned()))?;
+        let size = std::str::from_utf8(&body[cursor..line_end])
+            .ok()
+            .and_then(|line| line.split(';').next())
+            .and_then(|size| usize::from_str_radix(size.trim(), 16).ok())
+            .ok_or_else(|| CoreError::InvalidState("invalid Tailscale chunk size".to_owned()))?;
+        cursor = line_end + 2;
+        if size == 0 {
+            return Ok(decoded);
+        }
+        if size > MAX_TAILSCALE_STATUS_BYTES.saturating_sub(decoded.len())
+            || cursor.saturating_add(size).saturating_add(2) > body.len()
+        {
+            return Err(CoreError::ResourceLimit("Tailscale status"));
+        }
+        decoded.extend_from_slice(&body[cursor..cursor + size]);
+        cursor += size;
+        if body.get(cursor..cursor + 2) != Some(b"\r\n") {
+            return Err(CoreError::InvalidState(
+                "invalid Tailscale chunk terminator".to_owned(),
+            ));
+        }
+        cursor += 2;
+    }
+}
+
+#[cfg(not(unix))]
+fn tailscale_localapi_status() -> Result<Option<Vec<u8>>, CoreError> {
+    Ok(None)
 }
 
 fn parse_tailscale_status(
@@ -264,6 +480,51 @@ mod tests {
             candidates
                 .iter()
                 .all(|candidate| candidate.source == DiscoverySource::Tailscale)
+        );
+    }
+
+    #[test]
+    fn discovery_controller_applies_live_off_on_transitions() {
+        let controller = DiscoveryController::new(false, 4433).expect("controller");
+        assert!(!controller.is_active().expect("inactive"));
+        controller.set_enabled(true).expect("enable discovery");
+        assert!(controller.is_active().expect("active"));
+        controller.set_enabled(false).expect("disable discovery");
+        assert!(!controller.is_active().expect("inactive again"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tailscale_localapi_socket_is_preferred_and_bounded() {
+        use std::os::unix::net::UnixListener;
+
+        let directory = tempfile::tempdir().expect("directory");
+        let socket = directory.path().join("tailscaled.sock");
+        let listener = UnixListener::bind(&socket).expect("listen");
+        let fixture = br#"{"Peer":{"node-key:one":{"DNSName":"nas.tail.test.","TailscaleIPs":["100.64.0.2"]}}}"#;
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut request = [0_u8; 512];
+            let read = stream.read(&mut request).expect("read request");
+            assert!(String::from_utf8_lossy(&request[..read]).contains("Sec-Tailscale: localapi"));
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n",
+                fixture.len()
+            )
+            .expect("write headers");
+            stream.write_all(fixture).expect("write body");
+            stream.write_all(b"\r\n0\r\n\r\n").expect("finish body");
+        });
+        let bytes = tailscale_localapi_status_at(&socket)
+            .expect("localapi")
+            .expect("status body");
+        server.join().expect("server");
+        let candidates = parse_tailscale_status(&bytes, 4433).expect("parse status");
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(
+            candidates[0].endpoint,
+            "100.64.0.2:4433".parse().expect("endpoint")
         );
     }
 }

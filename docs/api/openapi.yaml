@@ -333,6 +333,22 @@ paths:
                 $ref: "#/components/schemas/RosterCursor"
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /api/v1/jobs:
+    get:
+      summary: List active and resumable jobs
+      operationId: listJobs
+      responses:
+        "200":
+          description: Bounded registry after TTL/LRU pruning.
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 1024
+                items:
+                  $ref: "#/components/schemas/JobStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /api/v1/jobs/control:
     post:
       summary: Pause, resume, or cancel an active job
@@ -356,16 +372,37 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: false
-                required: [jobId, state]
-                properties:
-                  jobId:
-                    $ref: "#/components/schemas/JobId"
-                  state:
-                    enum: [running, paused, cancelled]
+                $ref: "#/components/schemas/JobStatus"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ClientError"
+  /api/v1/jobs/discard:
+    post:
+      summary: Discard an inactive resumable job and its private artifacts
+      operationId: discardJob
+      requestBody:
+        $ref: "#/components/requestBodies/JobReference"
+      responses:
+        "204":
+          description: Inactive job, checkpoint, restore plans, and staging removed.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/jobs/acknowledge:
+    post:
+      summary: Acknowledge a fully received archive result
+      operationId: acknowledgeJob
+      requestBody:
+        $ref: "#/components/requestBodies/JobReference"
+      responses:
+        "204":
+          description: Retained byte-identical archive result and private staging removed.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
   /api/v1/backups:
     get:
       summary: List authoritative remembered backups
@@ -437,7 +474,13 @@ paths:
               format: binary
       responses:
         "200":
-          description: Streamed archive was safely staged, encrypted, committed, and explicitly replicated.
+          description: Streamed archive was safely staged, encrypted, committed, explicitly replicated, and retained byte-identically until acknowledgement.
+          headers:
+            X-Covalent-Job-Ack-Required:
+              required: true
+              schema:
+                type: string
+                const: "true"
           content:
             application/json:
               schema:
@@ -487,15 +530,55 @@ paths:
               $ref: "#/components/schemas/RestorePreviewRequest"
       responses:
         "200":
-          description: Signed immutable no-write plan bound to the authorized root identity.
+          description: Durable signed no-write plan reference. Entries are read through the bounded paginated route.
+          headers:
+            X-Covalent-Restore-Plan-Id:
+              $ref: "#/components/headers/RestorePlanId"
+            X-Covalent-Restore-Plan-Digest:
+              $ref: "#/components/headers/RestorePlanDigest"
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/RestorePlan"
+                $ref: "#/components/schemas/RestorePlanReference"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
+  /api/v1/restores/plans/{planId}:
+    get:
+      summary: Read a bounded page of a durable signed restore plan
+      operationId: getRestorePlanPage
+      parameters:
+        - name: planId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/HexDigest"
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: "^[0-9]+$"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      responses:
+        "200":
+          description: One page bound to the same immutable signed plan reference.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RestorePlanPage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ClientError"
   /api/v1/restores/execute:
     post:
       summary: Execute an immutable signed restore plan
@@ -505,15 +588,15 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: false
-              required: [plan]
-              properties:
-                plan:
-                  $ref: "#/components/schemas/RestorePlan"
+              $ref: "#/components/schemas/RestoreExecuteRequest"
       responses:
         "200":
           description: Atomic restore result for the exact signed plan.
+          headers:
+            X-Covalent-Restore-Plan-Id:
+              $ref: "#/components/headers/RestorePlanId"
+            X-Covalent-Restore-Plan-Digest:
+              $ref: "#/components/headers/RestorePlanDigest"
           content:
             application/json:
               schema:
@@ -537,11 +620,16 @@ paths:
               $ref: "#/components/schemas/RestoreArchivePreviewRequest"
       responses:
         "200":
-          description: Signed immutable content preview for subsequent streamed execution.
+          description: Durable signed immutable content reference for subsequent paginated review and streamed execution.
+          headers:
+            X-Covalent-Restore-Plan-Id:
+              $ref: "#/components/headers/RestorePlanId"
+            X-Covalent-Restore-Plan-Digest:
+              $ref: "#/components/headers/RestorePlanDigest"
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/RestorePlan"
+                $ref: "#/components/schemas/RestorePlanReference"
         "400":
           description: Streamed restore policy is not fail-on-conflict.
           content:
@@ -565,12 +653,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: false
-              required: [plan]
-              properties:
-                plan:
-                  $ref: "#/components/schemas/RestorePlan"
+              $ref: "#/components/schemas/RestoreExecuteRequest"
       responses:
         "200":
           description: ZIP stream with a base64url RestoreResponse in X-Covalent-Restore-Result.
@@ -579,6 +662,15 @@ paths:
               required: true
               schema:
                 type: string
+            X-Covalent-Restore-Plan-Id:
+              $ref: "#/components/headers/RestorePlanId"
+            X-Covalent-Restore-Plan-Digest:
+              $ref: "#/components/headers/RestorePlanDigest"
+            X-Covalent-Job-Ack-Required:
+              required: true
+              schema:
+                type: string
+                const: "true"
           content:
             application/vnd.covalent.restore+zip:
               schema:
@@ -602,6 +694,17 @@ components:
       type: http
       scheme: bearer
       bearerFormat: random-256-bit-local-token
+  headers:
+    RestorePlanId:
+      required: true
+      description: Durable opaque identifier for the persisted immutable plan.
+      schema:
+        $ref: "#/components/schemas/HexDigest"
+    RestorePlanDigest:
+      required: true
+      description: Digest bound by the signed restore plan.
+      schema:
+        $ref: "#/components/schemas/HexDigest"
   requestBodies:
     PairConfirmation:
       required: true
@@ -628,6 +731,17 @@ components:
             properties:
               session:
                 $ref: "#/components/schemas/PairingSession"
+    JobReference:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [jobId]
+            properties:
+              jobId:
+                $ref: "#/components/schemas/JobId"
   responses:
     ClientError:
       description: The route or HTTP method is not available.
@@ -694,6 +808,20 @@ components:
       minLength: 1
       maxLength: 128
       pattern: "^[A-Za-z0-9_-]+$"
+    JobStatus:
+      type: object
+      additionalProperties: false
+      required: [jobId, state, active, lastTouchedUnixMs]
+      properties:
+        jobId:
+          $ref: "#/components/schemas/JobId"
+        state:
+          enum: [running, paused, cancelled]
+        active:
+          type: boolean
+        lastTouchedUnixMs:
+          type: integer
+          minimum: 0
     Role:
       enum: [storage_provider, backup_reader, backup_writer]
     Health:
@@ -1163,7 +1291,118 @@ components:
           enum: [file, directory]
         action:
           enum: [create_file, create_directory, keep_directory, skip_file, replace_file, rename_file]
-    RestorePlan:
+    RestorePlanReference:
+      type: object
+      additionalProperties: false
+      required:
+        - planId
+        - backupId
+        - snapshotId
+        - authorizedRoot
+        - manifestDigest
+        - conflictPolicy
+        - jobId
+        - planDigest
+        - signerDeviceId
+        - signature
+        - totalEntries
+      properties:
+        planId:
+          $ref: "#/components/schemas/HexDigest"
+        backupId:
+          $ref: "#/components/schemas/BackupId"
+        snapshotId:
+          $ref: "#/components/schemas/SnapshotId"
+        authorizedRoot:
+          type: string
+        manifestDigest:
+          $ref: "#/components/schemas/HexDigest"
+        conflictPolicy:
+          enum: [fail, skip, replace, rename]
+        jobId:
+          $ref: "#/components/schemas/JobId"
+        planDigest:
+          $ref: "#/components/schemas/HexDigest"
+        signerDeviceId:
+          $ref: "#/components/schemas/DeviceId"
+        signature:
+          type: string
+        totalEntries:
+          type: integer
+          minimum: 0
+          maximum: 1000000
+    RestorePlanPage:
+      type: object
+      additionalProperties: false
+      required:
+        - planId
+        - backupId
+        - snapshotId
+        - authorizedRoot
+        - manifestDigest
+        - conflictPolicy
+        - jobId
+        - planDigest
+        - signerDeviceId
+        - signature
+        - entryOffset
+        - totalEntries
+        - entries
+        - nextCursor
+      properties:
+        planId:
+          $ref: "#/components/schemas/HexDigest"
+        backupId:
+          $ref: "#/components/schemas/BackupId"
+        snapshotId:
+          $ref: "#/components/schemas/SnapshotId"
+        authorizedRoot:
+          type: string
+        manifestDigest:
+          $ref: "#/components/schemas/HexDigest"
+        conflictPolicy:
+          enum: [fail, skip, replace, rename]
+        jobId:
+          $ref: "#/components/schemas/JobId"
+        planDigest:
+          $ref: "#/components/schemas/HexDigest"
+        signerDeviceId:
+          $ref: "#/components/schemas/DeviceId"
+        signature:
+          type: string
+        entryOffset:
+          type: integer
+          minimum: 0
+        totalEntries:
+          type: integer
+          minimum: 0
+          maximum: 1000000
+        entries:
+          type: array
+          maxItems: 1000
+          items:
+            $ref: "#/components/schemas/RestorePreviewEntry"
+        nextCursor:
+          oneOf:
+            - type: string
+              pattern: "^[0-9]+$"
+            - type: "null"
+    RestoreExecuteRequest:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [planId]
+          properties:
+            planId:
+              $ref: "#/components/schemas/HexDigest"
+        - type: object
+          additionalProperties: false
+          required: [plan]
+          properties:
+            plan:
+              $ref: "#/components/schemas/LegacyRestorePlan"
+      description: Execute by durable plan ID. The full-plan form remains only for protocol-v1 compatibility and is persisted before execution.
+    LegacyRestorePlan:
       type: object
       additionalProperties: false
       required:
@@ -1188,8 +1427,10 @@ components:
           type: string
         rootDevice:
           type: integer
+          minimum: 0
         rootInode:
           type: integer
+          minimum: 0
         manifestDigest:
           $ref: "#/components/schemas/HexDigest"
         conflictPolicy:
@@ -1198,6 +1439,7 @@ components:
           $ref: "#/components/schemas/JobId"
         entries:
           type: array
+          maxItems: 1000000
           items:
             $ref: "#/components/schemas/RestorePreviewEntry"
         planDigest:
