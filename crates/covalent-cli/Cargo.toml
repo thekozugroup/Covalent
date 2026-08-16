@@ -15,8 +15,8 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-covalent-core = { path = "../covalent-core" }
-covalent-protocol = { path = "../covalent-protocol" }
+covalent-core = { version = "0.1.0", path = "../covalent-core" }
+covalent-protocol = { version = "0.1.0", path = "../covalent-protocol" }
 rand_core.workspace = true
 serde.workspace = true
 serde_json.workspace = true

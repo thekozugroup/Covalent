@@ -190,7 +190,6 @@ fn multi_node_backup_resume_corruption_repair_restore_and_revocation() {
     assert!(pause_requested);
     assert!(
         engine
-            .store()
             .garbage_collect()
             .expect("deferred garbage collection")
             .deferred_active_jobs
@@ -200,11 +199,10 @@ fn multi_node_backup_resume_corruption_repair_restore_and_revocation() {
         .backup(source.path(), &resume_options, &resume_control, |_| {})
         .expect("resumed backup");
     assert!(
-        engine
+        !engine
             .store()
-            .read_checkpoint("backup-resume")
+            .has_checkpoint("backup-resume")
             .expect("backup checkpoint")
-            .is_none()
     );
 
     let mut second_options = first_options.clone();
@@ -266,9 +264,8 @@ fn multi_node_backup_resume_corruption_repair_restore_and_revocation() {
     assert!(
         engine
             .store()
-            .read_checkpoint("restore-resume")
+            .has_checkpoint("restore-resume")
             .expect("restore checkpoint")
-            .is_some()
     );
     restore_control.resume();
     engine

@@ -154,6 +154,26 @@ impl BackupKey {
         }
         Ok(plaintext)
     }
+
+    pub(crate) fn expected_chunk_locator(
+        &self,
+        backup_id: BackupId,
+        key_epoch: u64,
+        plaintext_digest: &str,
+    ) -> Result<String, CoreError> {
+        if key_epoch == 0 {
+            return Err(CoreError::AuthenticationFailed);
+        }
+        let digest = blake3::Hash::from_hex(plaintext_digest)
+            .map_err(|_| CoreError::CorruptChunk(plaintext_digest.to_owned()))?;
+        let locator_key = self.derive(
+            backup_id.to_string().as_bytes(),
+            b"covalent/chunk-locator/v1",
+        )?;
+        Ok(chunk_locator(&locator_key, key_epoch, digest.as_bytes())
+            .to_hex()
+            .to_string())
+    }
 }
 
 impl Clone for BackupKey {

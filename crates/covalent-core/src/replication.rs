@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use covalent_protocol::{BackupId, ChunkReference, DeviceId, ReplicaIntent};
 use zeroize::Zeroizing;
 
+use crate::engine::JobControl;
 use crate::{BackupKey, ChunkStore, CoreError, EncryptedChunk};
 
 /// Coarse provider reachability and integrity state.
@@ -169,6 +170,10 @@ impl ReplicationScheduler {
             .map(|provider| provider.health())
     }
 
+    pub(crate) const fn maximum_parallelism(&self) -> usize {
+        self.maximum_parallelism
+    }
+
     pub(crate) fn verify_provider_copy(
         &self,
         provider_id: DeviceId,
@@ -184,9 +189,6 @@ impl ReplicationScheduler {
             return Err(CoreError::ProvidersExhausted(
                 reference.opaque_locator.clone(),
             ));
-        }
-        if !provider.contains(&reference.opaque_locator)? {
-            return Err(CoreError::MissingChunk(reference.opaque_locator.clone()));
         }
         let record = provider.get(&reference.opaque_locator)?;
         let encrypted = EncryptedChunk::decode_provider_record(
@@ -258,6 +260,17 @@ impl ReplicationScheduler {
         intent: &ReplicaIntent,
         locators: &BTreeSet<String>,
     ) -> Result<ReplicationReport, CoreError> {
+        self.replicate_controlled(source, intent, locators, &JobControl::new())
+    }
+
+    pub(crate) fn replicate_controlled(
+        &self,
+        source: &ChunkStore,
+        intent: &ReplicaIntent,
+        locators: &BTreeSet<String>,
+        control: &JobControl,
+    ) -> Result<ReplicationReport, CoreError> {
+        control.check()?;
         let mut report = ReplicationReport::default();
         let mut online_providers = Vec::new();
         for provider_id in &intent.selected_providers {
@@ -307,6 +320,9 @@ impl ReplicationScheduler {
                     let failures = &failures;
                     scope.spawn(move || {
                         loop {
+                            if control.check().is_err() {
+                                break;
+                            }
                             let index = next.fetch_add(1, Ordering::Relaxed);
                             if index >= job_count {
                                 break;
@@ -314,9 +330,10 @@ impl ReplicationScheduler {
                             let locator = &locator_list[index / online_providers.len()];
                             let (provider_id, provider) =
                                 &online_providers[index % online_providers.len()];
-                            let result = source
-                                .get_provider_record(locator)
-                                .and_then(|record| provider.put(locator, &record));
+                            let result = source.get_provider_record(locator).and_then(|record| {
+                                control.check()?;
+                                provider.put(locator, &record)
+                            });
                             match result {
                                 Ok(()) => {
                                     if let Ok(mut values) = acknowledgements.lock() {
@@ -347,19 +364,103 @@ impl ReplicationScheduler {
                 .into_inner()
                 .map_err(|_| CoreError::Synchronization)?;
         }
+        control.check()?;
         report.failures.sort_by(|left, right| {
             (left.provider_id, &left.locator).cmp(&(right.provider_id, &right.locator))
         });
         Ok(report)
     }
 
-    /// Fetches from all allowed, connected providers in parallel; first valid copy wins.
+    /// Fetches one authenticated copy without issuing a redundant presence probe.
     pub(crate) fn fetch_plaintext(
         &self,
         reference: &ChunkReference,
         backup_id: BackupId,
         key: &BackupKey,
         allowed_providers: &BTreeSet<DeviceId>,
+        control: &JobControl,
+    ) -> Result<FetchedChunk, CoreError> {
+        let stripe = provider_stripe(&reference.opaque_locator);
+        self.fetch_plaintext_striped(
+            reference,
+            backup_id,
+            key,
+            allowed_providers,
+            control,
+            stripe,
+        )
+    }
+
+    /// Fetches different chunks concurrently while each chunk has only one
+    /// provider request in flight. Results retain manifest order.
+    pub(crate) fn fetch_plaintexts_parallel(
+        &self,
+        requests: &[(&ChunkReference, &BTreeSet<DeviceId>)],
+        backup_id: BackupId,
+        key: &BackupKey,
+        control: &JobControl,
+        stripe_offset: usize,
+    ) -> Result<Vec<FetchedChunk>, CoreError> {
+        if requests.is_empty() {
+            return Ok(Vec::new());
+        }
+        control.check()?;
+        let next = AtomicUsize::new(0);
+        let results = Mutex::new(
+            std::iter::repeat_with(|| None)
+                .take(requests.len())
+                .collect::<Vec<Option<Result<FetchedChunk, CoreError>>>>(),
+        );
+        let worker_count = self.maximum_parallelism.min(requests.len());
+        std::thread::scope(|scope| {
+            for _ in 0..worker_count {
+                let next = &next;
+                let results = &results;
+                scope.spawn(move || {
+                    loop {
+                        if control.check().is_err() {
+                            break;
+                        }
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        let Some((reference, allowed_providers)) = requests.get(index) else {
+                            break;
+                        };
+                        let result = self.fetch_plaintext_striped(
+                            reference,
+                            backup_id,
+                            key,
+                            allowed_providers,
+                            control,
+                            stripe_offset.saturating_add(index),
+                        );
+                        if let Ok(mut slots) = results.lock() {
+                            slots[index] = Some(result);
+                        }
+                    }
+                });
+            }
+        });
+        control.check()?;
+        results
+            .into_inner()
+            .map_err(|_| CoreError::Synchronization)?
+            .into_iter()
+            .map(|result| {
+                result
+                    .ok_or(CoreError::Synchronization)
+                    .and_then(std::convert::identity)
+            })
+            .collect()
+    }
+
+    fn fetch_plaintext_striped(
+        &self,
+        reference: &ChunkReference,
+        backup_id: BackupId,
+        key: &BackupKey,
+        allowed_providers: &BTreeSet<DeviceId>,
+        control: &JobControl,
+        stripe: usize,
     ) -> Result<FetchedChunk, CoreError> {
         let candidates: Vec<_> = allowed_providers
             .iter()
@@ -371,89 +472,44 @@ impl ReplicationScheduler {
                 reference.opaque_locator.clone(),
             ));
         }
-        let found: Mutex<Option<(DeviceId, Zeroizing<Vec<u8>>)>> = Mutex::new(None);
-        let failures = Mutex::new(Vec::new());
-        let next = AtomicUsize::new(0);
-        let worker_count = self.maximum_parallelism.min(candidates.len());
-        std::thread::scope(|scope| {
-            for _ in 0..worker_count {
-                let found = &found;
-                let failures = &failures;
-                let next = &next;
-                let candidates = &candidates;
-                scope.spawn(move || {
-                    loop {
-                        if found.lock().is_ok_and(|value| value.is_some()) {
-                            break;
-                        }
-                        let index = next.fetch_add(1, Ordering::Relaxed);
-                        let Some(provider) = candidates.get(index) else {
-                            break;
-                        };
-                        let result = provider
-                            .contains(&reference.opaque_locator)
-                            .and_then(|present| {
-                                if present {
-                                    provider.get(&reference.opaque_locator)
-                                } else {
-                                    Err(CoreError::MissingChunk(reference.opaque_locator.clone()))
-                                }
-                            })
-                            .and_then(|record| {
-                                let encrypted = EncryptedChunk::decode_provider_record(
-                                    reference.opaque_locator.clone(),
-                                    reference.plaintext_digest.clone(),
-                                    &record,
-                                    reference.plaintext_length as usize,
-                                )?;
-                                if encrypted.plaintext_length != reference.plaintext_length
-                                    || encrypted.ciphertext_length() != reference.ciphertext_length
-                                {
-                                    return Err(CoreError::CorruptChunk(
-                                        reference.opaque_locator.clone(),
-                                    ));
-                                }
-                                key.decrypt_chunk(
-                                    backup_id,
-                                    &reference.plaintext_digest,
-                                    &encrypted,
-                                )
-                            });
-                        match result {
-                            Ok(plaintext) => {
-                                if let Ok(mut slot) = found.lock()
-                                    && slot.is_none()
-                                {
-                                    *slot = Some((provider.device_id(), plaintext));
-                                }
-                            }
-                            Err(error) => {
-                                if let Ok(mut values) = failures.lock() {
-                                    values.push(ProviderFailure {
-                                        provider_id: provider.device_id(),
-                                        locator: Some(reference.opaque_locator.clone()),
-                                        reason: error_category(&error).to_owned(),
-                                    });
-                                }
-                            }
-                        }
-                    }
-                });
+        let mut failures = Vec::new();
+        let start = stripe % candidates.len();
+        for index in 0..candidates.len() {
+            control.check()?;
+            let provider = &candidates[(start + index) % candidates.len()];
+            let result = provider.get(&reference.opaque_locator).and_then(|record| {
+                control.check()?;
+                let encrypted = EncryptedChunk::decode_provider_record(
+                    reference.opaque_locator.clone(),
+                    reference.plaintext_digest.clone(),
+                    &record,
+                    reference.plaintext_length as usize,
+                )?;
+                if encrypted.plaintext_length != reference.plaintext_length
+                    || encrypted.ciphertext_length() != reference.ciphertext_length
+                {
+                    return Err(CoreError::CorruptChunk(reference.opaque_locator.clone()));
+                }
+                key.decrypt_chunk(backup_id, &reference.plaintext_digest, &encrypted)
+            });
+            match result {
+                Ok(plaintext) => {
+                    return Ok(FetchedChunk {
+                        provider_id: provider.device_id(),
+                        plaintext,
+                        failures,
+                    });
+                }
+                Err(error) => failures.push(ProviderFailure {
+                    provider_id: provider.device_id(),
+                    locator: Some(reference.opaque_locator.clone()),
+                    reason: error_category(&error).to_owned(),
+                }),
             }
-        });
-        let mut failures = failures
-            .into_inner()
-            .map_err(|_| CoreError::Synchronization)?;
-        failures.sort_by_key(|failure| failure.provider_id);
-        let (provider_id, plaintext) = found
-            .into_inner()
-            .map_err(|_| CoreError::Synchronization)?
-            .ok_or_else(|| CoreError::ProvidersExhausted(reference.opaque_locator.clone()))?;
-        Ok(FetchedChunk {
-            provider_id,
-            plaintext,
-            failures,
-        })
+        }
+        Err(CoreError::ProvidersExhausted(
+            reference.opaque_locator.clone(),
+        ))
     }
 }
 
@@ -482,6 +538,15 @@ fn error_category(error: &CoreError) -> &'static str {
     }
 }
 
+fn provider_stripe(locator: &str) -> usize {
+    let digest = blake3::hash(locator.as_bytes());
+    usize::from_be_bytes(
+        digest.as_bytes()[..std::mem::size_of::<usize>()]
+            .try_into()
+            .expect("native word slice"),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -504,6 +569,23 @@ mod tests {
         maximum_active: Arc<AtomicUsize>,
     }
 
+    struct CountingReadProvider {
+        id: DeviceId,
+        store: ChunkStore,
+        active: Arc<AtomicUsize>,
+        maximum_active: Arc<AtomicUsize>,
+        gets: AtomicUsize,
+        contains: AtomicUsize,
+        cancel_on_get: Option<JobControl>,
+    }
+
+    struct CancellingPutProvider {
+        id: DeviceId,
+        store: ChunkStore,
+        control: JobControl,
+        puts: AtomicUsize,
+    }
+
     impl ChunkProvider for ConcurrentPutProvider {
         fn device_id(&self) -> DeviceId {
             self.id
@@ -520,6 +602,64 @@ mod tests {
             let result = self.store.put_provider_record(locator, record).map(|_| ());
             self.active.fetch_sub(1, Ordering::AcqRel);
             result
+        }
+
+        fn get(&self, locator: &str) -> Result<Vec<u8>, CoreError> {
+            self.store.get_provider_record(locator)
+        }
+
+        fn contains(&self, locator: &str) -> Result<bool, CoreError> {
+            self.store.contains(locator)
+        }
+    }
+
+    impl ChunkProvider for CountingReadProvider {
+        fn device_id(&self) -> DeviceId {
+            self.id
+        }
+
+        fn health(&self) -> ProviderHealth {
+            ProviderHealth::Online
+        }
+
+        fn put(&self, locator: &str, record: &[u8]) -> Result<(), CoreError> {
+            self.store.put_provider_record(locator, record).map(|_| ())
+        }
+
+        fn get(&self, locator: &str) -> Result<Vec<u8>, CoreError> {
+            let call = self.gets.fetch_add(1, Ordering::AcqRel);
+            if call == 0
+                && let Some(control) = &self.cancel_on_get
+            {
+                control.cancel();
+            }
+            let active = self.active.fetch_add(1, Ordering::AcqRel) + 1;
+            self.maximum_active.fetch_max(active, Ordering::AcqRel);
+            std::thread::sleep(Duration::from_millis(20));
+            let result = self.store.get_provider_record(locator);
+            self.active.fetch_sub(1, Ordering::AcqRel);
+            result
+        }
+
+        fn contains(&self, locator: &str) -> Result<bool, CoreError> {
+            self.contains.fetch_add(1, Ordering::AcqRel);
+            self.store.contains(locator)
+        }
+    }
+
+    impl ChunkProvider for CancellingPutProvider {
+        fn device_id(&self) -> DeviceId {
+            self.id
+        }
+
+        fn health(&self) -> ProviderHealth {
+            ProviderHealth::Online
+        }
+
+        fn put(&self, locator: &str, record: &[u8]) -> Result<(), CoreError> {
+            self.puts.fetch_add(1, Ordering::AcqRel);
+            self.control.cancel();
+            self.store.put_provider_record(locator, record).map(|_| ())
         }
 
         fn get(&self, locator: &str) -> Result<Vec<u8>, CoreError> {
@@ -647,5 +787,154 @@ mod tests {
             .expect("replicate");
         assert!(report.is_complete(1));
         assert_eq!(maximum_active.load(Ordering::Acquire), 2);
+    }
+
+    #[test]
+    fn restore_reads_are_single_request_striped_and_bounded_across_chunks() {
+        let first_dir = tempdir().expect("first");
+        let second_dir = tempdir().expect("second");
+        let active = Arc::new(AtomicUsize::new(0));
+        let maximum_active = Arc::new(AtomicUsize::new(0));
+        let provider = |id, store| {
+            Arc::new(CountingReadProvider {
+                id,
+                store,
+                active: Arc::clone(&active),
+                maximum_active: Arc::clone(&maximum_active),
+                gets: AtomicUsize::new(0),
+                contains: AtomicUsize::new(0),
+                cancel_on_get: None,
+            })
+        };
+        let first = provider(
+            DeviceId::new(),
+            ChunkStore::open(first_dir.path(), 1_048_576).expect("first store"),
+        );
+        let second = provider(
+            DeviceId::new(),
+            ChunkStore::open(second_dir.path(), 1_048_576).expect("second store"),
+        );
+        let scheduler = ReplicationScheduler::new(
+            [
+                Arc::clone(&first) as Arc<dyn ChunkProvider>,
+                Arc::clone(&second) as Arc<dyn ChunkProvider>,
+            ],
+            4,
+        )
+        .expect("scheduler");
+        let backup_id = BackupId::new();
+        let key = BackupKey::generate();
+        let mut references = Vec::new();
+        for index in 0..8 {
+            let plaintext = format!("parallel restore chunk {index}");
+            let chunk = key
+                .encrypt_chunk(backup_id, 1, plaintext.as_bytes())
+                .expect("chunk");
+            first.store.put(&chunk).expect("first copy");
+            second.store.put(&chunk).expect("second copy");
+            references.push(ChunkReference {
+                plaintext_digest: chunk.plaintext_digest.clone(),
+                opaque_locator: chunk.opaque_locator.clone(),
+                plaintext_length: chunk.plaintext_length,
+                ciphertext_length: chunk.ciphertext_length(),
+            });
+        }
+        let allowed = BTreeSet::from([first.id, second.id]);
+        let requests: Vec<_> = references
+            .iter()
+            .map(|reference| (reference, &allowed))
+            .collect();
+        let fetched = scheduler
+            .fetch_plaintexts_parallel(&requests, backup_id, &key, &JobControl::new(), 0)
+            .expect("fetch");
+        let provider_counts = fetched
+            .into_iter()
+            .fold(BTreeMap::new(), |mut counts, chunk| {
+                *counts.entry(chunk.provider_id).or_insert(0_usize) += 1;
+                counts
+            });
+
+        assert_eq!(first.contains.load(Ordering::Acquire), 0);
+        assert_eq!(second.contains.load(Ordering::Acquire), 0);
+        assert_eq!(first.gets.load(Ordering::Acquire), 4);
+        assert_eq!(second.gets.load(Ordering::Acquire), 4);
+        assert_eq!(provider_counts.get(&first.id), Some(&4));
+        assert_eq!(provider_counts.get(&second.id), Some(&4));
+        assert!((2..=4).contains(&maximum_active.load(Ordering::Acquire)));
+    }
+
+    #[test]
+    fn cancellation_stops_new_restore_and_replication_requests() {
+        let provider_dir = tempdir().expect("provider");
+        let source_dir = tempdir().expect("source");
+        let backup_id = BackupId::new();
+        let key = BackupKey::generate();
+        let control = JobControl::new();
+        let read_provider = Arc::new(CountingReadProvider {
+            id: DeviceId::new(),
+            store: ChunkStore::open(provider_dir.path(), 1_048_576).expect("provider store"),
+            active: Arc::new(AtomicUsize::new(0)),
+            maximum_active: Arc::new(AtomicUsize::new(0)),
+            gets: AtomicUsize::new(0),
+            contains: AtomicUsize::new(0),
+            cancel_on_get: Some(control.clone()),
+        });
+        let mut references = Vec::new();
+        for index in 0..8 {
+            let chunk = key
+                .encrypt_chunk(backup_id, 1, format!("cancel {index}").as_bytes())
+                .expect("chunk");
+            read_provider.store.put(&chunk).expect("provider copy");
+            references.push(ChunkReference {
+                plaintext_digest: chunk.plaintext_digest.clone(),
+                opaque_locator: chunk.opaque_locator.clone(),
+                plaintext_length: chunk.plaintext_length,
+                ciphertext_length: chunk.ciphertext_length(),
+            });
+        }
+        let allowed = BTreeSet::from([read_provider.id]);
+        let requests: Vec<_> = references
+            .iter()
+            .map(|reference| (reference, &allowed))
+            .collect();
+        let scheduler =
+            ReplicationScheduler::new([Arc::clone(&read_provider) as Arc<dyn ChunkProvider>], 1)
+                .expect("scheduler");
+        assert!(matches!(
+            scheduler.fetch_plaintexts_parallel(&requests, backup_id, &key, &control, 0),
+            Err(CoreError::Cancelled)
+        ));
+        assert_eq!(read_provider.gets.load(Ordering::Acquire), 1);
+
+        let source = ChunkStore::open(source_dir.path(), 1_048_576).expect("source store");
+        let replication_control = JobControl::new();
+        let write_provider = Arc::new(CancellingPutProvider {
+            id: DeviceId::new(),
+            store: ChunkStore::open(tempdir().expect("write provider").keep(), 1_048_576)
+                .expect("write provider store"),
+            control: replication_control.clone(),
+            puts: AtomicUsize::new(0),
+        });
+        let mut locators = BTreeSet::new();
+        for index in 0..8 {
+            let chunk = key
+                .encrypt_chunk(backup_id, 1, format!("replicate cancel {index}").as_bytes())
+                .expect("chunk");
+            source.put(&chunk).expect("source copy");
+            locators.insert(chunk.opaque_locator);
+        }
+        let scheduler =
+            ReplicationScheduler::new([Arc::clone(&write_provider) as Arc<dyn ChunkProvider>], 1)
+                .expect("scheduler");
+        assert!(matches!(
+            scheduler.replicate_controlled(
+                &source,
+                &ReplicaIntent::explicit([write_provider.id]),
+                &locators,
+                &replication_control,
+            ),
+            Err(CoreError::Cancelled)
+        ));
+        assert_eq!(write_provider.puts.load(Ordering::Acquire), 1);
     }
 }

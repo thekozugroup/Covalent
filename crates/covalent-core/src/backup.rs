@@ -18,7 +18,10 @@ use crate::{
     StoredSnapshot,
 };
 
-const BACKUP_CHECKPOINT_SCHEMA_VERSION: u16 = 2;
+const LEGACY_BACKUP_CHECKPOINT_SCHEMA_VERSION: u16 = 2;
+const BACKUP_WAL_SCHEMA_VERSION: u16 = 3;
+const BACKUP_WAL_COMPACTION_STALE_RECORDS: usize = 4_096;
+const BACKUP_WAL_SYNC_INTERVAL: usize = 64;
 
 /// Source-link handling. Covalent never follows source symlinks.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -178,6 +181,23 @@ struct BackupCheckpoint {
     fingerprints: BTreeMap<RelativePath, SourceFingerprint>,
     chunk_locators: BTreeSet<String>,
     progress: BackupProgress,
+    #[serde(skip)]
+    record_count: usize,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "record", rename_all = "snake_case", deny_unknown_fields)]
+enum BackupWalRecord {
+    Header {
+        schema_version: u16,
+        options_digest: String,
+        source_canonical: String,
+    },
+    Entry {
+        entry: Box<ManifestEntry>,
+        fingerprint: SourceFingerprint,
+        progress: BackupProgress,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -240,15 +260,16 @@ pub(crate) fn scan_source(
     checkpoint.progress.entries_completed = 0;
     checkpoint.progress.symlinks_skipped = 0;
     if !resumed {
-        persist_checkpoint(store, options, &checkpoint)?;
+        initialize_checkpoint_log(store, options, &mut checkpoint)?;
     }
 
     let mut walker = WalkDir::new(&canonical)
         .follow_links(false)
         .same_file_system(false)
+        .sort_by_file_name()
         .into_iter();
     while let Some(next) = walker.next() {
-        control.check()?;
+        check_control_with_durable_checkpoint(control, store, &options.job_id)?;
         let entry = next.map_err(map_walk_error)?;
         if entry.depth() == 0 {
             continue;
@@ -296,7 +317,6 @@ pub(crate) fn scan_source(
                 source_fingerprint(&metadata, existing.kind),
             );
             checkpoint.progress.entries_completed += 1;
-            persist_checkpoint(store, options, &checkpoint)?;
             progress_callback(&checkpoint.progress);
             continue;
         }
@@ -353,15 +373,14 @@ pub(crate) fn scan_source(
                 .clone(),
             fingerprint,
         );
-        checkpoint
-            .entries
-            .sort_by(|left, right| left.path.cmp(&right.path));
         checkpoint.progress.entries_completed += 1;
         checkpoint.progress.current_path = None;
-        persist_checkpoint(store, options, &checkpoint)?;
+        append_checkpoint_entry(store, options, &mut checkpoint)?;
         progress_callback(&checkpoint.progress);
     }
 
+    store.sync_checkpoint_records(&options.job_id)?;
+    check_control_with_durable_checkpoint(control, store, &options.job_id)?;
     if !stable_root.path_is_unchanged()? {
         return Err(CoreError::SourceChanged(canonical));
     }
@@ -423,7 +442,7 @@ fn process_file(
     let mut sparse_extents = Vec::new();
 
     for (offset, extent_length) in extents {
-        control.check()?;
+        check_control_with_durable_checkpoint(control, store, &options.job_id)?;
         file.seek(SeekFrom::Start(offset))
             .map_err(|source| map_source_io(path, source))?;
         let mut limited = (&mut file).take(extent_length);
@@ -433,7 +452,7 @@ fn process_file(
             .next_chunk()
             .map_err(|source| map_source_io(path, source))?
         {
-            control.check()?;
+            check_control_with_durable_checkpoint(control, store, &options.job_id)?;
             processed = processed.saturating_add(bytes.len() as u64);
             checkpoint.progress.bytes_read = checkpoint
                 .progress
@@ -559,9 +578,13 @@ fn load_checkpoint(
     source_canonical: &str,
     options_digest: &str,
 ) -> Result<(BackupCheckpoint, bool), CoreError> {
+    if let Some(records) = store.read_checkpoint_records(&options.job_id)? {
+        return replay_checkpoint_log(store, options, source_canonical, options_digest, records)
+            .map(|checkpoint| (checkpoint, true));
+    }
     if let Some(bytes) = store.read_checkpoint(&options.job_id)? {
         let checkpoint: BackupCheckpoint = serde_json::from_slice(&bytes)?;
-        if checkpoint.schema_version != BACKUP_CHECKPOINT_SCHEMA_VERSION
+        if checkpoint.schema_version != LEGACY_BACKUP_CHECKPOINT_SCHEMA_VERSION
             || checkpoint.options_digest != options_digest
             || checkpoint.source_canonical != source_canonical
         {
@@ -569,28 +592,198 @@ fn load_checkpoint(
                 "backup checkpoint does not match this job".to_owned(),
             ));
         }
+        let mut checkpoint = checkpoint;
+        migrate_legacy_checkpoint(store, options, &mut checkpoint)?;
         return Ok((checkpoint, true));
     }
     Ok((
         BackupCheckpoint {
-            schema_version: BACKUP_CHECKPOINT_SCHEMA_VERSION,
+            schema_version: LEGACY_BACKUP_CHECKPOINT_SCHEMA_VERSION,
             options_digest: options_digest.to_owned(),
             source_canonical: source_canonical.to_owned(),
             entries: Vec::new(),
             fingerprints: BTreeMap::new(),
             chunk_locators: BTreeSet::new(),
             progress: BackupProgress::default(),
+            record_count: 0,
         },
         false,
     ))
 }
 
-fn persist_checkpoint(
+fn initialize_checkpoint_log(
+    store: &ChunkStore,
+    options: &BackupOptions,
+    checkpoint: &mut BackupCheckpoint,
+) -> Result<(), CoreError> {
+    let record = BackupWalRecord::Header {
+        schema_version: BACKUP_WAL_SCHEMA_VERSION,
+        options_digest: checkpoint.options_digest.clone(),
+        source_canonical: checkpoint.source_canonical.clone(),
+    };
+    store.append_checkpoint_record(&options.job_id, &serde_json::to_vec(&record)?)?;
+    checkpoint.record_count = 1;
+    Ok(())
+}
+
+fn append_checkpoint_entry(
+    store: &ChunkStore,
+    options: &BackupOptions,
+    checkpoint: &mut BackupCheckpoint,
+) -> Result<(), CoreError> {
+    let entry = checkpoint
+        .entries
+        .last()
+        .ok_or_else(|| CoreError::InvalidState("missing completed backup entry".to_owned()))?;
+    let fingerprint = checkpoint
+        .fingerprints
+        .get(&entry.path)
+        .ok_or_else(|| CoreError::InvalidState("missing source fingerprint".to_owned()))?;
+    let record = BackupWalRecord::Entry {
+        entry: Box::new(entry.clone()),
+        fingerprint: fingerprint.clone(),
+        progress: checkpoint.progress.clone(),
+    };
+    let next_record_count = checkpoint.record_count.saturating_add(1);
+    store.append_checkpoint_record_buffered(
+        &options.job_id,
+        &serde_json::to_vec(&record)?,
+        next_record_count.is_multiple_of(BACKUP_WAL_SYNC_INTERVAL),
+    )?;
+    checkpoint.record_count = next_record_count;
+    if backup_checkpoint_needs_compaction(checkpoint) {
+        compact_checkpoint_log(store, options, checkpoint)?;
+        checkpoint.record_count = checkpoint.entries.len().saturating_add(1);
+    }
+    Ok(())
+}
+
+fn check_control_with_durable_checkpoint(
+    control: &JobControl,
+    store: &ChunkStore,
+    job_id: &str,
+) -> Result<(), CoreError> {
+    match control.check() {
+        Ok(()) => Ok(()),
+        Err(error @ (CoreError::Paused | CoreError::Cancelled)) => {
+            store.sync_checkpoint_records(job_id)?;
+            Err(error)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn replay_checkpoint_log(
+    store: &ChunkStore,
+    options: &BackupOptions,
+    source_canonical: &str,
+    options_digest: &str,
+    records: Vec<Vec<u8>>,
+) -> Result<BackupCheckpoint, CoreError> {
+    let mut records = records.into_iter();
+    let header: BackupWalRecord = serde_json::from_slice(
+        &records
+            .next()
+            .ok_or_else(|| CoreError::InvalidState("empty backup checkpoint log".to_owned()))?,
+    )?;
+    match header {
+        BackupWalRecord::Header {
+            schema_version,
+            options_digest: persisted_options,
+            source_canonical: persisted_source,
+        } if schema_version == BACKUP_WAL_SCHEMA_VERSION
+            && persisted_options == options_digest
+            && persisted_source == source_canonical => {}
+        _ => {
+            return Err(CoreError::InvalidState(
+                "backup checkpoint does not match this job".to_owned(),
+            ));
+        }
+    }
+    let mut entries = BTreeMap::new();
+    let mut fingerprints = BTreeMap::new();
+    let mut progress = BackupProgress::default();
+    let mut record_count = 1_usize;
+    for bytes in records {
+        match serde_json::from_slice(&bytes)? {
+            BackupWalRecord::Entry {
+                entry,
+                fingerprint,
+                progress: recorded_progress,
+            } => {
+                fingerprints.insert(entry.path.clone(), fingerprint);
+                entries.insert(entry.path.clone(), *entry);
+                progress = recorded_progress;
+                record_count = record_count.saturating_add(1);
+            }
+            BackupWalRecord::Header { .. } => {
+                return Err(CoreError::InvalidState(
+                    "duplicate backup checkpoint header".to_owned(),
+                ));
+            }
+        }
+    }
+    let entries: Vec<_> = entries.into_values().collect();
+    let chunk_locators = entries
+        .iter()
+        .flat_map(|entry| &entry.chunks)
+        .map(|reference| reference.opaque_locator.clone())
+        .collect();
+    let checkpoint = BackupCheckpoint {
+        schema_version: LEGACY_BACKUP_CHECKPOINT_SCHEMA_VERSION,
+        options_digest: options_digest.to_owned(),
+        source_canonical: source_canonical.to_owned(),
+        entries,
+        fingerprints,
+        chunk_locators,
+        progress,
+        record_count,
+    };
+    if backup_checkpoint_needs_compaction(&checkpoint) {
+        compact_checkpoint_log(store, options, &checkpoint)?;
+    }
+    Ok(checkpoint)
+}
+
+fn backup_checkpoint_needs_compaction(checkpoint: &BackupCheckpoint) -> bool {
+    let live_records = checkpoint.entries.len().saturating_add(1);
+    let stale_records = checkpoint.record_count.saturating_sub(live_records);
+    stale_records
+        > BACKUP_WAL_COMPACTION_STALE_RECORDS.max(checkpoint.entries.len().saturating_div(2))
+}
+
+fn migrate_legacy_checkpoint(
+    store: &ChunkStore,
+    options: &BackupOptions,
+    checkpoint: &mut BackupCheckpoint,
+) -> Result<(), CoreError> {
+    checkpoint.record_count = checkpoint.entries.len().saturating_add(1);
+    compact_checkpoint_log(store, options, checkpoint)
+}
+
+fn compact_checkpoint_log(
     store: &ChunkStore,
     options: &BackupOptions,
     checkpoint: &BackupCheckpoint,
 ) -> Result<(), CoreError> {
-    store.write_checkpoint(&options.job_id, &serde_json::to_vec(checkpoint)?)
+    let mut records = Vec::with_capacity(checkpoint.entries.len().saturating_add(1));
+    records.push(serde_json::to_vec(&BackupWalRecord::Header {
+        schema_version: BACKUP_WAL_SCHEMA_VERSION,
+        options_digest: checkpoint.options_digest.clone(),
+        source_canonical: checkpoint.source_canonical.clone(),
+    })?);
+    for entry in &checkpoint.entries {
+        let fingerprint = checkpoint
+            .fingerprints
+            .get(&entry.path)
+            .ok_or_else(|| CoreError::InvalidState("missing source fingerprint".to_owned()))?;
+        records.push(serde_json::to_vec(&BackupWalRecord::Entry {
+            entry: Box::new(entry.clone()),
+            fingerprint: fingerprint.clone(),
+            progress: checkpoint.progress.clone(),
+        })?);
+    }
+    store.replace_checkpoint_records(&options.job_id, &records)
 }
 
 fn relative_path(root: &Path, path: &Path) -> Result<RelativePath, CoreError> {

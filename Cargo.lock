@@ -500,6 +500,7 @@ dependencies = [
  "covalent-core",
  "covalent-protocol",
  "ed25519-dalek",
+ "fs2",
  "http-body-util",
  "mdns-sd",
  "quinn",

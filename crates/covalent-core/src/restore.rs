@@ -16,7 +16,11 @@ use crate::{
     ReplicationScheduler,
 };
 
-const RESTORE_CHECKPOINT_SCHEMA_VERSION: u16 = 1;
+const LEGACY_RESTORE_CHECKPOINT_SCHEMA_VERSION: u16 = 1;
+const RESTORE_WAL_SCHEMA_VERSION: u16 = 2;
+const RESTORE_WAL_COMPACTION_STALE_RECORDS: usize = 4_096;
+const RESTORE_WAL_SYNC_INTERVAL: usize = 64;
+const RESTORE_FILE_COMMIT_BATCH_SIZE: usize = 64;
 const RESTORE_PLAN_SIGNATURE_DOMAIN: &[u8] = b"covalent/restore-plan/v1";
 
 /// Immutable restore preview options.
@@ -118,14 +122,55 @@ pub struct RestoreReport {
     pub bytes_written: u64,
     /// Provider failures rejected while another intact copy succeeded.
     pub rejected_provider_copies: Vec<ProviderFailure>,
+    /// Authenticated chunks consumed from each provider.
+    pub provider_chunks: BTreeMap<DeviceId, usize>,
+}
+
+#[derive(Clone, Debug)]
+struct RestoreCheckpoint {
+    plan_digest: String,
+    entries: BTreeMap<RelativePath, RestoreCheckpointEntry>,
+    record_count: usize,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RestoreCheckpoint {
+struct LegacyRestoreCheckpoint {
     schema_version: u16,
     plan_digest: String,
     completed: BTreeMap<RelativePath, String>,
+}
+
+#[derive(Clone, Debug)]
+enum RestoreCheckpointEntry {
+    Prepared(RestoreReceipt),
+    Completed(RestoreReceipt),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RestoreReceipt {
+    kind: EntryKind,
+    plaintext_digest: String,
+    expected_length: Option<u64>,
+    expected_metadata: Option<EntryMetadata>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "record", rename_all = "snake_case", deny_unknown_fields)]
+enum RestoreWalRecord {
+    Header {
+        schema_version: u16,
+        plan_digest: String,
+    },
+    Prepared {
+        destination_path: RelativePath,
+        receipt: RestoreReceipt,
+    },
+    Completed {
+        destination_path: RelativePath,
+        receipt: RestoreReceipt,
+    },
 }
 
 pub(crate) fn preview_restore(
@@ -195,7 +240,7 @@ pub(crate) fn execute_restore(
     control: &JobControl,
 ) -> Result<RestoreReport, CoreError> {
     validate_plan(manifest, plan, authorized_root, signer)?;
-    let mut checkpoint = load_restore_checkpoint(store, plan)?;
+    let mut checkpoint = load_restore_checkpoint(store, plan, manifest)?;
     let safe_root = SafeRestoreRoot::open(authorized_root)?;
     let manifest_entries: BTreeMap<_, _> = manifest
         .entries
@@ -220,8 +265,9 @@ pub(crate) fn execute_restore(
     }
     let mut deferred_directories = Vec::new();
 
-    for preview in &plan.entries {
-        control.check()?;
+    let mut preview_index = 0_usize;
+    while let Some(preview) = plan.entries.get(preview_index) {
+        check_restore_control(control, store, &plan.job_id)?;
         let synthetic;
         let entry = if let Some(entry) = manifest_entries.get(&preview.source_path) {
             *entry
@@ -236,62 +282,147 @@ pub(crate) fn execute_restore(
         } else {
             return Err(CoreError::RestorePlanMismatch);
         };
-        if let Some(expected_digest) = checkpoint.completed.get(&preview.destination_path) {
-            if safe_root.completed_entry_matches(
-                &preview.destination_path,
-                preview.kind,
-                expected_digest,
-            )? {
+        if let Some(state) = checkpoint.entries.get(&preview.destination_path).cloned() {
+            let receipt = match &state {
+                RestoreCheckpointEntry::Prepared(receipt)
+                | RestoreCheckpointEntry::Completed(receipt) => receipt,
+            };
+            if safe_root.completed_entry_matches(&preview.destination_path, receipt)? {
+                if matches!(state, RestoreCheckpointEntry::Prepared(_)) {
+                    append_restore_checkpoint(
+                        store,
+                        plan,
+                        &mut checkpoint,
+                        preview.destination_path.clone(),
+                        RestoreCheckpointEntry::Completed(receipt.clone()),
+                    )?;
+                }
                 if preview.action == PreviewAction::CreateDirectory {
                     deferred_directories.push((preview.destination_path.clone(), entry.clone()));
                 }
+                preview_index += 1;
                 continue;
             }
-            return Err(CoreError::RestorePlanMismatch);
+            if matches!(state, RestoreCheckpointEntry::Completed(_)) {
+                return Err(CoreError::RestorePlanMismatch);
+            }
         }
         match preview.action {
             PreviewAction::CreateDirectory => {
+                let receipt = directory_receipt();
+                append_restore_checkpoint(
+                    store,
+                    plan,
+                    &mut checkpoint,
+                    preview.destination_path.clone(),
+                    RestoreCheckpointEntry::Prepared(receipt.clone()),
+                )?;
                 safe_root.ensure_directory(&preview.destination_path, entry)?;
                 report.directories_created += 1;
-                checkpoint
-                    .completed
-                    .insert(preview.destination_path.clone(), "directory".to_owned());
+                append_restore_checkpoint(
+                    store,
+                    plan,
+                    &mut checkpoint,
+                    preview.destination_path.clone(),
+                    RestoreCheckpointEntry::Completed(receipt),
+                )?;
                 deferred_directories.push((preview.destination_path.clone(), (*entry).clone()));
             }
             PreviewAction::KeepDirectory => {
                 safe_root.verify_directory(&preview.destination_path)?;
-                checkpoint
-                    .completed
-                    .insert(preview.destination_path.clone(), "directory".to_owned());
+                append_restore_checkpoint(
+                    store,
+                    plan,
+                    &mut checkpoint,
+                    preview.destination_path.clone(),
+                    RestoreCheckpointEntry::Completed(directory_receipt()),
+                )?;
             }
             PreviewAction::SkipFile => {
                 safe_root.verify_regular_file(&preview.destination_path)?;
                 report.files_skipped += 1;
                 let digest = safe_root.digest_regular_file(&preview.destination_path)?;
-                checkpoint
-                    .completed
-                    .insert(preview.destination_path.clone(), digest);
+                append_restore_checkpoint(
+                    store,
+                    plan,
+                    &mut checkpoint,
+                    preview.destination_path.clone(),
+                    RestoreCheckpointEntry::Completed(RestoreReceipt {
+                        kind: EntryKind::File,
+                        plaintext_digest: digest,
+                        expected_length: None,
+                        expected_metadata: None,
+                    }),
+                )?;
             }
             PreviewAction::CreateFile | PreviewAction::ReplaceFile | PreviewAction::RenameFile => {
-                let outcome = safe_root.write_file(
-                    entry,
-                    &preview.destination_path,
-                    preview.action,
+                let mut batch = vec![(entry, preview)];
+                while batch.len() < RESTORE_FILE_COMMIT_BATCH_SIZE {
+                    let Some(next_preview) = plan.entries.get(preview_index + batch.len()) else {
+                        break;
+                    };
+                    if !matches!(
+                        next_preview.action,
+                        PreviewAction::CreateFile
+                            | PreviewAction::ReplaceFile
+                            | PreviewAction::RenameFile
+                    ) || checkpoint
+                        .entries
+                        .contains_key(&next_preview.destination_path)
+                    {
+                        break;
+                    }
+                    let next_entry = manifest_entries
+                        .get(&next_preview.source_path)
+                        .copied()
+                        .ok_or(CoreError::RestorePlanMismatch)?;
+                    batch.push((next_entry, next_preview));
+                }
+                let outcomes = safe_root.write_files(
+                    &batch,
                     manifest.backup_id,
                     key,
                     scheduler,
                     &allowed_providers,
                     control,
+                    &mut |preparations| {
+                        for ((entry, _), preparation) in batch.iter().zip(preparations) {
+                            let receipt =
+                                restored_file_receipt(entry, &preparation.outcome.plaintext_digest);
+                            append_restore_checkpoint_buffered(
+                                store,
+                                plan,
+                                &mut checkpoint,
+                                preparation.destination.clone(),
+                                RestoreCheckpointEntry::Prepared(receipt),
+                            )?;
+                        }
+                        store.sync_checkpoint_records(&plan.job_id)?;
+                        Ok(())
+                    },
                 )?;
-                report.files_restored += 1;
-                report.bytes_written = report.bytes_written.saturating_add(outcome.bytes_written);
-                report.rejected_provider_copies.extend(outcome.failures);
-                checkpoint
-                    .completed
-                    .insert(preview.destination_path.clone(), outcome.plaintext_digest);
+                for ((entry, preview), outcome) in batch.iter().zip(outcomes) {
+                    report.files_restored += 1;
+                    report.bytes_written =
+                        report.bytes_written.saturating_add(outcome.bytes_written);
+                    report.rejected_provider_copies.extend(outcome.failures);
+                    for (provider_id, chunks) in outcome.provider_chunks {
+                        *report.provider_chunks.entry(provider_id).or_default() += chunks;
+                    }
+                    let receipt = restored_file_receipt(entry, &outcome.plaintext_digest);
+                    append_restore_checkpoint_buffered(
+                        store,
+                        plan,
+                        &mut checkpoint,
+                        preview.destination_path.clone(),
+                        RestoreCheckpointEntry::Completed(receipt),
+                    )?;
+                }
+                preview_index += batch.len();
+                continue;
             }
         }
-        store.write_checkpoint(&plan.job_id, &serde_json::to_vec(&checkpoint)?)?;
+        preview_index += 1;
     }
     for (path, entry) in deferred_directories.into_iter().rev() {
         safe_root.apply_directory_metadata(&path, &entry)?;
@@ -574,21 +705,249 @@ fn implicit_directory(path: RelativePath) -> ManifestEntry {
 fn load_restore_checkpoint(
     store: &ChunkStore,
     plan: &RestorePlan,
+    manifest: &Manifest,
 ) -> Result<RestoreCheckpoint, CoreError> {
+    if let Some(records) = store.read_checkpoint_records(&plan.job_id)? {
+        return replay_restore_checkpoint(store, plan, records);
+    }
     if let Some(bytes) = store.read_checkpoint(&plan.job_id)? {
-        let checkpoint: RestoreCheckpoint = serde_json::from_slice(&bytes)?;
-        if checkpoint.schema_version != RESTORE_CHECKPOINT_SCHEMA_VERSION
-            || checkpoint.plan_digest != plan.plan_digest
+        let legacy: LegacyRestoreCheckpoint = serde_json::from_slice(&bytes)?;
+        if legacy.schema_version != LEGACY_RESTORE_CHECKPOINT_SCHEMA_VERSION
+            || legacy.plan_digest != plan.plan_digest
         {
             return Err(CoreError::RestorePlanMismatch);
         }
+        let mut checkpoint = RestoreCheckpoint {
+            plan_digest: plan.plan_digest.clone(),
+            entries: BTreeMap::new(),
+            record_count: 1,
+        };
+        for (destination, digest) in legacy.completed {
+            let preview = plan
+                .entries
+                .iter()
+                .find(|preview| preview.destination_path == destination)
+                .ok_or(CoreError::RestorePlanMismatch)?;
+            let receipt = if preview.kind == EntryKind::Directory {
+                directory_receipt()
+            } else if preview.action == PreviewAction::SkipFile {
+                RestoreReceipt {
+                    kind: EntryKind::File,
+                    plaintext_digest: digest,
+                    expected_length: None,
+                    expected_metadata: None,
+                }
+            } else {
+                let entry = manifest
+                    .entries
+                    .iter()
+                    .find(|entry| entry.path == preview.source_path)
+                    .ok_or(CoreError::RestorePlanMismatch)?;
+                restored_file_receipt(entry, &digest)
+            };
+            checkpoint
+                .entries
+                .insert(destination, RestoreCheckpointEntry::Completed(receipt));
+        }
+        compact_restore_checkpoint(store, plan, &checkpoint)?;
         return Ok(checkpoint);
     }
-    Ok(RestoreCheckpoint {
-        schema_version: RESTORE_CHECKPOINT_SCHEMA_VERSION,
+    let checkpoint = RestoreCheckpoint {
         plan_digest: plan.plan_digest.clone(),
-        completed: BTreeMap::new(),
-    })
+        entries: BTreeMap::new(),
+        record_count: 1,
+    };
+    compact_restore_checkpoint(store, plan, &checkpoint)?;
+    Ok(checkpoint)
+}
+
+fn replay_restore_checkpoint(
+    store: &ChunkStore,
+    plan: &RestorePlan,
+    records: Vec<Vec<u8>>,
+) -> Result<RestoreCheckpoint, CoreError> {
+    let mut records = records.into_iter();
+    let header: RestoreWalRecord = serde_json::from_slice(
+        &records
+            .next()
+            .ok_or_else(|| CoreError::InvalidState("empty restore checkpoint log".to_owned()))?,
+    )?;
+    match header {
+        RestoreWalRecord::Header {
+            schema_version,
+            plan_digest,
+        } if schema_version == RESTORE_WAL_SCHEMA_VERSION && plan_digest == plan.plan_digest => {}
+        _ => return Err(CoreError::RestorePlanMismatch),
+    }
+    let mut checkpoint = RestoreCheckpoint {
+        plan_digest: plan.plan_digest.clone(),
+        entries: BTreeMap::new(),
+        record_count: 1,
+    };
+    for bytes in records {
+        let (destination_path, state) = match serde_json::from_slice(&bytes)? {
+            RestoreWalRecord::Prepared {
+                destination_path,
+                receipt,
+            } => (destination_path, RestoreCheckpointEntry::Prepared(receipt)),
+            RestoreWalRecord::Completed {
+                destination_path,
+                receipt,
+            } => (destination_path, RestoreCheckpointEntry::Completed(receipt)),
+            RestoreWalRecord::Header { .. } => return Err(CoreError::RestorePlanMismatch),
+        };
+        if !plan
+            .entries
+            .iter()
+            .any(|preview| preview.destination_path == destination_path)
+        {
+            return Err(CoreError::RestorePlanMismatch);
+        }
+        checkpoint.entries.insert(destination_path, state);
+        checkpoint.record_count = checkpoint.record_count.saturating_add(1);
+    }
+    if restore_checkpoint_needs_compaction(&checkpoint) {
+        compact_restore_checkpoint(store, plan, &checkpoint)?;
+    }
+    Ok(checkpoint)
+}
+
+fn append_restore_checkpoint(
+    store: &ChunkStore,
+    plan: &RestorePlan,
+    checkpoint: &mut RestoreCheckpoint,
+    destination_path: RelativePath,
+    state: RestoreCheckpointEntry,
+) -> Result<(), CoreError> {
+    let next_record_count = checkpoint.record_count.saturating_add(1);
+    let durable = matches!(state, RestoreCheckpointEntry::Prepared(_))
+        || next_record_count.is_multiple_of(RESTORE_WAL_SYNC_INTERVAL);
+    append_restore_checkpoint_with_durability(
+        store,
+        plan,
+        checkpoint,
+        destination_path,
+        state,
+        durable,
+    )
+}
+
+fn append_restore_checkpoint_buffered(
+    store: &ChunkStore,
+    plan: &RestorePlan,
+    checkpoint: &mut RestoreCheckpoint,
+    destination_path: RelativePath,
+    state: RestoreCheckpointEntry,
+) -> Result<(), CoreError> {
+    append_restore_checkpoint_with_durability(
+        store,
+        plan,
+        checkpoint,
+        destination_path,
+        state,
+        false,
+    )
+}
+
+fn append_restore_checkpoint_with_durability(
+    store: &ChunkStore,
+    plan: &RestorePlan,
+    checkpoint: &mut RestoreCheckpoint,
+    destination_path: RelativePath,
+    state: RestoreCheckpointEntry,
+    durable: bool,
+) -> Result<(), CoreError> {
+    if checkpoint.plan_digest != plan.plan_digest {
+        return Err(CoreError::RestorePlanMismatch);
+    }
+    let record = match &state {
+        RestoreCheckpointEntry::Prepared(receipt) => RestoreWalRecord::Prepared {
+            destination_path: destination_path.clone(),
+            receipt: receipt.clone(),
+        },
+        RestoreCheckpointEntry::Completed(receipt) => RestoreWalRecord::Completed {
+            destination_path: destination_path.clone(),
+            receipt: receipt.clone(),
+        },
+    };
+    store.append_checkpoint_record_buffered(
+        &plan.job_id,
+        &serde_json::to_vec(&record)?,
+        durable,
+    )?;
+    checkpoint.entries.insert(destination_path, state);
+    checkpoint.record_count = checkpoint.record_count.saturating_add(1);
+    if restore_checkpoint_needs_compaction(checkpoint) {
+        compact_restore_checkpoint(store, plan, checkpoint)?;
+        checkpoint.record_count = checkpoint.entries.len().saturating_add(1);
+    }
+    Ok(())
+}
+
+fn check_restore_control(
+    control: &JobControl,
+    store: &ChunkStore,
+    job_id: &str,
+) -> Result<(), CoreError> {
+    match control.check() {
+        Ok(()) => Ok(()),
+        Err(error @ (CoreError::Paused | CoreError::Cancelled)) => {
+            store.sync_checkpoint_records(job_id)?;
+            Err(error)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn restore_checkpoint_needs_compaction(checkpoint: &RestoreCheckpoint) -> bool {
+    let live_records = checkpoint.entries.len().saturating_add(1);
+    let stale_records = checkpoint.record_count.saturating_sub(live_records);
+    stale_records
+        > RESTORE_WAL_COMPACTION_STALE_RECORDS.max(checkpoint.entries.len().saturating_div(2))
+}
+
+fn compact_restore_checkpoint(
+    store: &ChunkStore,
+    plan: &RestorePlan,
+    checkpoint: &RestoreCheckpoint,
+) -> Result<(), CoreError> {
+    let mut records = Vec::with_capacity(checkpoint.entries.len().saturating_add(1));
+    records.push(serde_json::to_vec(&RestoreWalRecord::Header {
+        schema_version: RESTORE_WAL_SCHEMA_VERSION,
+        plan_digest: plan.plan_digest.clone(),
+    })?);
+    for (destination_path, state) in &checkpoint.entries {
+        let record = match state {
+            RestoreCheckpointEntry::Prepared(receipt) => RestoreWalRecord::Prepared {
+                destination_path: destination_path.clone(),
+                receipt: receipt.clone(),
+            },
+            RestoreCheckpointEntry::Completed(receipt) => RestoreWalRecord::Completed {
+                destination_path: destination_path.clone(),
+                receipt: receipt.clone(),
+            },
+        };
+        records.push(serde_json::to_vec(&record)?);
+    }
+    store.replace_checkpoint_records(&plan.job_id, &records)
+}
+
+fn directory_receipt() -> RestoreReceipt {
+    RestoreReceipt {
+        kind: EntryKind::Directory,
+        plaintext_digest: "directory".to_owned(),
+        expected_length: Some(0),
+        expected_metadata: None,
+    }
+}
+
+fn restored_file_receipt(entry: &ManifestEntry, plaintext_digest: &str) -> RestoreReceipt {
+    RestoreReceipt {
+        kind: EntryKind::File,
+        plaintext_digest: plaintext_digest.to_owned(),
+        expected_length: Some(entry.length),
+        expected_metadata: Some(entry.metadata.clone()),
+    }
 }
 
 fn digest_file_handle(mut file: &File, path: &Path) -> Result<String, CoreError> {
@@ -637,6 +996,96 @@ struct FileWriteOutcome {
     plaintext_digest: String,
     bytes_written: u64,
     failures: Vec<ProviderFailure>,
+    provider_chunks: BTreeMap<DeviceId, usize>,
+}
+
+struct PreparedRestoreFile<'a> {
+    destination: &'a RelativePath,
+    outcome: &'a FileWriteOutcome,
+}
+
+#[cfg(unix)]
+struct StagedRestoreFile {
+    destination: RelativePath,
+    parent: std::os::fd::OwnedFd,
+    final_name: String,
+    temporary_name: String,
+    action: PreviewAction,
+    file: Option<File>,
+    outcome: Option<FileWriteOutcome>,
+    committed: bool,
+}
+
+#[cfg(unix)]
+impl Drop for StagedRestoreFile {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = rustix::fs::unlinkat(
+                &self.parent,
+                self.temporary_name.as_str(),
+                rustix::fs::AtFlags::empty(),
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+fn sync_staged_restore_files(
+    staged_files: &[StagedRestoreFile],
+    restore_root: &Path,
+    maximum_parallelism: usize,
+    control: &JobControl,
+) -> Result<(), CoreError> {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    if staged_files.is_empty() {
+        return Ok(());
+    }
+    let next = AtomicUsize::new(0);
+    let first_error = Mutex::new(None);
+    std::thread::scope(|scope| {
+        for _ in 0..maximum_parallelism.min(staged_files.len()) {
+            scope.spawn(|| {
+                loop {
+                    if first_error.lock().expect("restore sync lock").is_some() {
+                        break;
+                    }
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(staged) = staged_files.get(index) else {
+                        break;
+                    };
+                    let result = control.check().and_then(|()| {
+                        staged
+                            .file
+                            .as_ref()
+                            .ok_or_else(|| {
+                                CoreError::InvalidState(
+                                    "restore staging descriptor is unavailable".to_owned(),
+                                )
+                            })?
+                            .sync_all()
+                            .map_err(|source| CoreError::Io {
+                                operation: "sync restore staging file",
+                                path: restore_root.join(staged.destination.as_str()),
+                                source,
+                            })
+                    });
+                    if let Err(error) = result {
+                        let mut captured = first_error.lock().expect("restore sync lock");
+                        if captured.is_none() {
+                            *captured = Some(error);
+                        }
+                        break;
+                    }
+                }
+            });
+        }
+    });
+    if let Some(error) = first_error.into_inner().expect("restore sync lock") {
+        return Err(error);
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -745,12 +1194,11 @@ impl SafeRestoreRoot {
     fn completed_entry_matches(
         &self,
         path: &RelativePath,
-        kind: EntryKind,
-        expected_digest: &str,
+        receipt: &RestoreReceipt,
     ) -> Result<bool, CoreError> {
-        match kind {
+        match receipt.kind {
             EntryKind::Directory => match self.verify_directory(path) {
-                Ok(()) => Ok(expected_digest == "directory"),
+                Ok(()) => Ok(receipt.plaintext_digest == "directory"),
                 Err(CoreError::Io { source, .. })
                     if source.kind() == std::io::ErrorKind::NotFound =>
                 {
@@ -758,8 +1206,8 @@ impl SafeRestoreRoot {
                 }
                 Err(error) => Err(error),
             },
-            EntryKind::File => match self.digest_regular_file(path) {
-                Ok(digest) => Ok(digest == expected_digest),
+            EntryKind::File => match self.regular_file_matches_receipt(path, receipt) {
+                Ok(matches) => Ok(matches),
                 Err(CoreError::Io { source, .. })
                     if source.kind() == std::io::ErrorKind::NotFound =>
                 {
@@ -770,131 +1218,231 @@ impl SafeRestoreRoot {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn write_file(
+    fn regular_file_matches_receipt(
         &self,
-        entry: &ManifestEntry,
-        destination: &RelativePath,
-        action: PreviewAction,
+        path: &RelativePath,
+        receipt: &RestoreReceipt,
+    ) -> Result<bool, CoreError> {
+        use rustix::fs::{FileType, Mode, OFlags, fstat, openat};
+
+        if !self.root_is_unchanged()? {
+            return Err(CoreError::RestorePlanMismatch);
+        }
+        let (parent, name) = self.open_parent(path, false)?;
+        let descriptor = openat(
+            &parent,
+            name.as_str(),
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|error| {
+            restore_os_error(
+                "open restored file for reconciliation",
+                &self.canonical,
+                error,
+            )
+        })?;
+        let stat = fstat(&descriptor).map_err(|error| {
+            restore_os_error(
+                "inspect restored file for reconciliation",
+                &self.canonical,
+                error,
+            )
+        })?;
+        if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
+            return Ok(false);
+        }
+        let file = File::from(descriptor);
+        let metadata = file.metadata().map_err(|source| CoreError::Io {
+            operation: "inspect restored file metadata",
+            path: self.canonical.join(path.as_str()),
+            source,
+        })?;
+        if receipt
+            .expected_length
+            .is_some_and(|length| metadata.len() != length)
+            || receipt
+                .expected_metadata
+                .as_ref()
+                .is_some_and(|expected| !restored_metadata_matches(&metadata, expected))
+        {
+            return Ok(false);
+        }
+        Ok(
+            digest_file_handle(&file, &self.canonical.join(path.as_str()))?
+                == receipt.plaintext_digest,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn write_files(
+        &self,
+        entries: &[(&ManifestEntry, &RestorePreviewEntry)],
         backup_id: BackupId,
         key: &BackupKey,
         scheduler: &ReplicationScheduler,
         allowed_providers: &BTreeMap<String, BTreeSet<DeviceId>>,
         control: &JobControl,
-    ) -> Result<FileWriteOutcome, CoreError> {
+        before_commit: &mut dyn FnMut(&[PreparedRestoreFile<'_>]) -> Result<(), CoreError>,
+    ) -> Result<Vec<FileWriteOutcome>, CoreError> {
         use rustix::fs::{
             AtFlags, FileType, Mode, OFlags, RenameFlags, fsync, openat, renameat, renameat_with,
-            statat, unlinkat,
+            statat,
         };
-        if !self.root_is_unchanged()? {
-            return Err(CoreError::RestorePlanMismatch);
+        let mut staged_files = Vec::with_capacity(entries.len());
+        for (entry, preview) in entries {
+            control.check()?;
+            if !self.root_is_unchanged()? {
+                return Err(CoreError::RestorePlanMismatch);
+            }
+            let (parent, final_name) = self.open_parent(&preview.destination_path, true)?;
+            match statat(&parent, final_name.as_str(), AtFlags::SYMLINK_NOFOLLOW) {
+                Ok(stat) => {
+                    let kind = FileType::from_raw_mode(stat.st_mode);
+                    if preview.action != PreviewAction::ReplaceFile || kind != FileType::RegularFile
+                    {
+                        return Err(if kind == FileType::Symlink {
+                            CoreError::SymlinkTraversal(
+                                self.canonical.join(preview.destination_path.as_str()),
+                            )
+                        } else {
+                            CoreError::RestoreConflict(
+                                self.canonical.join(preview.destination_path.as_str()),
+                            )
+                        });
+                    }
+                }
+                Err(rustix::io::Errno::NOENT) => {
+                    if preview.action == PreviewAction::ReplaceFile {
+                        return Err(CoreError::RestorePlanMismatch);
+                    }
+                }
+                Err(error) => {
+                    return Err(restore_os_error(
+                        "inspect restore destination",
+                        &self.canonical,
+                        error,
+                    ));
+                }
+            }
+            let temporary_name = format!(".covalent-{}.tmp", uuid::Uuid::new_v4());
+            let mut staged = StagedRestoreFile {
+                destination: preview.destination_path.clone(),
+                parent,
+                final_name,
+                temporary_name,
+                action: preview.action,
+                file: None,
+                outcome: None,
+                committed: false,
+            };
+            let temporary_descriptor = openat(
+                &staged.parent,
+                staged.temporary_name.as_str(),
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::RUSR | Mode::WUSR,
+            )
+            .map_err(|error| {
+                restore_os_error("create restore staging file", &self.canonical, error)
+            })?;
+            let mut file = File::from(temporary_descriptor);
+            let outcome = self.write_plaintext(
+                &mut file,
+                entry,
+                backup_id,
+                key,
+                scheduler,
+                allowed_providers,
+                control,
+            )?;
+            self.apply_file_metadata(&file, entry)?;
+            staged.file = Some(file);
+            staged.outcome = Some(outcome);
+            staged_files.push(staged);
         }
-        let (parent, final_name) = self.open_parent(destination, true)?;
-        match statat(&parent, final_name.as_str(), AtFlags::SYMLINK_NOFOLLOW) {
-            Ok(stat) => {
-                let kind = FileType::from_raw_mode(stat.st_mode);
-                if action != PreviewAction::ReplaceFile || kind != FileType::RegularFile {
-                    return Err(if kind == FileType::Symlink {
-                        CoreError::SymlinkTraversal(self.canonical.join(destination.as_str()))
-                    } else {
-                        CoreError::RestoreConflict(self.canonical.join(destination.as_str()))
-                    });
-                }
+        sync_staged_restore_files(
+            &staged_files,
+            &self.canonical,
+            scheduler.maximum_parallelism(),
+            control,
+        )?;
+        for staged in &mut staged_files {
+            drop(staged.file.take());
+        }
+        let preparations: Vec<_> = staged_files
+            .iter()
+            .map(|staged| PreparedRestoreFile {
+                destination: &staged.destination,
+                outcome: staged.outcome.as_ref().expect("staged outcome"),
+            })
+            .collect();
+        before_commit(&preparations)?;
+
+        for staged in &mut staged_files {
+            let (reopened_parent, reopened_name) = self.open_parent(&staged.destination, false)?;
+            let original_stat = rustix::fs::fstat(&staged.parent).map_err(|error| {
+                restore_os_error("inspect restore parent", &self.canonical, error)
+            })?;
+            let reopened_stat = rustix::fs::fstat(&reopened_parent).map_err(|error| {
+                restore_os_error("recheck restore parent", &self.canonical, error)
+            })?;
+            if reopened_name != staged.final_name
+                || original_stat.st_dev != reopened_stat.st_dev
+                || original_stat.st_ino != reopened_stat.st_ino
+                || !self.root_is_unchanged()?
+            {
+                return Err(CoreError::RestorePlanMismatch);
             }
-            Err(rustix::io::Errno::NOENT) => {
-                if action == PreviewAction::ReplaceFile {
-                    return Err(CoreError::RestorePlanMismatch);
-                }
-            }
-            Err(error) => {
+            let rename_result = if staged.action == PreviewAction::ReplaceFile {
+                renameat(
+                    &staged.parent,
+                    staged.temporary_name.as_str(),
+                    &staged.parent,
+                    staged.final_name.as_str(),
+                )
+            } else {
+                renameat_with(
+                    &staged.parent,
+                    staged.temporary_name.as_str(),
+                    &staged.parent,
+                    staged.final_name.as_str(),
+                    RenameFlags::NOREPLACE,
+                )
+            };
+            if let Err(error) = rename_result {
                 return Err(restore_os_error(
-                    "inspect restore destination",
-                    &self.canonical,
+                    "atomically commit restored file",
+                    &self.canonical.join(staged.destination.as_str()),
                     error,
                 ));
             }
+            staged.committed = true;
         }
-        let temporary_name = format!(".covalent-{}.tmp", uuid::Uuid::new_v4());
-        let temporary_descriptor = openat(
-            &parent,
-            temporary_name.as_str(),
-            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::RUSR | Mode::WUSR,
-        )
-        .map_err(|error| restore_os_error("create restore staging file", &self.canonical, error))?;
-        let mut file = File::from(temporary_descriptor);
-        let write_result = self.write_plaintext(
-            &mut file,
-            entry,
-            backup_id,
-            key,
-            scheduler,
-            allowed_providers,
-            control,
-        );
-        let mut outcome = match write_result {
-            Ok(outcome) => outcome,
-            Err(error) => {
-                drop(file);
-                let _ = unlinkat(&parent, temporary_name.as_str(), AtFlags::empty());
-                return Err(error);
+        let mut synced_parents = BTreeSet::new();
+        for staged in &staged_files {
+            let stat = rustix::fs::fstat(&staged.parent).map_err(|error| {
+                restore_os_error("inspect restored file parent", &self.canonical, error)
+            })?;
+            if synced_parents.insert((stat.st_dev, stat.st_ino)) {
+                fsync(&staged.parent).map_err(|error| {
+                    restore_os_error(
+                        "sync restored file parent",
+                        &self.canonical.join(staged.destination.as_str()),
+                        error,
+                    )
+                })?;
             }
-        };
-        self.apply_file_metadata(&file, entry)?;
-        file.sync_all().map_err(|source| CoreError::Io {
-            operation: "sync restore staging file",
-            path: self.canonical.join(destination.as_str()),
-            source,
-        })?;
-        drop(file);
-
-        let (reopened_parent, reopened_name) = self.open_parent(destination, false)?;
-        let original_stat = rustix::fs::fstat(&parent)
-            .map_err(|error| restore_os_error("inspect restore parent", &self.canonical, error))?;
-        let reopened_stat = rustix::fs::fstat(&reopened_parent)
-            .map_err(|error| restore_os_error("recheck restore parent", &self.canonical, error))?;
-        if reopened_name != final_name
-            || original_stat.st_dev != reopened_stat.st_dev
-            || original_stat.st_ino != reopened_stat.st_ino
-            || !self.root_is_unchanged()?
-        {
-            let _ = unlinkat(&parent, temporary_name.as_str(), AtFlags::empty());
-            return Err(CoreError::RestorePlanMismatch);
         }
-
-        let rename_result = if action == PreviewAction::ReplaceFile {
-            renameat(
-                &parent,
-                temporary_name.as_str(),
-                &parent,
-                final_name.as_str(),
-            )
-        } else {
-            renameat_with(
-                &parent,
-                temporary_name.as_str(),
-                &parent,
-                final_name.as_str(),
-                RenameFlags::NOREPLACE,
-            )
-        };
-        if let Err(error) = rename_result {
-            let _ = unlinkat(&parent, temporary_name.as_str(), AtFlags::empty());
-            return Err(restore_os_error(
-                "atomically commit restored file",
-                &self.canonical.join(destination.as_str()),
-                error,
-            ));
-        }
-        fsync(&parent).map_err(|error| {
-            restore_os_error(
-                "sync restored file parent",
-                &self.canonical.join(destination.as_str()),
-                error,
-            )
-        })?;
-        outcome.failures.sort_by_key(|failure| failure.provider_id);
-        Ok(outcome)
+        staged_files
+            .iter_mut()
+            .map(|staged| {
+                let mut outcome = staged.outcome.take().ok_or_else(|| {
+                    CoreError::InvalidState("missing staged restore outcome".to_owned())
+                })?;
+                outcome.failures.sort_by_key(|failure| failure.provider_id);
+                Ok(outcome)
+            })
+            .collect()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -930,6 +1478,8 @@ impl SafeRestoreRoot {
         let mut logical_position = 0_u64;
         let mut bytes_written = 0_u64;
         let mut failures = Vec::new();
+        let mut provider_chunks = BTreeMap::new();
+        let provider_stripe_offset = restore_provider_stripe(&entry.path);
         for (offset, length) in extents {
             hash_zeros(
                 &mut full_hasher,
@@ -945,34 +1495,49 @@ impl SafeRestoreRoot {
             let mut remaining = length;
             while remaining > 0 {
                 control.check()?;
-                let reference = entry
-                    .chunks
-                    .get(reference_index)
-                    .ok_or(CoreError::RestorePlanMismatch)?;
-                if u64::from(reference.plaintext_length) > remaining {
-                    return Err(CoreError::RestorePlanMismatch);
+                let batch_start = reference_index;
+                let mut batch_remaining = remaining;
+                let mut requests = Vec::with_capacity(scheduler.maximum_parallelism());
+                while requests.len() < scheduler.maximum_parallelism() && batch_remaining > 0 {
+                    let reference = entry
+                        .chunks
+                        .get(reference_index + requests.len())
+                        .ok_or(CoreError::RestorePlanMismatch)?;
+                    let reference_length = u64::from(reference.plaintext_length);
+                    if reference_length > batch_remaining {
+                        return Err(CoreError::RestorePlanMismatch);
+                    }
+                    requests.push((
+                        reference,
+                        allowed_providers
+                            .get(&reference.opaque_locator)
+                            .ok_or(CoreError::RestorePlanMismatch)?,
+                    ));
+                    batch_remaining -= reference_length;
                 }
-                let fetched = scheduler.fetch_plaintext(
-                    reference,
+                let fetched_chunks = scheduler.fetch_plaintexts_parallel(
+                    &requests,
                     backup_id,
                     key,
-                    allowed_providers
-                        .get(&reference.opaque_locator)
-                        .ok_or(CoreError::RestorePlanMismatch)?,
+                    control,
+                    provider_stripe_offset.wrapping_add(batch_start),
                 )?;
-                let _provider_used = fetched.provider_id;
-                file.write_all(fetched.plaintext.as_ref())
-                    .map_err(|source| CoreError::Io {
-                        operation: "write restore staging file",
-                        path: self.canonical.join(entry.path.as_str()),
-                        source,
-                    })?;
-                full_hasher.update(fetched.plaintext.as_ref());
-                failures.extend(fetched.failures);
-                let length = u64::from(reference.plaintext_length);
-                remaining -= length;
-                bytes_written = bytes_written.saturating_add(length);
-                reference_index += 1;
+                for ((reference, _), fetched) in requests.into_iter().zip(fetched_chunks) {
+                    control.check()?;
+                    *provider_chunks.entry(fetched.provider_id).or_default() += 1;
+                    file.write_all(fetched.plaintext.as_ref())
+                        .map_err(|source| CoreError::Io {
+                            operation: "write restore staging file",
+                            path: self.canonical.join(entry.path.as_str()),
+                            source,
+                        })?;
+                    full_hasher.update(fetched.plaintext.as_ref());
+                    failures.extend(fetched.failures);
+                    let chunk_length = u64::from(reference.plaintext_length);
+                    remaining -= chunk_length;
+                    bytes_written = bytes_written.saturating_add(chunk_length);
+                    reference_index += 1;
+                }
             }
             logical_position = offset + length;
         }
@@ -988,6 +1553,7 @@ impl SafeRestoreRoot {
             plaintext_digest: full_hasher.finalize().to_hex().to_string(),
             bytes_written,
             failures,
+            provider_chunks,
         })
     }
 
@@ -1224,37 +1790,53 @@ impl SafeRestoreRoot {
     fn completed_entry_matches(
         &self,
         path: &RelativePath,
-        kind: EntryKind,
-        expected_digest: &str,
+        receipt: &RestoreReceipt,
     ) -> Result<bool, CoreError> {
-        match kind {
-            EntryKind::Directory => {
-                Ok(self.canonical.join(path.as_str()).is_dir() && expected_digest == "directory")
-            }
-            EntryKind::File => match self.digest_regular_file(path) {
-                Ok(digest) => Ok(digest == expected_digest),
-                Err(CoreError::Io { source, .. })
-                    if source.kind() == std::io::ErrorKind::NotFound =>
+        match receipt.kind {
+            EntryKind::Directory => Ok(self.canonical.join(path.as_str()).is_dir()
+                && receipt.plaintext_digest == "directory"),
+            EntryKind::File => {
+                let destination = self.canonical.join(path.as_str());
+                let metadata = match fs::symlink_metadata(&destination) {
+                    Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+                        metadata
+                    }
+                    Ok(_) => return Ok(false),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                    Err(source) => {
+                        return Err(CoreError::Io {
+                            operation: "inspect restored file for reconciliation",
+                            path: destination,
+                            source,
+                        });
+                    }
+                };
+                if receipt
+                    .expected_length
+                    .is_some_and(|length| metadata.len() != length)
+                    || receipt
+                        .expected_metadata
+                        .as_ref()
+                        .is_some_and(|expected| !restored_metadata_matches(&metadata, expected))
                 {
-                    Ok(false)
+                    return Ok(false);
                 }
-                Err(error) => Err(error),
-            },
+                Ok(self.digest_regular_file(path)? == receipt.plaintext_digest)
+            }
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn write_file(
+    fn write_files(
         &self,
-        _entry: &ManifestEntry,
-        _destination: &RelativePath,
-        _action: PreviewAction,
+        _entries: &[(&ManifestEntry, &RestorePreviewEntry)],
         _backup_id: BackupId,
         _key: &BackupKey,
         _scheduler: &ReplicationScheduler,
         _allowed_providers: &BTreeMap<String, BTreeSet<DeviceId>>,
         _control: &JobControl,
-    ) -> Result<FileWriteOutcome, CoreError> {
+        _before_commit: &mut dyn FnMut(&[PreparedRestoreFile<'_>]) -> Result<(), CoreError>,
+    ) -> Result<Vec<FileWriteOutcome>, CoreError> {
         Err(CoreError::InvalidState(
             "Windows is outside the supported platform set".to_owned(),
         ))
@@ -1269,12 +1851,42 @@ impl SafeRestoreRoot {
     }
 }
 
+fn restore_provider_stripe(path: &RelativePath) -> usize {
+    let digest = blake3::hash(path.as_str().as_bytes());
+    usize::from_be_bytes(
+        digest.as_bytes()[..std::mem::size_of::<usize>()]
+            .try_into()
+            .expect("native word slice"),
+    )
+}
+
 fn hash_zeros(hasher: &mut blake3::Hasher, mut length: u64, zero_buffer: &[u8]) {
     while length > 0 {
         let take = usize::try_from(length.min(zero_buffer.len() as u64)).expect("bounded");
         hasher.update(&zero_buffer[..take]);
         length -= take as u64;
     }
+}
+
+fn restored_metadata_matches(metadata: &fs::Metadata, expected: &EntryMetadata) -> bool {
+    #[cfg(unix)]
+    if let Some(expected_mode) = expected.unix_mode {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o777 != expected_mode & 0o777 {
+            return false;
+        }
+    }
+    if let Some(expected_millis) = expected.modified_at_unix_ms {
+        let actual_millis = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|duration| u64::try_from(duration.as_millis()).ok());
+        if actual_millis != Some(expected_millis) {
+            return false;
+        }
+    }
+    true
 }
 
 #[cfg(test)]
@@ -1380,6 +1992,94 @@ mod tests {
         assert_eq!(
             fs::read(restore.path().join("nested/file.txt")).expect("restored file"),
             b"restored content"
+        );
+    }
+
+    #[test]
+    fn prepared_restore_entry_reconciles_after_durable_rename_crash() {
+        let data = tempdir().expect("data");
+        let restore = tempdir().expect("restore");
+        let store = ChunkStore::open(data.path(), 1_048_576).expect("store");
+        let provider_id = DeviceId::new();
+        let key = BackupKey::generate();
+        let manifest = single_file_manifest(BackupId::new(), &key, &store, provider_id);
+        let identity = DeviceIdentity::generate();
+        let root = AuthorizedRoot::open(restore.path()).expect("root");
+        let plan = preview_restore(
+            &manifest,
+            &root,
+            &RestoreOptions::all("restore-crash"),
+            &identity,
+        )
+        .expect("preview");
+        fs::create_dir(restore.path().join("nested")).expect("committed directory");
+        fs::write(restore.path().join("nested/file.txt"), b"restored content")
+            .expect("committed file");
+        let file_entry = manifest.entries.first().expect("file entry");
+        let file_destination = plan
+            .entries
+            .iter()
+            .find(|preview| preview.kind == EntryKind::File)
+            .expect("file preview")
+            .destination_path
+            .clone();
+        let directory_destination = plan
+            .entries
+            .iter()
+            .find(|preview| preview.kind == EntryKind::Directory)
+            .expect("directory preview")
+            .destination_path
+            .clone();
+        let records = vec![
+            serde_json::to_vec(&RestoreWalRecord::Header {
+                schema_version: RESTORE_WAL_SCHEMA_VERSION,
+                plan_digest: plan.plan_digest.clone(),
+            })
+            .expect("header"),
+            serde_json::to_vec(&RestoreWalRecord::Completed {
+                destination_path: directory_destination,
+                receipt: directory_receipt(),
+            })
+            .expect("directory receipt"),
+            serde_json::to_vec(&RestoreWalRecord::Prepared {
+                destination_path: file_destination,
+                receipt: restored_file_receipt(
+                    file_entry,
+                    blake3::hash(b"restored content").to_hex().as_str(),
+                ),
+            })
+            .expect("prepared receipt"),
+        ];
+        store
+            .replace_checkpoint_records(&plan.job_id, &records)
+            .expect("crash journal");
+        let scheduler = ReplicationScheduler::new(
+            [Arc::new(StoreProvider::new(provider_id, store.clone())) as Arc<dyn ChunkProvider>],
+            4,
+        )
+        .expect("scheduler");
+
+        let report = execute_restore(
+            &manifest,
+            &plan,
+            &root,
+            &key,
+            &scheduler,
+            &store,
+            &identity.public_identity(),
+            provider_id,
+            &JobControl::new(),
+        )
+        .expect("reconcile");
+        assert_eq!(report.files_restored, 0);
+        assert_eq!(
+            fs::read(restore.path().join("nested/file.txt")).expect("restored file"),
+            b"restored content"
+        );
+        assert!(
+            !store
+                .has_checkpoint(&plan.job_id)
+                .expect("checkpoint removed")
         );
     }
 
