@@ -5,6 +5,23 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 temporary_root=$(mktemp -d "${TMPDIR:-/tmp}/covalent-smoke.XXXXXX")
 node_pid=""
 
+ports=$(python3 - <<'PY'
+import socket
+
+sockets = [socket.socket(), socket.socket()]
+try:
+    for sock in sockets:
+        sock.bind(("127.0.0.1", 0))
+    print(" ".join(str(sock.getsockname()[1]) for sock in sockets))
+finally:
+    for sock in sockets:
+        sock.close()
+PY
+)
+set -- $ports
+api_port=$1
+peer_port=$2
+
 cleanup() {
   if [ -n "$node_pid" ]; then
     kill "$node_pid" >/dev/null 2>&1 || true
@@ -16,14 +33,15 @@ trap cleanup EXIT INT TERM
 
 cd "$repo_root"
 cargo run --quiet -p covalent-node -- serve \
-  --listen 127.0.0.1:18787 \
+  --listen "127.0.0.1:$api_port" \
+  --peer-listen "127.0.0.1:$peer_port" \
   --data-dir "$temporary_root/node" \
   --device-name "Foundation smoke node" \
   >"$temporary_root/node.log" 2>&1 &
 node_pid=$!
 
 attempt=0
-until cargo run --quiet -p covalent-node -- healthcheck --url http://127.0.0.1:18787/healthz >/dev/null 2>&1; do
+until cargo run --quiet -p covalent-node -- healthcheck --url "http://127.0.0.1:$api_port/healthz" >/dev/null 2>&1; do
   attempt=$((attempt + 1))
   if [ "$attempt" -ge 20 ]; then
     sed -n '1,160p' "$temporary_root/node.log" >&2
