@@ -356,19 +356,57 @@ public struct RestorePreviewEntry: Codable, Equatable, Identifiable, Sendable {
     public var id: String { "\(destinationPath):\(action.rawValue)" }
 }
 
-public struct RestorePlan: Codable, Equatable, Sendable {
+public struct RestorePlanReference: Codable, Equatable, Sendable {
+    public let planId: String
     public let backupId: UUID
     public let snapshotId: String
     public let authorizedRoot: String
-    public let rootDevice: UInt64
-    public let rootInode: UInt64
     public let manifestDigest: String
     public let conflictPolicy: ConflictPolicy
     public let jobId: String
-    public let entries: [RestorePreviewEntry]
     public let planDigest: String
     public let signerDeviceId: UUID
     public let signature: String
+    public let totalEntries: Int
+}
+
+public struct RestorePlanPage: Codable, Equatable, Sendable {
+    public let planId: String
+    public let backupId: UUID
+    public let snapshotId: String
+    public let authorizedRoot: String
+    public let manifestDigest: String
+    public let conflictPolicy: ConflictPolicy
+    public let jobId: String
+    public let planDigest: String
+    public let signerDeviceId: UUID
+    public let signature: String
+    public let entryOffset: Int
+    public let totalEntries: Int
+    public let entries: [RestorePreviewEntry]
+    public let nextCursor: String?
+}
+
+public struct RestorePlan: Equatable, Sendable {
+    public let reference: RestorePlanReference
+    public let entries: [RestorePreviewEntry]
+
+    public var planId: String { reference.planId }
+    public var backupId: UUID { reference.backupId }
+    public var snapshotId: String { reference.snapshotId }
+    public var authorizedRoot: String { reference.authorizedRoot }
+    public var manifestDigest: String { reference.manifestDigest }
+    public var conflictPolicy: ConflictPolicy { reference.conflictPolicy }
+    public var jobId: String { reference.jobId }
+    public var planDigest: String { reference.planDigest }
+    public var signerDeviceId: UUID { reference.signerDeviceId }
+    public var signature: String { reference.signature }
+    public var totalEntries: Int { reference.totalEntries }
+
+    public init(reference: RestorePlanReference, entries: [RestorePreviewEntry]) {
+        self.reference = reference
+        self.entries = entries
+    }
 }
 
 public struct RestoreResponse: Codable, Equatable, Sendable {

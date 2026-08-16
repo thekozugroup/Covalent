@@ -9,6 +9,9 @@ struct IOSConnectionView: View {
     @State private var token = ""
     @State private var deviceName = ""
     @State private var lanDiscoveryEnabled = false
+    @State private var trustedCertificateDER: Data?
+    @State private var trustedCertificateName: String?
+    @State private var isChoosingCertificate = false
     @State private var isConnecting = false
 
     var body: some View {
@@ -37,6 +40,21 @@ struct IOSConnectionView: View {
                 }
 
                 Section {
+                    LabeledContent("Trust", value: trustedCertificateName ?? "System certificates")
+                    Button("Choose exact CA certificate…") { isChoosingCertificate = true }
+                    if trustedCertificateDER != nil {
+                        Button("Use system certificates", role: .destructive) {
+                            trustedCertificateDER = nil
+                            trustedCertificateName = nil
+                        }
+                    }
+                } header: {
+                    Text("HTTPS certificate")
+                } footer: {
+                    Text("Docker and Unraid use Caddy's root.crt. Covalent trusts only the selected certificate and still verifies the server hostname.")
+                }
+
+                Section {
                     Label("The token is stored in Keychain and excluded from settings exports.", systemImage: "lock.shield")
                         .foregroundStyle(.secondary)
                 }
@@ -54,6 +72,7 @@ struct IOSConnectionView: View {
                             if await model.connect(
                                 serviceAddress: serviceAddress,
                                 token: token,
+                                trustedCertificateDER: trustedCertificateDER,
                                 deviceName: deviceName,
                                 lanDiscoveryEnabled: lanDiscoveryEnabled
                             ) {
@@ -74,6 +93,29 @@ struct IOSConnectionView: View {
             serviceAddress = model.currentConnectionAddress()
             deviceName = model.status?.deviceName ?? ""
             lanDiscoveryEnabled = model.status?.lanDiscovery ?? false
+        }
+        .fileImporter(
+            isPresented: $isChoosingCertificate,
+            allowedContentTypes: [.data],
+            allowsMultipleSelection: false
+        ) { result in
+            guard case let .success(urls) = result, let url = urls.first else {
+                if case let .failure(error) = result {
+                    model.alert = AppAlert(title: "Certificate could not be opened", message: error.localizedDescription)
+                }
+                return
+            }
+            let accessed = url.startAccessingSecurityScopedResource()
+            defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+            do {
+                trustedCertificateDER = try SecureNodeConnectionStore.parseCertificateFile(Data(contentsOf: url))
+                trustedCertificateName = url.lastPathComponent
+            } catch {
+                model.alert = AppAlert(
+                    title: "Certificate is not valid",
+                    message: (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+                )
+            }
         }
     }
 }
@@ -198,7 +240,10 @@ struct IOSNewBackupView: View {
         guard let sourceGrantId else { return }
         isCreating = true
         Task {
-            let record = await IOSBackgroundExecution.perform(named: "Covalent backup") {
+            let record = await IOSBackgroundExecution.perform(
+                named: "Covalent backup",
+                onExpiration: { await model.pauseActiveTaskForBackgroundExpiration() }
+            ) {
                 await model.createBackup(
                     displayName: displayName,
                     existingBackupId: existingBackupId,

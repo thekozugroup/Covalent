@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import ZIPFoundation
 
@@ -6,14 +7,18 @@ enum AppleArchiveTransfer {
     static let restoreContentType = "application/vnd.covalent.restore+zip"
     static let metadataHeader = "X-Covalent-Archive-Metadata"
     static let restoreResultHeader = "X-Covalent-Restore-Result"
+    static let restorePlanIdHeader = "X-Covalent-Restore-Plan-Id"
+    static let restorePlanDigestHeader = "X-Covalent-Restore-Plan-Digest"
+    static let jobAcknowledgementRequiredHeader = "X-Covalent-Job-Ack-Required"
 
     private static let bufferSize = 64 * 1_024
-    private static let maximumEntries = 1_000_000
+    static let maximumEntries = 200_000
     private static let maximumDepth = 128
     private static let maximumPathBytes = 4_096
     private static let maximumComponentBytes = 255
-    private static let maximumCompressedBytes: UInt64 = 1 << 40
-    private static let maximumUncompressedBytes: UInt64 = 16 << 40
+    private static let maximumCompressedBytes: UInt64 = 8 << 30
+    private static let maximumUncompressedBytes: UInt64 = 64 << 30
+    private static let minimumFreeSpaceReserve: UInt64 = 256 << 20
 
     static func makeBackupArchive(sourceURL: URL) throws -> URL {
         try Task.checkCancellation()
@@ -74,6 +79,7 @@ enum AppleArchiveTransfer {
                         guard !overflow, nextTotal <= maximumUncompressedBytes else {
                             throw AppleArchiveTransferError.uncompressedSizeExceeded
                         }
+                        try ensureAvailableCapacity(at: archiveURL, requiredBytes: nextTotal)
                         totalBytes = nextTotal
                         try archive.addEntry(
                             with: path,
@@ -107,6 +113,7 @@ enum AppleArchiveTransfer {
             throw AppleArchiveTransferError.compressedSizeExceeded
         }
         let destination = temporaryArchiveURL(prefix: "covalent-restore")
+        try ensureAvailableCapacity(at: destination, requiredBytes: size)
         do {
             try FileManager.default.copyItem(at: sourceURL, to: destination)
             try secureTemporaryFile(destination)
@@ -118,15 +125,20 @@ enum AppleArchiveTransfer {
     }
 
     static func requireEmptyDirectory(_ targetURL: URL) throws {
-        try requireDirectory(targetURL)
-        guard try FileManager.default.contentsOfDirectory(atPath: targetURL.path).isEmpty else {
-            throw AppleArchiveTransferError.restoreDestinationMustBeEmpty
-        }
+        let root = try RestoreRoot(url: targetURL)
+        try root.requireEmpty()
     }
 
-    static func extractRestoreArchive(_ archiveURL: URL, to targetURL: URL, plan: RestorePlan) throws {
+    static func extractRestoreArchive(
+        _ archiveURL: URL,
+        to targetURL: URL,
+        plan: RestorePlan,
+        beforeWriting: (() throws -> Void)? = nil,
+        beforeEntry: (([String]) throws -> Void)? = nil
+    ) throws {
         try Task.checkCancellation()
-        try requireEmptyDirectory(targetURL)
+        let root = try RestoreRoot(url: targetURL)
+        try root.requireEmpty()
         let archive = try Archive(url: archiveURL, accessMode: .read)
         let entries = Array(archive)
         guard entries.count <= maximumEntries else {
@@ -177,65 +189,72 @@ enum AppleArchiveTransfer {
         guard seen == Set(expected.keys) else {
             throw AppleArchiveTransferError.restorePlanMismatch("missing signed entry")
         }
+        try ensureAvailableCapacity(at: targetURL, requiredBytes: totalBytes)
+        try beforeWriting?()
+        try root.revalidate()
 
-        let fileManager = FileManager.default
-        var createdURLs: [URL] = []
-        var createdDirectoryPaths = Set<String>()
+        var knownDirectories = ["": root.identity]
+        var createdDirectories: [[String]] = []
+        var createdFiles: [[String]] = []
         do {
-            for item in validatedEntries where item.entry.type == .file {
-                try Task.checkCancellation()
-                let parent = try ensureDirectoryPath(
-                    root: targetURL,
-                    components: Array(item.components.dropLast()),
-                    fileManager: fileManager,
-                    createdURLs: &createdURLs,
-                    createdDirectoryPaths: &createdDirectoryPaths
-                )
-                let destination = parent.appending(path: item.components.last!, directoryHint: .notDirectory)
-                guard !fileManager.fileExists(atPath: destination.path) else {
-                    throw AppleArchiveTransferError.destinationChanged
-                }
-                let temporary = parent.appending(
-                    path: ".covalent-restore-\(UUID().uuidString.lowercased())",
-                    directoryHint: .notDirectory
-                )
-                do {
-                    _ = try archive.extract(item.entry, to: temporary, bufferSize: bufferSize)
-                    guard !fileManager.fileExists(atPath: destination.path) else {
-                        throw AppleArchiveTransferError.destinationChanged
-                    }
-                    try fileManager.moveItem(at: temporary, to: destination)
-                    createdURLs.append(destination)
-                } catch {
-                    try? fileManager.removeItem(at: temporary)
-                    throw error
-                }
-            }
-
             let directories = validatedEntries
                 .filter { $0.entry.type == .directory }
-                .sorted { $0.components.count > $1.components.count }
+                .sorted { $0.components.count < $1.components.count }
             for item in directories {
                 try Task.checkCancellation()
-                let destination = try ensureDirectoryPath(
-                    root: targetURL,
+                try root.revalidate()
+                let descriptor = try openDirectory(
+                    root: root,
                     components: item.components,
-                    fileManager: fileManager,
-                    createdURLs: &createdURLs,
-                    createdDirectoryPaths: &createdDirectoryPaths
+                    create: true,
+                    knownDirectories: &knownDirectories,
+                    createdDirectories: &createdDirectories
                 )
-                _ = try archive.extract(item.entry, to: destination, bufferSize: bufferSize)
+                close(descriptor)
+                _ = try archive.extract(item.entry, bufferSize: bufferSize) { _ in }
             }
-        } catch {
-            for createdURL in createdURLs.reversed() {
-                if (try? createdURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
-                    if (try? fileManager.contentsOfDirectory(atPath: createdURL.path).isEmpty) == true {
-                        try? fileManager.removeItem(at: createdURL)
-                    }
-                } else {
-                    try? fileManager.removeItem(at: createdURL)
+
+            for item in validatedEntries where item.entry.type == .file {
+                try Task.checkCancellation()
+                try beforeEntry?(item.components)
+                try root.revalidate()
+                let parentDescriptor = try openDirectory(
+                    root: root,
+                    components: Array(item.components.dropLast()),
+                    create: false,
+                    knownDirectories: &knownDirectories,
+                    createdDirectories: &createdDirectories
+                )
+                defer { close(parentDescriptor) }
+                guard let name = item.components.last else {
+                    throw AppleArchiveTransferError.destinationChanged
                 }
+                let descriptor = openat(
+                    parentDescriptor,
+                    name,
+                    O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+                    mode_t(0o600)
+                )
+                guard descriptor >= 0 else {
+                    throw posixDestinationError()
+                }
+                createdFiles.append(item.components)
+                defer { close(descriptor) }
+                _ = try archive.extract(item.entry, bufferSize: bufferSize) { data in
+                    try Task.checkCancellation()
+                    try writeAll(data, to: descriptor)
+                }
+                guard fsync(descriptor) == 0 else { throw posixDestinationError() }
             }
+            try root.revalidate()
+            guard fsync(root.descriptor) == 0 else { throw posixDestinationError() }
+        } catch {
+            rollback(
+                root: root,
+                files: createdFiles,
+                directories: createdDirectories,
+                knownDirectories: &knownDirectories
+            )
             throw error
         }
     }
@@ -248,36 +267,214 @@ enum AppleArchiveTransfer {
         }
     }
 
-    private static func ensureDirectoryPath(
-        root: URL,
+    private static func openDirectory(
+        root: RestoreRoot,
         components: [String],
-        fileManager: FileManager,
-        createdURLs: inout [URL],
-        createdDirectoryPaths: inout Set<String>
-    ) throws -> URL {
-        var current = root
-        for component in components {
-            current.append(path: component, directoryHint: .isDirectory)
-            let standardizedPath = current.standardizedFileURL.path
-            if fileManager.fileExists(atPath: current.path) {
-                guard createdDirectoryPaths.contains(standardizedPath) else {
-                    throw AppleArchiveTransferError.destinationChanged
+        create: Bool,
+        knownDirectories: inout [String: DirectoryIdentity],
+        createdDirectories: inout [[String]]
+    ) throws -> Int32 {
+        var currentDescriptor = dup(root.descriptor)
+        guard currentDescriptor >= 0 else { throw posixDestinationError() }
+        var traversed: [String] = []
+        do {
+            for component in components {
+                traversed.append(component)
+                let canonical = traversed.joined(separator: "/")
+                var nextDescriptor = openat(
+                    currentDescriptor,
+                    component,
+                    O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+                )
+                if nextDescriptor < 0, errno == ENOENT, create {
+                    guard mkdirat(currentDescriptor, component, mode_t(0o700)) == 0 else {
+                        throw posixDestinationError()
+                    }
+                    nextDescriptor = openat(
+                        currentDescriptor,
+                        component,
+                        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+                    )
+                    guard nextDescriptor >= 0 else { throw posixDestinationError() }
+                    let identity = try directoryIdentity(descriptor: nextDescriptor)
+                    guard knownDirectories[canonical] == nil else {
+                        close(nextDescriptor)
+                        throw AppleArchiveTransferError.destinationChanged
+                    }
+                    knownDirectories[canonical] = identity
+                    createdDirectories.append(traversed)
+                } else {
+                    guard nextDescriptor >= 0,
+                          let expectedIdentity = knownDirectories[canonical],
+                          try directoryIdentity(descriptor: nextDescriptor) == expectedIdentity
+                    else {
+                        if nextDescriptor >= 0 { close(nextDescriptor) }
+                        throw AppleArchiveTransferError.destinationChanged
+                    }
                 }
-                try assertSafeDirectory(current)
-            } else {
-                try fileManager.createDirectory(at: current, withIntermediateDirectories: false)
-                try assertSafeDirectory(current)
-                createdURLs.append(current)
-                createdDirectoryPaths.insert(standardizedPath)
+                close(currentDescriptor)
+                currentDescriptor = nextDescriptor
             }
+            return currentDescriptor
+        } catch {
+            close(currentDescriptor)
+            throw error
         }
-        return current
     }
 
-    private static func assertSafeDirectory(_ url: URL) throws {
-        let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-        guard values.isDirectory == true, values.isSymbolicLink != true else {
-            throw AppleArchiveTransferError.destinationChanged
+    private static func rollback(
+        root: RestoreRoot,
+        files: [[String]],
+        directories: [[String]],
+        knownDirectories: inout [String: DirectoryIdentity]
+    ) {
+        var ignoredDirectories: [[String]] = []
+        for components in files.reversed() {
+            guard let name = components.last,
+                  let parent = try? openDirectory(
+                      root: root,
+                      components: Array(components.dropLast()),
+                      create: false,
+                      knownDirectories: &knownDirectories,
+                      createdDirectories: &ignoredDirectories
+                  )
+            else { continue }
+            _ = unlinkat(parent, name, 0)
+            close(parent)
+        }
+        for components in directories.sorted(by: { $0.count > $1.count }) {
+            guard let name = components.last,
+                  let parent = try? openDirectory(
+                      root: root,
+                      components: Array(components.dropLast()),
+                      create: false,
+                      knownDirectories: &knownDirectories,
+                      createdDirectories: &ignoredDirectories
+                  )
+            else { continue }
+            _ = unlinkat(parent, name, AT_REMOVEDIR)
+            close(parent)
+        }
+    }
+
+    private static func writeAll(_ data: Data, to descriptor: Int32) throws {
+        try data.withUnsafeBytes { rawBuffer in
+            guard var address = rawBuffer.baseAddress else { return }
+            var remaining = rawBuffer.count
+            while remaining > 0 {
+                let written = Darwin.write(descriptor, address, remaining)
+                if written < 0, errno == EINTR { continue }
+                guard written > 0 else { throw posixDestinationError() }
+                address = address.advanced(by: written)
+                remaining -= written
+            }
+        }
+    }
+
+    private static func directoryIdentity(descriptor: Int32) throws -> DirectoryIdentity {
+        var metadata = stat()
+        guard fstat(descriptor, &metadata) == 0,
+              (metadata.st_mode & S_IFMT) == S_IFDIR
+        else {
+            throw posixDestinationError()
+        }
+        return DirectoryIdentity(device: UInt64(metadata.st_dev), inode: UInt64(metadata.st_ino))
+    }
+
+    private static func posixDestinationError() -> Error {
+        if errno == EEXIST || errno == ELOOP || errno == ENOTDIR || errno == ENOENT {
+            return AppleArchiveTransferError.destinationChanged
+        }
+        return NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+    }
+
+    private static func ensureAvailableCapacity(at url: URL, requiredBytes: UInt64) throws {
+        let location = url.hasDirectoryPath ? url : url.deletingLastPathComponent()
+        let values = try location.resourceValues(forKeys: [
+            .volumeAvailableCapacityForImportantUsageKey,
+            .volumeAvailableCapacityKey,
+        ])
+        let available = values.volumeAvailableCapacityForImportantUsage
+            ?? values.volumeAvailableCapacity.map(Int64.init)
+        let (reservedRequirement, overflow) = requiredBytes.addingReportingOverflow(minimumFreeSpaceReserve)
+        guard !overflow,
+              let available,
+              available >= 0,
+              UInt64(available) >= reservedRequirement
+        else {
+            throw AppleArchiveTransferError.insufficientFreeSpace
+        }
+    }
+
+    private struct DirectoryIdentity: Equatable {
+        let device: UInt64
+        let inode: UInt64
+    }
+
+    private final class RestoreRoot {
+        let url: URL
+        let descriptor: Int32
+        let identity: DirectoryIdentity
+
+        init(url: URL) throws {
+            guard url.isFileURL else { throw AppleArchiveTransferError.notFileURL }
+            let descriptor = Darwin.open(
+                url.path,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+            )
+            guard descriptor >= 0 else { throw AppleArchiveTransferError.notDirectory }
+            do {
+                self.identity = try AppleArchiveTransfer.directoryIdentity(descriptor: descriptor)
+            } catch {
+                close(descriptor)
+                throw AppleArchiveTransferError.notDirectory
+            }
+            self.url = url
+            self.descriptor = descriptor
+        }
+
+        deinit {
+            close(descriptor)
+        }
+
+        func revalidate() throws {
+            guard try AppleArchiveTransfer.directoryIdentity(descriptor: descriptor) == identity else {
+                throw AppleArchiveTransferError.destinationChanged
+            }
+            let currentDescriptor = Darwin.open(
+                url.path,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+            )
+            guard currentDescriptor >= 0 else { throw AppleArchiveTransferError.destinationChanged }
+            defer { close(currentDescriptor) }
+            guard try AppleArchiveTransfer.directoryIdentity(descriptor: currentDescriptor) == identity else {
+                throw AppleArchiveTransferError.destinationChanged
+            }
+        }
+
+        func requireEmpty() throws {
+            try revalidate()
+            let duplicatedDescriptor = dup(descriptor)
+            guard duplicatedDescriptor >= 0,
+                  let directory = fdopendir(duplicatedDescriptor)
+            else {
+                if duplicatedDescriptor >= 0 { close(duplicatedDescriptor) }
+                throw AppleArchiveTransfer.posixDestinationError()
+            }
+            defer { closedir(directory) }
+            errno = 0
+            while let entry = readdir(directory) {
+                let name = withUnsafePointer(to: &entry.pointee.d_name) {
+                    $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXNAMLEN) + 1) {
+                        String(cString: $0)
+                    }
+                }
+                if name != "." && name != ".." {
+                    throw AppleArchiveTransferError.restoreDestinationMustBeEmpty
+                }
+            }
+            guard errno == 0 else { throw AppleArchiveTransfer.posixDestinationError() }
+            try revalidate()
         }
     }
 
@@ -361,6 +558,7 @@ enum AppleArchiveTransferError: Error, Equatable, Sendable {
     case tooManyEntries
     case compressedSizeExceeded
     case uncompressedSizeExceeded
+    case insufficientFreeSpace
     case restoreDestinationMustBeEmpty
     case nonEmptyRestorePlan
     case restorePlanMismatch(String)
@@ -377,8 +575,9 @@ extension AppleArchiveTransferError: LocalizedError {
         case let .unsupportedEntry(path): "Only regular files and folders can be transferred: \(path)"
         case let .duplicateEntry(path): "The transfer contains a duplicate path: \(path)"
         case .tooManyEntries: "The selected folder contains too many entries."
-        case .compressedSizeExceeded: "The transfer archive exceeds the 1 TiB compressed limit."
-        case .uncompressedSizeExceeded: "The transfer archive exceeds the 16 TiB expanded limit."
+        case .compressedSizeExceeded: "The transfer archive exceeds the 8 GiB compressed limit."
+        case .uncompressedSizeExceeded: "The transfer archive exceeds the 64 GiB expanded limit."
+        case .insufficientFreeSpace: "The selected volume does not have enough free space plus Covalent's 256 MiB safety reserve."
         case .restoreDestinationMustBeEmpty:
             "Choose an empty restore folder so the signed no-write preview remains exact."
         case .nonEmptyRestorePlan:

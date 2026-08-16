@@ -260,6 +260,7 @@ public final class CovalentAppModel: ObservableObject {
     public func connect(
         serviceAddress: String,
         token: String,
+        trustedCertificateDER: Data? = nil,
         deviceName: String,
         lanDiscoveryEnabled: Bool
     ) async -> Bool {
@@ -267,7 +268,11 @@ public final class CovalentAppModel: ObservableObject {
             guard let url = URL(string: serviceAddress.trimmingCharacters(in: .whitespacesAndNewlines)) else {
                 throw NodeClientError.invalidServiceURL
             }
-            let candidateConfiguration = try NodeConnectionConfiguration(baseURL: url, apiToken: token)
+            let candidateConfiguration = try NodeConnectionConfiguration(
+                baseURL: url,
+                apiToken: token,
+                trustedCertificateDER: trustedCertificateDER
+            )
             let candidateClient = NodeClient(configuration: candidateConfiguration)
             let nodeStatus = try await candidateClient.status()
             var exported = try await candidateClient.exportSettings()
@@ -383,10 +388,19 @@ public final class CovalentAppModel: ObservableObject {
             )
             snapshots.insert(record, at: 0)
             try await persistence.saveSnapshots(snapshots)
-            settings = try await client.exportSettings()
-            backups = try await client.backups()
             selectedSection = .backups
             presentation = nil
+            do {
+                try await client.acknowledgeJob(jobId: jobId)
+            } catch {
+                report(error, title: "Backup finished; staged retry cleanup is pending")
+            }
+            do {
+                settings = try await client.exportSettings()
+                backups = try await client.backups()
+            } catch {
+                report(error, title: "Backup finished; summary refresh is pending")
+            }
             return record
         } catch {
             report(error, title: "Backup did not finish")
@@ -403,6 +417,16 @@ public final class CovalentAppModel: ObservableObject {
             self.activeTask?.state = response.state
         } catch {
             report(error, title: "Job control failed")
+        }
+    }
+
+    public func pauseActiveTaskForBackgroundExpiration() async {
+        guard let jobId = activeTask?.jobId else { return }
+        do {
+            let response = try await client.controlJob(jobId: jobId, action: .pause)
+            activeTask?.state = response.state
+        } catch {
+            report(error, title: "Transfer paused locally; reconnect to resume")
         }
     }
 
@@ -439,6 +463,7 @@ public final class CovalentAppModel: ObservableObject {
         destinationGrantId: UUID,
         conflictPolicy: ConflictPolicy
     ) async -> RestorePlan? {
+        let jobId = "restore-\(UUID().uuidString.lowercased())"
         do {
             guard activeTask == nil else { throw AppModelError.operationInProgress }
             guard let grant = directoryGrants.first(where: {
@@ -446,7 +471,6 @@ public final class CovalentAppModel: ObservableObject {
             }) else {
                 throw AppModelError.folderPermissionMissing
             }
-            let jobId = "restore-\(UUID().uuidString.lowercased())"
             let resolved = try grant.resolve()
             let client = self.client
             let plan = try await resolved.withCoordinatedWrite { targetURL in
@@ -460,13 +484,18 @@ public final class CovalentAppModel: ObservableObject {
                         jobId: jobId
                 )
             }
+            let previousPreview = restorePreview
             restorePreview = RestorePreviewContext(
                 plan: plan,
                 destinationGrantId: destinationGrantId,
                 destinationDisplayName: grant.displayName
             )
+            if let previousPreview {
+                try? await client.discardJob(jobId: previousPreview.plan.jobId)
+            }
             return plan
         } catch {
+            try? await client.discardJob(jobId: jobId)
             report(error, title: "Restore preview failed")
             return nil
         }
@@ -493,6 +522,11 @@ public final class CovalentAppModel: ObservableObject {
             }
             lastRestoreResult = response
             restorePreview = nil
+            do {
+                try await client.acknowledgeJob(jobId: context.plan.jobId)
+            } catch {
+                report(error, title: "Restore finished; staged retry cleanup is pending")
+            }
             return response
         } catch {
             report(error, title: "Restore did not finish")
@@ -501,7 +535,11 @@ public final class CovalentAppModel: ObservableObject {
     }
 
     public func dismissRestorePreview() {
+        let jobId = restorePreview?.plan.jobId
         restorePreview = nil
+        if let jobId {
+            Task { try? await client.discardJob(jobId: jobId) }
+        }
     }
 
     public func clearRestoreResult() {

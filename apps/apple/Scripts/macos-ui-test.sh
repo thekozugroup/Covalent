@@ -6,6 +6,33 @@ apple_dir=${script_dir:h}
 repo_root=${apple_dir:h:h}
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/covalent-macos-ui.XXXXXX")
 node_pid=""
+artifact_root=${COVALENT_TEST_ARTIFACT_DIR:-$test_root}
+mkdir -p "$artifact_root"
+
+run_bounded() {
+  local limit_seconds=$1
+  shift
+  python3 - "$limit_seconds" "$@" <<'PY'
+import os
+import signal
+import subprocess
+import sys
+
+limit = int(sys.argv[1])
+process = subprocess.Popen(sys.argv[2:], start_new_session=True)
+try:
+    raise SystemExit(process.wait(timeout=limit))
+except subprocess.TimeoutExpired:
+    os.killpg(process.pid, signal.SIGINT)
+    try:
+        process.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+    print(f"Command exceeded {limit} seconds: {' '.join(sys.argv[2:])}", file=sys.stderr)
+    raise SystemExit(124)
+PY
+}
 
 cleanup() {
   if [[ -n "$node_pid" ]]; then
@@ -17,6 +44,12 @@ cleanup() {
   fi
 }
 trap cleanup EXIT INT TERM
+
+console_session=$(ioreg -n Root -d1)
+if [[ "$console_session" == *'"CGSSessionScreenIsLocked"=Yes'* ]]; then
+  print -u2 -- "macOS UI tests require an unlocked headed login session; the current session is locked."
+  exit 75
+fi
 
 port=$(python3 - <<'PY'
 import socket
@@ -57,12 +90,65 @@ print -r -- "COVALENT_UI_TEST_TOKEN = $token" >> "$test_settings"
 
 cd "$apple_dir"
 xcodegen generate --quiet
-xcodebuild \
+derived_data="$test_root/DerivedData"
+build_log="$artifact_root/build-for-testing.log"
+ui_log="$artifact_root/ui-test.log"
+result_bundle="$artifact_root/MacUITests.xcresult"
+if ! run_bounded 600 xcodebuild \
   -quiet \
   -project Covalent.xcodeproj \
   -scheme CovalentMac \
   -configuration Debug \
   -xcconfig "$test_settings" \
-  -destination 'platform=macOS' \
+  -derivedDataPath "$derived_data" \
+  -destination 'platform=macOS,arch=arm64' \
+  ARCHS=arm64 \
+  EXCLUDED_ARCHS=x86_64 \
+  -destination-timeout 30 \
+  -parallel-testing-enabled NO \
+  -maximum-parallel-testing-workers 1 \
   -only-testing:CovalentMacUITests \
-  test
+  build-for-testing >"$build_log" 2>&1; then
+  tail -200 "$build_log" >&2
+  exit 1
+fi
+
+# Xcode 26 can sign the generated macOS UI-test runner before its embedded
+# test bundle is finalized. Re-seal the complete runner, verify it, and then
+# execute without rebuilding so testmanagerd can attach to a valid worker.
+runner="$derived_data/Build/Products/Debug/CovalentMacUITests-Runner.app"
+test -d "$runner"
+codesign \
+  --force \
+  --deep \
+  --sign - \
+  --timestamp=none \
+  --preserve-metadata=identifier,entitlements,requirements,flags \
+  "$runner"
+codesign --verify --deep --strict --verbose=2 "$runner"
+
+if ! run_bounded 180 xcodebuild \
+  -quiet \
+  -project Covalent.xcodeproj \
+  -scheme CovalentMac \
+  -configuration Debug \
+  -xcconfig "$test_settings" \
+  -derivedDataPath "$derived_data" \
+  -destination 'platform=macOS,arch=arm64' \
+  ARCHS=arm64 \
+  EXCLUDED_ARCHS=x86_64 \
+  -destination-timeout 30 \
+  -parallel-testing-enabled NO \
+  -maximum-parallel-testing-workers 1 \
+  -only-testing:CovalentMacUITests \
+  -resultBundlePath "$result_bundle" \
+  -test-timeouts-enabled YES \
+  -default-test-execution-time-allowance 45 \
+  -maximum-test-execution-time-allowance 90 \
+  test-without-building >"$ui_log" 2>&1; then
+  tail -240 "$ui_log" >&2
+  codesign --verify --deep --strict --verbose=4 "$runner" >&2 || true
+  ps -axo pid,ppid,etime,state,command | grep -E 'xcodebuild|CovalentMacUITests|testmanagerd' >&2 || true
+  exit 1
+fi
+cat "$ui_log"

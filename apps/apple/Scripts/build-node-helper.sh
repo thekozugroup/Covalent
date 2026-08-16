@@ -27,73 +27,59 @@ if [ -z "$build_arches" ] || [ "$build_arches" = "undefined_arch" ]; then
   build_arches=${NATIVE_ARCH_ACTUAL:-$(uname -m)}
 fi
 
-arm64_binary=""
-x86_64_binary=""
-for build_arch in $build_arches; do
-  case "$build_arch" in
-    arm64)
-      rust_target=aarch64-apple-darwin
-      if [ -n "$arm64_binary" ]; then
-        continue
-      fi
-      ;;
-    x86_64)
-      rust_target=x86_64-apple-darwin
-      if [ -n "$x86_64_binary" ]; then
-        continue
-      fi
-      ;;
-    *)
-      printf '%s\n' "Unsupported macOS build architecture: $build_arch" >&2
-      exit 1
-      ;;
-  esac
+# Covalent for macOS is intentionally Apple Silicon only. Fail closed when
+# Xcode requests anything other than the single supported architecture.
+if [ "$build_arches" != "arm64" ]; then
+  printf '%s\n' "CovalentMac requires exactly ARCHS=arm64; received: $build_arches" >&2
+  exit 1
+fi
 
-  if [ "$configuration" = "Release" ]; then
-    cargo build \
-      --locked \
-      --release \
-      --manifest-path "$repo_root/Cargo.toml" \
-      --package covalent-node \
-      --bin covalent-node \
-      --target "$rust_target"
-  else
-    cargo build \
-      --locked \
-      --manifest-path "$repo_root/Cargo.toml" \
-      --package covalent-node \
-      --bin covalent-node \
-      --target "$rust_target"
-  fi
+rust_target=aarch64-apple-darwin
+if [ "$configuration" = "Release" ]; then
+  cargo build \
+    --locked \
+    --release \
+    --manifest-path "$repo_root/Cargo.toml" \
+    --package covalent-node \
+    --bin covalent-node \
+    --target "$rust_target"
+else
+  cargo build \
+    --locked \
+    --manifest-path "$repo_root/Cargo.toml" \
+    --package covalent-node \
+    --bin covalent-node \
+    --target "$rust_target"
+fi
 
-  source_binary="$repo_root/target/$rust_target/$profile_directory/covalent-node"
-  case "$build_arch" in
-    arm64) arm64_binary=$source_binary ;;
-    x86_64) x86_64_binary=$source_binary ;;
-  esac
-done
+source_binary="$repo_root/target/$rust_target/$profile_directory/covalent-node"
 
 destination_directory="$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH"
 destination_binary="$destination_directory/covalent-node"
 mkdir -p "$destination_directory"
-if [ -n "$arm64_binary" ] && [ -n "$x86_64_binary" ]; then
-  xcrun lipo -create "$arm64_binary" "$x86_64_binary" -output "$destination_binary"
-elif [ -n "$arm64_binary" ]; then
-  ditto "$arm64_binary" "$destination_binary"
-elif [ -n "$x86_64_binary" ]; then
-  ditto "$x86_64_binary" "$destination_binary"
-else
-  printf '%s\n' "No supported macOS helper architecture was requested." >&2
+ditto "$source_binary" "$destination_binary"
+if [ "$(xcrun lipo -archs "$destination_binary")" != "arm64" ]; then
+  printf '%s\n' "Bundled Covalent node is not arm64-only." >&2
   exit 1
 fi
 chmod 755 "$destination_binary"
 
 if [ "${CODE_SIGNING_ALLOWED:-YES}" = "YES" ]; then
   identity=${EXPANDED_CODE_SIGN_IDENTITY:--}
-  codesign \
-    --force \
-    --sign "$identity" \
-    --entitlements "$apple_dir/Config/CovalentNode.entitlements" \
-    --timestamp=none \
-    "$destination_binary"
+  if [ "$configuration" = "Release" ] && [ "$identity" != "-" ]; then
+    codesign \
+      --force \
+      --options runtime \
+      --sign "$identity" \
+      --entitlements "$apple_dir/Config/CovalentNode.entitlements" \
+      --timestamp \
+      "$destination_binary"
+  else
+    codesign \
+      --force \
+      --sign "$identity" \
+      --entitlements "$apple_dir/Config/CovalentNode.entitlements" \
+      --timestamp=none \
+      "$destination_binary"
+  fi
 fi

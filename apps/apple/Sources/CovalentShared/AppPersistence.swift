@@ -6,24 +6,31 @@ public final class SecureNodeConnectionStore: @unchecked Sendable {
     private let keychainService: String
     private let baseURLKey: String
     private let tokenAccount: String
+    private let certificateAccount: String
 
     public init(
         defaults: UserDefaults = .standard,
         keychainService: String = "life.michaelwong.covalent.local-api",
         baseURLKey: String = "nodeBaseURL",
-        tokenAccount: String = "local-api-token"
+        tokenAccount: String = "local-api-token",
+        certificateAccount: String = "local-api-trusted-certificate"
     ) {
         self.defaults = defaults
         self.keychainService = keychainService
         self.baseURLKey = baseURLKey
         self.tokenAccount = tokenAccount
+        self.certificateAccount = certificateAccount
     }
 
     public func load() throws -> NodeConnectionConfiguration {
         let url = defaults.string(forKey: baseURLKey)
             .flatMap(URL.init(string:))
             ?? NodeConnectionConfiguration.localDefault.baseURL
-        return try NodeConnectionConfiguration(baseURL: url, apiToken: try readToken())
+        return try NodeConnectionConfiguration(
+            baseURL: url,
+            apiToken: try readToken(),
+            trustedCertificateDER: try readSecret(account: certificateAccount)
+        )
     }
 
     public func save(_ configuration: NodeConnectionConfiguration) throws {
@@ -33,11 +40,17 @@ public final class SecureNodeConnectionStore: @unchecked Sendable {
         } else {
             try deleteToken()
         }
+        if let certificate = configuration.trustedCertificateDER {
+            try writeSecret(certificate, account: certificateAccount)
+        } else {
+            try deleteSecret(account: certificateAccount)
+        }
     }
 
     public func clear() throws {
         defaults.removeObject(forKey: baseURLKey)
         try deleteToken()
+        try deleteSecret(account: certificateAccount)
     }
 
     public static func parseTokenFile(_ data: Data) throws -> String {
@@ -50,18 +63,50 @@ public final class SecureNodeConnectionStore: @unchecked Sendable {
         return value
     }
 
+    public static func parseCertificateFile(_ data: Data) throws -> Data {
+        guard data.count <= 64 * 1_024 else { throw NodeClientError.invalidTrustedCertificate }
+        let certificateDER: Data
+        if let text = String(data: data, encoding: .utf8), text.contains("-----BEGIN CERTIFICATE-----") {
+            let encoded = text
+                .components(separatedBy: .newlines)
+                .filter { !$0.hasPrefix("-----") }
+                .joined()
+                .filter { !$0.isWhitespace }
+            guard let decoded = Data(base64Encoded: encoded) else {
+                throw NodeClientError.invalidTrustedCertificate
+            }
+            certificateDER = decoded
+        } else {
+            certificateDER = data
+        }
+        guard certificateDER.count <= 64 * 1_024,
+              SecCertificateCreateWithData(nil, certificateDER as CFData) != nil
+        else {
+            throw NodeClientError.invalidTrustedCertificate
+        }
+        return certificateDER
+    }
+
     private func readToken() throws -> String? {
-        var query = baseQuery
+        guard let data = try readSecret(account: tokenAccount) else { return nil }
+        guard let token = String(data: data, encoding: .utf8) else {
+            throw ConnectionStoreError.invalidKeychainData
+        }
+        return token
+    }
+
+    private func readSecret(account: String) throws -> Data? {
+        var query = baseQuery(account: account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         switch status {
         case errSecSuccess:
-            guard let data = item as? Data, let token = String(data: data, encoding: .utf8) else {
+            guard let data = item as? Data else {
                 throw ConnectionStoreError.invalidKeychainData
             }
-            return token
+            return data
         case errSecItemNotFound:
             return nil
         default:
@@ -70,12 +115,16 @@ public final class SecureNodeConnectionStore: @unchecked Sendable {
     }
 
     private func writeToken(_ token: String) throws {
-        let tokenData = Data(token.utf8)
-        let update = [kSecValueData as String: tokenData]
-        let status = SecItemUpdate(baseQuery as CFDictionary, update as CFDictionary)
+        try writeSecret(Data(token.utf8), account: tokenAccount)
+    }
+
+    private func writeSecret(_ data: Data, account: String) throws {
+        let query = baseQuery(account: account)
+        let update = [kSecValueData as String: data]
+        let status = SecItemUpdate(query as CFDictionary, update as CFDictionary)
         if status == errSecItemNotFound {
-            var item = baseQuery
-            item[kSecValueData as String] = tokenData
+            var item = query
+            item[kSecValueData as String] = data
             item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
             let addStatus = SecItemAdd(item as CFDictionary, nil)
             guard addStatus == errSecSuccess else {
@@ -87,17 +136,21 @@ public final class SecureNodeConnectionStore: @unchecked Sendable {
     }
 
     private func deleteToken() throws {
-        let status = SecItemDelete(baseQuery as CFDictionary)
+        try deleteSecret(account: tokenAccount)
+    }
+
+    private func deleteSecret(account: String) throws {
+        let status = SecItemDelete(baseQuery(account: account) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw ConnectionStoreError.keychain(status)
         }
     }
 
-    private var baseQuery: [String: Any] {
+    private func baseQuery(account: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: tokenAccount,
+            kSecAttrAccount as String: account,
         ]
     }
 }

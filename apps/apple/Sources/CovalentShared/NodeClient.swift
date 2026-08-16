@@ -1,10 +1,12 @@
 import Foundation
+import Security
 
 public struct NodeConnectionConfiguration: Equatable, Sendable {
     public let baseURL: URL
     public let apiToken: String?
+    public let trustedCertificateDER: Data?
 
-    public init(baseURL: URL, apiToken: String?) throws {
+    public init(baseURL: URL, apiToken: String?, trustedCertificateDER: Data? = nil) throws {
         guard let scheme = baseURL.scheme?.lowercased(), ["http", "https"].contains(scheme),
               baseURL.host != nil,
               baseURL.user == nil,
@@ -18,8 +20,17 @@ public struct NodeConnectionConfiguration: Equatable, Sendable {
         if let token, !token.isEmpty, !(32...512).contains(token.utf8.count) {
             throw NodeClientError.invalidToken
         }
+        if let trustedCertificateDER {
+            guard scheme == "https",
+                  trustedCertificateDER.count <= 64 * 1_024,
+                  SecCertificateCreateWithData(nil, trustedCertificateDER as CFData) != nil
+            else {
+                throw NodeClientError.invalidTrustedCertificate
+            }
+        }
         self.baseURL = baseURL
         self.apiToken = token?.isEmpty == false ? token : nil
+        self.trustedCertificateDER = trustedCertificateDER
     }
 
     public static var localDefault: Self {
@@ -30,6 +41,7 @@ public struct NodeConnectionConfiguration: Equatable, Sendable {
 public actor NodeClient {
     private let configuration: NodeConnectionConfiguration
     private let session: URLSession
+    private let trustDelegate: PinnedServerTrustDelegate?
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
 
@@ -40,13 +52,16 @@ public actor NodeClient {
         self.configuration = configuration
         if let session {
             self.session = session
+            self.trustDelegate = nil
         } else {
             let sessionConfiguration = URLSessionConfiguration.ephemeral
             sessionConfiguration.requestCachePolicy = .reloadIgnoringLocalCacheData
             sessionConfiguration.timeoutIntervalForRequest = 20
             sessionConfiguration.timeoutIntervalForResource = 3_600
             sessionConfiguration.urlCache = nil
-            self.session = URLSession(configuration: sessionConfiguration)
+            let delegate = configuration.trustedCertificateDER.flatMap(PinnedServerTrustDelegate.init(certificateDER:))
+            self.trustDelegate = delegate
+            self.session = URLSession(configuration: sessionConfiguration, delegate: delegate, delegateQueue: nil)
         }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -194,6 +209,9 @@ public actor NodeClient {
         }
         let http = try requireHTTPResponse(response)
         try validateHTTPResponse(data: data, response: http, expectedStatusCodes: [200])
+        guard http.value(forHTTPHeaderField: AppleArchiveTransfer.jobAcknowledgementRequiredHeader) == "true" else {
+            throw NodeClientError.invalidResponse
+        }
         return try decode(BackupResponse.self, from: data)
     }
 
@@ -202,7 +220,11 @@ public actor NodeClient {
     }
 
     public func previewRestore(_ request: RestorePreviewRequest) async throws -> RestorePlan {
-        try await send(path: "api/v1/restores/preview", method: "POST", body: request)
+        let reference = try await previewRestoreReference(
+            path: "api/v1/restores/preview",
+            body: request
+        )
+        return try await materializeRestorePlan(reference)
     }
 
     public func previewArchiveRestore(
@@ -211,9 +233,8 @@ public actor NodeClient {
         conflictPolicy: ConflictPolicy,
         jobId: String
     ) async throws -> RestorePlan {
-        try await send(
+        let reference = try await previewRestoreReference(
             path: "api/v1/restores/archive/preview",
-            method: "POST",
             body: RestoreArchivePreviewRequest(
                 backupId: backupId,
                 snapshotId: snapshotId,
@@ -221,22 +242,29 @@ public actor NodeClient {
                 jobId: jobId
             )
         )
+        return try await materializeRestorePlan(reference)
     }
 
     public func executeRestore(_ plan: RestorePlan) async throws -> RestoreResponse {
-        try await send(
+        let body = try encoder.encode(RestoreExecuteRequest(planId: plan.planId))
+        let (data, response) = try await execute(
             path: "api/v1/restores/execute",
+            queryItems: [],
             method: "POST",
-            body: RestoreExecuteRequest(plan: plan),
-            timeout: 86_400
+            bodyData: body,
+            authenticated: true,
+            timeout: 86_400,
+            expectedStatusCodes: [200]
         )
+        try validateRestorePlanHeaders(response, reference: plan.reference)
+        return try decode(RestoreResponse.self, from: data)
     }
 
     public func executeArchiveRestore(_ plan: RestorePlan, targetURL: URL) async throws -> RestoreResponse {
         try await Task.detached(priority: .userInitiated) {
             try AppleArchiveTransfer.requireEmptyDirectory(targetURL)
         }.value
-        let body = try encoder.encode(RestoreExecuteRequest(plan: plan))
+        let body = try encoder.encode(RestoreExecuteRequest(planId: plan.planId))
         var request = try authenticatedRequest(
             path: "api/v1/restores/archive/execute",
             method: "POST",
@@ -264,7 +292,10 @@ public actor NodeClient {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard contentType == AppleArchiveTransfer.restoreContentType,
               let encodedResult = http.value(forHTTPHeaderField: AppleArchiveTransfer.restoreResultHeader),
-              let resultData = Data(base64URLEncoded: encodedResult)
+              let resultData = Data(base64URLEncoded: encodedResult),
+              http.value(forHTTPHeaderField: AppleArchiveTransfer.restorePlanIdHeader) == plan.planId,
+              http.value(forHTTPHeaderField: AppleArchiveTransfer.restorePlanDigestHeader) == plan.planDigest,
+              http.value(forHTTPHeaderField: AppleArchiveTransfer.jobAcknowledgementRequiredHeader) == "true"
         else {
             throw NodeClientError.invalidResponse
         }
@@ -279,6 +310,14 @@ public actor NodeClient {
         return result
     }
 
+    public func acknowledgeJob(jobId: String) async throws {
+        try await sendNoContent(path: "api/v1/jobs/acknowledge", body: JobReferenceRequest(jobId: jobId))
+    }
+
+    public func discardJob(jobId: String) async throws {
+        try await sendNoContent(path: "api/v1/jobs/discard", body: JobReferenceRequest(jobId: jobId))
+    }
+
     public func controlJob(jobId: String, action: JobAction) async throws -> JobControlResponse {
         try await send(
             path: "api/v1/jobs/control",
@@ -287,13 +326,92 @@ public actor NodeClient {
         )
     }
 
+    private func materializeRestorePlan(_ reference: RestorePlanReference) async throws -> RestorePlan {
+        guard reference.planId.isLowercaseHexDigest,
+              reference.planDigest.isLowercaseHexDigest,
+              reference.manifestDigest.isLowercaseHexDigest,
+              !reference.signature.isEmpty,
+              (0...AppleArchiveTransfer.maximumEntries).contains(reference.totalEntries)
+        else {
+            throw NodeClientError.invalidPayload("Restore plan reference is invalid or exceeds the Apple archive limit.")
+        }
+        var entries: [RestorePreviewEntry] = []
+        entries.reserveCapacity(reference.totalEntries)
+        var cursor: String?
+        repeat {
+            var queryItems = [URLQueryItem(name: "limit", value: "1000")]
+            if let cursor { queryItems.append(URLQueryItem(name: "cursor", value: cursor)) }
+            let page: RestorePlanPage = try await send(
+                path: "api/v1/restores/plans/\(reference.planId)",
+                queryItems: queryItems
+            )
+            guard page.matches(reference),
+                  page.entryOffset == entries.count,
+                  page.entries.count <= 1_000,
+                  entries.count + page.entries.count <= reference.totalEntries
+            else {
+                throw NodeClientError.invalidPayload("Restore plan pagination changed or repeated unexpectedly.")
+            }
+            if let nextCursor = page.nextCursor, nextCursor == cursor {
+                throw NodeClientError.invalidPayload("Restore plan pagination repeated its cursor.")
+            }
+            entries.append(contentsOf: page.entries)
+            cursor = page.nextCursor
+        } while cursor != nil
+        guard entries.count == reference.totalEntries else {
+            throw NodeClientError.invalidPayload("Restore plan pagination ended before every signed entry was received.")
+        }
+        return RestorePlan(reference: reference, entries: entries)
+    }
+
+    private func previewRestoreReference<Body: Encodable & Sendable>(
+        path: String,
+        body: Body
+    ) async throws -> RestorePlanReference {
+        let bodyData = try encoder.encode(body)
+        let (data, response) = try await execute(
+            path: path,
+            queryItems: [],
+            method: "POST",
+            bodyData: bodyData,
+            authenticated: true,
+            timeout: nil,
+            expectedStatusCodes: [200]
+        )
+        let reference = try decode(RestorePlanReference.self, from: data)
+        try validateRestorePlanHeaders(response, reference: reference)
+        guard response.value(forHTTPHeaderField: "Cache-Control")?.lowercased().contains("no-store") == true else {
+            throw NodeClientError.invalidResponse
+        }
+        return reference
+    }
+
+    private func validateRestorePlanHeaders(
+        _ response: HTTPURLResponse,
+        reference: RestorePlanReference
+    ) throws {
+        guard response.value(forHTTPHeaderField: AppleArchiveTransfer.restorePlanIdHeader) == reference.planId,
+              response.value(forHTTPHeaderField: AppleArchiveTransfer.restorePlanDigestHeader) == reference.planDigest
+        else {
+            throw NodeClientError.invalidResponse
+        }
+    }
+
     private func send<Response: Decodable & Sendable>(
         path: String,
+        queryItems: [URLQueryItem] = [],
         method: String = "GET",
         authenticated: Bool = true,
         timeout: TimeInterval? = nil
     ) async throws -> Response {
-        try await send(path: path, method: method, bodyData: nil, authenticated: authenticated, timeout: timeout)
+        try await send(
+            path: path,
+            queryItems: queryItems,
+            method: method,
+            bodyData: nil,
+            authenticated: authenticated,
+            timeout: timeout
+        )
     }
 
     private func send<Response: Decodable & Sendable, Body: Encodable & Sendable>(
@@ -306,6 +424,7 @@ public actor NodeClient {
         let data = try encoder.encode(body)
         return try await send(
             path: path,
+            queryItems: [],
             method: method,
             bodyData: data,
             authenticated: authenticated,
@@ -315,6 +434,7 @@ public actor NodeClient {
 
     private func send<Response: Decodable & Sendable>(
         path: String,
+        queryItems: [URLQueryItem],
         method: String,
         bodyData: Data?,
         authenticated: Bool,
@@ -322,6 +442,7 @@ public actor NodeClient {
     ) async throws -> Response {
         let (data, _) = try await execute(
             path: path,
+            queryItems: queryItems,
             method: method,
             bodyData: bodyData,
             authenticated: authenticated,
@@ -339,6 +460,7 @@ public actor NodeClient {
         let data = try encoder.encode(body)
         _ = try await execute(
             path: path,
+            queryItems: [],
             method: "POST",
             bodyData: data,
             authenticated: true,
@@ -349,6 +471,7 @@ public actor NodeClient {
 
     private func execute(
         path: String,
+        queryItems: [URLQueryItem],
         method: String,
         bodyData: Data?,
         authenticated: Bool,
@@ -356,8 +479,14 @@ public actor NodeClient {
         expectedStatusCodes: Set<Int>
     ) async throws -> (Data, HTTPURLResponse) {
         var request = authenticated || configuration.apiToken != nil
-            ? try authenticatedRequest(path: path, method: method, accept: "application/json", authenticated: authenticated)
-            : URLRequest(url: configuration.baseURL.appending(path: path))
+            ? try authenticatedRequest(
+                path: path,
+                queryItems: queryItems,
+                method: method,
+                accept: "application/json",
+                authenticated: authenticated
+            )
+            : URLRequest(url: try serviceURL(path: path, queryItems: queryItems))
         request.httpMethod = method
         request.timeoutInterval = timeout ?? 20
         request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -381,11 +510,12 @@ public actor NodeClient {
 
     private func authenticatedRequest(
         path: String,
+        queryItems: [URLQueryItem] = [],
         method: String,
         accept: String,
         authenticated: Bool = true
     ) throws -> URLRequest {
-        var request = URLRequest(url: configuration.baseURL.appending(path: path))
+        var request = URLRequest(url: try serviceURL(path: path, queryItems: queryItems))
         request.httpMethod = method
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue(accept, forHTTPHeaderField: "Accept")
@@ -398,6 +528,17 @@ public actor NodeClient {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         return request
+    }
+
+    private func serviceURL(path: String, queryItems: [URLQueryItem]) throws -> URL {
+        let url = configuration.baseURL.appending(path: path)
+        guard !queryItems.isEmpty else { return url }
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            throw NodeClientError.invalidServiceURL
+        }
+        components.queryItems = queryItems
+        guard let result = components.url else { throw NodeClientError.invalidServiceURL }
+        return result
     }
 
     private func requireHTTPResponse(_ response: URLResponse) throws -> HTTPURLResponse {
@@ -437,6 +578,40 @@ public actor NodeClient {
         let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
         guard size <= 2 * 1_024 * 1_024 else { return Data() }
         return try Data(contentsOf: url)
+    }
+}
+
+private final class PinnedServerTrustDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
+    private let certificate: SecCertificate
+
+    init?(certificateDER: Data) {
+        guard let certificate = SecCertificateCreateWithData(nil, certificateDER as CFData) else {
+            return nil
+        }
+        self.certificate = certificate
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let trust = challenge.protectionSpace.serverTrust
+        else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        let hostnamePolicy = SecPolicyCreateSSL(true, challenge.protectionSpace.host as CFString)
+        guard SecTrustSetPolicies(trust, hostnamePolicy) == errSecSuccess,
+              SecTrustSetAnchorCertificates(trust, [certificate] as CFArray) == errSecSuccess,
+              SecTrustSetAnchorCertificatesOnly(trust, true) == errSecSuccess,
+              SecTrustEvaluateWithError(trust, nil)
+        else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+        completionHandler(.useCredential, URLCredential(trust: trust))
     }
 }
 
@@ -484,7 +659,7 @@ private struct ConnectProviderRequest: Codable, Sendable {
 }
 
 private struct RestoreExecuteRequest: Codable, Sendable {
-    let plan: RestorePlan
+    let planId: String
 }
 
 private struct RestoreArchivePreviewRequest: Codable, Sendable {
@@ -497,6 +672,34 @@ private struct RestoreArchivePreviewRequest: Codable, Sendable {
 private struct JobControlRequest: Codable, Sendable {
     let jobId: String
     let action: JobAction
+}
+
+private struct JobReferenceRequest: Codable, Sendable {
+    let jobId: String
+}
+
+private extension RestorePlanPage {
+    func matches(_ reference: RestorePlanReference) -> Bool {
+        planId == reference.planId
+            && backupId == reference.backupId
+            && snapshotId == reference.snapshotId
+            && authorizedRoot == reference.authorizedRoot
+            && manifestDigest == reference.manifestDigest
+            && conflictPolicy == reference.conflictPolicy
+            && jobId == reference.jobId
+            && planDigest == reference.planDigest
+            && signerDeviceId == reference.signerDeviceId
+            && signature == reference.signature
+            && totalEntries == reference.totalEntries
+    }
+}
+
+private extension String {
+    var isLowercaseHexDigest: Bool {
+        utf8.count == 64 && utf8.allSatisfy { byte in
+            (48...57).contains(byte) || (97...102).contains(byte)
+        }
+    }
 }
 
 private extension Data {
@@ -520,6 +723,7 @@ private extension Data {
 public enum NodeClientError: Error, Equatable, Sendable {
     case invalidServiceURL
     case invalidToken
+    case invalidTrustedCertificate
     case missingToken
     case insecureAuthenticatedTransport
     case invalidResponse
@@ -535,6 +739,7 @@ extension NodeClientError: LocalizedError {
         switch self {
         case .invalidServiceURL: "Enter a complete HTTP or HTTPS service address."
         case .invalidToken: "The local API token is not valid."
+        case .invalidTrustedCertificate: "Choose a valid DER or PEM TLS certificate for an HTTPS service."
         case .missingToken: "Connect this app with the node's local API token."
         case .insecureAuthenticatedTransport:
             "Covalent will not send its API token over plain HTTP to another device. Use loopback or HTTPS."

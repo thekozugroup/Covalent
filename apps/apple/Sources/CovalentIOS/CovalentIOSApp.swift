@@ -3,9 +3,12 @@ import UIKit
 
 @main
 struct CovalentIOSApp: App {
-    @StateObject private var model = CovalentAppModel()
+    @StateObject private var model: CovalentAppModel
 
     init() {
+        let model = CovalentAppModel()
+        _model = StateObject(wrappedValue: model)
+        IOSBackgroundExecution.register(model: model)
         let appearance = UITabBarAppearance()
         appearance.configureWithOpaqueBackground()
         appearance.backgroundColor = .systemBackground

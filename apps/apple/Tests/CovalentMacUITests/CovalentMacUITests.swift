@@ -30,7 +30,14 @@ final class CovalentMacUITests: XCTestCase {
         let app = try launchApp()
         continueAfterFailure = false
         XCTAssertTrue(app.staticTexts["Apple UI Test Node is protected here"].waitForExistence(timeout: 10))
-        try app.performAccessibilityAudit()
+        try app.performAccessibilityAudit { issue in
+            let details = "Accessibility audit: \(issue.compactDescription)\n\(issue.detailedDescription)\n\(issue.element?.debugDescription ?? "Element unavailable")"
+            let attachment = XCTAttachment(string: details)
+            attachment.name = "Accessibility audit element"
+            attachment.lifetime = .keepAlways
+            self.add(attachment)
+            return false
+        }
     }
 
     func testNativeMenuBarQuickActionsAreReachable() throws {

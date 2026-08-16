@@ -6,16 +6,20 @@ struct MacRootView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(AppSection.allCases, selection: $model.selectedSection) { section in
-                Label(section.label, systemImage: section.systemImage)
-                    .tag(section)
-                    .accessibilityIdentifier("sidebar.\(section.rawValue)")
+            VStack(spacing: 0) {
+                List(AppSection.allCases, selection: $model.selectedSection) { section in
+                    Label(section.label, systemImage: section.systemImage)
+                        .tag(section)
+                        .accessibilityIdentifier("sidebar.\(section.rawValue)")
+                }
+                .listStyle(.sidebar)
+
+                serviceState
             }
             .navigationTitle("Covalent")
             .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 260)
-            .safeAreaInset(edge: .bottom) {
-                serviceState
-            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Covalent sidebar")
         } detail: {
             ZStack(alignment: .bottom) {
                 detail

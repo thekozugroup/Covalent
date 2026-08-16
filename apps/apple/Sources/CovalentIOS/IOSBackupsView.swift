@@ -185,7 +185,9 @@ private struct IOSBackupDetailView: View {
 
     private func verify(_ snapshot: SnapshotRecord, repair: Bool = false) {
         Task {
-            _ = await IOSBackgroundExecution.perform(named: repair ? "Covalent repair" : "Covalent verify") {
+            _ = await IOSBackgroundExecution.perform(
+                named: repair ? "Covalent repair" : "Covalent verify"
+            ) {
                 await model.verify(snapshot, repair: repair)
             }
         }
@@ -348,7 +350,10 @@ struct IOSRestorePreviewView: View {
     private func restore() {
         isRestoring = true
         Task {
-            let result = await IOSBackgroundExecution.perform(named: "Covalent restore") {
+            let result = await IOSBackgroundExecution.perform(
+                named: "Covalent restore",
+                onExpiration: { await model.pauseActiveTaskForBackgroundExpiration() }
+            ) {
                 await model.executeRestore()
             }
             if result != nil { dismiss() }

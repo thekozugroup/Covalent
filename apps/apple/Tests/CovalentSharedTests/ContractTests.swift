@@ -82,6 +82,36 @@ import Testing
     #expect(throws: NodeClientError.invalidToken) {
         _ = try NodeConnectionConfiguration(baseURL: URL(string: "http://127.0.0.1:8787")!, apiToken: "short")
     }
+    #expect(throws: NodeClientError.invalidTrustedCertificate) {
+        _ = try NodeConnectionConfiguration(
+            baseURL: URL(string: "http://127.0.0.1:8787")!,
+            apiToken: nil,
+            trustedCertificateDER: Data("not a certificate".utf8)
+        )
+    }
+}
+
+@Test func exactTLSCertificateEnrollmentAcceptsPEMAndRequiresHTTPS() throws {
+    let encoded = "MIIDETCCAfmgAwIBAgIUYsPev+VNpSHCYn0nYC3w+2SsWUEwDQYJKoZIhvcNAQELBQAwGDEWMBQGA1UEAwwNY292YWxlbnQudGVzdDAeFw0yNjA4MTYxMDE3MzBaFw0zNjA4MTMxMDE3MzBaMBgxFjAUBgNVBAMMDWNvdmFsZW50LnRlc3QwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDEFxGkt0SWXJZYg07a+KyODIKOqdVWME/an7aRhjvsWQqgnymGxiX/SP3UkeGJmniv1GyLtMMs6HHIyQYm5fNTy79BXKhHbzXm9jXOcGZsg9cUYFv4Diw5jjk/m/UBwcST+YVNJ6lSuS3wbL1N9Lf1WF23Jo0GljMlCL3vrits0PzoM7BwkjUAtmEif0qj5NtwFQbkPie7q52ncv5BdAOLwEt5lw7TywHa0txlazf2YYFKywpTNs4zVZEGBXAJv596IDpHSCge/pyzzvPN3aPWBOKPa43jnzm6ns0X/pXUImGXulWWVsimfvZ8yB+bfyPVA0qsIwgwNksfBEOZQy8DAgMBAAGjUzBRMB0GA1UdDgQWBBRK/E13+jjcE1TYyefJvelp37GwVDAfBgNVHSMEGDAWgBRK/E13+jjcE1TYyefJvelp37GwVDAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQBSAqEDBH+zydx+MHkonv3T2HeTpXqnxl2nAgdbmiszaiiHUo5NO/OQPwWLLf3k1JnBh8G0g5jcOyKCKRmMIT4/9l085EeI9et3gyf7paKwo5zcO4+1i4S3ysdUKNx/6EuvnVrtlpR8YOWTmYK/zGbsvF+lJ5ppLwNDwRXwW82q6Zr21tgVqtrMqtdcflPVguvSs04J5TDwBlD3QVyCDIK3EZphjXZvSpKU5LpRTgKZlOVGon1itsTWHNzEgPtpGYPcyfL5U9Vc1PRwoctcd5bbDlG1W/7z5kT0f95zetjzZdAx1N2e72rGHbCD+W9jDETg5s3KVMUnBnzQovGWRXZx"
+    let pem = Data("-----BEGIN CERTIFICATE-----\n\(encoded)\n-----END CERTIFICATE-----\n".utf8)
+    let certificateDER = try SecureNodeConnectionStore.parseCertificateFile(pem)
+    #expect(!certificateDER.isEmpty)
+    let configuration = try NodeConnectionConfiguration(
+        baseURL: URL(string: "https://covalent.test:8443")!,
+        apiToken: String(repeating: "t", count: 32),
+        trustedCertificateDER: certificateDER
+    )
+    #expect(configuration.trustedCertificateDER == certificateDER)
+    #expect(throws: NodeClientError.invalidTrustedCertificate) {
+        _ = try NodeConnectionConfiguration(
+            baseURL: URL(string: "http://covalent.test:8443")!,
+            apiToken: nil,
+            trustedCertificateDER: certificateDER
+        )
+    }
+    #expect(throws: NodeClientError.invalidTrustedCertificate) {
+        _ = try SecureNodeConnectionStore.parseCertificateFile(Data("garbage".utf8))
+    }
 }
 
 @Test func directoryGrantRejectsNonFileURL() {

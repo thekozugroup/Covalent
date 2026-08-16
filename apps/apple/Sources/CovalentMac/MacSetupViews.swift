@@ -9,6 +9,8 @@ struct MacConnectionView: View {
     @State private var token = ""
     @State private var deviceName = ""
     @State private var lanDiscoveryEnabled = false
+    @State private var trustedCertificateDER: Data?
+    @State private var trustedCertificateName: String?
     @State private var revealToken = false
     @State private var isConnecting = false
 
@@ -66,6 +68,24 @@ struct MacConnectionView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                Section("HTTPS trust") {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(trustedCertificateName ?? "System trust store")
+                            Text("For the Docker or Unraid package, choose Caddy's exact root.crt. Hostname verification remains required.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if trustedCertificateDER != nil {
+                            Button("Clear") {
+                                trustedCertificateDER = nil
+                                trustedCertificateName = nil
+                            }
+                        }
+                        Button("Choose Certificate…") { chooseCertificateFile() }
+                    }
+                }
             }
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
@@ -85,6 +105,7 @@ struct MacConnectionView: View {
                         if await model.connect(
                             serviceAddress: serviceAddress,
                             token: token,
+                            trustedCertificateDER: trustedCertificateDER,
                             deviceName: deviceName,
                             lanDiscoveryEnabled: lanDiscoveryEnabled
                         ) {
@@ -121,6 +142,25 @@ struct MacConnectionView: View {
         } catch {
             model.alert = AppAlert(
                 title: "Token file is not valid",
+                message: (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+            )
+        }
+    }
+
+    private func chooseCertificateFile() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose the Node TLS Certificate"
+        panel.prompt = "Trust Exact Certificate"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            trustedCertificateDER = try SecureNodeConnectionStore.parseCertificateFile(Data(contentsOf: url))
+            trustedCertificateName = url.lastPathComponent
+        } catch {
+            model.alert = AppAlert(
+                title: "Certificate is not valid",
                 message: (error as? LocalizedError)?.errorDescription ?? String(describing: error)
             )
         }

@@ -17,6 +17,7 @@ struct CovalentMacApp: App {
         Window("Covalent", id: "main") {
             MacRootView(model: model)
                 .frame(minWidth: 900, minHeight: 640)
+                .background(MacWindowAccessibilityBridge())
         }
         .defaultSize(width: 1_080, height: 720)
         .commands {
@@ -61,8 +62,10 @@ struct CovalentMacApp: App {
         MenuBarExtra {
             MacMenuBarMenu(model: model)
         } label: {
-            Label("Covalent — \(model.serviceStatusLabel)", systemImage: menuBarSymbol)
-                .accessibilityLabel("Covalent, \(model.serviceStatusLabel)")
+            Image(systemName: menuBarSymbol)
+                .accessibilityLabel("Covalent")
+                .accessibilityValue(model.serviceStatusLabel)
+                .help("Covalent — \(model.serviceStatusLabel)")
         }
         .menuBarExtraStyle(.menu)
     }
@@ -73,6 +76,30 @@ struct CovalentMacApp: App {
         case .ready: "externaldrive.badge.checkmark"
         case .needsAuthorization: "externaldrive.badge.questionmark"
         case .offline: "externaldrive.badge.xmark"
+        }
+    }
+}
+
+private struct MacWindowAccessibilityBridge: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = WindowReaderView()
+        view.setAccessibilityElement(false)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        (nsView as? WindowReaderView)?.applyAccessibilityPolicy()
+    }
+
+    private final class WindowReaderView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            applyAccessibilityPolicy()
+        }
+
+        func applyAccessibilityPolicy() {
+            guard let contentView = window?.contentView else { return }
+            contentView.setAccessibilityLabel("Covalent content")
         }
     }
 }

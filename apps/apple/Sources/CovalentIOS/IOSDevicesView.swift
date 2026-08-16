@@ -266,6 +266,7 @@ struct IOSPairingView: View {
             step(2, "Paste the response and compare codes") {
                 transferEditor(text: $sessionJSON, prompt: "Paste responder session JSON")
                 if let session = try? model.pairingSession(from: sessionJSON) {
+                    pairingConsent(session)
                     authenticationCode(session.authenticationString)
                     Toggle("I compared this code on both devices", isOn: $comparedCode)
                     Button(session.inviterConfirmationSignature == nil ? "Confirm This Device" : "This Device Confirmed") {
@@ -313,6 +314,7 @@ struct IOSPairingView: View {
 
             if let session = try? model.pairingSession(from: sessionJSON) {
                 step(2, "Compare and sign the code") {
+                    pairingConsent(session)
                     authenticationCode(session.authenticationString)
                     Toggle("I compared this code on both devices", isOn: $comparedCode)
                     Button(session.responderConfirmationSignature == nil ? "Confirm This Device" : "This Device Confirmed") {
@@ -401,6 +403,29 @@ struct IOSPairingView: View {
         .padding(12)
         .frame(maxWidth: .infinity)
         .background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func pairingConsent(_ session: PairingSession) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Exact signed consent").font(.caption.weight(.semibold))
+            Text("Inviter: \(session.invitation.inviterDeviceName.isEmpty ? "Unnamed device" : session.invitation.inviterDeviceName)")
+            Text(session.invitation.inviterDeviceId.uuidString).font(.caption2.monospaced())
+            Text("Inviter receives: \(roleSummary(session.inviterRoles))")
+            Divider()
+            Text("Responder: \(session.responderName)")
+            Text(session.responderDeviceId.uuidString).font(.caption2.monospaced())
+            Text("Responder receives: \(roleSummary(session.responderRoles))")
+        }
+        .font(.caption)
+        .textSelection(.enabled)
+        .padding(12)
+        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityElement(children: .combine)
+    }
+
+    private func roleSummary(_ roles: Set<PeerRole>) -> String {
+        let labels = roles.sorted { $0.rawValue < $1.rawValue }.map(\.label)
+        return labels.isEmpty ? "No access" : labels.joined(separator: ", ")
     }
 
     private func roleToggles(selection: Binding<Set<PeerRole>>) -> some View {
