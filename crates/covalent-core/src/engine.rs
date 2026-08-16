@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use covalent_protocol::{
-    BackupId, DeviceId, ExportedDeviceSettings, Manifest, PairingInvitation, PeerGrant, PeerRole,
-    RememberedBackup, ReplicaAvailability, ReplicaIntent, SignedRoster,
+    BackupId, BackupSummary, DeviceId, ExportedDeviceSettings, Manifest, PairingInvitation,
+    PeerGrant, PeerRole, RememberedBackup, ReplicaAvailability, ReplicaIntent, SignedRoster,
 };
 use fs2::FileExt as _;
 use serde::{Deserialize, Serialize};
@@ -570,6 +570,54 @@ impl Engine {
             .lock()
             .map_err(|_| CoreError::Synchronization)?
             .clone())
+    }
+
+    /// Lists authoritative remembered backups with validated immutable snapshot metadata.
+    pub fn list_backups(&self) -> Result<Vec<BackupSummary>, CoreError> {
+        let config = self.config()?;
+        let snapshots = self.store.list_snapshots()?;
+        let mut by_backup = BTreeMap::<BackupId, Vec<StoredSnapshot>>::new();
+        for snapshot in snapshots {
+            by_backup
+                .entry(snapshot.backup_id)
+                .or_default()
+                .push(snapshot);
+        }
+        let mut summaries = Vec::with_capacity(config.remembered_backups.len());
+        for (backup_id, remembered) in config.remembered_backups {
+            let snapshots = by_backup.remove(&backup_id).unwrap_or_default();
+            let latest_snapshot = match remembered.latest_snapshot_id.as_deref() {
+                Some(snapshot_id) => Some(
+                    snapshots
+                        .iter()
+                        .find(|snapshot| snapshot.snapshot_id == snapshot_id)
+                        .ok_or_else(|| {
+                            CoreError::InvalidState(
+                                "remembered latest snapshot metadata is missing".to_owned(),
+                            )
+                        })?,
+                ),
+                None => None,
+            };
+            summaries.push(BackupSummary {
+                backup_id,
+                name: remembered.descriptor.name,
+                owner_device_id: remembered.descriptor.owner_device_id,
+                latest_snapshot_id: latest_snapshot.map(|snapshot| snapshot.snapshot_id.clone()),
+                latest_committed_at_unix_ms: latest_snapshot
+                    .map(|snapshot| snapshot.committed_at_unix_ms),
+                snapshot_count: u64::try_from(snapshots.len())
+                    .map_err(|_| CoreError::ResourceLimit("snapshot count"))?,
+                selected_provider_ids: remembered.replica_intent.selected_providers,
+            });
+        }
+        summaries.sort_by(|left, right| {
+            right
+                .latest_committed_at_unix_ms
+                .cmp(&left.latest_committed_at_unix_ms)
+                .then_with(|| left.backup_id.cmp(&right.backup_id))
+        });
+        Ok(summaries)
     }
 
     /// Persists one mutually confirmed grant.

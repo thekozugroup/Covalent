@@ -17,6 +17,7 @@ clap.workspace = true
 covalent-core = { path = "../covalent-core" }
 covalent-protocol = { path = "../covalent-protocol" }
 ed25519-dalek.workspace = true
+http-body-util.workspace = true
 mdns-sd.workspace = true
 quinn.workspace = true
 rand_core.workspace = true
@@ -26,13 +27,15 @@ serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+walkdir.workspace = true
 zeroize.workspace = true
+zip.workspace = true
 
 [dev-dependencies]
-http-body-util.workspace = true
 tower.workspace = true
 
 [lints]

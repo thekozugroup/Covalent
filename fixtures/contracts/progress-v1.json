@@ -1,0 +1,10 @@
+{
+  "protocolVersion": 1,
+  "jobId": "backup-golden-001",
+  "kind": "backup",
+  "state": "running",
+  "completedBytes": 1048576,
+  "totalBytes": 4194304,
+  "completedEntries": 42,
+  "message": "Encrypting local content."
+}

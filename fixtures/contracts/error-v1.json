@@ -1,0 +1,6 @@
+{
+  "protocolVersion": 1,
+  "code": "source_changed",
+  "message": "The source changed while it was being backed up. Retry after writes stop.",
+  "retryable": true
+}

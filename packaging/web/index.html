@@ -9,13 +9,13 @@
     <script src="/assets/app.js" defer></script>
   </head>
   <body>
-    <a class="skip-link" href="#content">Skip to status</a>
+    <a class="skip-link" href="#content">Skip to console</a>
     <header>
       <div>
         <p class="eyebrow">Private distributed backup</p>
         <h1>Covalent</h1>
       </div>
-      <span class="tier">Tier 1 node</span>
+      <p class="tier">Tier 1 node</p>
     </header>
     <main id="content">
       <section class="hero" aria-labelledby="node-heading">
@@ -24,31 +24,96 @@
           <h2 id="node-heading" data-device-name>Loading node…</h2>
           <p class="muted" data-state aria-live="polite">Connecting to the local service.</p>
         </div>
-        <button type="button" data-refresh>Refresh</button>
+        <button type="button" class="secondary" data-refresh>Refresh status</button>
       </section>
 
-      <section class="grid" aria-label="Node safeguards">
-        <article>
-          <h3>Discovery</h3>
-          <p class="value" data-discovery>Checking…</p>
-          <p class="muted">LAN discovery is optional. Manual and Tailnet-aware connections still require Covalent pairing.</p>
-        </article>
-        <article>
-          <h3>Replica policy</h3>
-          <p class="value">Explicit selection</p>
-          <p class="muted">This node stores an extra copy only when you choose it.</p>
-        </article>
-        <article>
-          <h3>Restore boundary</h3>
-          <p class="value">Authorized roots only</p>
-          <p class="muted">Relative paths cannot escape a destination selected for restore.</p>
-        </article>
+      <section class="security-card" aria-labelledby="token-heading">
+        <div>
+          <h2 id="token-heading">Local access</h2>
+          <p class="muted">Enter the token from <code>/data/local-api-token</code> to use changes. It stays only in this browser tab and is never sent anywhere except this local node.</p>
+        </div>
+        <form class="inline-form" data-token-form>
+          <label for="api-token">Local API token</label>
+          <input id="api-token" name="token" type="password" autocomplete="off" spellcheck="false" required />
+          <button>Unlock console</button>
+        </form>
       </section>
 
-      <aside aria-labelledby="foundation-heading">
-        <h2 id="foundation-heading">Foundation service</h2>
-        <p>This console currently exposes non-sensitive health and status. Pair, Backup, Restore, and Settings actions arrive through the versioned local API without changing these safety rules.</p>
-      </aside>
+      <nav class="tabs" aria-label="Covalent actions" role="tablist">
+        <button id="pair-tab" role="tab" aria-selected="true" aria-controls="pair-panel" data-tab="pair">Pair</button>
+        <button id="backup-tab" role="tab" aria-selected="false" aria-controls="backup-panel" data-tab="backup">Backup</button>
+        <button id="restore-tab" role="tab" aria-selected="false" aria-controls="restore-panel" data-tab="restore">Restore</button>
+        <button id="settings-tab" role="tab" aria-selected="false" aria-controls="settings-panel" data-tab="settings">Settings</button>
+      </nav>
+
+      <section id="pair-panel" role="tabpanel" aria-labelledby="pair-tab" data-panel="pair">
+        <div class="panel-heading"><div><h2>Pair a device</h2><p class="muted">Pairing requires both people to compare the same short code before a device receives any role.</p></div></div>
+        <div class="two-column">
+          <form class="card" data-pair-create>
+            <h3>Create invitation</h3>
+            <label>Reachable endpoint <input name="endpoint" placeholder="node-a.tailnet.ts.net:8787" required /></label>
+            <label>Expires in minutes <input name="minutes" type="number" min="1" max="15" value="10" required /></label>
+            <button>Create invitation</button>
+          </form>
+          <form class="card" data-pair-accept>
+            <h3>Accept invitation</h3>
+            <label>Your device name <input name="name" maxlength="80" required /></label>
+            <label>Invitation JSON <textarea name="invitation" rows="5" required></textarea></label>
+            <fieldset><legend>Roles granted to this device</legend><label><input type="checkbox" name="responderRole" value="storage_provider" /> Store selected encrypted copies</label><label><input type="checkbox" name="responderRole" value="backup_reader" /> Serve restore reads</label></fieldset>
+            <button>Accept and show code</button>
+          </form>
+        </div>
+        <form class="card" data-pair-confirm>
+          <h3>Confirm and finish</h3>
+          <p class="muted">Paste the session unchanged on each device. Confirm only after both screens show the identical code.</p>
+          <label>Pairing session JSON <textarea name="session" rows="7" required></textarea></label>
+          <label>Code shown on both devices <input name="code" autocomplete="off" required /></label>
+          <div class="button-row"><button name="side" value="responder">Confirm as accepter</button><button name="side" value="inviter" class="secondary">Confirm as creator</button></div>
+        </form>
+      </section>
+
+      <section id="backup-panel" role="tabpanel" aria-labelledby="backup-tab" data-panel="backup" hidden>
+        <div class="panel-heading"><div><h2>Back up selected files</h2><p class="muted">Only read-only source mounts such as <code>/source</code> or <code>/boot-source</code> should be selected. Extra copies are made only on the provider IDs you enter.</p></div></div>
+        <section class="card" aria-live="polite">
+          <div class="button-row"><h3>Remembered backups</h3><button type="button" class="secondary" data-backups-refresh>Refresh list</button></div>
+          <p class="muted" data-backups-empty>Unlock the console to load authoritative node backups.</p>
+          <ul data-backups-list></ul>
+        </section>
+        <form class="card" data-backup-form>
+          <label>Source directory <input name="sourceRoot" value="/source" required /></label>
+          <label>Backup name <input name="displayName" maxlength="120" required /></label>
+          <label>Snapshot ID <input name="snapshotId" pattern="[A-Za-z0-9_-]+" value="snapshot-1" required /></label>
+          <label>Provider device IDs <textarea name="providers" rows="3" placeholder="One UUID per line. Leave empty for a local-only copy."></textarea></label>
+          <p class="notice">Provider selection is explicit. Covalent will not select or place replicas automatically.</p>
+          <button>Start backup</button>
+        </form>
+      </section>
+
+      <section id="restore-panel" role="tabpanel" aria-labelledby="restore-tab" data-panel="restore" hidden>
+        <div class="panel-heading"><div><h2>Preview before restore</h2><p class="muted">Choose a distinct writable target. Relative restore paths stay under that target; preview is required before any write.</p></div></div>
+        <form class="card" data-restore-preview>
+          <label>Backup ID <input name="backupId" required /></label>
+          <label>Snapshot ID <input name="snapshotId" required /></label>
+          <label>Writable target directory <input name="targetRoot" value="/restore" required /></label>
+          <label>Conflict policy <select name="conflictPolicy"><option value="fail">Stop on conflicts (safest)</option><option value="skip">Skip existing files</option><option value="rename">Create renamed copies</option><option value="replace">Replace regular files</option></select></label>
+          <button>Preview restore</button>
+        </form>
+        <section class="card" aria-live="polite" data-restore-result hidden>
+          <h3>Restore preview</h3><p data-restore-summary></p><pre data-restore-plan></pre>
+          <label class="confirmation"><input type="checkbox" data-restore-confirm /> I reviewed this signed preview and authorize this restore to its displayed target.</label>
+          <button type="button" data-restore-execute disabled>Restore this preview</button>
+        </section>
+      </section>
+
+      <section id="settings-panel" role="tabpanel" aria-labelledby="settings-tab" data-panel="settings" hidden>
+        <div class="panel-heading"><div><h2>Settings and reachability</h2><p class="muted">LAN discovery is <strong data-discovery>Unknown</strong>. It can remain off when you use explicit LAN addresses or Tailscale; neither method bypasses pairing.</p></div></div>
+        <div class="two-column">
+          <section class="card"><h3>Export safe settings</h3><p class="muted">Exports name, discovery preference, and remembered backups. It excludes identity keys, backup keys, grants, and provider credentials.</p><button type="button" data-settings-export>Download settings</button></section>
+          <form class="card" data-settings-import><h3>Import safe settings</h3><label>Settings JSON <textarea name="settings" rows="5" required></textarea></label><label class="confirmation"><input type="checkbox" name="confirmed" required /> I understand this replaces safe settings, not identity keys.</label><button>Import settings</button></form>
+        </div>
+        <aside><h3>Container network choices</h3><p>Bridge mode exposes TCP/UDP 8787 explicitly. Host networking can improve multicast discovery; a Tailscale sidecar or host Tailnet address is optional. Restrict access to the console port because its token authorizes changes.</p></aside>
+      </section>
+      <output class="toast" data-message aria-live="polite"></output>
     </main>
     <footer>Core workflows require no Covalent account or hosted coordinator.</footer>
   </body>

@@ -1,0 +1,8 @@
+{
+  "protocolVersion": 1,
+  "sequence": 17,
+  "occurredAtUnixMs": 1786838400123,
+  "kind": "transfer_changed",
+  "jobId": "backup-golden-001",
+  "message": "Backup progress changed."
+}

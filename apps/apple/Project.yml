@@ -10,6 +10,10 @@ settings:
     SWIFT_VERSION: "6.0"
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED: YES
+packages:
+  ZIPFoundation:
+    url: https://github.com/weichsel/ZIPFoundation.git
+    exactVersion: 0.9.20
 targets:
   CovalentMac:
     type: application
@@ -17,6 +21,9 @@ targets:
     sources:
       - path: Sources/CovalentShared
       - path: Sources/CovalentMac
+    dependencies:
+      - package: ZIPFoundation
+        product: ZIPFoundation
     info:
       path: Config/CovalentMac-Info.plist
       properties:
@@ -39,14 +46,24 @@ targets:
         PRODUCT_NAME: Covalent
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: NO
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+    preBuildScripts:
+      - path: Scripts/build-node-helper.sh
+        name: Build bundled Covalent node
+        basedOnDependencyAnalysis: false
     scheme:
       gatherCoverageData: true
+      testTargets:
+        - CovalentMacUITests
   CovalentIOS:
     type: application
     platform: iOS
     sources:
       - path: Sources/CovalentShared
       - path: Sources/CovalentIOS
+    dependencies:
+      - package: ZIPFoundation
+        product: ZIPFoundation
     info:
       path: Config/CovalentIOS-Info.plist
       properties:
@@ -55,6 +72,10 @@ targets:
         NSLocalNetworkUsageDescription: Covalent finds backup devices you choose to pair on your local network.
         NSBonjourServices:
           - _covalent._udp
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        UIDesignRequiresCompatibility: true
+        UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         UISupportsDocumentBrowser: false
@@ -67,3 +88,41 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
     scheme:
       gatherCoverageData: true
+      testTargets:
+        - CovalentIOSUITests
+  CovalentMacUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: Tests/CovalentMacUITests
+    dependencies:
+      - target: CovalentMac
+    info:
+      path: Config/CovalentMacUITests-Info.plist
+      properties:
+        CovalentUITestPort: $(COVALENT_UI_TEST_PORT)
+        CovalentUITestToken: $(COVALENT_UI_TEST_TOKEN)
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: life.michaelwong.covalent.macos-uitests
+        TEST_TARGET_NAME: CovalentMac
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: NO
+  CovalentIOSUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: Tests/CovalentIOSUITests
+    dependencies:
+      - target: CovalentIOS
+    info:
+      path: Config/CovalentIOSUITests-Info.plist
+      properties:
+        CovalentUITestPort: $(COVALENT_UI_TEST_PORT)
+        CovalentUITestToken: $(COVALENT_UI_TEST_TOKEN)
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: life.michaelwong.covalent.ios-uitests
+        TEST_TARGET_NAME: CovalentIOS
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: NO

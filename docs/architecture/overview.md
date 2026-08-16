@@ -3,8 +3,8 @@
 ## Shape
 
 ```text
-Native macOS (T1) ─┐
-Native Android (T1)├─ local versioned service facade ─ Rust engine
+Native macOS + bundled node (T1) ─┐
+Native Android/Apple streams ─────├─ local versioned service facade ─ Rust engine
 Docker/Unraid (T1) ┤                                  ├─ encrypted chunk store
 Native iOS (T2) ───┘                                  ├─ signed manifest store
 Embedded console ─ local HTTP API ─ node daemon       └─ QUIC peer sessions
@@ -22,7 +22,7 @@ The Rust workspace owns protocol types, identity, pairing, backup traversal, chu
 
 ## Data flow
 
-1. A platform obtains durable access to a selected source and passes the authorized local path or platform-resolved access to the engine facade.
+1. A platform obtains durable access to a selected source. Unsandboxed filesystem clients pass an authorized local path. Android keeps SAF `content://` identifiers on-device and Apple keeps security-scoped URLs in-app; both stream a validated ZIP to a daemon-owned private staging path.
 2. The engine anchors a source directory handle, traverses without following symlinks, streams file content into bounded chunks, hashes plaintext, encrypts each chunk, and checkpoints completed entries.
 3. A signed encrypted manifest commits through a restart-recoverable transaction only after required local data is durable. Snapshot IDs are immutable and monotonic per backup.
 4. The user selects provider device IDs. The scheduler sends only to those providers and records acknowledgements; it never fills a desired count by choosing peers.
@@ -38,8 +38,8 @@ One process owns a node state directory through an exclusive lock. Identity, bac
 
 ## Platform boundaries
 
-- macOS Tier 1: sandbox-aware folder selection, security-scoped bookmarks, `NSFileCoordinator`, menus, keyboard, and supported background work.
-- Android Tier 1: current stable API targeting, SAF tree URIs, persisted grants, opt-in local-network permission for LAN discovery, foreground/resumable work, Compose Material 3, and a restrained floating action toolbar.
+- macOS Tier 1: bundled app-owned loopback node, private readiness/token files, inheritance-only helper entitlements, security-scoped and coordinated archive streaming without forwarding PowerBox paths, menus, keyboard, and supported background work.
+- Android Tier 1: API 37 targeting, persisted SAF tree grants, file-descriptor archive streaming without forwarding content URIs, exact create-only restore into an empty tree, opt-in local-network permission for LAN discovery, foreground/resumable work, Compose Material 3, and a restrained floating action toolbar.
 - Docker/Unraid Tier 1: explicit read-only source mounts, durable config/data, explicit writable restore roots, rootless runtime, and clear network mode tradeoffs.
 - iOS Tier 2: selected directories only, coordinated access, resumable jobs within iOS scheduling limits. Full-device backup is neither designed nor claimed.
 

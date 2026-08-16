@@ -34,10 +34,20 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
       - run: brew install xcodegen
       - run: swift test --package-path apps/apple
       - run: cd apps/apple && xcodegen generate --quiet
       - run: xcodebuild -project apps/apple/Covalent.xcodeproj -scheme CovalentMac -configuration Debug -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build
+      - name: Archive universal app-owned node
+        run: |
+          archive_path="$RUNNER_TEMP/CovalentMac.xcarchive"
+          xcodebuild -project apps/apple/Covalent.xcodeproj -scheme CovalentMac -configuration Release -destination 'generic/platform=macOS' -archivePath "$archive_path" CODE_SIGNING_ALLOWED=NO archive
+          helper="$archive_path/Products/Applications/Covalent.app/Contents/MacOS/covalent-node"
+          test -x "$helper"
+          lipo "$helper" -verify_arch arm64 x86_64
 
   android-tier1:
     name: Android Tier 1
@@ -62,6 +72,7 @@ jobs:
       - run: docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp --entrypoint covalent covalent:ci doctor
       - run: ./scripts/check-container-runtime.sh covalent:ci
       - run: ./scripts/validate-unraid-template.sh
+      - run: ./scripts/docker-compose-e2e.sh covalent:ci
 
   ios-tier2:
     name: iOS Tier 2 (non-blocking)

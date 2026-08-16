@@ -17,7 +17,7 @@ docker run --rm -d \
   --read-only \
   --cap-drop=ALL \
   --security-opt=no-new-privileges \
-  --tmpfs /tmp \
+  --tmpfs /tmp:rw,noexec,nosuid,size=64m \
   "$image" \
   >/dev/null
 started=true
@@ -32,8 +32,8 @@ until docker exec "$container_name" covalent-node healthcheck --url http://127.0
   sleep 1
 done
 
-runtime=$(docker inspect "$container_name" --format '{{.Config.User}} {{.HostConfig.ReadonlyRootfs}} {{json .HostConfig.CapDrop}}')
-if [ "$runtime" != '65532:65532 true ["ALL"]' ]; then
+runtime=$(docker inspect "$container_name" --format '{{.Config.User}} {{.HostConfig.ReadonlyRootfs}} {{json .HostConfig.CapDrop}} {{json .HostConfig.SecurityOpt}}')
+if [ "$runtime" != '65532:65532 true ["ALL"] ["no-new-privileges"]' ]; then
   echo "unexpected container isolation: $runtime" >&2
   exit 1
 fi

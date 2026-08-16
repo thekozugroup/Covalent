@@ -18,4 +18,24 @@ else
   exit 1
 fi
 
+for required in \
+  '<Privileged>false</Privileged>' \
+  'Target="/source"' \
+  'Target="/boot-source"' \
+  'Target="/restore"' \
+  'Target="/config"' \
+  'Target="/data"' \
+  'Mode="ro"' \
+  'Default="false"'; do
+  if ! grep -q "$required" "$template"; then
+    echo "Unraid template missing required safe policy: $required" >&2
+    exit 1
+  fi
+done
+
+if grep -q 'Target="/mnt/user"' "$template" || grep -q 'Target="/boot"' "$template"; then
+  echo "Unraid template must not map broad host roots directly" >&2
+  exit 1
+fi
+
 echo "Unraid template XML: ok"

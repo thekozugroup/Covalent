@@ -1,0 +1,77 @@
+name: covalent-e2e
+
+# This file intentionally describes three independent nodes. The test harness
+# performs the authenticated pairing exchange over their published local APIs.
+services:
+  node-a:
+    image: ${COVALENT_IMAGE:-covalent:e2e}
+    user: "65532:65532"
+    read_only: true
+    init: true
+    environment:
+      COVALENT_LISTEN: 0.0.0.0:8787
+      COVALENT_PEER_LISTEN: 0.0.0.0:8787
+      COVALENT_DATA_DIR: /data
+      COVALENT_DEVICE_NAME: Node A
+      COVALENT_LAN_DISCOVERY: "false"
+      UMASK: "027"
+    ports: ["18781:8787/tcp", "18781:8787/udp"]
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    volumes:
+      - a-data:/data
+      - a-config:/config
+      - ./example/source:/source:ro
+      - a-restore:/restore
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+  node-b:
+    image: ${COVALENT_IMAGE:-covalent:e2e}
+    user: "65532:65532"
+    read_only: true
+    init: true
+    environment:
+      COVALENT_LISTEN: 0.0.0.0:8787
+      COVALENT_PEER_LISTEN: 0.0.0.0:8787
+      COVALENT_DATA_DIR: /data
+      COVALENT_DEVICE_NAME: Node B
+      COVALENT_LAN_DISCOVERY: "false"
+      UMASK: "027"
+    ports: ["18782:8787/tcp", "18782:8787/udp"]
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    volumes:
+      - b-data:/data
+      - b-config:/config
+      - b-restore:/restore
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+  node-c:
+    image: ${COVALENT_IMAGE:-covalent:e2e}
+    user: "65532:65532"
+    read_only: true
+    init: true
+    environment:
+      COVALENT_LISTEN: 0.0.0.0:8787
+      COVALENT_PEER_LISTEN: 0.0.0.0:8787
+      COVALENT_DATA_DIR: /data
+      COVALENT_DEVICE_NAME: Node C
+      COVALENT_LAN_DISCOVERY: "false"
+      UMASK: "027"
+    ports: ["18783:8787/tcp", "18783:8787/udp"]
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    volumes:
+      - c-data:/data
+      - c-config:/config
+      - c-restore:/restore
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+volumes:
+  a-data: {}
+  a-config: {}
+  b-data: {}
+  b-config: {}
+  c-data: {}
+  c-config: {}
+  a-restore: {}
+  b-restore: {}
+  c-restore: {}

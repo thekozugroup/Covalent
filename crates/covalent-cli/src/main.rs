@@ -38,6 +38,8 @@ enum Command {
     Doctor,
     /// Prints live non-secret engine state.
     Status,
+    /// Lists authoritative remembered backups and latest committed snapshots.
+    Backups,
     /// Starts the long-running daemon binary with the same state directory.
     Daemon {
         /// Local HTTP listen socket.
@@ -327,6 +329,10 @@ fn main() -> Result<()> {
                     .filter(|grant| grant.revoked)
                     .count(),
             })
+        }
+        Command::Backups => {
+            let engine = open_engine(arguments.data_dir)?;
+            print_json(&engine.list_backups()?)
         }
         Command::Daemon {
             listen,

@@ -104,6 +104,15 @@ impl CovalentService {
             .map_err(|_| ServiceError::new("serialization_failed", "settings were not UTF-8"))
     }
 
+    /// Lists authoritative remembered backups and latest local snapshots as stable JSON.
+    pub fn backups_json(&self) -> Result<String, ServiceError> {
+        let backups = self
+            .engine()?
+            .list_backups()
+            .map_err(|error| ServiceError::from_engine(&error))?;
+        serialize(&backups)
+    }
+
     /// Imports safe settings after an explicit platform confirmation.
     pub fn import_settings_json(
         &self,
@@ -394,7 +403,7 @@ impl std::fmt::Debug for CovalentService {
 
 /// Binding-safe validated restore destination.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RestoreDestination {
     /// Canonical relative protocol path.
     pub relative_path: String,
@@ -406,39 +415,122 @@ pub struct RestoreDestination {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceError {
+    /// Contract version used to interpret this error.
+    pub protocol_version: u16,
     /// Stable machine-readable code.
     pub code: String,
     /// Safe local message.
     pub message: String,
+    /// Whether retrying the unchanged request may succeed later.
+    pub retryable: bool,
 }
 
 impl ServiceError {
     fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
+            protocol_version: PROTOCOL_VERSION,
             code: code.into(),
             message: message.into(),
+            retryable: false,
+        }
+    }
+
+    fn retryable(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            protocol_version: PROTOCOL_VERSION,
+            code: code.into(),
+            message: message.into(),
+            retryable: true,
         }
     }
 
     fn from_engine(error: &covalent_core::CoreError) -> Self {
-        let code = match error {
-            covalent_core::CoreError::SymlinkTraversal(_) => "symlink_traversal",
-            covalent_core::CoreError::InvalidAuthorizedRoot(_) => "invalid_authorized_root",
-            covalent_core::CoreError::NonDirectoryAncestor(_) => "non_directory_ancestor",
-            covalent_core::CoreError::RestoreConflict(_) => "restore_conflict",
-            covalent_core::CoreError::RestorePlanMismatch => "restore_plan_mismatch",
-            covalent_core::CoreError::SettingsImportNotConfirmed => "confirmation_required",
-            covalent_core::CoreError::PairingNotConfirmed => "pairing_confirmation_required",
-            covalent_core::CoreError::Paused => "job_paused",
-            covalent_core::CoreError::Cancelled => "job_cancelled",
-            covalent_core::CoreError::MissingChunk(_) => "missing_chunk",
-            covalent_core::CoreError::CorruptChunk(_)
-            | covalent_core::CoreError::AuthenticationFailed => "integrity_failure",
-            covalent_core::CoreError::PeerRevoked => "peer_revoked",
-            covalent_core::CoreError::ResourceLimit(_) => "resource_limit",
-            _ => "engine_failed",
-        };
-        Self::new(code, error.to_string())
+        use covalent_core::CoreError;
+        match error {
+            CoreError::InvalidAuthorizedRoot(_) => Self::new(
+                "invalid_authorized_root",
+                "The selected source or destination is not an accessible directory.",
+            ),
+            CoreError::SymlinkTraversal(_)
+            | CoreError::NonDirectoryAncestor(_)
+            | CoreError::EscapedAuthorizedRoot(_) => Self::new(
+                "unsafe_restore_path",
+                "The restore path cannot be confined beneath the authorized destination.",
+            ),
+            CoreError::SettingsImportNotConfirmed | CoreError::PairingNotConfirmed => Self::new(
+                "confirmation_required",
+                "Explicit local confirmation is required.",
+            ),
+            CoreError::Paused => Self::new(
+                "job_paused",
+                "The job is paused and can be resumed with the same job ID.",
+            ),
+            CoreError::Cancelled => Self::new(
+                "job_cancelled",
+                "The job was cancelled and its checkpoint was discarded.",
+            ),
+            CoreError::RestoreConflict(_) => Self::new(
+                "restore_conflict",
+                "The restore preview found a destination conflict.",
+            ),
+            CoreError::RestorePlanMismatch => Self::new(
+                "restore_plan_mismatch",
+                "The restore plan changed after preview. Preview the restore again.",
+            ),
+            CoreError::InvitationUnavailable => Self::new(
+                "invitation_unavailable",
+                "The pairing invitation is invalid, expired, or already used.",
+            ),
+            CoreError::ProtocolNegotiationFailed => Self::new(
+                "protocol_incompatible",
+                "The devices do not share a supported protocol version.",
+            ),
+            CoreError::SourceChanged(_) => Self::retryable(
+                "source_changed",
+                "The source changed while it was being backed up. Retry after writes stop.",
+            ),
+            CoreError::UnsupportedSourceEntry(_) | CoreError::SourcePermissionDenied(_) => {
+                Self::new(
+                    "source_unreadable",
+                    "The source contains an unsupported or unreadable entry.",
+                )
+            }
+            CoreError::CorruptChunk(_) | CoreError::AuthenticationFailed => Self::new(
+                "backup_corrupt",
+                "Backup data failed authenticated integrity verification.",
+            ),
+            CoreError::MissingChunk(_) | CoreError::ProvidersExhausted(_) => Self::retryable(
+                "backup_unavailable",
+                "No intact authorized copy is currently available.",
+            ),
+            CoreError::ResourceLimit(_) | CoreError::SettingsTooLarge => Self::new(
+                "resource_limit",
+                "The request exceeded a configured resource limit.",
+            ),
+            CoreError::PeerRevoked
+            | CoreError::UnselectedProvider
+            | CoreError::IdentityMismatch => Self::new(
+                "not_authorized",
+                "The requested peer or provider is not authorized.",
+            ),
+            CoreError::InvalidKeyMaterial
+            | CoreError::UnsupportedCipherSuite(_)
+            | CoreError::InvalidState(_)
+            | CoreError::InvalidLocator
+            | CoreError::Contract(_)
+            | CoreError::Json(_) => Self::new(
+                "invalid_contract",
+                "The request does not satisfy the versioned protocol contract.",
+            ),
+            CoreError::StateLocked => Self::retryable(
+                "node_state_locked",
+                "Another Covalent process currently owns this node state.",
+            ),
+            CoreError::Synchronization | CoreError::Io { .. } => Self::retryable(
+                "engine_failed",
+                "The local engine could not complete the request.",
+            ),
+        }
     }
 }
 
@@ -579,6 +671,18 @@ mod tests {
     }
 
     #[test]
+    fn binding_error_matches_the_shared_versioned_fixture() {
+        let expected: ServiceError =
+            serde_json::from_str(include_str!("../../../fixtures/contracts/error-v1.json"))
+                .expect("error fixture");
+        let actual = ServiceError::from_engine(&covalent_core::CoreError::SourceChanged(
+            PathBuf::from("private-source-name"),
+        ));
+        assert_eq!(actual, expected);
+        assert!(!actual.message.contains("private-source-name"));
+    }
+
+    #[test]
     fn stateful_json_facade_executes_backup_verify_and_restore() {
         let data = tempdir().expect("data");
         let source = tempdir().expect("source");
@@ -596,6 +700,11 @@ mod tests {
             serde_json::from_str(&service.backup_json(&request.to_string()).expect("backup"))
                 .expect("backup response");
         let backup_id = backup["backupId"].as_str().expect("backup ID");
+        let backups: serde_json::Value =
+            serde_json::from_str(&service.backups_json().expect("backup list"))
+                .expect("backup list response");
+        assert_eq!(backups[0]["backupId"], backup_id);
+        assert_eq!(backups[0]["latestSnapshotId"], "snapshot-1");
         let verify = serde_json::json!({
             "backupId": backup_id,
             "snapshotId": "snapshot-1"

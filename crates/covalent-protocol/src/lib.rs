@@ -218,6 +218,122 @@ pub struct RememberedBackup {
     pub owner_device_id: DeviceId,
 }
 
+/// Authoritative daemon view of one remembered backup and its latest local snapshot.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BackupSummary {
+    /// Stable logical backup identifier.
+    pub backup_id: BackupId,
+    /// User-facing backup name.
+    pub name: String,
+    /// Device that owns the backup definition.
+    pub owner_device_id: DeviceId,
+    /// Latest committed snapshot, absent for an imported descriptor with no local snapshot.
+    pub latest_snapshot_id: Option<String>,
+    /// Commit time of the latest local snapshot.
+    pub latest_committed_at_unix_ms: Option<u64>,
+    /// Number of immutable snapshots currently retained by this node.
+    pub snapshot_count: u64,
+    /// Exact providers explicitly selected for the latest snapshot.
+    pub selected_provider_ids: BTreeSet<DeviceId>,
+}
+
+/// Stable machine-readable API error shared by every client.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ApiErrorBody {
+    /// Contract version used to interpret this error.
+    pub protocol_version: u16,
+    /// Stable snake-case error identifier.
+    pub code: String,
+    /// Safe user-facing explanation without secrets or filesystem details.
+    pub message: String,
+    /// Whether retrying the unchanged request may succeed later.
+    pub retryable: bool,
+}
+
+/// Transfer category used by progress and event contracts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransferKind {
+    /// Source scan, encryption, and replication.
+    Backup,
+    /// Authenticated verification and optional repair.
+    Verification,
+    /// Root-confined restore or streamed archive export.
+    Restore,
+}
+
+/// Observable transfer lifecycle shared by native and web clients.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransferState {
+    /// Accepted but not yet executing.
+    Queued,
+    /// Work is actively executing.
+    Running,
+    /// Durable checkpoint is retained for explicit resume.
+    Paused,
+    /// Work completed successfully.
+    Completed,
+    /// Work stopped after a safe failure.
+    Failed,
+    /// Work was explicitly cancelled and its checkpoint discarded.
+    Cancelled,
+}
+
+/// Versioned bounded progress snapshot suitable for polling or event payloads.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TransferProgress {
+    /// Active protocol version.
+    pub protocol_version: u16,
+    /// Stable resumable job identifier.
+    pub job_id: String,
+    /// Operation category.
+    pub kind: TransferKind,
+    /// Current lifecycle state.
+    pub state: TransferState,
+    /// Plaintext or output bytes durably processed so far.
+    pub completed_bytes: u64,
+    /// Known total byte count, absent while discovery is incomplete.
+    pub total_bytes: Option<u64>,
+    /// Number of filesystem entries durably processed.
+    pub completed_entries: u64,
+    /// Safe short status text.
+    pub message: String,
+}
+
+/// Event category emitted by a node without embedding private payloads.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeEventKind {
+    /// A transfer changed lifecycle state or progress.
+    TransferChanged,
+    /// A peer or provider connection changed.
+    PeerChanged,
+    /// Local non-secret settings changed.
+    SettingsChanged,
+}
+
+/// Ordered versioned node event contract.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NodeEvent {
+    /// Active protocol version.
+    pub protocol_version: u16,
+    /// Monotonic sequence within one node process.
+    pub sequence: u64,
+    /// Event creation time.
+    pub occurred_at_unix_ms: u64,
+    /// Stable event category.
+    pub kind: NodeEventKind,
+    /// Related resumable job when applicable.
+    pub job_id: Option<String>,
+    /// Safe short status text.
+    pub message: String,
+}
+
 /// Settings deliberately excluding identities, content keys, and access grants.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

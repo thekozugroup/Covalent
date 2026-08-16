@@ -9,7 +9,10 @@ use clap::{Parser, Subcommand, ValueEnum};
 use covalent_core::{Engine, EngineOptions};
 use covalent_node::discovery::LanDiscovery;
 use covalent_node::transport::{QuicNode, TlsIdentity};
-use covalent_node::{AppState, load_or_create_local_api_token, router};
+use covalent_node::{
+    AppState, NodeReadyInfo, load_or_create_local_api_token, remove_node_ready_file, router,
+    write_node_ready_file,
+};
 use covalent_protocol::PlatformTier;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -43,6 +46,9 @@ enum Command {
         /// Readiness tier represented by this package.
         #[arg(long, env = "COVALENT_PLATFORM_TIER", value_enum, default_value_t = Tier::Tier1)]
         platform_tier: Tier,
+        /// Optional private readiness JSON for an app that owns this process.
+        #[arg(long, env = "COVALENT_READY_FILE")]
+        ready_file: Option<PathBuf>,
     },
     /// Checks an already-running node without curl.
     Healthcheck {
@@ -88,6 +94,7 @@ async fn main() -> Result<()> {
         device_name: "Covalent node".to_owned(),
         lan_discovery: false,
         platform_tier: Tier::Tier1,
+        ready_file: None,
     }) {
         Command::Serve {
             listen,
@@ -96,6 +103,7 @@ async fn main() -> Result<()> {
             device_name,
             lan_discovery,
             platform_tier,
+            ready_file,
         } => {
             serve(
                 listen,
@@ -104,6 +112,7 @@ async fn main() -> Result<()> {
                 device_name,
                 lan_discovery,
                 platform_tier.into(),
+                ready_file,
             )
             .await
         }
@@ -118,12 +127,19 @@ async fn serve(
     device_name: String,
     lan_discovery: bool,
     platform_tier: PlatformTier,
+    ready_file: Option<PathBuf>,
 ) -> Result<()> {
     std::fs::create_dir_all(&data_dir)
         .with_context(|| format!("create data directory {}", data_dir.display()))?;
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .with_context(|| format!("bind {listen}"))?;
+    let api_address = listener
+        .local_addr()
+        .context("inspect local API endpoint")?;
+    if !api_address.ip().is_loopback() && ready_file.is_some() {
+        bail!("an app-owned node readiness file requires a loopback API bind");
+    }
     let mut engine_options = EngineOptions::new(&data_dir);
     engine_options.initial_device_name = device_name;
     engine_options.initial_lan_discovery_enabled = lan_discovery;
@@ -151,13 +167,28 @@ async fn serve(
     let quic_task = tokio::spawn(quic_node.run());
     let discovery = LanDiscovery::start(discovery_enabled, peer_address.port())
         .context("start LAN discovery")?;
-    info!(%listen, %peer_address, data_dir = %data_dir.display(), "Covalent node ready");
+    if let Some(path) = ready_file.as_deref() {
+        write_node_ready_file(
+            path,
+            &NodeReadyInfo {
+                schema_version: 1,
+                api_base_url: format!("http://{api_address}"),
+                peer_address,
+                process_id: std::process::id(),
+            },
+        )
+        .context("publish node readiness")?;
+    }
+    info!(listen = %api_address, %peer_address, data_dir = %data_dir.display(), "Covalent node ready");
     let result = axum::serve(listener, router(state))
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("serve local API");
     quic_task.abort();
     discovery.stop();
+    if let Some(path) = ready_file.as_deref() {
+        remove_node_ready_file(path, std::process::id()).context("remove node readiness")?;
+    }
     result
 }
 

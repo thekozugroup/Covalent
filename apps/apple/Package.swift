@@ -10,9 +10,15 @@ let package = Package(
     products: [
         .library(name: "CovalentShared", targets: ["CovalentShared"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/weichsel/ZIPFoundation.git", exact: "0.9.20"),
+    ],
     targets: [
         .target(
             name: "CovalentShared",
+            dependencies: [
+                .product(name: "ZIPFoundation", package: "ZIPFoundation"),
+            ],
             path: "Sources/CovalentShared"
         ),
         .testTarget(

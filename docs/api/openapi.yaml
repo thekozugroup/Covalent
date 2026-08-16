@@ -2,6 +2,9 @@ openapi: 3.1.0
 info:
   title: Covalent local node API
   version: 1.0.0
+  license:
+    name: MIT
+    identifier: MIT
   description: >-
     Versioned API for a locally controlled Covalent node. Except for health and
     coarse status, every route requires the bearer token stored in the node data
@@ -13,6 +16,7 @@ security:
 paths:
   /healthz:
     get:
+      summary: Check node process readiness
       operationId: health
       security: []
       responses:
@@ -22,8 +26,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Health"
+        "405":
+          $ref: "#/components/responses/ClientError"
   /api/v1/status:
     get:
+      summary: Read coarse public node status
       operationId: status
       security: []
       responses:
@@ -33,8 +40,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Status"
+        "405":
+          $ref: "#/components/responses/ClientError"
   /api/v1/transport/identity:
     get:
+      summary: Read the authenticated transport identity
       operationId: transportIdentity
       responses:
         "200":
@@ -47,6 +57,7 @@ paths:
           $ref: "#/components/responses/Unauthorized"
   /api/v1/discovery:
     get:
+      summary: List untrusted discovery candidates
       operationId: discoveryCandidates
       responses:
         "200":
@@ -62,6 +73,7 @@ paths:
           $ref: "#/components/responses/Unauthorized"
   /api/v1/config/export:
     post:
+      summary: Export non-secret device settings
       operationId: exportConfig
       responses:
         "200":
@@ -74,6 +86,7 @@ paths:
           $ref: "#/components/responses/Unauthorized"
   /api/v1/config/import:
     post:
+      summary: Import explicitly confirmed safe settings
       operationId: importConfig
       requestBody:
         required: true
@@ -97,6 +110,7 @@ paths:
           $ref: "#/components/responses/Conflict"
   /api/v1/pair/invitations:
     post:
+      summary: Create a signed pairing invitation
       operationId: createPairingInvitation
       requestBody:
         required: true
@@ -129,6 +143,7 @@ paths:
           $ref: "#/components/responses/Unauthorized"
   /api/v1/pair/accept:
     post:
+      summary: Accept a pairing invitation as responder
       operationId: acceptPairingInvitation
       requestBody:
         required: true
@@ -147,6 +162,7 @@ paths:
           $ref: "#/components/responses/Unauthorized"
   /api/v1/pair/confirm/responder:
     post:
+      summary: Confirm the responder comparison code
       operationId: confirmPairingResponder
       requestBody:
         $ref: "#/components/requestBodies/PairConfirmation"
@@ -159,6 +175,7 @@ paths:
           $ref: "#/components/responses/Conflict"
   /api/v1/pair/confirm/inviter:
     post:
+      summary: Confirm the inviter comparison code
       operationId: confirmPairingInviter
       requestBody:
         $ref: "#/components/requestBodies/PairConfirmation"
@@ -171,6 +188,7 @@ paths:
           $ref: "#/components/responses/Conflict"
   /api/v1/pair/finalize/responder:
     post:
+      summary: Finalize pairing as responder
       operationId: finalizePairingResponder
       requestBody:
         $ref: "#/components/requestBodies/PairFinalization"
@@ -181,6 +199,7 @@ paths:
           $ref: "#/components/responses/Unauthorized"
   /api/v1/pair/finalize/inviter:
     post:
+      summary: Finalize pairing as inviter
       operationId: finalizePairingInviter
       requestBody:
         $ref: "#/components/requestBodies/PairFinalization"
@@ -191,6 +210,7 @@ paths:
           $ref: "#/components/responses/Unauthorized"
   /api/v1/peers/revoke:
     post:
+      summary: Revoke a paired peer
       operationId: revokePeer
       requestBody:
         required: true
@@ -212,6 +232,7 @@ paths:
           $ref: "#/components/responses/Forbidden"
   /api/v1/providers:
     get:
+      summary: List explicitly connected providers
       operationId: listProviders
       responses:
         "200":
@@ -227,6 +248,7 @@ paths:
           $ref: "#/components/responses/Unauthorized"
   /api/v1/providers/connect:
     post:
+      summary: Connect an authorized pinned provider
       operationId: connectProvider
       requestBody:
         required: true
@@ -259,6 +281,7 @@ paths:
           $ref: "#/components/responses/Forbidden"
   /api/v1/providers/disconnect:
     post:
+      summary: Disconnect a remembered provider
       operationId: disconnectProvider
       requestBody:
         required: true
@@ -278,6 +301,7 @@ paths:
           $ref: "#/components/responses/Unauthorized"
   /api/v1/rosters/current:
     get:
+      summary: Read the current signed peer roster
       operationId: currentRoster
       responses:
         "200":
@@ -292,6 +316,7 @@ paths:
           $ref: "#/components/responses/Unauthorized"
   /api/v1/rosters/accept:
     post:
+      summary: Accept a non-rollback signed roster
       operationId: acceptRoster
       requestBody:
         required: true
@@ -310,6 +335,7 @@ paths:
           $ref: "#/components/responses/Unauthorized"
   /api/v1/jobs/control:
     post:
+      summary: Pause, resume, or cancel an active job
       operationId: controlJob
       requestBody:
         required: true
@@ -341,7 +367,23 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
   /api/v1/backups:
+    get:
+      summary: List authoritative remembered backups
+      operationId: listBackups
+      responses:
+        "200":
+          description: Authoritative remembered backups and validated latest local snapshot metadata.
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 100000
+                items:
+                  $ref: "#/components/schemas/BackupSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
     post:
+      summary: Create a backup from a daemon-visible path
       operationId: createBackup
       requestBody:
         required: true
@@ -362,8 +404,59 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "409":
           $ref: "#/components/responses/Conflict"
+  /api/v1/backups/archive:
+    post:
+      summary: Create a backup from a streamed platform archive
+      operationId: createBackupFromArchive
+      description: >-
+        Streams a ZIP assembled from platform-owned file access. Android SAF
+        content URIs and Apple security-scoped paths remain local to their app
+        and must never appear in this request or in sourceRoot.
+      parameters:
+        - in: header
+          name: X-Covalent-Archive-Metadata
+          required: true
+          description: Base64url canonical ArchiveBackupMetadata JSON, at most 32 KiB decoded.
+          schema:
+            type: string
+            maxLength: 65536
+            contentEncoding: base64url
+            contentMediaType: application/json
+            contentSchema:
+              $ref: "#/components/schemas/ArchiveBackupMetadata"
+      requestBody:
+        required: true
+        content:
+          application/vnd.covalent.backup+zip:
+            schema:
+              type: string
+              format: binary
+          application/zip:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: Streamed archive was safely staged, encrypted, committed, and explicitly replicated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupResponse"
+        "400":
+          description: Metadata or a ZIP entry violated the versioned archive contract.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
   /api/v1/backups/verify:
     post:
+      summary: Verify and optionally repair a backup
       operationId: verifyBackup
       requestBody:
         required: true
@@ -384,6 +477,7 @@ paths:
           $ref: "#/components/responses/Unavailable"
   /api/v1/restores/preview:
     post:
+      summary: Preview a root-confined restore
       operationId: previewRestore
       requestBody:
         required: true
@@ -404,6 +498,7 @@ paths:
           $ref: "#/components/responses/Conflict"
   /api/v1/restores/execute:
     post:
+      summary: Execute an immutable signed restore plan
       operationId: executeRestore
       requestBody:
         required: true
@@ -423,6 +518,78 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RestoreResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /api/v1/restores/archive/preview:
+    post:
+      summary: Preview a streamed document-provider restore
+      operationId: previewArchiveRestore
+      description: Creates a signed no-write create-only plan in a daemon-owned private staging root for an empty client-authorized destination.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RestoreArchivePreviewRequest"
+      responses:
+        "200":
+          description: Signed immutable content preview for subsequent streamed execution.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RestorePlan"
+        "400":
+          description: Streamed restore policy is not fail-on-conflict.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/restores/archive/execute:
+    post:
+      summary: Execute and stream a document-provider restore
+      operationId: executeArchiveRestore
+      description: >-
+        Executes only a create-only archive restore plan for an empty
+        destination, then streams a ZIP. Android writes through authorized SAF
+        descriptors; Apple writes while security-scoped folder access is active.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [plan]
+              properties:
+                plan:
+                  $ref: "#/components/schemas/RestorePlan"
+      responses:
+        "200":
+          description: ZIP stream with a base64url RestoreResponse in X-Covalent-Restore-Result.
+          headers:
+            X-Covalent-Restore-Result:
+              required: true
+              schema:
+                type: string
+          content:
+            application/vnd.covalent.restore+zip:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: Plan is not an archive restore plan or does not match its private staging root.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "409":
@@ -462,6 +629,12 @@ components:
               session:
                 $ref: "#/components/schemas/PairingSession"
   responses:
+    ClientError:
+      description: The route or HTTP method is not available.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
     Unauthorized:
       description: Missing or invalid local bearer token.
       content:
@@ -482,6 +655,12 @@ components:
             $ref: "#/components/schemas/ApiError"
     Unavailable:
       description: No intact authorized copy is currently available.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    PayloadTooLarge:
+      description: A bounded request, archive, or expanded entry set exceeded its contract limit.
       content:
         application/json:
           schema:
@@ -815,6 +994,61 @@ components:
           description: Exact explicit set. Omitted or empty means local-only; the node never adds peers.
           items:
             $ref: "#/components/schemas/DeviceId"
+    ArchiveBackupMetadata:
+      type: object
+      additionalProperties: false
+      required: [protocolVersion, displayName, snapshotId, jobId]
+      properties:
+        protocolVersion:
+          type: integer
+          const: 1
+        backupId:
+          oneOf:
+            - $ref: "#/components/schemas/BackupId"
+            - type: "null"
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 120
+        snapshotId:
+          $ref: "#/components/schemas/SnapshotId"
+        jobId:
+          $ref: "#/components/schemas/JobId"
+        selectedProviderIds:
+          type: array
+          maxItems: 128
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/DeviceId"
+    BackupSummary:
+      type: object
+      additionalProperties: false
+      required: [backupId, name, ownerDeviceId, latestSnapshotId, latestCommittedAtUnixMs, snapshotCount, selectedProviderIds]
+      properties:
+        backupId:
+          $ref: "#/components/schemas/BackupId"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        ownerDeviceId:
+          $ref: "#/components/schemas/DeviceId"
+        latestSnapshotId:
+          oneOf:
+            - $ref: "#/components/schemas/SnapshotId"
+            - type: "null"
+        latestCommittedAtUnixMs:
+          type: [integer, "null"]
+          minimum: 0
+        snapshotCount:
+          type: integer
+          minimum: 0
+        selectedProviderIds:
+          type: array
+          maxItems: 128
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/DeviceId"
     BackupResponse:
       type: object
       additionalProperties: false
@@ -902,6 +1136,20 @@ components:
           enum: [fail, skip, replace, rename]
         jobId:
           $ref: "#/components/schemas/JobId"
+    RestoreArchivePreviewRequest:
+      type: object
+      additionalProperties: false
+      required: [backupId, snapshotId, conflictPolicy, jobId]
+      properties:
+        backupId:
+          $ref: "#/components/schemas/BackupId"
+        snapshotId:
+          $ref: "#/components/schemas/SnapshotId"
+        conflictPolicy:
+          enum: [fail]
+          description: Streamed restore destinations must be empty so every signed action is a create.
+        jobId:
+          $ref: "#/components/schemas/JobId"
     RestorePreviewEntry:
       type: object
       additionalProperties: false
@@ -984,9 +1232,13 @@ components:
     ApiError:
       type: object
       additionalProperties: false
-      required: [code, message]
+      required: [protocolVersion, code, message, retryable]
       properties:
+        protocolVersion:
+          const: 1
         code:
           type: string
         message:
           type: string
+        retryable:
+          type: boolean

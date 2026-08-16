@@ -1,6 +1,7 @@
 use covalent_protocol::{
-    ExportedDeviceSettings, Manifest, PROTOCOL_VERSION, PairingInvitation, RelativePath,
-    SETTINGS_SCHEMA_VERSION,
+    ApiErrorBody, BackupSummary, ExportedDeviceSettings, Manifest, NodeEvent, NodeEventKind,
+    PROTOCOL_VERSION, PairingInvitation, RelativePath, SETTINGS_SCHEMA_VERSION, TransferKind,
+    TransferProgress, TransferState,
 };
 use proptest::prelude::*;
 
@@ -23,6 +24,34 @@ fn versioned_json_fixtures_match_rust_contracts() {
             .expect("manifest fixture");
     assert_eq!(manifest.protocol_version, PROTOCOL_VERSION);
     assert_eq!(manifest.entries.len(), 1);
+
+    let backup: BackupSummary = serde_json::from_str(include_str!(
+        "../../../fixtures/contracts/backup-summary-v1.json"
+    ))
+    .expect("backup summary fixture");
+    assert_eq!(backup.snapshot_count, 3);
+    assert_eq!(backup.selected_provider_ids.len(), 1);
+
+    let error: ApiErrorBody =
+        serde_json::from_str(include_str!("../../../fixtures/contracts/error-v1.json"))
+            .expect("error fixture");
+    assert_eq!(error.protocol_version, PROTOCOL_VERSION);
+    assert_eq!(error.code, "source_changed");
+    assert!(error.retryable);
+
+    let progress: TransferProgress =
+        serde_json::from_str(include_str!("../../../fixtures/contracts/progress-v1.json"))
+            .expect("progress fixture");
+    assert_eq!(progress.protocol_version, PROTOCOL_VERSION);
+    assert_eq!(progress.kind, TransferKind::Backup);
+    assert_eq!(progress.state, TransferState::Running);
+
+    let event: NodeEvent =
+        serde_json::from_str(include_str!("../../../fixtures/contracts/event-v1.json"))
+            .expect("event fixture");
+    assert_eq!(event.protocol_version, PROTOCOL_VERSION);
+    assert_eq!(event.kind, NodeEventKind::TransferChanged);
+    assert_eq!(event.sequence, 17);
 }
 
 #[test]

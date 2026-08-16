@@ -22,7 +22,7 @@ if [ -z "$android_sdk" ]; then
 fi
 
 if [ -n "$android_java" ]; then
-  env JAVA_HOME="$android_java" ANDROID_HOME="$android_sdk" ANDROID_SDK_ROOT="$android_sdk" "$repo_root/apps/android/gradlew" -p "$repo_root/apps/android" --no-daemon test lint assembleDebug
+  env JAVA_HOME="$android_java" ANDROID_HOME="$android_sdk" ANDROID_SDK_ROOT="$android_sdk" "$repo_root/apps/android/gradlew" -p "$repo_root/apps/android" --no-daemon test lint assembleDebug assembleRelease assembleDebugAndroidTest
 else
-  env ANDROID_HOME="$android_sdk" ANDROID_SDK_ROOT="$android_sdk" "$repo_root/apps/android/gradlew" -p "$repo_root/apps/android" --no-daemon test lint assembleDebug
+  env ANDROID_HOME="$android_sdk" ANDROID_SDK_ROOT="$android_sdk" "$repo_root/apps/android/gradlew" -p "$repo_root/apps/android" --no-daemon test lint assembleDebug assembleRelease assembleDebugAndroidTest
 fi

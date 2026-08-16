@@ -7,7 +7,7 @@
   <Privileged>false</Privileged>
   <Support>https://github.com/thekozugroup/Covalent/issues</Support>
   <Project>https://github.com/thekozugroup/Covalent</Project>
-  <Overview>Private distributed backup with explicit replicas and authorized-root restore. macOS, Android, Docker, and Unraid are Tier 1; iOS is Tier 2.</Overview>
+  <Overview>Private distributed backup with explicit replicas and signed, authorized-root restore preview. Read-only source and optional boot mappings prevent container writes to backup inputs.</Overview>
   <Category>Backup: Tools:</Category>
   <WebUI>http://[IP]:[PORT:8787]/</WebUI>
   <Icon>https://raw.githubusercontent.com/thekozugroup/Covalent/main/packaging/unraid/icon.png</Icon>
@@ -20,12 +20,13 @@
   <Requires>Map each selected share separately as read-only. Optional /boot backup must also be read-only. Add a distinct writable restore target only when restoring. Host networking is optional and expands exposure.</Requires>
   <Config Name="Web console" Target="8787" Default="8787" Mode="tcp" Description="Local console and API port." Type="Port" Display="always" Required="true" Mask="false"/>
   <Config Name="Peer transport" Target="8787" Default="8787" Mode="udp" Description="Authenticated QUIC peer port." Type="Port" Display="always" Required="true" Mask="false"/>
-  <Config Name="Configuration" Target="/config" Default="/mnt/user/appdata/covalent/config" Mode="rw" Description="Durable non-secret configuration and protected identity state." Type="Path" Display="always" Required="true" Mask="false"/>
-  <Config Name="Encrypted storage" Target="/data" Default="/mnt/user/appdata/covalent/data" Mode="rw" Description="Durable encrypted chunk and manifest storage." Type="Path" Display="always" Required="true" Mask="false"/>
+  <Config Name="Configuration" Target="/config" Default="/mnt/user/appdata/covalent/config" Mode="rw" Description="Durable operator-managed safe settings and deployment files. Keep separate from selected shares." Type="Path" Display="always" Required="true" Mask="false"/>
+  <Config Name="Encrypted storage" Target="/data" Default="/mnt/user/appdata/covalent/data" Mode="rw" Description="Durable encrypted chunk, manifest, identity, and key state. Back up this appdata path separately." Type="Path" Display="always" Required="true" Mask="false"/>
   <Config Name="Selected backup source" Target="/source" Default="" Mode="ro" Description="One explicitly selected /mnt/user share. Add more read-only paths as needed." Type="Path" Display="always" Required="false" Mask="false"/>
   <Config Name="Optional boot backup" Target="/boot-source" Default="" Mode="ro" Description="Optional read-only /boot mapping for boot-drive backup." Type="Path" Display="advanced" Required="false" Mask="false"/>
   <Config Name="Restore target" Target="/restore" Default="" Mode="rw" Description="Explicit writable target used only after restore preview and confirmation." Type="Path" Display="always" Required="false" Mask="false"/>
   <Config Name="Device name" Target="COVALENT_DEVICE_NAME" Default="Covalent Unraid" Mode="" Description="Name shown during pairing." Type="Variable" Display="always" Required="true" Mask="false"/>
   <Config Name="Peer listen address" Target="COVALENT_PEER_LISTEN" Default="0.0.0.0:8787" Mode="" Description="Authenticated QUIC bind address and port." Type="Variable" Display="advanced" Required="true" Mask="false"/>
   <Config Name="LAN discovery" Target="COVALENT_LAN_DISCOVERY" Default="false" Mode="" Description="Enable mDNS advertisements. Pairing remains required." Type="Variable" Display="always" Required="true" Mask="false"/>
+  <Config Name="File creation umask" Target="UMASK" Default="027" Mode="" Description="Three-digit octal umask for runtime-created files." Type="Variable" Display="advanced" Required="true" Mask="false"/>
 </Container>
