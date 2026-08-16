@@ -19,7 +19,11 @@ final class CovalentMacUITests: XCTestCase {
         app.buttons["devices.pair"].click()
         XCTAssertTrue(app.staticTexts["Secure Pairing"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Nearby advertisements remain untrusted until finalization."].exists)
-        app.buttons["Close"].click()
+        let close = app.buttons["pairing.close"]
+        XCTAssertTrue(close.waitForExistence(timeout: 3))
+        XCTAssertTrue(close.isHittable)
+        close.click()
+        XCTAssertTrue(waitForDisappearance(of: app.staticTexts["Secure Pairing"], timeout: 3))
 
         app.staticTexts["Settings"].click()
         XCTAssertTrue(app.staticTexts["Settings transfer"].waitForExistence(timeout: 3))
@@ -69,5 +73,13 @@ final class CovalentMacUITests: XCTestCase {
         app.launchEnvironment["COVALENT_UI_TEST_TOKEN"] = try XCTUnwrap(token)
         app.launch()
         return app
+    }
+
+    private func waitForDisappearance(of element: XCUIElement, timeout: TimeInterval) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: element
+        )
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 }

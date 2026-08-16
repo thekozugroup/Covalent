@@ -148,7 +148,46 @@ if ! run_bounded 180 xcodebuild \
   test-without-building >"$ui_log" 2>&1; then
   tail -240 "$ui_log" >&2
   codesign --verify --deep --strict --verbose=4 "$runner" >&2 || true
-  ps -axo pid,ppid,etime,state,command | grep -E 'xcodebuild|CovalentMacUITests|testmanagerd' >&2 || true
+  pgrep -alf 'xcodebuild|CovalentMacUITests|testmanagerd' >&2 || true
   exit 1
 fi
+
+# Xcode can return success after leaving only a partial result directory. Do
+# not let a missing or unreadable report turn an aborted UI run into a pass.
+if [[ ! -f "$result_bundle/Info.plist" ]]; then
+  print -u2 -- "macOS UI test result bundle is incomplete: missing Info.plist."
+  exit 1
+fi
+if ! summary=$(xcrun xcresulttool get test-results summary --compact --path "$result_bundle"); then
+  print -u2 -- "macOS UI test result bundle summary could not be parsed."
+  exit 1
+fi
+if ! tests=$(xcrun xcresulttool get test-results tests --compact --path "$result_bundle"); then
+  print -u2 -- "macOS UI test result bundle test list could not be parsed."
+  exit 1
+fi
+if ! jq -e '
+  .result == "Passed" and
+  .totalTestCount == 3 and
+  .passedTests == 3 and
+  .failedTests == 0 and
+  .skippedTests == 0
+' <<<"$summary" >/dev/null; then
+  print -u2 -- "macOS UI test result did not prove exactly three passing, unskipped tests."
+  print -u2 -- "$summary"
+  exit 1
+fi
+for expected_test in \
+  'testTierOneNavigationAndPrimaryWorkflowsAreReachable()' \
+  'testOverviewPassesSystemAccessibilityAudit()' \
+  'testNativeMenuBarQuickActionsAreReachable()'
+do
+  if ! jq -e --arg expected_test "$expected_test" '
+    [.. | objects | select(.nodeType == "Test Case") | .name] |
+    any(. == $expected_test)
+  ' <<<"$tests" >/dev/null; then
+    print -u2 -- "macOS UI test result is missing expected test: $expected_test"
+    exit 1
+  fi
+done
 cat "$ui_log"

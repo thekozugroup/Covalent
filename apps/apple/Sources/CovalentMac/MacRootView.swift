@@ -3,11 +3,12 @@ import SwiftUI
 struct MacRootView: View {
     @ObservedObject var model: CovalentAppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var selectedSection: AppSection = .overview
 
     var body: some View {
         NavigationSplitView {
             VStack(spacing: 0) {
-                List(AppSection.allCases, selection: $model.selectedSection) { section in
+                List(AppSection.allCases, selection: $selectedSection) { section in
                     Label(section.label, systemImage: section.systemImage)
                         .tag(section)
                         .accessibilityIdentifier("sidebar.\(section.rawValue)")
@@ -49,6 +50,17 @@ struct MacRootView: View {
                 .disabled(!model.isAuthorized || model.activeTask != nil)
                 .help(model.isAuthorized ? "Create a backup" : "Connect to the local service first")
                 .accessibilityIdentifier("toolbar.newBackup")
+            }
+        }
+        .onAppear { selectedSection = model.selectedSection }
+        .onChange(of: selectedSection) { _, section in
+            if model.selectedSection != section {
+                model.selectedSection = section
+            }
+        }
+        .onChange(of: model.selectedSection) { _, section in
+            if selectedSection != section {
+                selectedSection = section
             }
         }
         .task { await model.start() }

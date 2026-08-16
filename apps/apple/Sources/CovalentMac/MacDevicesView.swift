@@ -286,18 +286,22 @@ struct MacPairingView: View {
             if let completedMessage {
                 completion(completedMessage)
             } else {
-                VStack(spacing: 18) {
+                ScrollView {
+                    VStack(spacing: 18) {
                     Picker("Pairing direction", selection: $mode) {
                         ForEach(Mode.allCases) { mode in Text(mode.rawValue).tag(mode) }
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
                     if mode == .invite { inviteFlow } else { joinFlow }
+                    }
+                    .padding(24)
                 }
-                .padding(24)
+                Divider()
+                footer.padding(24)
             }
         }
-        .frame(width: 720, height: 720)
+        .frame(width: 620, height: 620)
         .task {
             if endpoint.isEmpty {
                 endpoint = await model.defaultInvitationEndpoint() ?? ""
@@ -366,8 +370,6 @@ struct MacPairingView: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(!sessionIsMutuallySigned || isWorking)
             }
-            Spacer()
-            footer
         }
     }
 
@@ -437,8 +439,6 @@ struct MacPairingView: View {
                         .disabled(!sessionIsMutuallySigned || isWorking)
                 }
             }
-            Spacer()
-            footer
         }
     }
 
@@ -553,7 +553,15 @@ struct MacPairingView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()
-            Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
+            Button("Close") {
+                // Keep the item-backed sheet binding authoritative. Relying on
+                // environment dismissal alone can leave the pairing sheet in
+                // place while a subsequent navigation action is dispatched.
+                model.presentation = nil
+                dismiss()
+            }
+            .keyboardShortcut(.cancelAction)
+            .accessibilityIdentifier("pairing.close")
         }
     }
 
