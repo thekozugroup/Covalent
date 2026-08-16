@@ -17,6 +17,9 @@ tls_config_volume="$tls_container-config"
 wrong_tls_data_volume="$wrong_tls_container-data"
 wrong_tls_config_volume="$wrong_tls_container-config"
 tls_directory=""
+instrumentation_log=""
+device_gate_lock="${TMPDIR:-/tmp}/covalent-api37-device-gate.lock"
+lock_acquired=false
 
 cleanup() {
   docker rm -f "$tls_container" "$wrong_tls_container" >/dev/null 2>&1 || true
@@ -27,6 +30,12 @@ cleanup() {
     "$wrong_tls_config_volume" >/dev/null 2>&1 || true
   if [ -n "$tls_directory" ] && [ -d "$tls_directory" ]; then
     rm -rf "$tls_directory"
+  fi
+  if [ -n "$instrumentation_log" ] && [ -f "$instrumentation_log" ]; then
+    rm -f "$instrumentation_log"
+  fi
+  if [ "$lock_acquired" = true ]; then
+    rmdir "$device_gate_lock" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT INT TERM
@@ -81,6 +90,20 @@ fi
 api_level=$("$adb" -s "$serial" shell getprop ro.build.version.sdk | tr -d '\r')
 if [ "$api_level" != "37" ]; then
   echo "$avd_name is running API $api_level; API 37 is required." >&2
+  exit 1
+fi
+
+# Only one installer/instrumentation session may operate this physical AVD.
+# Concurrent package updates can kill Android's active runner and leave AMS
+# reporting a misleading target-process attachment failure.
+if ! mkdir "$device_gate_lock" 2>/dev/null; then
+  echo "Android API 37 device gate is already running ($device_gate_lock); wait for it to finish." >&2
+  exit 1
+fi
+lock_acquired=true
+activity_dump=$("$adb" -s "$serial" shell dumpsys activity 2>/dev/null || true)
+if printf '%s\n' "$activity_dump" | grep -Eq 'life\\.michaelwong\\.covalent(\\.test)?.*mFinished=false|mFinished=false.*life\\.michaelwong\\.covalent(\\.test)?'; then
+  echo "Refusing to install over an active Covalent instrumentation session on $serial." >&2
   exit 1
 fi
 
@@ -219,18 +242,36 @@ env \
   "$repo_root/apps/android/gradlew" \
   -p "$repo_root/apps/android" \
   --no-daemon \
-  "-Pandroid.testInstrumentationRunnerArguments.covalentTlsBaseUrl=https://$tls_hostname:$tls_port" \
-  "-Pandroid.testInstrumentationRunnerArguments.covalentTlsToken=$tls_token" \
-  "-Pandroid.testInstrumentationRunnerArguments.covalentTlsCa=$tls_ca" \
-  "-Pandroid.testInstrumentationRunnerArguments.covalentTlsWrongCa=$wrong_tls_ca" \
-  "-Pandroid.testInstrumentationRunnerArguments.covalentTlsPin=$tls_pin" \
-  connectedDebugAndroidTest
+  assembleDebug \
+  assembleDebugAndroidTest
 
 apk="$repo_root/apps/android/app/build/outputs/apk/debug/app-debug.apk"
+test_apk="$repo_root/apps/android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
 if [ "$headless_ci" = true ]; then
   "$adb" -s "$serial" install -r "$apk" >/dev/null
 else
   mobilecli apps install "$apk" --device "$avd_name"
+fi
+"$adb" -s "$serial" install -r "$test_apk" >/dev/null
+# Android 17 installs instrumentation packages disabled. Enable the exact
+# package before launch so the device gate cannot silently report zero tests.
+"$adb" -s "$serial" shell pm enable life.michaelwong.covalent.test >/dev/null
+instrumentation_log=$(mktemp "${TMPDIR:-/tmp}/covalent-api37-instrumentation.XXXXXX")
+if ! "$adb" -s "$serial" shell am instrument -w -r \
+  -e covalentTlsBaseUrl "https://$tls_hostname:$tls_port" \
+  -e covalentTlsToken "$tls_token" \
+  -e covalentTlsCa "$tls_ca" \
+  -e covalentTlsWrongCa "$wrong_tls_ca" \
+  -e covalentTlsPin "$tls_pin" \
+  life.michaelwong.covalent.test/androidx.test.runner.AndroidJUnitRunner >"$instrumentation_log" 2>&1; then
+  cat "$instrumentation_log" >&2
+  echo "Android instrumentation command failed on $serial." >&2
+  exit 1
+fi
+cat "$instrumentation_log"
+if ! grep -Eq '^INSTRUMENTATION_CODE: 0$' "$instrumentation_log"; then
+  echo "Android instrumentation reported a nonzero result on $serial." >&2
+  exit 1
 fi
 "$adb" -s "$serial" shell pm clear life.michaelwong.covalent >/dev/null
 if [ "$headless_ci" = true ]; then

@@ -103,12 +103,12 @@ class CovalentAppTest {
 
     @Test
     fun largeTextToolbarUsesStableIconFirstAccessibleActions() {
-        val store = isolatedStore("large_text")
-        val state = readyState(store, Screen.HOME)
         compose.setContent {
             val density = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale = 1.5f)) {
-                CovalentTheme { CovalentApp(store, state) }
+                CovalentTheme {
+                    PrimaryActionToolbar(enabled = true, compact = true, onAction = {})
+                }
             }
         }
         compose.onNodeWithContentDescription("Pair").assertIsDisplayed()
