@@ -1,0 +1,24 @@
+{
+  "protocolVersion": 1,
+  "backupId": "9c99acdb-dae7-4555-b6df-95b4ddc35450",
+  "snapshotId": "01M03X41Z05MD9QJ7TPD2JZN5K",
+  "createdAtUnixMs": 1786838400000,
+  "replicaIntent": {
+    "selectedProviders": ["c38b13e4-a72a-44f2-b749-990961523c77"]
+  },
+  "entries": [
+    {
+      "path": "Documents/notes.txt",
+      "kind": "file",
+      "length": 15,
+      "chunks": [
+        {
+          "plaintextDigest": "0b9f4f8a6f513efb17a8746be893c1780f5858ad9c44739cb9cc9e8754a2dd80",
+          "opaqueLocator": "8ebc982595323cce1f5d32fe86be84ceee87e56530e0622cb75cd54b00b062e5",
+          "plaintextLength": 15,
+          "ciphertextLength": 31
+        }
+      ]
+    }
+  ]
+}

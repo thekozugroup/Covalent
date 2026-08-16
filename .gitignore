@@ -1,0 +1,25 @@
+.DS_Store
+.idea/
+.vscode/
+.a5c/
+
+# Rust
+/target/
+**/*.rs.bk
+
+# Apple
+apps/apple/.build/
+apps/apple/DerivedData/
+apps/apple/*.xcodeproj/
+apps/apple/Config/*-Info.plist
+
+# Android
+apps/android/.gradle/
+apps/android/**/build/
+apps/android/local.properties
+
+# Packaging and validation
+.env
+artifacts/
+coverage/
+*.log

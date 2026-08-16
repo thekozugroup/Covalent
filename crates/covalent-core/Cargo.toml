@@ -1,0 +1,22 @@
+[package]
+name = "covalent-core"
+description = "Safety-critical backup, storage, verification, and restore primitives"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+blake3.workspace = true
+covalent-protocol = { path = "../covalent-protocol" }
+serde_json.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+uuid.workspace = true
+
+[lints]
+workspace = true

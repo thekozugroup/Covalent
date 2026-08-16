@@ -1,0 +1,12 @@
+.git
+.a5c
+target
+artifacts
+coverage
+apps/apple/.build
+apps/apple/DerivedData
+apps/apple/*.xcodeproj
+apps/android/.gradle
+apps/android/**/build
+apps/android/local.properties
+*.log

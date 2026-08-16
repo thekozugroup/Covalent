@@ -1,0 +1,53 @@
+openapi: 3.1.0
+info:
+  title: Covalent local node API
+  version: 0.1.0
+  description: Loopback or explicitly protected local API. Remote peers use the Covalent QUIC protocol.
+servers:
+  - url: http://127.0.0.1:8787
+paths:
+  /healthz:
+    get:
+      operationId: health
+      responses:
+        "200":
+          description: Node process is ready.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /api/v1/status:
+    get:
+      operationId: status
+      responses:
+        "200":
+          description: Non-sensitive local node status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+components:
+  schemas:
+    Health:
+      type: object
+      required: [status, protocolVersion]
+      properties:
+        status:
+          const: ok
+        protocolVersion:
+          type: integer
+          minimum: 1
+    Status:
+      type: object
+      required: [deviceName, protocolVersion, lanDiscovery, platformTier, state]
+      properties:
+        deviceName:
+          type: string
+        protocolVersion:
+          type: integer
+        lanDiscovery:
+          type: boolean
+        platformTier:
+          type: string
+        state:
+          enum: [foundation, ready, degraded, offline]

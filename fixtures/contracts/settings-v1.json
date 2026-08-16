@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "deviceName": "Living room Mac",
+  "lanDiscoveryEnabled": false,
+  "rememberedBackups": [
+    {
+      "backupId": "9c99acdb-dae7-4555-b6df-95b4ddc35450",
+      "name": "Documents",
+      "ownerDeviceId": "b73ed4f4-84af-4493-9d81-a8c54a932c7b"
+    }
+  ]
+}

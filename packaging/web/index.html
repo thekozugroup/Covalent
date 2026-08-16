@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Covalent node</title>
+    <link rel="stylesheet" href="/assets/app.css" />
+    <script src="/assets/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to status</a>
+    <header>
+      <div>
+        <p class="eyebrow">Private distributed backup</p>
+        <h1>Covalent</h1>
+      </div>
+      <span class="tier">Tier 1 node</span>
+    </header>
+    <main id="content">
+      <section class="hero" aria-labelledby="node-heading">
+        <div>
+          <p class="eyebrow">This device</p>
+          <h2 id="node-heading" data-device-name>Loading node…</h2>
+          <p class="muted" data-state aria-live="polite">Connecting to the local service.</p>
+        </div>
+        <button type="button" data-refresh>Refresh</button>
+      </section>
+
+      <section class="grid" aria-label="Node safeguards">
+        <article>
+          <h3>Discovery</h3>
+          <p class="value" data-discovery>Checking…</p>
+          <p class="muted">LAN discovery is optional. Manual and Tailnet-aware connections still require Covalent pairing.</p>
+        </article>
+        <article>
+          <h3>Replica policy</h3>
+          <p class="value">Explicit selection</p>
+          <p class="muted">This node stores an extra copy only when you choose it.</p>
+        </article>
+        <article>
+          <h3>Restore boundary</h3>
+          <p class="value">Authorized roots only</p>
+          <p class="muted">Relative paths cannot escape a destination selected for restore.</p>
+        </article>
+      </section>
+
+      <aside aria-labelledby="foundation-heading">
+        <h2 id="foundation-heading">Foundation service</h2>
+        <p>This console currently exposes non-sensitive health and status. Pair, Backup, Restore, and Settings actions arrive through the versioned local API without changing these safety rules.</p>
+      </aside>
+    </main>
+    <footer>Core workflows require no Covalent account or hosted coordinator.</footer>
+  </body>
+</html>

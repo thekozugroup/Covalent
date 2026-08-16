@@ -1,0 +1,23 @@
+[package]
+name = "covalent-ffi"
+description = "Stable native-client facade for the Covalent engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[dependencies]
+covalent-core = { path = "../covalent-core" }
+covalent-protocol = { path = "../covalent-protocol" }
+serde.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

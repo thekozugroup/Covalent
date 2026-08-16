@@ -1,0 +1,8 @@
+{
+  "protocolVersion": 1,
+  "inviterDeviceId": "b73ed4f4-84af-4493-9d81-a8c54a932c7b",
+  "inviterPublicKey": "hLJ1JdBkCwRrGfbvNpyYH1hI-1wqt9XH2eGqGfY4h1Y",
+  "invitationId": "invite-7b17bf7422dc4a978d05b93f7be1cbee",
+  "expiresAtUnixMs": 1786838400000,
+  "endpoints": ["192.0.2.10:8787", "covalent-mac.example.ts.net:8787"]
+}

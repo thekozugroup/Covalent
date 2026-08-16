@@ -1,0 +1,40 @@
+name: covalent
+services:
+  node:
+    build:
+      context: ../..
+      dockerfile: packaging/docker/Dockerfile
+    image: covalent:local
+    user: "${PUID:-65532}:${PGID:-65532}"
+    read_only: true
+    init: true
+    restart: unless-stopped
+    environment:
+      COVALENT_DEVICE_NAME: "${COVALENT_DEVICE_NAME:-Covalent node}"
+      COVALENT_LAN_DISCOVERY: "${COVALENT_LAN_DISCOVERY:-false}"
+      COVALENT_LISTEN: "0.0.0.0:8787"
+      COVALENT_DATA_DIR: /data
+    ports:
+      - "${COVALENT_PORT:-8787}:8787/tcp"
+      - "${COVALENT_PORT:-8787}:8787/udp"
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    volumes:
+      - node-config:/config
+      - node-data:/data
+      - type: bind
+        source: "${COVALENT_BACKUP_SOURCE:-./example/source}"
+        target: /source
+        read_only: true
+      - type: bind
+        source: "${COVALENT_RESTORE_TARGET:-./example/restore}"
+        target: /restore
+        read_only: false
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  node-config:
+  node-data:

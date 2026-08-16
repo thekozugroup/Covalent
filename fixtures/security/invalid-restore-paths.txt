@@ -1,0 +1,6 @@
+../escape
+/etc/passwd
+safe/../../escape
+safe//file
+safe/./file
+safe\file
