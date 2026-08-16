@@ -44,9 +44,7 @@ grep -q 'Target="/boot-source"' packaging/unraid/covalent.xml
 grep -q 'Target="/restore"' packaging/unraid/covalent.xml
 grep -q 'Default="false"' packaging/unraid/covalent.xml
 
-if command -v xmllint >/dev/null 2>&1; then
-  xmllint --noout packaging/unraid/covalent.xml
-fi
+./scripts/validate-unraid-template.sh
 
 if command -v jq >/dev/null 2>&1; then
   jq empty fixtures/contracts/settings-v1.json

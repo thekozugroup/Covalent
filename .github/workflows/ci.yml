@@ -60,7 +60,7 @@ jobs:
       - run: docker build -f packaging/docker/Dockerfile -t covalent:ci .
       - run: docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp --entrypoint covalent covalent:ci doctor
       - run: ./scripts/check-container-runtime.sh covalent:ci
-      - run: xmllint --noout packaging/unraid/covalent.xml
+      - run: ./scripts/validate-unraid-template.sh
 
   ios-tier2:
     name: iOS Tier 2 (non-blocking)
