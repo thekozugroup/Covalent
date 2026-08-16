@@ -15,17 +15,19 @@ Docker selects ownership with `--user` / Compose `PUID` and `PGID`; it never sta
 
 ## Console and local API
 
-Open `http://localhost:8787`. The responsive no-framework console implements Pair, Backup, Restore, and Settings against the daemon's real `/api/v1/*` routes. Status is public; changes require the token at `/data/local-api-token`:
+Open `https://localhost:8443`. A same-container Caddy proxy terminates TLS and can reach the daemon only over its loopback socket. The responsive no-framework console implements Pair, Backup, Restore, and Settings against the daemon's real `/api/v1/*` routes. Status is public; changes require the token at `/data/local-api-token`:
 
 ```sh
 docker compose -f packaging/docker/compose.yaml exec node cat /data/local-api-token
 ```
 
-The console keeps this token in page memory only. Do not publish port 8787 to an untrusted network or put the token in shell history. Settings export excludes identity keys, backup keys, grants, and provider credentials. Importing a changed discovery preference requires a node restart before the discovery service changes.
+The first start creates a durable local certificate authority under `/config/caddy/data/caddy/pki/authorities/local/root.crt`. Before entering the token, enroll that exact CA on each native client or operating system and set `COVALENT_HTTPS_HOST` to the DNS name clients use. Never use a trust-all client or bypass hostname verification. Compose publishes HTTPS on host loopback by default; remove `127.0.0.1:` only after the CA is enrolled and the hostname resolves on the intended private network.
+
+The console keeps the token in page memory only. Cleartext bearer-authenticated requests are rejected outside loopback. Do not put the token in shell history. Settings export excludes identity keys, backup keys, grants, and provider credentials.
 
 ## LAN and Tailscale
 
-LAN discovery defaults to `false`. Bridge mode publishes TCP and UDP 8787 explicitly and works with manual addresses. Host networking may improve multicast discovery but exposes the local console on the host network; use it only after choosing appropriate firewall boundaries. A Tailscale sidecar or host Tailnet address can provide reachability without host networking. Neither discovery nor Tailscale establishes trust: each provider still needs confirmed pairing and a pinned certificate.
+LAN discovery defaults to `false`. Bridge mode publishes TLS management on TCP 8443 and authenticated QUIC on UDP 8787. Host networking may improve multicast discovery but expands the private-network exposure; use it only after CA enrollment and firewall review. A same-host system-trusted reverse proxy or Tailscale Serve may replace the local CA boundary by forwarding to the container's loopback management socket. Neither discovery nor Tailscale establishes Covalent peer trust: each provider still needs confirmed pairing and its transport certificate pin.
 
 ## Multi-architecture, reproducibility, and supply chain
 
@@ -47,3 +49,11 @@ docker build -f packaging/docker/Dockerfile -t covalent:e2e .
 ```
 
 The Compose drill starts three rootless/read-only nodes, confirms pairing, selects two providers explicitly, backs up nested paths, loses the source, rejects local ciphertext corruption, repairs it from paired providers, imports safe settings, and restores only relative paths under `/restore`.
+
+On macOS, include the native Apple trust/enrollment probe in the same packaged-Caddy drill:
+
+```sh
+COVALENT_RUN_APPLE_TLS_E2E=true ./scripts/docker-compose-e2e.sh covalent:e2e
+```
+
+That probe first confirms the package certificate is rejected by default trust, then verifies the correct enrolled CA and bearer token, rejects a different package CA, rejects a wrong token, and leaves DNS/IP hostname verification enabled.

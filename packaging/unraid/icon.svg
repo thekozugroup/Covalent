@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title description">
+  <title id="title">Covalent</title>
+  <desc id="description">Three connected encrypted storage nodes forming a letter C.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#234fd2"/>
+      <stop offset="1" stop-color="#6c3bd1"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="url(#background)"/>
+  <path d="M184 77c-14-17-34-27-57-27-43 0-78 35-78 78s35 78 78 78c23 0 43-10 57-27" fill="none" stroke="#fff" stroke-width="24" stroke-linecap="round"/>
+  <path d="M180 77 135 128l45 51" fill="none" stroke="#9fd4ff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="180" cy="77" r="14" fill="#fff"/>
+  <circle cx="135" cy="128" r="14" fill="#fff"/>
+  <circle cx="180" cy="179" r="14" fill="#fff"/>
+</svg>

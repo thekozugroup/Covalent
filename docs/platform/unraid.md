@@ -16,10 +16,14 @@ Never map `/mnt/user` or `/boot` writable. `/boot-source` is deliberately separa
 
 ## Network and first use
 
-Bridge mode is the safe default: map TCP 8787 for the console/local API and UDP 8787 for authenticated QUIC. LAN discovery defaults off. Use manual LAN addresses, a host/sidecar Tailscale address, or host networking if multicast discovery is needed. Host mode expands the console's LAN exposure; protect it with Unraid/firewall controls. Tailscale and discovery only provide reachability, not authorization: every device still needs short-code confirmation and pinned identity pairing.
+Bridge mode maps TLS management on TCP 8443 and authenticated QUIC on UDP 8787. The daemon's cleartext API listens only on loopback inside the container; a pinned Caddy build terminates HTTPS in the same network namespace. LAN discovery defaults off. Set `COVALENT_HTTPS_HOST` to the exact private DNS name clients use, such as `tower.local`, before first enrollment.
 
-After the container starts, open its WebUI and obtain the local token from `/data/local-api-token` in the container console. The web console keeps the token only in its active tab. Pair storage nodes, enter only the provider IDs you mean to use, and choose source mappings one at a time. Covalent never automatically chooses replica placement.
+First start creates a durable local CA at `/config/caddy/data/caddy/pki/authorities/local/root.crt`. Copy that public certificate over the local Unraid administrative channel, verify it against the file on the host, and enroll that exact CA in Covalent's native setup or the operating-system trust store. Do not accept an arbitrary browser warning, use a trust-all client, or disable hostname checks. A system-trusted same-host reverse proxy or Tailscale Serve is also supported when it forwards only to the loopback management socket.
+
+After trust enrollment, open the HTTPS WebUI and obtain the local token from `/data/local-api-token` in the container console. The web console keeps the token only in its active tab. Pair storage nodes, enter only the provider IDs you mean to use, and choose source mappings one at a time. Covalent never automatically chooses replica placement.
 
 ## Upgrade and recovery
 
-Stop the container before backing up or migrating `/data`; keep `/config` and `/data` together in your normal Unraid appdata backup policy. On upgrade, retain both mappings and the same UID/GID. To test recovery, restore the two appdata directories to a separate host location, start a new container with those mounts, and verify a backup before using it. Do not overwrite an existing production `/data` directory during a restore drill.
+Stop the container before backing up or migrating `/data`; keep `/config` and `/data` together because `/config` contains the TLS CA and `/data` contains node identity and encrypted state. On upgrade, retain both mappings and the same UID/GID. To test recovery, restore the two appdata directories to a separate host location, start a new container with those mounts, and verify the HTTPS CA, node identity, and a backup before using it. Do not overwrite an existing production `/data` directory during a restore drill.
+
+The template pins the semantic image version. A release owner must replace it with the published digest after the scan/sign/attest workflow succeeds. Until that public digest exists and the live clean-install/upgrade/share/boot/restore drill passes on a provisioned Unraid host, the template is a validated candidate rather than release evidence.

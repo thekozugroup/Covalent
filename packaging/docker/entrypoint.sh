@@ -17,4 +17,32 @@ done
 
 # /config is intentionally durable for operator-managed files such as exported
 # safe settings.  The daemon's encrypted state and keys remain together in /data.
-exec covalent-node "$@"
+if [ "${1:-serve}" != "serve" ]; then
+  exec covalent-node "$@"
+fi
+
+mkdir -p "${XDG_DATA_HOME:-/config/caddy/data}" "${XDG_CONFIG_HOME:-/config/caddy/config}"
+
+covalent-node "$@" &
+node_pid=$!
+caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
+proxy_pid=$!
+
+shutdown() {
+  trap - INT TERM
+  kill -TERM "$proxy_pid" "$node_pid" >/dev/null 2>&1 || true
+  wait "$proxy_pid" >/dev/null 2>&1 || true
+  wait "$node_pid" >/dev/null 2>&1 || true
+  exit 0
+}
+trap shutdown INT TERM
+
+while kill -0 "$node_pid" >/dev/null 2>&1 && kill -0 "$proxy_pid" >/dev/null 2>&1; do
+  sleep 1
+done
+
+echo "Covalent node or TLS proxy exited unexpectedly" >&2
+kill -TERM "$proxy_pid" "$node_pid" >/dev/null 2>&1 || true
+wait "$proxy_pid" >/dev/null 2>&1 || true
+wait "$node_pid" >/dev/null 2>&1 || true
+exit 1

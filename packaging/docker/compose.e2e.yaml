@@ -9,13 +9,14 @@ services:
     read_only: true
     init: true
     environment:
-      COVALENT_LISTEN: 0.0.0.0:8787
+      COVALENT_LISTEN: 127.0.0.1:8787
       COVALENT_PEER_LISTEN: 0.0.0.0:8787
+      COVALENT_HTTPS_HOST: 127.0.0.1
       COVALENT_DATA_DIR: /data
       COVALENT_DEVICE_NAME: Node A
       COVALENT_LAN_DISCOVERY: "false"
       UMASK: "027"
-    ports: ["18781:8787/tcp", "18781:8787/udp"]
+    ports: ["18781:8443/tcp", "18781:8787/udp"]
     tmpfs: ["/tmp:size=64m,mode=1777"]
     volumes:
       - a-data:/data
@@ -30,13 +31,14 @@ services:
     read_only: true
     init: true
     environment:
-      COVALENT_LISTEN: 0.0.0.0:8787
+      COVALENT_LISTEN: 127.0.0.1:8787
       COVALENT_PEER_LISTEN: 0.0.0.0:8787
+      COVALENT_HTTPS_HOST: 127.0.0.1
       COVALENT_DATA_DIR: /data
       COVALENT_DEVICE_NAME: Node B
       COVALENT_LAN_DISCOVERY: "false"
       UMASK: "027"
-    ports: ["18782:8787/tcp", "18782:8787/udp"]
+    ports: ["18782:8443/tcp", "18782:8787/udp"]
     tmpfs: ["/tmp:size=64m,mode=1777"]
     volumes:
       - b-data:/data
@@ -50,13 +52,14 @@ services:
     read_only: true
     init: true
     environment:
-      COVALENT_LISTEN: 0.0.0.0:8787
+      COVALENT_LISTEN: 127.0.0.1:8787
       COVALENT_PEER_LISTEN: 0.0.0.0:8787
+      COVALENT_HTTPS_HOST: 127.0.0.1
       COVALENT_DATA_DIR: /data
       COVALENT_DEVICE_NAME: Node C
       COVALENT_LAN_DISCOVERY: "false"
       UMASK: "027"
-    ports: ["18783:8787/tcp", "18783:8787/udp"]
+    ports: ["18783:8443/tcp", "18783:8787/udp"]
     tmpfs: ["/tmp:size=64m,mode=1777"]
     volumes:
       - c-data:/data

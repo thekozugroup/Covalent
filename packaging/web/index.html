@@ -6,6 +6,8 @@
     <meta name="color-scheme" content="light dark" />
     <title>Covalent node</title>
     <link rel="stylesheet" href="/assets/app.css" />
+    <script src="/assets/pairing-flow.js" defer></script>
+    <script src="/assets/restore-plan-flow.js" defer></script>
     <script src="/assets/app.js" defer></script>
   </head>
   <body>
@@ -59,16 +61,22 @@
             <h3>Accept invitation</h3>
             <label>Your device name <input name="name" maxlength="80" required /></label>
             <label>Invitation JSON <textarea name="invitation" rows="5" required></textarea></label>
-            <fieldset><legend>Roles granted to this device</legend><label><input type="checkbox" name="responderRole" value="storage_provider" /> Store selected encrypted copies</label><label><input type="checkbox" name="responderRole" value="backup_reader" /> Serve restore reads</label></fieldset>
+            <fieldset><legend>Roles granted to this accepting device</legend><label><input type="checkbox" name="responderRole" value="storage_provider" /> Store selected encrypted copies</label><label><input type="checkbox" name="responderRole" value="backup_reader" /> Serve restore reads</label></fieldset>
+            <fieldset><legend>Roles granted to the invitation creator</legend><label><input type="checkbox" name="inviterRole" value="backup_writer" /> Send selected encrypted copies</label><label><input type="checkbox" name="inviterRole" value="backup_reader" /> Request restore reads</label></fieldset>
             <button>Accept and show code</button>
           </form>
         </div>
         <form class="card" data-pair-confirm>
-          <h3>Confirm and finish</h3>
-          <p class="muted">Paste the session unchanged on each device. Confirm only after both screens show the identical code.</p>
+          <h3>Confirm, exchange, then finish</h3>
+          <p class="muted">Paste the latest session on each device. Compare identities, roles, and code. Each side adds one signature, exchanges the updated JSON, and finalizes only after both signatures are present.</p>
           <label>Pairing session JSON <textarea name="session" rows="7" required></textarea></label>
           <label>Code shown on both devices <input name="code" autocomplete="off" required /></label>
-          <div class="button-row"><button name="side" value="responder">Confirm as accepter</button><button name="side" value="inviter" class="secondary">Confirm as creator</button></div>
+          <section class="pairing-consent" data-pair-consent hidden aria-live="polite">
+            <h4>Signed consent</h4>
+            <dl><div><dt>Creator</dt><dd data-pair-inviter></dd></div><div><dt>Accepter</dt><dd data-pair-responder></dd></div><div><dt>Comparison code</dt><dd data-pair-code></dd></div><div><dt>Signatures</dt><dd data-pair-signatures></dd></div></dl>
+          </section>
+          <div class="button-row"><button name="side" value="responder" data-pair-action="confirm">Add accepter confirmation</button><button name="side" value="inviter" data-pair-action="confirm" class="secondary">Add creator confirmation</button></div>
+          <div class="button-row"><button name="side" value="responder" data-pair-action="finalize" disabled>Finalize as accepter</button><button name="side" value="inviter" data-pair-action="finalize" class="secondary" disabled>Finalize as creator</button><button type="button" class="quiet" data-pair-clear>Clear exchange</button></div>
         </form>
       </section>
 
@@ -100,6 +108,11 @@
         </form>
         <section class="card" aria-live="polite" data-restore-result hidden>
           <h3>Restore preview</h3><p data-restore-summary></p><pre data-restore-plan></pre>
+          <div class="button-row" aria-label="Restore preview pages">
+            <button type="button" class="secondary" data-restore-previous disabled>Previous page</button>
+            <button type="button" class="secondary" data-restore-next disabled>Next page</button>
+            <button type="button" class="secondary" data-restore-discard>Discard preview</button>
+          </div>
           <label class="confirmation"><input type="checkbox" data-restore-confirm /> I reviewed this signed preview and authorize this restore to its displayed target.</label>
           <button type="button" data-restore-execute disabled>Restore this preview</button>
         </section>
@@ -111,7 +124,7 @@
           <section class="card"><h3>Export safe settings</h3><p class="muted">Exports name, discovery preference, and remembered backups. It excludes identity keys, backup keys, grants, and provider credentials.</p><button type="button" data-settings-export>Download settings</button></section>
           <form class="card" data-settings-import><h3>Import safe settings</h3><label>Settings JSON <textarea name="settings" rows="5" required></textarea></label><label class="confirmation"><input type="checkbox" name="confirmed" required /> I understand this replaces safe settings, not identity keys.</label><button>Import settings</button></form>
         </div>
-        <aside><h3>Container network choices</h3><p>Bridge mode exposes TCP/UDP 8787 explicitly. Host networking can improve multicast discovery; a Tailscale sidecar or host Tailnet address is optional. Restrict access to the console port because its token authorizes changes.</p></aside>
+        <aside><h3>Container network choices</h3><p>Bridge mode exposes HTTPS management on TCP 8443 and peer traffic on UDP 8787. Enroll the package CA or use a system-trusted same-host proxy before entering a token. Host networking can improve multicast discovery; a Tailscale sidecar or host Tailnet address is optional.</p></aside>
       </section>
       <output class="toast" data-message aria-live="polite"></output>
     </main>

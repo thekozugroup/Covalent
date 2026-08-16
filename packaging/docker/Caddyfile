@@ -1,0 +1,19 @@
+{
+	admin off
+	persist_config off
+	# IP-literal native clients do not send SNI. Select the explicitly configured
+	# host certificate for that handshake; client hostname verification still
+	# requires the matching DNS/IP SAN and enrolled trust anchor.
+	default_sni {$COVALENT_HTTPS_HOST:localhost}
+}
+
+https://{$COVALENT_HTTPS_HOST:localhost}:8443 {
+	tls internal
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+	}
+	reverse_proxy 127.0.0.1:8787
+}

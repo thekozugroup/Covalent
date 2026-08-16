@@ -9,10 +9,12 @@ source_dir="packaging/docker/example/source"
 restore_a="packaging/docker/example/restore-a"
 restore_b="packaging/docker/example/restore-b"
 restore_c="packaging/docker/example/restore-c"
+tls_directory=$(mktemp -d)
 
 cleanup() {
   $compose down --volumes --remove-orphans >/dev/null 2>&1 || true
   rm -rf "$source_dir/nested" "$restore_a/nested" "$restore_b/nested" "$restore_c/nested"
+  rm -rf "$tls_directory"
 }
 trap cleanup EXIT INT TERM
 
@@ -22,6 +24,21 @@ printf 'empty fixture\n' > "$source_dir/nested/empty.txt"
 
 COVALENT_IMAGE="$image" $compose up -d --wait
 
+for service in node-a node-b node-c; do
+  attempt=0
+  until $compose exec -T "$service" test -f /config/caddy/data/caddy/pki/authorities/local/root.crt; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 20 ]; then
+      $compose logs "$service" >&2
+      exit 1
+    fi
+    sleep 1
+  done
+done
+$compose cp node-a:/config/caddy/data/caddy/pki/authorities/local/root.crt "$tls_directory/a.crt" >/dev/null
+$compose cp node-b:/config/caddy/data/caddy/pki/authorities/local/root.crt "$tls_directory/b.crt" >/dev/null
+$compose cp node-c:/config/caddy/data/caddy/pki/authorities/local/root.crt "$tls_directory/c.crt" >/dev/null
+
 token() { $compose exec -T "$1" sh -c 'cat /data/local-api-token'; }
 token_a=$(token node-a)
 token_b=$(token node-b)
@@ -29,24 +46,34 @@ token_c=$(token node-c)
 node_b_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$($compose ps -q node-b)")
 node_c_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$($compose ps -q node-c)")
 
-TOKEN_A="$token_a" TOKEN_B="$token_b" TOKEN_C="$token_c" NODE_B_IP="$node_b_ip" NODE_C_IP="$node_c_ip" python3 - <<'PY'
+if [ "${COVALENT_RUN_APPLE_TLS_E2E:-false}" = "true" ]; then
+  "$repo_root/scripts/apple-package-tls-e2e.sh" \
+    "https://127.0.0.1:18781" \
+    "$tls_directory/a.crt" \
+    "$token_a" \
+    "$tls_directory/b.crt"
+fi
+
+TOKEN_A="$token_a" TOKEN_B="$token_b" TOKEN_C="$token_c" NODE_B_IP="$node_b_ip" NODE_C_IP="$node_c_ip" CA_A="$tls_directory/a.crt" CA_B="$tls_directory/b.crt" CA_C="$tls_directory/c.crt" python3 - <<'PY'
 import json
 import os
+import ssl
 import time
 import urllib.error
 import urllib.request
 
 ports = {"a": 18781, "b": 18782, "c": 18783}
 tokens = {"a": os.environ["TOKEN_A"], "b": os.environ["TOKEN_B"], "c": os.environ["TOKEN_C"]}
+contexts = {node: ssl.create_default_context(cafile=os.environ[f"CA_{node.upper()}"]) for node in ports}
 
 def request(node, path, payload=None):
     data = None if payload is None else json.dumps(payload).encode()
     headers = {"Accept": "application/json", "Authorization": "Bearer " + tokens[node]}
     if data is not None:
         headers["Content-Type"] = "application/json"
-    request = urllib.request.Request(f"http://127.0.0.1:{ports[node]}{path}", data=data, headers=headers, method="POST" if payload is not None else "GET")
+    request = urllib.request.Request(f"https://127.0.0.1:{ports[node]}{path}", data=data, headers=headers, method="POST" if payload is not None else "GET")
     try:
-        with urllib.request.urlopen(request, timeout=15) as response:
+        with urllib.request.urlopen(request, timeout=15, context=contexts[node]) as response:
             body = response.read()
             return None if not body else json.loads(body)
     except urllib.error.HTTPError as error:
@@ -102,16 +129,18 @@ $compose exec -T node-a sh -c 'chunk=$(find /data/store/chunks -type f | head -n
 
 # Resolve the immutable backup through the same authenticated listing contract
 # used by native and web clients.
-backup_id=$(TOKEN_A="$token_a" python3 - <<'PY'
+backup_id=$(TOKEN_A="$token_a" CA_A="$tls_directory/a.crt" python3 - <<'PY'
 import json
 import os
+import ssl
 import urllib.request
+import urllib.parse
 
 request = urllib.request.Request(
-    "http://127.0.0.1:18781/api/v1/backups",
+    "https://127.0.0.1:18781/api/v1/backups",
     headers={"Accept": "application/json", "Authorization": "Bearer " + os.environ["TOKEN_A"]},
 )
-with urllib.request.urlopen(request, timeout=15) as response:
+with urllib.request.urlopen(request, timeout=15, context=ssl.create_default_context(cafile=os.environ["CA_A"])) as response:
     backups = json.load(response)
 matches = [backup for backup in backups if backup["latestSnapshotId"] == "compose-snapshot"]
 if len(matches) != 1:
@@ -119,16 +148,28 @@ if len(matches) != 1:
 print(matches[0]["backupId"])
 PY
 )
-TOKEN_A="$token_a" BACKUP_ID="$backup_id" python3 - <<'PY'
+TOKEN_A="$token_a" BACKUP_ID="$backup_id" CA_A="$tls_directory/a.crt" python3 - <<'PY'
 import json
 import os
+import ssl
 import urllib.request
 
 headers = {"Accept": "application/json", "Authorization": "Bearer " + os.environ["TOKEN_A"], "Content-Type": "application/json"}
+context = ssl.create_default_context(cafile=os.environ["CA_A"])
+def exchange(path, payload=None):
+    data = None if payload is None else json.dumps(payload).encode()
+    request = urllib.request.Request(
+        "https://127.0.0.1:18781" + path,
+        data=data,
+        headers=headers,
+        method="GET" if payload is None else "POST",
+    )
+    with urllib.request.urlopen(request, timeout=30, context=context) as response:
+        body = None if response.status == 204 else json.loads(response.read() or b"null")
+        return body, response.headers
+
 def post(path, payload):
-    request = urllib.request.Request("http://127.0.0.1:18781" + path, data=json.dumps(payload).encode(), headers=headers, method="POST")
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return None if response.status == 204 else json.loads(response.read() or b"null")
+    return exchange(path, payload)[0]
 
 request = {"backupId": os.environ["BACKUP_ID"], "snapshotId": "compose-snapshot"}
 before = post("/api/v1/backups/verify", request)
@@ -137,12 +178,30 @@ if before["intact"]:
 after = post("/api/v1/backups/verify", {**request, "repair": True})
 if not after["intact"]:
     raise SystemExit("repair from paired provider failed")
-plan = post("/api/v1/restores/preview", {**request, "targetRoot": "/restore", "conflictPolicy": "fail", "jobId": "compose-restore"})
-if any(entry["destinationPath"].startswith("/") or ".." in entry["destinationPath"].split("/") for entry in plan["entries"]):
+plan, plan_headers = exchange("/api/v1/restores/preview", {**request, "targetRoot": "/restore", "conflictPolicy": "fail", "jobId": "compose-restore"})
+if plan_headers.get("X-Covalent-Restore-Plan-Id") != plan["planId"] or plan_headers.get("X-Covalent-Restore-Plan-Digest") != plan["planDigest"]:
+    raise SystemExit("restore reference headers did not bind the durable signed plan")
+entries = []
+cursor = None
+while True:
+    query = urllib.parse.urlencode({"limit": 1000, **({"cursor": cursor} if cursor is not None else {})})
+    page, _ = exchange(f"/api/v1/restores/plans/{plan['planId']}?{query}")
+    if page["planId"] != plan["planId"] or page["planDigest"] != plan["planDigest"] or page["entryOffset"] != len(entries):
+        raise SystemExit("restore plan pagination changed its signed binding or offset")
+    entries.extend(page["entries"])
+    cursor = page["nextCursor"]
+    if cursor is None:
+        break
+if len(entries) != plan["totalEntries"]:
+    raise SystemExit("restore plan pagination did not return every signed entry")
+if any(entry["destinationPath"].startswith("/") or ".." in entry["destinationPath"].split("/") for entry in entries):
     raise SystemExit("restore preview escaped its authorized root")
-result = post("/api/v1/restores/execute", {"plan": plan})
+result, result_headers = exchange("/api/v1/restores/execute", {"planId": plan["planId"]})
+if result_headers.get("X-Covalent-Restore-Plan-Id") != plan["planId"] or result_headers.get("X-Covalent-Restore-Plan-Digest") != plan["planDigest"]:
+    raise SystemExit("restore result headers did not bind the executed plan")
 if result["filesRestored"] < 2:
     raise SystemExit("restore after source loss did not restore expected files")
+post("/api/v1/jobs/discard", {"jobId": "compose-restore"})
 print("compose E2E: pair, explicit replication, source loss, corruption rejection/repair, safe settings import, and root-confined restore: ok")
 PY
 
