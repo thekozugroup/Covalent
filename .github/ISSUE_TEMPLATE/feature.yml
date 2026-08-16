@@ -1,0 +1,30 @@
+name: Feature request
+description: Propose an improvement within Covalent's local-first product scope.
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: Describe the outcome that is difficult today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Include platform, privacy, restore-safety, and compatibility expectations.
+    validations:
+      required: true
+  - type: checkboxes
+    id: invariants
+    attributes:
+      label: Product invariants
+      options:
+        - label: Core workflows remain local-first with no required hosted account.
+          required: true
+        - label: Replica placement remains explicit.
+          required: true
+        - label: Restore remains confined beneath a user-authorized root.
+          required: true

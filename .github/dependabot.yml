@@ -4,15 +4,27 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      rust-patches:
+        update-types: [patch]
   - package-ecosystem: gradle
     directory: /apps/android
     schedule:
       interval: weekly
+    groups:
+      android-patches:
+        update-types: [patch]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
   - package-ecosystem: docker
     directory: /packaging/docker
     schedule:
       interval: weekly
+    groups:
+      container-bases:
+        patterns: ["*"]

@@ -17,15 +17,15 @@ Plaintext file contents and paths, backup/content keys, long-lived device identi
 | Threat | Defense |
 | --- | --- |
 | Impostor pairing | Ephemeral invitation, expiry, transcript-bound short authentication string, explicit confirmation on both devices, identity fingerprint persistence. |
-| Passive or active network attacker | QUIC TLS 1.3 plus application identity binding, replay-resistant nonces, protocol negotiation, signed messages, strict size/time limits. |
+| Passive or active network attacker | QUIC TLS 1.3 plus application identity binding for peer traffic. Management uses loopback cleartext only, or HTTPS through the same-host package proxy with system trust or exact native CA enrollment and normal hostname verification. Replay-resistant nonces, protocol negotiation, signed messages, and strict size/time limits apply. |
 | Curious provider | Client-side authenticated encryption for chunks and manifests; opaque chunk locators; no private keys on provider. Traffic size/timing leakage is documented. |
 | Malicious provider | Verify framing, authenticated ciphertext, expected length, keyed locator, and BLAKE3 plaintext digest before use. Attribute rejected copies and repair only from an intact acknowledged copy. |
 | Roster injection or rollback | Monotonic signed roster epochs, signer authorization, remembered high-water mark, explicit conflict state. |
 | Device compromise | Owner-only key files, least-privilege grants, persistent revocation, and re-replication. A stolen backup master key remains valid for every epoch of that backup; recovery requires a new backup ID/master key and fresh replicas. |
 | Path traversal | Canonical authorized root, protocol-level relative path type, rejection of absolute/empty/`.`/`..` paths, component-by-component no-follow resolution. |
-| Symlink or TOCTOU escape | Do not follow source symlinks by default. Restore uses directory handles and no-follow operations where available, rechecks before commit, and fails closed on links. |
+| Symlink or TOCTOU escape | Do not follow source symlinks by default. Rust and Apple restore paths use root descriptors, descriptor-relative no-follow traversal, and device/inode identity checks; root or child swaps fail closed before writes. |
 | Partial or torn writes | Same-filesystem staging, file sync, metadata transaction, parent-directory sync where supported, atomic rename, startup recovery journal. |
-| Unbounded resource use | Framed message and local-body limits, bounded chunk size and worker count, per-peer request rate, QUIC stream/time limits, resumable cancellation, and bounded checkpoint/config state. Disk-full errors remain visible; capacity reservation is not claimed. |
+| Unbounded resource use | Framed message and local-body limits, bounded chunk size and worker count, byte-aware peer limits, QUIC stream/time limits, resumable cancellation, and bounded checkpoint/config state. Archive paths enforce entry/compressed/expanded quotas and reserve local free capacity before growth. Disk-full and slow-transfer failures remain visible. |
 | Discovery privacy | LAN discovery off switch, minimal advertisements, no backup names or paths, rate limits, manual/Tailnet alternatives, and Android local-network permission requested only after opt-in. |
 | Unsafe settings import | Version/schema validation, size limits, reject unknown key-like fields, never deserialize identity keys from normal export. |
 | Unraid mount mistake | Read-only sources by default; `/boot` optional and read-only for backup; restore requires a separate explicit writable target and preview. |
@@ -42,8 +42,8 @@ Algorithm agility is versioned and downgrade-protected. Implementations use esta
 
 ## Restore invariant
 
-For authorized canonical root `R` and protocol path `p`, every created object must resolve lexically and physically beneath `R`. Any absolute component, parent traversal, platform prefix, NUL, intermediate link, final link, changed directory identity, or authorization loss aborts that entry. A restore cannot widen its root after preview.
+For authorized canonical root `R` and protocol path `p`, every created object must resolve lexically and physically beneath `R`. Any absolute component, parent traversal, platform prefix, NUL, intermediate link, final link, changed directory identity, or authorization loss aborts that entry. A restore cannot widen its root after preview. Durable two-phase per-entry journal records reconcile a fully synced destination after a crash before the completion record; an existing unverified destination is never silently accepted.
 
 ## Residual risks
 
-Endpoint compromise can expose data while decrypted. A stolen backup master key is not healed by incrementing its epoch. Traffic analysis reveals timing, approximate volume, repeated keyed locators within an epoch, and provider access patterns. Role grants are device-wide rather than per-backup ACLs. A user can explicitly choose too few providers. Mobile operating systems can revoke access or suspend background work. Covalent reports these states and does not promise availability it cannot prove.
+Endpoint compromise can expose data while decrypted. A stolen backup master key is not healed by incrementing its epoch. Traffic analysis reveals timing, approximate volume, repeated keyed locators within an epoch, and provider access patterns. Role grants are device-wide rather than per-backup ACLs. A user can explicitly choose too few providers. Mobile operating systems can revoke access, delay a scheduled task, or suspend background work. Apple archive exchange uses bounded durable temporary files and therefore still requires transfer-sized local capacity. Covalent reports these states and does not promise availability it cannot prove.

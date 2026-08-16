@@ -6,7 +6,7 @@ Covalent is a lightweight, self-hosted backup and restore system for devices you
 
 | Tier | Platforms | Release policy |
 | --- | --- | --- |
-| Tier 1 | macOS, Android, Docker, Unraid | Must pass production gates before a release. |
+| Tier 1 | macOS on Apple Silicon, Android, Docker, Unraid | Must pass production gates before a release. |
 | Tier 2 | iOS | Supported and validated independently; never delays Tier 1 readiness. |
 
 iOS protects user-selected directories through document pickers and security-scoped access. Covalent does not claim or attempt a full-device iOS backup. Windows, hosted accounts, automatic replica placement, and restores outside an authorized root are out of scope.
@@ -25,20 +25,22 @@ iOS protects user-selected directories through document pickers and security-sco
 
 ## Start
 
-Prerequisites: Rust 1.97.1, Swift 6.3/Xcode 26 for Apple work, JDK 17 or 21 with Android SDK 37.0 for Android, and Docker for container checks.
+Prerequisites by area: Rust 1.97.1 for the shared engine; an Apple Silicon Mac with Swift 6.3, Xcode 26, and XcodeGen for Apple; JDK 17 or 21, `adb`, and Android SDK/API 37 for Android; Docker with Compose/Buildx for containers. Choose a mode so a core-only contributor is not blocked by unrelated platform tools.
 
 ```sh
-./scripts/bootstrap.sh
-./scripts/check.sh
+./scripts/bootstrap.sh core
+./scripts/check.sh core
 cargo run -p covalent-cli -- doctor
 cargo run -p covalent-node -- serve --listen 127.0.0.1:8787
 ```
+
+Use `apple`, `android`, `container`, or `all` with both scripts for broader work. Android headed validation additionally requires the exact `Covalent_API_37` AVD and an explicit `ANDROID_SERIAL`; Apple UI gates use the bounded scripts under `apps/apple/Scripts`. Container validation includes TLS-only management, the three-node disaster drill, and artifact budgets. Credentialed signing, notarization, public package promotion, and a physical Unraid drill are release gates, not bootstrap requirements.
 
 Open `http://127.0.0.1:8787` for the local status console. No secret or external account is required for bootstrap or core workflows.
 
 The implemented Rust vertical slice includes signed pairing and revocation, streaming encrypted backup, exact explicit replicas, authenticated QUIC providers, corruption repair, signed restore preview, crash recovery, and resumable root-confined restore. A direct CLI disaster-recovery drill is available through `./scripts/smoke.sh`; the full property/adversarial/multi-node suite runs with `cargo test --workspace --all-features`.
 
-Protocol v1 is strict and version-negotiated; incompatible wire changes require a new protocol version. See [local API](docs/api/openapi.yaml), [protocol](docs/protocol/protocol.md), [architecture](docs/architecture/overview.md), [threat model](docs/security/threat-model.md), and [validation matrix](docs/release/validation-matrix.md).
+The persisted/local API contract remains protocol v1. Peer QUIC framing is independently negotiated as transport v2, so framing changes cannot silently reuse an old ALPN or signature domain. See [local API](docs/api/openapi.yaml), [protocol](docs/protocol/protocol.md), [architecture](docs/architecture/overview.md), [threat model](docs/security/threat-model.md), and [validation matrix](docs/release/validation-matrix.md).
 
 ## License
 

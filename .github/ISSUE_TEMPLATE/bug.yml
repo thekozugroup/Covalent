@@ -1,0 +1,36 @@
+name: Bug report
+description: Report a reproducible Covalent defect without including private data.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not report security vulnerabilities here. Follow SECURITY.md.
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options: [Rust core or daemon, macOS, Android, Docker, Unraid, iOS]
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: v0.1.0 or full commit SHA
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Include exact steps, expected result, actual result, and sanitized logs.
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Data-safety impact
+      description: State whether source, backup, restore, or identity data may be at risk.
+    validations:
+      required: true

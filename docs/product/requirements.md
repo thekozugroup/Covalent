@@ -48,7 +48,7 @@ The user exports a versioned file containing the device name, LAN discovery pref
 - macOS Tier 1 uses open panels, security-scoped bookmarks in sandboxed builds, and coordinated file access.
 - Android Tier 1 targets the current stable Android API, uses the Storage Access Framework and persisted URI grants, and requests local-network permission only when the user enables LAN discovery.
 - Docker and Unraid Tier 1 use explicit mounts. Backup sources are read-only by default; restore targets require explicit writable mounts and confirmation.
-- iOS Tier 2 uses document pickers, security-scoped URLs/bookmarks, coordinated access, and resumable work within platform background limits. It never claims full-device access.
+- iOS Tier 2 uses document pickers, security-scoped URLs/bookmarks, coordinated access, and durable node checkpoints within platform background limits. Process-termination request rehydration remains a visible Tier 2 acceptance gap; it never claims full-device access.
 
 ## Quality attributes
 

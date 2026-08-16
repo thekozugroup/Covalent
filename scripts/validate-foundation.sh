@@ -25,6 +25,8 @@ apps/android/app/build.gradle.kts
 packaging/docker/Dockerfile
 packaging/unraid/covalent.xml
 .github/workflows/ci.yml
+.github/workflows/apple-release.yml
+scripts/verify-apple-silicon-bundle.sh
 "
 
 for path in $required_paths; do
@@ -43,6 +45,31 @@ grep -q 'Mode="ro"' packaging/unraid/covalent.xml
 grep -q 'Target="/boot-source"' packaging/unraid/covalent.xml
 grep -q 'Target="/restore"' packaging/unraid/covalent.xml
 grep -q 'Default="false"' packaging/unraid/covalent.xml
+
+test "$(grep -c 'ARCHS: arm64' apps/apple/Project.yml)" -eq 2
+test "$(grep -c 'EXCLUDED_ARCHS: x86_64' apps/apple/Project.yml)" -eq 2
+grep -q 'targets: aarch64-apple-darwin$' .github/workflows/ci.yml
+grep -q 'targets: aarch64-apple-darwin$' .github/workflows/apple-release.yml
+
+if rg -n 'x86_64-apple-darwin|arm64/x86_64|Apple Silicon and Intel|universal (helper|Release archive|app-owned)' \
+  apps/apple \
+  .github/workflows/ci.yml \
+  .github/workflows/apple-release.yml \
+  docs/platform/capabilities.md \
+  docs/product/traceability.md \
+  docs/release/validation-matrix.md; then
+  echo "obsolete multi-architecture macOS requirement found" >&2
+  exit 1
+fi
+
+if ARCHS=x86_64 apps/apple/Scripts/build-node-helper.sh >/dev/null 2>&1; then
+  echo "macOS helper build accepted x86_64" >&2
+  exit 1
+fi
+if ARCHS='arm64 x86_64' apps/apple/Scripts/build-node-helper.sh >/dev/null 2>&1; then
+  echo "macOS helper build accepted multiple architectures" >&2
+  exit 1
+fi
 
 ./scripts/validate-unraid-template.sh
 

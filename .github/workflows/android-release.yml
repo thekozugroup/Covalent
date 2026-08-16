@@ -1,0 +1,160 @@
+name: Signed Android release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing v-prefixed version for this exact commit
+        required: true
+        type: string
+      first_release:
+        description: Explicitly confirm there is no prior signed Covalent Android release to upgrade
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  checks: read
+
+concurrency:
+  group: signed-android-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  build-verify:
+    name: Sign and verify Android artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      COVALENT_ANDROID_KEYSTORE_BASE64: ${{ secrets.COVALENT_ANDROID_KEYSTORE_BASE64 }}
+      COVALENT_ANDROID_STORE_PASSWORD: ${{ secrets.COVALENT_ANDROID_STORE_PASSWORD }}
+      COVALENT_ANDROID_KEY_ALIAS: ${{ secrets.COVALENT_ANDROID_KEY_ALIAS }}
+      COVALENT_ANDROID_KEY_PASSWORD: ${{ secrets.COVALENT_ANDROID_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
+      - run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0"
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
+      - name: Verify immutable version and exact-commit software gates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${RELEASE_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "release version must be an explicit v-prefixed semantic version" >&2
+            exit 1
+          fi
+          workspace_version=$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)
+          android_version=$(awk -F'"' '/versionName = / { print $2; exit }' apps/android/app/build.gradle.kts)
+          test "${RELEASE_VERSION#v}" = "${workspace_version}"
+          test "${RELEASE_VERSION#v}" = "${android_version}"
+          test "$(git rev-list -n 1 "${RELEASE_VERSION}")" = "${GITHUB_SHA}"
+          checks=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100")
+          for required in "Shared Rust and contracts" "macOS integration and UI" "Android foundation" "Android API 37 device" "Container foundation" "Release candidate software gates"; do
+            if ! jq -e --arg name "${required}" '.check_runs | any(.name == $name and .conclusion == "success")' <<<"${checks}" >/dev/null; then
+              echo "required exact-commit check is not green: ${required}" >&2
+              exit 1
+            fi
+          done
+      - name: Install ephemeral release keystore
+        run: |
+          set -euo pipefail
+          for variable in \
+            COVALENT_ANDROID_KEYSTORE_BASE64 \
+            COVALENT_ANDROID_STORE_PASSWORD \
+            COVALENT_ANDROID_KEY_ALIAS \
+            COVALENT_ANDROID_KEY_PASSWORD; do
+            if [[ -z "${!variable:-}" ]]; then
+              echo "required Android release credential is unavailable: ${variable}" >&2
+              exit 1
+            fi
+          done
+          keystore="${RUNNER_TEMP}/covalent-release.keystore"
+          printf '%s' "${COVALENT_ANDROID_KEYSTORE_BASE64}" | base64 --decode > "${keystore}"
+          chmod 600 "${keystore}"
+          echo "COVALENT_ANDROID_KEYSTORE_PATH=${keystore}" >> "${GITHUB_ENV}"
+      - name: Build signed APK, AAB, SBOM, mapping, and checksums
+        run: ./apps/android/gradlew -p apps/android --no-daemon prepareReleaseCandidate
+      - name: Verify release signatures and checksums
+        run: |
+          set -euo pipefail
+          apk="apps/android/app/build/outputs/apk/release/app-release.apk"
+          aab="apps/android/app/build/outputs/bundle/release/app-release.aab"
+          apksigner_path=$(find "${ANDROID_HOME}/build-tools" -type f -name apksigner -print | sort -V | tail -n 1)
+          test -f "${apk}"
+          test -f "${aab}"
+          test -x "${apksigner_path}"
+          "${apksigner_path}" verify --verbose --print-certs "${apk}" | tee "${RUNNER_TEMP}/apk-signature.txt"
+          grep -q 'Verified using v2 scheme.*true' "${RUNNER_TEMP}/apk-signature.txt"
+          jarsigner -verify -certs "${aab}" > "${RUNNER_TEMP}/aab-signature.txt"
+          grep -q 'jar verified' "${RUNNER_TEMP}/aab-signature.txt"
+          (cd apps/android/app/build && shasum -a 256 -c reports/covalent/SHA256SUMS)
+          echo "COVALENT_RELEASE_APK=${apk}" >> "${GITHUB_ENV}"
+          echo "COVALENT_APKSIGNER=${apksigner_path}" >> "${GITHUB_ENV}"
+      - name: Resolve prior signed package for a real upgrade gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FIRST_RELEASE: ${{ inputs.first_release }}
+        run: |
+          set -euo pipefail
+          previous_dir="${RUNNER_TEMP}/previous-android"
+          mkdir -p "${previous_dir}"
+          if gh release view --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release download --repo "${GITHUB_REPOSITORY}" --pattern '*release.apk' --dir "${previous_dir}"
+            mapfile -t candidates < <(find "${previous_dir}" -maxdepth 1 -type f -name '*release.apk' -print)
+            if [[ "${#candidates[@]}" -ne 1 ]]; then
+              echo "expected exactly one prior signed release APK" >&2
+              exit 1
+            fi
+            previous_apk="${candidates[0]}"
+            current_digest=$("${COVALENT_APKSIGNER}" verify --print-certs "${COVALENT_RELEASE_APK}" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)
+            previous_digest=$("${COVALENT_APKSIGNER}" verify --print-certs "${previous_apk}" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)
+            test -n "${current_digest}"
+            test "${previous_digest}" = "${current_digest}"
+            echo "COVALENT_PREVIOUS_APK=${previous_apk}" >> "${GITHUB_ENV}"
+          elif [[ "${FIRST_RELEASE}" != "true" ]]; then
+            echo "no prior signed Android release exists; rerun only with explicit first_release confirmation" >&2
+            exit 1
+          fi
+      - name: Install and upgrade signed package on API 37
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 37
+          target: google_apis
+          arch: x86_64
+          avd-name: Covalent_API_37
+          emulator-port: 5570
+          disable-animations: true
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          script: |
+            set -euo pipefail
+            export ANDROID_SERIAL=emulator-5570
+            initial_apk="${COVALENT_PREVIOUS_APK:-${COVALENT_RELEASE_APK}}"
+            adb install "${initial_apk}"
+            adb shell am start -W -n life.michaelwong.covalent/.MainActivity
+            first_install=$(adb shell dumpsys package life.michaelwong.covalent | sed -n 's/.*firstInstallTime=//p' | head -n 1 | tr -d '\r')
+            test -n "${first_install}"
+            adb install -r "${COVALENT_RELEASE_APK}"
+            adb shell am start -W -n life.michaelwong.covalent/.MainActivity
+            after_install=$(adb shell dumpsys package life.michaelwong.covalent | sed -n 's/.*firstInstallTime=//p' | head -n 1 | tr -d '\r')
+            test "${after_install}" = "${first_install}"
+            adb shell pm path life.michaelwong.covalent
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: signed-covalent-android-${{ inputs.version }}-${{ github.sha }}
+          path: |
+            apps/android/app/build/outputs/apk/release/*.apk
+            apps/android/app/build/outputs/bundle/release/*.aab
+            apps/android/app/build/outputs/mapping/release/*
+            apps/android/app/build/reports/covalent/android-sbom.cdx.json
+            apps/android/app/build/reports/covalent/android-license-inventory.json
+            apps/android/app/build/reports/covalent/SHA256SUMS
+          if-no-files-found: error

@@ -25,6 +25,8 @@ for required in \
   'Target="/restore"' \
   'Target="/config"' \
   'Target="/data"' \
+  'Target="8443"' \
+  'Target="COVALENT_HTTPS_HOST"' \
   'Mode="ro"' \
   'Default="false"'; do
   if ! grep -q "$required" "$template"; then
@@ -32,6 +34,17 @@ for required in \
     exit 1
   fi
 done
+
+if grep -q '<WebUI>http://' "$template" || grep -q ':latest</Repository>' "$template"; then
+  echo "Unraid template must use TLS management and a versioned image" >&2
+  exit 1
+fi
+
+icon_path="$repo_root/packaging/unraid/icon.svg"
+if [ ! -s "$icon_path" ]; then
+  echo "Unraid icon is missing" >&2
+  exit 1
+fi
 
 if grep -q 'Target="/mnt/user"' "$template" || grep -q 'Target="/boot"' "$template"; then
   echo "Unraid template must not map broad host roots directly" >&2

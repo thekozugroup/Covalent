@@ -14,72 +14,188 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  dependency-review:
+    name: Dependency vulnerability and license delta
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+        with:
+          fail-on-severity: high
+          license-check: true
+          deny-licenses: AGPL-3.0-only, GPL-3.0-only
+
   rust-and-contracts:
     name: Shared Rust and contracts
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@1.97.1
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
         with:
           components: clippy,rustfmt
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: ./scripts/validate-foundation.sh
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --workspace --all-features
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --workspace --all-features
       - run: ./scripts/smoke.sh
-
-  macos-tier1:
-    name: macOS Tier 1
-    runs-on: macos-26
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@1.97.1
+      - run: node --test packaging/web/tests/*.test.mjs
+      - run: node scripts/check-openapi-routes.mjs
+      - run: npx --yes @redocly/cli@2.46.1 lint docs/api/openapi.yaml
+      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          command: check advisories bans licenses sources
+      - run: cargo build --locked --release -p covalent-node -p covalent-cli
+      - run: ./scripts/check-artifact-budgets.sh
+      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: covalent-source.spdx.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: source-sbom-${{ github.sha }}
+          path: covalent-source.spdx.json
+          if-no-files-found: error
+
+  macos-integration-ui:
+    name: macOS integration and UI
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Require an Apple Silicon runner
+        run: test "$(uname -m)" = arm64
       - run: brew install xcodegen
       - run: swift test --package-path apps/apple
+      - name: Generate Apple dependency inventories
+        env:
+          SOURCE_DATE_EPOCH: "0"
+        run: ./scripts/apple-dependency-inventory.sh "${RUNNER_TEMP}/covalent-apple-inventory"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: apple-dependency-inventory-${{ github.sha }}
+          path: ${{ runner.temp }}/covalent-apple-inventory
+          if-no-files-found: error
+      - run: apps/apple/Scripts/integration-test.sh
+      - name: Run bounded macOS UI and accessibility gates
+        env:
+          COVALENT_TEST_ARTIFACT_DIR: ${{ runner.temp }}/covalent-macos-ui
+        run: apps/apple/Scripts/macos-ui-test.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: macos-ui-diagnostics-${{ github.sha }}
+          path: ${{ runner.temp }}/covalent-macos-ui
+          if-no-files-found: warn
       - run: cd apps/apple && xcodegen generate --quiet
-      - run: xcodebuild -project apps/apple/Covalent.xcodeproj -scheme CovalentMac -configuration Debug -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build
-      - name: Archive universal app-owned node
+      - run: xcodebuild -project apps/apple/Covalent.xcodeproj -scheme CovalentMac -configuration Debug -destination 'platform=macOS,arch=arm64' ARCHS=arm64 EXCLUDED_ARCHS=x86_64 CODE_SIGNING_ALLOWED=NO build
+      - name: Archive and verify the Apple Silicon app-owned node
         run: |
+          set -euo pipefail
           archive_path="$RUNNER_TEMP/CovalentMac.xcarchive"
-          xcodebuild -project apps/apple/Covalent.xcodeproj -scheme CovalentMac -configuration Release -destination 'generic/platform=macOS' -archivePath "$archive_path" CODE_SIGNING_ALLOWED=NO archive
-          helper="$archive_path/Products/Applications/Covalent.app/Contents/MacOS/covalent-node"
-          test -x "$helper"
-          lipo "$helper" -verify_arch arm64 x86_64
+          xcodebuild -project apps/apple/Covalent.xcodeproj -scheme CovalentMac -configuration Release -destination 'generic/platform=macOS' -archivePath "$archive_path" ARCHS=arm64 EXCLUDED_ARCHS=x86_64 CODE_SIGNING_ALLOWED=NO archive
+          app="$archive_path/Products/Applications/Covalent.app"
+          helper="$app/Contents/MacOS/covalent-node"
+          codesign --force --options runtime --sign - --entitlements apps/apple/Config/CovalentNode.entitlements --timestamp=none "$helper"
+          codesign --force --options runtime --sign - --entitlements apps/apple/Config/CovalentMac.entitlements --timestamp=none "$app"
+          COVALENT_REQUIRE_HARDENED_RUNTIME=true ./scripts/verify-apple-silicon-bundle.sh "$app"
 
-  android-tier1:
-    name: Android Tier 1
+  android-foundation:
+    name: Android foundation
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: "17"
-      - uses: android-actions/setup-android@v4
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
       - run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0"
-      - uses: gradle/actions/setup-gradle@v6
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
       - run: ./scripts/check-android.sh
+      - run: ./apps/android/gradlew -p apps/android :app:generateAndroidSbom
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-dependency-inventory-${{ github.sha }}
+          path: |
+            apps/android/app/build/reports/covalent/android-sbom.cdx.json
+            apps/android/app/build/reports/covalent/android-license-inventory.json
+          if-no-files-found: error
 
-  container-tier1:
-    name: Docker and Unraid Tier 1
+  android-device:
+    name: Android API 37 device
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     steps:
-      - uses: actions/checkout@v5
-      - run: docker build -f packaging/docker/Dockerfile -t covalent:ci .
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
+      - uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 37
+          target: google_apis
+          arch: x86_64
+          avd-name: Covalent_API_37
+          emulator-port: 5570
+          disable-animations: true
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          script: COVALENT_ANDROID_EVIDENCE_DIR="${{ runner.temp }}/covalent-android-api37" COVALENT_ANDROID_HEADLESS_CI=true ANDROID_SERIAL=emulator-5570 ./scripts/android-api37-device-test.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: android-api37-evidence-${{ github.sha }}
+          path: ${{ runner.temp }}/covalent-android-api37
+          if-no-files-found: warn
+
+  container-foundation:
+    name: Container foundation
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - run: docker build --build-arg VCS_REF=${{ github.sha }} -f packaging/docker/Dockerfile -t covalent:ci .
       - run: docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp --entrypoint covalent covalent:ci doctor
       - run: ./scripts/check-container-runtime.sh covalent:ci
+      - run: ./scripts/check-artifact-budgets.sh covalent:ci
       - run: ./scripts/validate-unraid-template.sh
       - run: ./scripts/docker-compose-e2e.sh covalent:ci
 
   ios-tier2:
     name: iOS Tier 2 (non-blocking)
     runs-on: macos-26
+    timeout-minutes: 25
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - run: brew install xcodegen
       - run: cd apps/apple && xcodegen generate --quiet
       - run: xcodebuild -project apps/apple/Covalent.xcodeproj -scheme CovalentIOS -configuration Debug -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO build
+
+  release-candidate-software:
+    name: Release candidate software gates
+    if: always()
+    needs: [rust-and-contracts, macos-integration-ui, android-foundation, android-device, container-foundation]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every exact-current software gate
+        run: |
+          test '${{ needs.rust-and-contracts.result }}' = success
+          test '${{ needs.macos-integration-ui.result }}' = success
+          test '${{ needs.android-foundation.result }}' = success
+          test '${{ needs.android-device.result }}' = success
+          test '${{ needs.container-foundation.result }}' = success
+          echo "Software gates passed. Signing, notarization, published image, and live Unraid evidence remain separate release blockers."
