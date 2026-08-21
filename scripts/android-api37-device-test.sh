@@ -357,7 +357,128 @@ dump_guest_failure_evidence() {
     || echo "(no watchdog/crash signature matched in the guest log)" >&2
   echo "--- guest logcat: last 120 lines verbatim ---" >&2
   "$adb" -s "$serial" logcat -d -b main,system,crash -t 120 >&2 2>/dev/null || true
+  dump_component_resolution_evidence
   echo "--- end API-37-gate post-mortem ---" >&2
+}
+
+# The other way this gate goes red is not a dead guest at all: the run completes
+# and reports failures of the form
+#
+#   Unable to resolve activity for: Intent { cmp=life.michaelwong.covalent.test/
+#     androidx.activity.ComponentActivity }
+#
+# That intent is not something this repo constructs, and the `.test` package in
+# it is not a typo - it is androidx.test's documented fallback. The default
+# method androidx.test.internal.platform.app.ActivityInvoker#getIntentForActivity
+# (monitor-1.8.0) compiles to exactly this:
+#
+#   intent = Intent.makeMainActivity(
+#       new ComponentName(getInstrumentation().getTargetContext(), activityClass));
+#   if (getInstrumentation().getTargetContext().getPackageManager()
+#           .resolveActivity(intent, 0) != null) {
+#     return intent;                                  // -> app package
+#   }
+#   return Intent.makeMainActivity(
+#       new ComponentName(getInstrumentation().getContext(), activityClass));
+#                                                     // -> TEST package
+#
+# So a `.test/androidx.activity.ComponentActivity` component name is proof that
+# `resolveActivity(intent, 0)` returned null for the app package. The stub is
+# supplied by `debugImplementation("androidx.compose.ui:ui-test-manifest")` and
+# is verifiably present in app-debug.apk's merged manifest, so a build-output
+# check cannot tell us anything more - the question is only ever what the guest's
+# PackageManager answered at that instant, and there are exactly four ways for
+# that answer to be null:
+#
+#   1. the component is genuinely absent from the installed app package
+#   2. the app package is disabled or not installed for user 0 (flags=0 does not
+#      carry MATCH_DISABLED_COMPONENTS)
+#   3. user 0's credential-encrypted key is locked, so PackageManager's
+#      updateFlagsForComponent narrows an unflagged query to
+#      MATCH_DIRECT_BOOT_AWARE only, and this stub is not directBootAware
+#   4. package-visibility filtering hides the target from the caller
+#
+# Reason 3 is the one that also explains the credential-encrypted-storage
+# failures and an in-process UserManager.isUserUnlocked() of false in the same
+# run, and it is the one nothing here has ever actually measured. `am
+# get-started-user-state` and the non-encryption-aware service count both read
+# ActivityManager's UserController lifecycle state; the predicate PackageManager
+# and UserManager use is StorageManagerService's CE-key set, which is a
+# different field in a different service and is only visible in `dumpsys mount`.
+# Print both, side by side, so a red run says which of the four it was instead of
+# leaving it to be inferred. Same post-mortem discipline as above: read-only,
+# best-effort, only on a path already exiting 1.
+dump_component_resolution_evidence() {
+  stub_activity=androidx.activity.ComponentActivity
+  echo "--- API-37-gate post-mortem: ComponentActivity resolution evidence ---" >&2
+
+  echo "--- installed packages and UIDs ---" >&2
+  "$adb" -s "$serial" shell pm list packages -U 2>/dev/null \
+    | grep -i covalent >&2 || echo "(no covalent package is installed)" >&2
+  echo "--- packages currently disabled ---" >&2
+  "$adb" -s "$serial" shell pm list packages -d 2>/dev/null \
+    | grep -i covalent >&2 || echo "(no covalent package is disabled)" >&2
+
+  # Reason 2: per-user install/enable/stopped state for both packages.
+  for package in life.michaelwong.covalent life.michaelwong.covalent.test; do
+    echo "--- $package: user 0 package state ---" >&2
+    "$adb" -s "$serial" shell dumpsys package "$package" 2>/dev/null \
+      | grep -E 'User 0:|enabledComponents|disabledComponents' >&2 \
+      || echo "(no user-0 state reported for $package)" >&2
+  done
+
+  # Reason 1: is the stub actually on the device, as opposed to merely present in
+  # a merged manifest at build time? --all-components is what makes dumpsys emit
+  # activity entries for a named package at all.
+  for package in life.michaelwong.covalent life.michaelwong.covalent.test; do
+    echo "--- $package: on-device $stub_activity declaration ---" >&2
+    "$adb" -s "$serial" shell dumpsys package --all-components "$package" 2>/dev/null \
+      | grep -A5 "$stub_activity" >&2 \
+      || echo "($package does not declare $stub_activity on-device)" >&2
+  done
+
+  # The predicate itself, run the same way ActivityInvoker runs it: an explicit
+  # component name, no match flags. This is the single most direct reading
+  # available of what the failing call saw.
+  for package in life.michaelwong.covalent life.michaelwong.covalent.test; do
+    echo "--- resolve-activity (explicit component) $package/$stub_activity ---" >&2
+    "$adb" -s "$serial" shell cmd package resolve-activity --brief --user 0 \
+      -n "$package/$stub_activity" >&2 2>&1 || true
+  done
+  for package in life.michaelwong.covalent life.michaelwong.covalent.test; do
+    echo "--- resolve-activity (MAIN/LAUNCHER) $package ---" >&2
+    "$adb" -s "$serial" shell cmd package resolve-activity --brief --user 0 \
+      -a android.intent.action.MAIN \
+      -c android.intent.category.LAUNCHER "$package" >&2 2>&1 || true
+  done
+
+  # Reason 3, the measurement nothing upstream takes. "CE unlocked users" is
+  # StorageManagerService's own list and is the field UserManager.isUserUnlocked()
+  # and PackageManager's direct-boot narrowing both consult. If it omits 0 while
+  # am reports RUNNING_UNLOCKED, that is the whole failure, and the two lines
+  # printed together are the proof rather than an inference.
+  echo "--- StorageManagerService CE/DE key state (the isUserUnlocked predicate) ---" >&2
+  "$adb" -s "$serial" shell dumpsys mount 2>/dev/null \
+    | grep -iE 'unlocked users|unlocked' >&2 \
+    || echo "(dumpsys mount reported no unlocked-user state)" >&2
+  echo "--- ActivityManager user lifecycle state (a different field) ---" >&2
+  "$adb" -s "$serial" shell am get-started-user-state 0 >&2 2>&1 || true
+  "$adb" -s "$serial" shell cmd user list -v >&2 2>&1 || true
+  "$adb" -s "$serial" shell dumpsys user 2>/dev/null \
+    | grep -E 'id=0,|State: |Started users state|Unlock time' >&2 || true
+
+  # Reason 4 needs the instrumentation's own wiring: a targetPackage that is not
+  # the app package would mean getTargetContext() was never the app to begin with.
+  echo "--- declared instrumentation and targetPackage ---" >&2
+  "$adb" -s "$serial" shell pm list instrumentation 2>/dev/null \
+    | grep -i covalent >&2 || echo "(no covalent instrumentation is registered)" >&2
+  "$adb" -s "$serial" shell dumpsys package life.michaelwong.covalent.test 2>/dev/null \
+    | grep -B2 -A6 -i 'instrumentation' >&2 || true
+
+  echo "--- guest logcat: activity-resolution signatures ---" >&2
+  "$adb" -s "$serial" logcat -d -b main,system,crash -t 4000 2>/dev/null \
+    | grep -Ei 'Unable to resolve activity|ActivityNotFound|user [0-9]+ is (still )?locked|not directBootAware|direct.?boot|credential.encrypted|CE storage|isUserUnlocked|unlockUser|onUserUnlock' >&2 \
+    || echo "(no activity-resolution signature matched in the guest log)" >&2
 }
 
 instrumentation_log=$(mktemp "${TMPDIR:-/tmp}/covalent-api37-instrumentation.XXXXXX")
