@@ -151,6 +151,85 @@ class KeyProtectionContractTest {
         )
     }
 
+    /**
+     * Guards the one CodeQL alert this repository dismisses rather than fixes.
+     *
+     * `KeyInfo.isInsideSecureHardware` is deprecated, and CodeQL's `java/deprecated-call`
+     * is right to say so. It is kept anyway because API 26-30 ships no
+     * `KeyInfo.getSecurityLevel()`, so deleting it would report SOFTWARE for every
+     * pre-31 device and understate hardware protection that is really there. That
+     * argument holds only while `minSdk` is below 31. This test fails the moment it
+     * stops holding, so the branch and its dismissal cannot quietly outlive their reason.
+     */
+    @Test
+    fun theDeprecatedSecureHardwareProbeIsStillTheOnlyOptionBelowApi31() {
+        val minSdk = Regex("minSdk\\s*=\\s*(\\d+)")
+            .find(repositoryFile("apps/android/app/build.gradle.kts").readText())
+            ?.groupValues?.get(1)?.toInt()
+            ?: error("minSdk is not declared in app/build.gradle.kts")
+        assertTrue(
+            "minSdk is $minSdk. KeyInfo.getSecurityLevel() exists from API 31, so the " +
+                "deprecated isInsideSecureHardware branch in IdentityKeyProtector is now " +
+                "dead. Delete it and un-dismiss the java/deprecated-call CodeQL alert.",
+            minSdk < 31,
+        )
+
+        val protector = moduleFile(
+            "src/main/java/life/michaelwong/covalent/node/IdentityKeyProtector.kt",
+        ).readText()
+        assertTrue(
+            "The deprecated probe must stay behind an SDK_INT check, never run on API 31+",
+            protector.contains("Build.VERSION.SDK_INT >= Build.VERSION_CODES.S"),
+        )
+        assertTrue(
+            "API 31+ must read the precise security level, not the deprecated boolean",
+            protector.contains("info.securityLevel"),
+        )
+        assertTrue(
+            "Only the guarded pre-31 branch may consult isInsideSecureHardware",
+            protector.split("isInsideSecureHardware").size - 1 == 1,
+        )
+    }
+
+    /**
+     * The local API bearer token must come from one long-lived, kernel-seeded CSPRNG.
+     *
+     * Written against the source because the failure mode is a silent downgrade: swapping
+     * in `java.util.Random`, or dropping the zeroing of the buffer, changes no signature
+     * and breaks no other test, but weakens the credential that guards the node.
+     */
+    @Test
+    fun theLocalApiTokenIsDrawnFromOneReusedCsprng() {
+        val manager = moduleFile(
+            "src/main/java/life/michaelwong/covalent/node/EmbeddedNodeManager.kt",
+        ).readText()
+        assertTrue(
+            "The token generator must be SecureRandom, never a predictable PRNG",
+            manager.contains("import java.security.SecureRandom"),
+        )
+        assertFalse(
+            "java.util.Random and kotlin.random are not acceptable sources for a credential",
+            manager.contains("java.util.Random") || manager.contains("kotlin.random"),
+        )
+        assertNull(
+            "Construct SecureRandom once and reuse it; an inline SecureRandom().nextBytes " +
+                "is the throwaway-PRNG shape that CodeQL java/random-used-once flags",
+            Regex("SecureRandom\\(\\)\\s*\\.").find(manager),
+        )
+        assertTrue(
+            "The reused CSPRNG must be a field of EmbeddedNodeManager",
+            manager.contains("private val csprng = SecureRandom()"),
+        )
+        assertTrue(
+            "The token must be 32 bytes drawn from that field",
+            manager.contains("ByteArray(32)") && manager.contains("csprng.nextBytes(generated)"),
+        )
+        assertTrue(
+            "The raw token buffer must be zeroed once it has been encoded",
+            manager.contains("generated.fill(0)"),
+        )
+    }
+
     private fun rustJniSource(): String = repositoryFile("crates/covalent-android-jni/src/lib.rs")
         .readText()
 

@@ -50,6 +50,17 @@ class EmbeddedNodeManager(context: Context) {
     private val localStore = LocalEmbeddedNodeStore(applicationContext, protector)
     private var multicastLock: WifiManager.MulticastLock? = null
 
+    /**
+     * One long-lived CSPRNG for minting the local API token.
+     *
+     * Constructing a [SecureRandom] per call is not weaker — every instance seeds itself
+     * from the kernel entropy pool — but it is wasteful, and an inline `SecureRandom()`
+     * is indistinguishable, to static analysis, from the throwaway-`Random` pattern that
+     * genuinely is a weakness. Holding one instance is the documented Android practice,
+     * is thread-safe (`nextBytes` is synchronised), and keeps the good property visible.
+     */
+    private val csprng = SecureRandom()
+
     val state: StateFlow<EmbeddedProviderState> = sharedState.asStateFlow()
 
     init {
@@ -264,7 +275,7 @@ class EmbeddedNodeManager(context: Context) {
         localStore.token.takeIf(String::isNotBlank)?.let { return it.encodeToByteArray() }
         val minted = ByteArray(32).let { generated ->
             try {
-                SecureRandom().nextBytes(generated)
+                csprng.nextBytes(generated)
                 Base64.encodeToString(generated, Base64.NO_WRAP or Base64.URL_SAFE)
             } finally {
                 generated.fill(0)

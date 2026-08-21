@@ -192,6 +192,11 @@ internal class IdentityKeyProtector {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             securityLevelFromApi31(info)
         } else {
+            // API 26-30 has no KeyInfo.getSecurityLevel(), so this deprecated predicate is
+            // the only way to tell a TEE-backed key from a software one on those releases.
+            // Dropping it would report SOFTWARE for every pre-31 device and understate the
+            // hardware protection that is actually there. Delete this branch — and the
+            // CodeQL java/deprecated-call dismissal covering it — when minSdk reaches 31.
             @Suppress("DEPRECATION")
             if (info.isInsideSecureHardware) {
                 KeyProtectionLevel.TRUSTED_ENVIRONMENT
