@@ -125,7 +125,13 @@ budget=${COVALENT_ANDROID_GUEST_READY_TIMEOUT:-900}
 # Four samples five seconds apart. Long enough to span a system_server restart,
 # which takes tens of seconds to drop and re-register its services, and short
 # enough that a healthy guest pays twenty seconds for the proof.
-stable_samples=${COVALENT_ANDROID_GUEST_STABLE_SAMPLES:-4}
+# Six, not four. The runqueue ceiling was the gate's second line of defence
+# against handing over a guest that then Watchdog-kills mid-instrumentation, and
+# demoting it to an observation removes that. What replaces it is more of the
+# measurement that actually predicts the failure: the three system_server round
+# trips now have to hold for six consecutive samples rather than four, so the
+# guest must stay answering for half again as long before the gate lets go.
+stable_samples=${COVALENT_ANDROID_GUEST_STABLE_SAMPLES:-6}
 sample_interval=${COVALENT_ANDROID_GUEST_SAMPLE_INTERVAL:-5}
 started=$(date +%s)
 
@@ -293,6 +299,37 @@ guest_loadavg() {
 # property of the runner and this file should not be edited to find out.
 runnable_multiplier=${COVALENT_ANDROID_GUEST_RUNNABLE_MULTIPLIER:-2}
 
+# Whether that ceiling *vetoes* a sample, as opposed to being reported next to
+# it. Off, and run 32532615844 is why.
+#
+# That run sampled for 900s with the ceiling gating and reset the stability
+# window 32 times. Every reset named the runqueue. The window only prints a
+# reset once it has already banked a wholly good sample, so each of those 32
+# lines is a record of the guest passing all three real binder round trips and
+# then having that thrown away by one instantaneous reading of /proc/stat. The
+# give-up dump found every round trip answering normally - `cmd package path
+# android` returned package:/system/framework/framework-res.apk - with
+# procs_running at 3. And because the ceiling is checked before the round trips
+# and returns early, not one of the 32 resets ever established that anything
+# was actually wrong with system_server.
+#
+# The quantity itself is the problem. `am wait-for-broadcast-idle` reports the
+# queues idle at 17s, so the 7-to-74 oscillation that continues for the
+# remaining 880s is not a boot storm draining, it is what this image's
+# background work looks like indefinitely; two cores and three cores produced
+# the same picture. A predicate a healthy guest fails at random is not a strict
+# gate, it is a coin flip - and worse, a short-circuiting one that suppresses
+# the measurement that would have said so.
+#
+# This is the third proxy in this file retired in favour of the thing it stood
+# for. `service check` gave way to real binder round trips; the load average
+# gave way to procs_running; procs_running now gives way to the round trips it
+# was itself only ever a proxy for. It is still read, still printed on every
+# sample and at handover, and still enforceable with
+# COVALENT_ANDROID_GUEST_ENFORCE_RUNQUEUE=1. What it no longer does is veto a
+# guest that is demonstrably answering.
+enforce_runqueue=${COVALENT_ANDROID_GUEST_ENFORCE_RUNQUEUE:-0}
+
 # Until user 0's credential-encrypted key is unlocked, PackageManager matches
 # only direct-boot-aware components, so every activity the tests launch is
 # unresolvable, every credential-encrypted read throws, and keystore refuses to
@@ -369,12 +406,13 @@ user0_state() {
 # times in 600s and every message said only "the guest stopped being ready",
 # which is the one thing that was already obvious.
 #
-# Ordered cheapest-first, and that ordering is doing work rather than saving
-# milliseconds. A guest mid boot storm fails the load ceiling, which costs one
-# `cat` of a kernel file; short-circuiting there keeps each unready sample at
-# about a second instead of spending three ten-second binder deadlines learning
-# what the load average already said. Once the load is back under the ceiling
-# the round trips run, and they are what actually has to hold.
+# Ordered cheapest-first, which used to be load-bearing and is now only an
+# economy. While the runqueue ceiling vetoed samples, ordering it ahead of the
+# round trips meant a loaded guest cost one `cat` instead of three binder
+# deadlines - but it also meant 900 seconds of run 32532615844 never once
+# recorded whether system_server was answering, because the cheap proxy
+# returned first every time. With the ceiling demoted to an observation the
+# round trips always run, so the ordering now saves nothing it was hiding.
 first_unready_reason() {
   prop_is sys.boot_completed 1 || { echo "sys.boot_completed is not 1"; return; }
   prop_is sys.user.0.ce_available true ||
@@ -385,16 +423,21 @@ first_unready_reason() {
     echo "the guest did not answer /proc/cpuinfo within ${probe_deadline}s"
     return
   fi
-  ceiling=$((cores * runnable_multiplier))
   runnable=$(guest_runnable)
   if [ -z "$runnable" ]; then
     echo "the guest did not answer /proc/stat within ${probe_deadline}s"
     return
   fi
-  [ "$runnable" -le "$ceiling" ] || {
-    echo "guest has $runnable runnable tasks, above the ceiling $ceiling for its $cores cores"
-    return
-  }
+  # Both reads above stay gating: they are bounded round trips, and a guest that
+  # cannot answer a `cat` of a kernel file inside the deadline has told us
+  # something. It is only the comparison below that is opt-in.
+  if [ "$enforce_runqueue" = 1 ]; then
+    ceiling=$((cores * runnable_multiplier))
+    [ "$runnable" -le "$ceiling" ] || {
+      echo "guest has $runnable runnable tasks, above the ceiling $ceiling for its $cores cores"
+      return
+    }
+  fi
   package_service_answers ||
     { echo "PackageManagerService did not answer 'cmd package path android' within ${probe_deadline}s"; return; }
   activity_service_answers ||
@@ -447,6 +490,14 @@ report_and_fail() {
   "$adb" -s "$serial" shell grep '^procs_blocked' /proc/stat >&2 2>&1 || true
   printf 'cores: ' >&2
   "$adb" -s "$serial" shell grep -c '^processor' /proc/cpuinfo >&2 2>&1 || true
+  # Who is actually using the CPU. Every load dump before this one gave a
+  # magnitude and no subject, which is how "the guest is starved" survived as a
+  # diagnosis for a guest whose binder round trips were answering the whole
+  # time. If a runqueue of 40 is real work, this names it; if it is one process
+  # spinning, this names that instead.
+  echo "--- top processes by CPU ---" >&2
+  host_deadline 20 "$adb" -s "$serial" shell top -b -n 1 -m 12 -o PID,USER,%CPU,ARGS >&2 2>&1 ||
+    echo "(top did not answer within 20s)" >&2
   echo "--- storage ---" >&2
   "$adb" -s "$serial" shell df /data >&2 2>&1 || true
   echo "--- users ---" >&2
@@ -550,13 +601,20 @@ while [ "$settled" -lt "$stable_samples" ]; do
   reason=$(first_unready_reason)
   if [ -z "$reason" ]; then
     settled=$((settled + 1))
+    # Say what the runqueue was on a sample that passed. This is the number
+    # that used to veto these samples, and printing it beside a proven-good
+    # guest is what keeps its demotion honest rather than quiet: if handover
+    # keeps succeeding at runqueue 40, that is the evidence the ceiling was
+    # wrong, and if instrumentation starts dying after a high-runqueue
+    # handover, that is the evidence it was not.
+    echo "API-37-gate: ready sample $settled/$stable_samples at $(elapsed)s (runqueue $(guest_runnable))"
   else
     # A regression here is the run-32506293772 shape: ready, installed, then a
     # service disappears. Start the count over rather than averaging over it,
     # and say which condition went, so a window that keeps resetting accuses
     # something specific instead of leaving the next run to guess.
     if [ "$settled" -ne 0 ]; then
-      echo "API-37-gate: $reason at $(elapsed)s; restarting the stability window"
+      echo "API-37-gate: $reason at $(elapsed)s (runqueue $(guest_runnable)); restarting the stability window"
     fi
     last_reason=$reason
     settled=0

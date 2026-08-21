@@ -481,12 +481,28 @@ jobs:
           # `/proc/pressure/cpu` (SELinux-denied to the shell user on this image)
           # it is readable.
           #
+          # `procs_running` then failed on its own terms in run 32532615844, and
+          # the way it failed is the point. Gating on it reset the stability
+          # window 32 times in 900s; the window only announces a reset after it
+          # has banked a wholly good sample, so each of those lines records the
+          # guest passing all three real binder round trips and then losing it to
+          # one instantaneous reading of /proc/stat. Because the ceiling is
+          # checked first and returns early, none of those 32 resets ever
+          # established that system_server was unwell - and the give-up dump
+          # found it answering normally. `am wait-for-broadcast-idle` calls the
+          # queues idle at 17s, so the 7-to-74 oscillation over the remaining
+          # 880s is not a storm draining but this image's steady background
+          # behaviour, identical on two cores and three. The ceiling is therefore
+          # now read and reported on every sample but does not veto one
+          # (COVALENT_ANDROID_GUEST_ENFORCE_RUNQUEUE=1 restores the veto), and
+          # the stability window grew from four samples to six to put the weight
+          # back on the measurement that predicts the actual failure.
+          #
           # So scripts/wait-for-android-guest.sh now waits for the platform to
           # describe itself as ready (boot, user 0 unlocked, boot animation
-          # stopped), for the guest's runqueue to be no deeper than twice its
-          # core count - both read from the guest itself, so changing `cores`
-          # above retunes the ceiling instead of silently invalidating it - and
-          # for the package, activity and mount services to each answer a real
+          # stopped), for the guest to answer /proc/cpuinfo and /proc/stat inside
+          # the probe deadline at all, and for the package, activity and mount
+          # services to each answer a real
           # binder round trip (`cmd package path android`, `cmd activity
           # get-current-user`, `dumpsys mount`) inside a latency ceiling of three
           # seconds, against a healthy figure of 317ms measured locally and under
@@ -498,7 +514,7 @@ jobs:
           # performs the probe install - deliberately *before* the stability
           # window, because installing is the heaviest thing that happens to a
           # young guest and is what triggers dexopt - and requires every one of
-          # those conditions to hold for four consecutive samples afterwards,
+          # those conditions to hold for six consecutive samples afterwards,
           # starting the count over if any of them lapses and naming the one that
           # lapsed. It fails closed with properties, registered handles and round
           # trips side by side, both terms of the load average, storage, users
