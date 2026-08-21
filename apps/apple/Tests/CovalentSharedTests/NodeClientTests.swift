@@ -170,16 +170,37 @@ import Testing
     }
 }
 
-@Test func packagedCaddyTLSUsesEnrolledExactCAAndRejectsWrongCA() async throws {
+/// Drives a real packaged Caddy over TLS. Requires the four
+/// `COVALENT_PACKAGE_TLS_*` variables, which `scripts/apple-package-tls-e2e.sh`
+/// supplies.
+///
+/// The trait is what makes the absence of that environment *visible*. This
+/// test used to open with `guard … else { return }`, and a bare `return` in
+/// swift-testing is a **pass**, not a skip: with nothing configured it
+/// reported "1 test passed" without opening a socket, and had reported that
+/// for its whole life, because nothing has ever set `COVALENT_RUN_APPLE_TLS_E2E`
+/// (its only occurrence outside the guard is prose in
+/// `packaging/docker/README.md`). Now it reports as skipped and says so.
+///
+/// The pinning property this covers against a real server is *also* covered
+/// unconditionally, without any infrastructure, by `PinnedTrustTests` — so a
+/// skip here is a loss of end-to-end confidence, not a hole in the contract.
+@Test(
+    .enabled(
+        if: ProcessInfo.processInfo.environment["COVALENT_PACKAGE_TLS_BASE_URL"] != nil,
+        "COVALENT_PACKAGE_TLS_BASE_URL is unset, so no packaged server is running to test against"
+    )
+)
+func packagedCaddyTLSUsesEnrolledExactCAAndRejectsWrongCA() async throws {
     let environment = ProcessInfo.processInfo.environment
-    guard let baseURLValue = environment["COVALENT_PACKAGE_TLS_BASE_URL"],
-          let baseURL = URL(string: baseURLValue),
-          let token = environment["COVALENT_PACKAGE_TLS_TOKEN"],
-          let certificatePath = environment["COVALENT_PACKAGE_TLS_CERTIFICATE"],
-          let wrongCertificatePath = environment["COVALENT_PACKAGE_TLS_WRONG_CERTIFICATE"]
-    else {
-        return
-    }
+    // Everything past the trait is `#require`, not `guard … else { return }`.
+    // A driver that sets the base URL but forgets a certificate path is a
+    // broken driver, and this must fail rather than quietly report a pass.
+    let baseURLValue = try #require(environment["COVALENT_PACKAGE_TLS_BASE_URL"])
+    let baseURL = try #require(URL(string: baseURLValue))
+    let token = try #require(environment["COVALENT_PACKAGE_TLS_TOKEN"])
+    let certificatePath = try #require(environment["COVALENT_PACKAGE_TLS_CERTIFICATE"])
+    let wrongCertificatePath = try #require(environment["COVALENT_PACKAGE_TLS_WRONG_CERTIFICATE"])
     let certificate = try SecureNodeConnectionStore.parseCertificateFile(
         Data(contentsOf: URL(fileURLWithPath: certificatePath))
     )
@@ -322,16 +343,30 @@ import Testing
     #expect(result.filesRestored == 1)
 }
 
-@Test func realDaemonBackupVerifyAndRestore() async throws {
+/// Drives a real `covalent-node` process end to end.
+/// `Scripts/integration-test.sh` builds the node, starts it, and supplies the
+/// four `COVALENT_INTEGRATION_*` variables.
+///
+/// The trait replaces a `guard … else { return }`. A bare `return` in
+/// swift-testing is a **pass**: in a plain `swift test` run this reported
+/// "passed" having never spoken to a daemon, so the suite's headline count
+/// included a test that had done nothing. It now reports as skipped, and
+/// `Scripts/integration-test.sh` fails if it ever reports as skipped there.
+@Test(
+    .enabled(
+        if: ProcessInfo.processInfo.environment["COVALENT_INTEGRATION_BASE_URL"] != nil,
+        "COVALENT_INTEGRATION_BASE_URL is unset, so no covalent-node is running to test against"
+    )
+)
+func realDaemonBackupVerifyAndRestore() async throws {
     let environment = ProcessInfo.processInfo.environment
-    guard let baseURLValue = environment["COVALENT_INTEGRATION_BASE_URL"],
-          let baseURL = URL(string: baseURLValue),
-          let token = environment["COVALENT_INTEGRATION_TOKEN"],
-          let sourcePath = environment["COVALENT_INTEGRATION_SOURCE"],
-          let restorePath = environment["COVALENT_INTEGRATION_RESTORE"]
-    else {
-        return
-    }
+    // `#require`, not `guard … else { return }`: a driver that sets the base
+    // URL and forgets the source directory must fail, not report a pass.
+    let baseURLValue = try #require(environment["COVALENT_INTEGRATION_BASE_URL"])
+    let baseURL = try #require(URL(string: baseURLValue))
+    let token = try #require(environment["COVALENT_INTEGRATION_TOKEN"])
+    let sourcePath = try #require(environment["COVALENT_INTEGRATION_SOURCE"])
+    let restorePath = try #require(environment["COVALENT_INTEGRATION_RESTORE"])
 
     let source = URL(fileURLWithPath: sourcePath, isDirectory: true)
     let restore = URL(fileURLWithPath: restorePath, isDirectory: true)

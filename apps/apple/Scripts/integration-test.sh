@@ -55,8 +55,38 @@ if [[ ! -s "$data_dir/local-api-token" ]]; then
 fi
 
 token=$(tr -d '\r\n' < "$data_dir/local-api-token")
+
+# One name, used both to select the test and to prove it ran. Two copies of
+# the string would let a rename break the selector while the proof still
+# looked for the old name.
+integration_test=realDaemonBackupVerifyAndRestore
+test_log="$test_root/swift-test.log"
+
+set +e
 COVALENT_INTEGRATION_BASE_URL="http://127.0.0.1:$port" \
 COVALENT_INTEGRATION_TOKEN="$token" \
 COVALENT_INTEGRATION_SOURCE="$source_dir" \
 COVALENT_INTEGRATION_RESTORE="$restore_dir" \
-swift test --package-path "$apple_dir" --filter realDaemonBackupVerifyAndRestore
+swift test --package-path "$apple_dir" --filter "$integration_test" 2>&1 | tee "$test_log"
+swift_test_status=${pipestatus[1]}
+set -e
+if (( swift_test_status != 0 )); then
+  exit "$swift_test_status"
+fi
+
+# `swift test --filter` exits 0 when the pattern matches nothing: it prints
+# "Test run with 0 tests in 0 suites passed" and returns success. One rename
+# and this script would prove nothing while staying green. The test is also
+# `.enabled(if:)`-gated on the environment set above, so a variable that
+# stopped being exported would make it *skip* — which also exits 0.
+#
+# An exit code is therefore not evidence here. Demand the positive statement.
+if ! grep -q "Test ${integration_test}() passed" "$test_log"; then
+  print -u2 -- "swift test exited 0 but never reported ${integration_test} as passing."
+  print -u2 -- "Either the filter matched nothing (a rename), or the test was skipped."
+  exit 1
+fi
+if grep -q "Test ${integration_test}() skipped" "$test_log"; then
+  print -u2 -- "${integration_test} was skipped, so this run proved nothing about the daemon."
+  exit 1
+fi

@@ -944,6 +944,35 @@ public actor NodeClient {
     }
 }
 
+/// The pinning decision itself, separated from the URLSession plumbing that
+/// delivers it.
+///
+/// It lives apart so it can be tested without a TLS server: the only test
+/// that ever exercised pinning end to end needs a packaged Caddy, four
+/// environment variables and a driver script, and for its whole life it
+/// reported "passed" while running nothing. `PinnedTrustTests` drives this
+/// function against a real certificate chain and gets the same answer the
+/// delegate below would give, with no infrastructure at all.
+enum PinnedTrust {
+    /// Whether `trust` chains to `anchor` — and only to `anchor` — and is
+    /// valid for `host`.
+    ///
+    /// `SecTrustSetAnchorCertificatesOnly(true)` is what makes this pinning
+    /// rather than an addition: the system roots are taken out of
+    /// consideration, so a certificate signed by any public CA is refused
+    /// just as firmly as a self-signed one.
+    static func accepts(_ trust: SecTrust, host: String, anchor: SecCertificate) -> Bool {
+        let hostnamePolicy = SecPolicyCreateSSL(true, host as CFString)
+        guard SecTrustSetPolicies(trust, hostnamePolicy) == errSecSuccess,
+              SecTrustSetAnchorCertificates(trust, [anchor] as CFArray) == errSecSuccess,
+              SecTrustSetAnchorCertificatesOnly(trust, true) == errSecSuccess
+        else {
+            return false
+        }
+        return SecTrustEvaluateWithError(trust, nil)
+    }
+}
+
 private final class PinnedServerTrustDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
     private let certificate: SecCertificate
 
@@ -965,12 +994,7 @@ private final class PinnedServerTrustDelegate: NSObject, URLSessionDelegate, @un
             completionHandler(.performDefaultHandling, nil)
             return
         }
-        let hostnamePolicy = SecPolicyCreateSSL(true, challenge.protectionSpace.host as CFString)
-        guard SecTrustSetPolicies(trust, hostnamePolicy) == errSecSuccess,
-              SecTrustSetAnchorCertificates(trust, [certificate] as CFArray) == errSecSuccess,
-              SecTrustSetAnchorCertificatesOnly(trust, true) == errSecSuccess,
-              SecTrustEvaluateWithError(trust, nil)
-        else {
+        guard PinnedTrust.accepts(trust, host: challenge.protectionSpace.host, anchor: certificate) else {
             completionHandler(.cancelAuthenticationChallenge, nil)
             return
         }
