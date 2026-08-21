@@ -11,7 +11,7 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write
   checks: read
   security-events: read
   packages: write
@@ -61,6 +61,7 @@ jobs:
               exit 1
             fi
           done
+          ./scripts/release-version.sh check
           ./scripts/verify-release-commit-signature.sh
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
           if [[ "${version}" == *-* ]]; then
@@ -167,8 +168,35 @@ jobs:
             args+=(--tag "${IMAGE}:latest")
           fi
           docker buildx imagetools create "${args[@]}" "${subject}"
+      - name: Record the released image digest and checksums
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          IMAGE_DIGEST: ${{ steps.manifest.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cat > covalent-container-digest.txt <<EOF
+          image: ${IMAGE}:${RELEASE_VERSION}
+          digest: ${IMAGE}@${IMAGE_DIGEST}
+          platforms: linux/amd64, linux/arm64
+          commit: ${GITHUB_SHA}
+          verify: cosign verify ${IMAGE}@${IMAGE_DIGEST} --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/" --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          EOF
+          sha256sum covalent-container.spdx.json covalent-container-digest.txt \
+            > covalent-container-SHA256SUMS.txt
+          cat covalent-container-digest.txt
+      - name: Publish container evidence to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./scripts/publish-release-assets.sh "${{ needs.validate.outputs.version }}" \
+            covalent-container.spdx.json \
+            covalent-container-digest.txt \
+            covalent-container-SHA256SUMS.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: container-sbom-${{ github.sha }}
-          path: covalent-container.spdx.json
+          path: |
+            covalent-container.spdx.json
+            covalent-container-digest.txt
+            covalent-container-SHA256SUMS.txt
           if-no-files-found: error

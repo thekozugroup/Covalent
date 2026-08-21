@@ -1,0 +1,146 @@
+name: Unsigned macOS release
+
+# Deliberate, separately-labelled distribution lane for the period before an
+# Apple Developer Program membership exists. It produces a real, runnable
+# ad-hoc-signed Apple Silicon app that Gatekeeper will quarantine, and it never
+# claims to be notarized. `apple-release.yml` remains the only lane that emits a
+# Developer ID signed, notarized, stapled build, and this workflow never touches
+# that path or relaxes any of its checks.
+#
+# Every source gate that guards the notarized lane also guards this one: exact
+# version agreement, tag-to-commit identity, the nine exact-commit software
+# checks, and the verified release commit signature.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing v-prefixed version for this exact commit
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  checks: read
+  security-events: read
+
+concurrency:
+  group: unsigned-macos-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  build-unsigned:
+    name: Build and publish an ad-hoc signed Apple Silicon app
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Require an Apple Silicon runner
+        run: test "$(uname -m)" = arm64
+      - id: release
+        name: Verify immutable version and exact-commit software gates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            version="${INPUT_VERSION}"
+          fi
+          if [[ ! "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "release version must be an explicit v-prefixed semantic version" >&2
+            exit 1
+          fi
+          workspace_version=$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)
+          test "${version#v}" = "${workspace_version}"
+          test "$(git rev-list -n 1 "${version}")" = "${GITHUB_SHA}"
+          checks=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100")
+          for required in "Shared Rust and contracts" "macOS integration and UI" "Android foundation" "Android API 37 device" "Container foundation" "CodeQL java-kotlin" "CodeQL swift" "CodeQL policy" "Release candidate software gates"; do
+            if ! jq -e --arg name "${required}" '[.check_runs[] | select(.name == $name)] | sort_by(.started_at // .created_at) | last | select(.status == "completed" and .conclusion == "success")' <<<"${checks}" >/dev/null; then
+              echo "latest required exact-commit check is not green: ${required}" >&2
+              exit 1
+            fi
+          done
+          ./scripts/release-version.sh check
+          ./scripts/verify-release-commit-signature.sh
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+      - run: brew install xcodegen
+      - name: Refuse to reuse Developer ID material in the unsigned lane
+        run: |
+          set -euo pipefail
+          # This lane must never silently produce something that looks notarized.
+          if security find-identity -v -p codesigning | grep -q 'Developer ID Application'; then
+            echo "a Developer ID identity is present; use apple-release.yml instead" >&2
+            exit 1
+          fi
+      - name: Build the ad-hoc signed Apple Silicon archive
+        run: |
+          set -euo pipefail
+          cd apps/apple
+          xcodegen generate --quiet
+          archive_path="${RUNNER_TEMP}/CovalentMac.xcarchive"
+          xcodebuild \
+            -project Covalent.xcodeproj \
+            -scheme CovalentMac \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -archivePath "${archive_path}" \
+            ARCHS=arm64 \
+            EXCLUDED_ARCHS=x86_64 \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY=- \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            OTHER_CODE_SIGN_FLAGS="" \
+            archive
+          app="${archive_path}/Products/Applications/Covalent.app"
+          COVALENT_REQUIRE_HARDENED_RUNTIME=true \
+            COVALENT_REQUIRE_DEVELOPER_ID=false \
+            "${GITHUB_WORKSPACE}/scripts/verify-apple-silicon-bundle.sh" "${app}"
+          echo "COVALENT_ARCHIVE_APP=${app}" >> "${GITHUB_ENV}"
+      - name: Assert the build is ad-hoc signed and not notarized
+        run: |
+          set -euo pipefail
+          # Fail loudly rather than shipping something mislabelled.
+          codesign -d --verbose=4 "${COVALENT_ARCHIVE_APP}" 2>&1 | tee "${RUNNER_TEMP}/adhoc-signature.txt"
+          grep -q 'Signature=adhoc' "${RUNNER_TEMP}/adhoc-signature.txt"
+          if xcrun stapler validate "${COVALENT_ARCHIVE_APP}" >/dev/null 2>&1; then
+            echo "unexpected notarization ticket on the unsigned lane" >&2
+            exit 1
+          fi
+      - name: Package, checksum, and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          output="${RUNNER_TEMP}/Covalent-${RELEASE_VERSION}-macOS-arm64-unsigned.zip"
+          ditto -c -k --sequesterRsrc --keepParent "${COVALENT_ARCHIVE_APP}" "${output}"
+          shasum -a 256 "${output}" > "${output}.sha256"
+          cat "${output}.sha256"
+          SOURCE_DATE_EPOCH=0 ./scripts/apple-dependency-inventory.sh "${RUNNER_TEMP}/covalent-apple-inventory"
+          cp Cargo.lock "${RUNNER_TEMP}/covalent-apple-inventory/Cargo.lock"
+          (cd "${RUNNER_TEMP}/covalent-apple-inventory" && shasum -a 256 Cargo.lock >> SHA256SUMS)
+          inventory="${RUNNER_TEMP}/Covalent-${RELEASE_VERSION}-macOS-dependency-inventory.tar.gz"
+          tar -czf "${inventory}" -C "${RUNNER_TEMP}" covalent-apple-inventory
+          ./scripts/publish-release-assets.sh "${RELEASE_VERSION}" \
+            "${output}" \
+            "${output}.sha256" \
+            "${inventory}"
+          echo "COVALENT_RELEASE_ARTIFACT=${output}" >> "${GITHUB_ENV}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unsigned-covalent-macos-${{ steps.release.outputs.version }}-${{ github.sha }}
+          path: |
+            ${{ env.COVALENT_RELEASE_ARTIFACT }}
+            ${{ env.COVALENT_RELEASE_ARTIFACT }}.sha256
+          if-no-files-found: error

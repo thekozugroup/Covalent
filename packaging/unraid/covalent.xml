@@ -3,6 +3,7 @@
   <Name>Covalent</Name>
   <Repository>ghcr.io/thekozugroup/covalent:v0.1.0</Repository>
   <Registry>https://github.com/thekozugroup/Covalent/pkgs/container/covalent</Registry>
+  <TemplateURL>https://raw.githubusercontent.com/thekozugroup/Covalent/main/packaging/unraid/covalent.xml</TemplateURL>
   <Network>bridge</Network>
   <Privileged>false</Privileged>
   <Support>https://github.com/thekozugroup/Covalent/issues</Support>

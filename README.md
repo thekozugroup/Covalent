@@ -11,6 +11,16 @@ Covalent is a lightweight, self-hosted backup and restore system for devices you
 
 iOS protects user-selected directories through document pickers and security-scoped access. Covalent does not claim or attempt a full-device iOS backup. Windows, hosted accounts, automatic replica placement, and restores outside an authorized root are out of scope.
 
+## Install
+
+Download signed artifacts from the [latest release](https://github.com/thekozugroup/Covalent/releases/latest).
+
+- Docker and Unraid: `docker pull ghcr.io/thekozugroup/covalent:v0.1.0`, then add the template at `packaging/unraid/covalent.xml`.
+- macOS on Apple Silicon: the `.zip` in this release is ad-hoc signed, not notarized. Clear the quarantine flag with `xattr -dr com.apple.quarantine` after verifying its `.sha256`.
+- Android: install the published `*-android-release.apk` after checking it against the release `SHA256SUMS`.
+
+Per-release install detail and provenance live in [docs/release/notes](docs/release/notes), and the publishing lanes are documented in [docs/release/publishing.md](docs/release/publishing.md).
+
 ## Repository map
 
 - `crates/covalent-core`: storage, verification, restore safety, and shared domain logic.

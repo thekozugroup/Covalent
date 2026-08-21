@@ -14,7 +14,7 @@ on:
         type: boolean
 
 permissions:
-  contents: read
+  contents: write
   checks: read
   security-events: read
 
@@ -72,6 +72,7 @@ jobs:
               exit 1
             fi
           done
+          ./scripts/release-version.sh check
           ./scripts/verify-release-commit-signature.sh
       - name: Install ephemeral release keystore
         run: |
@@ -157,6 +158,33 @@ jobs:
             after_install=$(adb shell dumpsys package life.michaelwong.covalent | sed -n 's/.*firstInstallTime=//p' | head -n 1 | tr -d '\r')
             test "${after_install}" = "${first_install}"
             adb shell pm path life.michaelwong.covalent
+      - name: Publish the signed Android build to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          staging="${RUNNER_TEMP}/android-release-assets"
+          mkdir -p "${staging}"
+          outputs="apps/android/app/build/outputs"
+          reports="apps/android/app/build/reports/covalent"
+          # The upgrade gate for the next release resolves the prior package with
+          # `--pattern '*release.apk'`, so the published APK must keep that suffix.
+          cp "${outputs}/apk/release/app-release.apk" \
+            "${staging}/Covalent-${RELEASE_VERSION}-android-release.apk"
+          cp "${outputs}/bundle/release/app-release.aab" \
+            "${staging}/Covalent-${RELEASE_VERSION}-android.aab"
+          cp "${outputs}/mapping/release/mapping.txt" \
+            "${staging}/Covalent-${RELEASE_VERSION}-android-r8-mapping.txt"
+          cp "${reports}/android-sbom.cdx.json" \
+            "${staging}/Covalent-${RELEASE_VERSION}-android-sbom.cdx.json"
+          (cd "${staging}" && shasum -a 256 ./* > "Covalent-${RELEASE_VERSION}-android-SHA256SUMS.txt")
+          ./scripts/publish-release-assets.sh "${RELEASE_VERSION}" \
+            "${staging}/Covalent-${RELEASE_VERSION}-android-release.apk" \
+            "${staging}/Covalent-${RELEASE_VERSION}-android.aab" \
+            "${staging}/Covalent-${RELEASE_VERSION}-android-r8-mapping.txt" \
+            "${staging}/Covalent-${RELEASE_VERSION}-android-sbom.cdx.json" \
+            "${staging}/Covalent-${RELEASE_VERSION}-android-SHA256SUMS.txt"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: signed-covalent-android-${{ inputs.version }}-${{ github.sha }}

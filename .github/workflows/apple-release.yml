@@ -9,7 +9,7 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write
   checks: read
   security-events: read
 
@@ -59,6 +59,7 @@ jobs:
               exit 1
             fi
           done
+          ./scripts/release-version.sh check
           ./scripts/verify-release-commit-signature.sh
       - name: Require signing and notarization credentials
         run: |
@@ -144,6 +145,18 @@ jobs:
           cp Cargo.lock "${RUNNER_TEMP}/covalent-apple-inventory/Cargo.lock"
           (cd "${RUNNER_TEMP}/covalent-apple-inventory" && shasum -a 256 Cargo.lock >> SHA256SUMS)
           echo "COVALENT_RELEASE_ARTIFACT=${output}" >> "${GITHUB_ENV}"
+      - name: Publish the notarized macOS build to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          inventory="${RUNNER_TEMP}/Covalent-${RELEASE_VERSION}-macOS-dependency-inventory.tar.gz"
+          tar -czf "${inventory}" -C "${RUNNER_TEMP}" covalent-apple-inventory
+          ./scripts/publish-release-assets.sh "${RELEASE_VERSION}" \
+            "${COVALENT_RELEASE_ARTIFACT}" \
+            "${COVALENT_RELEASE_ARTIFACT}.sha256" \
+            "${inventory}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: notarized-covalent-macos-${{ inputs.version }}-${{ github.sha }}
