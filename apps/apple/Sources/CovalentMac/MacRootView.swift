@@ -220,8 +220,14 @@ struct MacRootView: View {
                 .frame(width: 8, height: 8)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
+                // A step up in size, on measurement rather than taste: the
+                // sidebar's vibrant text path renders this row at a
+                // coverage-weighted 3.75:1 even in `.primary`, against 8.5:1
+                // for the same weight on an ordinary background. Bigger glyphs
+                // are the only lever left that does not mean leaving the
+                // sidebar.
                 Text(model.serviceStatusLabel)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.headline)
                     .foregroundStyle(.primary)
                 if let status = model.status {
                     // The sidebar draws its text vibrantly, and that blend is
@@ -242,7 +248,7 @@ struct MacRootView: View {
                     // proved the vibrancy theory, and dropping it would re-open
                     // the 4.0:1 case if the backdrop ever goes translucent.
                     Text(status.deviceName)
-                        .font(.caption.weight(.semibold))
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                 }

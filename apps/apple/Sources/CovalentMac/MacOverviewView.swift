@@ -214,8 +214,16 @@ struct MacSafeguard: View {
             // `accessibilityHidden` keeps this glyph out of the *tree*, not
             // out of the combined element's rectangle, and the audit grades
             // the rectangle. See `MacLabelColor.accentGlyph`.
+            //
+            // Filled, not outlined, and measured rather than assumed: the
+            // outline variant declares #0B5FBF (6.2:1) but its strokes are one
+            // point wide, so sampling the audit's own element screenshot gives
+            // a coverage-weighted #4786CE — 3.75:1, under the floor, while the
+            // text beside it sat at 5.7:1. A filled glyph reaches nearly full
+            // coverage, so what it renders is what it declared.
             Image(systemName: systemImage)
-                .font(.title2)
+                .font(.title2.weight(.semibold))
+                .symbolVariant(.fill)
                 .foregroundStyle(MacLabelColor.accentGlyph)
                 .frame(width: 28)
                 .accessibilityHidden(true)

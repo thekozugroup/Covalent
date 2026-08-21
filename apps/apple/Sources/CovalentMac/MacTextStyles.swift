@@ -121,11 +121,12 @@ struct MacEmptyState<Actions: View>: View {
             Text(title)
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(.primary)
-            // Body size at medium weight, not `.callout` at regular. The
-            // audit grades rendered stroke coverage, and this message failed
-            // at 12pt regular while measuring 8.7:1 on paper.
+            // `.title3`, matching the one piece of secondary copy on this
+            // screen that the audit has ever accepted in this colour — the
+            // overview header's subtitle, same token, 15pt. At 13pt the same
+            // colour was refused twice, at both regular and medium weight.
             Text(message)
-                .font(.body.weight(.medium))
+                .font(.title3)
                 .secondaryLabelStyle()
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 360)
