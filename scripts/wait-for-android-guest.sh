@@ -501,15 +501,30 @@ while : ; do
 done
 echo "API-37-gate: user 0 unlocked after $(elapsed)s"
 
-# Not fatal and not always available: `am wait-for-broadcast-idle` is how AOSP's
-# own harnesses wait out the boot broadcast storm, but it is a developer command
-# and images vary. When it works it removes the largest remaining source of
-# background work; when it does not, the stability window below still has to
-# pass on its own.
-if "$adb" -s "$serial" shell am wait-for-broadcast-idle >/dev/null 2>&1; then
+# `am wait-for-broadcast-idle` is how AOSP's own harnesses wait out the boot
+# broadcast storm, and it *is* supported here: on a settled API 37 guest it
+# prints "All broadcast queues are idle!" and exits 0 immediately. An earlier
+# revision of this block called it unbounded with both streams discarded, which
+# made three very different outcomes look identical - the command succeeding,
+# the command being rejected, and the command blocking for minutes on a guest
+# whose queues never drain. That ambiguity is what let "unavailable on this
+# image" get believed. Bound it and name which one happened.
+#
+# It stays non-fatal. The stability window below is the gate; this is the
+# platform's own settled signal used as evidence, and on a guest that never
+# settles the "did not return within Ns" line is the most direct statement of
+# that fact the platform can make.
+broadcast_idle_deadline=${COVALENT_ANDROID_GUEST_BROADCAST_IDLE_TIMEOUT:-300}
+if broadcast_idle_out=$(host_deadline "$broadcast_idle_deadline" \
+  "$adb" -s "$serial" shell am wait-for-broadcast-idle 2>&1); then
   echo "API-37-gate: broadcast queues idle after $(elapsed)s"
 else
-  echo "API-37-gate: am wait-for-broadcast-idle unavailable on this image; continuing"
+  broadcast_idle_status=$?
+  if [ "$broadcast_idle_status" -eq 124 ]; then
+    echo "API-37-gate: am wait-for-broadcast-idle did not return within ${broadcast_idle_deadline}s (queues still draining at $(elapsed)s); continuing"
+  else
+    echo "API-37-gate: am wait-for-broadcast-idle exited ${broadcast_idle_status}: $(printf '%s' "$broadcast_idle_out" | tr -d '\r' | head -n 1); continuing"
+  fi
 fi
 
 # Perturb, then prove. Everything above is the guest describing itself; this is

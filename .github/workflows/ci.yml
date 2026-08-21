@@ -260,9 +260,36 @@ jobs:
       # `IActivityManager$Stub$Proxy.startInstrumentation` - all of them twelve
       # seconds after scripts/wait-for-android-guest.sh had proved the guest
       # healthy and stable across four samples. Those are three surfaces of one
-      # fault. Two cores leaves two for the host, and the guest only has to run
-      # instrumentation, not compile anything: every build this gate needs is
-      # already done by `pre-emulator-launch-script` before the guest boots.
+      # fault. The guest only has to run instrumentation, not compile anything:
+      # every build this gate needs is already done by
+      # `pre-emulator-launch-script` before the guest boots.
+      #
+      # Two cores was the answer to that Watchdog window and it did stop the
+      # kills, but it bought that at a price the honest readiness gate then
+      # measured: on two cores this guest never settles at all. Fifteen minutes
+      # of sampling gave `procs_running` mean 27.9 (min 5, max 76) with
+      # `procs_blocked` 0 and no downward trend across the window, and the run
+      # ended on a real binder failure - PackageManagerService could not answer
+      # `cmd package path android` inside 3s. That is not a heuristic being
+      # fussy. For calibration, an API 37 guest given four cores settles to
+      # `procs_running` 1-2, so the ceiling the gate enforces is reachable; two
+      # cores is simply not enough CPU for this image to finish becoming
+      # itself.
+      #
+      # Three, not four. Four hands the guest every host vCPU and leaves
+      # nothing for the emulator's own render/IO threads, adbd and the host-side
+      # adb server - which is the oversubscription that caused the kills above.
+      # Three raises guest capacity by half while keeping one vCPU on the host
+      # side of the boundary. This is the only variable changed in this commit,
+      # so if the runqueue still does not drain, the next step is four.
+      #
+      # An ATD image (`aosp_atd`/`google_atd`) would be the better answer and is
+      # not available: at API 37 the SDK publishes only `google_apis`,
+      # `google_apis_playstore` and their `_ps16k` variants. ATD stops at
+      # android-36. Nothing in this app needs GMS - there is no Play Services,
+      # Firebase, Play Integrity or `GoogleApiAvailability` reference anywhere in
+      # apps/android/app/src - so the moment an API 37 ATD image ships, switch
+      # `target` to `aosp_atd` and revisit this number.
       - uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: "37.0"
@@ -270,7 +297,7 @@ jobs:
           arch: x86_64
           avd-name: Covalent_API_37
           profile: pixel_6
-          cores: 2
+          cores: 3
           ram-size: 4096M
           heap-size: 576M
           disk-size: 8G
@@ -464,7 +491,10 @@ jobs:
           # get-current-user`, `dumpsys mount`) inside a latency ceiling of three
           # seconds, against a healthy figure of 317ms measured locally and under
           # 100ms on this runner.
-          # It then drains the boot broadcast storm where the image supports it,
+          # It then drains the boot broadcast storm - `am wait-for-broadcast-idle`
+          # is supported on this image, verified answering `All broadcast queues
+          # are idle!` on an API 37 guest, and is now bounded and logged rather
+          # than called unbounded with both streams discarded -
           # performs the probe install - deliberately *before* the stability
           # window, because installing is the heaviest thing that happens to a
           # young guest and is what triggers dexopt - and requires every one of
