@@ -28,6 +28,16 @@ enum Command {
         /// QUIC peer socket. UDP may share the same port number as the HTTP TCP socket.
         #[arg(long, env = "COVALENT_PEER_LISTEN", default_value = "127.0.0.1:8787")]
         peer_listen: SocketAddr,
+        /// Address other devices dial to reach this node, when it cannot be detected.
+        ///
+        /// Left unset, the node picks a private LAN address from its own
+        /// interfaces. That fails in exactly one common case: a container on a
+        /// bridge network, where the only visible address belongs to the bridge
+        /// and the peer port is published on the host instead. Unraid's default
+        /// is bridge networking, so this is the ordinary path there rather than
+        /// an exotic one. A zero port inherits the bound peer port.
+        #[arg(long, env = "COVALENT_ADVERTISED_PEER_ADDRESS")]
+        advertised_peer_address: Option<SocketAddr>,
         /// Durable node state directory.
         #[arg(long, env = "COVALENT_DATA_DIR", default_value = ".covalent-data")]
         data_dir: PathBuf,
@@ -43,9 +53,16 @@ enum Command {
         /// Optional private readiness JSON for an app that owns this process.
         #[arg(long, env = "COVALENT_READY_FILE")]
         ready_file: Option<PathBuf>,
+        /// CA certificate a claiming client should pin, when a proxy terminates TLS.
+        #[arg(long, env = "COVALENT_TLS_CA_FILE")]
+        tls_ca_file: Option<PathBuf>,
         /// Streamed archive admission and capacity limits.
+        ///
+        /// Boxed so this variant does not dwarf `Healthcheck`: eight tuning
+        /// numbers is most of the subcommand's footprint and none of it is on a
+        /// hot path.
         #[command(flatten)]
-        archive_limits: ArchiveLimitArguments,
+        archive_limits: Box<ArchiveLimitArguments>,
     },
     /// Checks an already-running node without curl.
     Healthcheck {
@@ -136,11 +153,13 @@ impl From<Tier> for PlatformTier {
 struct ServeConfiguration {
     listen: SocketAddr,
     peer_listen: SocketAddr,
+    advertised_peer_address: Option<SocketAddr>,
     data_dir: PathBuf,
     device_name: String,
     lan_discovery: bool,
     platform_tier: PlatformTier,
     ready_file: Option<PathBuf>,
+    tls_ca_file: Option<PathBuf>,
     archive_limits: ArchiveLimits,
 }
 
@@ -157,12 +176,14 @@ async fn main() -> Result<()> {
     match Arguments::parse().command.unwrap_or(Command::Serve {
         listen: "127.0.0.1:8787".parse().expect("static socket address"),
         peer_listen: "127.0.0.1:8787".parse().expect("static socket address"),
+        advertised_peer_address: None,
         data_dir: PathBuf::from(".covalent-data"),
         device_name: "Covalent node".to_owned(),
         lan_discovery: false,
         platform_tier: Tier::Tier1,
         ready_file: None,
-        archive_limits: ArchiveLimitArguments {
+        tls_ca_file: None,
+        archive_limits: Box::new(ArchiveLimitArguments {
             archive_max_compressed_bytes: 64_u64 << 30,
             archive_max_uncompressed_bytes: 256_u64 << 30,
             archive_max_entries: 250_000,
@@ -171,27 +192,31 @@ async fn main() -> Result<()> {
             archive_max_retained_result_bytes: 64_u64 << 30,
             archive_max_retained_results: 64,
             archive_free_space_reserve_bytes: 512_u64 << 20,
-        },
+        }),
     }) {
         Command::Serve {
             listen,
             peer_listen,
+            advertised_peer_address,
             data_dir,
             device_name,
             lan_discovery,
             platform_tier,
             ready_file,
+            tls_ca_file,
             archive_limits,
         } => {
             serve(ServeConfiguration {
                 listen,
                 peer_listen,
+                advertised_peer_address,
                 data_dir,
                 device_name,
                 lan_discovery,
                 platform_tier: platform_tier.into(),
                 ready_file,
-                archive_limits: archive_limits.into(),
+                tls_ca_file,
+                archive_limits: (*archive_limits).into(),
             })
             .await
         }
@@ -203,19 +228,27 @@ async fn serve(configuration: ServeConfiguration) -> Result<()> {
     let ServeConfiguration {
         listen,
         peer_listen,
+        advertised_peer_address,
         data_dir,
         device_name,
         lan_discovery,
         platform_tier,
         ready_file,
+        tls_ca_file,
         archive_limits,
     } = configuration;
     let mut runtime_configuration = NodeRuntimeConfig::new(data_dir, listen, peer_listen);
+    runtime_configuration.advertised_peer_address = advertised_peer_address;
     runtime_configuration.device_name = device_name;
     runtime_configuration.lan_discovery_enabled = lan_discovery;
     runtime_configuration.platform_tier = platform_tier;
     runtime_configuration.archive_limits = archive_limits;
     runtime_configuration.api_token = LocalApiTokenSource::Persisted;
+    // A supervising app provisions its own token through platform secure
+    // storage, so the unauthenticated claim route exists only for the standalone
+    // daemon -- which is the headless container this whole flow is for.
+    runtime_configuration.first_run_claim_enabled = ready_file.is_none();
+    runtime_configuration.tls_ca_certificate_file = tls_ca_file;
     runtime_configuration.ready_file = ready_file;
     let runtime = NodeRuntime::start(runtime_configuration).await?;
     shutdown_signal().await;

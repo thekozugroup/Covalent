@@ -17,7 +17,9 @@ use tokio::sync::{Mutex, watch};
 use tracing::info;
 use zeroize::Zeroizing;
 
+use crate::advertised_address;
 use crate::discovery::DiscoveryController;
+use crate::first_run_claim::{self, ClaimCode, FirstRunClaim};
 use crate::pairing_transport::NetworkPairingService;
 use crate::transport::{QuicNode, TlsIdentity};
 use crate::{
@@ -86,6 +88,19 @@ pub struct NodeRuntimeConfig {
     pub api_token: LocalApiTokenSource,
     /// Optional private record for an app supervising this runtime.
     pub ready_file: Option<PathBuf>,
+    /// Offer the one-shot first-run ownership claim on a node with no owner.
+    ///
+    /// Off by default. An embedded app provisions its own token through
+    /// platform secure storage and must never expose an unauthenticated route
+    /// that hands one out, so this is opt-in rather than opt-out: a new caller
+    /// that forgets the field gets the safe behaviour.
+    pub first_run_claim_enabled: bool,
+    /// CA certificate clients should pin, delivered by a successful claim.
+    ///
+    /// Set when TLS is terminated by a same-host proxy with a private CA, which
+    /// is the container deployment. Without it a claim still succeeds and simply
+    /// carries no certificate, which is correct for a loopback-only node.
+    pub tls_ca_certificate_file: Option<PathBuf>,
 }
 
 impl NodeRuntimeConfig {
@@ -108,6 +123,8 @@ impl NodeRuntimeConfig {
             provider_quota_policy: ProviderQuotaPolicy::default(),
             api_token: LocalApiTokenSource::Persisted,
             ready_file: None,
+            first_run_claim_enabled: false,
+            tls_ca_certificate_file: None,
         }
     }
 }
@@ -175,6 +192,8 @@ impl NodeRuntime {
             provider_quota_policy,
             api_token,
             ready_file,
+            first_run_claim_enabled,
+            tls_ca_certificate_file,
         } = configuration;
 
         std::fs::create_dir_all(&data_directory)
@@ -198,10 +217,14 @@ impl NodeRuntime {
         engine_options.initial_lan_discovery_enabled = lan_discovery_enabled;
         engine_options.provider_quota_policy = provider_quota_policy;
         let engine = Arc::new(Engine::open(engine_options).context("open Covalent engine")?);
+        // Observed before the token is loaded, because loading creates it. A
+        // deployment that already had a token was provisioned the old way, so it
+        // is marked as owned rather than offered a code it never needed.
+        let token_path = data_directory.join("local-api-token");
+        let token_predates_this_start = std::fs::symlink_metadata(&token_path).is_ok();
         let api_token = match api_token {
             LocalApiTokenSource::Persisted => Zeroizing::new(
-                load_or_create_local_api_token(data_directory.join("local-api-token"))
-                    .context("load local API token")?,
+                load_or_create_local_api_token(&token_path).context("load local API token")?,
             ),
             LocalApiTokenSource::Provided(token) => token,
         };
@@ -236,6 +259,16 @@ impl NodeRuntime {
             .context("load remembered provider connections")?;
         if let Some(address) = static_advertised_peer_address {
             state = state.with_peer_address(address);
+        }
+        if first_run_claim_enabled
+            && let Some(claim) = arm_first_run_claim(
+                &data_directory,
+                token_predates_this_start,
+                tls_ca_certificate_file,
+            )
+            .context("arm first-run ownership claim")?
+        {
+            state = state.with_first_run_claim(claim);
         }
         // The pairing-only ALPN shares the advertised QUIC endpoint, so the
         // address a peer discovers is the exact address it must dial to pair.
@@ -371,27 +404,114 @@ async fn wait_for_shutdown(mut shutdown: watch::Receiver<bool>) {
     }
 }
 
+/// Mints a first-run code when this node has no owner, and prints it.
+///
+/// Returns `None` — silently and correctly — when the node is already owned.
+/// The banner goes to stdout rather than through `tracing` deliberately: it is
+/// the one message whose whole purpose is to be read by a person in a container
+/// log viewer, and no log filter should be able to suppress it. The code itself
+/// is dropped as soon as it is printed; only its stretched key survives.
+fn arm_first_run_claim(
+    data_directory: &std::path::Path,
+    token_predates_this_start: bool,
+    tls_ca_certificate_file: Option<PathBuf>,
+) -> Result<Option<Arc<FirstRunClaim>>> {
+    let marker_path = first_run_claim::owner_marker_path(data_directory);
+    if first_run_claim::is_claimed(&marker_path) {
+        return Ok(None);
+    }
+    if token_predates_this_start {
+        // An upgrade of a deployment provisioned before claiming existed. The
+        // operator already holds the token, so record the owner and never offer
+        // a code — an existing install must not gain a new way to be claimed.
+        first_run_claim::mark_claimed(&marker_path, crate::now_unix_ms())
+            .context("record pre-existing ownership")?;
+        return Ok(None);
+    }
+
+    let code = ClaimCode::mint();
+    let claim = Arc::new(FirstRunClaim::new(
+        &code,
+        marker_path,
+        tls_ca_certificate_file,
+        crate::now_unix_ms(),
+    ));
+    let minutes = first_run_claim::CLAIM_WINDOW_MS / 60_000;
+    // Width is fixed and every line is padded to it, so the box does not skew
+    // when a value changes length. An operator reading a Docker log is already
+    // hunting through JSON noise; a clean box is what makes this findable.
+    const WIDTH: usize = 46;
+    let rule = "─".repeat(WIDTH);
+    let row = |text: &str| println!("  │{text:<WIDTH$}│");
+    println!();
+    println!("  ┌{rule}┐");
+    row("  Covalent setup code");
+    row("");
+    row(&format!("      {}", code.grouped()));
+    row("");
+    row("  Enter this in the Covalent app or web page");
+    row("  to finish setting up this server.");
+    row("");
+    row(&format!("  Valid for {minutes} minutes, and usable once."));
+    row("  Restart this container for a new code.");
+    println!("  └{rule}┘");
+    println!();
+    use std::io::Write as _;
+    let _ = std::io::stdout().flush();
+    drop(code);
+    Ok(Some(claim))
+}
+
+/// Determines the endpoint peers are told to dial.
+///
+/// Until this function existed, `advertised_peer_address` was set in exactly one
+/// place in the repository — the integration test harness — so `peer_address`
+/// was `None` on every real deployment and `AppState::local_transport_binding`
+/// failed on all of them. `GET /api/v1/discovery` and
+/// `GET /api/v1/transport/identity` answered 500, and
+/// `POST /api/v1/pair/invitations` answered 400 `invalid_contract`, which is why
+/// the failure read as a schema drift for sixty CI runs rather than as the
+/// missing configuration it was. The integration test passed throughout because
+/// it set the field production never set.
+///
+/// Auto-detection is therefore the default rather than an opt-in, and a node
+/// that cannot determine a usable address refuses to advertise one at all. See
+/// [`crate::advertised_address`] for why advertising a wrong address is worse
+/// than advertising none.
 fn resolve_advertised_peer_address(
     bound_address: SocketAddr,
     configured_address: Option<SocketAddr>,
 ) -> Result<Option<SocketAddr>> {
-    let Some(configured_address) = configured_address else {
-        return Ok(None);
-    };
-    if configured_address.ip().is_unspecified() {
+    if configured_address.is_some_and(|address| address.ip().is_unspecified()) {
         return Err(anyhow!(
             "an advertised QUIC peer address must not be unspecified"
         ));
     }
-    let port = if configured_address.port() == 0 {
-        bound_address.port()
-    } else {
-        configured_address.port()
-    };
-    if port == 0 {
-        return Err(anyhow!("advertised QUIC peer address must have a port"));
+    let observed = advertised_address::observed_interface_addresses();
+    let in_container = advertised_address::running_in_container();
+    match advertised_address::resolve_advertised_endpoint(
+        bound_address,
+        configured_address,
+        &observed,
+        in_container,
+    ) {
+        Ok(address) if address.port() == 0 => {
+            Err(anyhow!("advertised QUIC peer address must have a port"))
+        }
+        Ok(address) => Ok(Some(address)),
+        Err(refusal) => {
+            // Not a startup failure. The node still serves backups, restores and
+            // the local console; only device-to-device pairing is unavailable,
+            // and the routes that need the endpoint say so specifically. Warning
+            // loudly here means the operator sees the remedy in the container
+            // log at the moment it becomes relevant.
+            tracing::warn!(
+                guidance = %refusal.operator_guidance(),
+                "no advertised peer endpoint; pairing with other devices is unavailable"
+            );
+            Ok(None)
+        }
     }
-    Ok(Some(SocketAddr::new(configured_address.ip(), port)))
 }
 
 #[cfg(test)]
@@ -484,15 +604,32 @@ mod tests {
         runtime.stop().await.expect("stop wildcard node");
     }
 
+    /// DELIBERATE CHANGE OF EXPECTATION, not a relaxed assertion.
+    ///
+    /// This test previously asserted that a wildcard bind with no configured
+    /// address resolves to `None`. That was the behaviour, and the behaviour was
+    /// the bug: `None` is what left `AppState::peer_address` unset on every real
+    /// deployment, so `transport/identity` and `discovery` answered 500 and
+    /// `pair/invitations` answered `invalid_contract`. Pinning it kept the
+    /// defect green. A wildcard bind must now auto-detect.
     #[test]
-    fn wildcard_peer_bind_starts_without_a_static_advertised_endpoint() {
+    fn wildcard_peer_bind_auto_detects_an_advertised_endpoint() {
+        use crate::advertised_address as selection;
+        let expected = selection::select_advertised_address(
+            &selection::observed_interface_addresses(),
+            selection::running_in_container(),
+        )
+        .ok()
+        .map(|address| SocketAddr::new(address, 8787));
         assert_eq!(
             super::resolve_advertised_peer_address(
                 "0.0.0.0:8787".parse().expect("bind address"),
                 None,
             )
             .expect("wildcard bind is valid"),
-            None,
+            expected,
+            "a wildcard bind must advertise what selection chose, and refuse only when \
+             selection refuses"
         );
         assert_eq!(
             super::resolve_advertised_peer_address(

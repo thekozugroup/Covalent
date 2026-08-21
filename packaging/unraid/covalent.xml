@@ -18,7 +18,17 @@
   <DateInstalled>0</DateInstalled>
   <DonateText/>
   <DonateLink/>
-  <Requires>Map each selected share separately as read-only. Optional /boot backup must also be read-only. Add a distinct writable restore target only when restoring. Set the exact HTTPS hostname and enroll the durable local CA before entering the API token.</Requires>
+  <Requires>Set the HTTPS hostname to the name you will use to reach this server. Map each share you want backed up separately, read-only; never map all of /mnt/user. A /boot mapping must also be read-only. Add a writable restore target only when you are restoring.</Requires>
+  <Description>Covalent keeps encrypted backups on devices you own, with no cloud account and no third party holding your data.
+
+Setting up, once the container is running:
+
+1. Open this container's Log from the Unraid Docker page. Covalent prints a setup code there when it first starts.
+2. Open the WebUI and enter that code.
+
+The code is single-use, expires after 30 minutes, and proves to your browser that it is talking to this server and not to something impersonating it. Your browser is given this server's certificate as part of entering the code, so there is no certificate file to copy and nothing to verify by hand. If the code expires before you use it, restart the container and Covalent prints a new one.
+
+You never need a terminal or a container console.</Description>
   <Config Name="HTTPS console" Target="8443" Default="8443" Mode="tcp" Description="TLS-only console and API port. Cleartext management is loopback-only inside the container." Type="Port" Display="always" Required="true" Mask="false"/>
   <Config Name="Peer transport" Target="8787" Default="8787" Mode="udp" Description="Authenticated QUIC peer port." Type="Port" Display="always" Required="true" Mask="false"/>
   <Config Name="Configuration" Target="/config" Default="/mnt/user/appdata/covalent/config" Mode="rw" Description="Durable operator-managed safe settings and deployment files. Keep separate from selected shares." Type="Path" Display="always" Required="true" Mask="false"/>
@@ -26,9 +36,10 @@
   <Config Name="Selected backup source" Target="/source" Default="" Mode="ro" Description="One explicitly selected /mnt/user share. Add more read-only paths as needed." Type="Path" Display="always" Required="false" Mask="false"/>
   <Config Name="Optional boot backup" Target="/boot-source" Default="" Mode="ro" Description="Optional read-only /boot mapping for boot-drive backup." Type="Path" Display="advanced" Required="false" Mask="false"/>
   <Config Name="Restore target" Target="/restore" Default="" Mode="rw" Description="Explicit writable target used only after restore preview and confirmation." Type="Path" Display="always" Required="false" Mask="false"/>
-  <Config Name="Device name" Target="COVALENT_DEVICE_NAME" Default="Covalent Unraid" Mode="" Description="Name shown during pairing." Type="Variable" Display="always" Required="true" Mask="false"/>
-  <Config Name="HTTPS hostname" Target="COVALENT_HTTPS_HOST" Default="tower.local" Mode="" Description="Exact DNS name clients use for HTTPS certificate validation. Enroll the CA from /config/caddy/data/caddy/pki/authorities/local/root.crt." Type="Variable" Display="always" Required="true" Mask="false"/>
-  <Config Name="Peer listen address" Target="COVALENT_PEER_LISTEN" Default="0.0.0.0:8787" Mode="" Description="Authenticated QUIC bind address and port." Type="Variable" Display="advanced" Required="true" Mask="false"/>
-  <Config Name="LAN discovery" Target="COVALENT_LAN_DISCOVERY" Default="false" Mode="" Description="Enable mDNS advertisements. Pairing remains required." Type="Variable" Display="always" Required="true" Mask="false"/>
+  <Config Name="Device name" Target="COVALENT_DEVICE_NAME" Default="Covalent Unraid" Mode="" Description="The name your other devices will show for this server." Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="HTTPS hostname" Target="COVALENT_HTTPS_HOST" Default="tower.local" Mode="" Description="The exact name you will type in your browser and apps to reach this server, such as tower.local. Covalent's certificate is issued for this name." Type="Variable" Display="always" Required="true" Mask="false"/>
+  <Config Name="Address other devices dial" Target="COVALENT_ADVERTISED_PEER_ADDRESS" Default="" Mode="" Description="Usually leave blank. On bridge networking Covalent works this out from the HTTPS hostname above. Fill it in only if your phone or laptop cannot reach this server after pairing: use this server's LAN address and peer port, such as 192.168.1.50:8787." Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="Peer listen address" Target="COVALENT_PEER_LISTEN" Default="0.0.0.0:8787" Mode="" Description="Encrypted device-to-device port inside the container. The default is correct unless you changed the peer port mapping above." Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="Find devices on your network" Target="COVALENT_LAN_DISCOVERY" Default="false" Mode="" Description="Off by default. Turn it on to let your phone and laptop find this server by name instead of you typing an address. Only the device name, address, and certificate fingerprint are announced, and pairing still has to be confirmed on both devices." Type="Variable" Display="always" Required="false" Mask="false"/>
   <Config Name="File creation umask" Target="UMASK" Default="027" Mode="" Description="Three-digit octal umask for runtime-created files." Type="Variable" Display="advanced" Required="true" Mask="false"/>
 </Container>

@@ -194,6 +194,34 @@
       "This device has no address another device can reach it on yet. Set its peer address, then pair again.",
       RECOVERY.none,
     ],
+    peer_endpoint_unavailable: [
+      "This server doesn't know which address other devices should dial yet. Set the address other devices dial in its settings, then try again.",
+      RECOVERY.none,
+    ],
+    claim_unavailable: [
+      "This server already has an owner, so it can't be set up again.",
+      RECOVERY.none,
+    ],
+    claim_code_incorrect: [
+      "That setup code isn't correct. Check the code shown in your server's log and try again.",
+      RECOVERY.none,
+    ],
+    claim_window_expired: [
+      "That setup code has expired. Restart Covalent on your server to get a new one.",
+      RECOVERY.none,
+    ],
+    claim_window_exhausted: [
+      "Too many incorrect setup codes were entered. Restart Covalent on your server to get a new code.",
+      RECOVERY.none,
+    ],
+    claim_rate_limited: [
+      "Setup codes are being entered too quickly. Wait a moment, then try again.",
+      RECOVERY.retry,
+    ],
+    claim_certificate_unavailable: [
+      "This server is still preparing its security certificate. Wait a few seconds, then try again.",
+      RECOVERY.retry,
+    ],
     pairing_peer_unreachable: [
       "Covalent couldn't reach that device. Check that it's switched on and on the same network, then pair again.",
       RECOVERY.chooseAnotherDevice,

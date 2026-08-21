@@ -23,6 +23,36 @@ fi
 
 mkdir -p "${XDG_DATA_HOME:-/config/caddy/data}" "${XDG_CONFIG_HOME:-/config/caddy/config}"
 
+# The node hands this certificate to a client that proves it holds the first-run
+# setup code, so nobody has to copy a .crt out of a container by hand.  Caddy
+# writes it on first start; the node reads it lazily, at claim time, by which
+# point the client has necessarily already completed a TLS handshake through
+# Caddy and the file therefore exists.
+COVALENT_TLS_CA_FILE="${COVALENT_TLS_CA_FILE:-${XDG_DATA_HOME:-/config/caddy/data}/caddy/pki/authorities/local/root.crt}"
+export COVALENT_TLS_CA_FILE
+
+# Bridge networking is Unraid's default, so the address the container can see is
+# its own bridge address and peers must dial the host instead.  The container
+# cannot observe the host's address, but the operator already told us the exact
+# name clients use, so resolve that rather than making them state it twice.
+# Purely a convenience: if this resolves to nothing the node auto-detects, and
+# if that also fails it refuses to advertise and says what to set.
+if [ -z "${COVALENT_ADVERTISED_PEER_ADDRESS:-}" ] && [ -n "${COVALENT_HTTPS_HOST:-}" ]; then
+  resolved=$(getent ahostsv4 "$COVALENT_HTTPS_HOST" 2>/dev/null | awk 'NR==1 {print $1}')
+  case "$resolved" in
+    ''|127.*) : ;;
+    *)
+      peer_port=${COVALENT_PEER_LISTEN##*:}
+      case "$peer_port" in
+        ''|*[!0-9]*) peer_port=8787 ;;
+      esac
+      COVALENT_ADVERTISED_PEER_ADDRESS="$resolved:$peer_port"
+      export COVALENT_ADVERTISED_PEER_ADDRESS
+      echo "Covalent will tell other devices to dial $COVALENT_ADVERTISED_PEER_ADDRESS (resolved from $COVALENT_HTTPS_HOST)"
+      ;;
+  esac
+fi
+
 covalent-node "$@" &
 node_pid=$!
 caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &

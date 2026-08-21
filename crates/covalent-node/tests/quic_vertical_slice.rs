@@ -89,6 +89,25 @@ async fn real_quic_scale_backup_and_restore_is_streaming_and_disk_bounded() {
         )
         .expect("accept pairing");
     let code = session.authentication_string().to_string();
+    // Feeding the session's own code straight back would assert nothing: a
+    // derivation returning a constant, or a confirmation that never compared,
+    // would satisfy it just as well. Prove the comparison is live before
+    // relying on it, so the pairing this transport test is built on is real.
+    assert_eq!(
+        code.len(),
+        19,
+        "the short authentication string is four groups of four"
+    );
+    // Flip the first digit, so the wrong code differs from the right one in
+    // exactly one position and the comparison cannot pass by length alone.
+    let (first, rest) = code.split_at(1);
+    let wrong = format!("{}{rest}", if first == "0" { "1" } else { "0" });
+    assert!(
+        provider
+            .confirm_pairing_as_responder(&mut session, &wrong, 2_000)
+            .is_err(),
+        "a code that does not match must be refused"
+    );
     provider
         .confirm_pairing_as_responder(&mut session, &code, 2_000)
         .expect("responder confirmation");

@@ -171,7 +171,15 @@ function trackedFiles() {
 // Collapses a source file to a single line with comments removed, keeping a
 // line number for every surviving character. String bodies are preserved
 // verbatim so path literals survive intact.
-function flatten(text) {
+// A `/` that begins a regular expression, not a division. Deciding needs the
+// previous significant token, and this is the standard heuristic: a regex can
+// only start where a value is expected. Enabled for JavaScript sources alone,
+// so a Rust, Swift or Kotlin division is never mistaken for one.
+const REGEX_MAY_FOLLOW = new Set([
+  undefined, "(", ",", "=", ":", "[", "!", "&", "|", "?", "{", "}", ";", "+", "-", "*", "%", "<", ">", "~", "^",
+]);
+
+function flatten(text, allowRegex = false) {
   const characters = [];
   const lines = [];
   let line = 1;
@@ -195,6 +203,33 @@ function flatten(text) {
       push(character);
       index += 1;
       if (character === quote) return;
+    }
+  };
+  let lastSignificant;
+  const pushRegex = () => {
+    push(text[index]);
+    index += 1;
+    let inClass = false;
+    while (index < text.length) {
+      const character = text[index];
+      if (character === "\n") return; // Unterminated: not a regex after all.
+      if (character === "\\") {
+        push(character);
+        if (index + 1 < text.length) push(text[index + 1]);
+        index += 2;
+        continue;
+      }
+      push(character);
+      index += 1;
+      if (character === "[") inClass = true;
+      else if (character === "]") inClass = false;
+      else if (character === "/" && !inClass) {
+        while (index < text.length && /[a-z]/.test(text[index])) {
+          push(text[index]);
+          index += 1;
+        }
+        return;
+      }
     }
   };
   while (index < text.length) {
@@ -228,8 +263,14 @@ function flatten(text) {
       index += 3;
       continue;
     }
+    if (allowRegex && character === "/" && REGEX_MAY_FOLLOW.has(lastSignificant)) {
+      pushRegex();
+      lastSignificant = "/";
+      continue;
+    }
     if (character === '"' || character === "`" || character === "'") {
       pushString(character);
+      lastSignificant = character;
       continue;
     }
     if (/\s/.test(character)) {
@@ -239,6 +280,7 @@ function flatten(text) {
       continue;
     }
     push(character);
+    lastSignificant = character;
     index += 1;
   }
   return { flat: characters.join(""), lineAt: (offset) => lines[Math.min(offset, lines.length - 1)] ?? 1 };
@@ -252,7 +294,10 @@ function loadFlat(relativePath) {
     } catch (error) {
       throw new Error(`${relativePath} could not be read (${error.code ?? error.message}); this gate names it and is now stale`);
     }
-    flatCache.set(relativePath, flatten(text));
+    // Regex literals are JavaScript-only. A `/` in Rust, Swift or Kotlin is
+    // division, and treating it as a regex would swallow real code.
+    const isJavaScript = relativePath.endsWith(".js") || relativePath.endsWith(".mjs");
+    flatCache.set(relativePath, flatten(text, isJavaScript));
   }
   return flatCache.get(relativePath);
 }

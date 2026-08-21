@@ -108,6 +108,96 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
+  /api/v1/claim:
+    post:
+      summary: Claim ownership of an unclaimed node with its first-run code
+      description: >-
+        The only unauthenticated mutating route in this API, and the only one a
+        client without a token may call. A headless node with no owner mints a
+        single-use, time-limited setup code at startup and prints it to its
+        container log, where an operator can read it without a shell. The code
+        itself is never transmitted: the client sends a MAC over a fresh nonce
+        under a stretched key derived from the code, and the node replies with
+        the local API token sealed under a key derived from the same code, with
+        the delivered CA certificate's SHA-256 bound in as associated data. A
+        machine-in-the-middle that relays the exchange therefore obtains
+        ciphertext it cannot open, and cannot substitute its own CA without
+        breaking the seal. Successful decryption is simultaneously proof that
+        the responder held the code and proof that the CA came from it, which
+        replaces the manual certificate comparison this flow used to require.
+        The window is single-use, expires 30 minutes after mint, refuses
+        presentations closer together than 500 ms, and closes permanently after
+        16 incorrect codes; restarting the container mints a new one.
+      operationId: claimOwnership
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [clientNonce, clientProof]
+              properties:
+                clientNonce:
+                  type: string
+                  description: 32 random bytes, base64url without padding.
+                  minLength: 43
+                  maxLength: 43
+                clientProof:
+                  type: string
+                  description: >-
+                    blake3 keyed hash of the domain string
+                    "covalent/first-run-claim/client-proof/v1" followed by the
+                    nonce, keyed with the stretched claim code. Base64url,
+                    unpadded.
+                  minLength: 43
+                  maxLength: 43
+      responses:
+        "200":
+          description: Ownership claimed. The window is now closed permanently.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OwnershipClaim"
+        "400":
+          $ref: "#/components/responses/ClientError"
+        "401":
+          description: The setup code was incorrect (code claim_code_incorrect).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: This node already has an owner (code claim_unavailable).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "410":
+          description: >-
+            The window expired or was exhausted by incorrect codes (codes
+            claim_window_expired, claim_window_exhausted). Restart the container
+            for a new code.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: Codes presented too quickly (code claim_rate_limited).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: >-
+            The CA certificate is not readable yet (code
+            claim_certificate_unavailable). Checked before the code is spent, so
+            the code is not consumed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/v1/pair/invitations:
     post:
       summary: Create a signed pairing invitation
@@ -1334,6 +1424,34 @@ components:
           maxItems: 100000
           items:
             $ref: "#/components/schemas/RememberedBackup"
+    OwnershipClaim:
+      type: object
+      additionalProperties: false
+      required: [deviceName, sealNonce, sealedToken]
+      properties:
+        deviceName:
+          type: string
+          description: The node's display name, so the client can confirm it reached the right server.
+        caCertificate:
+          type: [string, "null"]
+          description: >-
+            PEM certificate authority to pin for every later connection. Null
+            when this node terminates no TLS of its own, such as a loopback-only
+            node embedded in a desktop app.
+        caFingerprintSha256:
+          type: [string, "null"]
+          description: Lowercase hex SHA-256 of the CA's DER, for display and out-of-band checking.
+        sealNonce:
+          type: string
+          description: 24-byte XChaCha20-Poly1305 nonce, base64url without padding.
+        sealedToken:
+          type: string
+          description: >-
+            The local API token, sealed with XChaCha20-Poly1305 under a key
+            derived from the claim code and the client nonce, with the CA
+            digest as associated data. Decryption failure means either the code
+            was wrong or the CA was substituted in transit; a client must treat
+            it as a failed claim and must not proceed unpinned.
     PairingInvitation:
       type: object
       additionalProperties: false

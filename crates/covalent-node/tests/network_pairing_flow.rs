@@ -13,6 +13,7 @@ use std::time::Duration;
 use std::sync::Arc;
 
 use covalent_core::{Engine, EngineOptions};
+use covalent_node::advertised_address;
 use covalent_node::network_pairing::{
     NetworkPairingManager, NetworkPairingWireOperation, NetworkPairingWireResponse,
 };
@@ -746,4 +747,131 @@ async fn submit_cannot_aim_this_node_at_a_third_host_and_probes_are_rationed() {
     drop(connection);
     victim.stop().await.expect("stop victim");
     initiator.stop().await.expect("stop initiator");
+}
+
+/// Starts a node exactly the way a real deployment starts one.
+///
+/// The difference from [`start_node`] is the entire point of this test, and it
+/// is one line: nothing here assigns `advertised_peer_address`. That field was
+/// set in precisely one place in the whole repository — `start_node` above — so
+/// every test passed while `AppState::peer_address` was `None` on Unraid,
+/// macOS, Android and the web console alike. `GET /api/v1/transport/identity`
+/// and `GET /api/v1/discovery` answered 500 and
+/// `POST /api/v1/pair/invitations` answered 400 `invalid_contract` on every
+/// real install, and no test in the tree could observe it, because the harness
+/// supplied the one value production never did.
+///
+/// So this test asserts the production configuration path rather than a
+/// convenient one. It cannot assert a fixed address — a CI runner's interfaces
+/// are not knowable in advance, and inventing a way to inject them would
+/// reintroduce exactly the blind spot being closed. It asserts the properties
+/// that hold on every host instead:
+///
+/// * no route reports missing configuration as an internal fault, or as a
+///   malformed request;
+/// * the three routes agree with each other, so a node cannot advertise itself
+///   as pairable through one route and unpairable through another;
+/// * when an endpoint is resolved it is concrete and dialable, never loopback
+///   or unspecified — an address a peer cannot use is worse than none.
+///
+/// Address selection itself is exhaustively covered as pure arithmetic in
+/// `covalent_node::advertised_address`, including the container-bridge case
+/// this host may or may not be in.
+#[tokio::test]
+async fn a_node_started_the_production_way_resolves_or_refuses_coherently() {
+    let directory = TempDir::new().expect("temp directory");
+    let configuration = NodeRuntimeConfig::new(directory.path(), loopback_zero(), loopback_zero());
+    let node = NodeRuntime::start(configuration)
+        .await
+        .expect("a node with no advertised address configured must still start");
+
+    let identity = call(&node, "GET", "/api/v1/transport/identity", None).await;
+    let discovery = call(&node, "GET", "/api/v1/discovery", None).await;
+    let invitation = call(
+        &node,
+        "POST",
+        "/api/v1/pair/invitations",
+        Some(r#"{"lifetimeMs":600000}"#),
+    )
+    .await;
+
+    for (label, response) in [
+        ("transport/identity", &identity),
+        ("discovery", &discovery),
+        ("pair/invitations", &invitation),
+    ] {
+        assert_ne!(
+            response.status, 500,
+            "{label} must never report configuration state as an internal fault"
+        );
+        if response.status != 200 {
+            let body = response.json();
+            let code = body["code"].as_str().unwrap_or_default().to_owned();
+            assert_eq!(
+                code, "peer_endpoint_unavailable",
+                "{label} answered {} with code {code}; a well-formed request against a \
+                 healthy node must not be called malformed",
+                response.status
+            );
+            assert_eq!(response.status, 409, "{label} status");
+        }
+    }
+
+    // The load-bearing assertion, and the one that actually fails against the
+    // old runtime. Everything above holds even with address resolution removed,
+    // because the error taxonomy alone guarantees it; asserting only that would
+    // be a test that looks strict and catches nothing. So compute what this host
+    // *should* resolve to and require the running node to agree. On a machine
+    // with a usable private address the node must have one, and 409 is a
+    // failure; on a bridged container with nothing dialable, 409 is required and
+    // success would mean the node is advertising a dead end.
+    //
+    // Selection itself is verified independently as pure arithmetic in
+    // `advertised_address`; what is under test here is that the production
+    // startup path consults it at all, which is precisely what it did not do.
+    let expected = advertised_address::select_advertised_address(
+        &advertised_address::observed_interface_addresses(),
+        advertised_address::running_in_container(),
+    );
+    assert_eq!(
+        identity.status == 200,
+        expected.is_ok(),
+        "this host resolves {expected:?}, so the node's answer of {} contradicts it",
+        identity.status
+    );
+
+    assert_eq!(
+        identity.status == 200,
+        discovery.status == 200,
+        "discovery and transport identity must agree about whether this node is reachable"
+    );
+    assert_eq!(
+        identity.status == 200,
+        invitation.status == 200,
+        "invitations and transport identity must agree about whether this node is reachable"
+    );
+
+    if invitation.status == 200 {
+        let body = invitation.json();
+        let address = body["transportBinding"]["address"]
+            .as_str()
+            .expect("a served invitation names the address peers dial")
+            .to_owned();
+        let parsed: SocketAddr = address.parse().expect("advertised address is concrete");
+        assert!(
+            !parsed.ip().is_unspecified() && parsed.port() != 0,
+            "an advertised endpoint must be dialable, got {address}"
+        );
+        assert!(
+            !parsed.ip().is_loopback(),
+            "auto-detection must never hand peers a loopback address, got {address}"
+        );
+        assert_eq!(
+            parsed.ip(),
+            expected.expect("a served invitation implies an address was resolvable"),
+            "the node must advertise the address selection chose, not some other interface"
+        );
+    }
+
+    node.stop().await.expect("stop node");
 }

@@ -1,6 +1,8 @@
 //! Local authenticated API, embedded accessible console, discovery, and peer transport.
 
+pub mod advertised_address;
 pub mod discovery;
+pub mod first_run_claim;
 pub mod network_pairing;
 pub mod pairing_transport;
 pub mod runtime;
@@ -514,6 +516,7 @@ pub struct AppState {
     provider_state_path: Option<Arc<PathBuf>>,
     transport_certificate: Option<Arc<Vec<u8>>>,
     network_pairing: Arc<NetworkPairingManager>,
+    first_run_claim: Option<Arc<first_run_claim::FirstRunClaim>>,
     discovery_controller: Option<Arc<discovery::DiscoveryController>>,
     archive_limits: ArchiveLimits,
     archive_backup_root: Arc<PathBuf>,
@@ -567,6 +570,7 @@ impl AppState {
             provider_state_path: None,
             transport_certificate: None,
             network_pairing,
+            first_run_claim: None,
             discovery_controller: None,
             archive_limits: ArchiveLimits::default(),
             archive_backup_root: Arc::new(archive_backup_root),
@@ -620,6 +624,17 @@ impl AppState {
             certificate_der: URL_SAFE_NO_PAD.encode(certificate),
             certificate_fingerprint: sha256_hex(certificate),
         })
+    }
+
+    /// Arms the one-shot first-run ownership claim.
+    ///
+    /// Absent by default, and deliberately so: an embedded app that owns its own
+    /// token through platform secure storage must never expose this route, and
+    /// fail-closed means a caller has to ask for it rather than opt out.
+    #[must_use]
+    pub fn with_first_run_claim(mut self, claim: Arc<first_run_claim::FirstRunClaim>) -> Self {
+        self.first_run_claim = Some(claim);
+        self
     }
 
     /// Connects persisted discovery settings to the live network advertiser.
@@ -1221,6 +1236,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/discovery", get(discovery_candidates))
         .route("/api/v1/config/export", post(config_export))
         .route("/api/v1/config/import", post(config_import))
+        .route("/api/v1/claim", post(claim_ownership))
         .route("/api/v1/pair/invitations", post(pair_invitation))
         .route("/api/v1/pair/network/start", post(pair_network_start))
         .route("/api/v1/pair/network/pending", get(pair_network_pending))
@@ -1791,12 +1807,12 @@ async fn transport_identity(
     let certificate = state
         .transport_certificate
         .as_deref()
-        .ok_or_else(|| ApiError::internal("transport identity is unavailable"))?;
+        .ok_or_else(ApiError::peer_endpoint_unavailable)?;
     Ok(axum::Json(TransportIdentityResponse {
         device_id: state.engine.device_id(),
         peer_port: state
             .peer_address
-            .ok_or_else(|| ApiError::internal("peer endpoint is unavailable"))?
+            .ok_or_else(ApiError::peer_endpoint_unavailable)?
             .port(),
         certificate_der: URL_SAFE_NO_PAD.encode(certificate),
         certificate_fingerprint: sha256_hex(certificate),
@@ -1815,7 +1831,7 @@ async fn discovery_candidates(
         .lan_discovery_enabled;
     let peer_port = state
         .peer_address
-        .ok_or_else(|| ApiError::internal("peer endpoint is unavailable"))?
+        .ok_or_else(ApiError::peer_endpoint_unavailable)?
         .port();
     let candidates = tokio::task::spawn_blocking(move || {
         let mut candidates = discovery::LanDiscovery::browse(enabled, Duration::from_secs(1))?;
@@ -1898,6 +1914,72 @@ async fn config_import(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ClaimOwnershipRequest {
+    /// Base64url, unpadded. Fresh per exchange.
+    client_nonce: String,
+    /// Base64url, unpadded. `blake3::keyed_hash` under the stretched code.
+    client_proof: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaimOwnershipResponse {
+    device_name: String,
+    ca_certificate: Option<String>,
+    ca_fingerprint_sha256: Option<String>,
+    seal_nonce: String,
+    sealed_token: String,
+}
+
+/// Trades proof of the first-run code for the API token and the CA to pin.
+///
+/// Unauthenticated by necessity — a client with no token is the entire point —
+/// and therefore the only route in this API that is. Every protection it has is
+/// in [`first_run_claim`]: proof of the code rather than the code itself, a
+/// sealed token an on-path relay cannot open, the CA bound into that seal so it
+/// cannot be substituted, single use, expiry, spacing, and a failure budget.
+/// The threat model is written out at the top of that module.
+async fn claim_ownership(
+    State(state): State<AppState>,
+    ContractJson(request): ContractJson<ClaimOwnershipRequest>,
+) -> Result<axum::Json<ClaimOwnershipResponse>, ApiError> {
+    let claim = state.first_run_claim.as_deref().ok_or_else(|| {
+        ApiError::conflict(
+            "claim_unavailable",
+            "This backup server already has an owner, so it cannot be set up again.",
+        )
+    })?;
+    let client_nonce = URL_SAFE_NO_PAD
+        .decode(&request.client_nonce)
+        .map_err(|_| ApiError::from_json_contract())?;
+    let client_proof = URL_SAFE_NO_PAD
+        .decode(&request.client_proof)
+        .map_err(|_| ApiError::from_json_contract())?;
+
+    let grant = claim
+        .present(
+            &client_nonce,
+            &client_proof,
+            state.api_token.as_str(),
+            now_unix_ms(),
+        )
+        .map_err(ApiError::from_claim_refusal)?;
+
+    Ok(axum::Json(ClaimOwnershipResponse {
+        device_name: state
+            .engine
+            .config()
+            .map_err(ApiError::from_core)?
+            .device_name,
+        ca_certificate: grant.ca_certificate,
+        ca_fingerprint_sha256: grant.ca_fingerprint,
+        seal_nonce: URL_SAFE_NO_PAD.encode(&grant.seal_nonce),
+        sealed_token: URL_SAFE_NO_PAD.encode(&grant.sealed_token),
+    }))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PairInvitationRequest {
     lifetime_ms: u64,
     #[serde(default)]
@@ -1923,12 +2005,9 @@ async fn pair_network_start(
     ContractJson(request): ContractJson<PairNetworkStartRequest>,
 ) -> Result<axum::Json<NetworkPairingItem>, ApiError> {
     authorize(&state, &headers)?;
-    let local_transport = state.local_transport_binding().map_err(|_| {
-        ApiError::bad_request(
-            "pairing_endpoint_unavailable",
-            "This node has no concrete advertised peer endpoint to pair with.",
-        )
-    })?;
+    let local_transport = state
+        .local_transport_binding()
+        .map_err(|_| ApiError::peer_endpoint_unavailable())?;
     let addresses = network_pairing::resolve_pairing_candidate(&request.candidate_address, false)
         .await
         .map_err(ApiError::from_core)?;
@@ -2036,9 +2115,13 @@ async fn pair_invitation(
     ContractJson(request): ContractJson<PairInvitationRequest>,
 ) -> Result<axum::Json<PairingInvitation>, ApiError> {
     authorize(&state, &headers)?;
+    // `local_transport_binding` fails when no advertised peer endpoint is known.
+    // Routing that through `ApiError::from_core` mapped `CoreError::InvalidState`
+    // onto `invalid_contract`, so a node missing configuration told every client
+    // its perfectly well-formed request was malformed.
     let binding = state
         .local_transport_binding()
-        .map_err(ApiError::from_core)?;
+        .map_err(|_| ApiError::peer_endpoint_unavailable())?;
     if request
         .endpoints
         .iter()
@@ -5547,7 +5630,7 @@ fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
     difference == 0
 }
 
-fn now_unix_ms() -> u64 {
+pub(crate) fn now_unix_ms() -> u64 {
     unix_ms(SystemTime::now())
 }
 
@@ -5667,6 +5750,30 @@ impl ApiError {
                 retryable: false,
                 upload_offset: None,
             },
+            // KNOWN MIS-SIGNAL, recorded rather than silently tolerated.
+            //
+            // `CoreError::InvalidState` is a catch-all for "the node is not in a
+            // state where it can do this", and folding it in here reports every
+            // such condition to the client as a malformed request. It is not
+            // one: the request can be perfectly well-formed and the fault can be
+            // configuration, ordering, or missing durable state.
+            //
+            // This cost real time. `POST /api/v1/pair/invitations` returned
+            // `invalid_contract` on every deployment because the node had no
+            // advertised peer endpoint, and the job failed for sixty CI runs
+            // while it was investigated as a JSON schema drift that never
+            // existed. That specific route is closed — the three handlers that
+            // needed a transport binding now answer
+            // `peer_endpoint_unavailable` — but the general hazard remains.
+            //
+            // Blast radius, measured rather than guessed: `InvalidState` is
+            // constructed in twelve `covalent-core` modules, and `from_core` is
+            // reached from 100 call sites across 34 handlers, every one of which
+            // can therefore report a state problem as a contract problem.
+            // Splitting `InvalidState` into distinguishable variants is the real
+            // fix and is deliberately not attempted here, because it is a
+            // `covalent-core` change touching every one of those handlers and
+            // wants scheduling rather than a drive-by.
             CoreError::InvalidKeyMaterial
             | CoreError::UnsupportedCipherSuite(_)
             | CoreError::InvalidState(_)
@@ -5723,6 +5830,81 @@ impl ApiError {
             code: "pairing_peer_unreachable",
             message: "The selected device did not answer the pairing request.",
             retryable: true,
+            upload_offset: None,
+        }
+    }
+
+    /// Maps a first-run claim refusal onto a status that says what happened.
+    ///
+    /// Each case gets its own code because each has a different remedy: retry,
+    /// wait, or restart the container for a new code. Collapsing them would put
+    /// the operator back where they started.
+    fn from_claim_refusal(refusal: first_run_claim::ClaimRefusal) -> Self {
+        use first_run_claim::{ClaimClosure, ClaimRefusal};
+        match refusal {
+            ClaimRefusal::AlreadyClaimed => Self::conflict(
+                "claim_unavailable",
+                "This backup server already has an owner, so it cannot be set up again.",
+            ),
+            ClaimRefusal::WindowClosed(ClaimClosure::Expired) => Self {
+                status: StatusCode::GONE,
+                code: "claim_window_expired",
+                message: "That setup code has expired. Restart Covalent on your server to get \
+                          a new one.",
+                retryable: false,
+                upload_offset: None,
+            },
+            ClaimRefusal::WindowClosed(ClaimClosure::Exhausted) => Self {
+                status: StatusCode::GONE,
+                code: "claim_window_exhausted",
+                message: "Too many incorrect setup codes were entered. Restart Covalent on \
+                          your server to get a new code.",
+                retryable: false,
+                upload_offset: None,
+            },
+            ClaimRefusal::TooSoon => Self {
+                status: StatusCode::TOO_MANY_REQUESTS,
+                code: "claim_rate_limited",
+                message: "Setup codes are being entered too quickly. Wait a moment and try \
+                          again.",
+                retryable: true,
+                upload_offset: None,
+            },
+            ClaimRefusal::IncorrectCode => Self {
+                status: StatusCode::UNAUTHORIZED,
+                code: "claim_code_incorrect",
+                message: "That setup code is not correct. Check the code shown in your \
+                          server's log and try again.",
+                retryable: false,
+                upload_offset: None,
+            },
+            ClaimRefusal::Malformed => Self::from_json_contract(),
+            ClaimRefusal::CertificateUnavailable => Self {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                code: "claim_certificate_unavailable",
+                message: "This backup server is still preparing its security certificate. \
+                          Wait a few seconds and try again.",
+                retryable: true,
+                upload_offset: None,
+            },
+        }
+    }
+
+    /// The node has no usable advertised peer endpoint.
+    ///
+    /// This is configuration state, not a fault and not a malformed request.
+    /// Before this existed, `discovery` and `transport_identity` reported it as
+    /// a 500 and `pair/invitations` reported it as `invalid_contract`, so the
+    /// one condition wore three disguises and none of them named it. `409` says
+    /// what is true: the request is well-formed and the node is healthy, but it
+    /// is not in a state where it can answer.
+    const fn peer_endpoint_unavailable() -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            code: "peer_endpoint_unavailable",
+            message: "This backup server does not yet know which address other devices should \
+                      dial. Set the address other devices dial in its settings, then try again.",
+            retryable: false,
             upload_offset: None,
         }
     }

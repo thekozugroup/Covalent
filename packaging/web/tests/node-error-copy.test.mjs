@@ -91,6 +91,34 @@ test("mapped engine codes produce their intended sentence and next step", () => 
   }
 });
 
+test("first-run setup and endpoint codes read as instructions, never as diagnostics", () => {
+  // These are the codes a person meets before they have any Covalent
+  // vocabulary at all: the very first screen, on a server they cannot log
+  // into. Each one has to say what to do next without naming a token, a
+  // certificate file, a bearer header, or a container path.
+  const cases = [
+    ["peer_endpoint_unavailable", 409, "This server doesn't know which address other devices should dial yet. Set the address other devices dial in its settings, then try again.", "none"],
+    ["claim_unavailable", 409, "This server already has an owner, so it can't be set up again.", "none"],
+    ["claim_code_incorrect", 401, "That setup code isn't correct. Check the code shown in your server's log and try again.", "none"],
+    ["claim_window_expired", 410, "That setup code has expired. Restart Covalent on your server to get a new one.", "none"],
+    ["claim_window_exhausted", 410, "Too many incorrect setup codes were entered. Restart Covalent on your server to get a new code.", "none"],
+    ["claim_rate_limited", 429, "Setup codes are being entered too quickly. Wait a moment, then try again.", "retry"],
+    ["claim_certificate_unavailable", 503, "This server is still preparing its security certificate. Wait a few seconds, then try again.", "retry"],
+  ];
+  for (const [code, status, summary, recovery] of cases) {
+    const failure = copy.describeApi(status, code, "engine text nobody should read", false);
+    assert.equal(failure.summary, summary, code);
+    assert.equal(failure.recovery, recovery, code);
+    assert.equal(failure.detail, `HTTP ${status} \u00b7 ${code} \u00b7 engine text nobody should read`);
+    // The specific regression this guards: `claim_code_incorrect` arrives as a
+    // 401, and the unrecognised-401 fallback tells the reader to unlock the
+    // console with a local access token -- advice that is exactly backwards for
+    // someone who has no token and is trying to obtain one.
+    assert.ok(!failure.summary.includes("local access token"), code);
+    assert.ok(!failure.summary.includes("engine text"), code);
+  }
+});
+
 test("an unrecognised code still falls back on its status, never on server text", () => {
   const cases = [
     [401, "Your backup server refused this request. Unlock the console again with a current local access token.", "reconnect"],
