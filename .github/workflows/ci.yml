@@ -305,7 +305,66 @@ jobs:
               --tag covalent:android-api37-e2e \
               .
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-metrics -accel on
-          script: COVALENT_ANDROID_EVIDENCE_DIR="${{ runner.temp }}/covalent-android-api37" COVALENT_ANDROID_HEADLESS_CI=true ANDROID_SERIAL=emulator-5570 ./scripts/android-api37-device-test.sh
+          # Wait for the unlock, not just for the boot.
+          #
+          # This action's only readiness check is `getprop sys.boot_completed`, and
+          # nothing here or in the gate script ever waited for anything more. That
+          # was survivable purely by accident: until the reordering above, the cold
+          # Rust and Docker builds ran inside this `script:` payload, so `am
+          # instrument` started twenty minutes after boot and user 0 had long since
+          # unlocked. Moving those builds before launch was right, and it also
+          # removed the accidental delay - run 32495908942 reached instrumentation
+          # two seconds after sys.boot_completed with user 0 STILL LOCKED, and 40 of
+          # 56 tests failed. All four symptoms are one cause:
+          #
+          #   * DirectBootStorageTest#theRealDeviceReportsItsOwnUnlockState failed on
+          #     its own assertion "The instrumentation host is unlocked" - the gate
+          #     measured UserManager.isUserUnlocked() == false and said so directly.
+          #   * IdentityKeyProtectorTest got expected:<SOFTWARE> but was:<UNAVAILABLE>,
+          #     because the Direct Boot gate fail-closes on a locked user by design.
+          #     That is correct behaviour on a locked device, so the environment is
+          #     what is wrong, not the assertion.
+          #   * 8x "SharedPreferences in credential encrypted storage are not
+          #     available until after user (id 0) is unlocked".
+          #   * 77x "Unable to resolve activity for: ... androidx.activity.
+          #     ComponentActivity". This one reads like a missing
+          #     androidx.compose.ui:ui-test-manifest and is not: the stub is declared
+          #     debugImplementation and is present in the app's merged debug manifest.
+          #     A locked user makes PackageManager match only direct-boot-aware
+          #     components, so the stub is filtered out of resolveActivity, androidx
+          #     .test falls back to the test package, and that fails too.
+          #
+          # No test can unlock user 0 from inside instrumentation, so establishing an
+          # unlocked device is this harness's job; the suite already fails closed with
+          # a legible message when the harness does not do it. Both properties flip in
+          # the same second on a healthy cold boot of this AVD - measured at 17s - so
+          # this costs seconds, and when it does not happen it reports what it saw
+          # instead of handing the suite a device that cannot pass.
+          script: |
+            set -eu
+            adb="$ANDROID_HOME/platform-tools/adb"
+            serial=emulator-5570
+            deadline=$(($(date +%s) + 300))
+            while :; do
+              booted=$("$adb" -s "$serial" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)
+              unlocked=$("$adb" -s "$serial" shell getprop sys.user.0.ce_available 2>/dev/null | tr -d '\r' || true)
+              if [ "$booted" = 1 ] && [ "$unlocked" = true ]; then
+                break
+              fi
+              if [ "$(date +%s)" -ge "$deadline" ]; then
+                echo "user 0 never unlocked on $serial after 300s:" >&2
+                echo "  sys.boot_completed=${booted:-<unset>} sys.user.0.ce_available=${unlocked:-<unset>}" >&2
+                "$adb" -s "$serial" shell dumpsys user >&2 || true
+                exit 1
+              fi
+              sleep 2
+            done
+            echo "user 0 is unlocked: sys.boot_completed=$booted sys.user.0.ce_available=$unlocked"
+            "$adb" -s "$serial" shell wm dismiss-keyguard >/dev/null 2>&1 || true
+            COVALENT_ANDROID_EVIDENCE_DIR="${{ runner.temp }}/covalent-android-api37" \
+              COVALENT_ANDROID_HEADLESS_CI=true \
+              ANDROID_SERIAL="$serial" \
+              ./scripts/android-api37-device-test.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
