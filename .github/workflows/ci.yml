@@ -182,6 +182,19 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
+      # This gate runs scripts/check-android.sh through the device script, so it
+      # needs the same JNI cross-compile toolchain as the Android foundation job:
+      # the pinned NDK, a rustup toolchain with both Android targets, and
+      # cargo-ndk. Without them the emulator boots and the script then dies at
+      # `:app:buildAndroidJni`. Versions are read from the same pins the scripts
+      # assert, so a drift fails with check-android.sh's own message.
+      - run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "ndk;27.1.12297006"
+      - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Install the pinned cargo-ndk
+        run: cargo install --locked cargo-ndk --version 4.1.2
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
       # GitHub's ubuntu-24.04 image ships /dev/kvm as root:kvm mode 0660 with an
       # empty `kvm` group, so the emulator's ProbeKVM reports
