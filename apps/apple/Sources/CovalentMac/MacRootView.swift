@@ -143,8 +143,15 @@ struct MacRootView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
                 if let status = model.status {
+                    // The sidebar draws its text vibrantly, and that blend is
+                    // stroke-coverage dependent: on the 1x CI display a regular
+                    // 10pt caption never renders darker than #7F7F7F, i.e. 4.0:1
+                    // against the sidebar, which fails the system contrast audit
+                    // even though the colour is `.primary`. The semibold status
+                    // line directly above renders #272727 (15:1) in the same
+                    // vibrancy context, so match its weight here.
                     Text(status.deviceName)
-                        .font(.caption)
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                 }
