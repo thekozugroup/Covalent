@@ -2,6 +2,15 @@ import XCTest
 
 @MainActor
 final class CovalentIOSUITests: XCTestCase {
+    /// How long a screen transition may take before the test gives up.
+    ///
+    /// This is a tolerance for runner contention, not an assertion. The three
+    /// seconds it replaces encoded an assumption about machine speed: on a
+    /// loaded CI runner the iOS test phase took 284s against a normal ~55s,
+    /// and a tab switch missed its window while the app was working fine.
+    /// What each assertion requires is unchanged — only the patience is.
+    private let uiTransitionTimeout: TimeInterval = 30
+
     func testTierTwoPrimaryWorkflowsAreReachable() throws {
         let app = try launchApp()
         continueAfterFailure = false
@@ -11,15 +20,15 @@ final class CovalentIOSUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Not a full-device or continuous background backup"].exists)
 
         app.tabBars.buttons["Backups"].tap()
-        XCTAssertTrue(app.navigationBars["Backups"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.navigationBars["Backups"].waitForExistence(timeout: uiTransitionTimeout))
         app.buttons["backups.new"].tap()
-        XCTAssertTrue(app.navigationBars["New Backup"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.navigationBars["New Backup"].waitForExistence(timeout: uiTransitionTimeout))
         XCTAssertTrue(app.textFields["backup.name"].exists)
         XCTAssertFalse(app.buttons["backup.create"].isEnabled)
         app.buttons["Cancel"].tap()
 
         app.tabBars.buttons["Devices"].tap()
-        XCTAssertTrue(app.navigationBars["Devices"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.navigationBars["Devices"].waitForExistence(timeout: uiTransitionTimeout))
         let advanced = app.buttons["devices.advancedRecovery"]
         scrollTo(advanced, in: app)
         XCTAssertTrue(advanced.exists)
@@ -28,7 +37,7 @@ final class CovalentIOSUITests: XCTestCase {
         scrollTo(offlinePairing, in: app)
         XCTAssertTrue(offlinePairing.exists)
         offlinePairing.tap()
-        XCTAssertTrue(app.navigationBars["Secure Pairing"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.navigationBars["Secure Pairing"].waitForExistence(timeout: uiTransitionTimeout))
         XCTAssertTrue(
             app.staticTexts
                 .containing(NSPredicate(format: "label CONTAINS %@", "Nearby advertisements alone remain untrusted"))
@@ -38,7 +47,7 @@ final class CovalentIOSUITests: XCTestCase {
         app.buttons["Close"].tap()
 
         app.tabBars.buttons["Settings"].tap()
-        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: uiTransitionTimeout))
         let privateTransferNotice = app.staticTexts["Private identity keys, API tokens, backup keys, and folder permissions never leave this device."]
         scrollTo(privateTransferNotice, in: app)
         XCTAssertTrue(privateTransferNotice.exists)

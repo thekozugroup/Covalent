@@ -2,6 +2,15 @@ import XCTest
 
 @MainActor
 final class CovalentMacUITests: XCTestCase {
+    /// How long a screen transition may take before the test gives up.
+    ///
+    /// This is a tolerance for runner contention, not an assertion. The three
+    /// seconds it replaces encoded an assumption about machine speed: on a
+    /// loaded CI runner the iOS test phase took 284s against a normal ~55s,
+    /// and a tab switch missed its window while the app was working fine.
+    /// What each assertion requires is unchanged — only the patience is.
+    private let uiTransitionTimeout: TimeInterval = 30
+
     func testTierOneNavigationAndPrimaryWorkflowsAreReachable() throws {
         let app = try launchApp()
         continueAfterFailure = false
@@ -9,15 +18,15 @@ final class CovalentMacUITests: XCTestCase {
         XCTAssertTrue(app.buttons["overview.newBackup"].isEnabled)
 
         app.buttons["overview.newBackup"].click()
-        XCTAssertTrue(app.staticTexts["New Backup"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["New Backup"].waitForExistence(timeout: uiTransitionTimeout))
         XCTAssertTrue(app.textFields["backup.name"].exists)
         XCTAssertFalse(app.buttons["backup.create"].isEnabled)
         app.buttons["Cancel"].click()
 
         app.staticTexts["Devices"].click()
-        XCTAssertTrue(app.staticTexts["Your backup network"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Your backup network"].waitForExistence(timeout: uiTransitionTimeout))
         let advanced = app.descendants(matching: .any)["devices.advancedRecovery"]
-        XCTAssertTrue(advanced.waitForExistence(timeout: 3))
+        XCTAssertTrue(advanced.waitForExistence(timeout: uiTransitionTimeout))
         scrollTo(advanced, in: app)
         expandDisclosure(advanced)
         XCTAssertEqual(
@@ -30,19 +39,19 @@ final class CovalentMacUITests: XCTestCase {
         // keeps off-screen scroll content out of the accessibility tree, so
         // bring it into view before asserting — exactly as the iOS test does.
         scrollTo(offlinePairing, in: app)
-        XCTAssertTrue(offlinePairing.waitForExistence(timeout: 3))
+        XCTAssertTrue(offlinePairing.waitForExistence(timeout: uiTransitionTimeout))
         XCTAssertTrue(offlinePairing.isHittable)
         offlinePairing.click()
-        XCTAssertTrue(app.staticTexts["Secure Pairing"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Secure Pairing"].waitForExistence(timeout: uiTransitionTimeout))
         XCTAssertTrue(app.staticTexts["Nearby advertisements remain untrusted until finalization."].exists)
         let close = app.buttons["pairing.close"]
-        XCTAssertTrue(close.waitForExistence(timeout: 3))
+        XCTAssertTrue(close.waitForExistence(timeout: uiTransitionTimeout))
         XCTAssertTrue(close.isHittable)
         close.click()
-        XCTAssertTrue(waitForDisappearance(of: app.staticTexts["Secure Pairing"], timeout: 3))
+        XCTAssertTrue(waitForDisappearance(of: app.staticTexts["Secure Pairing"], timeout: uiTransitionTimeout))
 
         app.staticTexts["Settings"].click()
-        XCTAssertTrue(app.staticTexts["Settings transfer"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Settings transfer"].waitForExistence(timeout: uiTransitionTimeout))
         XCTAssertTrue(app.staticTexts["Private identity keys and folder permissions never leave this device."].exists)
     }
 
@@ -70,7 +79,7 @@ final class CovalentMacUITests: XCTestCase {
         XCTAssertTrue(statusItem.isHittable)
         statusItem.click()
 
-        XCTAssertTrue(app.menuItems["Open Covalent"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.menuItems["Open Covalent"].waitForExistence(timeout: uiTransitionTimeout))
         XCTAssertTrue(app.menuItems["New Backup…"].exists)
         XCTAssertTrue(app.menuItems["Restore Latest Backup…"].exists)
         XCTAssertTrue(app.menuItems["Refresh Status"].exists)
@@ -114,7 +123,7 @@ final class CovalentMacUITests: XCTestCase {
     private func scrollTo(_ element: XCUIElement, in app: XCUIApplication) {
         guard !element.exists else { return }
         let scrollView = app.scrollViews.firstMatch
-        guard scrollView.waitForExistence(timeout: 3) else { return }
+        guard scrollView.waitForExistence(timeout: uiTransitionTimeout) else { return }
         for delta in [-60.0, -60.0, -60.0, -60.0, 60.0, 60.0, 60.0, 60.0] where !element.exists {
             scrollView.scroll(byDeltaX: 0, deltaY: CGFloat(delta))
         }
