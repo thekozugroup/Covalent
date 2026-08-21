@@ -397,8 +397,20 @@ import Testing
         targetURL: restore
     )
     #expect(plan.entries.contains { $0.destinationPath.hasSuffix("Documents/notes.txt") })
-    let result = try await client.executeArchiveRestore(plan, targetURL: restore)
+    // Drive the restore with a progress sink so the task-progress delegate is
+    // exercised against the real daemon over real CFNetwork. Installing a
+    // delegate must not disturb the async download's file handoff — if it
+    // did, the restored bytes below would not match.
+    let restoreProgress = RestoreProgressLog()
+    let result = try await client.executeArchiveRestore(
+        plan,
+        targetURL: restore,
+        onProgress: { restoreProgress.record($0) }
+    )
     #expect(result.filesRestored == 2)
+    let restorePhases = restoreProgress.snapshots.map(\.phase)
+    #expect(restorePhases.first == .preparing)
+    #expect(restorePhases.last == .finishing)
     #expect(result.rejectedProviderCopies == 0)
     let restored = try String(contentsOf: restore.appending(path: "Documents/notes.txt"), encoding: .utf8)
     #expect(restored == "real daemon integration\n")
@@ -919,5 +931,23 @@ private enum TestResponse {
             headerFields: ["Content-Type": "application/json"].merging(headers) { _, new in new }
         )!
         return (response, Data(json.utf8))
+    }
+}
+
+/// Collects restore progress callbacks, which arrive off the main actor.
+private final class RestoreProgressLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [TransferProgressSnapshot] = []
+
+    func record(_ snapshot: TransferProgressSnapshot) {
+        lock.lock()
+        recorded.append(snapshot)
+        lock.unlock()
+    }
+
+    var snapshots: [TransferProgressSnapshot] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recorded
     }
 }
