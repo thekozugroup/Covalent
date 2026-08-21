@@ -258,25 +258,24 @@ struct MacRootView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         // One flat, non-semantic colour rather than an opaque base plus a 12%
-        // tint. The two-layer version was meant to stop the sidebar material
-        // showing through, and it did not: measured off the audit's own element
-        // screenshot, the row's backdrop is still a four-step vertical gradient
-        // — (231,248,235) over 48% of it, then 230/229/228 down the rest —
-        // where a flat fill would be one value.
-        //
-        // The reason is the same one this file already documents for text.
-        // `windowBackgroundColor` is a semantic system colour, and semantic
-        // colours are what AppKit's vibrancy blends against the material behind
-        // them; that applies to fills, not only to glyphs. A colour the app
-        // mixes itself does not participate, so it paints the value it
-        // declares. This is what "take the row out of the vibrant path"
-        // actually means here, and it is the only part of the row that was
-        // still in it: its two text runs already measure (35,38,36) on that
-        // backdrop, 13.8:1.
-        //
-        // Same colour as before, arrived at by mixing rather than by layering,
-        // so nothing about how the row looks changes.
-        .background(serviceWashColor)
+        // tint. `windowBackgroundColor` is a semantic system colour, and
+        // semantic colours are what AppKit's vibrancy blends against the
+        // material behind them — fills as much as glyphs — so the two-layer
+        // version was still a four-step vertical gradient where a flat fill
+        // would be one value. A colour the app mixes itself does not
+        // participate, and paints what it declares.
+        .background(serviceWashColor, in: RoundedRectangle(cornerRadius: 10))
+        // An inset footer rather than a slab welded to the window's corner,
+        // which is how the system's own sidebars finish. It is also what
+        // stopped the audit reporting this row: macOS draws the Dock over the
+        // bottom 14pt of a window this tall, and the audit grades each
+        // element's rectangle from the screen, so a row that ran to the
+        // window's edge was graded partly on the Dock's chrome — mid-grey on
+        // near-white, 2.6:1. The row's own contents were never the problem;
+        // its two text runs measure 13.8:1 on this wash and the status dot
+        // 12.6:1. Ten points of inset lifts the whole rectangle clear.
+        .padding(.horizontal, 8)
+        .padding(.bottom, 16)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Service \(model.serviceStatusLabel)")
     }
