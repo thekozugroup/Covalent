@@ -141,6 +141,130 @@ paths:
                 $ref: "#/components/schemas/PairingInvitation"
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /api/v1/pair/network/pending:
+    get:
+      summary: List retained network pairing requests
+      operationId: listNetworkPairingRequests
+      description: >-
+        Lists every retained QUIC pairing request, incoming and outgoing, after
+        applying expiry transitions. Completed and failed requests are retained
+        until they are explicitly cancelled so a polling client cannot miss a
+        terminal outcome. The view carries no invitation secret and no signed
+        exchange material.
+      responses:
+        "200":
+          description: Secret-free view of every retained pairing request.
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 64
+                items:
+                  $ref: "#/components/schemas/NetworkPairingItem"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /api/v1/pair/network/{pairingId}/confirm:
+    post:
+      summary: Confirm a network pairing request with the displayed code
+      operationId: confirmNetworkPairing
+      description: >-
+        Records this device's explicit short authentication string approval for
+        one retained QUIC pairing request and signs the updated exchange. When
+        both devices have confirmed, the pairing is finalized and the mutually
+        confirmed transport binding is connected as a pinned provider. The
+        displayed code is compared against the exchange in constant application
+        logic; a mismatch is an identity failure, not a retryable error.
+      parameters:
+        - name: pairingId
+          in: path
+          required: true
+          description: Invitation identifier naming the retained pairing request.
+          schema:
+            $ref: "#/components/schemas/NetworkPairingId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [displayedCode]
+              properties:
+                displayedCode:
+                  type: string
+                  pattern: "^[0-9]{4}(-[0-9]{4}){3}$"
+                  description: Code shown on this device and compared by a human against the peer.
+      responses:
+        "200":
+          description: Updated secret-free pairing item after this device's confirmation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NetworkPairingItem"
+        "400":
+          description: >-
+            The body does not satisfy the versioned contract, or the request is
+            already complete or failed and is no longer confirmable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: The displayed code does not match the exchange's short authentication string.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/Gone"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          description: >-
+            The finalized peer transport binding failed authenticated
+            verification against the observed certificate fingerprint.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /api/v1/pair/network/{pairingId}:
+    delete:
+      summary: Cancel and forget a network pairing request
+      operationId: cancelNetworkPairing
+      description: >-
+        Removes one retained pairing request. An incoming request that has not
+        completed also consumes its underlying invitation, so a cancelled
+        invitation can never be reused.
+      parameters:
+        - name: pairingId
+          in: path
+          required: true
+          description: Invitation identifier naming the retained pairing request.
+          schema:
+            $ref: "#/components/schemas/NetworkPairingId"
+      responses:
+        "204":
+          description: The pairing request was removed. No response body.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "410":
+          $ref: "#/components/responses/Gone"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /api/v1/pair/accept:
     post:
       summary: Accept a pairing invitation as responder
@@ -607,6 +731,176 @@ paths:
           $ref: "#/components/responses/Conflict"
         "503":
           $ref: "#/components/responses/Unavailable"
+  /api/v1/restores/archive/inventories:
+    post:
+      summary: Begin a bounded client target inventory upload
+      operationId: beginTargetInventory
+      description: >-
+        Opens a resumable upload session for the client-observed target
+        inventory of a document-provider restore. The declared root identity,
+        entry count, and total byte count are immutable for the life of the
+        session. Entries are appended as ordered pages and the session is sealed
+        by finalize.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BeginTargetInventoryRequest"
+      responses:
+        "200":
+          description: Opened upload session and the next expected entry offset, which is always zero.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TargetInventoryUploadResponse"
+        "400":
+          description: >-
+            The job ID is invalid, or the declared inventory metadata is invalid
+            or exceeds its bounded contract.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "507":
+          $ref: "#/components/responses/InsufficientStorage"
+  /api/v1/restores/archive/inventories/{inventoryId}/pages:
+    post:
+      summary: Append one ordered page to a target inventory upload
+      operationId: appendTargetInventoryPage
+      description: >-
+        Appends the next contiguous page of strictly path-sorted entries. Pages
+        are idempotent: re-sending a page that is already durable at its
+        original offset returns the current durable offset instead of storing it
+        twice. Any other offset mismatch is rejected with the durable offset in
+        X-Covalent-Inventory-Offset so the client can resume exactly.
+      parameters:
+        - name: inventoryId
+          in: path
+          required: true
+          description: Upload session identifier returned when the inventory was begun.
+          schema:
+            $ref: "#/components/schemas/HexDigest"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TargetInventoryPageRequest"
+      responses:
+        "200":
+          description: Page is durable. Returns the next expected entry offset.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TargetInventoryUploadResponse"
+        "400":
+          description: >-
+            The upload identity is malformed, or the entries are not canonical,
+            sorted, unique, and within the immutable declared counts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: >-
+            The upload is bound to a different restore job, or the page offset
+            does not match the durable server offset.
+          headers:
+            X-Covalent-Inventory-Offset:
+              $ref: "#/components/headers/TargetInventoryOffset"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          description: The page is empty or its content does not match its declared page digest.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "507":
+          $ref: "#/components/responses/InsufficientStorage"
+  /api/v1/restores/archive/inventories/{inventoryId}/finalize:
+    post:
+      summary: Seal a target inventory upload
+      operationId: finalizeTargetInventory
+      description: >-
+        Verifies that every declared entry was uploaded, computes the canonical
+        BLAKE3 inventory digest over the sorted entries, and writes the sealed
+        inventory. The call is idempotent: once sealed, the same reference is
+        returned and the staging session and page file no longer exist. A
+        declared final digest that does not match discards the staged upload.
+      parameters:
+        - name: inventoryId
+          in: path
+          required: true
+          description: Upload session identifier returned when the inventory was begun.
+          schema:
+            $ref: "#/components/schemas/HexDigest"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FinalizeTargetInventoryRequest"
+      responses:
+        "200":
+          description: Sealed inventory reference usable by streamed archive restore preview.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TargetInventoryReference"
+        "400":
+          description: >-
+            The upload identity is malformed, or the staged entries are not
+            canonical, sorted, unique, and within the declared counts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: >-
+            The finalization does not match the immutable upload metadata, or
+            the uploaded pages are incomplete.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          description: The staged content does not match the declared final inventory digest.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /api/v1/restores/archive/preview:
     post:
       summary: Preview a streamed document-provider restore
@@ -705,6 +999,12 @@ components:
       description: Digest bound by the signed restore plan.
       schema:
         $ref: "#/components/schemas/HexDigest"
+    TargetInventoryOffset:
+      required: true
+      description: Durable server-side entry offset to resume a target inventory upload from.
+      schema:
+        type: integer
+        minimum: 0
   requestBodies:
     PairConfirmation:
       required: true
@@ -775,6 +1075,36 @@ components:
             $ref: "#/components/schemas/ApiError"
     PayloadTooLarge:
       description: A bounded request, archive, or expanded entry set exceeded its contract limit.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    NotFound:
+      description: The referenced upload session or restore job is unavailable, expired, or already finalized.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    Gone:
+      description: The pairing request or its invitation is invalid, expired, or already used.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    UnsupportedMediaType:
+      description: "JSON routes require Content-Type: application/json."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    InsufficientStorage:
+      description: The bounded archive staging budget or the reserved free-space floor is exhausted.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    InternalError:
+      description: The local node could not complete the request.
       content:
         application/json:
           schema:
@@ -1468,6 +1798,207 @@ components:
         rejectedProviderCopies:
           type: integer
           minimum: 0
+    NetworkPairingId:
+      type: string
+      description: Invitation identifier that also names the retained network pairing request.
+      minLength: 1
+      maxLength: 128
+    TransportBinding:
+      type: object
+      description: Transport endpoint and pinned TLS identity bound into a mutually confirmed pairing.
+      additionalProperties: false
+      required: [peerId, displayName, address, certificateDer, certificateFingerprint]
+      properties:
+        peerId:
+          $ref: "#/components/schemas/DeviceId"
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 80
+        address:
+          type: string
+          description: Canonical numeric socket address including the peer port.
+          maxLength: 512
+        certificateDer:
+          type: string
+          description: Base64url unpadded DER certificate pinned by the QUIC client.
+        certificateFingerprint:
+          $ref: "#/components/schemas/HexDigest"
+    NetworkPairingItem:
+      type: object
+      description: Secret-free view of one retained network pairing request.
+      additionalProperties: false
+      required:
+        - pairingId
+        - direction
+        - peerName
+        - authenticationString
+        - expiresAtUnixMs
+        - state
+      properties:
+        pairingId:
+          $ref: "#/components/schemas/NetworkPairingId"
+        direction:
+          enum: [incoming, outgoing]
+          description: Whether this device created the request or received it from a remote node.
+        peerName:
+          type: string
+          minLength: 1
+          maxLength: 80
+        authenticationString:
+          type: string
+          pattern: "^[0-9]{4}(-[0-9]{4}){3}$"
+          description: Short authentication string a human compares on both devices.
+        expiresAtUnixMs:
+          type: integer
+          minimum: 1
+        state:
+          enum:
+            - awaiting_local_confirmation
+            - awaiting_peer_confirmation
+            - complete
+            - failed
+        failureCode:
+          type: string
+          pattern: "^[a-z_]{1,80}$"
+          description: Present only for a failed request.
+        failureMessage:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: Present only for a failed request.
+        peerTransport:
+          $ref: "#/components/schemas/TransportBinding"
+    TargetInventoryEntry:
+      type: object
+      description: One client-observed target entry used to compute external restore actions.
+      additionalProperties: false
+      required: [path, kind, length, identityToken]
+      properties:
+        path:
+          type: string
+          description: >-
+            Normalized relative slash-separated path beneath the authorized SAF
+            tree or PowerBox root. Absolute paths, backslashes, NUL, and empty,
+            dot, or parent components are rejected.
+          minLength: 1
+          maxLength: 4096
+        kind:
+          enum: [file, directory]
+        length:
+          type: integer
+          description: Observed regular-file length. Must be zero for a directory.
+          minimum: 0
+        modifiedAtUnixMs:
+          type: integer
+          minimum: 0
+        identityToken:
+          type: string
+          description: Bounded provider identity token used to detect replacement before apply.
+          minLength: 1
+          maxLength: 512
+    BeginTargetInventoryRequest:
+      type: object
+      additionalProperties: false
+      required: [jobId, schemaVersion, rootIdentity, entryCount, totalBytes]
+      properties:
+        jobId:
+          $ref: "#/components/schemas/JobId"
+        schemaVersion:
+          const: 1
+        rootIdentity:
+          type: string
+          description: Stable client-owned identity for the authorized SAF tree or PowerBox root.
+          minLength: 1
+          maxLength: 512
+        entryCount:
+          type: integer
+          minimum: 0
+          maximum: 250000
+        totalBytes:
+          type: integer
+          minimum: 0
+    TargetInventoryUploadResponse:
+      type: object
+      additionalProperties: false
+      required: [inventoryId, jobId, nextOffset]
+      properties:
+        inventoryId:
+          $ref: "#/components/schemas/HexDigest"
+        jobId:
+          $ref: "#/components/schemas/JobId"
+        nextOffset:
+          type: integer
+          description: Next entry offset the server expects.
+          minimum: 0
+    TargetInventoryPageRequest:
+      type: object
+      additionalProperties: false
+      required: [jobId, offset, pageDigest, entries]
+      properties:
+        jobId:
+          $ref: "#/components/schemas/JobId"
+        offset:
+          type: integer
+          description: Entry offset this page starts at.
+          minimum: 0
+        pageDigest:
+          $ref: "#/components/schemas/HexDigest"
+        entries:
+          type: array
+          minItems: 1
+          maxItems: 250000
+          items:
+            $ref: "#/components/schemas/TargetInventoryEntry"
+    FinalizeTargetInventoryRequest:
+      type: object
+      additionalProperties: false
+      required: [jobId, entryCount, totalBytes]
+      properties:
+        jobId:
+          $ref: "#/components/schemas/JobId"
+        entryCount:
+          type: integer
+          minimum: 0
+          maximum: 250000
+        totalBytes:
+          type: integer
+          minimum: 0
+        inventoryDigest:
+          type: string
+          description: Optional canonical inventory digest. An empty string skips the client-side cross-check.
+          pattern: "^$|^[0-9a-f]{64}$"
+          default: ""
+    TargetInventoryReference:
+      type: object
+      additionalProperties: false
+      required:
+        - inventoryId
+        - jobId
+        - schemaVersion
+        - rootIdentity
+        - entryCount
+        - totalBytes
+        - inventoryDigest
+      properties:
+        inventoryId:
+          $ref: "#/components/schemas/HexDigest"
+        jobId:
+          $ref: "#/components/schemas/JobId"
+        schemaVersion:
+          const: 1
+        rootIdentity:
+          type: string
+          minLength: 1
+          maxLength: 512
+        entryCount:
+          type: integer
+          minimum: 0
+        totalBytes:
+          type: integer
+          minimum: 0
+        inventoryDigest:
+          $ref: "#/components/schemas/HexDigest"
     HexDigest:
       type: string
       pattern: "^[0-9a-f]{64}$"
