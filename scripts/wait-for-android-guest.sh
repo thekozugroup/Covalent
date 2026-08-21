@@ -109,25 +109,71 @@ service_found() {
     tr -d '\r' | grep -q ': found'
 }
 
-# The one fact `sys.user.0.ce_available` cannot express. Until user 0 reaches
-# RUNNING_UNLOCKED, PackageManager matches only direct-boot-aware components, so
-# every activity the tests launch is unresolvable, every credential-encrypted
-# read throws, and keystore refuses to name a security level - which is exactly
-# the 40-failure shape run 32513657537 produced on a guest that was otherwise
-# perfectly healthy.
+# Until user 0's credential-encrypted key is unlocked, PackageManager matches
+# only direct-boot-aware components, so every activity the tests launch is
+# unresolvable, every credential-encrypted read throws, and keystore refuses to
+# name a security level - which is exactly the 40-failure shape run 32513657537
+# produced on a guest that was otherwise perfectly healthy.
+#
+# Read StorageManagerService's credential-encrypted key set first, because that
+# is the field the failures actually depend on. `dumpsys mount` prints
+# `CE unlocked users: [0]` on an unlocked guest and `CE unlocked users: []` on a
+# locked one, and that set is what UserManager.isUserUnlocked() returns and what
+# PackageManager's updateFlagsForComponent consults: with the CE key locked an
+# unflagged query is narrowed to MATCH_DIRECT_BOOT_AWARE, every non-direct-boot
+# component stops resolving, and androidx.test's ActivityInvoker falls back to
+# naming the *test* package - which is the `cmp=life.michaelwong.covalent.test/
+# androidx.activity.ComponentActivity` shape this gate keeps dying on.
+#
+# Measured on a local API 37 guest by setting a PIN, rebooting, and never
+# entering it, then clearing it again:
+#
+#                                    CE-locked            unlocked
+#   dumpsys mount CE unlocked users  []                   [0]
+#   am get-started-user-state 0      RUNNING_LOCKED       RUNNING_UNLOCKED
+#   getprop sys.user.0.ce_available  (empty)              true
+#   resolve-activity ComponentActivity  No activity found  resolves
+#
+# So all three discriminate, and the header's claim that
+# `sys.user.0.ce_available` "reads true on a locked guest and on an unlocked one
+# alike" does not reproduce - on a genuinely CE-locked guest it is empty. What
+# it cannot do is stay honest once the guest is merely slow, which is the case
+# below.
+#
+# Ordering matters for reliability, not just correctness. `am
+# get-started-user-state` costs an app_process start and on a two-core guest
+# under load it sometimes does not answer in time; when it did not, the old
+# fallback asked `dumpsys user` for `0=RUNNING_UNLOCKED`, found
+# `0=RUNNING_LOCKED` instead, and reported "unknown" - not "locked" - on a guest
+# that was definitively locked. `dumpsys mount` is one dumpsys against a service
+# the readiness window above already requires, so it answers in the case where
+# the expensive probe does not.
 #
 # Answers "unlocked", "locked" or "unknown", and the third is not the second.
-# This read costs an `am` round trip - which starts an app_process - and a
-# `dumpsys user` behind it, orders of magnitude more than a getprop or a
-# `service check`, and on a two-core guest under load it sometimes simply does
-# not answer in time. That distinction is load-bearing; see the stability window.
 user0_state() {
+  ce_line=$("$adb" -s "$serial" shell dumpsys mount 2>/dev/null | tr -d '\r' |
+    grep -m1 'CE unlocked users:')
+  case "$ce_line" in
+    *'CE unlocked users: ['*)
+      # Match the id exactly. A substring test for "0" would accept a guest
+      # where only user 10 is unlocked.
+      ids=${ce_line#*[}
+      ids=${ids%%]*}
+      for id in $(echo "$ids" | tr ',' ' '); do
+        [ "$id" = 0 ] && { echo unlocked; return; }
+      done
+      echo locked
+      return
+      ;;
+  esac
   case "$("$adb" -s "$serial" shell am get-started-user-state 0 2>/dev/null | tr -d '\r')" in
     *RUNNING_UNLOCKED*) echo unlocked; return ;;
     *RUNNING_LOCKED*|*RUNNING_UNLOCKING*|*BOOTING*) echo locked; return ;;
   esac
+  # Anchored for the same reason as the id match above: an unanchored
+  # `0=RUNNING_UNLOCKED` also matches `10=RUNNING_UNLOCKED`.
   if "$adb" -s "$serial" shell dumpsys user 2>/dev/null | tr -d '\r' |
-    grep -q '0=RUNNING_UNLOCKED'; then
+    grep -qE '(^|[^0-9])0=RUNNING_UNLOCKED'; then
     echo unlocked
   else
     echo unknown
@@ -261,10 +307,17 @@ done
 # The window above deliberately does not re-read the unlock state on every
 # sample, so assert it once more here. A system_server restart mid-window is the
 # one thing that could have undone it, and that restart would also have taken
-# the binder services with it - which the window does watch - so this is a
-# belt-and-braces check on a narrow race, not the primary defence.
-if [ "$(user0_state)" = locked ]; then
-  report_and_fail "user 0 re-locked before the gate could hand over"
+# the binder services with it - which the window does watch.
+#
+# Asserted as "must be provably unlocked" rather than "must not be locked". The
+# difference is not pedantry: user0_state answers "unknown" when its probes do
+# not come back, and a locked guest whose probes are slow answers "unknown", not
+# "locked" - so `= locked` let exactly the guest this gate exists to catch
+# through to instrumentation, where it produced 40 failures instead of one
+# named readiness failure. Requiring proof rather than absence of disproof costs
+# nothing on a healthy guest, which answers "unlocked" on the first read.
+if [ "$(user0_state)" != unlocked ]; then
+  report_and_fail "user 0 was not provably unlocked at handover"
 fi
 
 echo "API-37-gate: guest ready and stable across $stable_samples samples after $(elapsed)s"

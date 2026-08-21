@@ -321,15 +321,6 @@ fi
 
 apk="$repo_root/apps/android/app/build/outputs/apk/debug/app-debug.apk"
 test_apk="$repo_root/apps/android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
-if [ "$headless_ci" = true ]; then
-  "$adb" -s "$serial" install -r "$apk" >/dev/null
-else
-  mobilecli apps install "$apk" --device "$avd_name"
-fi
-"$adb" -s "$serial" install -r "$test_apk" >/dev/null
-# Android 17 installs instrumentation packages disabled. Enable the exact
-# package before launch so the device gate cannot silently report zero tests.
-"$adb" -s "$serial" shell pm enable life.michaelwong.covalent.test >/dev/null
 # When instrumentation dies the message `am` prints is the symptom, never the
 # cause: a DeadObjectException on the ActivityManager binder says only that
 # system_server was gone by the time the call landed, and an
@@ -480,6 +471,63 @@ dump_component_resolution_evidence() {
     | grep -Ei 'Unable to resolve activity|ActivityNotFound|user [0-9]+ is (still )?locked|not directBootAware|direct.?boot|credential.encrypted|CE storage|isUserUnlocked|unlockUser|onUserUnlock' >&2 \
     || echo "(no activity-resolution signature matched in the guest log)" >&2
 }
+
+# Installing is the heaviest thing this gate asks of the guest, and it is where
+# run 32520518338 actually died:
+#
+#   API-37-gate: probe install accepted after 16s
+#   API-37-gate: binder service 'package' is gone at 38s; restarting the window
+#   API-37-gate: guest ready and stable across 4 samples after 60s
+#   adb: failed to install .../app-debug.apk:
+#     cmd: Failure calling service package: Broken pipe (32)
+#
+# That is a young guest whose package service is flapping, not a locked user -
+# a different fault from the 40-failure shape, and one this script reported in a
+# single line because `adb install` ran bare under `set -e`. Nothing dumped, so
+# the next diagnosis started from that one line again. Route these through the
+# same post-mortem the instrumentation paths use: the guest's own log is the
+# only place the reason for a vanished `package` service is written down, and
+# logd outlives system_server, so it is still readable afterwards.
+install_or_dump() {
+  if ! "$adb" -s "$serial" install -r "$1" >/dev/null; then
+    echo "Android install of $1 failed on $serial." >&2
+    dump_guest_failure_evidence
+    exit 1
+  fi
+}
+if [ "$headless_ci" = true ]; then
+  install_or_dump "$apk"
+else
+  mobilecli apps install "$apk" --device "$avd_name"
+fi
+install_or_dump "$test_apk"
+# Android 17 installs instrumentation packages disabled. Enable the exact
+# package before launch so the device gate cannot silently report zero tests.
+"$adb" -s "$serial" shell pm enable life.michaelwong.covalent.test >/dev/null
+
+# The post-mortem above is a post-mortem: it runs after `am instrument` returns,
+# which on a 56-test suite is tens of minutes after the first test failed. A
+# guest that was credential-encrypted-locked at t=0 and recovered by the time
+# the dump runs reads perfectly healthy there, and that is precisely the shape
+# this gate has been failing in. So take the same readings once, unconditionally,
+# at the instant they govern - immediately before instrumentation starts.
+#
+# Four adb calls on a guest that is about to be handed a 56-test suite; the cost
+# is not measurable against what follows, and unlike the post-mortem this cannot
+# be too late.
+echo "--- API-37-gate: guest state at instrumentation start ---"
+printf 'CE key set        : '
+"$adb" -s "$serial" shell dumpsys mount 2>/dev/null \
+  | grep -m1 -i 'CE unlocked users' || echo "(unreported)"
+printf 'user 0 lifecycle  : '
+"$adb" -s "$serial" shell am get-started-user-state 0 2>&1 || true
+printf 'ComponentActivity : '
+"$adb" -s "$serial" shell cmd package resolve-activity --brief --user 0 \
+  -n life.michaelwong.covalent/androidx.activity.ComponentActivity 2>&1 | tail -1
+printf 'app package state : '
+"$adb" -s "$serial" shell dumpsys package life.michaelwong.covalent 2>/dev/null \
+  | grep -m1 -o 'installed=true[^,]*enabled=[0-9]*' || echo "(unreported)"
+echo "--- end guest state ---"
 
 instrumentation_log=$(mktemp "${TMPDIR:-/tmp}/covalent-api37-instrumentation.XXXXXX")
 if ! "$adb" -s "$serial" shell am instrument -w -r \
