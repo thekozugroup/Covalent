@@ -141,6 +141,97 @@ paths:
                 $ref: "#/components/schemas/PairingInvitation"
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /api/v1/pair/network/start:
+    post:
+      summary: Start network pairing with a discovered candidate
+      operationId: startNetworkPairing
+      description: >-
+        Originates a QUIC pairing exchange against one discovered candidate
+        endpoint. The candidate is resolved with bounded DNS and must land on a
+        private, loopback, link-local, or tailnet route; a public route is
+        refused rather than dialled. Each resolved address is tried in turn over
+        the pairing-only ALPN, and the certificate observed on that exact dial
+        must match the transport binding inside the peer's signed invitation, so
+        an invitation replayed from a different endpoint or identity is rejected
+        before anything is retained. The returned request is awaiting local
+        confirmation on both devices and carries the short authentication string
+        a human compares; nothing is authorized until both devices confirm it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [candidateAddress]
+              properties:
+                candidateAddress:
+                  type: string
+                  minLength: 1
+                  maxLength: 512
+                  description: >-
+                    Host and port of the discovered candidate, as carried by a
+                    DiscoveryCandidate endpoint.
+      responses:
+        "200":
+          description: >-
+            Retained outgoing request awaiting local confirmation, carrying the
+            short authentication string to compare against the peer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NetworkPairingItem"
+        "400":
+          description: >-
+            The body does not satisfy the versioned contract, the candidate does
+            not resolve to a safe route, or this node has no concrete advertised
+            peer endpoint to pair with.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >-
+            The peer's signed invitation did not verify against the identity or
+            certificate observed on the dial.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "409":
+          description: >-
+            The devices do not share a supported pairing wire version, or the
+            peer refused the request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "410":
+          $ref: "#/components/responses/Gone"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          description: >-
+            The peer's transport binding failed authenticated verification
+            against the observed certificate fingerprint.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          description: >-
+            No resolved address answered the pairing request. This is retryable
+            once the selected device is reachable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /api/v1/pair/network/pending:
     get:
       summary: List retained network pairing requests

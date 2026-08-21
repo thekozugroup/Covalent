@@ -28,11 +28,16 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use zeroize::Zeroizing;
 
+use crate::pairing_transport::{NetworkPairingService, serve_pairing_connection};
+
 /// Version of the authenticated, two-frame QUIC storage transport.
 ///
 /// This is intentionally independent from the local HTTP/archive API version.
 pub const QUIC_TRANSPORT_VERSION: u16 = 2;
 const ALPN: &[u8] = b"covalent-quic/2";
+/// ALPN of the pairing-only path, which carries identity-signed pairing requests
+/// between devices that are not yet paired and never carries stored objects.
+pub(crate) const PAIRING_ALPN: &[u8] = b"covalent-pair/1";
 const TRANSPORT_SIGNATURE_DOMAIN: &[u8] = b"covalent/authenticated-quic/v2";
 const TLS_ALERT_NO_APPLICATION_PROTOCOL: u8 = 0x78;
 const MAX_REPLAY_NONCES_PER_PEER: usize = 4_096;
@@ -275,17 +280,22 @@ impl TlsIdentity {
     }
 
     fn server_config(&self) -> Result<ServerConfig, CoreError> {
-        self.server_config_with_alpn(ALPN)
+        self.server_config_with_alpns(&[ALPN, PAIRING_ALPN])
     }
 
+    #[cfg(test)]
     fn server_config_with_alpn(&self, alpn: &[u8]) -> Result<ServerConfig, CoreError> {
+        self.server_config_with_alpns(&[alpn])
+    }
+
+    fn server_config_with_alpns(&self, alpns: &[&[u8]]) -> Result<ServerConfig, CoreError> {
         let certificate = CertificateDer::from(self.certificate_der.clone());
         let key = PrivatePkcs8KeyDer::from(self.private_key_der.to_vec());
         let mut crypto = rustls::ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(vec![certificate], key.into())
             .map_err(|error| CoreError::InvalidState(format!("configure QUIC TLS: {error}")))?;
-        crypto.alpn_protocols = vec![alpn.to_vec()];
+        crypto.alpn_protocols = alpns.iter().map(|alpn| alpn.to_vec()).collect();
         let quic_crypto = quinn::crypto::rustls::QuicServerConfig::try_from(crypto)
             .map_err(|error| CoreError::InvalidState(format!("configure QUIC crypto: {error}")))?;
         let mut config = ServerConfig::with_crypto(Arc::new(quic_crypto));
@@ -315,6 +325,7 @@ pub struct QuicNode {
     stream_limit: Arc<Semaphore>,
     blocking_limit: Arc<Semaphore>,
     source_connections: Arc<Mutex<BTreeMap<IpAddr, usize>>>,
+    pairing_service: Option<Arc<NetworkPairingService>>,
 }
 
 impl QuicNode {
@@ -342,7 +353,16 @@ impl QuicNode {
             stream_limit: Arc::new(Semaphore::new(MAX_GLOBAL_STREAMS)),
             blocking_limit: Arc::new(Semaphore::new(MAX_BLOCKING_OPERATIONS)),
             source_connections: Arc::new(Mutex::new(BTreeMap::new())),
+            pairing_service: None,
         })
+    }
+
+    /// Serves the pairing-only ALPN on this same endpoint, so the advertised and
+    /// discovered QUIC address is the exact address a pairing peer must reach.
+    #[must_use]
+    pub fn with_pairing_service(mut self, service: Arc<NetworkPairingService>) -> Self {
+        self.pairing_service = Some(service);
+        self
     }
 
     /// Actual bound address, including an assigned ephemeral port.
@@ -380,6 +400,7 @@ impl QuicNode {
             let rate_limiter = Arc::clone(&self.rate_limiter);
             let stream_limit = Arc::clone(&self.stream_limit);
             let blocking_limit = Arc::clone(&self.blocking_limit);
+            let pairing_service = self.pairing_service.clone();
             tokio::spawn(async move {
                 let _connection_permit = connection_permit;
                 let _source_permit = source_permit;
@@ -388,6 +409,12 @@ impl QuicNode {
                 else {
                     return;
                 };
+                if negotiated_alpn(&connection).as_deref() == Some(PAIRING_ALPN) {
+                    if let Some(service) = pairing_service {
+                        serve_pairing_connection(connection, service, stream_limit).await;
+                    }
+                    return;
+                }
                 loop {
                     let mut streams = match connection.accept_bi().await {
                         Ok(streams) => streams,
@@ -422,6 +449,14 @@ impl QuicNode {
             });
         }
     }
+}
+
+fn negotiated_alpn(connection: &quinn::Connection) -> Option<Vec<u8>> {
+    connection
+        .handshake_data()?
+        .downcast::<quinn::crypto::rustls::HandshakeData>()
+        .ok()?
+        .protocol
 }
 
 struct SourceConnectionPermit {
@@ -703,7 +738,7 @@ fn quic_runtime() -> Result<&'static tokio::runtime::Runtime, CoreError> {
     }
 }
 
-fn map_quic_connection_error(error: ConnectionError) -> CoreError {
+pub(crate) fn map_quic_connection_error(error: ConnectionError) -> CoreError {
     let no_application_protocol = TransportErrorCode::crypto(TLS_ALERT_NO_APPLICATION_PROTOCOL);
     if matches!(error, ConnectionError::VersionMismatch)
         || matches!(
@@ -1434,7 +1469,10 @@ impl ReplayWindow {
     }
 }
 
-async fn write_frame(send: &mut quinn::SendStream, bytes: &[u8]) -> Result<(), CoreError> {
+pub(crate) async fn write_frame(
+    send: &mut quinn::SendStream,
+    bytes: &[u8],
+) -> Result<(), CoreError> {
     let length =
         u32::try_from(bytes.len()).map_err(|_| CoreError::ResourceLimit("QUIC frame length"))?;
     send.write_u32(length)
@@ -1445,7 +1483,10 @@ async fn write_frame(send: &mut quinn::SendStream, bytes: &[u8]) -> Result<(), C
         .map_err(|_| CoreError::AuthenticationFailed)
 }
 
-async fn read_frame(receive: &mut quinn::RecvStream, maximum: usize) -> Result<Vec<u8>, CoreError> {
+pub(crate) async fn read_frame(
+    receive: &mut quinn::RecvStream,
+    maximum: usize,
+) -> Result<Vec<u8>, CoreError> {
     let length = receive
         .read_u32()
         .await
@@ -1985,7 +2026,7 @@ fn response_payload_digest(
     .to_string())
 }
 
-fn transport_limits() -> Result<TransportConfig, CoreError> {
+pub(crate) fn transport_limits() -> Result<TransportConfig, CoreError> {
     let mut transport = TransportConfig::default();
     transport.max_concurrent_bidi_streams(VarInt::from_u32(32));
     transport.max_concurrent_uni_streams(VarInt::from_u32(0));

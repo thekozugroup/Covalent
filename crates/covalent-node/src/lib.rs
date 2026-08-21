@@ -2,6 +2,7 @@
 
 pub mod discovery;
 pub mod network_pairing;
+pub mod pairing_transport;
 pub mod runtime;
 pub mod transport;
 
@@ -35,7 +36,11 @@ use covalent_protocol::{
     TransportBinding,
 };
 use http_body_util::BodyExt as _;
-use network_pairing::{NetworkPairingItem, NetworkPairingManager, NetworkPairingStatus};
+use network_pairing::{
+    NETWORK_PAIRING_SCHEMA_VERSION, NetworkPairingItem, NetworkPairingManager,
+    NetworkPairingStatus, NetworkPairingWireOperation, NetworkPairingWireResponse,
+};
+use pairing_transport::PairingConnection;
 use rand_core::{OsRng, RngCore};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -54,6 +59,10 @@ const APP_JS: &str = include_str!("../../../packaging/web/app.js");
 const PAIRING_FLOW_JS: &str = include_str!("../../../packaging/web/pairing-flow.js");
 const RESTORE_PLAN_FLOW_JS: &str = include_str!("../../../packaging/web/restore-plan-flow.js");
 const MAX_LOCAL_API_BODY_BYTES: usize = 2 * 1_024 * 1_024;
+/// Bounds the peer round trips one pending-list poll may perform.
+const MAX_NETWORK_PAIRING_POLLS_PER_REQUEST: usize = 4;
+/// Caps the latency an unreachable peer can add to a routine list or cancel.
+const NETWORK_PAIRING_BACKGROUND_BUDGET: Duration = Duration::from_secs(3);
 const PROVIDER_CONNECTION_SCHEMA_VERSION: u16 = 1;
 const MAX_PROVIDER_CONNECTION_STATE_BYTES: usize = 16 * 1_024 * 1_024;
 const ARCHIVE_METADATA_HEADER: &str = "x-covalent-archive-metadata";
@@ -585,7 +594,13 @@ impl AppState {
         self
     }
 
-    fn local_transport_binding(&self) -> Result<TransportBinding, CoreError> {
+    /// Shared retained pairing state, so the QUIC pairing service and the local
+    /// API operate on exactly one durable transcript.
+    pub(crate) fn network_pairing_manager(&self) -> Arc<NetworkPairingManager> {
+        Arc::clone(&self.network_pairing)
+    }
+
+    pub(crate) fn local_transport_binding(&self) -> Result<TransportBinding, CoreError> {
         let certificate = self.transport_certificate.as_deref().ok_or_else(|| {
             CoreError::InvalidState("transport identity is unavailable".to_owned())
         })?;
@@ -930,6 +945,194 @@ impl AppState {
         Ok(())
     }
 
+    /// Signs one pairing-only request with this node's identity and sends it.
+    async fn pairing_request(
+        &self,
+        connection: &PairingConnection,
+        operation: NetworkPairingWireOperation,
+    ) -> Result<NetworkPairingWireResponse, ApiError> {
+        let request = self
+            .network_pairing
+            .sign_wire_request(operation, now_unix_ms())
+            .map_err(ApiError::from_core)?;
+        connection
+            .request(&request)
+            .await
+            .map_err(|_| ApiError::pairing_peer_unreachable())
+    }
+
+    /// Dials one candidate, obtains its signed invitation, and registers the
+    /// outgoing exchange against the exact certificate the dial observed.
+    async fn begin_network_pairing(
+        &self,
+        address: SocketAddr,
+        local_transport: &TransportBinding,
+    ) -> Result<String, ApiError> {
+        let connection = PairingConnection::connect(address)
+            .await
+            .map_err(|_| ApiError::pairing_peer_unreachable())?;
+        match self
+            .pairing_request(&connection, NetworkPairingWireOperation::Probe)
+            .await?
+        {
+            NetworkPairingWireResponse::Probe {
+                minimum_protocol_version,
+                maximum_protocol_version,
+            } => {
+                if minimum_protocol_version > NETWORK_PAIRING_SCHEMA_VERSION
+                    || maximum_protocol_version < NETWORK_PAIRING_SCHEMA_VERSION
+                {
+                    return Err(ApiError::from_core(CoreError::ProtocolNegotiationFailed));
+                }
+            }
+            response => return Err(pairing_wire_error(&response)),
+        }
+        let invitation = match self
+            .pairing_request(
+                &connection,
+                NetworkPairingWireOperation::Start {
+                    responder_transport: local_transport.clone(),
+                },
+            )
+            .await?
+        {
+            NetworkPairingWireResponse::Invitation { invitation } => *invitation,
+            response => return Err(pairing_wire_error(&response)),
+        };
+        let session = self
+            .network_pairing
+            .register_outgoing(
+                address,
+                connection.observed_certificate(),
+                invitation,
+                local_transport.clone(),
+                now_unix_ms(),
+            )
+            .map_err(ApiError::from_core)?;
+        let pairing_id = session.invitation().invitation_id.clone();
+        // Publish the unconfirmed exchange immediately so both devices display
+        // the same short authentication string and either human may confirm
+        // first. Nothing is trusted until both confirmations are present.
+        let published = self
+            .submit_network_pairing(&connection, &pairing_id, session)
+            .await;
+        if let Err(error) = published {
+            // Nothing was established, so do not strand a dead request here.
+            let _ = self.network_pairing.remove(&pairing_id, now_unix_ms());
+            return Err(error);
+        }
+        Ok(pairing_id)
+    }
+
+    /// Sends one signed exchange to the peer and merges the reply it returns.
+    async fn submit_network_pairing(
+        &self,
+        connection: &PairingConnection,
+        pairing_id: &str,
+        session: PairingSession,
+    ) -> Result<(), ApiError> {
+        let response = self
+            .pairing_request(
+                connection,
+                NetworkPairingWireOperation::Submit {
+                    pairing_id: pairing_id.to_owned(),
+                    session: Box::new(session),
+                },
+            )
+            .await?;
+        let NetworkPairingWireResponse::Session { session } = response else {
+            return Err(pairing_wire_error(&response));
+        };
+        self.network_pairing
+            .merge_peer_session(pairing_id, &session, now_unix_ms())
+            .map_err(ApiError::from_core)?;
+        Ok(())
+    }
+
+    /// Publishes this device's newly signed consent to the retained peer endpoint.
+    async fn publish_network_pairing(
+        &self,
+        pairing_id: &str,
+        session: PairingSession,
+    ) -> Result<(), ApiError> {
+        let address = self
+            .network_pairing
+            .candidate_address(pairing_id)
+            .map_err(ApiError::from_core)?;
+        let connection = PairingConnection::connect(address)
+            .await
+            .map_err(|_| ApiError::pairing_peer_unreachable())?;
+        self.submit_network_pairing(&connection, pairing_id, session)
+            .await
+    }
+
+    /// Recovers exchanges whose peer reply was lost after this device confirmed.
+    ///
+    /// Only requests already awaiting the peer are polled, so a routine list
+    /// call performs no peer round trip in the common case, and a peer that is
+    /// unreachable leaves the retained request exactly as it was.
+    async fn reconcile_network_pairings(&self) {
+        let Ok(items) = self.network_pairing.items(now_unix_ms()) else {
+            return;
+        };
+        for pairing_id in items
+            .into_iter()
+            .filter(|item| item.state == NetworkPairingStatus::AwaitingPeerConfirmation)
+            .map(|item| item.pairing_id)
+            .take(MAX_NETWORK_PAIRING_POLLS_PER_REQUEST)
+        {
+            let _ = self.poll_network_pairing(&pairing_id).await;
+        }
+    }
+
+    async fn poll_network_pairing(&self, pairing_id: &str) -> Result<(), ApiError> {
+        let address = self
+            .network_pairing
+            .candidate_address(pairing_id)
+            .map_err(ApiError::from_core)?;
+        let connection = PairingConnection::connect(address)
+            .await
+            .map_err(|_| ApiError::pairing_peer_unreachable())?;
+        let response = self
+            .pairing_request(
+                &connection,
+                NetworkPairingWireOperation::Poll {
+                    pairing_id: pairing_id.to_owned(),
+                },
+            )
+            .await?;
+        let NetworkPairingWireResponse::Session { session } = response else {
+            return Err(pairing_wire_error(&response));
+        };
+        self.network_pairing
+            .merge_peer_session(pairing_id, &session, now_unix_ms())
+            .map_err(ApiError::from_core)?;
+        Ok(())
+    }
+
+    /// Tells the peer to forget a request before this device forgets it locally.
+    async fn cancel_network_pairing_with_peer(&self, pairing_id: &str) -> Result<(), ApiError> {
+        let address = self
+            .network_pairing
+            .candidate_address(pairing_id)
+            .map_err(ApiError::from_core)?;
+        let connection = PairingConnection::connect(address)
+            .await
+            .map_err(|_| ApiError::pairing_peer_unreachable())?;
+        match self
+            .pairing_request(
+                &connection,
+                NetworkPairingWireOperation::Cancel {
+                    pairing_id: pairing_id.to_owned(),
+                },
+            )
+            .await?
+        {
+            NetworkPairingWireResponse::Acknowledged => Ok(()),
+            response => Err(pairing_wire_error(&response)),
+        }
+    }
+
     fn connect_completed_network_pairing(
         &self,
         item: &NetworkPairingItem,
@@ -954,11 +1157,26 @@ impl AppState {
         {
             return Err(CoreError::AuthenticationFailed);
         }
-        self.connect_provider(ProviderConnection {
+        let connection = ProviderConnection {
             peer_id: transport.peer_id,
             address,
             certificate_der: transport.certificate_der.clone(),
-        })
+        };
+        // Polling clients reach this on every pending-list call, so an already
+        // connected identical provider must not rewrite durable state.
+        {
+            let connected = self
+                .provider_connections
+                .lock()
+                .map_err(|_| CoreError::Synchronization)?;
+            if connected.get(&connection.peer_id).is_some_and(|existing| {
+                existing.address == connection.address
+                    && existing.certificate_der == connection.certificate_der
+            }) {
+                return Ok(());
+            }
+        }
+        self.connect_provider(connection)
     }
 }
 
@@ -1004,6 +1222,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/config/export", post(config_export))
         .route("/api/v1/config/import", post(config_import))
         .route("/api/v1/pair/invitations", post(pair_invitation))
+        .route("/api/v1/pair/network/start", post(pair_network_start))
         .route("/api/v1/pair/network/pending", get(pair_network_pending))
         .route(
             "/api/v1/pair/network/{pairing_id}/confirm",
@@ -1685,15 +1904,74 @@ struct PairInvitationRequest {
     endpoints: Vec<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PairNetworkStartRequest {
+    candidate_address: String,
+}
+
+/// Originates network pairing against one discovered candidate endpoint.
+///
+/// The candidate resolves only to a private, loopback, link-local, or tailnet
+/// route; a public route is refused rather than silently dialled. Every
+/// resolved address is tried in turn, and the first that answers a signed
+/// invitation matching the certificate observed on that exact dial becomes the
+/// retained outgoing request.
+async fn pair_network_start(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ContractJson(request): ContractJson<PairNetworkStartRequest>,
+) -> Result<axum::Json<NetworkPairingItem>, ApiError> {
+    authorize(&state, &headers)?;
+    let local_transport = state.local_transport_binding().map_err(|_| {
+        ApiError::bad_request(
+            "pairing_endpoint_unavailable",
+            "This node has no concrete advertised peer endpoint to pair with.",
+        )
+    })?;
+    let addresses = network_pairing::resolve_pairing_candidate(&request.candidate_address, false)
+        .await
+        .map_err(ApiError::from_core)?;
+    let mut last_error = ApiError::pairing_peer_unreachable();
+    for address in addresses {
+        match state.begin_network_pairing(address, &local_transport).await {
+            Ok(pairing_id) => {
+                let item = state
+                    .network_pairing
+                    .item(&pairing_id, now_unix_ms())
+                    .map_err(ApiError::from_core)?;
+                return Ok(axum::Json(item));
+            }
+            Err(error) => last_error = error,
+        }
+    }
+    Err(last_error)
+}
+
 async fn pair_network_pending(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<axum::Json<Vec<NetworkPairingItem>>, ApiError> {
     authorize(&state, &headers)?;
+    // Recovers exchanges whose peer reply was lost after this device confirmed.
+    // Bounded, because clients poll this route and a peer may be offline.
+    let _ = tokio::time::timeout(
+        NETWORK_PAIRING_BACKGROUND_BUDGET,
+        state.reconcile_network_pairings(),
+    )
+    .await;
     let items = state
         .network_pairing
         .items(now_unix_ms())
         .map_err(ApiError::from_core)?;
+    // A pairing can complete through a peer-initiated exchange, so connecting
+    // the mutually confirmed binding cannot depend on this device's own confirm
+    // call having been the last step.
+    for item in &items {
+        state
+            .connect_completed_network_pairing(item)
+            .map_err(ApiError::from_core)?;
+    }
     Ok(axum::Json(items))
 }
 
@@ -1710,10 +1988,14 @@ async fn pair_network_confirm(
     ContractJson(request): ContractJson<PairNetworkConfirmRequest>,
 ) -> Result<axum::Json<NetworkPairingItem>, ApiError> {
     authorize(&state, &headers)?;
-    state
+    let confirmed = state
         .network_pairing
         .confirm_local(&pairing_id, &request.displayed_code, now_unix_ms())
         .map_err(ApiError::from_core)?;
+    // This device's consent is already durable. Publishing it lets the peer
+    // finalize immediately when its own human has confirmed, and the reply
+    // carries back the peer's signature when it confirmed first.
+    let published = state.publish_network_pairing(&pairing_id, confirmed).await;
     let item = state
         .network_pairing
         .item(&pairing_id, now_unix_ms())
@@ -1721,6 +2003,9 @@ async fn pair_network_confirm(
     state
         .connect_completed_network_pairing(&item)
         .map_err(ApiError::from_core)?;
+    if item.state != NetworkPairingStatus::Complete {
+        published?;
+    }
     Ok(axum::Json(item))
 }
 
@@ -1730,6 +2015,14 @@ async fn pair_network_cancel(
     AxumPath(pairing_id): AxumPath<String>,
 ) -> Result<StatusCode, ApiError> {
     authorize(&state, &headers)?;
+    // Best effort: a peer that cannot be reached still expires the request on
+    // its own retention deadline, so local removal must not depend on it or
+    // wait on it.
+    let _ = tokio::time::timeout(
+        NETWORK_PAIRING_BACKGROUND_BUDGET,
+        state.cancel_network_pairing_with_peer(&pairing_id),
+    )
+    .await;
     state
         .network_pairing
         .remove(&pairing_id, now_unix_ms())
@@ -5224,6 +5517,25 @@ fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
     }
 }
 
+/// Maps a peer's stable pairing failure code onto this node's error taxonomy.
+fn pairing_wire_error(response: &NetworkPairingWireResponse) -> ApiError {
+    let NetworkPairingWireResponse::Failed { code, .. } = response else {
+        return ApiError::from_core(CoreError::ProtocolNegotiationFailed);
+    };
+    match code.as_str() {
+        "pairing_unavailable" => ApiError::from_core(CoreError::InvitationUnavailable),
+        "pairing_identity_mismatch" => ApiError::from_core(CoreError::IdentityMismatch),
+        "pairing_resource_limit" => ApiError::from_core(CoreError::ResourceLimit("peer pairing")),
+        _ => ApiError {
+            status: StatusCode::CONFLICT,
+            code: "pairing_rejected",
+            message: "The selected device refused the pairing request.",
+            retryable: false,
+            upload_offset: None,
+        },
+    }
+}
+
 fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
     let maximum = left.len().max(right.len());
     let mut difference = left.len() ^ right.len();
@@ -5403,6 +5715,16 @@ impl ApiError {
 
     fn from_json(_error: serde_json::Error) -> Self {
         Self::from_json_contract()
+    }
+
+    const fn pairing_peer_unreachable() -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            code: "pairing_peer_unreachable",
+            message: "The selected device did not answer the pairing request.",
+            retryable: true,
+            upload_offset: None,
+        }
     }
 
     const fn bad_request(code: &'static str, message: &'static str) -> Self {

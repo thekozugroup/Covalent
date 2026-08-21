@@ -18,6 +18,7 @@ use tracing::info;
 use zeroize::Zeroizing;
 
 use crate::discovery::DiscoveryController;
+use crate::pairing_transport::NetworkPairingService;
 use crate::transport::{QuicNode, TlsIdentity};
 use crate::{
     AppState, ArchiveLimits, NodeReadyInfo, load_or_create_local_api_token, remove_node_ready_file,
@@ -236,6 +237,13 @@ impl NodeRuntime {
         if let Some(address) = static_advertised_peer_address {
             state = state.with_peer_address(address);
         }
+        // The pairing-only ALPN shares the advertised QUIC endpoint, so the
+        // address a peer discovers is the exact address it must dial to pair.
+        let quic_node = quic_node.with_pairing_service(Arc::new(NetworkPairingService::new(
+            Arc::clone(&engine),
+            state.network_pairing_manager(),
+            state.local_transport_binding().ok(),
+        )));
 
         if let Some(path) = ready_file.as_deref()
             && let Err(error) = write_node_ready_file(

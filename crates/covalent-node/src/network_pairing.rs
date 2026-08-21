@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::persist_private_file;
 
-const NETWORK_PAIRING_SCHEMA_VERSION: u16 = 1;
+/// Wire schema version negotiated by the pairing-only QUIC probe.
+pub const NETWORK_PAIRING_SCHEMA_VERSION: u16 = 1;
 const MAX_NETWORK_PAIRING_STATE_BYTES: usize = 8 * 1_024 * 1_024;
 const MAX_NETWORK_PAIRING_ITEMS: usize = 64;
 const PAIRING_ROLE_COUNT: usize = 3;
@@ -60,6 +61,18 @@ pub async fn resolve_pairing_candidate(
         ));
     }
     Ok(addresses.into_iter().collect())
+}
+
+/// Rejects a pairing endpoint whose route is unsafe for an unauthenticated exchange.
+///
+/// Applied to every address this node dials for pairing, including the responder
+/// binding named inside a remote `Submit`, so a signed request cannot steer this
+/// node at an arbitrary public endpoint.
+pub fn validate_pairing_route(
+    address: SocketAddr,
+    allow_public_route: bool,
+) -> Result<(), CoreError> {
+    validate_resolved_candidate(address, allow_public_route)
 }
 
 /// Whether a pairing request was initiated here or arrived from a remote node.
