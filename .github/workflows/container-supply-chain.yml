@@ -187,8 +187,9 @@ jobs:
       - name: Publish container evidence to the release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
         run: |
-          ./scripts/publish-release-assets.sh "${{ needs.validate.outputs.version }}" \
+          ./scripts/publish-release-assets.sh "${RELEASE_VERSION}" \
             covalent-container.spdx.json \
             covalent-container-digest.txt \
             covalent-container-SHA256SUMS.txt
