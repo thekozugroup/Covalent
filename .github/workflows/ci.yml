@@ -348,15 +348,40 @@ jobs:
           # the same second on a healthy cold boot of this AVD - measured at 17s - so
           # this costs seconds, and when it does not happen it reports what it saw
           # instead of handing the suite a device that cannot pass.
-          # Same one-command-per-line rule as above, which is why the wait is a
+          # Same one-command-per-line rule as above, which is why each wait is a
           # single `until` and not a readable multi-line loop. The action has
           # already waited for sys.boot_completed by the time this runs, so
-          # sys.user.0.ce_available is the only remaining question; it is the
-          # property that flips when user 0's credential-encrypted storage
+          # sys.user.0.ce_available is the only remaining question there; it is
+          # the property that flips when user 0's credential-encrypted storage
           # unlocks, and it is what all four failure shapes above were really
           # asking about.
+          #
+          # The second wait is the same lesson one layer down. Once the warm
+          # BuildKit cache above actually worked, the gate stopped spending
+          # twelve minutes rebuilding and reached `adb install` 73 seconds after
+          # boot - and run 32499985083 died there:
+          #
+          #   java.lang.NullPointerException: Attempt to invoke virtual method
+          #   'void android.content.pm.PackageManagerInternal.freeStorage(...)'
+          #   on a null object reference
+          #     at com.android.server.StorageManagerService.allocateBytes
+          #     at com.android.server.pm.PackageInstallerSession.doWriteInternal
+          #
+          # PackageManagerInternal is registered into LocalServices some time
+          # after sys.boot_completed on this image, and until it is, every
+          # session write that has to allocate space dies in the platform. The
+          # same install succeeded in run 32495908942, where the cold rebuild had
+          # accidentally delayed it to twelve minutes after boot. There is no
+          # external property that reports that registration, so rather than wait
+          # on a proxy and hope it correlates, wait on the capability itself: keep
+          # attempting the real install until the guest accepts one. It is
+          # idempotent (`-r`, and the gate script installs again anyway), it is
+          # bounded, and it fails closed with `df /data` attached. Installing the
+          # app is a precondition, not an assertion, so nothing the gate proves is
+          # weakened by proving the device can accept it first.
           script: |
             n=0; until $ANDROID_HOME/platform-tools/adb -s emulator-5570 shell getprop sys.user.0.ce_available | grep -q true; do n=$((n+2)); if [ $n -ge 300 ]; then echo API-37-gate: user 0 never unlocked after ${n}s - sys.user.0.ce_available never became true >&2; $ANDROID_HOME/platform-tools/adb -s emulator-5570 shell dumpsys user >&2; exit 1; fi; sleep 2; done; echo API-37-gate: user 0 unlocked after ${n}s
+            n=0; until $ANDROID_HOME/platform-tools/adb -s emulator-5570 install -r apps/android/app/build/outputs/apk/debug/app-debug.apk; do n=$((n+5)); if [ $n -ge 300 ]; then echo API-37-gate: the guest never became able to accept a package install after ${n}s >&2; $ANDROID_HOME/platform-tools/adb -s emulator-5570 shell df /data >&2; exit 1; fi; sleep 5; done; echo API-37-gate: package installer ready after ${n}s
             $ANDROID_HOME/platform-tools/adb -s emulator-5570 shell wm dismiss-keyguard || true
             COVALENT_ANDROID_EVIDENCE_DIR="${{ runner.temp }}/covalent-android-api37" COVALENT_ANDROID_HEADLESS_CI=true ANDROID_SERIAL=emulator-5570 ./scripts/android-api37-device-test.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
