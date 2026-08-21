@@ -73,18 +73,29 @@ jobs:
   build-digests:
     name: Build immutable ${{ matrix.platform }} digest
     needs: validate
-    runs-on: ubuntu-latest
+    # Each platform builds on a runner of that architecture. Both legs used to
+    # share ubuntu-latest, so the arm64 leg was QEMU-emulated - the same
+    # emulated Rust build that never once finished inside CI's arm64 job. A
+    # release that has to survive that is a release waiting to time out.
+    #
+    # Nothing about the evidence changes: each leg still pushes by digest with
+    # sbom and max provenance, and the digests are still merged, scanned,
+    # signed, and attested downstream. Only the machine each build runs on
+    # differs, and each now matches the image it produces.
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: true
       matrix:
         include:
           - platform: linux/amd64
             artifact: amd64
+            runner: ubuntu-latest
           - platform: linux/arm64
             artifact: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      # No setup-qemu-action: every leg now builds its own native platform.
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:

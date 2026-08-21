@@ -2,6 +2,29 @@ name: covalent-e2e
 
 # This file intentionally describes three independent nodes. The test harness
 # performs the authenticated pairing exchange over their published local APIs.
+#
+# Every node sets COVALENT_ADVERTISED_PEER_ADDRESS explicitly, and the network
+# below exists so those addresses can be written down ahead of time.
+#
+# Without it the nodes refuse to advertise anything and every pairing route
+# answers 409 `peer_endpoint_unavailable`. That refusal is correct: the only
+# non-loopback address a container on a bridge network can see is its own
+# 172.16/12 bridge address, which is reachable from the host and from sibling
+# containers and from nothing else - emphatically not from the phone a real
+# user is holding. The node cannot tell those two situations apart, so it
+# declines rather than publish an address that would resolve, accept a tap, and
+# then time out.
+#
+# This stack is the situation the node cannot detect: the peers here *are*
+# sibling containers on that same bridge, so the bridge address is exactly the
+# right one to advertise. Saying so explicitly is the documented remedy an
+# Unraid operator uses for the same reason, so the harness exercises the real
+# override rather than a test-only escape hatch.
+#
+# The addresses are static because the node signs the advertised address into
+# the pairing transcript, and the pairing invitation endpoint rejects any
+# endpoint that does not match it. A DHCP address assigned at container start
+# cannot be named in the environment that same container is started with.
 services:
   node-a:
     image: ${COVALENT_IMAGE:-covalent:e2e}
@@ -12,6 +35,7 @@ services:
       COVALENT_LISTEN: 127.0.0.1:8787
       COVALENT_PEER_LISTEN: 0.0.0.0:8787
       COVALENT_HTTPS_HOST: 127.0.0.1
+      COVALENT_ADVERTISED_PEER_ADDRESS: 172.28.7.11:8787
       COVALENT_DATA_DIR: /data
       COVALENT_DEVICE_NAME: Node A
       COVALENT_LAN_DISCOVERY: "false"
@@ -25,6 +49,9 @@ services:
       - a-restore:/restore
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
+    networks:
+      peers:
+        ipv4_address: 172.28.7.11
   node-b:
     image: ${COVALENT_IMAGE:-covalent:e2e}
     user: "65532:65532"
@@ -34,6 +61,7 @@ services:
       COVALENT_LISTEN: 127.0.0.1:8787
       COVALENT_PEER_LISTEN: 0.0.0.0:8787
       COVALENT_HTTPS_HOST: 127.0.0.1
+      COVALENT_ADVERTISED_PEER_ADDRESS: 172.28.7.12:8787
       COVALENT_DATA_DIR: /data
       COVALENT_DEVICE_NAME: Node B
       COVALENT_LAN_DISCOVERY: "false"
@@ -46,6 +74,9 @@ services:
       - b-restore:/restore
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
+    networks:
+      peers:
+        ipv4_address: 172.28.7.12
   node-c:
     image: ${COVALENT_IMAGE:-covalent:e2e}
     user: "65532:65532"
@@ -55,6 +86,7 @@ services:
       COVALENT_LISTEN: 127.0.0.1:8787
       COVALENT_PEER_LISTEN: 0.0.0.0:8787
       COVALENT_HTTPS_HOST: 127.0.0.1
+      COVALENT_ADVERTISED_PEER_ADDRESS: 172.28.7.13:8787
       COVALENT_DATA_DIR: /data
       COVALENT_DEVICE_NAME: Node C
       COVALENT_LAN_DISCOVERY: "false"
@@ -67,6 +99,19 @@ services:
       - c-restore:/restore
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
+    networks:
+      peers:
+        ipv4_address: 172.28.7.13
+
+# A /24 rather than the /16 Docker hands out by default, so this stack claims
+# the smallest range it can and is least likely to collide with a network the
+# developer or runner already has.
+networks:
+  peers:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.7.0/24
 
 volumes:
   a-data: {}

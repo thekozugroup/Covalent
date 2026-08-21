@@ -43,8 +43,15 @@ token() { $compose exec -T "$1" sh -c 'cat /data/local-api-token'; }
 token_a=$(token node-a)
 token_b=$(token node-b)
 token_c=$(token node-c)
-node_b_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$($compose ps -q node-b)")
-node_c_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$($compose ps -q node-c)")
+# Read back rather than restate the addresses the compose file pinned. If the
+# static assignment ever silently stopped taking effect, the node would still be
+# advertising the pinned address while these read the real one, and the
+# invitation below would be rejected as `pairing_endpoint_mismatch` instead of
+# pairing three nodes that cannot actually reach each other.
+peer_ip() { docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$($compose ps -q "$1")"; }
+node_a_ip=$(peer_ip node-a)
+node_b_ip=$(peer_ip node-b)
+node_c_ip=$(peer_ip node-c)
 
 if [ "${COVALENT_RUN_APPLE_TLS_E2E:-false}" = "true" ]; then
   "$repo_root/scripts/apple-package-tls-e2e.sh" \
@@ -54,7 +61,7 @@ if [ "${COVALENT_RUN_APPLE_TLS_E2E:-false}" = "true" ]; then
     "$tls_directory/b.crt"
 fi
 
-TOKEN_A="$token_a" TOKEN_B="$token_b" TOKEN_C="$token_c" NODE_B_IP="$node_b_ip" NODE_C_IP="$node_c_ip" CA_A="$tls_directory/a.crt" CA_B="$tls_directory/b.crt" CA_C="$tls_directory/c.crt" python3 - <<'PY'
+TOKEN_A="$token_a" TOKEN_B="$token_b" TOKEN_C="$token_c" NODE_A_IP="$node_a_ip" NODE_B_IP="$node_b_ip" NODE_C_IP="$node_c_ip" CA_A="$tls_directory/a.crt" CA_B="$tls_directory/b.crt" CA_C="$tls_directory/c.crt" python3 - <<'PY'
 import json
 import os
 import ssl
@@ -88,8 +95,15 @@ for _ in range(30):
 else:
     raise SystemExit("all compose nodes did not become ready")
 
+# The invitation endpoint has to be the exact address the node advertises,
+# because the node signs it into the pairing transcript and rejects any other
+# value as `pairing_endpoint_mismatch`. The service name this used to send was
+# never that address: the node stores a SocketAddr and can only ever advertise
+# a literal one.
+addresses = {node: os.environ[f"NODE_{node.upper()}_IP"] for node in ports}
+
 def pair(inviter, responder, responder_name):
-    invitation = request(inviter, "/api/v1/pair/invitations", {"lifetimeMs": 600000, "endpoints": [f"node-{inviter}:8787"]})
+    invitation = request(inviter, "/api/v1/pair/invitations", {"lifetimeMs": 600000, "endpoints": [f"{addresses[inviter]}:8787"]})
     session = request(responder, "/api/v1/pair/accept", {
         "invitation": invitation, "responderName": responder_name,
         "responderRoles": ["storage_provider", "backup_reader"],
@@ -97,19 +111,48 @@ def pair(inviter, responder, responder_name):
     })
     session = request(responder, "/api/v1/pair/confirm/responder", {"session": session, "displayedCode": session["authenticationString"]})
     session = request(inviter, "/api/v1/pair/confirm/inviter", {"session": session, "displayedCode": session["authenticationString"]})
-    request(inviter, "/api/v1/pair/finalize/inviter", {"session": session})
+    finalized = request(inviter, "/api/v1/pair/finalize/inviter", {"session": session})
     request(responder, "/api/v1/pair/finalize/responder", {"session": session})
+    # `inviterGrant` is the grant the inviter issued, so it describes the
+    # responder and carries the roles the responder was granted.
+    if "storage_provider" not in finalized["inviterGrant"]["roles"]:
+        raise SystemExit(f"{responder_name} was not granted the storage_provider role")
+    # The mutually signed binding the inviter durably trusted when it finalized,
+    # carried in the pairing session this harness relays between the two nodes.
+    # Connecting a provider confirms that exact record - the node compares every
+    # field against the one it stored and answers `provider_binding_mismatch` on
+    # any difference - so it is taken verbatim rather than reassembled from parts
+    # that merely look equivalent.
+    #
+    # A real client reads this from the `peerTransport` of its own finalize
+    # response instead. That field is null on the inviter side today, so it
+    # cannot be the source here; the session carries the identical record.
+    transport = session["responderTransport"]
+    # Cross-check the signed record against what the responder itself reports
+    # live. These come from different places - one from the pairing transcript,
+    # one from the running node - and a disagreement means the transcript does
+    # not describe the node it names.
+    identity = request(responder, "/api/v1/transport/identity")
+    if transport["peerId"] != identity["deviceId"]:
+        raise SystemExit(f"signed transport for {responder_name} names a different device")
+    if transport["certificateFingerprint"] != identity["certificateFingerprint"]:
+        raise SystemExit(f"signed transport for {responder_name} pins a different certificate")
+    # Proves the advertised-address override actually reached the transcript.
+    # Without it the node refuses to advertise at all and pairing never gets
+    # this far, so this asserts the address is not merely present but correct.
+    expected_address = f"{addresses[responder]}:8787"
+    if transport["address"] != expected_address:
+        raise SystemExit(f"signed transport for {responder_name} advertises {transport['address']}, expected {expected_address}")
+    return transport
 
-pair("a", "b", "Node B")
-pair("a", "c", "Node C")
-identity_b = request("b", "/api/v1/transport/identity")
-identity_c = request("c", "/api/v1/transport/identity")
-for identity, address in ((identity_b, os.environ["NODE_B_IP"]), (identity_c, os.environ["NODE_C_IP"])):
-    request("a", "/api/v1/providers/connect", {"peerId": identity["deviceId"], "address": f"{address}:8787", "certificateDer": identity["certificateDer"]})
+transport_b = pair("a", "b", "Node B")
+transport_c = pair("a", "c", "Node C")
+for transport in (transport_b, transport_c):
+    request("a", "/api/v1/providers/connect", {"peerTransport": transport})
 
 backup = request("a", "/api/v1/backups", {
     "sourceRoot": "/source", "displayName": "Compose disaster drill", "snapshotId": "compose-snapshot", "jobId": "compose-backup",
-    "selectedProviderIds": [identity_b["deviceId"], identity_c["deviceId"]],
+    "selectedProviderIds": [transport_b["peerId"], transport_c["peerId"]],
 })
 if backup["selectedProviders"] != 2 or backup["degradedFailures"] != 0:
     raise SystemExit("explicit two-provider replication did not complete")
@@ -119,7 +162,7 @@ if not availability["intact"] or len(availability["providerAvailability"]) != 2:
 
 settings = request("a", "/api/v1/config/export", {})
 request("a", "/api/v1/config/import", {"confirmed": True, "settings": settings})
-print(json.dumps({"backupId": backup["backupId"], "providerIds": [identity_b["deviceId"], identity_c["deviceId"]]}))
+print(json.dumps({"backupId": backup["backupId"], "providerIds": [transport_b["peerId"], transport_c["peerId"]]}))
 PY
 
 # Simulate source loss and one local corrupt ciphertext. Repair must use an
