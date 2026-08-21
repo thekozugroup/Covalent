@@ -248,10 +248,10 @@ public actor NodeClient {
             request.setValue(String(upload.length), forHTTPHeaderField: AppleArchiveTransfer.uploadLengthHeader)
             request.setValue(upload.digest, forHTTPHeaderField: AppleArchiveTransfer.uploadDigestHeader)
             request.setValue(String(upload.length - upload.offset), forHTTPHeaderField: "Content-Length")
-            request.httpBodyStream = try UploadSliceInputStream(
-                url: URL(fileURLWithPath: upload.archivePath),
+            request.httpBodyStream = try ArchiveUploadBody.slice(
+                archivePath: upload.archivePath,
                 offset: upload.offset,
-                length: upload.length - upload.offset
+                count: upload.length - upload.offset
             )
             let data: Data
             let response: URLResponse
@@ -966,63 +966,54 @@ private struct DurableArchiveUpload: Codable, Sendable {
     var offset: UInt64
 }
 
-private final class UploadSliceInputStream: InputStream, @unchecked Sendable {
-    private let descriptor: Int32
-    private var remaining: UInt64
-    private var currentStatus: Stream.Status = .notOpen
-    private var currentError: Error?
-
-    init(url: URL, offset: UInt64, length: UInt64) throws {
-        guard offset <= UInt64(Int64.max), length <= UInt64(Int64.max) else {
+/// Builds the request body for a resumable archive upload.
+///
+/// `URLSession` hands `httpBodyStream` to CFNetwork, which toll-free-bridges it to a
+/// `CFReadStream` and calls `CFReadStreamSetClient` on it. `InputStream` is a class
+/// cluster, so a Swift subclass that only overrides the read primitives reaches
+/// `_NSRequestConcreteObject` ("-setDelegate: only defined for abstract class") and
+/// aborts the process the moment CFNetwork starts providing the body. The body must
+/// therefore be a concrete Foundation file stream, positioned through the public
+/// `fileCurrentOffsetKey` property.
+///
+/// The archive is still validated through an `O_NOFOLLOW` descriptor, and the length
+/// check is now made before the request is sent instead of aborting mid-body.
+private enum ArchiveUploadBody {
+    /// Streams `count` bytes of the archive at `archivePath`, starting at `offset`.
+    static func slice(archivePath: String, offset: UInt64, count: UInt64) throws -> InputStream {
+        let limit = UInt64(Int64.max)
+        guard offset <= limit, count <= limit, offset <= limit - count else {
             throw NodeClientError.invalidPayload("Archive upload offset exceeds platform limits.")
         }
-        let descriptor = Darwin.open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        let required = offset + count
+
+        let descriptor = Darwin.open(archivePath, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
         guard descriptor >= 0 else {
             throw NodeClientError.invalidPayload("Durable archive could not be opened safely.")
         }
-        guard lseek(descriptor, off_t(offset), SEEK_SET) == off_t(offset) else {
-            Darwin.close(descriptor)
-            throw NodeClientError.invalidPayload("Durable archive offset is unavailable.")
+        defer { Darwin.close(descriptor) }
+
+        var opened = stat()
+        guard fstat(descriptor, &opened) == 0, opened.st_mode & S_IFMT == S_IFREG else {
+            throw NodeClientError.invalidPayload("Durable archive is not a regular file.")
         }
-        self.descriptor = descriptor
-        self.remaining = length
-        super.init(data: Data())
-    }
-
-    deinit { Darwin.close(descriptor) }
-
-    override func open() {
-        currentStatus = remaining == 0 ? .atEnd : .open
-    }
-
-    override func close() {
-        currentStatus = .closed
-    }
-
-    override var streamStatus: Stream.Status { currentStatus }
-    override var streamError: Error? { currentError }
-    override var hasBytesAvailable: Bool { currentStatus == .open && remaining > 0 }
-
-    override func read(_ buffer: UnsafeMutablePointer<UInt8>, maxLength len: Int) -> Int {
-        guard currentStatus == .open, remaining > 0 else { return 0 }
-        let requested = min(len, Int(min(remaining, UInt64(Int.max))))
-        while true {
-            let count = Darwin.read(descriptor, buffer, requested)
-            if count < 0, errno == EINTR { continue }
-            if count < 0 {
-                currentError = NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
-                currentStatus = .error
-                return -1
-            }
-            if count == 0 {
-                currentError = NodeClientError.invalidPayload("Durable archive ended before its declared length.")
-                currentStatus = .error
-                return -1
-            }
-            remaining -= UInt64(count)
-            if remaining == 0 { currentStatus = .atEnd }
-            return count
+        guard opened.st_size >= 0, UInt64(opened.st_size) >= required else {
+            throw NodeClientError.invalidPayload("Durable archive ended before its declared length.")
         }
+
+        // Foundation opens the stream by path, so confirm the path still names the exact
+        // regular file the descriptor just vouched for rather than a symlink swapped in.
+        var byPath = stat()
+        guard lstat(archivePath, &byPath) == 0,
+              byPath.st_mode & S_IFMT == S_IFREG,
+              byPath.st_dev == opened.st_dev,
+              byPath.st_ino == opened.st_ino,
+              let stream = InputStream(url: URL(fileURLWithPath: archivePath))
+        else {
+            throw NodeClientError.invalidPayload("Durable archive could not be opened safely.")
+        }
+        stream.setProperty(NSNumber(value: offset), forKey: .fileCurrentOffsetKey)
+        return stream
     }
 }
 

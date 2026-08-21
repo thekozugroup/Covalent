@@ -163,12 +163,13 @@ jobs:
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
       # GitHub's ubuntu-24.04 image ships /dev/kvm as root:kvm mode 0660 with an
       # empty `kvm` group, so the emulator's ProbeKVM reports
-      # "This user doesn't have permissions to use KVM (/dev/kvm)", silently falls
-      # back to TCG, and the API 37 image never finishes booting inside the
-      # action's timeout. Chowning the node is not enough: install the udev rule
-      # the emulator-runner action documents, then prove acceleration is really
-      # usable with a live KVM_GET_API_VERSION ioctl so a software-only runner
-      # fails here, loudly and immediately, instead of timing out ten minutes later.
+      # "This user doesn't have permissions to use KVM (/dev/kvm)" and silently
+      # falls back to TCG. Install the udev rule the emulator-runner action
+      # documents, then prove acceleration is really usable with a live
+      # KVM_GET_API_VERSION ioctl so a software-only runner fails here, loudly and
+      # immediately, instead of timing out ten minutes later. This gate passes on
+      # the hosted runner today (it reports "KVM API version 12"), so keep it as
+      # the tripwire that tells a KVM regression apart from a guest boot failure.
       - name: Enable and prove KVM acceleration
         run: |
           set -euo pipefail
@@ -197,17 +198,37 @@ jobs:
       # api-level 37.0 is intentional and verified: sdkmanager installs
       # system-images;android-37.0;google_apis;x86_64 on the hosted runner today.
       # The emulator boots under KVM; do not downgrade this pin.
+      #
+      # The hardware envelope below is load-bearing. Without `profile`/`ram-size`/
+      # `heap-size`/`disk-size` the action runs a bare `avdmanager create avd`, which
+      # produces the emulator's ancient fallback device: a 320x640 160dpi screen, a
+      # 64 MB Dalvik heap and an undersized RAM and userdata partition. An API 37
+      # google_apis x86_64 guest cannot reach userspace in that envelope, so adbd
+      # never starts and `adb -s emulator-5570 shell getprop sys.boot_completed`
+      # answers `device offline` until the boot timeout expires - even though KVM,
+      # the system image and the emulator process itself are all healthy. Give the
+      # guest a real Pixel profile and enough RAM, heap and disk to finish booting.
       - uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: "37.0"
           target: google_apis
           arch: x86_64
           avd-name: Covalent_API_37
+          profile: pixel_6
+          cores: 4
+          ram-size: 4096M
+          heap-size: 576M
+          disk-size: 8G
           emulator-port: 5570
           disable-animations: true
           disable-linux-hw-accel: false
           emulator-boot-timeout: 900
-          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-metrics -accel on
+          # Start the adb server before the emulator so it can register itself
+          # instead of logging "Unable to connect to adb daemon on port: 5037" and
+          # leaving the action to discover the device by port scan.
+          pre-emulator-launch-script: |
+            "$ANDROID_HOME/platform-tools/adb" start-server
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-metrics -accel on
           script: COVALENT_ANDROID_EVIDENCE_DIR="${{ runner.temp }}/covalent-android-api37" COVALENT_ANDROID_HEADLESS_CI=true ANDROID_SERIAL=emulator-5570 ./scripts/android-api37-device-test.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
