@@ -1,7 +1,7 @@
 //! Durable user-consent state for discovery-mediated network pairing.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -23,6 +23,18 @@ const PAIRING_RESOLUTION_TIMEOUT: std::time::Duration = std::time::Duration::fro
 const NETWORK_PAIRING_REQUEST_DOMAIN: &[u8] = b"covalent/network-pairing-request/v1";
 const NETWORK_PAIRING_REQUEST_SKEW_MS: u64 = 5 * 60 * 1_000;
 const MAX_CONSUMED_REQUEST_NONCES: usize = 4_096;
+/// Ceiling on the shared nonce table one source may occupy at once.
+///
+/// Sized at an eighth of the table so no single source can crowd out the rest,
+/// and well above what a chatty legitimate peer needs: a pairing that polls its
+/// peer twice a second for the whole skew window lands near six hundred, and a
+/// source that does exceed this recycles its own oldest slot instead of being
+/// refused. See [`admit_request_nonce`] for why that recycling is safe.
+const MAX_CONSUMED_NONCES_PER_SOURCE: usize = 512;
+/// Bucket label for a request with no attributable network source.
+const LOCAL_NONCE_SOURCE: &str = "local";
+/// Bounds the attacker-influenced width of one persisted bucket label.
+const MAX_NONCE_SOURCE_BYTES: usize = 64;
 
 /// Resolves one explicit host:port candidate with bounded DNS and safe-route defaults.
 pub async fn resolve_pairing_candidate(
@@ -204,6 +216,12 @@ struct PersistedNetworkPairingState {
     items: BTreeMap<String, PersistedNetworkPairingItem>,
     #[serde(default)]
     consumed_request_nonces: BTreeMap<String, u64>,
+    /// Bucket that admitted each consumed nonce, keyed identically to
+    /// `consumed_request_nonces`. Attribution is what makes source-fair
+    /// eviction possible; it is deliberately persisted so a restart during a
+    /// flood does not leave the table full of unevictable entries.
+    #[serde(default)]
+    consumed_request_nonce_sources: BTreeMap<String, String>,
 }
 
 impl Default for PersistedNetworkPairingState {
@@ -212,6 +230,7 @@ impl Default for PersistedNetworkPairingState {
             schema_version: NETWORK_PAIRING_SCHEMA_VERSION,
             items: BTreeMap::new(),
             consumed_request_nonces: BTreeMap::new(),
+            consumed_request_nonce_sources: BTreeMap::new(),
         }
     }
 }
@@ -340,10 +359,17 @@ impl NetworkPairingManager {
     }
 
     /// Verifies freshness/signature and durably consumes a request nonce before dispatch.
+    ///
+    /// `source` is the address the request actually arrived from, already proven
+    /// reachable by QUIC address validation before this node spent a signature
+    /// verification on it. It selects the rate-limiting bucket only; every
+    /// freshness, signature, operation-binding and replay check below is
+    /// identical for every caller and is never scoped to a bucket.
     pub fn verify_and_consume_wire_request(
         &self,
         request: &NetworkPairingWireRequest,
         now_unix_ms: u64,
+        source: Option<IpAddr>,
     ) -> Result<(), CoreError> {
         if request.schema_version != NETWORK_PAIRING_SCHEMA_VERSION
             || now_unix_ms.abs_diff(request.issued_at_unix_ms) > NETWORK_PAIRING_REQUEST_SKEW_MS
@@ -383,21 +409,17 @@ impl NetworkPairingManager {
             | NetworkPairingWireOperation::Cancel { .. } => {}
         }
         let nonce_key = format!("{}:{}", request.requester.device_id, request.request_id);
+        let expires_at_unix_ms = request
+            .issued_at_unix_ms
+            .saturating_add(NETWORK_PAIRING_REQUEST_SKEW_MS);
         let mut state = self.state.lock().map_err(|_| CoreError::Synchronization)?;
-        state
-            .consumed_request_nonces
-            .retain(|_, expires_at| *expires_at > now_unix_ms);
-        if state.consumed_request_nonces.contains_key(&nonce_key)
-            || state.consumed_request_nonces.len() >= MAX_CONSUMED_REQUEST_NONCES
-        {
-            return Err(CoreError::AuthenticationFailed);
-        }
-        state.consumed_request_nonces.insert(
+        admit_request_nonce(
+            &mut state,
             nonce_key,
-            request
-                .issued_at_unix_ms
-                .saturating_add(NETWORK_PAIRING_REQUEST_SKEW_MS),
-        );
+            expires_at_unix_ms,
+            &nonce_source_key(source),
+            now_unix_ms,
+        )?;
         self.persist_locked(&state)
     }
 
@@ -741,6 +763,141 @@ impl NetworkPairingManager {
     }
 }
 
+/// Names the rate-limiting bucket one request address belongs to.
+///
+/// IPv4 addresses are individually scarce on the local networks pairing runs on,
+/// so each one funds its own budget. A single IPv6 host is routinely handed a
+/// whole /64, so the prefix — not the address — is the unit an attacker cannot
+/// cheaply multiply; budgeting per address there would hand one host billions of
+/// free buckets.
+fn nonce_source_key(source: Option<IpAddr>) -> String {
+    match source {
+        Some(IpAddr::V4(address)) => address.to_string(),
+        Some(IpAddr::V6(address)) => {
+            let mut prefix = [0_u8; 16];
+            prefix[..8].copy_from_slice(&address.octets()[..8]);
+            format!("{}/64", Ipv6Addr::from(prefix))
+        }
+        None => LOCAL_NONCE_SOURCE.to_owned(),
+    }
+}
+
+/// Admits one freshly verified request nonce under a source-partitioned budget.
+///
+/// # Eviction versus replay protection
+///
+/// This is the crux of the source-keyed limiting, so the reasoning is written
+/// down rather than implied.
+///
+/// Replay protection is global and stays global. The same signed request can be
+/// replayed from *any* address, so partitioning the uniqueness *lookup* by
+/// source would be a replay hole outright: an attacker would capture a request,
+/// send it from a second address whose partition is empty, and be admitted. The
+/// `contains_key` check below therefore runs against the whole table, exactly as
+/// it did before this function existed, and is reached by every caller before
+/// any budget is consulted.
+///
+/// Only *eviction* is partitioned, under a single invariant: **an entry is
+/// evicted only from a bucket that is at or above its own per-source budget, and
+/// the soonest-expiring entry in that bucket goes first.** Two consequences make
+/// that safe:
+///
+/// * A source evicting its own entry gains nothing. It holds the signing key for
+///   those requests and can mint a fresh nonce whenever it likes, so recovering
+///   the ability to replay a request it already consumed is not a new
+///   capability — it is a slower way to do what it could already do.
+/// * A bucket below its budget is untouchable by anyone. A peer behaving
+///   normally — a handful of nonces per pairing — can never have an entry
+///   dropped by another source, so its replay protection is byte-for-byte what
+///   it was before this change.
+///
+/// The residual cost is stated plainly rather than hidden: when the table is
+/// full and *every* bucket sits below budget, admission is refused instead of
+/// evicting from a well-behaved peer. Reaching that state needs distinct,
+/// address-validated sources in the hundreds — not the single flooding source
+/// this guards against — and the alternative would trade a throughput problem
+/// for a replay hole in a peer that did nothing wrong. Denial is the safer
+/// failure, so denial is what happens.
+///
+/// Nonces restored from a state file written before attribution existed carry no
+/// bucket, count toward no budget, and are never evicted. That is the same
+/// conservative choice, and it drains on its own within one skew window.
+fn admit_request_nonce(
+    state: &mut PersistedNetworkPairingState,
+    nonce_key: String,
+    expires_at_unix_ms: u64,
+    source: &str,
+    now_unix_ms: u64,
+) -> Result<(), CoreError> {
+    let PersistedNetworkPairingState {
+        consumed_request_nonces: nonces,
+        consumed_request_nonce_sources: buckets,
+        ..
+    } = state;
+    nonces.retain(|_, expires_at| *expires_at > now_unix_ms);
+    buckets.retain(|key, _| nonces.contains_key(key));
+
+    // Global single-consumption, checked first and never scoped to a bucket.
+    if nonces.contains_key(&nonce_key) {
+        return Err(CoreError::AuthenticationFailed);
+    }
+
+    if bucket_len(buckets, source) >= MAX_CONSUMED_NONCES_PER_SOURCE {
+        evict_soonest_expiring(nonces, buckets, source);
+    }
+    if nonces.len() >= MAX_CONSUMED_REQUEST_NONCES {
+        let crowder = noisiest_bucket_at_budget(buckets)
+            .ok_or(CoreError::ResourceLimit("pairing request nonces"))?;
+        evict_soonest_expiring(nonces, buckets, &crowder);
+    }
+    if nonces.len() >= MAX_CONSUMED_REQUEST_NONCES {
+        return Err(CoreError::ResourceLimit("pairing request nonces"));
+    }
+    nonces.insert(nonce_key.clone(), expires_at_unix_ms);
+    buckets.insert(nonce_key, source.to_owned());
+    Ok(())
+}
+
+fn bucket_len(buckets: &BTreeMap<String, String>, source: &str) -> usize {
+    buckets
+        .values()
+        .filter(|bucket| bucket.as_str() == source)
+        .count()
+}
+
+/// Drops one bucket's soonest-expiring entry, so the slot recovered is the one
+/// whose replay window had least left to run.
+fn evict_soonest_expiring(
+    nonces: &mut BTreeMap<String, u64>,
+    buckets: &mut BTreeMap<String, String>,
+    source: &str,
+) {
+    let victim = buckets
+        .iter()
+        .filter(|(_, bucket)| bucket.as_str() == source)
+        .filter_map(|(key, _)| nonces.get(key).map(|expires_at| (*expires_at, key.clone())))
+        .min();
+    if let Some((_, key)) = victim {
+        nonces.remove(&key);
+        buckets.remove(&key);
+    }
+}
+
+/// The widest bucket, considered only once it has spent its own budget. Buckets
+/// under budget are never eviction candidates, which is what keeps a quiet
+/// peer's replay protection intact under someone else's flood.
+fn noisiest_bucket_at_budget(buckets: &BTreeMap<String, String>) -> Option<String> {
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for bucket in buckets.values() {
+        *counts.entry(bucket.as_str()).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .filter(|&(_, count)| count >= MAX_CONSUMED_NONCES_PER_SOURCE)
+        .max_by_key(|&(source, count)| (count, source))
+        .map(|(source, _)| source.to_owned())
+}
+
 fn network_pairing_roles() -> BTreeSet<PeerRole> {
     BTreeSet::from([
         PeerRole::StorageProvider,
@@ -908,6 +1065,15 @@ fn validate_state(
     if state.schema_version != NETWORK_PAIRING_SCHEMA_VERSION
         || state.items.len() > MAX_NETWORK_PAIRING_ITEMS
         || state.consumed_request_nonces.len() > MAX_CONSUMED_REQUEST_NONCES
+        || state.consumed_request_nonce_sources.len() > MAX_CONSUMED_REQUEST_NONCES
+        || state
+            .consumed_request_nonce_sources
+            .iter()
+            .any(|(key, source)| {
+                source.is_empty()
+                    || source.len() > MAX_NONCE_SOURCE_BYTES
+                    || !state.consumed_request_nonces.contains_key(key)
+            })
         || state.consumed_request_nonces.iter().any(|(key, expiry)| {
             *expiry == 0
                 || key.len() > 256
@@ -1252,13 +1418,31 @@ mod tests {
 
         // A fresh, correctly signed request is accepted exactly once.
         manager
-            .verify_and_consume_wire_request(&request, now)
+            .verify_and_consume_wire_request(
+                &request,
+                now,
+                Some(IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 20))),
+            )
             .expect("first verification");
         assert!(
             manager
-                .verify_and_consume_wire_request(&request, now)
+                .verify_and_consume_wire_request(
+                    &request,
+                    now,
+                    Some(IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 20)))
+                )
                 .is_err(),
             "consumed request nonce must not be replayable"
+        );
+        assert!(
+            manager
+                .verify_and_consume_wire_request(
+                    &request,
+                    now,
+                    Some(IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 7))),
+                )
+                .is_err(),
+            "source-keyed budgets must not scope replay protection to one source"
         );
 
         // A second request outside the accepted clock skew is rejected.
@@ -1267,7 +1451,11 @@ mod tests {
             .expect("sign stale");
         assert!(
             manager
-                .verify_and_consume_wire_request(&stale, now + NETWORK_PAIRING_REQUEST_SKEW_MS + 1)
+                .verify_and_consume_wire_request(
+                    &stale,
+                    now + NETWORK_PAIRING_REQUEST_SKEW_MS + 1,
+                    Some(IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 20))),
+                )
                 .is_err(),
             "request outside the skew window must be rejected"
         );
@@ -1281,9 +1469,207 @@ mod tests {
         };
         assert!(
             manager
-                .verify_and_consume_wire_request(&tampered, now)
+                .verify_and_consume_wire_request(
+                    &tampered,
+                    now,
+                    Some(IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 20)))
+                )
                 .is_err(),
             "operation is covered by the request signature"
         );
+    }
+
+    fn fresh_nonce_state() -> (PersistedNetworkPairingState, u64, u64) {
+        let now = 1_700_000_000_000_u64;
+        (
+            PersistedNetworkPairingState::default(),
+            now,
+            now + NETWORK_PAIRING_REQUEST_SKEW_MS,
+        )
+    }
+
+    #[test]
+    fn one_source_flooding_the_nonce_table_cannot_deny_another_source() {
+        let (mut state, now, expiry) = fresh_nonce_state();
+
+        // A quiet peer consumes one nonce, the way a real pairing does.
+        admit_request_nonce(
+            &mut state,
+            "quiet:0".to_owned(),
+            expiry,
+            "192.168.1.20",
+            now,
+        )
+        .expect("quiet peer admitted");
+
+        // The flood runs twice past the whole table's capacity. Before
+        // source-keyed budgets this filled the shared table and every later
+        // request — from anyone — was refused for the length of the skew window.
+        for index in 0..MAX_CONSUMED_REQUEST_NONCES * 2 {
+            admit_request_nonce(
+                &mut state,
+                format!("flood:{index}"),
+                expiry,
+                "192.168.1.99",
+                now,
+            )
+            .expect("a flooding source is absorbed by its own budget, never refused");
+            assert!(
+                state.consumed_request_nonces.len() <= MAX_CONSUMED_REQUEST_NONCES,
+                "the table must stay inside its global bound"
+            );
+        }
+
+        // The flood is pinned to its own budget rather than the whole table.
+        assert_eq!(
+            bucket_len(&state.consumed_request_nonce_sources, "192.168.1.99"),
+            MAX_CONSUMED_NONCES_PER_SOURCE,
+            "one source must never hold more than its per-source budget"
+        );
+        assert!(
+            state.consumed_request_nonces.len() <= MAX_CONSUMED_NONCES_PER_SOURCE + 1,
+            "a single flooding source must leave the rest of the table free"
+        );
+
+        // The quiet peer's nonce survived every one of those admissions, so its
+        // replay protection is exactly what it was before the flood started.
+        assert!(
+            state.consumed_request_nonces.contains_key("quiet:0"),
+            "a flood must never evict a quiet peer's unexpired nonce"
+        );
+
+        // And a third source pairs normally while the flood is still at budget.
+        for index in 0..64 {
+            admit_request_nonce(
+                &mut state,
+                format!("legit:{index}"),
+                expiry,
+                "192.168.1.30",
+                now,
+            )
+            .expect("a legitimate peer still pairs during someone else's flood");
+        }
+        assert!(state.consumed_request_nonces.contains_key("quiet:0"));
+    }
+
+    #[test]
+    fn replay_protection_stays_global_across_buckets_and_over_budget_sources() {
+        let (mut state, now, expiry) = fresh_nonce_state();
+
+        admit_request_nonce(&mut state, "peer:one".to_owned(), expiry, "10.0.0.5", now)
+            .expect("first consumption");
+
+        // The same nonce replayed from a different source, whose bucket is
+        // empty, must still be refused: partitioning the uniqueness lookup would
+        // be a replay hole, so only eviction is partitioned.
+        assert!(
+            admit_request_nonce(&mut state, "peer:one".to_owned(), expiry, "10.0.0.6", now)
+                .is_err(),
+            "a consumed nonce must stay dead no matter which source replays it"
+        );
+        assert_eq!(
+            state.consumed_request_nonce_sources.get("peer:one"),
+            Some(&"10.0.0.5".to_owned()),
+            "a refused replay must not re-attribute the incumbent entry"
+        );
+
+        // Driving one source past its budget evicts only that source's own
+        // entries, so the other bucket's replay protection is untouched.
+        for index in 0..MAX_CONSUMED_NONCES_PER_SOURCE * 2 {
+            admit_request_nonce(
+                &mut state,
+                format!("noisy:{index}"),
+                expiry,
+                "10.0.0.6",
+                now,
+            )
+            .expect("self-eviction keeps the noisy source served");
+        }
+        assert!(
+            admit_request_nonce(&mut state, "peer:one".to_owned(), expiry, "10.0.0.6", now)
+                .is_err(),
+            "an over-budget source must not be able to reopen someone else's nonce"
+        );
+    }
+
+    #[test]
+    fn a_bucket_below_its_budget_is_never_evicted_even_under_global_pressure() {
+        let (mut state, now, expiry) = fresh_nonce_state();
+
+        // Spread a full table across enough sources that every bucket stays
+        // under budget — the distributed case, not the single-source flood.
+        let sources = MAX_CONSUMED_REQUEST_NONCES / MAX_CONSUMED_NONCES_PER_SOURCE + 1;
+        for index in 0..MAX_CONSUMED_REQUEST_NONCES {
+            admit_request_nonce(
+                &mut state,
+                format!("spread:{index}"),
+                expiry,
+                &format!("10.1.0.{}", index % sources),
+                now,
+            )
+            .expect("filling the table below every budget");
+        }
+        assert_eq!(
+            state.consumed_request_nonces.len(),
+            MAX_CONSUMED_REQUEST_NONCES
+        );
+        for bucket in 0..sources {
+            assert!(
+                bucket_len(
+                    &state.consumed_request_nonce_sources,
+                    &format!("10.1.0.{bucket}")
+                ) < MAX_CONSUMED_NONCES_PER_SOURCE
+            );
+        }
+
+        // This is the tradeoff, asserted rather than assumed: with no bucket
+        // over budget there is no safe eviction candidate, so admission is
+        // refused instead of dropping a well-behaved peer's unexpired nonce.
+        assert!(
+            matches!(
+                admit_request_nonce(&mut state, "newcomer:0".to_owned(), expiry, "10.2.0.1", now),
+                Err(CoreError::ResourceLimit(_))
+            ),
+            "a full table of below-budget buckets must refuse, never evict"
+        );
+        assert_eq!(
+            state.consumed_request_nonces.len(),
+            MAX_CONSUMED_REQUEST_NONCES,
+            "a refused admission must not have evicted anything"
+        );
+
+        // Once the window passes, the table drains and pairing recovers.
+        let later = expiry + 1;
+        admit_request_nonce(
+            &mut state,
+            "newcomer:0".to_owned(),
+            later + NETWORK_PAIRING_REQUEST_SKEW_MS,
+            "10.2.0.1",
+            later,
+        )
+        .expect("expired nonces are pruned and capacity returns");
+        assert_eq!(state.consumed_request_nonces.len(), 1);
+        assert_eq!(state.consumed_request_nonce_sources.len(), 1);
+    }
+
+    #[test]
+    fn nonce_source_buckets_group_ipv6_by_prefix_and_ipv4_by_address() {
+        let first = nonce_source_key(Some("2001:db8::1".parse().expect("ipv6")));
+        let second = nonce_source_key(Some("2001:db8::dead:beef".parse().expect("ipv6")));
+        assert_eq!(
+            first, second,
+            "one IPv6 host holds a whole /64, so the prefix funds one budget"
+        );
+        assert_ne!(
+            first,
+            nonce_source_key(Some("2001:db9::1".parse().expect("ipv6"))),
+            "a different /64 is a different budget"
+        );
+        assert_ne!(
+            nonce_source_key(Some(IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 20)))),
+            nonce_source_key(Some(IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 21)))),
+            "IPv4 addresses are scarce enough to budget individually"
+        );
+        assert_eq!(nonce_source_key(None), LOCAL_NONCE_SOURCE);
     }
 }

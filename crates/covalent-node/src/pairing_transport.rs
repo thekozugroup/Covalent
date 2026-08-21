@@ -80,11 +80,15 @@ impl NetworkPairingService {
     }
 
     /// Verifies one signed request and produces its response, or a stable failure.
-    async fn dispatch(&self, request: &NetworkPairingWireRequest) -> NetworkPairingWireResponse {
+    async fn dispatch(
+        &self,
+        request: &NetworkPairingWireRequest,
+        source: IpAddr,
+    ) -> NetworkPairingWireResponse {
         let now_unix_ms = self.now_unix_ms();
         if self
             .manager
-            .verify_and_consume_wire_request(request, now_unix_ms)
+            .verify_and_consume_wire_request(request, now_unix_ms, Some(source))
             .is_err()
         {
             return failure(
@@ -200,6 +204,10 @@ pub(crate) async fn serve_pairing_connection(
     stream_limit: Arc<Semaphore>,
 ) {
     let connection_streams = Arc::new(Semaphore::new(MAX_PAIRING_STREAMS_PER_CONNECTION));
+    // The address every request on this connection is attributed to. QUIC
+    // address validation has already run, so it is a reachable peer rather than
+    // a spoofed header.
+    let source = connection.remote_address().ip();
     while let Ok(streams) = connection.accept_bi().await {
         let Ok(connection_permit) = Arc::clone(&connection_streams).try_acquire_owned() else {
             break;
@@ -213,7 +221,7 @@ pub(crate) async fn serve_pairing_connection(
             let _stream_permit = stream_permit;
             let _ = tokio::time::timeout(
                 PAIRING_REQUEST_TIMEOUT,
-                serve_pairing_stream(streams, service),
+                serve_pairing_stream(streams, service, source),
             )
             .await;
         });
@@ -223,10 +231,11 @@ pub(crate) async fn serve_pairing_connection(
 async fn serve_pairing_stream(
     (mut send, mut receive): (quinn::SendStream, quinn::RecvStream),
     service: Arc<NetworkPairingService>,
+    source: IpAddr,
 ) -> Result<(), CoreError> {
     let bytes = read_frame(&mut receive, MAX_PAIRING_FRAME_BYTES).await?;
     let response = match serde_json::from_slice::<NetworkPairingWireRequest>(&bytes) {
-        Ok(request) => service.dispatch(&request).await,
+        Ok(request) => service.dispatch(&request, source).await,
         Err(_) => failure(
             "pairing_request_invalid",
             "The pairing request does not satisfy the versioned wire contract.",

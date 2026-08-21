@@ -54,6 +54,10 @@ const MAX_RESPONSE_FRAME_BYTES: usize = 12 * 1_024 * 1_024;
 const MAX_GLOBAL_CONNECTIONS: usize = 64;
 const MAX_CONNECTIONS_PER_SOURCE: usize = 8;
 const MAX_GLOBAL_STREAMS: usize = 256;
+/// Pairing gets its own stream pool rather than drawing on `MAX_GLOBAL_STREAMS`,
+/// so unauthenticated pairing traffic can never starve authenticated storage
+/// transfers on the same endpoint.
+const MAX_GLOBAL_PAIRING_STREAMS: usize = 32;
 const MAX_BLOCKING_OPERATIONS: usize = 16;
 const CONNECTION_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const STREAM_OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -323,6 +327,7 @@ pub struct QuicNode {
     rate_limiter: Arc<Mutex<PeerRateLimiter>>,
     connection_limit: Arc<Semaphore>,
     stream_limit: Arc<Semaphore>,
+    pairing_stream_limit: Arc<Semaphore>,
     blocking_limit: Arc<Semaphore>,
     source_connections: Arc<Mutex<BTreeMap<IpAddr, usize>>>,
     pairing_service: Option<Arc<NetworkPairingService>>,
@@ -351,6 +356,7 @@ impl QuicNode {
             rate_limiter: Arc::new(Mutex::new(PeerRateLimiter::default())),
             connection_limit: Arc::new(Semaphore::new(MAX_GLOBAL_CONNECTIONS)),
             stream_limit: Arc::new(Semaphore::new(MAX_GLOBAL_STREAMS)),
+            pairing_stream_limit: Arc::new(Semaphore::new(MAX_GLOBAL_PAIRING_STREAMS)),
             blocking_limit: Arc::new(Semaphore::new(MAX_BLOCKING_OPERATIONS)),
             source_connections: Arc::new(Mutex::new(BTreeMap::new())),
             pairing_service: None,
@@ -399,6 +405,7 @@ impl QuicNode {
             let replay_window = Arc::clone(&self.replay_window);
             let rate_limiter = Arc::clone(&self.rate_limiter);
             let stream_limit = Arc::clone(&self.stream_limit);
+            let pairing_stream_limit = Arc::clone(&self.pairing_stream_limit);
             let blocking_limit = Arc::clone(&self.blocking_limit);
             let pairing_service = self.pairing_service.clone();
             tokio::spawn(async move {
@@ -411,7 +418,7 @@ impl QuicNode {
                 };
                 if negotiated_alpn(&connection).as_deref() == Some(PAIRING_ALPN) {
                     if let Some(service) = pairing_service {
-                        serve_pairing_connection(connection, service, stream_limit).await;
+                        serve_pairing_connection(connection, service, pairing_stream_limit).await;
                     }
                     return;
                 }
