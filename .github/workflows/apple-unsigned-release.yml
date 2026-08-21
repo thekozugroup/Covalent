@@ -103,7 +103,13 @@ jobs:
             OTHER_CODE_SIGN_FLAGS="" \
             archive
           app="${archive_path}/Products/Applications/Covalent.app"
-          COVALENT_REQUIRE_HARDENED_RUNTIME=true \
+          # Hardened runtime is a notarization requirement, and this lane does not
+          # notarize. apps/apple/Scripts/build-node-helper.sh deliberately omits
+          # `--options runtime` when the identity is ad-hoc, so requiring it here
+          # would fail on the bundled helper by construction. Every other check in
+          # the verifier still runs: arm64-only, valid signatures on both binaries,
+          # and the exact sandbox-inheritance entitlements.
+          COVALENT_REQUIRE_HARDENED_RUNTIME=false \
             COVALENT_REQUIRE_DEVELOPER_ID=false \
             "${GITHUB_WORKSPACE}/scripts/verify-apple-silicon-bundle.sh" "${app}"
           echo "COVALENT_ARCHIVE_APP=${app}" >> "${GITHUB_ENV}"
