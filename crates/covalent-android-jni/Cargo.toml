@@ -9,7 +9,12 @@ license.workspace = true
 repository.workspace = true
 
 [lib]
-crate-type = ["cdylib"]
+# Built as a staticlib; scripts/build-android-jni.sh performs the final link
+# into libcovalent_android_jni.so so that the export surface is governed by
+# exports.map.  A cdylib cannot honour that contract: rustc emits its own
+# version script and marks every `#[no_mangle]` symbol in the whole crate
+# graph global in it.  See scripts/build-android-jni.sh for the full rationale.
+crate-type = ["staticlib"]
 
 [dependencies]
 anyhow.workspace = true

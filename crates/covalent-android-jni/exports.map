@@ -1,0 +1,18 @@
+/*
+ * Export contract for libcovalent_android_jni.so.
+ *
+ * JNI_OnLoad is the only intended public entry point.  Every native method is
+ * wired up through RegisterNatives from inside JNI_OnLoad, so the JVM never
+ * resolves a `Java_*` symbol by name and nothing else needs to be visible.
+ *
+ * This script is applied by scripts/build-android-jni.sh when it links the
+ * shared object, and the export surface is re-verified from the linked ELF by
+ * the same script.  See the comment there for why the link is performed
+ * explicitly instead of letting rustc emit a cdylib.
+ */
+{
+  global:
+    JNI_OnLoad;
+  local:
+    *;
+};

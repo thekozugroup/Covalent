@@ -43,13 +43,78 @@ done
 mkdir -p "$output_root"
 export ANDROID_NDK_HOME="$ndk_root"
 export RUSTC="$rustc_bin"
-# Hide bundled static-library implementation symbols.  JNI_OnLoad is the only
-# intended public entry point; the release audit below enforces that contract.
-export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-Wl,-z,max-page-size=16384 -C link-arg=-Wl,--exclude-libs,ALL"
 
 cd "$repo_root"
-"$cargo_bin" ndk -t arm64-v8a -o "$output_root" build --release -p covalent-android-jni
-"$cargo_bin" ndk -t x86_64 -o "$output_root" build --release -p covalent-android-jni
+
+# The crate is built as a staticlib and linked into the shared object here,
+# by us, instead of letting rustc emit a cdylib.
+#
+# JNI_OnLoad is the only intended public entry point, and the audit below
+# enforces that.  rustc cannot honour that contract for a cdylib: it emits its
+# own `--version-script` listing every `#[no_mangle]` symbol in the *entire
+# crate graph* as global.  blake3 1.8.6 defines
+# `blake3_compress_in_place_portable` as a `#[no_mangle]` *Rust* function in
+# `src/ffi_neon.rs` (it backs the 1x compression that `c/blake3_neon.c` needs),
+# and that module is compiled only under `cfg(blake3_neon)` — which blake3's
+# build.rs sets on aarch64/armv7 and never on x86_64.  That is exactly why the
+# arm64 library exported a second symbol while x86_64 stayed clean.
+#
+# Because rustc globals it in its own version script, nothing downstream can
+# demote it: `--exclude-libs` only rewrites symbols coming from archive
+# members (rustc passes crate objects to the linker directly), a second
+# `--version-script` loses to rustc's exact-match `global:` entry, and objcopy
+# will not rewrite `.dynsym` of an already-linked shared object.
+#
+# Linking the staticlib ourselves puts exports.map in charge, so the contract
+# holds on both ABIs and blake3 keeps its NEON backend on arm64.
+android_api=26  # must match minSdk in apps/android/app/build.gradle.kts
+version_script="$repo_root/crates/covalent-android-jni/exports.map"
+target_dir=${CARGO_TARGET_DIR:-"$repo_root/target"}
+test -f "$version_script" || {
+  echo "Missing JNI export version script at $version_script" >&2
+  exit 1
+}
+
+for abi in arm64-v8a x86_64; do
+  case "$abi" in
+    arm64-v8a) triple=aarch64-linux-android ;;
+    x86_64) triple=x86_64-linux-android ;;
+    *) echo "Unsupported ABI $abi" >&2; exit 1 ;;
+  esac
+
+  "$cargo_bin" ndk -t "$abi" -- build --release -p covalent-android-jni
+
+  archive="$target_dir/$triple/release/libcovalent_android_jni.a"
+  test -f "$archive" || {
+    echo "Missing JNI static library for $abi at $archive" >&2
+    exit 1
+  }
+
+  clang_bin=$(find "$ndk_root/toolchains/llvm/prebuilt" -type f \
+    -name "${triple}${android_api}-clang" -print -quit)
+  test -x "$clang_bin" || {
+    echo "The pinned NDK clang driver for $triple$android_api is required" >&2
+    exit 1
+  }
+
+  # --no-undefined keeps a missing runtime dependency a link error rather than
+  # a load-time crash; --strip-all only drops .symtab, leaving .dynsym (and so
+  # the export contract) intact.
+  mkdir -p "$output_root/$abi"
+  "$clang_bin" -shared -o "$output_root/$abi/libcovalent_android_jni.so" \
+    -Wl,--version-script="$version_script" \
+    -Wl,--undefined=JNI_OnLoad \
+    -Wl,--gc-sections \
+    -Wl,--hash-style=both \
+    -Wl,--no-undefined \
+    -Wl,-z,max-page-size=16384 \
+    -Wl,-z,relro \
+    -Wl,-z,now \
+    -Wl,-z,noexecstack \
+    -Wl,--strip-all \
+    "$archive" \
+    -llog -ldl -lm -lc
+done
 
 llvm_readobj=$(find "$ndk_root/toolchains/llvm/prebuilt" -type f -path '*/bin/llvm-readobj' -print -quit)
 test -x "$llvm_readobj" || {

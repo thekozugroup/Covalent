@@ -15,7 +15,15 @@ test -f "$native"
 test -f "$manager"
 test -f "$service"
 test -x "$package_gate"
-grep -Fq 'crate-type = ["cdylib"]' "$crate/Cargo.toml"
+# The JNI library is linked from a staticlib by scripts/build-android-jni.sh so
+# that exports.map governs the export surface; a cdylib cannot, because rustc
+# globals every `#[no_mangle]` symbol in the crate graph in its own version
+# script. Assert both halves of that arrangement stay in place.
+grep -Fq 'crate-type = ["staticlib"]' "$crate/Cargo.toml"
+test -f "$crate/exports.map"
+grep -Fq 'JNI_OnLoad;' "$crate/exports.map"
+grep -Fq 'local:' "$crate/exports.map"
+grep -Fq -e '--version-script' "$repo_root/scripts/build-android-jni.sh"
 grep -Fq 'JNI_OnLoad' "$crate/src/lib.rs"
 grep -Fq 'register_native_methods' "$crate/src/lib.rs"
 grep -Fq 'MAX_LIVE_NODES' "$crate/src/lib.rs"
