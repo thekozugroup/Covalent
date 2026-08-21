@@ -1,5 +1,41 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <lint>
+    <!--
+      Upstream-release-cadence advisories, not correctness or security checks.
+      Each fires purely because a newer version exists upstream, so each turns an
+      event entirely outside this repository into a red build on unrelated
+      changes. Real vulnerability detection is gated elsewhere and stays fatal:
+      dependency-review-action (fail-on-severity: high), cargo-deny check
+      advisories, rustsec/audit-check, CodeQL, and Dependabot security alerts.
+    -->
     <issue id="GradleDependency" severity="ignore" />
     <issue id="NewerVersionAvailable" severity="ignore" />
+    <!--
+      Same class as the two above, and demoted for the same reason. Recorded
+      explicitly because the reasoning is easy to mistake for weakening a gate:
+
+        $ lint --show AndroidGradlePluginVersion
+        Summary: Obsolete Android Gradle Plugin Version
+        Priority: 4 / 10
+        Severity: Warning
+        "Using older versions is fine, and there are cases where you
+         deliberately want to stick with an older version. However, you may
+         simply not be aware that a more recent version is available, and that
+         is what this lint check helps find."
+
+      Lint's own default severity is Warning and its own description states that
+      staying on an older version is fine - it is an awareness aid, not a
+      requirement. It only became build-breaking here because `warningsAsErrors
+      = true` promotes it to an error, which also means demoting it to "warning"
+      would be a no-op. "informational" is the weakest demotion that actually
+      takes effect, and unlike "ignore" it keeps the advisory visible in every
+      lint report, so Gradle currency stays tracked without failing CI every
+      time Gradle ships a patch release.
+
+      The wrapper's integrity is independently pinned in
+      apps/android/gradle/wrapper/gradle-wrapper.properties by
+      distributionSha256Sum plus validateDistributionUrl=true, so demoting this
+      advisory does not loosen any check on what actually gets executed.
+    -->
+    <issue id="AndroidGradlePluginVersion" severity="informational" />
 </lint>
