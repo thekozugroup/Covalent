@@ -5,13 +5,13 @@ COPY crates ./crates
 COPY packaging/web ./packaging/web
 RUN cargo build --locked --release -p covalent-node -p covalent-cli
 
-FROM caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d AS caddy
+FROM caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648 AS caddy
 # Create a capability-free inode in this throwaway stage. Only this copy enters
 # the runtime image, avoiding cap_net_bind_service and a duplicated Caddy layer.
 RUN cp /usr/bin/caddy /caddy.unprivileged \
     && chmod 0555 /caddy.unprivileged
 
-FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40
+FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 ARG VCS_REF=unknown
 LABEL org.opencontainers.image.title="Covalent" \
       org.opencontainers.image.description="Private distributed backup node" \
