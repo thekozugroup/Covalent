@@ -212,6 +212,20 @@ jobs:
             | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+          # `udevadm trigger` only queues the uevent; it does not wait for the
+          # new mode to be applied. Without `settle` the assertions below race
+          # the rule they depend on and can fail on a device that is about to
+          # become usable a few milliseconds later.
+          sudo udevadm settle
+          # Report the real state before asserting on it. Every assertion here is
+          # a silent `test`, so a failure produced exit code 1 and nothing else -
+          # indistinguishable between "this runner has no /dev/kvm at all" and
+          # "the udev rule has not landed yet". These lines always run, so the
+          # evidence is in the log whether the gate passes or fails. The `|| echo`
+          # covers only the diagnostic; the assertions that follow still fail
+          # closed.
+          echo "runner user: $(id)"
+          ls -l /dev/kvm || echo "/dev/kvm is absent on this runner"
           test -c /dev/kvm
           test -r /dev/kvm
           test -w /dev/kvm
