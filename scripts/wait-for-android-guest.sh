@@ -17,6 +17,22 @@
 #     probe reported "Success" at t+0s - and the gate's own install twelve
 #     seconds later died with `cmd: Can't find service: package`. The package
 #     service had gone away again. A single success is a sample, not a state.
+#   * ...plus user 0 actually being unlocked. Run 32513657537 passed every check
+#     above - system_server never even restarted, PID 5198 served the whole run -
+#     and 40 of 56 tests still failed the instant they started, 77 of them on
+#     `Unable to resolve activity for ... androidx.activity.ComponentActivity`.
+#     The guest log names the reason directly: `AccessibilityManagerService:
+#     Ignoring non-encryption-aware service`, which AOSP logs only when
+#     `isUserUnlockedLocked()` is false. User 0 was LOCKED.
+#     `sys.user.0.ce_available` had been `true` since the first poll, so the
+#     property is not a proxy for unlock - it reads `true` on a locked guest and
+#     on an unlocked one alike, which makes it useless as a discriminator. The
+#     authoritative answer is the user's own state, and `am
+#     get-started-user-state 0` reports it as RUNNING_UNLOCKED. Waiting on it is
+#     what the previous three definitions were all reaching for and none of them
+#     expressed: every one of those 40 failures - unresolvable non-direct-boot
+#     activities, credential-encrypted reads, keystore levels - is the same
+#     single fact about the guest.
 #
 # So this waits for the capability and then requires it to survive. The probe
 # install is deliberately performed *before* the stability window rather than
@@ -93,11 +109,29 @@ service_found() {
     tr -d '\r' | grep -q ': found'
 }
 
+# The one fact `sys.user.0.ce_available` cannot express. Until user 0 reaches
+# RUNNING_UNLOCKED, PackageManager matches only direct-boot-aware components, so
+# every activity the tests launch is unresolvable, every credential-encrypted
+# read throws, and keystore refuses to name a security level - which is exactly
+# the 40-failure shape run 32513657537 produced on a guest that was otherwise
+# perfectly healthy. Read `dumpsys user` as a second opinion rather than a
+# lenient fallback: both are asking the same question, and a guest that answers
+# neither is not ready.
+user0_is_unlocked() {
+  state=$("$adb" -s "$serial" shell am get-started-user-state 0 2>/dev/null | tr -d '\r')
+  case "$state" in
+    *RUNNING_UNLOCKED*) return 0 ;;
+  esac
+  "$adb" -s "$serial" shell dumpsys user 2>/dev/null | tr -d '\r' |
+    grep -q '0=RUNNING_UNLOCKED'
+}
+
 # The services the gate actually uses: package for installs, activity for
 # `am instrument`, mount for the storage allocation that killed run 32499985083.
 guest_is_ready() {
   prop_is sys.boot_completed 1 &&
     prop_is sys.user.0.ce_available true &&
+    user0_is_unlocked &&
     prop_is_not init.svc.bootanim running &&
     service_found package &&
     service_found activity &&
@@ -126,6 +160,8 @@ report_and_fail() {
   echo "--- storage ---" >&2
   "$adb" -s "$serial" shell df /data >&2 2>&1 || true
   echo "--- users ---" >&2
+  printf 'am get-started-user-state 0: ' >&2
+  "$adb" -s "$serial" shell am get-started-user-state 0 >&2 2>&1 || true
   "$adb" -s "$serial" shell dumpsys user >&2 2>&1 || true
   # The one thing no previous failure captured. If system_server is dying under
   # this gate, its death is in here and every future diagnosis starts from it
