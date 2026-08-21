@@ -496,10 +496,35 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn tailscale_localapi_socket_is_preferred_and_bounded() {
+        use std::os::unix::ffi::OsStrExt;
         use std::os::unix::net::UnixListener;
 
-        let directory = tempfile::tempdir().expect("directory");
-        let socket = directory.path().join("tailscaled.sock");
+        // `sockaddr_un::sun_path` holds 104 bytes on macOS and 108 on Linux, so a
+        // socket created under a deeply nested `$TMPDIR` (macOS per-user temp dirs
+        // and CI runner temp dirs both nest) cannot be bound at all. Anchor the
+        // socket under a short fixed prefix instead of inheriting `$TMPDIR`.
+        // `/tmp/covalent-tsXXXXXX/ts.sock` is ~26 bytes, so this always fits on
+        // every platform the workspace targets. If it somehow does not, that is a
+        // broken environment and the assertion must fail loudly: never silently
+        // return, which would report this gate as passing without exercising it.
+        const SUN_PATH_CAPACITY: usize = 104;
+        let short_base = std::path::Path::new("/tmp");
+        let mut builder = tempfile::Builder::new();
+        let builder = builder.prefix("covalent-ts");
+        let directory = if short_base.is_dir() {
+            builder.tempdir_in(short_base)
+        } else {
+            builder.tempdir()
+        }
+        .expect("directory");
+        let socket = directory.path().join("ts.sock");
+        assert!(
+            socket.as_os_str().as_bytes().len() < SUN_PATH_CAPACITY,
+            "{} needs {} bytes but sun_path holds {}",
+            socket.display(),
+            socket.as_os_str().as_bytes().len() + 1,
+            SUN_PATH_CAPACITY
+        );
         let listener = UnixListener::bind(&socket).expect("listen");
         let fixture = br#"{"Peer":{"node-key:one":{"DNSName":"nas.tail.test.","TailscaleIPs":["100.64.0.2"]}}}"#;
         let server = std::thread::spawn(move || {
