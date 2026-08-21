@@ -9,11 +9,11 @@ struct MacBackupsView: View {
     var body: some View {
         Group {
             if model.snapshots.isEmpty {
-                ContentUnavailableView {
-                    Label("No snapshots yet", systemImage: "externaldrive.badge.plus")
-                } description: {
-                    Text("A backup appears here after the local node commits its encrypted snapshot.")
-                } actions: {
+                MacEmptyState(
+                    systemImage: "externaldrive.badge.plus",
+                    title: "No backups yet",
+                    message: "A backup appears here once your backup server finishes encrypting and saving it."
+                ) {
                     Button("New Backup") { model.requestNewBackup() }
                         .buttonStyle(.borderedProminent)
                         .disabled(!model.isAuthorized)
@@ -28,7 +28,11 @@ struct MacBackupsView: View {
                         }
                             .frame(minWidth: 480)
                     } else {
-                        ContentUnavailableView("Select a Backup", systemImage: "externaldrive")
+                        MacEmptyState(
+                            systemImage: "externaldrive",
+                            title: "Select a Backup",
+                            message: "Choose a backup on the left to see what it holds."
+                        )
                             .frame(minWidth: 480)
                     }
                 }
@@ -121,7 +125,7 @@ private struct MacSnapshotDetail: View {
             .padding(32)
         }
         .confirmationDialog(
-            "Repair this snapshot?",
+            "Repair this backup?",
             isPresented: $showingRepairConfirmation,
             titleVisibility: .visible
         ) {
@@ -130,7 +134,7 @@ private struct MacSnapshotDetail: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Covalent will use only intact copies on explicitly selected, authorized providers. It will not add another replica device.")
+            Text("Covalent will use only intact copies on the storage devices you already selected and approved. It will not add another device.")
         }
     }
 
@@ -138,7 +142,7 @@ private struct MacSnapshotDetail: View {
         HStack(alignment: .top, spacing: 18) {
             Image(systemName: "externaldrive.fill")
                 .scaledSymbolFont(size: 34)
-                .foregroundStyle(.blue)
+                .foregroundStyle(MacLabelColor.accentGlyph)
                 .scaledSymbolFrame(52)
                 .background(Color.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
                 .accessibilityHidden(true)
@@ -146,7 +150,7 @@ private struct MacSnapshotDetail: View {
                 Text(snapshot.displayName)
                     .font(.largeTitle.weight(.semibold))
                     .accessibilityAddTraits(.isHeader)
-                Text("Snapshot from \(snapshot.createdAt.formatted(date: .long, time: .shortened))")
+                Text("Backup from \(snapshot.createdAt.formatted(date: .long, time: .shortened))")
                     .secondaryLabelStyle()
             }
             Spacer()
@@ -163,10 +167,10 @@ private struct MacSnapshotDetail: View {
 
     private var attentionCallout: some View {
         MacCallout(
-            title: snapshot.integrity == .corrupt ? "Snapshot needs repair" : "Some selected replicas were unavailable",
+            title: snapshot.integrity == .corrupt ? "Backup needs repair" : "Some selected devices were unavailable",
             message: snapshot.integrity == .corrupt
-                ? "Verification found missing or corrupt local objects. Repair can use intact copies from your selected providers."
-                : "The local snapshot committed, but one or more explicitly selected devices did not acknowledge every object.",
+                ? "The check found missing or damaged data on this Mac. Repair can use intact copies from the storage devices you selected."
+                : "The backup was saved on this Mac, but one or more devices you selected did not confirm receiving every part of it.",
             systemImage: "exclamationmark.triangle.fill",
             tint: .orange
         ) {
@@ -197,19 +201,19 @@ private struct MacSnapshotDetail: View {
 
     private var replicaPlacement: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Replica placement")
+            Text("Where copies are kept")
                 .font(.title2.weight(.semibold))
             if snapshot.selectedProviderIds.isEmpty {
                 Label("Local only", systemImage: "desktopcomputer")
                     .secondaryLabelStyle()
-                Text("No extra storage device was selected for this snapshot.")
+                Text("No extra storage device was selected for this backup.")
                     .font(.subheadline)
                     .secondaryLabelStyle()
             } else {
                 ForEach(snapshot.selectedProviderIds, id: \.self) { providerId in
                     HStack {
                         Image(systemName: "server.rack")
-                            .foregroundStyle(.blue)
+                            .foregroundStyle(MacLabelColor.accentGlyph)
                         VStack(alignment: .leading) {
                             Text(providerName(providerId))
                             Text(providerId.uuidString)
@@ -232,11 +236,11 @@ private struct MacSnapshotDetail: View {
                     .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
                 }
             }
-            Button("Change Replicas for Next Snapshot…") {
+            Button("Change Extra Copies for Next Backup…") {
                 model.requestNewBackup(existingBackupId: snapshot.backupId)
             }
             .disabled(model.activeTask != nil)
-            Text("Adding or removing a device changes only the next snapshot. Existing snapshots retain their original encrypted copies.")
+            Text("Adding or removing a device changes only the next backup. Existing backups keep their original encrypted copies.")
                 .font(.caption)
                 .secondaryLabelStyle()
         }
@@ -254,7 +258,7 @@ private struct MacSnapshotDetail: View {
                     .controlSize(.large)
                     .disabled(model.activeTask != nil)
                     .accessibilityIdentifier("snapshot.previewRestore")
-                Button("Verify Snapshot") { Task { _ = await model.verify(snapshot) } }
+                Button("Check Backup") { Task { _ = await model.verify(snapshot) } }
                     .controlSize(.large)
                     .disabled(model.activeTask != nil)
             }
@@ -265,8 +269,8 @@ private struct MacSnapshotDetail: View {
         DisclosureGroup("Technical details") {
             Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 8) {
                 detailRow("Backup ID", snapshot.backupId.uuidString)
-                detailRow("Snapshot ID", snapshot.snapshotId)
-                detailRow("Selected replicas", snapshot.selectedProviderIds.count.formatted())
+                detailRow("Backup ID", snapshot.snapshotId)
+                detailRow("Selected devices", snapshot.selectedProviderIds.count.formatted())
             }
             .font(.caption)
             .textSelection(.enabled)
@@ -327,7 +331,7 @@ struct MacRestoreSetupView: View {
             .formStyle(.grouped)
 
             Label(
-                "Covalent inventories this folder before preview and again immediately before writing. Any change stops the restore.",
+                "Covalent lists this folder's contents before the preview and again right before writing. Any change stops the restore.",
                 systemImage: "checkmark.shield"
             )
             .secondaryLabelStyle()
@@ -418,7 +422,7 @@ struct MacRestorePreviewView: View {
                     VStack(alignment: .leading, spacing: 5) {
                         Text("Restore Preview")
                             .font(.title.weight(.semibold))
-                        Text("No files have been written. The node signed the exact content and actions for local extraction.")
+                        Text("No files have been written. Your backup server signed the exact contents and actions this restore will perform.")
                             .secondaryLabelStyle()
                     }
                     Spacer()
@@ -510,7 +514,7 @@ struct MacRestoreResultView: View {
                 resultMetric("Skipped", result.filesSkipped)
             }
             if result.rejectedProviderCopies > 0 {
-                Label("\(result.rejectedProviderCopies) invalid provider copies were rejected.", systemImage: "checkmark.shield")
+                Label("\(result.rejectedProviderCopies) invalid copies from storage devices were rejected.", systemImage: "checkmark.shield")
                     .foregroundStyle(.orange)
             }
             Button("Done", action: done)

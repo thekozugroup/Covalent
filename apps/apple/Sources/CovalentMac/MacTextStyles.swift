@@ -24,35 +24,67 @@ import SwiftUI
 /// So: one pair of **opaque**, appearance-aware tokens, used for every piece of
 /// macOS text that used to be `.primary`/`.secondary`. Measured contrast:
 ///
-/// | token | backdrop | ratio |
+/// | token | backdrop | measured |
 /// | --- | --- | --- |
-/// | secondary light #4B4B4B | windowBackground #ECECEC | 7.4:1 |
-/// | secondary light #4B4B4B | controlBackground #FFFFFF | 8.7:1 |
-/// | secondary dark #C4C4C4 | windowBackground #323232 | 8.3:1 |
-/// | secondary dark #C4C4C4 | controlBackground #1E1E1E | 10.5:1 |
+/// | secondary light #333333 | controlBackground #FFFFFF | 12.6:1 |
+/// | secondary light #333333 | windowBackground #ECECEC | 10.7:1 |
+/// | secondary dark #D8D8D8 | windowBackground #323232 | 10.6:1 |
 ///
-/// The margin is deliberate. The audit measures rendered pixels, not declared
-/// colours, so anti-aliasing on a 1x CI display eats some of any ratio computed
-/// on paper; landing at 7:1+ leaves room for that without relying on it.
+/// The margin is deliberate, and the first attempt taught why. #4B4B4B
+/// measured 8.7:1 in the audit's own element screenshots and the audit still
+/// reported those lines as failing, because what it grades is the *rendered*
+/// run and small light-weight glyphs on a 1x display never reach their
+/// declared colour — a 13pt regular row measured mostly #B3B3B3 with only 16
+/// pixels at full coverage. So colour alone is not the lever for small text;
+/// weight is, and both are applied at the sites that failed.
+///
+/// ## Why there is no matching `primary` token
+///
+/// There was one, and it made things worse. `.primary` is `labelColor`: pure
+/// black, and *selection-aware* — on a selected sidebar row AppKit flips it to
+/// white. An opaque #1A1A1A replacement is both slightly lighter (enough to
+/// tip a 13pt row over the audit's line) and blind to selection, so the
+/// selected row rendered near-black on the blue highlight and measured 3.07:1.
+/// Two sidebar rows that had been passing started failing. `.primary` is
+/// already opaque and already correct; leave it alone.
 ///
 /// iOS is intentionally left on `.secondary`: `UIColor.secondaryLabel` is 60%
 /// alpha, which clears 4.5:1 on the iOS backgrounds, and the iOS audit gate is
 /// green. Changing it would risk a passing gate for no accessibility gain.
 enum MacLabelColor {
-    /// Body and title text. Replaces `.primary`.
-    static let primary = Color(nsColor: NSColor(name: "CovalentPrimaryLabel") { appearance in
-        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            ? NSColor(white: 0.937, alpha: 1)
-            : NSColor(white: 0.102, alpha: 1)
-    })
-
     /// Supporting text that should read as quieter without becoming unreadable.
     /// Replaces `.secondary`.
     static let secondary = Color(nsColor: NSColor(name: "CovalentSecondaryLabel") { appearance in
         appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            ? NSColor(white: 0.769, alpha: 1)
-            : NSColor(white: 0.294, alpha: 1)
+            ? NSColor(white: 0.847, alpha: 1)
+            : NSColor(white: 0.200, alpha: 1)
     })
+
+    /// A blue for decorative glyphs that sit *inside* a combined accessibility
+    /// element.
+    ///
+    /// `.accessibilityElement(children: .combine)` gives the audit one element
+    /// whose rectangle still contains everything drawn in it, including glyphs
+    /// marked `accessibilityHidden`. System blue is 3.7:1 on white, so a tile
+    /// whose text was fine failed anyway on the icon beside it. This is the
+    /// same blue, dark enough to be graded on its own.
+    static let accentGlyph = dynamic(
+        named: "CovalentAccentGlyph",
+        light: NSColor(red: 0.043, green: 0.373, blue: 0.749, alpha: 1),
+        dark: NSColor(red: 0.561, green: 0.761, blue: 1.0, alpha: 1)
+    )
+
+    /// Builds an appearance-aware opaque colour.
+    ///
+    /// Both halves are required: a single fixed colour that clears 4.5:1 in
+    /// light mode will usually be close to invisible in dark mode, which trades
+    /// one accessibility failure for another that the audit — running in light
+    /// mode on CI — would never report.
+    static func dynamic(named name: String, light: NSColor, dark: NSColor) -> Color {
+        Color(nsColor: NSColor(name: name) { appearance in
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
+        })
+    }
 }
 
 /// An empty-state panel whose text colours the app controls.
@@ -68,6 +100,18 @@ struct MacEmptyState<Actions: View>: View {
     let message: String
     @ViewBuilder var actions: () -> Actions
 
+    init(
+        systemImage: String,
+        title: String,
+        message: String,
+        @ViewBuilder actions: @escaping () -> Actions = { EmptyView() }
+    ) {
+        self.systemImage = systemImage
+        self.title = title
+        self.message = message
+        self.actions = actions
+    }
+
     var body: some View {
         VStack(spacing: 10) {
             Image(systemName: systemImage)
@@ -76,9 +120,12 @@ struct MacEmptyState<Actions: View>: View {
                 .accessibilityHidden(true)
             Text(title)
                 .font(.title3.weight(.semibold))
-                .primaryLabelStyle()
+                .foregroundStyle(.primary)
+            // Body size at medium weight, not `.callout` at regular. The
+            // audit grades rendered stroke coverage, and this message failed
+            // at 12pt regular while measuring 8.7:1 on paper.
             Text(message)
-                .font(.callout)
+                .font(.body.weight(.medium))
                 .secondaryLabelStyle()
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 360)
@@ -95,8 +142,4 @@ extension View {
         foregroundStyle(MacLabelColor.secondary)
     }
 
-    /// Leading text. Opaque, so vibrancy cannot blend it away. See ``MacLabelColor``.
-    func primaryLabelStyle() -> some View {
-        foregroundStyle(MacLabelColor.primary)
-    }
 }

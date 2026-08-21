@@ -76,9 +76,9 @@ struct MacOverviewView: View {
 
     private var calloutMessage: String {
         switch model.phase {
-        case .starting: "Covalent is checking protocol compatibility."
-        case .needsAuthorization: "Add the node's local API token. It stays in this Mac's Keychain."
-        case .offline: "Start covalent-node, then reconnect. Existing resumable jobs remain in the node's durable state."
+        case .starting: "Covalent is checking that it can work with your backup server."
+        case .needsAuthorization: "Add your backup server's access token. It stays in this Mac's Keychain."
+        case .offline: "Start your backup server, then reconnect. Work already under way is saved and continues where it stopped."
         case .ready: "The service is ready."
         }
     }
@@ -88,11 +88,11 @@ struct MacOverviewView: View {
             MacMetric(
                 title: "Backups",
                 value: "\(model.backups.count)",
-                detail: model.snapshots.isEmpty ? "No snapshots created in this app" : "\(model.snapshots.count) recent snapshots",
+                detail: model.snapshots.isEmpty ? "No backups created in this app" : "\(model.snapshots.count) recent backups",
                 systemImage: "externaldrive"
             )
             MacMetric(
-                title: "Replica devices",
+                title: "Extra copy devices",
                 value: "\(model.providers.count)",
                 detail: model.providers.isEmpty ? "Local-only is supported" : "Chosen per backup",
                 systemImage: "square.3.layers.3d"
@@ -169,7 +169,7 @@ struct MacOverviewView: View {
             Text("Built around your choices")
                 .font(.title2.weight(.semibold))
             HStack(alignment: .top, spacing: 28) {
-                MacSafeguard(systemImage: "checkmark.shield", title: "Explicit replicas", text: "Covalent never picks another storage device for you.")
+                MacSafeguard(systemImage: "checkmark.shield", title: "Explicit extra copies", text: "Covalent never picks another storage device for you.")
                 MacSafeguard(systemImage: "folder.badge.gearshape", title: "Confined restores", text: "A signed preview stays beneath the folder you authorize.")
                 MacSafeguard(systemImage: "person.crop.circle.badge.xmark", title: "Local control", text: "Core workflows need no Covalent account or hosted coordinator.")
             }
@@ -211,14 +211,17 @@ struct MacSafeguard: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
+            // `accessibilityHidden` keeps this glyph out of the *tree*, not
+            // out of the combined element's rectangle, and the audit grades
+            // the rectangle. See `MacLabelColor.accentGlyph`.
             Image(systemName: systemImage)
                 .font(.title2)
-                .foregroundStyle(.blue)
+                .foregroundStyle(MacLabelColor.accentGlyph)
                 .frame(width: 28)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(title).font(.headline)
-                Text(text).font(.subheadline).secondaryLabelStyle()
+                Text(text).font(.subheadline.weight(.medium)).secondaryLabelStyle()
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -260,7 +263,7 @@ struct MacSnapshotRow: View {
         HStack(spacing: 12) {
             Image(systemName: "externaldrive.fill")
                 .font(.title3)
-                .foregroundStyle(.blue)
+                .foregroundStyle(MacLabelColor.accentGlyph)
                 .frame(width: 30)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {

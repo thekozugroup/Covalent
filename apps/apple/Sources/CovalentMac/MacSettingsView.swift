@@ -46,7 +46,7 @@ struct MacSettingsView: View {
             }
             Button("Cancel", role: .cancel) { grantToRemove = nil }
         } message: {
-            Text("Future backups or restores using this folder will ask you to choose it again. Existing encrypted snapshots are unchanged.")
+            Text("Future backups or restores using this folder will ask you to choose it again. Existing encrypted backups are unchanged.")
         }
     }
 
@@ -81,7 +81,7 @@ struct MacSettingsView: View {
     private var settingsTransfer: some View {
         settingsSection("Settings transfer", systemImage: "arrow.left.arrow.right") {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Export only the device name, LAN discovery preference, and remembered backup descriptors.")
+                Text("Export only the device name, LAN discovery preference, and remembered backup list.")
                     .secondaryLabelStyle()
                 HStack {
                     Button("Export Settings…") { exportSettings() }
@@ -106,7 +106,7 @@ struct MacSettingsView: View {
                     ForEach(model.directoryGrants) { grant in
                         HStack {
                             Image(systemName: grant.purpose == .backupSource ? "folder" : "folder.badge.plus")
-                                .foregroundStyle(.blue)
+                                .foregroundStyle(MacLabelColor.accentGlyph)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(grant.displayName)
                                 Text(grant.purpose == .backupSource ? "Backup source" : "Restore destination")
@@ -135,7 +135,7 @@ struct MacSettingsView: View {
                         Task { await model.disconnect() }
                     }
                 }
-                Text("Authenticated requests use loopback HTTP or HTTPS. Covalent refuses to send the bearer token to another device over plain HTTP.")
+                Text("Your access token is only ever sent over an encrypted connection. An unencrypted address is accepted only when the backup server runs on this Mac.")
                     .font(.caption)
                     .secondaryLabelStyle()
             }
@@ -144,7 +144,7 @@ struct MacSettingsView: View {
 
     private var platformLimits: some View {
         settingsSection("Background work", systemImage: "clock.arrow.circlepath") {
-            Text("The node owns durable checkpoints and resumes interrupted jobs. Keep this Mac awake for long local folder operations; Covalent does not claim unrestricted background execution outside APIs macOS grants.")
+            Text("Your backup server saves its progress and picks up interrupted work where it left off. Keep this Mac awake for long folder operations; Covalent does not run unrestricted in the background, only within what macOS allows.")
                 .secondaryLabelStyle()
         }
     }

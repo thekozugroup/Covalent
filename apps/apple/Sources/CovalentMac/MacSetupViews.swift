@@ -19,7 +19,7 @@ struct MacConnectionView: View {
             HStack(spacing: 16) {
                 Image(systemName: "point.3.connected.trianglepath.dotted")
                     .scaledSymbolFont(size: 30)
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(MacLabelColor.accentGlyph)
                     .scaledSymbolFrame(54)
                     .background(Color.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 13))
                     .accessibilityHidden(true)
@@ -36,16 +36,16 @@ struct MacConnectionView: View {
             Divider()
 
             Form {
-                Section("Local node") {
+                Section("Backup server") {
                     TextField("Service address", text: $serviceAddress, prompt: Text("http://127.0.0.1:8787"))
                         .textContentType(.URL)
                         .accessibilityIdentifier("connection.address")
                     HStack {
                         if revealToken {
-                            TextField("Local API token", text: $token)
+                            TextField("Server access token", text: $token)
                                 .textContentType(.password)
                         } else {
-                            SecureField("Local API token", text: $token)
+                            SecureField("Server access token", text: $token)
                                 .textContentType(.password)
                         }
                         Button(revealToken ? "Hide" : "Show") { revealToken.toggle() }
@@ -53,7 +53,7 @@ struct MacConnectionView: View {
                     }
                     .accessibilityIdentifier("connection.token")
                     HStack {
-                        Text("Find it in the node data directory as local-api-token.")
+                        Text("Your backup server shows this token when you set it up. Copy it from there.")
                             .font(.caption)
                             .secondaryLabelStyle()
                         Spacer()
@@ -131,7 +131,7 @@ struct MacConnectionView: View {
 
     private func chooseTokenFile() {
         let panel = NSOpenPanel()
-        panel.title = "Choose Local API Token"
+        panel.title = "Choose Server Access Token"
         panel.prompt = "Use Token"
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
@@ -149,7 +149,7 @@ struct MacConnectionView: View {
 
     private func chooseCertificateFile() {
         let panel = NSOpenPanel()
-        panel.title = "Choose the Node TLS Certificate"
+        panel.title = "Choose Security Certificate"
         panel.prompt = "Trust Exact Certificate"
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
@@ -179,9 +179,9 @@ struct MacNewBackupView: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 5) {
-                Text(existingBackupId == nil ? "New Backup" : "Add Snapshot")
+                Text(existingBackupId == nil ? "New Backup" : "Add to Backup")
                     .font(.title.weight(.semibold))
-                Text("The local node encrypts and checkpoints this folder. Extra copies go only to devices you select below.")
+                Text("Your backup server encrypts this folder and saves its progress as it goes. Extra copies go only to devices you select below.")
                     .secondaryLabelStyle()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -206,7 +206,7 @@ struct MacNewBackupView: View {
                         }
                     }
                     HStack {
-                        Text("Folder access is stored as a security-scoped bookmark.")
+                        Text("Covalent remembers this folder until you remove its access in Settings.")
                             .font(.caption)
                             .secondaryLabelStyle()
                         Spacer()
@@ -217,7 +217,7 @@ struct MacNewBackupView: View {
                 Section("Extra copies") {
                     if model.providers.isEmpty {
                         Label("Local only", systemImage: "desktopcomputer")
-                        Text("Pair and connect a storage provider to choose an extra copy. Local-only backups remain fully supported.")
+                        Text("Pair and connect a storage device to choose an extra copy. Keeping backups only on this Mac is fully supported.")
                             .font(.caption)
                             .secondaryLabelStyle()
                     } else {
@@ -236,7 +236,7 @@ struct MacNewBackupView: View {
                             }
                             .disabled(true)
                         }
-                        Text("This exact set is sent as replica intent. Covalent never substitutes another device.")
+                        Text("Covalent sends copies to exactly the devices you selected. It never substitutes another device.")
                             .font(.caption)
                             .secondaryLabelStyle()
                     }
@@ -248,13 +248,13 @@ struct MacNewBackupView: View {
                     LabeledContent("Access", value: "Selected folder only")
                     LabeledContent("Copies", value: copySummary)
                     if selectedProviderIds.isEmpty {
-                        Label("This snapshot will stay on this device only.", systemImage: "desktopcomputer")
+                        Label("This backup will stay on this device only.", systemImage: "desktopcomputer")
                     } else {
                         ForEach(selectedProviders) { provider in
                             Label(provider.address, systemImage: "server.rack")
                         }
                     }
-                    Text("Every readable item under the selected folder is included. An unreadable or unsupported item stops the backup before commit.")
+                    Text("Every readable item under the selected folder is included. An unreadable or unsupported item stops the backup before anything is saved.")
                         .font(.caption)
                         .secondaryLabelStyle()
                     if existingBackupId != nil {
@@ -273,7 +273,7 @@ struct MacNewBackupView: View {
                 if isCreating {
                     ProgressView().controlSize(.small)
                 }
-                Button(existingBackupId == nil ? "Create Backup" : "Add Snapshot") {
+                Button(existingBackupId == nil ? "Create Backup" : "Add to Backup") {
                     guard let sourceGrantId else { return }
                     isCreating = true
                     Task {
@@ -348,18 +348,18 @@ struct MacNewBackupView: View {
         let added = selectedProviderIds.subtracting(previous)
         let removed = previous.subtracting(selectedProviderIds)
         Divider()
-        Text("Replica changes apply to this new snapshot only. Existing snapshots keep their original copies.")
+        Text("Copy changes apply to this new backup only. Existing backups keep their original copies.")
             .font(.caption)
             .secondaryLabelStyle()
         if added.isEmpty && removed.isEmpty {
-            Label("Replica set unchanged", systemImage: "checkmark.circle")
+            Label("Extra copies unchanged", systemImage: "checkmark.circle")
         } else {
             if !added.isEmpty {
                 Label("Add \(added.count) extra \(added.count == 1 ? "copy" : "copies")", systemImage: "plus.circle")
                     .foregroundStyle(.green)
             }
             if !removed.isEmpty {
-                Label("Do not place this snapshot on \(removed.count) previous \(removed.count == 1 ? "device" : "devices")", systemImage: "minus.circle")
+                Label("Do not place this backup on \(removed.count) previous \(removed.count == 1 ? "device" : "devices")", systemImage: "minus.circle")
                     .foregroundStyle(.orange)
             }
         }
@@ -402,7 +402,7 @@ struct MacSettingsImportView: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text("Import Device Settings")
                     .font(.title.weight(.semibold))
-                Text("This replaces the device name, discovery preference, and remembered backup descriptors after confirmation.")
+                Text("This replaces the device name, discovery preference, and remembered backup list after confirmation.")
                     .secondaryLabelStyle()
             }
 
@@ -412,15 +412,15 @@ struct MacSettingsImportView: View {
                     LabeledContent("LAN discovery", value: preview.lanDiscoveryEnabled ? "On" : "Off")
                     LabeledContent("Remembered backups", value: preview.rememberedBackups.count.formatted())
                 }
-                Label("Identity keys, backup keys, provider credentials, and folder grants are never imported by this workflow.", systemImage: "checkmark.shield")
+                Label("Identity keys, backup keys, storage device credentials, and folder permissions are never imported.", systemImage: "checkmark.shield")
                     .font(.subheadline)
                     .secondaryLabelStyle()
             } else {
-                ContentUnavailableView {
-                    Label("Choose a settings file", systemImage: "doc.badge.arrow.up")
-                } description: {
-                    Text("Covalent validates the complete JSON contract before enabling import.")
-                } actions: {
+                MacEmptyState(
+                    systemImage: "doc.badge.arrow.up",
+                    title: "Choose a settings file",
+                    message: "Covalent checks the whole file before allowing the import."
+                ) {
                     Button("Choose File…") { chooseFile() }
                 }
                 .frame(minHeight: 220)

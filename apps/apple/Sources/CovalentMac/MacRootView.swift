@@ -13,7 +13,7 @@ struct MacRootView: View {
                 List(AppSection.allCases, selection: $selectedSection) { section in
                     Label(section.label, systemImage: section.systemImage)
                         .tag(section)
-                        .primaryLabelStyle()
+                        .foregroundStyle(.primary)
                         .accessibilityIdentifier("sidebar.\(section.rawValue)")
                 }
                 .listStyle(.sidebar)
@@ -209,14 +209,20 @@ struct MacRootView: View {
 
     private var serviceState: some View {
         HStack(spacing: 9) {
+            // Deliberately not `serviceColor`: that is the *tint*, chosen to
+            // sit at 12% behind the row. Drawn solid at 8pt on that same tint,
+            // system green measures about 1.7:1 — and because this row is one
+            // combined accessibility element, the audit grades that dot along
+            // with the text and reported the whole row as failing. Same
+            // meaning, dark enough to be graded.
             Circle()
-                .fill(serviceColor)
+                .fill(serviceGlyphColor)
                 .frame(width: 8, height: 8)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text(model.serviceStatusLabel)
                     .font(.subheadline.weight(.semibold))
-                    .primaryLabelStyle()
+                    .foregroundStyle(.primary)
                 if let status = model.status {
                     // The sidebar draws its text vibrantly, and that blend is
                     // stroke-coverage dependent: on the 1x CI display a regular
@@ -226,20 +232,18 @@ struct MacRootView: View {
                     // line directly above renders #272727 (15:1) in the same
                     // vibrancy context, so match its weight here.
                     //
-                    // Weight alone was not enough: CI run 32461742319, on the
-                    // commit that introduced it, still reported "Contrast
-                    // failed for Service Ready". Weight changes stroke
-                    // coverage, but the *inputs* to the blend were still a
-                    // translucent tint over a vibrant material and a semantic
-                    // colour AppKit is free to reinterpret. Both are now
-                    // pinned: opaque text (`MacLabelColor`) over an opaque
-                    // backdrop, so what the audit samples is what the app
-                    // declared. The weight stays — it is what proved the
-                    // vibrancy theory, and dropping it would re-open the
-                    // 4.0:1 case if the backdrop ever goes translucent again.
+                    // Weight alone was not enough — but the reason turned out
+                    // not to be the text at all. Measured from the audit's own
+                    // element screenshot in CI run 32465148487, both lines here
+                    // render #1A1A1A on #F1FCF4: 16.5:1. What failed was the
+                    // status dot beside them, inside the same combined element.
+                    // The backdrop is opaque now so the measurement no longer
+                    // depends on the runner, and the weight stays: it is what
+                    // proved the vibrancy theory, and dropping it would re-open
+                    // the 4.0:1 case if the backdrop ever goes translucent.
                     Text(status.deviceName)
                         .font(.caption.weight(.semibold))
-                        .primaryLabelStyle()
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
                 }
             }
@@ -259,12 +263,40 @@ struct MacRootView: View {
         .accessibilityLabel("Service \(model.serviceStatusLabel)")
     }
 
+    /// The 12% wash behind the service row.
     private var serviceColor: Color {
         switch model.phase {
         case .starting: .orange
         case .ready: .green
         case .needsAuthorization: .blue
         case .offline: .red
+        }
+    }
+
+    /// The solid status dot. Darkened so it clears 4.5:1 against its own wash;
+    /// see the comment at the `Circle` above for why that matters here.
+    private var serviceGlyphColor: Color {
+        switch model.phase {
+        case .starting:
+            MacLabelColor.dynamic(
+                named: "CovalentStatusStarting",
+                light: NSColor(red: 0.541, green: 0.263, blue: 0.0, alpha: 1),
+                dark: NSColor(red: 1.0, green: 0.769, blue: 0.443, alpha: 1)
+            )
+        case .ready:
+            MacLabelColor.dynamic(
+                named: "CovalentStatusReady",
+                light: NSColor(red: 0.086, green: 0.388, blue: 0.184, alpha: 1),
+                dark: NSColor(red: 0.478, green: 0.867, blue: 0.588, alpha: 1)
+            )
+        case .needsAuthorization:
+            MacLabelColor.accentGlyph
+        case .offline:
+            MacLabelColor.dynamic(
+                named: "CovalentStatusOffline",
+                light: NSColor(red: 0.639, green: 0.090, blue: 0.059, alpha: 1),
+                dark: NSColor(red: 1.0, green: 0.616, blue: 0.576, alpha: 1)
+            )
         }
     }
 }

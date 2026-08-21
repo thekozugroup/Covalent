@@ -52,7 +52,7 @@ final class CovalentMacUITests: XCTestCase {
         XCTAssertTrue(offlinePairing.isHittable)
         offlinePairing.click()
         XCTAssertTrue(app.staticTexts["Secure Pairing"].waitForExistence(timeout: uiTransitionTimeout))
-        XCTAssertTrue(app.staticTexts["Nearby advertisements remain untrusted until finalization."].exists)
+        XCTAssertTrue(app.staticTexts["A device seen nearby is not trusted until you finish pairing with it."].exists)
         let close = app.buttons["pairing.close"]
         XCTAssertTrue(close.waitForExistence(timeout: uiTransitionTimeout))
         XCTAssertTrue(close.isHittable)
@@ -106,17 +106,47 @@ final class CovalentMacUITests: XCTestCase {
         // Both exclusions are counted and asserted below, so neither can grow
         // silently into a place to hide a real finding.
         //
+        //  3. The **two NavigationSplitView column containers**, reported as
+        //     `Group, {{0, 31}, {1024, 692}}` and `Group, {{8, 39}, {220, 676}}`,
+        //     each a direct child of `SplitGroup "main, SidebarNavigationSplitView"`.
+        //     These are the one exclusion here that is *not* obviously
+        //     framework-owned on sight, so it was tested rather than assumed.
+        //     Two SwiftUI fixes were tried in CI run 32465148487 and the audit
+        //     tree from that run shows exactly what each did:
+        //
+        //       - `.accessibilityElement(children: .contain)` plus a label, on
+        //         the outermost view of the sidebar column, produced
+        //         `Group {{8, 39}, {220, 676}}` (still unnamed)
+        //           -> `Group {{8, 83}, {220, 632}}, label: 'Sections and service status'`.
+        //         The name landed on a *new* group inside the container.
+        //
+        //       - A bare `.accessibilityLabel` on the outermost view of the
+        //         detail column produced `Group {{0, 31}, {1024, 692}}` (still
+        //         unnamed) -> `ScrollView, label: 'Overview'`. The name landed
+        //         on the scroll view underneath it.
+        //
+        //     In both cases the label attached *below* the container, because
+        //     the container is synthesized above every modifier the column
+        //     closure can carry. Nothing in `MacRootView.swift` sits between
+        //     the split view and these groups. The way to remove them is to
+        //     stop using `NavigationSplitView`, which is a UI decision and not
+        //     an accessibility fix; both labels above were kept, because naming
+        //     the sidebar region and the content pane is worth having on its
+        //     own.
+        //
         // Read this as a narrowing of ownership, not of coverage. Every view
         // Covalent draws — sidebar, toolbar, detail pane, sheets — is inside
         // this window and is still audited, and the ten app-owned findings
-        // this change was made alongside were *fixed*, not excluded: three
-        // unnamed containers were named, and seven contrast failures were
-        // traced to a single cause (`.secondary` is 50% alpha, so it renders
-        // near 3.9:1) and fixed once, in `MacTextStyles.swift`. If you are
-        // here because you want a failing finding to go away, this is not the
-        // precedent for it: exclude only elements that no Covalent source
-        // file can reach, and prove it by pasting the audit's "Path to
-        // element" the way the two entries above do.
+        // this change was made alongside were *fixed*, not excluded: the
+        // status grid was named, and seven contrast findings were traced to
+        // their real causes (a 50%-alpha `.secondary`, then rendered stroke
+        // coverage at small sizes, then two decorative glyphs inside combined
+        // elements) and fixed at the source in `MacTextStyles.swift`,
+        // `MacOverviewView.swift` and `MacRootView.swift`. If you are here
+        // because you want a failing finding to go away, this is not the
+        // precedent for it: exclude only elements that no Covalent source file
+        // can reach, prove it the way entry 3 does, and add a counted
+        // assertion so the exclusion cannot widen.
         // ---------------------------------------------------------------
         let window = app.windows["main"]
         XCTAssertTrue(window.waitForExistence(timeout: uiTransitionTimeout))
@@ -125,6 +155,7 @@ final class CovalentMacUITests: XCTestCase {
 
         var outsideWindow: [String] = []
         var harnessChrome: [String] = []
+        var splitViewColumns: [String] = []
         try app.performAccessibilityAudit { issue in
             let details = """
                 Accessibility audit: \(issue.compactDescription)
@@ -137,6 +168,15 @@ final class CovalentMacUITests: XCTestCase {
                 && !elementFrame.intersects(windowFrame)
             let isHarnessChrome = issue.auditType == .parentChild
                 && details.contains("_XCUI:FullScreenWindow")
+            // Deliberately narrow. "Descends from the split view" would match
+            // nearly every element in the app, so this also requires the
+            // element to be an unnamed group that spans the column full height
+            // — which is what a column container is and what no content view is.
+            let isSplitViewColumn = issue.auditType == .sufficientElementDescription
+                && issue.element?.elementType == .group
+                && issue.element?.label.isEmpty == true
+                && details.contains("SidebarNavigationSplitView")
+                && elementFrame.height >= windowFrame.height * 0.9
 
             let attachment = XCTAttachment(string: details)
             if isOutsideWindow {
@@ -145,12 +185,15 @@ final class CovalentMacUITests: XCTestCase {
             } else if isHarnessChrome {
                 harnessChrome.append(issue.compactDescription)
                 attachment.name = "Ignored: AppKit/XCTest window button"
+            } else if isSplitViewColumn {
+                splitViewColumns.append("\(issue.compactDescription) \(elementFrame)")
+                attachment.name = "Ignored: NavigationSplitView column container"
             } else {
                 attachment.name = "Accessibility audit element"
             }
             attachment.lifetime = .keepAlways
             self.add(attachment)
-            return isOutsideWindow || isHarnessChrome
+            return isOutsideWindow || isHarnessChrome || isSplitViewColumn
         }
 
         // Negative controls. An exclusion nobody has watched fire is
@@ -168,6 +211,15 @@ final class CovalentMacUITests: XCTestCase {
             harnessChrome.count,
             1,
             "Expected exactly the window-button ancestry mismatch, got: \(harnessChrome)"
+        )
+        XCTAssertEqual(
+            splitViewColumns.count,
+            2,
+            """
+            Expected exactly the two NavigationSplitView column containers, got: \(splitViewColumns)
+            Three would mean the app grew a full-height unnamed group of its own; one or zero
+            would mean SwiftUI stopped synthesizing them, and this exclusion should be deleted.
+            """
         )
     }
 

@@ -39,7 +39,7 @@ struct MacDevicesView: View {
             }
             Button("Cancel", role: .cancel) { providerToRevoke = nil }
         } message: {
-            Text("Revocation creates a durable tombstone, disconnects the provider, and prevents future access. Existing replica data remains encrypted.")
+            Text("Covalent permanently records that this device is no longer trusted, disconnects it, and blocks any future access. Copies already stored there stay encrypted.")
         }
     }
 
@@ -107,11 +107,12 @@ struct MacDevicesView: View {
                     Button("Settings") { model.selectedSection = .settings }
                 }
             } else if model.discoveryCandidates.isEmpty {
-                ContentUnavailableView {
-                    Label("No candidates found", systemImage: "dot.radiowaves.left.and.right")
-                } description: {
-                    Text("No LAN devices replied. You can enter a Tailscale address above; discovery never grants trust automatically.")
-                }
+                MacEmptyState(
+                    systemImage: "dot.radiowaves.left.and.right",
+                    title: "No candidates found",
+                    message: "No LAN devices replied. You can enter a Tailscale address above; "
+                        + "discovery never grants trust automatically."
+                )
                 .frame(maxWidth: .infinity, minHeight: 180)
                 .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
             } else {
@@ -120,7 +121,7 @@ struct MacDevicesView: View {
                         VStack(alignment: .leading, spacing: 10) {
                             HStack {
                                 Image(systemName: candidate.source == .tailscale ? "network.badge.shield.half.filled" : "dot.radiowaves.left.and.right")
-                                    .foregroundStyle(.blue)
+                                    .foregroundStyle(MacLabelColor.accentGlyph)
                                 Text(candidate.source.label).font(.headline)
                                 Spacer()
                                 Text(candidate.isCompatible ? "Protocol 1" : "Incompatible")
@@ -162,15 +163,15 @@ struct MacDevicesView: View {
     private var providers: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Connected storage providers")
+                Text("Connected storage devices")
                     .font(.title2.weight(.semibold))
             }
             if model.providers.isEmpty {
-                ContentUnavailableView {
-                    Label("No connected providers", systemImage: "server.rack")
-                } description: {
-                    Text("Backups stay local until you pair, connect, and explicitly select a provider.")
-                }
+                MacEmptyState(
+                    systemImage: "server.rack",
+                    title: "No connected storage devices",
+                    message: "Backups stay on this Mac until you pair a device, connect it, and select it yourself."
+                )
                 .frame(maxWidth: .infinity, minHeight: 180)
                 .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
             } else {
@@ -179,7 +180,7 @@ struct MacDevicesView: View {
                         HStack(spacing: 14) {
                             Image(systemName: "server.rack")
                                 .font(.title2)
-                                .foregroundStyle(.blue)
+                                .foregroundStyle(MacLabelColor.accentGlyph)
                                 .frame(width: 34)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(provider.address).font(.headline)
@@ -223,12 +224,12 @@ struct MacDevicesView: View {
             // in is a glyph a few points wide.
             DisclosureGroup(isExpanded: $isAdvancedRecoveryExpanded) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Use mutually signed JSON only when direct network pairing is unavailable or you are recovering an older node.")
+                    Text("Recovery only: exchange signed setup files by hand when direct pairing over the network cannot be used, or when reconnecting an older backup server.")
                         .font(.caption)
                         .secondaryLabelStyle()
-                    Button("Offline Pairing with Signed JSON…") { model.requestManualPairing() }
+                    Button("Offline Pairing with Signed Files…") { model.requestManualPairing() }
                         .accessibilityIdentifier("devices.offlinePairing")
-                    Button("Import Signed Transport JSON…") { showingConnectProvider = true }
+                    Button("Import Signed Connection File…") { showingConnectProvider = true }
                         .disabled(!model.isAuthorized)
                 }
                 .padding(.top, 6)
@@ -245,7 +246,7 @@ struct MacDevicesView: View {
     private var trustExplanation: some View {
         MacCallout(
             title: "Pairing and transport are separate safeguards",
-            message: "Both devices first sign matching roles and a comparison code. A provider connection then pins the certificate transferred through that confirmed channel.",
+            message: "Both devices first sign the same permissions and the same comparison code. The storage connection then locks onto the exact certificate that was exchanged through that confirmed channel.",
             systemImage: "checkmark.shield",
             tint: .blue
         ) {
@@ -263,20 +264,20 @@ struct MacProviderConnectionView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("Import Signed Provider Transport")
+                Text("Import Signed Connection File")
                     .font(.title.weight(.semibold))
-                Text("Paste the complete transport object from a mutually finalized pairing. Loose fields are never accepted.")
+                Text("Paste the complete connection details from a pairing both devices finished. Partial details are never accepted.")
                     .secondaryLabelStyle()
             }
             Form {
                 VStack(alignment: .leading) {
-                    Text("Signed transport JSON")
+                    Text("Signed connection details")
                     TextEditor(text: $signedTransportJSON)
                         .font(.caption.monospaced())
                         .frame(height: 220)
                         .overlay { RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.25)) }
                 }
-                Text("The node exact-compares the peer ID, name, address, certificate, and SHA-256 pin against the mutually signed pairing transcript.")
+                Text("Your backup server checks the other device's identity, name, address, certificate, and certificate fingerprint against what both devices signed during pairing. Every one must match exactly.")
                     .font(.caption)
                     .secondaryLabelStyle()
             }
@@ -330,7 +331,7 @@ struct MacPairingView: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text("Secure Pairing")
                     .font(.title.weight(.semibold))
-                Text("Transfer the signed JSON through AirDrop, Messages, or another channel, then compare the code on both physical devices.")
+                Text("Transfer the signed file through AirDrop, Messages, or another channel you trust, then compare the code on both physical devices.")
                     .secondaryLabelStyle()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -387,7 +388,7 @@ struct MacPairingView: View {
             }
 
             pairingStep(2, "Paste the signed response and compare codes") {
-                transferEditor(text: $sessionJSON, prompt: "Paste the responder's session JSON")
+                transferEditor(text: $sessionJSON, prompt: "Paste the other device's signed reply")
                 if let session = try? model.pairingSession(from: sessionJSON) {
                     pairingConsent(session)
                     authenticationCode(session.authenticationString)
@@ -424,7 +425,7 @@ struct MacPairingView: View {
     private var joinFlow: some View {
         VStack(alignment: .leading, spacing: 16) {
             pairingStep(1, "Paste an invitation and choose exact roles") {
-                transferEditor(text: $transferJSON, prompt: "Paste invitation JSON")
+                transferEditor(text: $transferJSON, prompt: "Paste the invitation")
                 if let invitation = try? model.pairingInvitation(from: transferJSON) {
                     Label("Invitation from \(invitation.inviterDeviceName)", systemImage: "checkmark.seal")
                         .font(.subheadline)
@@ -475,7 +476,7 @@ struct MacPairingView: View {
                     .disabled(!comparedCode || session.responderConfirmationSignature != nil || isWorking)
                     if session.responderConfirmationSignature != nil {
                         transferBox(title: "Send this signed session to the inviter", text: sessionJSON)
-                        Text("Paste the inviter's returned, mutually signed session into the box below.")
+                        Text("Paste the reply that the inviting device signed and returned into the box below.")
                             .font(.caption)
                             .secondaryLabelStyle()
                         transferEditor(text: $sessionJSON, prompt: "Paste final signed session")
@@ -597,7 +598,7 @@ struct MacPairingView: View {
 
     private var footer: some View {
         HStack {
-            Label("Nearby advertisements remain untrusted until finalization.", systemImage: "lock.shield")
+            Label("A device seen nearby is not trusted until you finish pairing with it.", systemImage: "lock.shield")
                 .font(.caption)
                 .secondaryLabelStyle()
             Spacer()
@@ -644,8 +645,8 @@ struct MacPairingView: View {
                 .accessibilityIdentifier("pairing.useAsBackupDevice")
             } else {
                 Text(peer.roles.contains(.storageProvider)
-                    ? "This older pairing did not include signed transport details. Use Advanced recovery from Devices."
-                    : "Storage access was not granted, so this device will not appear as a backup replica.")
+                    ? "This older pairing did not include signed connection details. Use Advanced recovery in Devices."
+                    : "Storage access was not granted, so this device cannot keep an extra copy.")
                     .font(.subheadline)
                     .secondaryLabelStyle()
                     .multilineTextAlignment(.center)
@@ -741,7 +742,7 @@ struct MacNetworkPairingView: View {
                         .buttonStyle(.borderedProminent)
                         .keyboardShortcut(.defaultAction)
                 } else {
-                    ProgressView("Saving signed provider connection…")
+                    ProgressView("Saving the signed connection to this device…")
                 }
             case .failed:
                 Text(current.failureMessage ?? "The devices could not finish pairing.")
