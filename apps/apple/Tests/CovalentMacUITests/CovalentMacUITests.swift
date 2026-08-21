@@ -19,11 +19,12 @@ final class CovalentMacUITests: XCTestCase {
         let advanced = app.descendants(matching: .any)["devices.advancedRecovery"]
         XCTAssertTrue(advanced.waitForExistence(timeout: 3))
         scrollTo(advanced, in: app)
-        // Click the disclosure triangle at the control's leading edge. The
-        // identifier resolves to an element spanning triangle *and* label, and
-        // on macOS only the triangle toggles the group — a centred click lands
-        // on the label and leaves it collapsed.
-        advanced.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.5)).click()
+        expandDisclosure(advanced)
+        XCTAssertEqual(
+            String(describing: advanced.value ?? ""),
+            "1",
+            "Advanced recovery did not expand, so its contents cannot be reached."
+        )
         let offlinePairing = app.buttons["devices.offlinePairing"]
         // Revealing the group pushes its contents below the fold, and macOS
         // keeps off-screen scroll content out of the accessibility tree, so
@@ -75,6 +76,34 @@ final class CovalentMacUITests: XCTestCase {
         XCTAssertTrue(app.menuItems["Refresh Status"].exists)
         XCTAssertTrue(app.menuItems["Settings…"].exists)
         XCTAssertTrue(app.menuItems["Quit Covalent"].exists)
+    }
+
+    /// Expands a macOS `DisclosureGroup`.
+    ///
+    /// The identifier resolves to an element covering the group's label, while
+    /// the triangle that actually toggles it sits just outside that element's
+    /// leading edge — so a plain `click()` lands on the label and leaves the
+    /// group shut. Try the triangle first, then the element itself, stopping
+    /// as soon as the control reports itself expanded.
+    private func expandDisclosure(_ element: XCUIElement) {
+        let targets = [
+            element.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: -11, dy: 8)),
+            element.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)),
+            element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)),
+        ]
+        for target in targets {
+            guard String(describing: element.value ?? "") != "1" else { return }
+            target.click()
+            _ = XCTWaiter.wait(
+                for: [
+                    XCTNSPredicateExpectation(
+                        predicate: NSPredicate(format: "value == 1"),
+                        object: element
+                    )
+                ],
+                timeout: 2
+            )
+        }
     }
 
     /// Scrolls `element` into view, so an assertion measures whether the app

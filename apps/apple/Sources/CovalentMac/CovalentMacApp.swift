@@ -17,12 +17,13 @@ struct CovalentMacApp: App {
         Window("Covalent", id: "main") {
             MacRootView(model: model)
                 .frame(minWidth: 900, minHeight: 640)
-                // The window's root container carried no description at all,
-                // which the system accessibility audit reports as "Element has
-                // no description". Name it, and keep every child individually
-                // reachable underneath.
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel("Covalent")
+                // The window's hosting container carries no description, which
+                // the system accessibility audit reports as "Element has no
+                // description". It sits above every SwiftUI modifier — a
+                // `.accessibilityLabel` here only names a *nested* group and
+                // leaves the offending one untouched — so name it through
+                // AppKit, where it actually lives.
+                .onAppear { Self.nameWindowContainer() }
         }
         .defaultSize(width: 1_080, height: 720)
         .commands {
@@ -78,6 +79,22 @@ struct CovalentMacApp: App {
                 .accessibilityIdentifier("Covalent")
         }
         .menuBarExtraStyle(.menu)
+    }
+
+    /// Gives the main window's hosting view an accessibility description.
+    ///
+    /// SwiftUI exposes no hook for this container, so reach it through AppKit.
+    /// Runs on the next turn of the run loop because the window is not yet
+    /// installed when the content view's `onAppear` fires.
+    private static func nameWindowContainer() {
+        DispatchQueue.main.async {
+            for window in NSApplication.shared.windows
+            where window.identifier?.rawValue == "main" || window.contentView != nil {
+                guard let contentView = window.contentView else { continue }
+                contentView.setAccessibilityLabel("Covalent")
+                contentView.setAccessibilityRoleDescription("Covalent main window content")
+            }
+        }
     }
 
     private var menuBarSymbol: String {
