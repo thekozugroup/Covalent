@@ -29,3 +29,6 @@ coverage/
 /TemporaryDirectory.*/
 /_Users_*.lock
 /.tmp*/
+
+# Node compile cache emitted by repo scripts (NODE_COMPILE_CACHE); never repository content
+/node-compile-cache/
