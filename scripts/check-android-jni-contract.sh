@@ -34,6 +34,59 @@ grep -Fq 'FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE' "$service"
 grep -Fq 'FOREGROUND_SERVICE_CONNECTED_DEVICE' "$manifest"
 grep -Fq 'foregroundServiceType="connectedDevice"' "$manifest"
 grep -Fq 'nativeStart' "$native"
-grep -Fq 'External node connections remain unchanged' "$manager"
+
+# The embedded on-device provider is an explicit opt-in that must never disturb
+# a separately configured external node. That contract used to be asserted by
+# grepping "$manager" for the sentence "External node connections remain
+# unchanged" - a string shown to users. Pinning UI copy in a shell script made
+# any wording improvement look like a security regression, and it proved
+# nothing: the sentence could stay word-perfect while the code beneath it
+# started clobbering external state. Assert the behaviour instead.
+
+# 1. Disabling the local provider must hand control back to external mode, so
+#    the app is never left pointed at a local node it has just stopped, and must
+#    stop only the embedded provider's own service.
+disable_body=$(
+  awk '
+    /^    fun disable\(\)/ { inside = 1 }
+    inside { print }
+    inside && /^    \}/ { exit }
+  ' "$manager"
+)
+test -n "$disable_body" || {
+  echo "EmbeddedNodeManager.disable() was not found; the external-node contract is unverifiable" >&2
+  exit 1
+}
+printf '%s\n' "$disable_body" | grep -Fq 'putString(KEY_ACTIVE_MODE, NodeMode.EXTERNAL.wireValue)' || {
+  echo "disable() must restore external mode so stopping the local provider cannot strand the app" >&2
+  exit 1
+}
+printf '%s\n' "$disable_body" | grep -Fq 'NodeProviderService.ACTION_STOP' || {
+  echo "disable() must stop only the embedded provider service" >&2
+  exit 1
+}
+
+# 2. External mode is both the default and the fallback for an unknown persisted
+#    value, so no parse failure can silently promote the local node.
+grep -Fq 'preferences.getString(KEY_ACTIVE_MODE, NodeMode.EXTERNAL.wireValue)' "$manager" || {
+  echo "activeMode() must default to external mode" >&2
+  exit 1
+}
+grep -Eq '\?:[[:space:]]*EXTERNAL' "$manager" || {
+  echo "NodeMode.fromWire must fall back to EXTERNAL for unknown wire values" >&2
+  exit 1
+}
+
+# 3. Local credentials live in their own store and are handed to the client
+#    selector only while local mode is active, so external credentials are never
+#    read, written, or substituted by this path.
+grep -Fq 'activeMode() == NodeMode.LOCAL' "$manager" || {
+  echo "local credentials must only be returned while local mode is active" >&2
+  exit 1
+}
+grep -Fq 'covalent_embedded_node_credentials' "$manager" || {
+  echo "local node credentials must use their own separate store" >&2
+  exit 1
+}
 
 echo "Android JNI contract checks passed."
