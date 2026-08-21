@@ -16,6 +16,7 @@
 //! still requires a human comparing the short authentication string on both
 //! devices; this path only moves the signed exchange between them.
 
+use std::collections::{BTreeMap, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -31,7 +32,8 @@ use tokio::sync::Semaphore;
 
 use crate::network_pairing::{
     NETWORK_PAIRING_SCHEMA_VERSION, NetworkPairingManager, NetworkPairingWireOperation,
-    NetworkPairingWireRequest, NetworkPairingWireResponse, validate_pairing_route,
+    NetworkPairingWireRequest, NetworkPairingWireResponse, rate_limit_bucket_key,
+    validate_pairing_route,
 };
 use crate::transport::{
     PAIRING_ALPN, map_quic_connection_error, read_frame, transport_limits, write_frame,
@@ -42,16 +44,154 @@ const MAX_PAIRING_FRAME_BYTES: usize = 256 * 1_024;
 /// A pairing dial is a foreground user action on a local network; fail fast.
 const PAIRING_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 const PAIRING_REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
+/// Ceiling on one `Submit`-driven probe.
+///
+/// Deliberately far shorter than [`PAIRING_CONNECT_TIMEOUT`], which covers a
+/// dial the local user asked for and may be aimed at a device that needs waking.
+/// A probe is not that: its target has, by the source check in
+/// [`NetworkPairingService::submit`], just completed a QUIC handshake with this
+/// node from the same address, so it is awake and one hop away. The long timeout
+/// was the per-attempt cost of using this node as a port prober.
+const PAIRING_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+/// Probes one source may start inside [`PROBE_BUDGET_WINDOW_MS`].
+///
+/// A legitimate pairing spends exactly one, on the first `Submit` of an
+/// exchange; the remainder covers retries after a transient failure.
+const MAX_PROBES_PER_SOURCE: usize = 4;
+const PROBE_BUDGET_WINDOW_MS: u64 = 60 * 1_000;
+/// Probes in flight across the whole node. Bounds the sockets and tasks the
+/// pairing path can be made to hold open at once, without queueing — a queue
+/// would let an attacker delay a real pairing instead of being refused.
+const MAX_CONCURRENT_PROBES: usize = 4;
+/// How long a failed probe is remembered, so hammering one dead address costs
+/// one dial rather than one per attempt. Short enough that a peer whose listener
+/// was briefly not ready recovers without operator involvement.
+const PROBE_FAILURE_CACHE_MS: u64 = 10 * 1_000;
+/// Ceilings on the guard's own memory. Both maps drain on their own; these stop
+/// a burst from many sources growing them without bound in the meantime.
+const MAX_PROBE_BUCKETS: usize = 256;
+const MAX_PROBE_FAILURE_ENTRIES: usize = 256;
 /// Bounds one connection so a single source cannot pin pairing capacity open.
 const MAX_PAIRING_STREAMS_PER_CONNECTION: usize = 8;
 /// Certificate ceiling shared with every other transport-binding validation.
 const MAX_CERTIFICATE_BYTES: usize = 64 * 1_024;
+
+/// Bounds the reflection and port-probe capability the `Submit` path exposes.
+///
+/// A `Submit` makes this node dial an address the sender named. The route check
+/// confines that to private networks, and the source check in
+/// [`NetworkPairingService::submit`] confines it to the sender's own address —
+/// but a caller can still ask for arbitrary *ports* there, and each attempt used
+/// to cost eight seconds of this node's time. This is what makes each attempt
+/// cheap for the node, rare for the caller, and free to repeat.
+#[derive(Debug)]
+struct ProbeGuard {
+    inflight: Semaphore,
+    budget: Mutex<ProbeBudget>,
+}
+
+#[derive(Debug, Default)]
+struct ProbeBudget {
+    /// Probe start times per rate-limiting bucket, oldest first.
+    attempts: BTreeMap<String, VecDeque<u64>>,
+    /// Addresses whose last probe failed, with the instant the memory expires.
+    ///
+    /// Only failures are cached, and the asymmetry is deliberate: a remembered
+    /// failure can refuse a pairing but can never make one succeed, whereas
+    /// remembering a certificate would let a byte string captured from one host
+    /// satisfy a live binding check against whatever holds that address later.
+    failures: BTreeMap<SocketAddr, u64>,
+}
+
+impl ProbeGuard {
+    fn new() -> Self {
+        Self {
+            inflight: Semaphore::new(MAX_CONCURRENT_PROBES),
+            budget: Mutex::new(ProbeBudget::default()),
+        }
+    }
+
+    /// Charges one probe of `address` to `bucket`, or refuses it.
+    fn admit(&self, bucket: &str, address: SocketAddr, now_unix_ms: u64) -> Result<(), CoreError> {
+        let mut budget = self.budget.lock().map_err(|_| CoreError::Synchronization)?;
+        let window_start = now_unix_ms.saturating_sub(PROBE_BUDGET_WINDOW_MS);
+        budget
+            .failures
+            .retain(|_, expires_at| *expires_at > now_unix_ms);
+        for attempts in budget.attempts.values_mut() {
+            while attempts.front().is_some_and(|at| *at < window_start) {
+                attempts.pop_front();
+            }
+        }
+        budget.attempts.retain(|_, attempts| !attempts.is_empty());
+
+        if budget.failures.contains_key(&address) {
+            return Err(CoreError::InvitationUnavailable);
+        }
+        if budget
+            .attempts
+            .get(bucket)
+            .is_some_and(|attempts| attempts.len() >= MAX_PROBES_PER_SOURCE)
+        {
+            return Err(CoreError::ResourceLimit("pairing probes"));
+        }
+        if budget.attempts.len() >= MAX_PROBE_BUCKETS && !budget.attempts.contains_key(bucket) {
+            // Evict the least recently active bucket rather than refusing a new
+            // one. The evicted source has not probed inside the window it would
+            // have been charged against, so its budget was about to lapse
+            // anyway, and refusing instead would let a spread of sources deny
+            // pairing to everyone else.
+            let stalest = budget
+                .attempts
+                .iter()
+                .filter_map(|(key, attempts)| attempts.back().map(|at| (*at, key.clone())))
+                .min();
+            if let Some((_, key)) = stalest {
+                budget.attempts.remove(&key);
+            }
+        }
+        budget
+            .attempts
+            .entry(bucket.to_owned())
+            .or_default()
+            .push_back(now_unix_ms);
+        Ok(())
+    }
+
+    fn record_failure(&self, address: SocketAddr, now_unix_ms: u64) {
+        let Ok(mut budget) = self.budget.lock() else {
+            return;
+        };
+        if budget.failures.len() >= MAX_PROBE_FAILURE_ENTRIES
+            && !budget.failures.contains_key(&address)
+        {
+            let soonest = budget
+                .failures
+                .iter()
+                .map(|(key, expires_at)| (*expires_at, *key))
+                .min();
+            if let Some((_, key)) = soonest {
+                budget.failures.remove(&key);
+            }
+        }
+        budget
+            .failures
+            .insert(address, now_unix_ms.saturating_add(PROBE_FAILURE_CACHE_MS));
+    }
+
+    fn clear_failure(&self, address: SocketAddr) {
+        if let Ok(mut budget) = self.budget.lock() {
+            budget.failures.remove(&address);
+        }
+    }
+}
 
 /// Handles pairing-only requests arriving on the node's advertised QUIC endpoint.
 pub struct NetworkPairingService {
     engine: Arc<Engine>,
     manager: Arc<NetworkPairingManager>,
     local_transport: Option<TransportBinding>,
+    probes: ProbeGuard,
 }
 
 impl NetworkPairingService {
@@ -59,7 +199,7 @@ impl NetworkPairingService {
     /// no concrete advertised endpoint, which leaves probing and exchange
     /// forwarding available but refuses to originate invitations.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         engine: Arc<Engine>,
         manager: Arc<NetworkPairingManager>,
         local_transport: Option<TransportBinding>,
@@ -68,6 +208,7 @@ impl NetworkPairingService {
             engine,
             manager,
             local_transport,
+            probes: ProbeGuard::new(),
         }
     }
 
@@ -96,7 +237,7 @@ impl NetworkPairingService {
                 "The pairing request was not fresh, signed, and unused.",
             );
         }
-        match self.execute(request, now_unix_ms).await {
+        match self.execute(request, source, now_unix_ms).await {
             Ok(response) => response,
             Err(error) => failure_for(&error),
         }
@@ -105,6 +246,7 @@ impl NetworkPairingService {
     async fn execute(
         &self,
         request: &NetworkPairingWireRequest,
+        source: IpAddr,
         now_unix_ms: u64,
     ) -> Result<NetworkPairingWireResponse, CoreError> {
         match &request.operation {
@@ -129,7 +271,7 @@ impl NetworkPairingService {
                 session,
             } => {
                 let merged = self
-                    .submit(pairing_id, session, request, now_unix_ms)
+                    .submit(pairing_id, session, request, source, now_unix_ms)
                     .await?;
                 Ok(NetworkPairingWireResponse::Session {
                     session: Box::new(merged),
@@ -157,16 +299,41 @@ impl NetworkPairingService {
     /// Registers a first submission after independently probing the responder
     /// binding, then merges only signatures that verify against the same
     /// immutable transcript.
+    ///
+    /// # Why the probe is confined
+    ///
+    /// This is the one place an unauthenticated caller makes this node open a
+    /// connection to an address of the caller's choosing, so the capability that
+    /// hands out is bounded here rather than left to the dial itself:
+    ///
+    /// * The route check keeps it off public networks.
+    /// * The address probed must be the address the `Submit` arrived from. QUIC
+    ///   address validation has already proven the caller receives packets
+    ///   there, so this reduces "make the node touch any host on the LAN" to
+    ///   "make the node touch the caller's own host" — and a caller can reach
+    ///   its own host without this node's help.
+    /// * What survives that is the port: a caller may still ask for any port on
+    ///   its own address and learn from the response whether something answered.
+    ///   [`ProbeGuard`] is what makes that expensive to repeat and cheap for
+    ///   this node to refuse.
+    ///
+    /// The source check has an operational edge, and it is a refusal rather than
+    /// a silent downgrade: a multi-homed peer that advertises one interface but
+    /// routes to this node out of another will be turned away. Pairing then
+    /// fails visibly and is fixed by advertising the interface the peer actually
+    /// reaches this node on, which is the safe direction for this to break.
     async fn submit(
         &self,
         pairing_id: &str,
         session: &PairingSession,
         request: &NetworkPairingWireRequest,
+        source: IpAddr,
         now_unix_ms: u64,
     ) -> Result<PairingSession, CoreError> {
         if self.manager.item(pairing_id, now_unix_ms).is_ok() {
             // Reject a submission that names a retained request belonging to a
-            // different identity before any state is touched.
+            // different identity before any state is touched. Note that this
+            // path never probes: only a first submission does.
             self.manager
                 .session_for_peer(pairing_id, request.requester.device_id)?;
             return self
@@ -185,7 +352,10 @@ impl NetworkPairingService {
             .map_err(|_| CoreError::AuthenticationFailed)?;
         // A signed request must never steer this node at an arbitrary endpoint.
         validate_pairing_route(responder_address, false)?;
-        let observed = PairingConnection::probe(responder_address).await?;
+        if responder_address.ip() != source {
+            return Err(CoreError::AuthenticationFailed);
+        }
+        let observed = self.probe(responder_address, source, now_unix_ms).await?;
         self.manager.register_incoming(
             responder_address,
             &observed,
@@ -194,6 +364,34 @@ impl NetworkPairingService {
         )?;
         self.manager
             .session_for_peer(pairing_id, request.requester.device_id)
+    }
+
+    /// Probes `address` under the guard's budget, cache, and concurrency cap.
+    async fn probe(
+        &self,
+        address: SocketAddr,
+        source: IpAddr,
+        now_unix_ms: u64,
+    ) -> Result<Vec<u8>, CoreError> {
+        self.probes
+            .admit(&rate_limit_bucket_key(Some(source)), address, now_unix_ms)?;
+        // Refused rather than queued: waiting for a slot would let a burst of
+        // probes delay a real pairing instead of being turned away.
+        let _permit = self
+            .probes
+            .inflight
+            .try_acquire()
+            .map_err(|_| CoreError::ResourceLimit("pairing probes in flight"))?;
+        match PairingConnection::probe(address).await {
+            Ok(observed) => {
+                self.probes.clear_failure(address);
+                Ok(observed)
+            }
+            Err(error) => {
+                self.probes.record_failure(address, now_unix_ms);
+                Err(error)
+            }
+        }
     }
 }
 
@@ -263,6 +461,10 @@ impl PairingConnection {
     /// this is a first contact between strangers. It becomes meaningful only
     /// once the caller binds it against the peer's signed transport binding.
     pub async fn connect(address: SocketAddr) -> Result<Self, CoreError> {
+        Self::connect_within(address, PAIRING_CONNECT_TIMEOUT).await
+    }
+
+    async fn connect_within(address: SocketAddr, timeout: Duration) -> Result<Self, CoreError> {
         validate_pairing_route(address, true)?;
         let observed = Arc::new(Mutex::new(None));
         let verifier = Arc::new(RecordingVerifier {
@@ -292,7 +494,7 @@ impl PairingConnection {
         let connecting = endpoint
             .connect(address, "covalent.local")
             .map_err(|error| CoreError::InvalidState(format!("start QUIC pairing: {error}")))?;
-        let connection = tokio::time::timeout(PAIRING_CONNECT_TIMEOUT, connecting)
+        let connection = tokio::time::timeout(timeout, connecting)
             .await
             .map_err(|_| CoreError::ResourceLimit("QUIC pairing connection timeout"))?
             .map_err(map_quic_connection_error)?;
@@ -343,8 +545,12 @@ impl PairingConnection {
     }
 
     /// Observes a peer's live certificate without exchanging pairing state.
+    ///
+    /// Held to [`PAIRING_PROBE_TIMEOUT`] rather than the dial timeout: a probe
+    /// target has just handshaked with this node, so a slow one is a probe worth
+    /// abandoning, not a device worth waiting for.
     async fn probe(address: SocketAddr) -> Result<Vec<u8>, CoreError> {
-        let connection = Self::connect(address).await?;
+        let connection = Self::connect_within(address, PAIRING_PROBE_TIMEOUT).await?;
         Ok(connection.observed_certificate)
     }
 }

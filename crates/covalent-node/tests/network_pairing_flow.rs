@@ -461,3 +461,289 @@ async fn a_pairing_flood_cannot_deny_pairing_or_weaken_replay_and_skew_checks() 
         "a flood must not deny a legitimate pairing"
     );
 }
+
+/// Identity of a committed pairing state file, or `None` while it does not exist.
+///
+/// The node stages every durable commit into a fresh temporary file and renames
+/// it over the target, so each commit installs a new inode. Watching the inode
+/// therefore counts commits as the filesystem saw them, which no counter kept by
+/// the code under test could honestly do.
+fn state_file_identity(path: &std::path::Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt as _;
+    std::fs::metadata(path)
+        .ok()
+        .map(|metadata| (metadata.ino(), metadata.len()))
+}
+
+/// Wire requests used to cost one full state-file rewrite and two fsyncs each,
+/// unauthenticated and unbounded. This drives real requests over real QUIC at a
+/// live node and watches its actual state file, then proves the writes that were
+/// removed were not the ones a crash needs.
+#[tokio::test(flavor = "multi_thread")]
+async fn wire_requests_never_commit_the_state_file_but_consent_survives_a_restart() {
+    let initiator_data = TempDir::new().expect("initiator data");
+    let responder_data = TempDir::new().expect("responder data");
+    let flooder_data = TempDir::new().expect("flooder data");
+    let initiator = start_node(&initiator_data, "Initiator laptop").await;
+    let responder = start_node(&responder_data, "Responder server").await;
+    let attacker = flooder(&flooder_data);
+    let target = responder.ready_info().peer_address();
+    let state_path = responder_data.path().join("network-pairing.json");
+
+    // Starting the node committed the replay floor. That is the one durable
+    // write a process start is allowed, and everything below is measured
+    // against it.
+    let at_start =
+        state_file_identity(&state_path).expect("the replay floor is committed at start");
+
+    let connection = PairingConnection::connect(target)
+        .await
+        .expect("dial the pairing ALPN");
+    for index in 0..PAIRING_FLOOD_REQUESTS {
+        let request = attacker
+            .sign_wire_request(NetworkPairingWireOperation::Probe, now_unix_ms())
+            .expect("sign probe");
+        let response = connection.request(&request).await.expect("probe");
+        assert!(
+            matches!(response, NetworkPairingWireResponse::Probe { .. }),
+            "a source inside its budget must still be served (request {index})"
+        );
+    }
+    drop(connection);
+
+    assert_eq!(
+        state_file_identity(&state_path),
+        Some(at_start),
+        "{PAIRING_FLOOD_REQUESTS} accepted wire requests must not commit the durable state file once"
+    );
+
+    // What was removed is write amplification, not durability. A pairing that a
+    // human actually confirmed still commits, and still survives a restart.
+    let start = call(
+        &initiator,
+        "POST",
+        "/api/v1/pair/network/start",
+        Some(&format!(r#"{{"candidateAddress":"{target}"}}"#)),
+    )
+    .await;
+    assert_eq!(start.status, 200, "{}", start.body);
+    let started = start.json();
+    let pairing_id = field(&started, "pairingId").to_owned();
+    let code = field(&started, "authenticationString").to_owned();
+
+    for node in [&initiator, &responder] {
+        let confirmed = call(
+            node,
+            "POST",
+            &format!("/api/v1/pair/network/{pairing_id}/confirm"),
+            Some(&format!(r#"{{"displayedCode":"{code}"}}"#)),
+        )
+        .await;
+        assert_eq!(confirmed.status, 200, "{}", confirmed.body);
+    }
+
+    let after_consent =
+        state_file_identity(&state_path).expect("consent leaves a committed state file");
+    assert_ne!(
+        after_consent, at_start,
+        "a human comparing a code and pressing confirm must reach the disk"
+    );
+
+    // Restart the responder over the same data directory. The mutually
+    // confirmed exchange has to still be there: nothing can rebuild it.
+    responder.stop().await.expect("stop responder");
+    let restarted = start_node(&responder_data, "Responder server").await;
+    let retained = only_item(&call(&restarted, "GET", "/api/v1/pair/network/pending", None).await);
+    assert_eq!(field(&retained, "pairingId"), pairing_id);
+    assert_eq!(
+        field(&retained, "state"),
+        "complete",
+        "mutual consent must survive a restart"
+    );
+
+    restarted.stop().await.expect("stop restarted responder");
+    initiator.stop().await.expect("stop initiator");
+}
+
+/// Builds the `Submit` an attacker uses to reach the probe.
+///
+/// It asks the victim for an invitation naming a transport binding of its own
+/// choosing, accepts that invitation locally, and signs the resulting exchange
+/// back. `claimed_address` is the address the victim would dial — the parameter
+/// this whole defect is about.
+async fn signed_submit_naming(
+    connection: &PairingConnection,
+    attacker: &NetworkPairingManager,
+    victim: SocketAddr,
+    claimed_address: SocketAddr,
+) -> covalent_node::network_pairing::NetworkPairingWireRequest {
+    let binding = attacker
+        .local_transport_binding(claimed_address, b"attacker certificate bytes")
+        .expect("attacker transport binding");
+    let start = attacker
+        .sign_wire_request(
+            NetworkPairingWireOperation::Start {
+                responder_transport: binding.clone(),
+            },
+            now_unix_ms(),
+        )
+        .expect("sign start");
+    let NetworkPairingWireResponse::Invitation { invitation } =
+        connection.request(&start).await.expect("start")
+    else {
+        panic!("the victim must issue an invitation for a well formed start");
+    };
+    let session = attacker
+        .register_outgoing(
+            victim,
+            connection.observed_certificate(),
+            *invitation,
+            binding,
+            now_unix_ms(),
+        )
+        .expect("attacker session");
+    attacker
+        .sign_wire_request(
+            NetworkPairingWireOperation::Submit {
+                pairing_id: session.invitation().invitation_id.clone(),
+                session: Box::new(session),
+            },
+            now_unix_ms(),
+        )
+        .expect("sign submit")
+}
+
+fn failure_code(response: &NetworkPairingWireResponse) -> String {
+    match response {
+        NetworkPairingWireResponse::Failed { code, .. } => code.clone(),
+        other => panic!(
+            "expected a stable wire failure: {}",
+            serde_json::to_string(other).unwrap_or_default()
+        ),
+    }
+}
+
+/// `Submit` is the one path that makes this node dial an address a stranger
+/// named. This drives that path from a live attacker over real QUIC and pins
+/// down exactly how much of it survives: not a LAN scanner, and not a free one.
+#[tokio::test(flavor = "multi_thread")]
+async fn submit_cannot_aim_this_node_at_a_third_host_and_probes_are_rationed() {
+    let initiator_data = TempDir::new().expect("initiator data");
+    let responder_data = TempDir::new().expect("responder data");
+    let attacker_data = TempDir::new().expect("attacker data");
+    let initiator = start_node(&initiator_data, "Initiator laptop").await;
+    let victim = start_node(&responder_data, "Responder server").await;
+    let attacker = flooder(&attacker_data);
+    let target = victim.ready_info().peer_address();
+
+    // A real pairing first, so the budget is proven to accommodate the traffic
+    // it exists to protect before any of it is spent on an attack.
+    let start = call(
+        &initiator,
+        "POST",
+        "/api/v1/pair/network/start",
+        Some(&format!(r#"{{"candidateAddress":"{target}"}}"#)),
+    )
+    .await;
+    assert_eq!(
+        start.status, 200,
+        "the probe guard must not break a legitimate pairing: {}",
+        start.body
+    );
+    let started = start.json();
+    let pairing_id = field(&started, "pairingId").to_owned();
+    let code = field(&started, "authenticationString").to_owned();
+    for node in [&initiator, &victim] {
+        let confirmed = call(
+            node,
+            "POST",
+            &format!("/api/v1/pair/network/{pairing_id}/confirm"),
+            Some(&format!(r#"{{"displayedCode":"{code}"}}"#)),
+        )
+        .await;
+        assert_eq!(confirmed.status, 200, "{}", confirmed.body);
+    }
+    assert_eq!(
+        field(
+            &only_item(&call(&victim, "GET", "/api/v1/pair/network/pending", None).await),
+            "state"
+        ),
+        "complete",
+        "a legitimate pairing must still complete end to end"
+    );
+
+    let connection = PairingConnection::connect(target)
+        .await
+        .expect("dial the pairing ALPN");
+
+    // A third host on the LAN. The route check alone would wave this through —
+    // it is a private address — so this is precisely the reflection primitive.
+    // It must be refused, and refused without a packet leaving the victim.
+    let reflection = signed_submit_naming(
+        &connection,
+        &attacker,
+        target,
+        "192.168.1.5:8787".parse().expect("third host"),
+    )
+    .await;
+    let started_at = std::time::Instant::now();
+    let refused = connection.request(&reflection).await.expect("reflection");
+    let refusal_took = started_at.elapsed();
+    assert_eq!(
+        failure_code(&refused),
+        "pairing_identity_mismatch",
+        "a submit must not steer this node at a host it did not arrive from"
+    );
+    assert!(
+        refusal_took < Duration::from_secs(1),
+        "refusing a reflection must cost no dial at all, took {refusal_took:?}"
+    );
+
+    // The attacker's own address is all it has left, and only the port varies.
+    // The first attempt is allowed to dial; the second at the same address must
+    // be served from the remembered failure instead of dialing again.
+    let closed = |port: u16| SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+    let first = signed_submit_naming(&connection, &attacker, target, closed(1)).await;
+    let first_response = connection.request(&first).await.expect("first probe");
+    assert!(
+        matches!(first_response, NetworkPairingWireResponse::Failed { .. }),
+        "a probe of a closed port cannot produce a pairing"
+    );
+
+    let repeat = signed_submit_naming(&connection, &attacker, target, closed(1)).await;
+    let started_at = std::time::Instant::now();
+    let cached = connection.request(&repeat).await.expect("repeat probe");
+    let cached_took = started_at.elapsed();
+    assert_eq!(
+        failure_code(&cached),
+        "pairing_unavailable",
+        "a repeated probe of a known-dead address must be answered from memory"
+    );
+    assert!(
+        cached_took < Duration::from_secs(1),
+        "a cached probe failure must not redial, took {cached_took:?}"
+    );
+
+    // Fresh addresses each cost a slot, and the budget runs out. Scanning ports
+    // is what is left of the primitive, and this is the rate it is left at.
+    let mut refusals = Vec::new();
+    for port in 2..=8_u16 {
+        let attempt = signed_submit_naming(&connection, &attacker, target, closed(port)).await;
+        refusals.push(failure_code(
+            &connection.request(&attempt).await.expect("budgeted probe"),
+        ));
+    }
+    assert!(
+        refusals.contains(&"pairing_resource_limit".to_owned()),
+        "one source must run out of probe budget rather than scan freely: {refusals:?}"
+    );
+    assert_eq!(
+        refusals.last().map(String::as_str),
+        Some("pairing_resource_limit"),
+        "the budget must stay spent for the rest of the window: {refusals:?}"
+    );
+
+    drop(connection);
+    victim.stop().await.expect("stop victim");
+    initiator.stop().await.expect("stop initiator");
+}

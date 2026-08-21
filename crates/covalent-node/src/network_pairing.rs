@@ -32,9 +32,7 @@ const MAX_CONSUMED_REQUEST_NONCES: usize = 4_096;
 /// refused. See [`admit_request_nonce`] for why that recycling is safe.
 const MAX_CONSUMED_NONCES_PER_SOURCE: usize = 512;
 /// Bucket label for a request with no attributable network source.
-const LOCAL_NONCE_SOURCE: &str = "local";
-/// Bounds the attacker-influenced width of one persisted bucket label.
-const MAX_NONCE_SOURCE_BYTES: usize = 64;
+pub(crate) const LOCAL_RATE_LIMIT_BUCKET: &str = "local";
 
 /// Resolves one explicit host:port candidate with bounded DNS and safe-route defaults.
 pub async fn resolve_pairing_candidate(
@@ -209,18 +207,45 @@ impl PersistedNetworkPairingItem {
     }
 }
 
+/// The half of pairing state a crash must not lose.
+///
+/// Membership here is decided by one question: can this be rebuilt or safely
+/// discarded after a restart?
+///
+/// * `items` cannot. Each one records a human comparing a short authentication
+///   string on two screens and pressing confirm. Nothing on the wire can
+///   reconstruct that decision, so losing it silently un-pairs devices or forces
+///   a person to repeat the ceremony. It is durable.
+/// * `request_floor_unix_ms` cannot, and is the price of making the nonce table
+///   volatile — see [`NetworkPairingManager::open_at`]. It is one integer.
+///
+/// The consumed-nonce table used to live here and no longer does. It is pure
+/// replay suppression for requests that expire within
+/// `NETWORK_PAIRING_REQUEST_SKEW_MS`, it is refilled by traffic rather than by
+/// consent, and every unauthenticated wire request grew it — which made an
+/// entire ~650 KB file rewrite plus two fsyncs the standing cost of one pairing
+/// packet. It now lives in [`VolatileNonceTable`], and the replay guarantee it
+/// provided across a restart is carried by the floor instead.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PersistedNetworkPairingState {
     schema_version: u16,
     items: BTreeMap<String, PersistedNetworkPairingItem>,
+    /// Wire requests must be issued strictly after this instant.
+    ///
+    /// Advanced to the current clock reading on every start, so no request that
+    /// existed before this process did can be admitted. That is what replaces
+    /// per-nonce durability: the pre-restart nonces are gone, but so is every
+    /// request they were protecting against.
     #[serde(default)]
+    request_floor_unix_ms: u64,
+    /// Read from files written before the nonce table became volatile, then
+    /// dropped. Present only so an upgrade over a `deny_unknown_fields` schema
+    /// does not reject a state file it wrote itself; never written again.
+    #[serde(default, skip_serializing)]
     consumed_request_nonces: BTreeMap<String, u64>,
-    /// Bucket that admitted each consumed nonce, keyed identically to
-    /// `consumed_request_nonces`. Attribution is what makes source-fair
-    /// eviction possible; it is deliberately persisted so a restart during a
-    /// flood does not leave the table full of unevictable entries.
-    #[serde(default)]
+    /// Companion of `consumed_request_nonces`, accepted and dropped identically.
+    #[serde(default, skip_serializing)]
     consumed_request_nonce_sources: BTreeMap<String, String>,
 }
 
@@ -229,10 +254,25 @@ impl Default for PersistedNetworkPairingState {
         Self {
             schema_version: NETWORK_PAIRING_SCHEMA_VERSION,
             items: BTreeMap::new(),
+            request_floor_unix_ms: 0,
             consumed_request_nonces: BTreeMap::new(),
             consumed_request_nonce_sources: BTreeMap::new(),
         }
     }
+}
+
+/// Replay suppression for the lifetime of one process, and nothing else.
+///
+/// Deliberately never written to disk. Every entry expires inside one skew
+/// window, and a restart cannot leave a stale one behind because a restart
+/// leaves none at all — the floor in [`PersistedNetworkPairingState`] refuses
+/// anything old enough to have been protected by an entry this table lost.
+#[derive(Debug, Default)]
+struct VolatileNonceTable {
+    nonces: BTreeMap<String, u64>,
+    /// Bucket that admitted each nonce, keyed identically to `nonces`.
+    /// Attribution is what makes source-fair eviction possible.
+    sources: BTreeMap<String, String>,
 }
 
 /// Crash-safe coordinator for the mutually confirmed pairing transcript.
@@ -240,12 +280,61 @@ pub struct NetworkPairingManager {
     engine: Arc<Engine>,
     state_path: PathBuf,
     state: Mutex<PersistedNetworkPairingState>,
+    /// Held separately from `state` so admitting a nonce never touches the
+    /// durable file and never contends with a consent transition. No path takes
+    /// both locks, so the split introduces no ordering hazard.
+    nonces: Mutex<VolatileNonceTable>,
+    request_floor_unix_ms: u64,
 }
 
 impl NetworkPairingManager {
-    /// Opens retained pairing requests. Active requests resume after restart.
+    /// Opens retained pairing requests against the system clock.
     pub fn open(engine: Arc<Engine>, state_path: PathBuf) -> Result<Self, CoreError> {
-        let state = match std::fs::symlink_metadata(&state_path) {
+        Self::open_at(engine, state_path, system_now_unix_ms())
+    }
+
+    /// Opens retained pairing requests at an explicit clock reading.
+    ///
+    /// # The replay floor
+    ///
+    /// Making the nonce table volatile would, on its own, be a replay hole, and
+    /// the hole is worth spelling out because it is the whole reason this
+    /// parameter exists. A request stays inside the skew window for
+    /// `NETWORK_PAIRING_REQUEST_SKEW_MS` either side of its stamp. Consume its
+    /// nonce, crash a second later, and restart with an empty table, and the
+    /// captured request is admissible all over again for the rest of that
+    /// window. Nonces were persisted precisely to stop that.
+    ///
+    /// The floor closes the same window without per-request durability. Every
+    /// start records the current instant and refuses any request not issued
+    /// strictly after it. A request that existed before this process started is
+    /// therefore dead on arrival, whether or not its nonce survived — which is a
+    /// strictly stronger statement than the old table made, since the table only
+    /// remembered requests this node had actually seen, while the floor also
+    /// covers ones captured from another peer's traffic.
+    ///
+    /// Two details keep it honest:
+    ///
+    /// * The stored value only ever moves forward (`max` against the previous
+    ///   floor), so a clock stepping backwards — NTP correction, a device with
+    ///   no battery-backed clock — cannot lower the bar.
+    /// * It is read back clamped to one skew window ahead of now. A floor
+    ///   further ahead than that already refuses every request through the skew
+    ///   check alone, so the clamp forfeits nothing, and it stops a single
+    ///   forward clock glitch from bricking pairing permanently once the clock
+    ///   is corrected.
+    ///
+    /// The cost is stated rather than hidden: for the first moments after a
+    /// restart, a peer whose clock trails this node's is refused until its own
+    /// stamps pass the floor. It resigns each request with a fresh stamp, so the
+    /// condition clears on its own within the peers' clock offset, and refusing
+    /// briefly is the safe direction to fail.
+    pub fn open_at(
+        engine: Arc<Engine>,
+        state_path: PathBuf,
+        now_unix_ms: u64,
+    ) -> Result<Self, CoreError> {
+        let mut state = match std::fs::symlink_metadata(&state_path) {
             Ok(metadata) => {
                 if metadata.file_type().is_symlink()
                     || !metadata.is_file()
@@ -282,12 +371,39 @@ impl NetworkPairingManager {
                 });
             }
         };
+        // Nonces retained by an older build are volatile now. Drop them before
+        // validation so a file written by that build neither has to satisfy
+        // rules that no longer apply nor keeps memory alive for a table this
+        // process rebuilds from zero.
+        state.consumed_request_nonces = BTreeMap::new();
+        state.consumed_request_nonce_sources = BTreeMap::new();
         validate_state(&state, engine.device_id())?;
-        Ok(Self {
+
+        let request_floor_unix_ms = state
+            .request_floor_unix_ms
+            .max(now_unix_ms)
+            .min(now_unix_ms.saturating_add(NETWORK_PAIRING_REQUEST_SKEW_MS));
+        let floor_advanced = request_floor_unix_ms != state.request_floor_unix_ms;
+        state.request_floor_unix_ms = request_floor_unix_ms;
+
+        let manager = Self {
             engine,
             state_path,
             state: Mutex::new(state),
-        })
+            nonces: Mutex::new(VolatileNonceTable::default()),
+            request_floor_unix_ms,
+        };
+        if floor_advanced {
+            // The one unavoidable durable write per process start, and the
+            // anchor every later request is checked against. It must land
+            // before a single request is served, so it is not deferred.
+            let state = manager
+                .state
+                .lock()
+                .map_err(|_| CoreError::Synchronization)?;
+            manager.persist_locked(&state)?;
+        }
+        Ok(manager)
     }
 
     /// Creates a concrete local binding from a live QUIC interface address and TLS identity.
@@ -358,13 +474,20 @@ impl NetworkPairingManager {
         Ok(request)
     }
 
-    /// Verifies freshness/signature and durably consumes a request nonce before dispatch.
+    /// Verifies freshness/signature and consumes a request nonce before dispatch.
     ///
     /// `source` is the address the request actually arrived from, already proven
     /// reachable by QUIC address validation before this node spent a signature
     /// verification on it. It selects the rate-limiting bucket only; every
     /// freshness, signature, operation-binding and replay check below is
     /// identical for every caller and is never scoped to a bucket.
+    ///
+    /// Consumption writes nothing to disk. Single-use is enforced against the
+    /// in-memory table for the life of this process, and requests predating the
+    /// process are refused outright by the replay floor established in
+    /// [`Self::open_at`], which together cover the same ground the persisted
+    /// nonce table used to — at zero writes per request instead of a full state
+    /// file and two fsyncs.
     pub fn verify_and_consume_wire_request(
         &self,
         request: &NetworkPairingWireRequest,
@@ -372,6 +495,7 @@ impl NetworkPairingManager {
         source: Option<IpAddr>,
     ) -> Result<(), CoreError> {
         if request.schema_version != NETWORK_PAIRING_SCHEMA_VERSION
+            || request.issued_at_unix_ms <= self.request_floor_unix_ms
             || now_unix_ms.abs_diff(request.issued_at_unix_ms) > NETWORK_PAIRING_REQUEST_SKEW_MS
             || request.signature.is_empty()
             || base64::Engine::decode(
@@ -412,15 +536,14 @@ impl NetworkPairingManager {
         let expires_at_unix_ms = request
             .issued_at_unix_ms
             .saturating_add(NETWORK_PAIRING_REQUEST_SKEW_MS);
-        let mut state = self.state.lock().map_err(|_| CoreError::Synchronization)?;
+        let mut nonces = self.nonces.lock().map_err(|_| CoreError::Synchronization)?;
         admit_request_nonce(
-            &mut state,
+            &mut nonces,
             nonce_key,
             expires_at_unix_ms,
-            &nonce_source_key(source),
+            &rate_limit_bucket_key(source),
             now_unix_ms,
-        )?;
-        self.persist_locked(&state)
+        )
     }
 
     /// Registers an outgoing exchange only after the signed invitation matches the probed peer.
@@ -770,7 +893,11 @@ impl NetworkPairingManager {
 /// whole /64, so the prefix — not the address — is the unit an attacker cannot
 /// cheaply multiply; budgeting per address there would hand one host billions of
 /// free buckets.
-fn nonce_source_key(source: Option<IpAddr>) -> String {
+///
+/// Shared with the pairing probe budget rather than duplicated there, so both
+/// limits agree on what counts as one source and an attacker cannot escape one
+/// by exploiting a looser definition in the other.
+pub(crate) fn rate_limit_bucket_key(source: Option<IpAddr>) -> String {
     match source {
         Some(IpAddr::V4(address)) => address.to_string(),
         Some(IpAddr::V6(address)) => {
@@ -778,8 +905,16 @@ fn nonce_source_key(source: Option<IpAddr>) -> String {
             prefix[..8].copy_from_slice(&address.octets()[..8]);
             format!("{}/64", Ipv6Addr::from(prefix))
         }
-        None => LOCAL_NONCE_SOURCE.to_owned(),
+        None => LOCAL_RATE_LIMIT_BUCKET.to_owned(),
     }
+}
+
+fn system_now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok())
+        .unwrap_or(0)
 }
 
 /// Admits one freshly verified request nonce under a source-partitioned budget.
@@ -819,21 +954,20 @@ fn nonce_source_key(source: Option<IpAddr>) -> String {
 /// for a replay hole in a peer that did nothing wrong. Denial is the safer
 /// failure, so denial is what happens.
 ///
-/// Nonces restored from a state file written before attribution existed carry no
-/// bucket, count toward no budget, and are never evicted. That is the same
-/// conservative choice, and it drains on its own within one skew window.
+/// The table is process-local, so it starts empty rather than restored: a
+/// restart during a flood now begins with nothing to evict at all, and the
+/// requests that flood was replaying are refused by the replay floor.
 fn admit_request_nonce(
-    state: &mut PersistedNetworkPairingState,
+    table: &mut VolatileNonceTable,
     nonce_key: String,
     expires_at_unix_ms: u64,
     source: &str,
     now_unix_ms: u64,
 ) -> Result<(), CoreError> {
-    let PersistedNetworkPairingState {
-        consumed_request_nonces: nonces,
-        consumed_request_nonce_sources: buckets,
-        ..
-    } = state;
+    let VolatileNonceTable {
+        nonces,
+        sources: buckets,
+    } = table;
     nonces.retain(|_, expires_at| *expires_at > now_unix_ms);
     buckets.retain(|key, _| nonces.contains_key(key));
 
@@ -1062,32 +1196,11 @@ fn validate_state(
     state: &PersistedNetworkPairingState,
     local_device_id: DeviceId,
 ) -> Result<(), CoreError> {
+    // The consumed-nonce maps are not checked here: `open_at` empties them
+    // before this runs, because they are volatile state that no longer round
+    // trips through the file at all.
     if state.schema_version != NETWORK_PAIRING_SCHEMA_VERSION
         || state.items.len() > MAX_NETWORK_PAIRING_ITEMS
-        || state.consumed_request_nonces.len() > MAX_CONSUMED_REQUEST_NONCES
-        || state.consumed_request_nonce_sources.len() > MAX_CONSUMED_REQUEST_NONCES
-        || state
-            .consumed_request_nonce_sources
-            .iter()
-            .any(|(key, source)| {
-                source.is_empty()
-                    || source.len() > MAX_NONCE_SOURCE_BYTES
-                    || !state.consumed_request_nonces.contains_key(key)
-            })
-        || state.consumed_request_nonces.iter().any(|(key, expiry)| {
-            *expiry == 0
-                || key.len() > 256
-                || key
-                    .rsplit_once(':')
-                    .and_then(|(_, request_id)| {
-                        base64::Engine::decode(
-                            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-                            request_id,
-                        )
-                        .ok()
-                    })
-                    .is_none_or(|nonce| nonce.len() != 16)
-        })
     {
         return Err(CoreError::InvalidState(
             "unsupported network pairing state".to_owned(),
@@ -1396,12 +1509,15 @@ mod tests {
     fn signed_wire_request_verifies_once_and_rejects_replay_skew_and_tampering() {
         let dir = tempdir().expect("dir");
         let engine = Arc::new(Engine::open(EngineOptions::new(dir.path())).expect("engine"));
-        let manager = NetworkPairingManager::open(
+        let now = 1_700_000_000_000_u64;
+        // Opened one millisecond before the requests below are issued, which is
+        // what a node serving them looks like: the replay floor is behind them.
+        let manager = NetworkPairingManager::open_at(
             Arc::clone(&engine),
             dir.path().join("network-pairing.json"),
+            now - 1,
         )
         .expect("manager");
-        let now = 1_700_000_000_000_u64;
 
         let request = manager
             .sign_wire_request(NetworkPairingWireOperation::Probe, now)
@@ -1479,10 +1595,163 @@ mod tests {
         );
     }
 
-    fn fresh_nonce_state() -> (PersistedNetworkPairingState, u64, u64) {
+    /// Identity of the committed state file, or `None` while it does not exist.
+    ///
+    /// `persist_private_file` stages into a fresh temporary file and renames it
+    /// over the target, so every durable commit installs a new inode. Counting
+    /// inode changes therefore counts real commits as the filesystem saw them,
+    /// which a counter maintained by the code under test could not honestly do.
+    fn state_file_identity(path: &std::path::Path) -> Option<(u64, u64)> {
+        use std::os::unix::fs::MetadataExt as _;
+        std::fs::metadata(path)
+            .ok()
+            .map(|metadata| (metadata.ino(), metadata.len()))
+    }
+
+    /// Counts the durable commits `body` causes.
+    fn durable_commits(path: &std::path::Path, body: impl FnOnce()) -> usize {
+        let before = state_file_identity(path);
+        let mut commits = 0;
+        let mut last = before;
+        let observe = |last: &mut Option<(u64, u64)>, commits: &mut usize| {
+            let now = state_file_identity(path);
+            if now != *last {
+                *commits += 1;
+                *last = now;
+            }
+        };
+        body();
+        observe(&mut last, &mut commits);
+        commits
+    }
+
+    #[test]
+    fn a_flood_of_wire_requests_no_longer_rewrites_the_state_file() {
+        let dir = tempdir().expect("dir");
+        let engine = Arc::new(Engine::open(EngineOptions::new(dir.path())).expect("engine"));
+        let path = dir.path().join("network-pairing.json");
+        let now = 1_700_000_000_000_u64;
+        let manager = NetworkPairingManager::open_at(Arc::clone(&engine), path.clone(), now - 1)
+            .expect("manager");
+
+        // Opening advanced the replay floor, which is the one durable write a
+        // process start is allowed to make.
+        let opened = state_file_identity(&path).expect("floor is committed at open");
+
+        const REQUESTS: usize = 256;
+        let source = Some(IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 99)));
+        let commits = durable_commits(&path, || {
+            for _ in 0..REQUESTS {
+                let request = manager
+                    .sign_wire_request(NetworkPairingWireOperation::Probe, now)
+                    .expect("sign");
+                manager
+                    .verify_and_consume_wire_request(&request, now, source)
+                    .expect("fresh request is admitted");
+            }
+        });
+
+        assert_eq!(
+            commits, 0,
+            "{REQUESTS} accepted wire requests must not commit the state file even once"
+        );
+        assert_eq!(
+            state_file_identity(&path),
+            Some(opened),
+            "neither the file's identity nor its length may move under a flood"
+        );
+    }
+
+    #[test]
+    fn a_restart_keeps_consent_durable_and_closes_the_replay_window_it_opens() {
+        let dir = tempdir().expect("dir");
+        let engine = Arc::new(Engine::open(EngineOptions::new(dir.path())).expect("engine"));
+        let path = dir.path().join("network-pairing.json");
+        let now = 1_700_000_000_000_u64;
+        let manager = NetworkPairingManager::open_at(Arc::clone(&engine), path.clone(), now - 1)
+            .expect("manager");
+
+        let captured = manager
+            .sign_wire_request(NetworkPairingWireOperation::Probe, now)
+            .expect("sign");
+        manager
+            .verify_and_consume_wire_request(&captured, now, None)
+            .expect("first use is admitted");
+
+        // Crash and restart one second later, well inside the skew window that
+        // still makes the captured request look fresh on its face.
+        drop(manager);
+        let restart = now + 1_000;
+        let reopened = NetworkPairingManager::open_at(Arc::clone(&engine), path.clone(), restart)
+            .expect("reopen");
+
+        // The nonce table is gone, so this is exactly the replay the old
+        // persisted table existed to refuse. The floor refuses it instead.
+        assert!(
+            reopened
+                .verify_and_consume_wire_request(&captured, restart, None)
+                .is_err(),
+            "a request consumed before the restart must stay dead after it"
+        );
+        // Not merely because its own nonce was remembered: a request this node
+        // never saw, captured from someone else's traffic before the restart,
+        // is refused too.
+        let unseen = reopened
+            .sign_wire_request(NetworkPairingWireOperation::Probe, now)
+            .expect("sign unseen");
+        assert!(
+            reopened
+                .verify_and_consume_wire_request(&unseen, restart, None)
+                .is_err(),
+            "the floor must refuse anything issued before this process started"
+        );
+        // And pairing still works: a request issued after the restart is served.
+        let fresh = reopened
+            .sign_wire_request(NetworkPairingWireOperation::Probe, restart + 1)
+            .expect("sign fresh");
+        reopened
+            .verify_and_consume_wire_request(&fresh, restart + 1, None)
+            .expect("a request issued after the restart must be admitted");
+    }
+
+    #[test]
+    fn the_replay_floor_never_moves_backwards_but_recovers_from_a_forward_glitch() {
+        let dir = tempdir().expect("dir");
+        let engine = Arc::new(Engine::open(EngineOptions::new(dir.path())).expect("engine"));
+        let path = dir.path().join("network-pairing.json");
+        let now = 1_700_000_000_000_u64;
+
+        NetworkPairingManager::open_at(Arc::clone(&engine), path.clone(), now).expect("first");
+        // A clock stepping backwards must not lower the bar, or every request
+        // the earlier run already consumed becomes admissible again.
+        let stepped_back =
+            NetworkPairingManager::open_at(Arc::clone(&engine), path.clone(), now - 60_000)
+                .expect("reopen with a backwards clock");
+        assert_eq!(
+            stepped_back.request_floor_unix_ms, now,
+            "the floor is monotonic across restarts"
+        );
+        drop(stepped_back);
+
+        // A single forward glitch must not brick pairing once the clock is
+        // corrected: the stored floor is read back clamped to one skew window
+        // ahead, which is already beyond anything the skew check would accept.
+        let glitch = now + 400 * 24 * 60 * 60 * 1_000;
+        NetworkPairingManager::open_at(Arc::clone(&engine), path.clone(), glitch)
+            .expect("reopen with a glitched clock");
+        let corrected = NetworkPairingManager::open_at(engine, path, now + 1_000)
+            .expect("reopen with a corrected clock");
+        assert_eq!(
+            corrected.request_floor_unix_ms,
+            now + 1_000 + NETWORK_PAIRING_REQUEST_SKEW_MS,
+            "a glitched floor is clamped back to the horizon the skew check already enforces"
+        );
+    }
+
+    fn fresh_nonce_state() -> (VolatileNonceTable, u64, u64) {
         let now = 1_700_000_000_000_u64;
         (
-            PersistedNetworkPairingState::default(),
+            VolatileNonceTable::default(),
             now,
             now + NETWORK_PAIRING_REQUEST_SKEW_MS,
         )
@@ -1515,26 +1784,26 @@ mod tests {
             )
             .expect("a flooding source is absorbed by its own budget, never refused");
             assert!(
-                state.consumed_request_nonces.len() <= MAX_CONSUMED_REQUEST_NONCES,
+                state.nonces.len() <= MAX_CONSUMED_REQUEST_NONCES,
                 "the table must stay inside its global bound"
             );
         }
 
         // The flood is pinned to its own budget rather than the whole table.
         assert_eq!(
-            bucket_len(&state.consumed_request_nonce_sources, "192.168.1.99"),
+            bucket_len(&state.sources, "192.168.1.99"),
             MAX_CONSUMED_NONCES_PER_SOURCE,
             "one source must never hold more than its per-source budget"
         );
         assert!(
-            state.consumed_request_nonces.len() <= MAX_CONSUMED_NONCES_PER_SOURCE + 1,
+            state.nonces.len() <= MAX_CONSUMED_NONCES_PER_SOURCE + 1,
             "a single flooding source must leave the rest of the table free"
         );
 
         // The quiet peer's nonce survived every one of those admissions, so its
         // replay protection is exactly what it was before the flood started.
         assert!(
-            state.consumed_request_nonces.contains_key("quiet:0"),
+            state.nonces.contains_key("quiet:0"),
             "a flood must never evict a quiet peer's unexpired nonce"
         );
 
@@ -1549,7 +1818,7 @@ mod tests {
             )
             .expect("a legitimate peer still pairs during someone else's flood");
         }
-        assert!(state.consumed_request_nonces.contains_key("quiet:0"));
+        assert!(state.nonces.contains_key("quiet:0"));
     }
 
     #[test]
@@ -1568,7 +1837,7 @@ mod tests {
             "a consumed nonce must stay dead no matter which source replays it"
         );
         assert_eq!(
-            state.consumed_request_nonce_sources.get("peer:one"),
+            state.sources.get("peer:one"),
             Some(&"10.0.0.5".to_owned()),
             "a refused replay must not re-attribute the incumbent entry"
         );
@@ -1609,16 +1878,11 @@ mod tests {
             )
             .expect("filling the table below every budget");
         }
-        assert_eq!(
-            state.consumed_request_nonces.len(),
-            MAX_CONSUMED_REQUEST_NONCES
-        );
+        assert_eq!(state.nonces.len(), MAX_CONSUMED_REQUEST_NONCES);
         for bucket in 0..sources {
             assert!(
-                bucket_len(
-                    &state.consumed_request_nonce_sources,
-                    &format!("10.1.0.{bucket}")
-                ) < MAX_CONSUMED_NONCES_PER_SOURCE
+                bucket_len(&state.sources, &format!("10.1.0.{bucket}"))
+                    < MAX_CONSUMED_NONCES_PER_SOURCE
             );
         }
 
@@ -1633,7 +1897,7 @@ mod tests {
             "a full table of below-budget buckets must refuse, never evict"
         );
         assert_eq!(
-            state.consumed_request_nonces.len(),
+            state.nonces.len(),
             MAX_CONSUMED_REQUEST_NONCES,
             "a refused admission must not have evicted anything"
         );
@@ -1648,28 +1912,28 @@ mod tests {
             later,
         )
         .expect("expired nonces are pruned and capacity returns");
-        assert_eq!(state.consumed_request_nonces.len(), 1);
-        assert_eq!(state.consumed_request_nonce_sources.len(), 1);
+        assert_eq!(state.nonces.len(), 1);
+        assert_eq!(state.sources.len(), 1);
     }
 
     #[test]
-    fn nonce_source_buckets_group_ipv6_by_prefix_and_ipv4_by_address() {
-        let first = nonce_source_key(Some("2001:db8::1".parse().expect("ipv6")));
-        let second = nonce_source_key(Some("2001:db8::dead:beef".parse().expect("ipv6")));
+    fn rate_limit_buckets_group_ipv6_by_prefix_and_ipv4_by_address() {
+        let first = rate_limit_bucket_key(Some("2001:db8::1".parse().expect("ipv6")));
+        let second = rate_limit_bucket_key(Some("2001:db8::dead:beef".parse().expect("ipv6")));
         assert_eq!(
             first, second,
             "one IPv6 host holds a whole /64, so the prefix funds one budget"
         );
         assert_ne!(
             first,
-            nonce_source_key(Some("2001:db9::1".parse().expect("ipv6"))),
+            rate_limit_bucket_key(Some("2001:db9::1".parse().expect("ipv6"))),
             "a different /64 is a different budget"
         );
         assert_ne!(
-            nonce_source_key(Some(IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 20)))),
-            nonce_source_key(Some(IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 21)))),
+            rate_limit_bucket_key(Some(IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 20)))),
+            rate_limit_bucket_key(Some(IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 21)))),
             "IPv4 addresses are scarce enough to budget individually"
         );
-        assert_eq!(nonce_source_key(None), LOCAL_NONCE_SOURCE);
+        assert_eq!(rate_limit_bucket_key(None), LOCAL_RATE_LIMIT_BUCKET);
     }
 }
