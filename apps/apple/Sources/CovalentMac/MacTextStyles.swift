@@ -135,62 +135,71 @@ struct MacEmptyState<Actions: View>: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            Image(systemName: systemImage)
-                .scaledSymbolFont(size: 34)
-                .foregroundStyle(MacLabelColor.secondary)
-                .accessibilityHidden(true)
-            Text(title)
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(.primary)
-            // The fixed width and the combined element here are both load
-            // bearing, and both are about the accessibility audit rather than
-            // the layout. Read this before "simplifying" either away — the
-            // size, weight and colour of this line are all innocent, and three
-            // rounds were spent blaming them in turn.
-            //
-            // What the audit actually does, read out of
-            // `AccessibilityAudit.framework`: its contrast check takes the
-            // element's screenshot, asks `_topColorsForImageData:` for the two
-            // **most frequent** colours in it, and compares those. It never
-            // isolates the text ink, and it ignores the font size it is handed.
-            // So the check only passes while the ink survives as a colour
-            // cluster of its own.
-            //
-            // Left alone, this `Text` is its own accessibility element at its
-            // ideal width — 349pt, odd — and the card centres it, so the
-            // element's frame origin landed on x = 626 - 349/2 = **451.5**. On
-            // the 1x display CI runs on, the audit's crop at that half-point is
-            // resampled, which splits every 13pt stem across two pixels. The
-            // ink cluster dissolves, the runner-up colour becomes near-white
-            // antialiasing (#F8F8F8), and the ratio it reports is 1.04 — on
-            // copy that renders (51,51,51) on white at 12.63:1.
-            //
-            // Colour and weight cannot help: re-measured through the
-            // framework's own code, the same glyphs re-inked to 38, 25, 12 and
-            // pure black all still grade 1.01-1.05 once blurred. The parity is
-            // also invisible — this line passed in the rounds where its
-            // rendered width happened to come out even, which is what made the
-            // finding look nondeterministic for so long.
-            //
-            // So the rectangle has to be moved onto whole pixels. A `frame`
-            // alone does not do it: the element stays the `Text`, which keeps
-            // its own 349pt bounds inside the box (CI run 32487387947 reported
-            // the identical 451.5 after that change). `.combine` is what moves
-            // the element up to the box, exactly as it does for the sidebar's
-            // service row, which vends its container's 204pt width and not its
-            // text's. The box is a fixed even width, so it centres on
-            // 626 - 180 = 446.0 and the crop is never resampled.
-            //
-            // Nothing moves on screen: each line is still centred on x = 626,
-            // since (360 - L)/2 + 446 and (349 - L)/2 + 451.5 are the same
-            // number.
-            Text(message)
-                .font(.body.weight(.medium))
-                .secondaryLabelStyle()
-                .multilineTextAlignment(.center)
-                .frame(width: 360)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(message)
+            VStack(spacing: 10) {
+                Image(systemName: systemImage)
+                    .scaledSymbolFont(size: 34)
+                    .foregroundStyle(MacLabelColor.secondary)
+                    .accessibilityHidden(true)
+                Text(title)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.primary)
+                // The fixed width on the message and the `.combine` on this
+                // inner stack are both load bearing, and both are about the
+                // accessibility audit rather than the layout. Read this before
+                // "simplifying" either away — the size, weight and colour of
+                // the message are all innocent, and three rounds were spent
+                // blaming them in turn.
+                //
+                // What the audit actually does, read out of
+                // `AccessibilityAudit.framework`: its contrast check takes the
+                // element's screenshot, asks `_topColorsForImageData:` for the
+                // two **most frequent** colours in it, and compares those. It
+                // never isolates the text ink, and it ignores the font size it
+                // is handed. So the check only passes while the ink survives as
+                // a colour cluster of its own.
+                //
+                // Left alone, the message is its own element at its ideal width
+                // — 349pt, odd — and the card centres it, so the element's
+                // origin landed on x = 626 - 349/2 = **451.5**. On the 1x
+                // display CI runs on, the audit's crop at that half-point is
+                // resampled, which splits every 13pt stem across two pixels.
+                // The ink cluster dissolves, the runner-up colour becomes
+                // near-white antialiasing (#F8F8F8), and the ratio it reports
+                // is 1.04 — on copy that renders (51,51,51) on white at
+                // 12.63:1.
+                //
+                // Colour and weight cannot help: re-measured through the
+                // framework's own code, the same glyphs re-inked to 38, 25, 12
+                // and pure black all still grade 1.01-1.05 once blurred. The
+                // parity is also invisible — the line passed in the rounds
+                // where its rendered width happened to come out even, which is
+                // what made the finding look nondeterministic for so long.
+                //
+                // So the rectangle has to land on whole pixels, and two
+                // narrower attempts did not put it there. A `frame` alone does
+                // not (CI run 32487387947: the element stays the `Text`, which
+                // keeps its own 349pt bounds inside the box). Nor does
+                // `.combine` on the `Text` itself (CI run 32489285578: with a
+                // single child it collapses back to that child's element).
+                // Both reported the identical 451.5.
+                //
+                // What does work is combining a genuinely multi-child
+                // container, which is what the sidebar's service row already
+                // does — it vends its container's 204pt width, not its text's.
+                // This stack's width is the widest child, the message's fixed
+                // and even 360, so it centres on 626 - 180 = 446.0 and the crop
+                // is never resampled. The button stays outside the group so it
+                // remains its own element.
+                //
+                // Nothing moves on screen; only the rectangle the audit reads
+                // does.
+                Text(message)
+                    .font(.body.weight(.medium))
+                    .secondaryLabelStyle()
+                    .multilineTextAlignment(.center)
+                    .frame(width: 360)
+            }
+            .accessibilityElement(children: .combine)
             actions()
                 .padding(.top, 4)
         }
