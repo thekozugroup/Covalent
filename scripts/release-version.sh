@@ -15,13 +15,19 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
 cargo_manifest="$repo_root/Cargo.toml"
 android_gradle="$repo_root/apps/android/app/build.gradle.kts"
-apple_project="$repo_root/apps/apple/project.yml"
+apple_project="$repo_root/apps/apple/Project.yml"
 unraid_template="$repo_root/packaging/unraid/covalent.xml"
 
 fail() {
   echo "$1" >&2
   exit 1
 }
+
+# Case-sensitive filesystems are unforgiving here: these paths must match the
+# tracked names exactly, or every version reads as empty and looks like drift.
+for required_file in "$cargo_manifest" "$android_gradle" "$apple_project" "$unraid_template"; do
+  [ -f "$required_file" ] || fail "version file is missing: $required_file"
+done
 
 require_semver() {
   case "$1" in
@@ -89,8 +95,8 @@ do_check() {
 
   assert "apps/android/app/build.gradle.kts versionName" "$(read_android_version_name)" "$version"
   assert "apps/android/app/build.gradle.kts versionCode" "$(read_android_version_code)" "$expected_build"
-  assert "apps/apple/project.yml MARKETING_VERSION" "$(read_apple_marketing_version)" "$version"
-  assert "apps/apple/project.yml CURRENT_PROJECT_VERSION" "$(read_apple_project_version)" "$expected_build"
+  assert "apps/apple/Project.yml MARKETING_VERSION" "$(read_apple_marketing_version)" "$version"
+  assert "apps/apple/Project.yml CURRENT_PROJECT_VERSION" "$(read_apple_project_version)" "$expected_build"
   assert "packaging/unraid/covalent.xml Repository tag" "$(read_unraid_version)" "v$version"
 
   if [ "$status" -ne 0 ]; then

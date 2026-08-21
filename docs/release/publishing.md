@@ -23,9 +23,9 @@ Release notes come from `docs/release/notes/<tag>.md` when that file exists.
 `scripts/release-version.sh` derives and enforces every other surface:
 
 - `apps/android/app/build.gradle.kts` — `versionName` and `versionCode`
-- `apps/apple/project.yml` — `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION`
+- `apps/apple/Project.yml` — `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION`
   (the Apple `Info.plist` files are XcodeGen output and are gitignored, so
-  `project.yml` is where the Apple version actually lives)
+  `Project.yml` is where the Apple version actually lives)
 - `packaging/unraid/covalent.xml` — the `<Repository>` image tag
 
 `versionCode` and `CURRENT_PROJECT_VERSION` are both the monotonic integer
