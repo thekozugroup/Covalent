@@ -23,3 +23,9 @@ apps/android/local.properties
 artifacts/
 coverage/
 *.log
+
+# Scratch that lands in the repo root only when a tool redirects TMPDIR here
+# (some sandboxed runners do). Never legitimate repository content.
+/TemporaryDirectory.*/
+/_Users_*.lock
+/.tmp*/
