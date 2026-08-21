@@ -430,19 +430,81 @@ function enclosingOpen(flat, offset) {
   return stack.length === 0 ? null : stack[stack.length - 1];
 }
 
+// True when `offset` sits in the path argument of a call this gate recognizes.
+function isPathArgument(flat, offset, calls) {
+  const call = enclosingCall(flat, offset);
+  if (call === null || call.declaration === true) return false;
+  const shape = calls[call.callee];
+  if (shape === undefined) return false;
+  return call.indexOf(offset) === selectArgument(call.parts.map((part) => part.text), shape.path);
+}
+
+// Decides whether a `buildString { … }` block is this gate's business. Kotlin
+// uses buildString for plenty that is not a URL — accessibility labels, log
+// lines, assertion messages — and running path analysis over those was never
+// analysis, only a rewrite that happened to succeed until one of them was
+// written differently.
+//
+// The test is positive and narrow: a block builds a path when the path is
+// visible inside it, or when the value it produces reaches a request helper in
+// that helper's path argument, either inline or through the local constant it
+// is assigned to. Everything it admits is then held to the full standard — a
+// block that lands here and cannot be folded throws rather than passing, which
+// is the point of the guard. Everything it rejects is left byte-for-byte alone,
+// and the scans downstream only ever read /api/v1 literals, so an untouched
+// diagnostic block contributes nothing either way.
+function buildsApiPath(flat, marker, open, close, tree) {
+  for (const literal of stringLiterals(flat.slice(open + 1, close))) {
+    if (literal.body.includes("api/v1")) return true;
+  }
+  const calls = tree?.calls;
+  if (calls === undefined) return false;
+
+  // Inline: `request(baseUrl, "GET", buildString { … }, token, null)`.
+  if (isPathArgument(flat, marker, calls)) return true;
+
+  // Named: `val path = buildString { … }` issued further down the same block.
+  // This mirrors how a stored path constant is resolved, so the two agree about
+  // which names are paths.
+  const before = flat.slice(0, marker).replace(/\s+$/, "");
+  const assignment = /(?:\bval|\bvar|\blet|\bconst)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*(?::[^=]*)?=\s*$/.exec(before);
+  if (assignment === null) return false;
+  const block = enclosingBlock(flat, marker);
+  const uses = new RegExp(`\\b${assignment[1]}\\b`, "g");
+  for (const use of flat.slice(block.start, block.end).matchAll(uses)) {
+    const offset = block.start + use.index;
+    if (offset >= marker && offset <= close) continue;
+    if (isPathArgument(flat, offset, calls)) return true;
+  }
+  return false;
+}
+
 // `buildString { append(a) append(b) }` is a concatenation written as statements.
 // Rewriting it to `a + b` lets one folding routine handle every client. The
 // rewrite is padded back to the original width so reported line numbers stay
-// exact for everything downstream of it.
-function foldBuildStrings(flat, file) {
+// exact for everything downstream of it. Only blocks `buildsApiPath` recognizes
+// are rewritten; the rest of a source file's buildString blocks are none of this
+// gate's concern and are passed through untouched.
+function foldBuildStrings(flat, file, tree) {
   let result = flat;
   let searchFrom = 0;
-  for (let guard = 0; guard < 64; guard += 1) {
+  let folded = 0;
+  // Folding only ever replaces a block with something no longer than it was and
+  // never writes a fresh `buildString {`, so the blocks present at the start
+  // bound the number of iterations and this cannot spin.
+  const blocks = result.split("buildString {").length - 1;
+  for (let guard = 0; guard <= blocks; guard += 1) {
     const marker = result.indexOf("buildString {", searchFrom);
     if (marker === -1) return result;
     const open = result.indexOf("{", marker);
     const close = matchingClose(result, open);
     if (close === -1) throw new Error(`${file}: unterminated buildString block`);
+    if (!buildsApiPath(result, marker, open, close, tree)) {
+      // Step over the marker only, so a path block nested inside an unrelated
+      // one is still judged on its own.
+      searchFrom = marker + "buildString".length;
+      continue;
+    }
     const body = result.slice(open + 1, close);
     const pieces = [];
     for (const match of body.matchAll(/\bappend\(/g)) {
@@ -451,12 +513,16 @@ function foldBuildStrings(flat, file) {
       if (argumentClose === -1) throw new Error(`${file}: unterminated append() inside buildString`);
       pieces.push(body.slice(argumentOpen + 1, argumentClose));
     }
-    if (pieces.length === 0) throw new Error(`${file}: buildString block with no append() calls; the path extractor is stale`);
+    if (pieces.length === 0) {
+      throw new Error(`${file}: buildString block building an API path with no append() calls; the path extractor is stale`);
+    }
     const width = close + 1 - marker;
     const replacement = pieces.join(" + ");
     if (replacement.length > width) throw new Error(`${file}: buildString rewrite cannot preserve source offsets`);
     result = `${result.slice(0, marker)}${replacement.padEnd(width, " ")}${result.slice(close + 1)}`;
     searchFrom = marker + width;
+    folded += 1;
+    if (folded > 64) throw new Error(`${file}: more API path buildString blocks than this gate will fold; the path extractor is stale`);
   }
   throw new Error(`${file}: more buildString blocks than this gate will fold; the path extractor is stale`);
 }
@@ -519,7 +585,14 @@ function foldExpression(text, tree, variables) {
 
 function normalizeTemplate(template) {
   const withoutQuery = template.split("?")[0].split("#")[0];
-  return withoutQuery.startsWith("/") ? withoutQuery : `/${withoutQuery}`;
+  // An absolute URL still names a path on the node, and the path is the half
+  // this contract covers. Dropping a real origin means such a literal is held
+  // against the router instead of being reported as unresolvable. The origin has
+  // to be a literal scheme and host: a folded `{}` never matches, so an
+  // unresolved prefix cannot dress itself up as a URL to get its suffix ignored.
+  const origin = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/]+/.exec(withoutQuery);
+  const path = origin === null ? withoutQuery : withoutQuery.slice(origin[0].length);
+  return path.startsWith("/") ? path : `/${path}`;
 }
 
 // --------------------------------------------------------------- route tables
@@ -770,7 +843,7 @@ function scanRequestTree(tree, tracked) {
   for (const check of tree.wiring ?? []) matchAtLeastOnce(check, `${tree.label}: ${check.description}`);
   for (const file of treeFiles(tree, tracked)) {
     const raw = loadFlat(file);
-    const flat = foldBuildStrings(raw.flat, file);
+    const flat = foldBuildStrings(raw.flat, file, tree);
     const lineAt = (offset) => raw.lineAt(Math.min(offset, raw.flat.length - 1));
     const variables = new Map();
     const pending = [];
@@ -894,7 +967,7 @@ function scanAssertionTree(tree, tracked) {
   const references = [];
   for (const file of treeFiles(tree, tracked)) {
     const raw = loadFlat(file);
-    const flat = foldBuildStrings(raw.flat, file);
+    const flat = foldBuildStrings(raw.flat, file, tree);
     for (const literal of stringLiterals(flat)) {
       if (!literal.body.includes("api/v1")) continue;
       const location = `${file}:${raw.lineAt(literal.start)}`;
