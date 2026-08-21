@@ -196,6 +196,12 @@ final class CovalentMacUITests: XCTestCase {
                 attachment.name = "Ignored: NavigationSplitView column container"
             } else {
                 attachment.name = "Accessibility audit element"
+                // Also to stdout. The attachment only reaches the result
+                // bundle, which on CI means a 100 MB artifact download before
+                // anyone can read what failed, and `xcodebuild -quiet` prints
+                // the failing test's name and nothing else. Every round trip
+                // this gate has cost was spent finding that out again.
+                print("COVALENT-AUDIT-FINDING\n\(details)")
             }
             attachment.lifetime = .keepAlways
             self.add(attachment)

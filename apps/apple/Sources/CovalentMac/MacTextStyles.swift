@@ -66,12 +66,33 @@ enum MacLabelColor {
     /// `.accessibilityElement(children: .combine)` gives the audit one element
     /// whose rectangle still contains everything drawn in it, including glyphs
     /// marked `accessibilityHidden`. System blue is 3.7:1 on white, so a tile
-    /// whose text was fine failed anyway on the icon beside it. This is the
-    /// same blue, dark enough to be graded on its own.
+    /// whose text was fine failed anyway on the icon beside it.
+    ///
+    /// The first replacement, #0B5FBF, was measured against **white** and
+    /// quoted as 6.2:1. The tiles that use it are not on white: they sit
+    /// directly on `windowBackgroundColor` (#ECECEC), where that blue is
+    /// **5.2:1**. That turns out to be the whole remaining story. Every element
+    /// still failing the audit measures 5.2-5.7:1 against its own backdrop —
+    /// the safeguard glyph at 5.2, all three service dots at 5.7 — while the
+    /// comparable runs that pass measure 10.7:1 or better. `MacMetric` is the
+    /// control: its `Label` symbol is this same `secondary` token on this same
+    /// background at 10.7:1, in a combined element, and it has never been
+    /// reported. So what the audit refuses here is a decorative glyph in the
+    /// 5-6:1 band, and the nominal 4.5:1 floor is not where its line falls.
+    /// Aim well past it rather than at it.
+    ///
+    /// #00286E is 11.6:1 on `windowBackgroundColor`, 13.7:1 on the white cards
+    /// and 10.1:1 on the 12% blue wash behind the service row — the three
+    /// backdrops this token is actually drawn on. Deep navy instead of a mid
+    /// blue is the price: at the luminance this needs, every hue is dark, so
+    /// the choice left is how much chroma survives, and this keeps the blue
+    /// channel at full stretch rather than greying toward black. It is one
+    /// accent for the whole app, all eight sites, rather than a second blue
+    /// kept only for the tiles that are graded.
     static let accentGlyph = dynamic(
         named: "CovalentAccentGlyph",
-        light: NSColor(red: 0.043, green: 0.373, blue: 0.749, alpha: 1),
-        dark: NSColor(red: 0.561, green: 0.761, blue: 1.0, alpha: 1)
+        light: NSColor(red: 0.0, green: 0.157, blue: 0.431, alpha: 1),
+        dark: NSColor(red: 0.784, green: 0.886, blue: 1.0, alpha: 1)
     )
 
     /// Builds an appearance-aware opaque colour.

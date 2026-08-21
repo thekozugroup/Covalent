@@ -216,11 +216,14 @@ struct MacSafeguard: View {
             // the rectangle. See `MacLabelColor.accentGlyph`.
             //
             // Filled, not outlined, and measured rather than assumed: the
-            // outline variant declares #0B5FBF (6.2:1) but its strokes are one
+            // outline variant declares its colour but its strokes are one
             // point wide, so sampling the audit's own element screenshot gives
-            // a coverage-weighted #4786CE — 3.75:1, under the floor, while the
-            // text beside it sat at 5.7:1. A filled glyph reaches nearly full
-            // coverage, so what it renders is what it declared.
+            // a coverage-weighted #4786CE — 3.75:1, under the floor. A filled
+            // glyph reaches nearly full coverage, so what it renders is what it
+            // declared. Which then made the declared value the thing that
+            // mattered, and it had been picked against the wrong backdrop:
+            // these tiles sit on `windowBackgroundColor`, not on white. See
+            // `MacLabelColor.accentGlyph`.
             Image(systemName: systemImage)
                 .font(.title2.weight(.semibold))
                 .symbolVariant(.fill)
@@ -229,7 +232,18 @@ struct MacSafeguard: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(title).font(.headline)
-                Text(text).font(.subheadline.weight(.medium)).secondaryLabelStyle()
+                // Body size in the primary label colour, not 11pt in the
+                // quieter one. Two reasons, and only one of them is the audit.
+                // These three sentences are the screen's explanation of what
+                // Covalent will and will not do on its own; 11pt is the size
+                // this app uses for timestamps and byte counts, and reading
+                // them at it is a chore. And the tile is graded as one
+                // rectangle, so the more of its ink that sits near 17.8:1 the
+                // less any single run has to carry.
+                //
+                // Hierarchy moves onto weight alone: 13pt semibold over 13pt
+                // regular, which is what the system's own settings panes do.
+                Text(text).font(.body)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

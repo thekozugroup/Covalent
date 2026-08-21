@@ -151,6 +151,13 @@ if ! run_bounded 480 xcodebuild \
   -default-test-execution-time-allowance 120 \
   -maximum-test-execution-time-allowance 240 \
   test-without-building >"$ui_log" 2>&1; then
+  # `tail` alone is not enough. A failing run ends with several hundred lines
+  # of codesign and launch chatter, so the failures themselves — and the audit
+  # findings the accessibility test prints — scroll off the end of any tail
+  # worth reading. Pull them out by name first.
+  print -u2 -- "--- audit findings and test failures ---"
+  grep -n -A3 -E 'COVALENT-AUDIT-FINDING|error: -\[|XCTAssert' "$ui_log" | tail -200 >&2 || true
+  print -u2 -- "--- last 240 lines ---"
   tail -240 "$ui_log" >&2
   codesign --verify --deep --strict --verbose=4 "$runner" >&2 || true
   pgrep -alf 'xcodebuild|CovalentMacUITests|testmanagerd' >&2 || true

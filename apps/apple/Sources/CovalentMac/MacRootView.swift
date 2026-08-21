@@ -279,29 +279,43 @@ struct MacRootView: View {
         }
     }
 
-    /// The solid status dot. Darkened so it clears 4.5:1 against its own wash;
-    /// see the comment at the `Circle` above for why that matters here.
+    /// The solid status dot, dark enough to be graded against its own wash.
+    ///
+    /// The previous values were aimed at the 4.5:1 floor and landed just past
+    /// it: measured against the wash actually behind them — 12% of the phase
+    /// tint over `windowBackgroundColor` — starting was 5.68:1, ready 5.73:1
+    /// and offline 5.70:1. All three cleared 4.5 and the audit reported the row
+    /// anyway, and the safeguard glyph that failed alongside them sat at 5.22:1
+    /// on its own backdrop. Three dots and a glyph inside one narrow band, with
+    /// every passing run on the screen at 10.7:1 or better, is not a coincidence
+    /// about font size; see `MacLabelColor.accentGlyph`.
+    ///
+    /// So these are aimed at the passing population instead of at the floor.
+    /// Against their own washes: starting 10.7:1, ready 10.8:1, offline 10.6:1,
+    /// and `accentGlyph` 10.1:1 on the blue one. Deeper colour is the cost, and
+    /// it is small here — the dot is 8pt, its hue restates the word beside it
+    /// and the 12% wash behind the whole row, and neither of those changes.
     private var serviceGlyphColor: Color {
         switch model.phase {
         case .starting:
             MacLabelColor.dynamic(
                 named: "CovalentStatusStarting",
-                light: NSColor(red: 0.541, green: 0.263, blue: 0.0, alpha: 1),
-                dark: NSColor(red: 1.0, green: 0.769, blue: 0.443, alpha: 1)
+                light: NSColor(red: 0.282, green: 0.141, blue: 0.0, alpha: 1),
+                dark: NSColor(red: 1.0, green: 0.839, blue: 0.620, alpha: 1)
             )
         case .ready:
             MacLabelColor.dynamic(
                 named: "CovalentStatusReady",
-                light: NSColor(red: 0.086, green: 0.388, blue: 0.184, alpha: 1),
-                dark: NSColor(red: 0.478, green: 0.867, blue: 0.588, alpha: 1)
+                light: NSColor(red: 0.031, green: 0.204, blue: 0.090, alpha: 1),
+                dark: NSColor(red: 0.627, green: 0.941, blue: 0.725, alpha: 1)
             )
         case .needsAuthorization:
             MacLabelColor.accentGlyph
         case .offline:
             MacLabelColor.dynamic(
                 named: "CovalentStatusOffline",
-                light: NSColor(red: 0.639, green: 0.090, blue: 0.059, alpha: 1),
-                dark: NSColor(red: 1.0, green: 0.616, blue: 0.576, alpha: 1)
+                light: NSColor(red: 0.337, green: 0.039, blue: 0.027, alpha: 1),
+                dark: NSColor(red: 1.0, green: 0.788, blue: 0.769, alpha: 1)
             )
         }
     }
