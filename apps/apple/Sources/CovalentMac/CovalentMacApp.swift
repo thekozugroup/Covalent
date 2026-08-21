@@ -92,31 +92,7 @@ struct CovalentMacApp: App {
                 guard let contentView = window.contentView else { continue }
                 contentView.setAccessibilityLabel("Covalent")
                 contentView.setAccessibilityRoleDescription("Covalent main window content")
-                hideStructuralGroups(in: contentView)
             }
-        }
-    }
-
-    /// Drops unlabelled layout wrappers out of the accessibility tree.
-    ///
-    /// `NavigationSplitView` builds nested container views that hold no
-    /// content of their own. VoiceOver gains nothing by stopping on them, and
-    /// the system audit reports each as "Element has no description". A view
-    /// that is not itself an accessibility element passes its children
-    /// straight through, so nothing becomes unreachable — the labelled groups
-    /// inside, such as "Covalent sidebar", are untouched because they have a
-    /// description to offer.
-    private static func hideStructuralGroups(in view: NSView) {
-        for subview in view.subviews {
-            let hasDescription = !(subview.accessibilityLabel() ?? "").isEmpty
-                || !(subview.accessibilityTitle() ?? "").isEmpty
-            if subview.isAccessibilityElement(),
-               subview.accessibilityRole() == .group,
-               !hasDescription,
-               !subview.subviews.isEmpty {
-                subview.setAccessibilityElement(false)
-            }
-            hideStructuralGroups(in: subview)
         }
     }
 
