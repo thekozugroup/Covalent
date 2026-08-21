@@ -53,7 +53,7 @@ jobs:
           test "${RELEASE_VERSION#v}" = "${workspace_version}"
           test "$(git rev-list -n 1 "${RELEASE_VERSION}")" = "${GITHUB_SHA}"
           checks=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100")
-          for required in "Shared Rust and contracts" "macOS integration and UI" "Android foundation" "Android API 37 device" "Container foundation" "CodeQL java-kotlin" "CodeQL swift" "CodeQL policy" "Release candidate software gates"; do
+          for required in "Shared Rust and contracts" "macOS integration and UI" "macOS app bundle" "iOS Tier 2" "Android foundation" "Android API 37 device" "Container foundation" "Container arm64 image" "CodeQL java-kotlin" "CodeQL swift" "CodeQL policy" "Release candidate software gates"; do
             if ! jq -e --arg name "${required}" '[.check_runs[] | select(.name == $name)] | sort_by(.started_at // .created_at) | last | select(.status == "completed" and .conclusion == "success")' <<<"${checks}" >/dev/null; then
               echo "latest required exact-commit check is not green: ${required}" >&2
               exit 1

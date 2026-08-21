@@ -7,6 +7,7 @@ mode="${1:-all}"
 
 check_core() {
   ./scripts/validate-foundation.sh
+  ./scripts/check-required-checks.sh
   cargo fmt --all -- --check
   cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
   cargo test --locked --workspace --all-features
