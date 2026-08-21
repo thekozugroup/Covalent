@@ -1059,4 +1059,453 @@ mod tests {
             PairingSession::accept(session.invitation.clone(), &responder, "NAS", 111,).is_err()
         );
     }
+
+    /// Produces a code of exactly the same shape and length as `displayed` with a
+    /// single digit changed, so only an exact comparison can reject it.
+    fn near_miss_code(displayed: &str) -> String {
+        let mut bytes = displayed.as_bytes().to_vec();
+        for byte in &mut bytes {
+            if byte.is_ascii_digit() {
+                *byte = if *byte == b'0' { b'1' } else { b'0' };
+                break;
+            }
+        }
+        String::from_utf8(bytes).expect("ascii authentication string")
+    }
+
+    #[test]
+    fn a_wrong_authentication_string_is_refused_by_both_devices() {
+        let inviter = Arc::new(DeviceIdentity::generate());
+        let responder = DeviceIdentity::generate();
+        let manager = PairingManager::new(Arc::clone(&inviter), "Home Mac");
+        let invitation = manager
+            .create_invitation(1_000, 60_000, Vec::new())
+            .expect("invitation");
+        let mut session = PairingSession::accept(invitation, &responder, "NAS", 2_000)
+            .expect("accept invitation");
+
+        let displayed = session.authentication_string().to_string();
+        let near_miss = near_miss_code(&displayed);
+        assert_ne!(near_miss, displayed, "the near miss must actually differ");
+        assert_eq!(near_miss.len(), displayed.len());
+
+        // This is the entire defence against a machine in the middle: the human
+        // reads a code off the other device and it does not match.
+        for wrong in [
+            near_miss.as_str(),
+            "",
+            "0000-0000-0000-0000-0000",
+            &displayed[..displayed.len() - 1],
+            &format!("{displayed}0"),
+            &displayed.replace('-', ""),
+        ] {
+            if wrong == displayed {
+                continue;
+            }
+            assert!(
+                matches!(
+                    session.confirm_responder(wrong, &responder, 2_000),
+                    Err(CoreError::IdentityMismatch)
+                ),
+                "responder accepted {wrong:?} instead of {displayed:?}"
+            );
+            assert!(
+                !session.responder_is_confirmed(),
+                "a refused comparison left a consent signature behind for {wrong:?}"
+            );
+            assert!(
+                matches!(
+                    manager.confirm_inviter(&mut session, wrong, 2_000),
+                    Err(CoreError::IdentityMismatch)
+                ),
+                "inviter accepted {wrong:?} instead of {displayed:?}"
+            );
+            assert!(!session.inviter_is_confirmed());
+        }
+
+        // The code the user actually sees is the only one that is accepted, so the
+        // rejections above are the comparison firing and not a broken session.
+        session
+            .confirm_responder(&displayed, &responder, 2_000)
+            .expect("the displayed code is accepted");
+        assert!(session.responder_is_confirmed());
+        manager
+            .confirm_inviter(&mut session, &displayed, 2_000)
+            .expect("the displayed code is accepted");
+        assert!(session.inviter_is_confirmed());
+    }
+
+    #[test]
+    fn the_authentication_string_is_derived_from_the_secret_and_the_transcript() {
+        // Both inputs must move the output, or the code carries no information
+        // about the exchange the two humans are comparing.
+        let transcript: &[u8] = b"acceptance transcript";
+        let other_transcript: &[u8] = b"acceptance transcripu";
+        let secret = [7_u8; 32];
+        let other_secret = [8_u8; 32];
+        let base = authentication_string(&secret, transcript);
+        assert_ne!(
+            base,
+            authentication_string(&other_secret, transcript),
+            "a different invitation secret must produce a different code"
+        );
+        assert_ne!(
+            base,
+            authentication_string(&secret, other_transcript),
+            "a different transcript must produce a different code"
+        );
+        assert_eq!(
+            base,
+            authentication_string(&secret, transcript),
+            "the derivation must stay deterministic"
+        );
+        let groups: Vec<&str> = base.as_str().split('-').collect();
+        assert_eq!(groups.len(), 4, "unexpected code shape: {base}");
+        assert!(
+            groups
+                .iter()
+                .all(|group| group.len() == 4 && group.bytes().all(|byte| byte.is_ascii_digit())),
+            "unexpected code shape: {base}"
+        );
+
+        // End to end, independent pairings must not display the same code.
+        let mut seen = BTreeSet::new();
+        for index in 0..8_u64 {
+            let manager = PairingManager::new(Arc::new(DeviceIdentity::generate()), "Home Mac");
+            let invitation = manager
+                .create_invitation(1_000, 60_000, Vec::new())
+                .expect("invitation");
+            let session =
+                PairingSession::accept(invitation, &DeviceIdentity::generate(), "NAS", 2_000)
+                    .expect("accept invitation");
+            assert!(
+                seen.insert(session.authentication_string().to_string()),
+                "pairing {index} repeated an authentication string"
+            );
+        }
+
+        // Holding the invitation fixed, changing anything the transcript covers
+        // must change the code the two humans compare.
+        let manager = PairingManager::new(Arc::new(DeviceIdentity::generate()), "Home Mac");
+        let invitation = manager
+            .create_invitation(1_000, 60_000, Vec::new())
+            .expect("invitation");
+        let first = PairingSession::accept(
+            invitation.clone(),
+            &DeviceIdentity::generate(),
+            "NAS",
+            2_000,
+        )
+        .expect("accept invitation");
+        let other_responder = PairingSession::accept(
+            invitation.clone(),
+            &DeviceIdentity::generate(),
+            "NAS",
+            2_000,
+        )
+        .expect("accept invitation");
+        assert_ne!(
+            first.authentication_string(),
+            other_responder.authentication_string(),
+            "a different responder identity must change the displayed code"
+        );
+        let renamed = PairingSession::accept_with_roles(
+            invitation.clone(),
+            &DeviceIdentity::generate(),
+            "Attacker NAS",
+            BTreeSet::from([PeerRole::StorageProvider]),
+            BTreeSet::from([PeerRole::BackupReader]),
+            2_000,
+        )
+        .expect("accept invitation");
+        assert_ne!(
+            first.authentication_string(),
+            renamed.authentication_string(),
+            "a different responder name must change the displayed code"
+        );
+        let rerolled = PairingSession::accept_with_roles(
+            invitation,
+            &DeviceIdentity::generate(),
+            "Attacker NAS",
+            BTreeSet::from([PeerRole::BackupReader]),
+            BTreeSet::from([PeerRole::StorageProvider]),
+            2_000,
+        )
+        .expect("accept invitation");
+        assert_ne!(
+            renamed.authentication_string(),
+            rerolled.authentication_string(),
+            "different requested roles must change the displayed code"
+        );
+    }
+
+    #[test]
+    fn confirmations_are_verified_against_the_signed_transcript() {
+        let inviter = Arc::new(DeviceIdentity::generate());
+        let responder = DeviceIdentity::generate();
+        let manager = PairingManager::new(Arc::clone(&inviter), "Home Mac");
+        let invitation = manager
+            .create_invitation(1_000, 60_000, Vec::new())
+            .expect("invitation");
+        let mut session = PairingSession::accept(invitation, &responder, "NAS", 2_000)
+            .expect("accept invitation");
+        let displayed = session.authentication_string().to_string();
+
+        assert!(
+            !session.is_mutually_confirmed(2_000),
+            "an unconfirmed session must not be mutually confirmed"
+        );
+        assert!(matches!(
+            session.finalize_for_responder(&responder, 2_000),
+            Err(CoreError::PairingNotConfirmed)
+        ));
+        assert!(matches!(
+            manager.finalize(&session, 2_000),
+            Err(CoreError::PairingNotConfirmed)
+        ));
+
+        session
+            .confirm_responder(&displayed, &responder, 2_000)
+            .expect("responder confirmation");
+        assert!(
+            !session.is_mutually_confirmed(2_000),
+            "one signature out of two must not be mutual confirmation"
+        );
+        assert!(matches!(
+            session.finalize_for_responder(&responder, 2_000),
+            Err(CoreError::PairingNotConfirmed)
+        ));
+
+        manager
+            .confirm_inviter(&mut session, &displayed, 2_000)
+            .expect("inviter confirmation");
+        assert!(session.is_mutually_confirmed(2_000));
+
+        let transcript = session.transcript().expect("transcript");
+        let genuine_responder = session
+            .responder_confirmation_signature
+            .clone()
+            .expect("responder signature");
+        let genuine_inviter = session
+            .inviter_confirmation_signature
+            .clone()
+            .expect("inviter signature");
+        let mut other_transcript = transcript.clone();
+        other_transcript.push(0x00);
+
+        // Each substitution below is a well formed signature that a permissive
+        // check would wave through. None of them is consent to this exchange.
+        for (label, forged) in [
+            (
+                "signed over a different transcript",
+                responder.sign(RESPONDER_CONFIRMATION_DOMAIN, &other_transcript),
+            ),
+            (
+                "signed by a stranger",
+                DeviceIdentity::generate().sign(RESPONDER_CONFIRMATION_DOMAIN, &transcript),
+            ),
+            (
+                "signed under the inviter domain",
+                responder.sign(INVITER_CONFIRMATION_DOMAIN, &transcript),
+            ),
+            ("replayed from the inviter", genuine_inviter.clone()),
+        ] {
+            session.responder_confirmation_signature = Some(forged);
+            assert!(
+                !session.is_mutually_confirmed(2_000),
+                "a responder confirmation {label} was accepted"
+            );
+            assert!(matches!(
+                session.finalize_for_responder(&responder, 2_000),
+                Err(CoreError::AuthenticationFailed | CoreError::PairingNotConfirmed)
+            ));
+        }
+        session.responder_confirmation_signature = None;
+        assert!(!session.is_mutually_confirmed(2_000));
+
+        session.responder_confirmation_signature = Some(genuine_responder);
+        assert!(session.is_mutually_confirmed(2_000));
+
+        for (label, forged) in [
+            (
+                "signed over a different transcript",
+                inviter.sign(INVITER_CONFIRMATION_DOMAIN, &other_transcript),
+            ),
+            (
+                "signed by a stranger",
+                DeviceIdentity::generate().sign(INVITER_CONFIRMATION_DOMAIN, &transcript),
+            ),
+            (
+                "signed under the responder domain",
+                inviter.sign(RESPONDER_CONFIRMATION_DOMAIN, &transcript),
+            ),
+        ] {
+            session.inviter_confirmation_signature = Some(forged);
+            assert!(
+                !session.is_mutually_confirmed(2_000),
+                "an inviter confirmation {label} was accepted"
+            );
+            assert!(matches!(
+                session.finalize_for_responder(&responder, 2_000),
+                Err(CoreError::AuthenticationFailed | CoreError::PairingNotConfirmed)
+            ));
+            assert!(manager.finalize(&session, 2_000).is_err());
+        }
+        session.inviter_confirmation_signature = None;
+        assert!(!session.is_mutually_confirmed(2_000));
+
+        // Restoring both genuine signatures confirms the session again, so the
+        // rejections above are the verification firing and not a broken session.
+        session.inviter_confirmation_signature = Some(genuine_inviter);
+        assert!(session.is_mutually_confirmed(2_000));
+        assert!(session.finalize_for_responder(&responder, 2_000).is_ok());
+    }
+
+    #[test]
+    fn a_session_carrying_a_substituted_authentication_string_is_refused() {
+        let inviter = Arc::new(DeviceIdentity::generate());
+        let responder = DeviceIdentity::generate();
+        let manager = PairingManager::new(Arc::clone(&inviter), "Home Mac");
+        let invitation = manager
+            .create_invitation(1_000, 60_000, Vec::new())
+            .expect("invitation");
+        let mut session = PairingSession::accept(invitation, &responder, "NAS", 2_000)
+            .expect("accept invitation");
+        let genuine = session.authentication_string().clone();
+        session.validate_exchange(2_000).expect("genuine session");
+
+        // A session is transferable and deserializable, so the code it carries is
+        // untrusted until it is rederived from the invitation secret and the signed
+        // transcript. Otherwise whoever hands over the session blob chooses the
+        // digits both humans read off their screens, and the comparison they
+        // perform proves nothing.
+        let attacker_chosen = ShortAuthenticationString("1234-5678-1234-5678".to_owned());
+        assert_ne!(attacker_chosen, genuine);
+        session.authentication_string = attacker_chosen.clone();
+
+        assert!(matches!(
+            session.validate_exchange(2_000),
+            Err(CoreError::IdentityMismatch)
+        ));
+        assert!(matches!(
+            session.confirm_responder(attacker_chosen.as_str(), &responder, 2_000),
+            Err(CoreError::IdentityMismatch)
+        ));
+        assert!(!session.responder_is_confirmed());
+        assert!(matches!(
+            manager.confirm_inviter(&mut session, attacker_chosen.as_str(), 2_000),
+            Err(CoreError::IdentityMismatch)
+        ));
+        assert!(!session.inviter_is_confirmed());
+        assert!(!session.is_mutually_confirmed(2_000));
+
+        // Restoring the derived code makes the session usable again.
+        session.authentication_string = genuine.clone();
+        session.validate_exchange(2_000).expect("restored session");
+        session
+            .confirm_responder(genuine.as_str(), &responder, 2_000)
+            .expect("responder confirmation");
+    }
+
+    #[test]
+    fn only_the_named_devices_can_record_their_own_consent() {
+        let inviter = Arc::new(DeviceIdentity::generate());
+        let responder = DeviceIdentity::generate();
+        let stranger = DeviceIdentity::generate();
+        let manager = PairingManager::new(Arc::clone(&inviter), "Home Mac");
+        let invitation = manager
+            .create_invitation(1_000, 60_000, Vec::new())
+            .expect("invitation");
+        let mut session = PairingSession::accept(invitation.clone(), &responder, "NAS", 2_000)
+            .expect("accept invitation");
+        let displayed = session.authentication_string().to_string();
+
+        // Knowing the code is not enough: consent is recorded with the key of the
+        // device the transcript names, so a third device holding the same code
+        // cannot sign the responder's approval.
+        assert!(matches!(
+            session.confirm_responder(&displayed, &stranger, 2_000),
+            Err(CoreError::IdentityMismatch)
+        ));
+        assert!(
+            !session.responder_is_confirmed(),
+            "a stranger recorded the responder's consent"
+        );
+        session
+            .confirm_responder(&displayed, &responder, 2_000)
+            .expect("responder confirmation");
+
+        // Likewise on the inviter side: a manager for a different device cannot
+        // sign the inviter approval for someone else's invitation.
+        let other_manager = PairingManager::new(Arc::new(stranger), "Someone Else");
+        assert!(matches!(
+            other_manager.confirm_inviter(&mut session, &displayed, 2_000),
+            Err(CoreError::IdentityMismatch)
+        ));
+        assert!(
+            !session.inviter_is_confirmed(),
+            "a foreign manager recorded the inviter's consent"
+        );
+        manager
+            .confirm_inviter(&mut session, &displayed, 2_000)
+            .expect("inviter confirmation");
+        assert!(session.is_mutually_confirmed(2_000));
+    }
+
+    #[test]
+    fn confirmations_do_not_merge_across_different_exchanges() {
+        let inviter = Arc::new(DeviceIdentity::generate());
+        let manager = PairingManager::new(Arc::clone(&inviter), "Home Mac");
+        let invitation = manager
+            .create_invitation(1_000, 60_000, Vec::new())
+            .expect("invitation");
+
+        // Two exchanges under the same invitation, differing only in who the
+        // responder is. Their transcripts and codes differ, so consent recorded in
+        // one is not consent in the other and must not be spliced across.
+        let responder = DeviceIdentity::generate();
+        let other_responder = DeviceIdentity::generate();
+        let mut session = PairingSession::accept(invitation.clone(), &responder, "NAS", 2_000)
+            .expect("accept invitation");
+        let mut other = PairingSession::accept(invitation, &other_responder, "Other NAS", 2_000)
+            .expect("accept invitation");
+        assert_ne!(
+            session.authentication_string(),
+            other.authentication_string()
+        );
+
+        assert!(matches!(
+            session.merge_confirmations_from(&other, 2_000),
+            Err(CoreError::IdentityMismatch)
+        ));
+
+        other
+            .confirm_responder(
+                &other.authentication_string().to_string(),
+                &other_responder,
+                2_000,
+            )
+            .expect("other responder confirmation");
+        assert!(matches!(
+            session.merge_confirmations_from(&other, 2_000),
+            Err(CoreError::IdentityMismatch)
+        ));
+        assert!(
+            !session.responder_is_confirmed(),
+            "a confirmation from a different exchange was merged in"
+        );
+        assert!(!session.is_mutually_confirmed(2_000));
+
+        // Merging from a genuine copy of the same exchange still works, so the
+        // rejections above are the transcript gate and not a disabled merge.
+        let mut copy = PairingSession::accept(session.invitation.clone(), &responder, "NAS", 2_000)
+            .expect("accept invitation");
+        let displayed = copy.authentication_string().to_string();
+        copy.confirm_responder(&displayed, &responder, 2_000)
+            .expect("responder confirmation");
+        session
+            .merge_confirmations_from(&copy, 2_000)
+            .expect("same exchange merges");
+        assert!(session.responder_is_confirmed());
+    }
 }

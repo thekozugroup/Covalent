@@ -433,4 +433,274 @@ mod tests {
             prop_assert!(key.decrypt_chunk(backup, &encrypted.plaintext_digest, &tampered).is_err());
         }
     }
+
+    /// Forges a record whose AEAD associated data is exactly the one an honest
+    /// encryptor would use for `claimed`, but whose sealed plaintext is `actual`.
+    /// Key, nonce, locator, declared digest and declared length all stay consistent
+    /// with `claimed`, so every check before the AEAD passes and the AEAD itself
+    /// verifies. Only the independent post-decrypt length and digest recomputation
+    /// can tell the two plaintexts apart.
+    fn forge_substituted_plaintext(
+        key: &BackupKey,
+        backup_id: BackupId,
+        key_epoch: u64,
+        claimed: &[u8],
+        actual: &[u8],
+    ) -> EncryptedChunk {
+        let claimed_length = u32::try_from(claimed.len()).expect("claimed length");
+        let digest = blake3::hash(claimed);
+        let context = chunk_context(backup_id, key_epoch, digest.as_bytes(), claimed_length);
+        let encryption_key = key
+            .derive(&context, b"covalent/chunk-encryption/v1")
+            .expect("encryption key");
+        let nonce_material = key
+            .derive(&context, b"covalent/chunk-nonce/v1")
+            .expect("nonce material");
+        let locator_key = key
+            .derive(
+                backup_id.to_string().as_bytes(),
+                b"covalent/chunk-locator/v1",
+            )
+            .expect("locator key");
+        let mut nonce = [0_u8; 24];
+        nonce.copy_from_slice(&nonce_material[..24]);
+        let cipher = XChaCha20Poly1305::new(Key::from_slice(encryption_key.as_ref()));
+        let ciphertext = cipher
+            .encrypt(
+                XNonce::from_slice(&nonce),
+                Payload {
+                    msg: actual,
+                    aad: &context,
+                },
+            )
+            .expect("forged ciphertext");
+        EncryptedChunk {
+            key_epoch,
+            plaintext_digest: digest.to_hex().to_string(),
+            opaque_locator: chunk_locator(&locator_key, key_epoch, digest.as_bytes())
+                .to_hex()
+                .to_string(),
+            plaintext_length: claimed_length,
+            nonce,
+            ciphertext,
+        }
+    }
+
+    #[test]
+    fn a_record_that_lies_about_its_own_digest_is_refused() {
+        let key = BackupKey::generate();
+        let backup = BackupId::new();
+        let honest = key
+            .encrypt_chunk(backup, 4, b"honest chunk")
+            .expect("encrypt");
+        let elsewhere = key
+            .encrypt_chunk(backup, 4, b"a different chunk")
+            .expect("encrypt");
+        assert_ne!(honest.plaintext_digest, elsewhere.plaintext_digest);
+
+        // The record is authentic in every respect except the digest it declares
+        // about itself. The declared digest is deliberately not part of the AEAD
+        // associated data, so nothing else in the pipeline can notice the lie:
+        // without the explicit comparison this decrypts cleanly.
+        let mut lying = key
+            .encrypt_chunk(backup, 4, b"honest chunk")
+            .expect("encrypt");
+        assert_eq!(lying.opaque_locator, honest.opaque_locator);
+        lying.plaintext_digest = elsewhere.plaintext_digest.clone();
+        assert!(matches!(
+            key.decrypt_chunk(backup, &honest.plaintext_digest, &lying),
+            Err(CoreError::CorruptChunk(_))
+        ));
+
+        // Asking for the digest the record now claims does not rescue it either.
+        assert!(matches!(
+            key.decrypt_chunk(backup, &elsewhere.plaintext_digest, &lying),
+            Err(CoreError::CorruptChunk(_) | CoreError::AuthenticationFailed)
+        ));
+
+        // A syntactically invalid declared digest is refused rather than parsed.
+        let mut malformed = key
+            .encrypt_chunk(backup, 4, b"honest chunk")
+            .expect("encrypt");
+        malformed.plaintext_digest = "not a digest".to_owned();
+        assert!(matches!(
+            key.decrypt_chunk(backup, &honest.plaintext_digest, &malformed),
+            Err(CoreError::CorruptChunk(_))
+        ));
+    }
+
+    #[test]
+    fn a_chunk_served_under_a_foreign_locator_is_refused() {
+        let key = BackupKey::generate();
+        let backup = BackupId::new();
+        let elsewhere = key
+            .encrypt_chunk(backup, 9, b"a different chunk")
+            .expect("encrypt");
+
+        // A storage provider that files an otherwise authentic record under some
+        // other chunk's locator must be refused. The locator is keyed and derived,
+        // so it is checked rather than trusted; it is not part of the AEAD
+        // associated data, so the binding check is the only thing that can reject
+        // this. Every case below leaves the record decryptable on purpose.
+        let mut swapped = key
+            .encrypt_chunk(backup, 9, b"requested chunk")
+            .expect("encrypt");
+        assert_ne!(swapped.opaque_locator, elsewhere.opaque_locator);
+        swapped.opaque_locator = elsewhere.opaque_locator.clone();
+        assert!(
+            validate_hex_locator(&swapped.opaque_locator).is_ok(),
+            "the swapped locator stays well formed, so only the binding can reject it"
+        );
+        assert!(matches!(
+            key.decrypt_chunk(backup, &swapped.plaintext_digest, &swapped),
+            Err(CoreError::CorruptChunk(_))
+        ));
+
+        // A locator computed under a different backup identity.
+        let mut cross_backup = key
+            .encrypt_chunk(backup, 9, b"requested chunk")
+            .expect("encrypt");
+        cross_backup.opaque_locator = key
+            .encrypt_chunk(BackupId::new(), 9, b"requested chunk")
+            .expect("encrypt")
+            .opaque_locator;
+        assert!(matches!(
+            key.decrypt_chunk(backup, &cross_backup.plaintext_digest, &cross_backup),
+            Err(CoreError::CorruptChunk(_))
+        ));
+
+        // A locator computed under a different key epoch.
+        let mut cross_epoch = key
+            .encrypt_chunk(backup, 9, b"requested chunk")
+            .expect("encrypt");
+        cross_epoch.opaque_locator = key
+            .encrypt_chunk(backup, 10, b"requested chunk")
+            .expect("encrypt")
+            .opaque_locator;
+        assert!(matches!(
+            key.decrypt_chunk(backup, &cross_epoch.plaintext_digest, &cross_epoch),
+            Err(CoreError::CorruptChunk(_))
+        ));
+
+        // The unmodified record still decrypts, so the rejections above are the
+        // binding check firing and not some unrelated breakage.
+        let intact = key
+            .encrypt_chunk(backup, 9, b"requested chunk")
+            .expect("encrypt");
+        assert_eq!(
+            key.decrypt_chunk(backup, &intact.plaintext_digest, &intact)
+                .expect("intact record")
+                .as_slice(),
+            b"requested chunk"
+        );
+    }
+
+    #[test]
+    fn a_substituted_plaintext_that_survives_the_aead_is_still_refused() {
+        let key = BackupKey::generate();
+        let backup = BackupId::new();
+        let claimed: &[u8] = b"the exact bytes the caller asked for";
+        let expected_digest = blake3::hash(claimed).to_hex().to_string();
+
+        // The forge helper reproduces a genuine record when it substitutes nothing,
+        // which proves the rejections below come from the substitution alone.
+        let honest = forge_substituted_plaintext(&key, backup, 5, claimed, claimed);
+        assert_eq!(
+            key.decrypt_chunk(backup, &expected_digest, &honest)
+                .expect("unsubstituted forge decrypts")
+                .as_slice(),
+            claimed
+        );
+
+        let mut extended = claimed.to_vec();
+        extended.push(b'!');
+        let mut same_length = claimed.to_vec();
+        same_length[0] ^= 0x20;
+        assert_eq!(same_length.len(), claimed.len());
+
+        for (label, actual) in [
+            ("truncated", &claimed[..claimed.len() - 1]),
+            ("emptied", &claimed[..0]),
+            ("extended", extended.as_slice()),
+            // Same length, different content: the length comparison alone cannot
+            // catch this, so the independent digest recomputation must.
+            ("same length, different content", same_length.as_slice()),
+        ] {
+            let wire = forge_substituted_plaintext(&key, backup, 5, claimed, actual);
+            assert!(
+                matches!(
+                    key.decrypt_chunk(backup, &expected_digest, &wire),
+                    Err(CoreError::CorruptChunk(_))
+                ),
+                "a {label} plaintext was returned to the caller as the requested chunk"
+            );
+        }
+    }
+
+    #[test]
+    fn a_malformed_locator_is_rejected_as_malformed_before_any_key_derivation() {
+        let key = BackupKey::generate();
+        let backup = BackupId::new();
+        let honest = key.encrypt_chunk(backup, 6, b"chunk").expect("encrypt");
+
+        // Provider-supplied locators are untrusted input. A locator that is not a
+        // lowercase 64-character hex string is refused as malformed rather than
+        // being carried into the key schedule and reported as chunk corruption.
+        for (label, locator) in [
+            ("too short", "00".repeat(31)),
+            ("too long", "00".repeat(33)),
+            ("uppercase", "AB".repeat(32)),
+            ("not hex", "zz".repeat(32)),
+            ("empty", String::new()),
+        ] {
+            let mut wire = key.encrypt_chunk(backup, 6, b"chunk").expect("encrypt");
+            wire.opaque_locator = locator;
+            assert!(
+                matches!(
+                    key.decrypt_chunk(backup, &honest.plaintext_digest, &wire),
+                    Err(CoreError::InvalidLocator)
+                ),
+                "a {label} locator was not rejected as malformed"
+            );
+        }
+    }
+
+    #[test]
+    fn the_reserved_zero_key_epoch_is_refused_on_both_sides() {
+        let key = BackupKey::generate();
+        let backup = BackupId::new();
+
+        // The honest encryptor never emits epoch zero.
+        assert!(matches!(
+            key.encrypt_chunk(backup, 0, b"chunk"),
+            Err(CoreError::ResourceLimit(_))
+        ));
+        assert!(matches!(
+            key.expected_chunk_locator(backup, 0, blake3::hash(b"chunk").to_hex().as_ref()),
+            Err(CoreError::AuthenticationFailed)
+        ));
+
+        // So a record that claims epoch zero came from somewhere else. It is
+        // internally consistent here - locator, nonce, AEAD and digest all agree -
+        // which is exactly why the reserved-epoch gate has to be the thing that
+        // rejects it.
+        let claimed: &[u8] = b"a chunk minted at the reserved epoch";
+        let expected_digest = blake3::hash(claimed).to_hex().to_string();
+        let wire = forge_substituted_plaintext(&key, backup, 0, claimed, claimed);
+        assert_eq!(wire.key_epoch, 0);
+        assert!(matches!(
+            key.decrypt_chunk(backup, &expected_digest, &wire),
+            Err(CoreError::CorruptChunk(_))
+        ));
+
+        // The same forge at a legitimate epoch decrypts, so the rejection above is
+        // the reserved-epoch gate and not a broken forge.
+        let legitimate = forge_substituted_plaintext(&key, backup, 1, claimed, claimed);
+        assert_eq!(
+            key.decrypt_chunk(backup, &expected_digest, &legitimate)
+                .expect("epoch one decrypts")
+                .as_slice(),
+            claimed
+        );
+    }
 }
