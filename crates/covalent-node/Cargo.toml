@@ -8,12 +8,31 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+# The command line and RUST_LOG filtering belong to the standalone binary and
+# the container, not to every consumer of the library.  `covalent-android-jni`
+# links the lib target into a phone: it never parses argv and a phone never
+# sets RUST_LOG, but `tracing-subscriber/env-filter` still drags `matchers` in,
+# and `matchers` turns on `regex-automata`'s `dfa-build`/`dfa-search` features.
+# Those features are not requested by `globset` (the crate that genuinely needs
+# regex on Android, for backup include/exclude patterns), so enabling them adds
+# a fully-compiled-DFA strategy to the meta engine globset *does* use — live,
+# reachable code in the shipped .so.  Gating both behind `cli` keeps the server
+# path byte-identical and drops that strategy from the Android library.
+[features]
+default = ["cli"]
+cli = ["dep:clap", "dep:tracing-subscriber"]
+
+[[bin]]
+name = "covalent-node"
+path = "src/main.rs"
+required-features = ["cli"]
+
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
 base64.workspace = true
 blake3.workspace = true
-clap.workspace = true
+clap = { workspace = true, optional = true }
 covalent-core = { version = "0.1.0", path = "../covalent-core" }
 covalent-protocol = { version = "0.1.0", path = "../covalent-protocol" }
 ed25519-dalek.workspace = true
@@ -34,7 +53,7 @@ tempfile.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
+tracing-subscriber = { workspace = true, optional = true }
 uuid.workspace = true
 walkdir.workspace = true
 zeroize.workspace = true
