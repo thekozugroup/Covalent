@@ -230,6 +230,42 @@ package_service_answers() {
   bounded_shell cmd package path android | grep -q '^package:/'
 }
 
+# The activity every Compose test in this suite launches, asked of the same
+# service, in the same way, that androidx.test asks it.
+#
+# Run 32535337631 is why this exists. That run handed over at 78s with the
+# platform ready, CE unlocked, all three round trips answering - and the very
+# first evidence line printed at instrumentation start read `ComponentActivity :
+# No activity found`, followed by three AccessibilityGateTest failures reading
+# `Unable to resolve activity for: Intent { ... cmp=life.michaelwong.covalent
+# .test/androidx.activity.ComponentActivity }`. That `.test` component is
+# androidx.test's InstrumentationActivityInvoker falling back to the test
+# package after the target package's copy failed to resolve; the fallback is a
+# symptom, and the unresolvable activity is the cause.
+#
+# `androidx.compose.ui:ui-test-manifest` is a debugImplementation dependency, so
+# ComponentActivity is declared by the *app* under test, and it becomes
+# resolvable only once PackageManager has finished scanning the APK the probe
+# install above just pushed. The gate already dumped this exact fact as
+# post-mortem evidence while never once requiring it. Requiring it is the whole
+# fix: it is not a proxy for readiness, it is the precondition the failing tests
+# have, stated directly.
+app_package=${COVALENT_ANDROID_APP_PACKAGE:-life.michaelwong.covalent}
+launch_component=${COVALENT_ANDROID_LAUNCH_COMPONENT:-androidx.activity.ComponentActivity}
+
+# Matched on the component line, anchored. `resolve-activity --brief` prints a
+# `priority=...` line first and then the component, and prints `No activity
+# found` when it cannot resolve - which an unanchored match would happily read
+# past.
+launch_activity_resolves() {
+  bounded_shell cmd package resolve-activity --brief "$app_package/$launch_component" |
+    grep -q "^$app_package/$launch_component\$"
+}
+
+# Only meaningful once the probe install has landed, so the readiness window
+# before that install must not ask. Flipped to 1 immediately after it.
+require_launchable=0
+
 activity_service_answers() {
   bounded_shell cmd activity get-current-user | grep -qE '^[0-9]+$'
 }
@@ -444,6 +480,10 @@ first_unready_reason() {
     { echo "ActivityManagerService did not answer 'cmd activity get-current-user' within ${probe_deadline}s"; return; }
   mount_service_answers ||
     { echo "StorageManagerService did not answer 'dumpsys mount' within ${probe_deadline}s"; return; }
+  if [ "$require_launchable" = 1 ]; then
+    launch_activity_resolves ||
+      { echo "PackageManager cannot resolve $app_package/$launch_component, the activity every Compose test launches"; return; }
+  fi
   echo ""
 }
 
@@ -591,6 +631,9 @@ while : ; do
   sleep "$sample_interval"
 done
 echo "API-37-gate: probe install accepted after $(elapsed)s"
+# The APK is on the device; from here the gate may require its activity to
+# resolve, which it could not have asked before the install.
+require_launchable=1
 
 settled=0
 last_reason="nothing was sampled"
@@ -639,3 +682,13 @@ fi
 
 echo "API-37-gate: guest ready and stable across $stable_samples samples after $(elapsed)s"
 echo "API-37-gate: handover with $(guest_runnable) runnable on $(guest_core_count || echo '?') cores, loadavg $(guest_loadavg)"
+# Report the ActivityManager lifecycle beside the CE key set, because run
+# 32535337631 showed them disagreeing: `CE unlocked users: [0]` while
+# `am get-started-user-state 0` still said BOOTING. The CE key is what
+# PackageManager's direct-boot filtering consults and is what this gate waits
+# on; the lifecycle is a different field and is not required here, because the
+# thing that disagreement was actually costing us - ComponentActivity failing
+# to resolve - is now gated on directly above. Printed so the next reader sees
+# the disagreement instead of rediscovering it.
+echo "API-37-gate: user 0 CE key set unlocked; ActivityManager lifecycle $(bounded_shell am get-started-user-state 0 | head -n 1)"
+echo "API-37-gate: $app_package/$launch_component resolves"

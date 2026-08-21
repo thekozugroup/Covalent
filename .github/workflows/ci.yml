@@ -513,7 +513,22 @@ jobs:
           # than called unbounded with both streams discarded -
           # performs the probe install - deliberately *before* the stability
           # window, because installing is the heaviest thing that happens to a
-          # young guest and is what triggers dexopt - and requires every one of
+          # young guest and is what triggers dexopt - and then, because the APK
+          # is now on the device and can be asked about, requires PackageManager
+          # to resolve life.michaelwong.covalent/androidx.activity.ComponentActivity.
+          # That last one is what run 32535337631 cost. It handed over at 78s
+          # with everything above satisfied, printed `ComponentActivity : No
+          # activity found` as its very first line of instrumentation evidence,
+          # and lost three AccessibilityGateTest cases to `Unable to resolve
+          # activity for: ... cmp=life.michaelwong.covalent.test/androidx.activity
+          # .ComponentActivity` - androidx.test falling back to the test package
+          # after the app's own copy failed to resolve. ui-test-manifest is a
+          # debugImplementation dependency, so that activity belongs to the app
+          # and appears only once PackageManager has finished scanning the APK
+          # the probe install just pushed. The gate had been dumping this exact
+          # fact as post-mortem evidence without ever requiring it.
+          #
+          # It requires every one of
           # those conditions to hold for six consecutive samples afterwards,
           # starting the count over if any of them lapses and naming the one that
           # lapsed. It fails closed with properties, registered handles and round
