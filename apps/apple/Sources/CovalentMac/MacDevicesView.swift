@@ -605,7 +605,7 @@ struct MacPairingView: View {
         return VStack(spacing: 18) {
             Spacer()
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 54))
+                .scaledSymbolFont(size: 54)
                 .foregroundStyle(.green)
             Text("Pairing Complete").font(.title.weight(.semibold))
             Text("\(peer.displayName) is trusted with exactly the roles both devices approved.")
@@ -678,7 +678,7 @@ struct MacNetworkPairingView: View {
     var body: some View {
         VStack(spacing: 22) {
             Image(systemName: current.state == .complete ? "checkmark.shield.fill" : "laptopcomputer.and.iphone")
-                .font(.system(size: 52))
+                .scaledSymbolFont(size: 52)
                 .foregroundStyle(current.state == .failed ? .red : .blue)
                 .accessibilityHidden(true)
             Text(title)

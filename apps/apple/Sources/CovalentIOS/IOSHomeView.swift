@@ -34,9 +34,9 @@ struct IOSHomeView: View {
     private var serviceHeader: some View {
         HStack(spacing: 14) {
             Image(systemName: serviceSymbol)
-                .font(.system(size: 25, weight: .semibold))
+                .scaledSymbolFont(size: 25, weight: .semibold, relativeTo: .title2)
                 .foregroundStyle(serviceColor)
-                .frame(width: 48, height: 48)
+                .scaledSymbolFrame(48, relativeTo: .title2)
                 .background(serviceColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
@@ -121,7 +121,7 @@ struct IOSHomeView: View {
             } else {
                 VStack(spacing: 12) {
                     Image(systemName: "externaldrive.badge.plus")
-                        .font(.system(size: 42))
+                        .scaledSymbolFont(size: 42)
                         .foregroundStyle(.primary)
                         .accessibilityHidden(true)
                     Text("No snapshots yet")

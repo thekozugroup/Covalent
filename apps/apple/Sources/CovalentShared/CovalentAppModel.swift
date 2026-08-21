@@ -69,24 +69,77 @@ public struct ActiveTask: Equatable, Sendable {
     public let jobId: String?
     public let title: String
     public var state: JobState
+    /// Live byte counts, once the transfer has any to report. `nil` before the
+    /// first callback and for work that moves no bytes (verification).
+    public var progress: TransferProgressSnapshot?
 
-    public init(kind: ActiveTaskKind, jobId: String?, title: String, state: JobState = .running) {
+    public init(
+        kind: ActiveTaskKind,
+        jobId: String?,
+        title: String,
+        state: JobState = .running,
+        progress: TransferProgressSnapshot? = nil
+    ) {
         self.kind = kind
         self.jobId = jobId
         self.title = title
         self.state = state
+        self.progress = progress
+    }
+
+    /// What to show beneath the title: real byte counts when the transfer has
+    /// them, and the durable-checkpoint reassurance otherwise.
+    public func statusDetail(pausedText: String, checkpointText: String) -> String {
+        guard state != .paused else { return pausedText }
+        guard let progress else { return checkpointText }
+        switch progress.phase {
+        case .preparing: return "Preparing…"
+        case .finishing: return "Finishing up…"
+        case .transferring: return progress.byteSummary
+        }
     }
 }
 
 public struct AppAlert: Identifiable, Equatable, Sendable {
     public let id = UUID()
     public let title: String
+    /// Plain-English lead. Never a raw error string.
     public let message: String
+    /// The technical text behind `message`, shown only on request.
+    public let detail: String?
+    /// The way out of this failure, rendered as a real button beside "OK".
+    public let recovery: RecoveryHint
 
-    public init(title: String, message: String) {
+    public init(
+        title: String,
+        message: String,
+        detail: String? = nil,
+        recovery: RecoveryHint = .none
+    ) {
         self.title = title
         self.message = message
+        self.detail = detail
+        self.recovery = recovery
     }
+
+    /// The button label for ``recovery``, or `nil` when the only honest
+    /// option is to acknowledge. An alert offering only "OK" on a recoverable
+    /// failure is a bug, so every actionable hint must return a title here.
+    public var recoveryActionTitle: String? {
+        switch recovery {
+        case .none, .freeUpSpace: nil
+        case .retry: "Try Again"
+        case .reconnect: "Reconnect"
+        case .checkNetworkSettings: "Open Settings"
+        case .chooseAnotherDevice: "Choose Another Device"
+        case .chooseFolderAgain: "Choose Folder"
+        case .previewRestoreAgain: "Preview Again"
+        }
+    }
+
+    /// `true` when the recovery must be performed by the platform layer
+    /// (opening system Settings) rather than by the model.
+    public var recoveryOpensSystemSettings: Bool { recovery == .checkNetworkSettings }
 }
 
 public struct RestorePreviewContext: Equatable, Sendable {
@@ -128,6 +181,10 @@ public final class CovalentAppModel: ObservableObject {
     @Published public private(set) var lastRestoreResult: RestoreResponse?
     @Published public private(set) var lastRefreshedAt: Date?
     @Published public var alert: AppAlert?
+
+    /// The operation "Try Again" re-runs. Held outside ``AppAlert`` so the
+    /// alert itself stays `Equatable` and `Sendable`.
+    private var alertRetry: (@MainActor () async -> Void)?
 
     private let connectionStore: SecureNodeConnectionStore
     private let persistence: AppleAppPersistence
@@ -200,8 +257,10 @@ public final class CovalentAppModel: ObservableObject {
     public func startNetworkPairing(candidate: DiscoveryCandidate) async {
         guard candidate.isCompatible else {
             alert = AppAlert(
-                title: "Device is not compatible",
-                message: "This device does not support Covalent protocol 1."
+                title: "This device can't pair",
+                message: "That device runs a version of Covalent that can't pair with this one. "
+                    + "Update it, or pick a different device.",
+                recovery: .chooseAnotherDevice
             )
             return
         }
@@ -214,8 +273,9 @@ public final class CovalentAppModel: ObservableObject {
         let address = candidateAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !address.isEmpty, address.utf8.count <= 253, !address.contains(where: \Character.isWhitespace) else {
             alert = AppAlert(
-                title: "Tailscale address is not valid",
-                message: "Enter a MagicDNS hostname or IP address, including the Covalent peer port when required."
+                title: "That address doesn't look right",
+                message: "Enter the other device's name or IP address, with no spaces. "
+                    + "Include its Covalent port if it uses a non-standard one."
             )
             return
         }
@@ -226,9 +286,27 @@ public final class CovalentAppModel: ObservableObject {
             upsertNetworkPairing(pairing)
             activeNetworkPairing = pairing
             presentation = .networkPairing
+        } catch let error as NodeClientError where Self.isUnsupportedRoute(error) {
+            // A node that predates quick pairing answers 404 rather than
+            // failing the request, so say what is actually wrong instead of
+            // surfacing a bare "not found".
+            alert = AppAlert(
+                title: "Quick pairing isn't available",
+                message: "Your backup server is running an older version that doesn't support quick pairing. "
+                    + "Update it, or pair using Advanced recovery.",
+                detail: ErrorPresenter.detail(for: error),
+                recovery: .chooseAnotherDevice
+            )
         } catch {
-            report(error, title: "Secure pairing could not start")
+            report(error, title: "Secure pairing couldn't start") { [weak self] in
+                await self?.startNetworkPairing(candidateAddress: address)
+            }
         }
+    }
+
+    private static func isUnsupportedRoute(_ error: NodeClientError) -> Bool {
+        guard case let .api(status, code, _, _) = error else { return false }
+        return status == 404 && (code == "route_not_found" || code == "http_404")
     }
 
     public func refreshNetworkPairings(reportErrors: Bool = false) async {
@@ -253,7 +331,9 @@ public final class CovalentAppModel: ObservableObject {
         } catch where !reportErrors {
             // Status refresh remains authoritative; transient pairing polling errors are retried.
         } catch {
-            self.report(error, title: "Pairing requests could not be refreshed")
+            self.report(error, title: "Pairing requests couldn't be refreshed") { [weak self] in
+                await self?.refreshNetworkPairings(reportErrors: true)
+            }
         }
     }
 
@@ -280,7 +360,9 @@ public final class CovalentAppModel: ObservableObject {
                 try await establishProviderConnection(for: updated)
             }
         } catch {
-            report(error, title: "Pairing confirmation failed")
+            report(error, title: "Pairing couldn't be confirmed") { [weak self] in
+                await self?.confirmNetworkPairing(pairing)
+            }
         }
     }
 
@@ -364,9 +446,11 @@ public final class CovalentAppModel: ObservableObject {
             report(
                 error,
                 title: localNodeBootstrapper == nil
-                    ? "Local service unavailable"
-                    : "Local service could not start"
-            )
+                    ? "Can't reach your backup server"
+                    : "Your backup server didn't start"
+            ) { [weak self] in
+                await self?.refresh()
+            }
         }
     }
 
@@ -481,6 +565,7 @@ public final class CovalentAppModel: ObservableObject {
             defer { activeTask = nil }
             let resolved = try grant.resolve()
             let client = self.client
+            let onProgress = progressSink()
             let response = try await resolved.withCoordinatedRead { sourceURL in
                 try await client.createBackupArchive(
                     sourceURL: sourceURL,
@@ -490,7 +575,8 @@ public final class CovalentAppModel: ObservableObject {
                         snapshotId: snapshotId,
                         jobId: jobId,
                         selectedProviderIds: selectedProviderIds.sorted { $0.uuidString < $1.uuidString }
-                    )
+                    ),
+                    onProgress: onProgress
                 )
             }
             let record = SnapshotRecord(
@@ -519,8 +605,28 @@ public final class CovalentAppModel: ObservableObject {
             }
             return record
         } catch {
-            report(error, title: "Backup did not finish")
+            report(error, title: "Backup didn't finish") { [weak self] in
+                _ = await self?.createBackup(
+                    displayName: displayName,
+                    existingBackupId: existingBackupId,
+                    sourceGrantId: sourceGrantId,
+                    selectedProviderIds: selectedProviderIds
+                )
+            }
             return nil
+        }
+    }
+
+    /// A `URLSession`-safe sink that funnels transfer byte counts back onto
+    /// the main actor and into ``activeTask``.
+    ///
+    /// `CovalentAppModel` is `@MainActor`-isolated and therefore implicitly
+    /// `Sendable`, so the escaping closure can hold a weak reference safely.
+    private func progressSink() -> @Sendable (TransferProgressSnapshot) -> Void {
+        { [weak self] snapshot in
+            Task { @MainActor in
+                self?.activeTask?.progress = snapshot
+            }
         }
     }
 
@@ -532,7 +638,9 @@ public final class CovalentAppModel: ObservableObject {
             let response = try await client.controlJob(jobId: jobId, action: action)
             self.activeTask?.state = response.state
         } catch {
-            report(error, title: "Job control failed")
+            report(error, title: "That didn't take effect") { [weak self] in
+                await self?.controlActiveTask(action)
+            }
         }
     }
 
@@ -569,7 +677,9 @@ public final class CovalentAppModel: ObservableObject {
             return result
         } catch {
             updateIntegrity(recordId: record.id, to: .unknown)
-            report(error, title: "Verification failed")
+            report(error, title: "Verification didn't finish") { [weak self] in
+                _ = await self?.verify(record, repair: repair)
+            }
             return nil
         }
     }
@@ -610,7 +720,13 @@ public final class CovalentAppModel: ObservableObject {
             return plan
         } catch {
             try? await client.discardJob(jobId: jobId)
-            report(error, title: "Restore preview failed")
+            report(error, title: "Restore preview didn't finish") { [weak self] in
+                _ = await self?.previewRestore(
+                    record: record,
+                    destinationGrantId: destinationGrantId,
+                    conflictPolicy: conflictPolicy
+                )
+            }
             return nil
         }
     }
@@ -631,8 +747,13 @@ public final class CovalentAppModel: ObservableObject {
             defer { activeTask = nil }
             let resolved = try grant.resolve()
             let client = self.client
+            let onProgress = progressSink()
             let response = try await resolved.withCoordinatedWrite { targetURL in
-                try await client.executeArchiveRestore(context.plan, targetURL: targetURL)
+                try await client.executeArchiveRestore(
+                    context.plan,
+                    targetURL: targetURL,
+                    onProgress: onProgress
+                )
             }
             lastRestoreResult = response
             restorePreview = nil
@@ -643,7 +764,9 @@ public final class CovalentAppModel: ObservableObject {
             }
             return response
         } catch {
-            report(error, title: "Restore did not finish")
+            report(error, title: "Restore didn't finish") { [weak self] in
+                _ = await self?.executeRestore()
+            }
             return nil
         }
     }
@@ -709,7 +832,9 @@ public final class CovalentAppModel: ObservableObject {
         do {
             discoveryCandidates = try await client.discoveryCandidates()
         } catch {
-            report(error, title: "Nearby devices could not be refreshed")
+            report(error, title: "Nearby devices couldn't be refreshed") { [weak self] in
+                await self?.refreshDiscovery()
+            }
         }
     }
 
@@ -904,6 +1029,7 @@ public final class CovalentAppModel: ObservableObject {
 
     public func clearAlert() {
         alert = nil
+        alertRetry = nil
     }
 
     private func decode<Value: Decodable>(_ type: Value.Type, from json: String) throws -> Value {
@@ -930,9 +1056,58 @@ public final class CovalentAppModel: ObservableObject {
         return clean
     }
 
-    private func report(_ error: Error, title: String) {
-        let message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
-        alert = AppAlert(title: title, message: message)
+    /// Presents a failure the way a person can act on it: plain-English lead,
+    /// technical detail tucked behind a disclosure, and a real recovery button.
+    ///
+    /// `retry` is the operation to re-run when the recovery is ``RecoveryHint/retry``.
+    /// Callers that can cheaply repeat themselves should pass it; without one,
+    /// "Try Again" falls back to refreshing service state.
+    private func report(
+        _ error: Error,
+        title: String,
+        retry: (@MainActor () async -> Void)? = nil
+    ) {
+        let failure = ErrorPresenter.present(error)
+        alertRetry = retry
+        alert = AppAlert(
+            title: title,
+            message: failure.summary,
+            detail: failure.detail,
+            recovery: failure.recovery
+        )
+    }
+
+    /// Runs the alert's recovery action, then dismisses it.
+    ///
+    /// ``RecoveryHint/checkNetworkSettings`` is deliberately not handled here:
+    /// opening system Settings is platform-specific, so the iOS and macOS
+    /// alert surfaces do that themselves and then call ``clearAlert()``.
+    public func performAlertRecovery() async {
+        guard let alert else { return }
+        let recovery = alert.recovery
+        let retry = alertRetry
+        clearAlert()
+        switch recovery {
+        case .retry:
+            if let retry {
+                await retry()
+            } else {
+                await refresh()
+            }
+        case .reconnect:
+            presentation = .connection
+        case .chooseAnotherDevice:
+            presentation = nil
+            selectedSection = .devices
+        case .chooseFolderAgain:
+            presentation = nil
+            selectedSection = .settings
+        case .previewRestoreAgain:
+            dismissRestorePreview()
+            selectedSection = .backups
+        case .checkNetworkSettings, .freeUpSpace, .none:
+            break
+        }
     }
 
     private static func snapshotIdentifier() -> String {

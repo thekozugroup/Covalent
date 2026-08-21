@@ -113,7 +113,7 @@ struct IOSConnectionView: View {
             } catch {
                 model.alert = AppAlert(
                     title: "Certificate is not valid",
-                    message: (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+                    message: ErrorPresenter.summary(for: error)
                 )
             }
         }
@@ -338,7 +338,7 @@ struct IOSNewBackupView: View {
     private func report(_ error: Error, title: String) {
         model.alert = AppAlert(
             title: title,
-            message: (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+            message: ErrorPresenter.summary(for: error)
         )
     }
 }
@@ -419,7 +419,7 @@ struct IOSSettingsImportView: View {
     private func report(_ error: Error) {
         model.alert = AppAlert(
             title: "Settings file is not valid",
-            message: (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+            message: ErrorPresenter.summary(for: error)
         )
     }
 }

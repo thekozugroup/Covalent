@@ -176,7 +176,7 @@ struct MacMetric: View {
                 Spacer()
             }
             Text(value)
-                .font(.system(size: 30, weight: .semibold, design: .rounded))
+                .font(.system(.largeTitle, design: .rounded).weight(.semibold))
             Text(detail)
                 .font(.caption)
                 .foregroundStyle(.secondary)

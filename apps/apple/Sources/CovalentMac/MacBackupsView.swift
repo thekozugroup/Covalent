@@ -137,9 +137,9 @@ private struct MacSnapshotDetail: View {
     private var header: some View {
         HStack(alignment: .top, spacing: 18) {
             Image(systemName: "externaldrive.fill")
-                .font(.system(size: 34))
+                .scaledSymbolFont(size: 34)
                 .foregroundStyle(.blue)
-                .frame(width: 52, height: 52)
+                .scaledSymbolFrame(52)
                 .background(Color.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 5) {
@@ -494,7 +494,7 @@ struct MacRestoreResultView: View {
     var body: some View {
         VStack(spacing: 22) {
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 54))
+                .scaledSymbolFont(size: 54)
                 .foregroundStyle(.green)
                 .accessibilityHidden(true)
             VStack(spacing: 6) {

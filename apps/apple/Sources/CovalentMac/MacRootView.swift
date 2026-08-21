@@ -4,6 +4,7 @@ struct MacRootView: View {
     @ObservedObject var model: CovalentAppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var selectedSection: AppSection = .overview
+    @State private var detailedAlert: AppAlert?
 
     var body: some View {
         NavigationSplitView {
@@ -111,11 +112,46 @@ struct MacRootView: View {
                 set: { if !$0 { model.clearAlert() } }
             ),
             presenting: model.alert
-        ) { _ in
-            Button("OK") { model.clearAlert() }
+        ) { alert in
+            if let recoveryTitle = alert.recoveryActionTitle {
+                Button(recoveryTitle) {
+                    if alert.recoveryOpensSystemSettings {
+                        openNetworkSettings()
+                        model.clearAlert()
+                    } else {
+                        Task { await model.performAlertRecovery() }
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+            if alert.detail != nil {
+                Button("Details…") { detailedAlert = alert }
+            }
+            Button("OK", role: .cancel) { model.clearAlert() }
+                .keyboardShortcut(.cancelAction)
         } message: { alert in
             Text(alert.message)
         }
+        // The technical text never leads. It is one deliberate click away, for
+        // the person who is going to paste it into a bug report.
+        .alert(
+            "Technical details",
+            isPresented: Binding(
+                get: { detailedAlert != nil },
+                set: { if !$0 { detailedAlert = nil } }
+            ),
+            presenting: detailedAlert
+        ) { _ in
+            Button("Done", role: .cancel) { detailedAlert = nil }
+                .keyboardShortcut(.cancelAction)
+        } message: { alert in
+            Text(alert.detail ?? "")
+        }
+    }
+
+    private func openNetworkSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.Network-Settings.extension") else { return }
+        NSWorkspace.shared.open(url)
     }
 
     @ViewBuilder
@@ -181,13 +217,22 @@ struct MacActiveTaskBar: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            ProgressView()
-                .controlSize(.small)
-            VStack(alignment: .leading, spacing: 2) {
+            if fractionCompleted == nil {
+                ProgressView()
+                    .controlSize(.small)
+            }
+            VStack(alignment: .leading, spacing: 4) {
                 Text("\(task.kind.label) \(task.title)")
                     .font(.subheadline.weight(.semibold))
-                Text(task.state == .paused ? "Paused. This resumable job stays on the local node." : "The local node checkpoints resumable progress.")
-                    .font(.caption)
+                // A real fraction whenever the bytes are known; the spinner
+                // beside it stands in only while they genuinely are not.
+                if let fractionCompleted {
+                    ProgressView(value: fractionCompleted)
+                        .progressViewStyle(.linear)
+                        .frame(width: 260)
+                }
+                Text(statusDetail)
+                    .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -212,5 +257,16 @@ struct MacActiveTaskBar: View {
         .shadow(color: .black.opacity(0.08), radius: 12, y: 4)
         .frame(maxWidth: 720)
         .accessibilityElement(children: .contain)
+    }
+
+    private var fractionCompleted: Double? {
+        task.state == .running ? task.progress?.fractionCompleted : nil
+    }
+
+    private var statusDetail: String {
+        task.statusDetail(
+            pausedText: "Paused. This resumable job stays on the local node.",
+            checkpointText: "The local node checkpoints resumable progress."
+        )
     }
 }

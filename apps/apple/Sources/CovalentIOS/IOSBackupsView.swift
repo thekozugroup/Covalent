@@ -280,7 +280,7 @@ struct IOSRestoreSetupView: View {
                 } catch {
                     model.alert = AppAlert(
                         title: "Folder could not be opened",
-                        message: (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+                        message: ErrorPresenter.summary(for: error)
                     )
                 }
             }
@@ -447,7 +447,7 @@ struct IOSRestoreResultView: View {
         VStack(spacing: 22) {
             Spacer()
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 58))
+                .scaledSymbolFont(size: 58)
                 .foregroundStyle(.green)
                 .accessibilityHidden(true)
             Text("Restore Complete")

@@ -3,6 +3,7 @@ import SwiftUI
 struct IOSRootView: View {
     @ObservedObject var model: CovalentAppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var detailedAlert: AppAlert?
 
     var body: some View {
         TabView(selection: $model.selectedSection) {
@@ -90,11 +91,43 @@ struct IOSRootView: View {
                 set: { if !$0 { model.clearAlert() } }
             ),
             presenting: model.alert
-        ) { _ in
-            Button("OK") { model.clearAlert() }
+        ) { alert in
+            if let recoveryTitle = alert.recoveryActionTitle {
+                Button(recoveryTitle) {
+                    if alert.recoveryOpensSystemSettings {
+                        openSystemSettings()
+                        model.clearAlert()
+                    } else {
+                        Task { await model.performAlertRecovery() }
+                    }
+                }
+            }
+            if alert.detail != nil {
+                Button("Details") { detailedAlert = alert }
+            }
+            Button("OK", role: .cancel) { model.clearAlert() }
         } message: { alert in
             Text(alert.message)
         }
+        // The technical text never leads. It is one deliberate tap away, for
+        // the person who is going to paste it into a bug report.
+        .alert(
+            "Technical details",
+            isPresented: Binding(
+                get: { detailedAlert != nil },
+                set: { if !$0 { detailedAlert = nil } }
+            ),
+            presenting: detailedAlert
+        ) { _ in
+            Button("Done", role: .cancel) { detailedAlert = nil }
+        } message: { alert in
+            Text(alert.detail ?? "")
+        }
+    }
+
+    private func openSystemSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
     }
 }
 
@@ -104,19 +137,26 @@ private struct IOSActiveTaskBar: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            if task.state == .running {
-                ProgressView()
-            } else {
+            if task.state != .running {
                 Image(systemName: "pause.circle.fill")
                     .foregroundStyle(.orange)
+            } else if fractionCompleted == nil {
+                ProgressView()
             }
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text("\(task.kind.label) \(task.title)")
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
-                Text(task.state == .paused ? "Paused on the node" : "Resumable checkpoint active")
-                    .font(.caption)
+                // A real fraction whenever the bytes are known; the spinner
+                // above stands in only while they genuinely are not.
+                if let fractionCompleted {
+                    ProgressView(value: fractionCompleted)
+                        .progressViewStyle(.linear)
+                }
+                Text(statusDetail)
+                    .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             Spacer(minLength: 8)
             if task.jobId != nil {
@@ -131,5 +171,16 @@ private struct IOSActiveTaskBar: View {
         .background(Color(uiColor: .secondarySystemBackground))
         .overlay(alignment: .top) { Divider() }
         .accessibilityElement(children: .contain)
+    }
+
+    private var fractionCompleted: Double? {
+        task.state == .running ? task.progress?.fractionCompleted : nil
+    }
+
+    private var statusDetail: String {
+        task.statusDetail(
+            pausedText: "Paused on the node",
+            checkpointText: "Resumable checkpoint active"
+        )
     }
 }

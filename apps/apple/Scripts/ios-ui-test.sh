@@ -109,7 +109,13 @@ if ! run_bounded 600 xcodebuild \
   exit 1
 fi
 
-if ! run_bounded 240 xcodebuild \
+# Bound the test phase generously. This is a hang detector, not a quality
+# gate: the 240s it used to carry was expiring during cold simulator install
+# and launch on a contended runner, failing runs whose code was fine -- no
+# "Testing started" ever appeared in those logs. The real assertions are the
+# xcresult checks below, which are untouched.
+# The surrounding job allows 45 minutes.
+if ! run_bounded 900 xcodebuild \
   -quiet \
   -project Covalent.xcodeproj \
   -scheme CovalentIOS \

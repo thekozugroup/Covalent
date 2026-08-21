@@ -522,6 +522,56 @@ public enum TransferState: String, Codable, Sendable {
     case cancelled
 }
 
+/// Live progress for a transfer this device is driving.
+///
+/// The node exposes no progress-polling route, so — exactly as the Android
+/// client does — these counts come from the bytes this device has actually
+/// put on (or taken off) the wire. `totalBytes` is `nil` only while the work
+/// genuinely has no known size, which is what keeps the indeterminate
+/// spinner honest instead of universal.
+public struct TransferProgressSnapshot: Equatable, Sendable {
+    public enum Phase: String, Equatable, Sendable {
+        /// Reading and encrypting locally; the byte total isn't known yet.
+        case preparing
+        /// Bytes are moving. `completedBytes` and `totalBytes` are real.
+        case transferring
+        /// The transfer landed; the node is finalising it.
+        case finishing
+
+        public var label: String {
+            switch self {
+            case .preparing: "Preparing"
+            case .transferring: "Transferring"
+            case .finishing: "Finishing up"
+            }
+        }
+    }
+
+    public let phase: Phase
+    public let completedBytes: UInt64
+    public let totalBytes: UInt64?
+
+    public init(phase: Phase, completedBytes: UInt64 = 0, totalBytes: UInt64? = nil) {
+        self.phase = phase
+        self.completedBytes = completedBytes
+        self.totalBytes = totalBytes
+    }
+
+    /// `nil` when the total is genuinely unknown — callers must fall back to
+    /// an indeterminate indicator rather than inventing a denominator.
+    public var fractionCompleted: Double? {
+        guard let totalBytes, totalBytes > 0 else { return nil }
+        return min(1, Double(completedBytes) / Double(totalBytes))
+    }
+
+    /// "1.2 GB of 8.4 GB", or just the completed count when no total is known.
+    public var byteSummary: String {
+        let completed = completedBytes.formatted(.byteCount(style: .file))
+        guard let totalBytes, totalBytes > 0 else { return completed }
+        return "\(completed) of \(totalBytes.formatted(.byteCount(style: .file)))"
+    }
+}
+
 public struct TransferProgress: Codable, Equatable, Sendable {
     public let protocolVersion: UInt16
     public let jobId: String

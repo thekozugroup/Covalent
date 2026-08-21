@@ -485,7 +485,7 @@ struct IOSPairingView: View {
         let peer = peerGrant(in: confirmation)
         return VStack(spacing: 16) {
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 58))
+                .scaledSymbolFont(size: 58)
                 .foregroundStyle(.green)
                 .accessibilityHidden(true)
             Text("Pairing Complete").font(.title.weight(.semibold))
@@ -596,7 +596,7 @@ struct IOSNetworkPairingView: View {
             VStack(spacing: 20) {
                 Spacer()
                 Image(systemName: current.state == .complete ? "checkmark.shield.fill" : "laptopcomputer.and.iphone")
-                    .font(.system(size: 56))
+                    .scaledSymbolFont(size: 56)
                     .foregroundStyle(current.state == .failed ? .red : .blue)
                     .accessibilityHidden(true)
                 Text(title)

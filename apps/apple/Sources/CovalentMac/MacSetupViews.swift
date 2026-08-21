@@ -18,9 +18,9 @@ struct MacConnectionView: View {
         VStack(spacing: 0) {
             HStack(spacing: 16) {
                 Image(systemName: "point.3.connected.trianglepath.dotted")
-                    .font(.system(size: 30))
+                    .scaledSymbolFont(size: 30)
                     .foregroundStyle(.blue)
-                    .frame(width: 54, height: 54)
+                    .scaledSymbolFrame(54)
                     .background(Color.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 13))
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 4) {
@@ -142,7 +142,7 @@ struct MacConnectionView: View {
         } catch {
             model.alert = AppAlert(
                 title: "Token file is not valid",
-                message: (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+                message: ErrorPresenter.summary(for: error)
             )
         }
     }
@@ -161,7 +161,7 @@ struct MacConnectionView: View {
         } catch {
             model.alert = AppAlert(
                 title: "Certificate is not valid",
-                message: (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+                message: ErrorPresenter.summary(for: error)
             )
         }
     }
@@ -467,7 +467,7 @@ struct MacSettingsImportView: View {
         } catch {
             model.alert = AppAlert(
                 title: "Settings file is not valid",
-                message: (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+                message: ErrorPresenter.summary(for: error)
             )
         }
     }

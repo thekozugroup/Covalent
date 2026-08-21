@@ -222,7 +222,11 @@ public actor NodeClient {
         try await send(path: "api/v1/backups", method: "POST", body: request, timeout: 86_400)
     }
 
-    public func createBackupArchive(sourceURL: URL, metadata: ArchiveBackupMetadata) async throws -> BackupResponse {
+    public func createBackupArchive(
+        sourceURL: URL,
+        metadata: ArchiveBackupMetadata,
+        onProgress: (@Sendable (TransferProgressSnapshot) -> Void)? = nil
+    ) async throws -> BackupResponse {
         guard metadata.protocolVersion == covalentProtocolVersion else {
             throw NodeClientError.unsupportedProtocol(metadata.protocolVersion)
         }
@@ -230,10 +234,21 @@ public actor NodeClient {
         guard metadataData.count <= 32 * 1_024 else {
             throw NodeClientError.invalidPayload("Archive metadata exceeds 32 KiB.")
         }
+        // Staging reads and encrypts every file before a single byte is sent,
+        // and its size is not known until it finishes, so this phase is
+        // honestly indeterminate.
+        onProgress?(TransferProgressSnapshot(phase: .preparing))
         var upload = try await prepareArchiveUpload(
             sourceURL: sourceURL,
             metadata: metadata,
             metadataData: metadataData
+        )
+        onProgress?(
+            TransferProgressSnapshot(
+                phase: .transferring,
+                completedBytes: upload.offset,
+                totalBytes: upload.length
+            )
         )
         for _ in 0..<8 {
             var request = try authenticatedRequest(
@@ -256,9 +271,18 @@ public actor NodeClient {
             let data: Data
             let response: URLResponse
             do {
-                (data, response) = try await session.data(for: request)
+                if let onProgress {
+                    let progress = TransferProgressDelegate(
+                        baseOffset: upload.offset,
+                        declaredTotal: upload.length,
+                        report: onProgress
+                    )
+                    (data, response) = try await session.data(for: request, delegate: progress)
+                } else {
+                    (data, response) = try await session.data(for: request)
+                }
             } catch {
-                throw NodeClientError.transport(String(describing: error))
+                throw NodeClientError.transport(NodeTransportCopy.describe(error))
             }
             let http = try requireHTTPResponse(response)
             if http.statusCode == 409,
@@ -286,6 +310,13 @@ public actor NodeClient {
             }
             upload.offset = upload.length
             try persistArchiveUpload(upload)
+            onProgress?(
+                TransferProgressSnapshot(
+                    phase: .finishing,
+                    completedBytes: upload.length,
+                    totalBytes: upload.length
+                )
+            )
             return try decode(BackupResponse.self, from: data)
         }
         throw NodeClientError.transport("Archive upload did not converge on the durable server offset.")
@@ -339,7 +370,12 @@ public actor NodeClient {
         return try decode(RestoreResponse.self, from: data)
     }
 
-    public func executeArchiveRestore(_ plan: RestorePlan, targetURL: URL) async throws -> RestoreResponse {
+    public func executeArchiveRestore(
+        _ plan: RestorePlan,
+        targetURL: URL,
+        onProgress: (@Sendable (TransferProgressSnapshot) -> Void)? = nil
+    ) async throws -> RestoreResponse {
+        onProgress?(TransferProgressSnapshot(phase: .preparing))
         let freshInventory = try await uploadTargetInventory(targetURL: targetURL, jobId: plan.jobId)
         let reboundReference = try await previewRestoreReference(
             path: "api/v1/restores/archive/preview",
@@ -366,9 +402,18 @@ public actor NodeClient {
         let downloadedURL: URL
         let response: URLResponse
         do {
-            (downloadedURL, response) = try await session.download(for: request)
+            if let onProgress {
+                // The signed plan states an entry count, not a byte count, so
+                // the denominator comes from the response's content length.
+                // When the server sends none, the total stays nil and the UI
+                // falls back to an indeterminate bar rather than guessing.
+                let progress = TransferProgressDelegate(report: onProgress)
+                (downloadedURL, response) = try await session.download(for: request, delegate: progress)
+            } else {
+                (downloadedURL, response) = try await session.download(for: request)
+            }
         } catch {
-            throw NodeClientError.transport(String(describing: error))
+            throw NodeClientError.transport(NodeTransportCopy.describe(error))
         }
         let http = try requireHTTPResponse(response)
         guard http.statusCode == 200 else {
@@ -390,6 +435,15 @@ public actor NodeClient {
             throw NodeClientError.invalidResponse
         }
         let result = try decode(RestoreResponse.self, from: resultData)
+        // The signed result carries the authoritative byte count, so the bar
+        // lands on a true 100% before local extraction begins.
+        onProgress?(
+            TransferProgressSnapshot(
+                phase: .finishing,
+                completedBytes: result.bytesWritten,
+                totalBytes: result.bytesWritten
+            )
+        )
         let archiveURL = try await Task.detached(priority: .userInitiated) {
             try AppleArchiveTransfer.copyDownloadedArchive(downloadedURL)
         }.value
@@ -752,7 +806,7 @@ public actor NodeClient {
         do {
             return try decoder.decode(Response.self, from: data)
         } catch {
-            throw NodeClientError.invalidPayload(String(describing: error))
+            throw NodeClientError.invalidPayload(NodeTransportCopy.describeDecodingFailure(error))
         }
     }
 
@@ -801,7 +855,7 @@ public actor NodeClient {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
-            throw NodeClientError.transport(String(describing: error))
+            throw NodeClientError.transport(NodeTransportCopy.describe(error))
         }
         let http = try requireHTTPResponse(response)
         try validateHTTPResponse(data: data, response: http, expectedStatusCodes: expectedStatusCodes)
@@ -879,7 +933,7 @@ public actor NodeClient {
         do {
             return try decoder.decode(type, from: data)
         } catch {
-            throw NodeClientError.invalidPayload(String(describing: error))
+            throw NodeClientError.invalidPayload(NodeTransportCopy.describeDecodingFailure(error))
         }
     }
 
@@ -978,6 +1032,73 @@ private struct DurableArchiveUpload: Codable, Sendable {
 ///
 /// The archive is still validated through an `O_NOFOLLOW` descriptor, and the length
 /// check is now made before the request is sent instead of aborting mid-body.
+/// Turns `URLSession`'s byte-level callbacks into ``TransferProgressSnapshot``.
+///
+/// Attached per request via `data(for:delegate:)` / `download(for:delegate:)`
+/// so it never disturbs the session-wide certificate-pinning delegate, and so
+/// an injected test session is unaffected.
+private final class TransferProgressDelegate: NSObject,
+    URLSessionTaskDelegate,
+    URLSessionDownloadDelegate,
+    @unchecked Sendable {
+    private let baseOffset: UInt64
+    private let declaredTotal: UInt64?
+    private let report: @Sendable (TransferProgressSnapshot) -> Void
+
+    init(
+        baseOffset: UInt64 = 0,
+        declaredTotal: UInt64? = nil,
+        report: @escaping @Sendable (TransferProgressSnapshot) -> Void
+    ) {
+        self.baseOffset = baseOffset
+        self.declaredTotal = declaredTotal
+        self.report = report
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didSendBodyData bytesSent: Int64,
+        totalBytesSent: Int64,
+        totalBytesExpectedToSend: Int64
+    ) {
+        // A resumed upload sends only the remaining suffix, so both halves are
+        // offset by whatever the durable record already proved was delivered.
+        let completed = baseOffset &+ UInt64(max(0, totalBytesSent))
+        let total = declaredTotal
+            ?? (totalBytesExpectedToSend > 0 ? baseOffset &+ UInt64(totalBytesExpectedToSend) : nil)
+        report(
+            TransferProgressSnapshot(phase: .transferring, completedBytes: completed, totalBytes: total)
+        )
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64,
+        totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        let total = declaredTotal
+            ?? (totalBytesExpectedToWrite > 0 ? UInt64(totalBytesExpectedToWrite) : nil)
+        report(
+            TransferProgressSnapshot(
+                phase: .transferring,
+                completedBytes: UInt64(max(0, totalBytesWritten)),
+                totalBytes: total
+            )
+        )
+    }
+
+    /// Required by `URLSessionDownloadDelegate`. The async `download(for:)`
+    /// owns the downloaded file, so this deliberately does nothing.
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didFinishDownloadingTo location: URL
+    ) {}
+}
+
 private enum ArchiveUploadBody {
     /// Streams `count` bytes of the archive at `archivePath`, starting at `offset`.
     static func slice(archivePath: String, offset: UInt64, count: UInt64) throws -> InputStream {
@@ -1148,28 +1269,58 @@ public enum NodeClientError: Error, Equatable, Sendable {
     case missingToken
     case insecureAuthenticatedTransport
     case invalidResponse
-    case invalidPayload(String)
+    case invalidPayload(NodeClientFailure)
     case unsupportedProtocol(UInt16)
     case unauthorized
-    case transport(String)
+    case transport(NodeClientFailure)
     case api(status: Int, code: String, message: String, retryable: Bool)
 }
 
 extension NodeClientError: LocalizedError {
+    /// Plain-English copy only. Technical text lives in ``diagnosticDetail``.
     public var errorDescription: String? {
         switch self {
-        case .invalidServiceURL: "Enter a complete HTTP or HTTPS service address."
-        case .invalidToken: "The local API token is not valid."
-        case .invalidTrustedCertificate: "Choose a valid DER or PEM TLS certificate for an HTTPS service."
-        case .missingToken: "Connect this app with the node's local API token."
+        case .invalidServiceURL: "Enter a complete web address for your backup server, starting with http or https."
+        case .invalidToken: "That access token isn't one Covalent can use."
+        case .invalidTrustedCertificate: "Choose a valid DER or PEM certificate for an HTTPS server."
+        case .missingToken: "Connect this app to your backup server before continuing."
         case .insecureAuthenticatedTransport:
-            "Covalent will not send its API token over plain HTTP to another device. Use loopback or HTTPS."
-        case .invalidResponse: "The service returned an invalid response."
-        case let .invalidPayload(details): "The service response did not match protocol 1. \(details)"
-        case let .unsupportedProtocol(version): "This node uses unsupported protocol \(version)."
-        case .unauthorized: "The local API token was rejected."
-        case let .transport(message): "The Covalent service could not be reached. \(message)"
-        case let .api(_, _, message, _): message
+            "Covalent won't send its access token over an unencrypted connection to another device. "
+                + "Use an HTTPS address."
+        case .invalidResponse: "Your backup server sent back something Covalent couldn't read."
+        case let .invalidPayload(failure): failure.summary
+        case .unsupportedProtocol:
+            "This app and your backup server are running versions that can't work together. Update both."
+        case .unauthorized: "This app is no longer signed in to your backup server. Reconnect it to continue."
+        case let .transport(failure): failure.summary
+        case let .api(status, code, message, retryable):
+            NodeAPIErrorCopy.describe(status: status, code: code, message: message, retryable: retryable).summary
+        }
+    }
+
+    /// The underlying technical text, kept for a "Details" disclosure and for
+    /// logs. Never lead with this — ``errorDescription`` is what users read.
+    public var diagnosticDetail: String? {
+        switch self {
+        case let .invalidPayload(failure), let .transport(failure): failure.detail
+        case let .unsupportedProtocol(version): "unsupported protocol version \(version)"
+        case let .api(status, code, message, retryable):
+            NodeAPIErrorCopy.describe(status: status, code: code, message: message, retryable: retryable).detail
+        default: nil
+        }
+    }
+
+    /// What the person can do about this, surfaced as an alert button.
+    public var recoveryHint: RecoveryHint {
+        switch self {
+        case .invalidServiceURL, .invalidToken, .invalidTrustedCertificate,
+             .missingToken, .insecureAuthenticatedTransport, .unauthorized:
+            .reconnect
+        case .unsupportedProtocol: .none
+        case .invalidResponse: .retry
+        case let .invalidPayload(failure), let .transport(failure): failure.recovery
+        case let .api(status, code, message, retryable):
+            NodeAPIErrorCopy.describe(status: status, code: code, message: message, retryable: retryable).recovery
         }
     }
 }

@@ -187,7 +187,7 @@ struct MacSettingsView: View {
             } catch {
                 model.alert = AppAlert(
                     title: "Settings could not be saved",
-                    message: (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+                    message: ErrorPresenter.summary(for: error)
                 )
             }
         }
