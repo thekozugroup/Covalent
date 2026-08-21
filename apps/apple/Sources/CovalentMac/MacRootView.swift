@@ -17,13 +17,22 @@ struct MacRootView: View {
                         .accessibilityIdentifier("sidebar.\(section.rawValue)")
                 }
                 .listStyle(.sidebar)
+                // Named on the list itself rather than through an enclosing
+                // `.accessibilityElement(children: .contain)`. That wrapper
+                // named a *nested* group and left the column container
+                // NavigationSplitView synthesizes above it undescribed, which
+                // is what the system audit reports: an unlabelled group at
+                // {{8, 39}, {220, 676}} whose sole child was the labelled
+                // wrapper at {{8, 83}, {220, 632}}. Describing the list
+                // directly keeps the name a screen reader needs without
+                // interposing an opaque container between the column and its
+                // describable contents.
+                .accessibilityLabel("Covalent sidebar")
 
                 serviceState
             }
             .navigationTitle("Covalent")
             .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 260)
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel("Covalent sidebar")
         } detail: {
             ZStack(alignment: .bottom) {
                 detail

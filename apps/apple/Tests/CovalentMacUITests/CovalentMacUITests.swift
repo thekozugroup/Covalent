@@ -58,7 +58,10 @@ final class CovalentMacUITests: XCTestCase {
 
     func testOverviewPassesSystemAccessibilityAudit() throws {
         let app = try launchApp()
-        continueAfterFailure = false
+        // Every audit finding still fails this test; stopping at the first one
+        // only hid how many there were, which turned a single run into a
+        // one-finding-at-a-time search. Report them all.
+        continueAfterFailure = true
         XCTAssertTrue(app.staticTexts["Apple UI Test Node is protected here"].waitForExistence(timeout: 10))
         try app.performAccessibilityAudit { issue in
             let details = "Accessibility audit: \(issue.compactDescription)\n\(issue.detailedDescription)\n\(issue.element?.debugDescription ?? "Element unavailable")"
@@ -90,16 +93,18 @@ final class CovalentMacUITests: XCTestCase {
 
     /// Expands a macOS `DisclosureGroup`.
     ///
-    /// The identifier resolves to an element covering the group's label, while
-    /// the triangle that actually toggles it sits just outside that element's
-    /// leading edge — so a plain `click()` lands on the label and leaves the
-    /// group shut. Try the triangle first, then the element itself, stopping
-    /// as soon as the control reports itself expanded.
+    /// Click the control itself first. A previous ordering reached outside the
+    /// element's leading edge first, hunting for the triangle glyph: for this
+    /// group that offset resolved to x=227 while the enclosing scroll view
+    /// starts at x=228, so the click landed in the sidebar and the group was
+    /// never touched. Anything the control offers has to be reachable within
+    /// its own bounds, so that is where this looks; the leading-edge offsets
+    /// remain as fallbacks and are kept small enough to stay inside the pane.
     private func expandDisclosure(_ element: XCUIElement) {
         let targets = [
-            element.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: -11, dy: 8)),
-            element.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)),
             element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)),
+            element.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)),
+            element.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: -6, dy: 8)),
         ]
         for target in targets {
             guard String(describing: element.value ?? "") != "1" else { return }

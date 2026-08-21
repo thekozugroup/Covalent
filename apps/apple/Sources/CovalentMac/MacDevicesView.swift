@@ -6,6 +6,7 @@ struct MacDevicesView: View {
     @State private var showingConnectProvider = false
     @State private var providerToRevoke: ProviderConnection?
     @State private var tailscaleAddress = ""
+    @State private var isAdvancedRecoveryExpanded = false
 
     var body: some View {
         ScrollView {
@@ -211,7 +212,16 @@ struct MacDevicesView: View {
                 }
                 .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
             }
-            DisclosureGroup {
+            // The expansion is bound to explicit state, and the whole label row
+            // toggles it. Left to itself, SwiftUI gives this group an
+            // accessibility element of role `DisclosureTriangle` whose frame
+            // covers only the label text — the triangle glyph that actually
+            // toggles the group sits outside those bounds. The control then
+            // advertises a disclosure with an expanded/collapsed value while
+            // offering no activation point anywhere inside itself, so a click
+            // on the words "Advanced recovery" does nothing and the only way
+            // in is a glyph a few points wide.
+            DisclosureGroup(isExpanded: $isAdvancedRecoveryExpanded) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Use mutually signed JSON only when direct network pairing is unavailable or you are recovering an older node.")
                         .font(.caption)
@@ -224,6 +234,9 @@ struct MacDevicesView: View {
                 .padding(.top, 6)
             } label: {
                 Text("Advanced recovery")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture { isAdvancedRecoveryExpanded.toggle() }
                     .accessibilityIdentifier("devices.advancedRecovery")
             }
         }
