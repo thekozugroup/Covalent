@@ -167,13 +167,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Error"
+                $ref: "#/components/schemas/ApiError"
         "409":
           description: This node already has an owner (code claim_unavailable).
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Error"
+                $ref: "#/components/schemas/ApiError"
         "410":
           description: >-
             The window expired or was exhausted by incorrect codes (codes
@@ -182,13 +182,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Error"
+                $ref: "#/components/schemas/ApiError"
         "429":
           description: Codes presented too quickly (code claim_rate_limited).
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Error"
+                $ref: "#/components/schemas/ApiError"
         "503":
           description: >-
             The CA certificate is not readable yet (code
@@ -197,7 +197,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Error"
+                $ref: "#/components/schemas/ApiError"
   /api/v1/pair/invitations:
     post:
       summary: Create a signed pairing invitation

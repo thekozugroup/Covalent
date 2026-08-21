@@ -665,6 +665,232 @@ function openapiOperations(source) {
   return operations;
 }
 
+// ------------------------------------------------------ OpenAPI $ref integrity
+//
+// Five responses on POST /api/v1/claim pointed at #/components/schemas/Error, a
+// schema that has never existed under that name; the error envelope is called
+// ApiError, and every other error response in the document already says so. This
+// gate read the very same file to extract operations and never noticed, because
+// it only ever looked at two indentation levels and never asked whether the
+// document refers to itself coherently.
+//
+// `redocly lint` does catch this, and CI already runs it on the next line of
+// this same job, so the tool was never missing. What was missing is that the
+// contract gate trusted a document whose internal coherence it never checked,
+// and reported success on it. Shelling out to redocly from here would make an
+// otherwise hermetic, offline, dependency-free gate require the network in order
+// to run at all, and would duplicate the adjacent CI step rather than close the
+// hole in this one. So the document is resolved in process, and redocly stays
+// where it is as the broader schema validator.
+//
+// The reader below models YAML only as far as node identity -- mappings,
+// sequences, block scalars, quoted keys -- which is all that resolving a JSON
+// pointer requires. Being bespoke, it is not trusted on its own word: it is held
+// against two facts derived independently of it, so a reader that silently
+// degrades fails the build instead of quietly approving everything.
+
+function encodePointerToken(key) {
+  return key.replaceAll("~", "~0").replaceAll("/", "~1");
+}
+
+function decodePointerToken(token) {
+  return token.replaceAll("~1", "/").replaceAll("~0", "~");
+}
+
+function normalizePointer(pointer) {
+  const tokens = pointer.split("/").slice(1);
+  if (tokens.length === 1 && tokens[0] === "") return "";
+  return tokens.map((token) => `/${encodePointerToken(decodePointerToken(token))}`).join("");
+}
+
+// Returns the mapping key a line opens, or null when the line is not a mapping
+// entry at all (a bare scalar in a sequence, say). Quoted keys are read as
+// written, so "200" and 200 stay distinguishable the way a pointer sees them.
+function readYamlKey(text) {
+  if (text.startsWith('"')) {
+    let index = 1;
+    let key = "";
+    while (index < text.length) {
+      const character = text[index];
+      if (character === "\\" && index + 1 < text.length) {
+        key += text[index + 1];
+        index += 2;
+        continue;
+      }
+      if (character === '"') break;
+      key += character;
+      index += 1;
+    }
+    if (text[index] !== '"') return null;
+    const after = text.slice(index + 1);
+    if (!after.startsWith(":")) return null;
+    return { key, rest: after.slice(1).trim() };
+  }
+  const separator = text.search(/:(\s|$)/);
+  if (separator === -1) return null;
+  return { key: text.slice(0, separator), rest: text.slice(separator + 1).trim() };
+}
+
+function yamlScalar(text) {
+  if (text.length >= 2 && text.startsWith('"') && text.endsWith('"')) return text.slice(1, -1);
+  if (text.length >= 2 && text.startsWith("'") && text.endsWith("'")) return text.slice(1, -1);
+  return text;
+}
+
+// Walks the document and records the JSON pointer of every node in it, plus
+// every $ref node with the line it sits on. Anything the reader cannot model is
+// reported rather than skipped, so an unfamiliar construct fails the gate.
+function documentStructure(source, file) {
+  const problems = [];
+  const nodes = new Set([""]);
+  const references = [];
+  const lines = source.split(/\r?\n/);
+  // Each frame is an open container; `indent` is the column its entries start
+  // at, and is null until the first entry fixes it.
+  const frames = [{ indent: 0, path: "", kind: "map", nextIndex: 0 }];
+  let blockScalarIndent = null;
+
+  for (let number = 1; number <= lines.length; number += 1) {
+    const line = lines[number - 1];
+    if (blockScalarIndent !== null) {
+      if (line.trim() === "") continue;
+      if (line.search(/\S/) > blockScalarIndent) continue;
+      blockScalarIndent = null;
+    }
+    if (line.trim() === "") continue;
+    const indent = line.search(/\S/);
+    let rest = line.slice(indent);
+    if (rest.startsWith("#")) continue;
+    if (rest === "---" || rest === "...") {
+      problems.push(`${file}:${number}: multi-document YAML is not modelled by this gate`);
+      continue;
+    }
+
+    // A container whose indent is still unknown adopts the first entry indented
+    // past its parent; anything shallower means the container was empty.
+    while (frames.length > 1 && frames[frames.length - 1].indent === null) {
+      const parent = frames[frames.length - 2];
+      if (indent > parent.indent) {
+        frames[frames.length - 1].indent = indent;
+        break;
+      }
+      frames.pop();
+    }
+    while (frames.length > 1 && indent < frames[frames.length - 1].indent) frames.pop();
+    const frame = frames[frames.length - 1];
+    if (indent !== frame.indent) {
+      problems.push(`${file}:${number}: indentation ${indent} does not line up with the enclosing block at ${frame.indent}`);
+      continue;
+    }
+
+    let entryIndent = indent;
+    if (/^-(\s|$)/.test(rest)) {
+      if (frame.kind === "map" && frame.path !== "" && frame.nextIndex === 0) frame.kind = "seq";
+      if (frame.kind !== "seq") {
+        problems.push(`${file}:${number}: a sequence entry appears where a mapping was expected`);
+        continue;
+      }
+      const entryPath = `${frame.path}/${frame.nextIndex}`;
+      frame.nextIndex += 1;
+      nodes.add(entryPath);
+      const afterDash = rest.slice(1);
+      const offset = afterDash.length - afterDash.trimStart().length;
+      rest = afterDash.trimStart();
+      if (rest === "") {
+        frames.push({ indent: null, path: entryPath, kind: "map", nextIndex: 0 });
+        continue;
+      }
+      // A scalar entry is a leaf, and was recorded above.
+      if (readYamlKey(rest) === null) continue;
+      entryIndent = indent + 1 + offset;
+      frames.push({ indent: entryIndent, path: entryPath, kind: "map", nextIndex: 0 });
+    } else if (frame.kind === "seq") {
+      problems.push(`${file}:${number}: a mapping entry appears where a sequence was expected`);
+      continue;
+    }
+
+    const parsed = readYamlKey(rest);
+    if (parsed === null) {
+      problems.push(`${file}:${number}: this gate cannot read ${JSON.stringify(rest)} as a mapping entry`);
+      continue;
+    }
+    const holder = frames[frames.length - 1];
+    holder.nextIndex += 1;
+    const path = `${holder.path}/${encodePointerToken(parsed.key)}`;
+    nodes.add(path);
+
+    if (parsed.key === "$ref") {
+      references.push({ pointer: yamlScalar(parsed.rest), line: number });
+      continue;
+    }
+    if (parsed.rest === "") {
+      frames.push({ indent: null, path, kind: "map", nextIndex: 0 });
+      continue;
+    }
+    if (/^[|>][-+0-9]*$/.test(parsed.rest)) {
+      blockScalarIndent = entryIndent;
+      continue;
+    }
+    // Anything else is a scalar or a flow collection: a leaf, for pointers.
+  }
+
+  return { nodes, references, problems };
+}
+
+function checkOpenapiReferences(source, documented) {
+  const { nodes, references, problems } = documentStructure(source, openapiFile);
+  for (const problem of problems) fail(problem);
+
+  // First independent fact: every line in the file that writes a $ref key must
+  // have become a reference node. If the reader ever loses one -- swallowed by a
+  // block scalar, dropped by an unfamiliar shape -- the pointer on it would go
+  // unchecked, so the discrepancy is named line by line instead of tolerated.
+  const seen = new Set(references.map((reference) => reference.line));
+  const lines = source.split(/\r?\n/);
+  for (let number = 1; number <= lines.length; number += 1) {
+    if (/^\s*(- )?\$ref:/.test(lines[number - 1]) && !seen.has(number)) {
+      fail(`${openapiFile}:${number}: this line writes a $ref the structural reader did not resolve`);
+    }
+  }
+
+  // Second independent fact: the operations this reader sees and the operations
+  // the line-based extractor sees must be the same set. The two parse the file
+  // by unrelated means, so agreement is evidence and divergence is a bug in one
+  // of them -- either way the build stops rather than guessing which.
+  const structural = new Set();
+  for (const node of nodes) {
+    const match = /^\/paths\/([^/]+)\/([a-z]+)$/.exec(node);
+    if (match === null || !specMethods.has(match[2])) continue;
+    const path = decodePointerToken(match[1]);
+    if (path.startsWith("/api/v1")) structural.add(operationKey(match[2], path));
+  }
+  for (const operation of documented) {
+    if (!structural.has(operation)) fail(`${openapiFile}: the structural reader lost the documented operation ${operation}`);
+  }
+  for (const operation of structural) {
+    if (!documented.has(operation)) fail(`${openapiFile}: the structural reader invented the operation ${operation}`);
+  }
+
+  for (const reference of references) {
+    const pointer = reference.pointer;
+    if (pointer === "") {
+      fail(`${openapiFile}:${reference.line}: $ref names no pointer`);
+      continue;
+    }
+    if (!pointer.startsWith("#/")) {
+      // Nothing in this contract lives outside the document, and a pointer this
+      // gate cannot follow is not a pointer this gate may approve.
+      fail(`${openapiFile}:${reference.line}: $ref "${pointer}" is not a document-internal JSON pointer`);
+      continue;
+    }
+    if (!nodes.has(normalizePointer(pointer))) {
+      fail(`${openapiFile}:${reference.line}: $ref "${pointer}" resolves to nothing in this document`);
+    }
+  }
+
+  return references.length;
+}
+
 // A client segment matches a route segment when either side is a placeholder or
 // the two literals are equal. Segment counts must agree: there is no prefix rule,
 // so a literal appended past the end of a route can never be satisfied.
@@ -1032,9 +1258,14 @@ function classifyRepository(tracked) {
 try {
   const tracked = trackedFiles();
   const runtime = routerOperations(readFileSync(resolve(repositoryRoot, routerFile), "utf8"));
-  const documented = openapiOperations(readFileSync(resolve(repositoryRoot, openapiFile), "utf8"));
+  const openapiSource = readFileSync(resolve(repositoryRoot, openapiFile), "utf8");
+  const documented = openapiOperations(openapiSource);
   if (runtime.size === 0 || documented.size === 0) {
     throw new Error("API route extraction unexpectedly returned no operations");
+  }
+  const resolvedReferences = checkOpenapiReferences(openapiSource, documented);
+  if (resolvedReferences === 0) {
+    throw new Error("the OpenAPI document yielded no $ref nodes, so reference resolution proved nothing");
   }
 
   const routeTable = new Map();
@@ -1095,6 +1326,7 @@ try {
       .map((reference) => `${reference.method} ${reference.template}`),
   );
   console.log(`OpenAPI/runtime route coverage: ${runtime.size} operations match`);
+  console.log(`OpenAPI reference integrity: ${resolvedReferences} $ref pointers resolve within the document`);
   console.log(
     `Client/runtime route coverage: ${operations.size} distinct client operations from ${verbChecked} verb-checked call sites across ${clientTrees.length} trees are routed`,
   );
