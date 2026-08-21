@@ -296,14 +296,22 @@ jobs:
           # minute after boot instead of twenty. Nothing the gate proves changes.
           # BuildKit keys its layer cache on content, so the docker build below
           # warms the expensive Rust layer even if the script retags the image.
+          #
+          # Every line below is one whole command. This action does not run these
+          # payloads as a script: it splits them on newlines and runs each line in
+          # its own `sh -c`, so continuations, multi-line `while`/`if`, and shell
+          # variables carried between lines all break. The docker build here used
+          # backslash continuations and had been failing since it was added -
+          # `sh -c "docker build \"` passes a literal backslash as the context and
+          # dies with `unable to prepare context: path "\" not found`, which this
+          # action reports and then continues past. So the warm BuildKit layer this
+          # comment describes was never actually warmed, and the gate script's own
+          # cold docker build ran with the guest already up - the exact starvation
+          # the reordering exists to prevent. One line, no continuations.
           pre-emulator-launch-script: |
-            set -eu
             "$ANDROID_HOME/platform-tools/adb" start-server
             ./scripts/check-android.sh
-            docker build \
-              --file packaging/docker/Dockerfile \
-              --tag covalent:android-api37-e2e \
-              .
+            docker build --file packaging/docker/Dockerfile --tag covalent:android-api37-e2e .
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-metrics -accel on
           # Wait for the unlock, not just for the boot.
           #
@@ -340,31 +348,17 @@ jobs:
           # the same second on a healthy cold boot of this AVD - measured at 17s - so
           # this costs seconds, and when it does not happen it reports what it saw
           # instead of handing the suite a device that cannot pass.
+          # Same one-command-per-line rule as above, which is why the wait is a
+          # single `until` and not a readable multi-line loop. The action has
+          # already waited for sys.boot_completed by the time this runs, so
+          # sys.user.0.ce_available is the only remaining question; it is the
+          # property that flips when user 0's credential-encrypted storage
+          # unlocks, and it is what all four failure shapes above were really
+          # asking about.
           script: |
-            set -eu
-            adb="$ANDROID_HOME/platform-tools/adb"
-            serial=emulator-5570
-            deadline=$(($(date +%s) + 300))
-            while :; do
-              booted=$("$adb" -s "$serial" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)
-              unlocked=$("$adb" -s "$serial" shell getprop sys.user.0.ce_available 2>/dev/null | tr -d '\r' || true)
-              if [ "$booted" = 1 ] && [ "$unlocked" = true ]; then
-                break
-              fi
-              if [ "$(date +%s)" -ge "$deadline" ]; then
-                echo "user 0 never unlocked on $serial after 300s:" >&2
-                echo "  sys.boot_completed=${booted:-<unset>} sys.user.0.ce_available=${unlocked:-<unset>}" >&2
-                "$adb" -s "$serial" shell dumpsys user >&2 || true
-                exit 1
-              fi
-              sleep 2
-            done
-            echo "user 0 is unlocked: sys.boot_completed=$booted sys.user.0.ce_available=$unlocked"
-            "$adb" -s "$serial" shell wm dismiss-keyguard >/dev/null 2>&1 || true
-            COVALENT_ANDROID_EVIDENCE_DIR="${{ runner.temp }}/covalent-android-api37" \
-              COVALENT_ANDROID_HEADLESS_CI=true \
-              ANDROID_SERIAL="$serial" \
-              ./scripts/android-api37-device-test.sh
+            n=0; until $ANDROID_HOME/platform-tools/adb -s emulator-5570 shell getprop sys.user.0.ce_available | grep -q true; do n=$((n+2)); if [ $n -ge 300 ]; then echo API-37-gate: user 0 never unlocked after ${n}s - sys.user.0.ce_available never became true >&2; $ANDROID_HOME/platform-tools/adb -s emulator-5570 shell dumpsys user >&2; exit 1; fi; sleep 2; done; echo API-37-gate: user 0 unlocked after ${n}s
+            $ANDROID_HOME/platform-tools/adb -s emulator-5570 shell wm dismiss-keyguard || true
+            COVALENT_ANDROID_EVIDENCE_DIR="${{ runner.temp }}/covalent-android-api37" COVALENT_ANDROID_HEADLESS_CI=true ANDROID_SERIAL=emulator-5570 ./scripts/android-api37-device-test.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
