@@ -17,6 +17,12 @@ struct CovalentMacApp: App {
         Window("Covalent", id: "main") {
             MacRootView(model: model)
                 .frame(minWidth: 900, minHeight: 640)
+                // The window's root container carried no description at all,
+                // which the system accessibility audit reports as "Element has
+                // no description". Name it, and keep every child individually
+                // reachable underneath.
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Covalent")
         }
         .defaultSize(width: 1_080, height: 720)
         .commands {
@@ -59,8 +65,17 @@ struct CovalentMacApp: App {
                 .frame(width: 620, height: 540)
         }
 
-        MenuBarExtra("Covalent", systemImage: menuBarSymbol) {
+        // The `systemImage:` convenience publishes the raw SF Symbol name as
+        // the status item's accessibility title, so VoiceOver announced
+        // "externaldrive.badge.checkmark". Supply the label explicitly so the
+        // menu bar item is named for what it is, and says what it means.
+        MenuBarExtra {
             MacMenuBarMenu(model: model)
+        } label: {
+            Image(systemName: menuBarSymbol)
+                .accessibilityLabel("Covalent")
+                .accessibilityValue(model.serviceStatusLabel)
+                .accessibilityIdentifier("Covalent")
         }
         .menuBarExtraStyle(.menu)
     }

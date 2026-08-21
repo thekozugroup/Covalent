@@ -18,9 +18,19 @@ final class CovalentMacUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Your backup network"].waitForExistence(timeout: 3))
         let advanced = app.descendants(matching: .any)["devices.advancedRecovery"]
         XCTAssertTrue(advanced.waitForExistence(timeout: 3))
-        advanced.click()
+        scrollTo(advanced, in: app)
+        // Click the disclosure triangle at the control's leading edge. The
+        // identifier resolves to an element spanning triangle *and* label, and
+        // on macOS only the triangle toggles the group — a centred click lands
+        // on the label and leaves it collapsed.
+        advanced.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.5)).click()
         let offlinePairing = app.buttons["devices.offlinePairing"]
+        // Revealing the group pushes its contents below the fold, and macOS
+        // keeps off-screen scroll content out of the accessibility tree, so
+        // bring it into view before asserting — exactly as the iOS test does.
+        scrollTo(offlinePairing, in: app)
         XCTAssertTrue(offlinePairing.waitForExistence(timeout: 3))
+        XCTAssertTrue(offlinePairing.isHittable)
         offlinePairing.click()
         XCTAssertTrue(app.staticTexts["Secure Pairing"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Nearby advertisements remain untrusted until finalization."].exists)
@@ -65,6 +75,20 @@ final class CovalentMacUITests: XCTestCase {
         XCTAssertTrue(app.menuItems["Refresh Status"].exists)
         XCTAssertTrue(app.menuItems["Settings…"].exists)
         XCTAssertTrue(app.menuItems["Quit Covalent"].exists)
+    }
+
+    /// Scrolls `element` into view, so an assertion measures whether the app
+    /// offers the control — not whether it happened to be above the fold.
+    ///
+    /// macOS keeps off-screen scroll content out of the accessibility tree, so
+    /// without this a perfectly good control reads as missing.
+    private func scrollTo(_ element: XCUIElement, in app: XCUIApplication) {
+        guard !element.exists else { return }
+        let scrollView = app.scrollViews.firstMatch
+        guard scrollView.waitForExistence(timeout: 3) else { return }
+        for delta in [-60.0, -60.0, -60.0, -60.0, 60.0, 60.0, 60.0, 60.0] where !element.exists {
+            scrollView.scroll(byDeltaX: 0, deltaY: CGFloat(delta))
+        }
     }
 
     private func launchApp() throws -> XCUIApplication {
