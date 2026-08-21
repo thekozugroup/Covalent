@@ -330,6 +330,36 @@ fi
 # Android 17 installs instrumentation packages disabled. Enable the exact
 # package before launch so the device gate cannot silently report zero tests.
 "$adb" -s "$serial" shell pm enable life.michaelwong.covalent.test >/dev/null
+# When instrumentation dies the message `am` prints is the symptom, never the
+# cause: a DeadObjectException on the ActivityManager binder says only that
+# system_server was gone by the time the call landed, and an
+# INSTRUMENTATION_ABORTED says only that it went away mid-run. The cause is in
+# the guest's own log, and logd is a separate process that outlives
+# system_server, so the buffer is still readable after the crash. Dump it before
+# giving up so a red run explains itself instead of needing another red run to
+# reproduce. Everything here is post-mortem and best-effort: it runs only on a
+# path that has already decided to exit 1, it never changes the exit code, and
+# it adds no load while the tests are actually running.
+dump_guest_failure_evidence() {
+  echo "--- API-37-gate post-mortem: guest death evidence ---" >&2
+  echo "--- host load at failure ---" >&2
+  { nproc; uptime; free -m; } >&2 2>/dev/null || true
+  echo "--- guest /proc/loadavg ---" >&2
+  "$adb" -s "$serial" shell cat /proc/loadavg >&2 2>/dev/null || true
+  echo "--- guest memory ---" >&2
+  "$adb" -s "$serial" shell cat /proc/meminfo 2>/dev/null | head -8 >&2 || true
+  # The Watchdog signature is the thing to look for: "WATCHDOG KILLING SYSTEM
+  # PROCESS" names the monitored lock that blocked, which identifies precisely
+  # which resource starved.
+  echo "--- guest logcat: watchdog / crash / lmk signatures ---" >&2
+  "$adb" -s "$serial" logcat -d -b main,system,crash -t 4000 2>/dev/null \
+    | grep -Ei 'watchdog|killing system process|blocked in handler|am_crash|am_proc_died|system_server|lowmemorykiller|lmkd|Slow operation|ANR in' >&2 \
+    || echo "(no watchdog/crash signature matched in the guest log)" >&2
+  echo "--- guest logcat: last 120 lines verbatim ---" >&2
+  "$adb" -s "$serial" logcat -d -b main,system,crash -t 120 >&2 2>/dev/null || true
+  echo "--- end API-37-gate post-mortem ---" >&2
+}
+
 instrumentation_log=$(mktemp "${TMPDIR:-/tmp}/covalent-api37-instrumentation.XXXXXX")
 if ! "$adb" -s "$serial" shell am instrument -w -r \
   -e covalentTlsBaseUrl "https://$tls_hostname:$tls_port" \
@@ -340,11 +370,13 @@ if ! "$adb" -s "$serial" shell am instrument -w -r \
   life.michaelwong.covalent.test/androidx.test.runner.AndroidJUnitRunner >"$instrumentation_log" 2>&1; then
   cat "$instrumentation_log" >&2
   echo "Android instrumentation command failed on $serial." >&2
+  dump_guest_failure_evidence
   exit 1
 fi
 cat "$instrumentation_log"
 if ! validate_android_api37_result "$instrumentation_log" "$expected_suite"; then
   echo "Android instrumentation result is invalid on $serial." >&2
+  dump_guest_failure_evidence
   exit 1
 fi
 "$adb" -s "$serial" shell pm clear life.michaelwong.covalent >/dev/null

@@ -247,6 +247,22 @@ jobs:
       # answers `device offline` until the boot timeout expires - even though KVM,
       # the system image and the emulator process itself are all healthy. Give the
       # guest a real Pixel profile and enough RAM, heap and disk to finish booting.
+      #
+      # `cores` is the one knob that is deliberately NOT maximal. ubuntu-24.04 is
+      # a 4-vCPU runner, so `cores: 4` hands the guest every host CPU and leaves
+      # nothing for the emulator's own render/IO threads, adbd, the Gradle JVM and
+      # the two Rust node containers this gate starts as its test fixture. That
+      # oversubscription is not a slowdown, it is a kill: Android's Watchdog
+      # aborts system_server once a monitored lock stays blocked for 60s, and CPU
+      # starvation is exactly how that lock gets held. Three runs died three
+      # different ways inside that window - an NPE in StorageManagerService, then
+      # `Can't find service: package`, then DeadObjectException out of
+      # `IActivityManager$Stub$Proxy.startInstrumentation` - all of them twelve
+      # seconds after scripts/wait-for-android-guest.sh had proved the guest
+      # healthy and stable across four samples. Those are three surfaces of one
+      # fault. Two cores leaves two for the host, and the guest only has to run
+      # instrumentation, not compile anything: every build this gate needs is
+      # already done by `pre-emulator-launch-script` before the guest boots.
       - uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: "37.0"
@@ -254,7 +270,7 @@ jobs:
           arch: x86_64
           avd-name: Covalent_API_37
           profile: pixel_6
-          cores: 4
+          cores: 2
           ram-size: 4096M
           heap-size: 576M
           disk-size: 8G
