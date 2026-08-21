@@ -142,10 +142,11 @@ struct MacEmptyState<Actions: View>: View {
             Text(title)
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(.primary)
-            // `width:`, not `maxWidth:`, and the reason is the accessibility
-            // audit rather than the layout. Read this before "simplifying" it
-            // back — the size, weight and colour here are all innocent, and
-            // three rounds were spent blaming them in turn.
+            // The fixed width and the combined element here are both load
+            // bearing, and both are about the accessibility audit rather than
+            // the layout. Read this before "simplifying" either away — the
+            // size, weight and colour of this line are all innocent, and three
+            // rounds were spent blaming them in turn.
             //
             // What the audit actually does, read out of
             // `AccessibilityAudit.framework`: its contrast check takes the
@@ -155,31 +156,41 @@ struct MacEmptyState<Actions: View>: View {
             // So the check only passes while the ink survives as a colour
             // cluster of its own.
             //
-            // With `maxWidth:` this `Text` took its ideal width — 349pt, odd —
-            // and the card centres it, so the element's frame origin landed on
-            // x = 626 - 349/2 = **451.5**. On the 1x display CI runs on, the
-            // audit's crop at that half-point is resampled, which splits every
-            // 13pt stem across two pixels. The ink cluster dissolves, the
-            // runner-up colour becomes near-white antialiasing (#F8F8F8), and
-            // the ratio it reports is 1.04 — hence "Contrast failed" on copy
-            // that renders (51,51,51) on white at 12.63:1.
+            // Left alone, this `Text` is its own accessibility element at its
+            // ideal width — 349pt, odd — and the card centres it, so the
+            // element's frame origin landed on x = 626 - 349/2 = **451.5**. On
+            // the 1x display CI runs on, the audit's crop at that half-point is
+            // resampled, which splits every 13pt stem across two pixels. The
+            // ink cluster dissolves, the runner-up colour becomes near-white
+            // antialiasing (#F8F8F8), and the ratio it reports is 1.04 — on
+            // copy that renders (51,51,51) on white at 12.63:1.
             //
-            // Two things follow. Colour and weight cannot help: re-measured
-            // through the framework's own code, the same glyphs re-inked to
-            // 38, 25, 12 and pure black all still grade 1.01-1.05 once blurred.
-            // And the parity is invisible — this line passed in the rounds
-            // where its rendered width happened to come out even, which is what
-            // made the finding look nondeterministic.
+            // Colour and weight cannot help: re-measured through the
+            // framework's own code, the same glyphs re-inked to 38, 25, 12 and
+            // pure black all still grade 1.01-1.05 once blurred. The parity is
+            // also invisible — this line passed in the rounds where its
+            // rendered width happened to come out even, which is what made the
+            // finding look nondeterministic for so long.
             //
-            // A fixed even width pins the origin at 626 - 180 = 446.0, so the
-            // crop is never resampled. Nothing moves on screen: each line is
-            // centred on x = 626 either way, since (360 - L)/2 + 446 and
-            // (349 - L)/2 + 451.5 are the same number.
+            // So the rectangle has to be moved onto whole pixels. A `frame`
+            // alone does not do it: the element stays the `Text`, which keeps
+            // its own 349pt bounds inside the box (CI run 32487387947 reported
+            // the identical 451.5 after that change). `.combine` is what moves
+            // the element up to the box, exactly as it does for the sidebar's
+            // service row, which vends its container's 204pt width and not its
+            // text's. The box is a fixed even width, so it centres on
+            // 626 - 180 = 446.0 and the crop is never resampled.
+            //
+            // Nothing moves on screen: each line is still centred on x = 626,
+            // since (360 - L)/2 + 446 and (349 - L)/2 + 451.5 are the same
+            // number.
             Text(message)
                 .font(.body.weight(.medium))
                 .secondaryLabelStyle()
                 .multilineTextAlignment(.center)
                 .frame(width: 360)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(message)
             actions()
                 .padding(.top, 4)
         }
