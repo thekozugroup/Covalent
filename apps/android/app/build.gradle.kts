@@ -151,14 +151,45 @@ val verifyReleaseSigningConfigured = tasks.register("verifyReleaseSigningConfigu
     }
 }
 
+// The Gradle root project lives at `apps/android`, so `projectDir.parentFile` is
+// `apps` — not the repository root. Resolving the Cargo workspace against it
+// produced `apps/crates/covalent-android-jni` and `apps/Cargo.lock`, so the JNI
+// Exec task ran from the wrong directory and `assembleRelease` always failed.
+// Walk up to the directory that actually owns the workspace instead of hardcoding
+// a parent count, and fail closed with a clear message if it cannot be found.
+val covalentRepoRoot: File =
+    generateSequence(rootProject.projectDir.canonicalFile) { it.parentFile }
+        .firstOrNull {
+            it.resolve("Cargo.lock").isFile &&
+                it.resolve("crates/covalent-android-jni").isDirectory &&
+                it.resolve("scripts/build-android-jni.sh").isFile
+        }
+        ?: error(
+            "Unable to locate the Covalent repository root above ${rootProject.projectDir}: " +
+                "expected an ancestor containing Cargo.lock, crates/covalent-android-jni, " +
+                "and scripts/build-android-jni.sh."
+        )
+
 val buildAndroidJni = tasks.register<Exec>("buildAndroidJni") {
     group = "build"
     description = "Builds pinned Android arm64 and x86_64 JNI libraries with 16 KiB ELF alignment."
-    workingDir = rootProject.projectDir.parentFile
+    workingDir = covalentRepoRoot
     commandLine("./scripts/build-android-jni.sh", layout.buildDirectory.dir("generated/jniLibs").get().asFile.absolutePath)
-    inputs.dir(rootProject.projectDir.parentFile.resolve("crates/covalent-android-jni"))
-    inputs.file(rootProject.projectDir.parentFile.resolve("Cargo.lock"))
+    inputs.dir(covalentRepoRoot.resolve("crates/covalent-android-jni"))
+    inputs.file(covalentRepoRoot.resolve("Cargo.lock"))
     outputs.dir(layout.buildDirectory.dir("generated/jniLibs"))
+}
+
+// `sourceSets.main.jniLibs.directories` above takes a plain path string, so
+// Gradle cannot infer that `buildAndroidJni` produces that directory and fails
+// validation with "uses this output ... without declaring an explicit or
+// implicit dependency". Declare the relationship. `mustRunAfter` rather than
+// `dependsOn` is deliberate: it establishes correct ordering whenever
+// `buildAndroidJni` is in the task graph without forcing the Rust/NDK build into
+// every debug build, preserving the existing opt-in `covalentBuildNative`
+// behaviour and the unconditional `assembleRelease` dependency below.
+tasks.matching { it.name.endsWith("JniLibFolders") }.configureEach {
+    mustRunAfter(buildAndroidJni)
 }
 
 tasks.matching { it.name == "assembleRelease" }.configureEach { dependsOn(buildAndroidJni) }
