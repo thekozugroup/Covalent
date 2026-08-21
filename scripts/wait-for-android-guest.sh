@@ -114,28 +114,47 @@ service_found() {
 # every activity the tests launch is unresolvable, every credential-encrypted
 # read throws, and keystore refuses to name a security level - which is exactly
 # the 40-failure shape run 32513657537 produced on a guest that was otherwise
-# perfectly healthy. Read `dumpsys user` as a second opinion rather than a
-# lenient fallback: both are asking the same question, and a guest that answers
-# neither is not ready.
-user0_is_unlocked() {
-  state=$("$adb" -s "$serial" shell am get-started-user-state 0 2>/dev/null | tr -d '\r')
-  case "$state" in
-    *RUNNING_UNLOCKED*) return 0 ;;
+# perfectly healthy.
+#
+# Answers "unlocked", "locked" or "unknown", and the third is not the second.
+# This read costs an `am` round trip - which starts an app_process - and a
+# `dumpsys user` behind it, orders of magnitude more than a getprop or a
+# `service check`, and on a two-core guest under load it sometimes simply does
+# not answer in time. That distinction is load-bearing; see the stability window.
+user0_state() {
+  case "$("$adb" -s "$serial" shell am get-started-user-state 0 2>/dev/null | tr -d '\r')" in
+    *RUNNING_UNLOCKED*) echo unlocked; return ;;
+    *RUNNING_LOCKED*|*RUNNING_UNLOCKING*|*BOOTING*) echo locked; return ;;
   esac
-  "$adb" -s "$serial" shell dumpsys user 2>/dev/null | tr -d '\r' |
-    grep -q '0=RUNNING_UNLOCKED'
+  if "$adb" -s "$serial" shell dumpsys user 2>/dev/null | tr -d '\r' |
+    grep -q '0=RUNNING_UNLOCKED'; then
+    echo unlocked
+  else
+    echo unknown
+  fi
 }
 
 # The services the gate actually uses: package for installs, activity for
 # `am instrument`, mount for the storage allocation that killed run 32499985083.
+#
+# Echoes the first condition that is not satisfied, or nothing when the guest is
+# ready. Naming it matters: run 32515541756 reset its stability window sixteen
+# times in 600s and every message said only "the guest stopped being ready",
+# which is the one thing that was already obvious.
+first_unready_reason() {
+  prop_is sys.boot_completed 1 || { echo "sys.boot_completed is not 1"; return; }
+  prop_is sys.user.0.ce_available true ||
+    { echo "sys.user.0.ce_available is not true"; return; }
+  prop_is_not init.svc.bootanim running ||
+    { echo "init.svc.bootanim is still running"; return; }
+  service_found package || { echo "binder service 'package' is gone"; return; }
+  service_found activity || { echo "binder service 'activity' is gone"; return; }
+  service_found mount || { echo "binder service 'mount' is gone"; return; }
+  echo ""
+}
+
 guest_is_ready() {
-  prop_is sys.boot_completed 1 &&
-    prop_is sys.user.0.ce_available true &&
-    user0_is_unlocked &&
-    prop_is_not init.svc.bootanim running &&
-    service_found package &&
-    service_found activity &&
-    service_found mount
+  [ -z "$(first_unready_reason)" ]
 }
 
 report_and_fail() {
@@ -180,6 +199,21 @@ while : ; do
 done
 echo "API-37-gate: platform reported ready after $(elapsed)s"
 
+# Unlock is waited for here, once, rather than being folded into the conditions
+# above and re-read on every sample. Both placements were tried. Inside the
+# sampling loop, run 32515541756 never completed four consecutive samples in the
+# whole 600s budget while the timeout dump showed user 0 in RUNNING_UNLOCKED the
+# entire time: the loop was measuring the probe's reliability, not the guest's
+# readiness. Unlock is also monotonic in a way the binder services are not -
+# a user does not spontaneously re-lock - so it wants establishing once, like
+# the probe install, not asserting continuously.
+while : ; do
+  out_of_budget && report_and_fail "user 0 never reached RUNNING_UNLOCKED"
+  [ "$(user0_state)" = unlocked ] && break
+  sleep "$sample_interval"
+done
+echo "API-37-gate: user 0 unlocked after $(elapsed)s"
+
 # Not fatal and not always available: `am wait-for-broadcast-idle` is how AOSP's
 # own harnesses wait out the boot broadcast storm, but it is a developer command
 # and images vary. When it works it removes the largest remaining source of
@@ -209,16 +243,28 @@ settled=0
 while [ "$settled" -lt "$stable_samples" ]; do
   out_of_budget && report_and_fail "the guest never stayed ready for $stable_samples consecutive samples"
   sleep "$sample_interval"
-  if guest_is_ready; then
+  reason=$(first_unready_reason)
+  if [ -z "$reason" ]; then
     settled=$((settled + 1))
   else
     # A regression here is the run-32506293772 shape: ready, installed, then a
-    # service disappears. Start the count over rather than averaging over it.
+    # service disappears. Start the count over rather than averaging over it,
+    # and say which condition went, so a window that keeps resetting accuses
+    # something specific instead of leaving the next run to guess.
     if [ "$settled" -ne 0 ]; then
-      echo "API-37-gate: the guest stopped being ready at $(elapsed)s; restarting the stability window"
+      echo "API-37-gate: $reason at $(elapsed)s; restarting the stability window"
     fi
     settled=0
   fi
 done
+
+# The window above deliberately does not re-read the unlock state on every
+# sample, so assert it once more here. A system_server restart mid-window is the
+# one thing that could have undone it, and that restart would also have taken
+# the binder services with it - which the window does watch - so this is a
+# belt-and-braces check on a narrow race, not the primary defence.
+if [ "$(user0_state)" = locked ]; then
+  report_and_fail "user 0 re-locked before the gate could hand over"
+fi
 
 echo "API-37-gate: guest ready and stable across $stable_samples samples after $(elapsed)s"
