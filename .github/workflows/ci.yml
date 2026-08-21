@@ -37,6 +37,18 @@ jobs:
         with:
           components: clippy,rustfmt
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      # validate-foundation.sh now requires ripgrep and jq instead of skipping
+      # its scans when they are absent, so guarantee both are installed rather
+      # than depending on whatever the hosted runner image happens to ship.
+      - name: Install validate-foundation.sh gate dependencies
+        run: |
+          set -euo pipefail
+          if ! command -v rg >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends ripgrep jq
+          fi
+          rg --version
+          jq --version
       - run: ./scripts/validate-foundation.sh
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
@@ -122,7 +134,10 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
-      - run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0"
+      # check-android.sh runs assembleRelease, which builds the pinned JNI
+      # libraries through the NDK. Install the exact pinned NDK so the gate can
+      # actually run instead of failing on a missing toolchain.
+      - run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "ndk;27.1.12297006"
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
       - run: ./scripts/check-android.sh
       - run: ./apps/android/gradlew -p apps/android :app:generateAndroidSbom
@@ -146,13 +161,42 @@ jobs:
           java-version: "17"
       - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
-      - name: Require usable KVM acceleration
+      # GitHub's ubuntu-24.04 image ships /dev/kvm as root:kvm mode 0660 with an
+      # empty `kvm` group, so the emulator's ProbeKVM reports
+      # "This user doesn't have permissions to use KVM (/dev/kvm)", silently falls
+      # back to TCG, and the API 37 image never finishes booting inside the
+      # action's timeout. Chowning the node is not enough: install the udev rule
+      # the emulator-runner action documents, then prove acceleration is really
+      # usable with a live KVM_GET_API_VERSION ioctl so a software-only runner
+      # fails here, loudly and immediately, instead of timing out ten minutes later.
+      - name: Enable and prove KVM acceleration
         run: |
           set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
           test -c /dev/kvm
-          sudo chown "${USER}:kvm" /dev/kvm || sudo chmod 666 /dev/kvm
           test -r /dev/kvm
           test -w /dev/kvm
+          python3 - <<'PY'
+          import fcntl
+          import os
+          import sys
+
+          KVM_GET_API_VERSION = 0xAE00
+          descriptor = os.open("/dev/kvm", os.O_RDWR | os.O_CLOEXEC)
+          try:
+              version = fcntl.ioctl(descriptor, KVM_GET_API_VERSION, 0)
+          finally:
+              os.close(descriptor)
+          if version != 12:
+              sys.exit(f"KVM reported API version {version}; hardware acceleration is unusable.")
+          print("KVM API version 12 is usable by the current user.")
+          PY
+      # api-level 37.0 is intentional and verified: sdkmanager installs
+      # system-images;android-37.0;google_apis;x86_64 on the hosted runner today.
+      # The emulator boots under KVM; do not downgrade this pin.
       - uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: "37.0"
@@ -162,6 +206,7 @@ jobs:
           emulator-port: 5570
           disable-animations: true
           disable-linux-hw-accel: false
+          emulator-boot-timeout: 900
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-metrics -accel on
           script: COVALENT_ANDROID_EVIDENCE_DIR="${{ runner.temp }}/covalent-android-api37" COVALENT_ANDROID_HEADLESS_CI=true ANDROID_SERIAL=emulator-5570 ./scripts/android-api37-device-test.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -190,26 +235,47 @@ jobs:
       - run: ./scripts/docker-compose-e2e.sh covalent:ci
 
   ios-tier2:
-    name: iOS Tier 2 (non-blocking)
+    name: iOS Tier 2
     runs-on: macos-26
-    timeout-minutes: 25
-    continue-on-error: true
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Require an Apple Silicon runner
+        run: test "$(uname -m)" = arm64
       - run: brew install xcodegen
       - run: cd apps/apple && xcodegen generate --quiet
       - run: xcodebuild -project apps/apple/Covalent.xcodeproj -scheme CovalentIOS -configuration Debug -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO build
+      # Building the iOS app proved only that it compiles. The UI and
+      # accessibility assertions in apps/apple/Scripts/ios-ui-test.sh existed but
+      # ran in no job, so nothing gated on them; the macOS equivalent caught a
+      # real 4.0:1 contrast regression, which this tier could not have caught.
+      # Run the bounded iOS gate here and let its failure fail the workflow.
+      - name: Run bounded iOS UI and accessibility gates
+        env:
+          COVALENT_TEST_ARTIFACT_DIR: ${{ runner.temp }}/covalent-ios-ui
+        run: apps/apple/Scripts/ios-ui-test.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: ios-ui-diagnostics-${{ github.sha }}
+          path: ${{ runner.temp }}/covalent-ios-ui
+          if-no-files-found: warn
 
   release-candidate-software:
     name: Release candidate software gates
     if: always()
-    needs: [rust-and-contracts, macos-integration-ui, android-foundation, android-device, container-foundation]
+    needs: [rust-and-contracts, macos-integration-ui, ios-tier2, android-foundation, android-device, container-foundation]
     runs-on: ubuntu-latest
     steps:
       - name: Require every exact-current software gate
         run: |
           test '${{ needs.rust-and-contracts.result }}' = success
           test '${{ needs.macos-integration-ui.result }}' = success
+          test '${{ needs.ios-tier2.result }}' = success
           test '${{ needs.android-foundation.result }}' = success
           test '${{ needs.android-device.result }}' = success
           test '${{ needs.container-foundation.result }}' = success
