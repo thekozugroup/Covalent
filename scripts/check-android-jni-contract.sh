@@ -14,7 +14,17 @@ test -f "$crate/src/lib.rs"
 test -f "$native"
 test -f "$manager"
 test -f "$service"
+# This is only a presence check: the package gate needs a built APK or AAB and a
+# zipalign binary, so it cannot run here. It is invoked for real on the signed
+# artefacts in .github/workflows/android-release.yml ("Verify the signed native
+# packages"). Assert that caller still exists, so deleting it cannot quietly
+# return this script to being the gate's only mention.
 test -x "$package_gate"
+grep -Fq 'scripts/check-android-native-package.sh' \
+  "$repo_root/.github/workflows/android-release.yml" || {
+  echo "check-android-native-package.sh has no release-workflow caller; it would run on nothing." >&2
+  exit 1
+}
 # The JNI library is linked from a staticlib by scripts/build-android-jni.sh so
 # that exports.map governs the export surface; a cdylib cannot, because rustc
 # globals every `#[no_mangle]` symbol in the crate graph in its own version

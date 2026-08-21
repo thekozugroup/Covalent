@@ -13,9 +13,14 @@ use covalent_node::transport::{QuicNode, QuicProvider, TlsIdentity};
 use covalent_protocol::{BackupId, PeerRole, ReplicaAvailability, ReplicaIntent};
 use tempfile::tempdir;
 
-/// Executes at 64 MiB by default. Release validation also runs a bounded 1 GiB
-/// proof with `COVALENT_QUIC_SCALE_BYTES=1073741824`; capable dedicated hosts
-/// can run the production ceiling with
+/// Executes at 64 MiB by default. `COVALENT_QUIC_SCALE_BYTES` raises that, and a
+/// value outside the 8 MiB..=10 GiB envelope - or one that is not a plain byte
+/// count - now fails the test instead of silently reverting to the default.
+///
+/// No workflow or script sets `COVALENT_QUIC_SCALE_BYTES` today, so the larger
+/// runs below are operator-invoked and must not be described as release
+/// validation until something actually invokes them. Capable dedicated hosts can
+/// run the production ceiling with
 /// `COVALENT_QUIC_SCALE_BYTES=10737418240 cargo test --locked -p covalent-node
 /// --test quic_vertical_slice real_quic_scale_backup_and_restore_is_streaming_and_disk_bounded
 /// -- --nocapture`.
@@ -26,11 +31,24 @@ async fn real_quic_scale_backup_and_restore_is_streaming_and_disk_bounded() {
     let source = tempdir().expect("source");
     let restore = tempdir().expect("restore");
     fs::create_dir_all(source.path().join("nested/empty")).expect("source directories");
-    let transfer_bytes = std::env::var("COVALENT_QUIC_SCALE_BYTES")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(64_u64 << 20);
-    assert!((8_u64 << 20..=10_u64 << 30).contains(&transfer_bytes));
+    // `.parse().ok().unwrap_or(64 MiB)` used to swallow a malformed value, so
+    // `COVALENT_QUIC_SCALE_BYTES=1GiB` ran a 64 MiB transfer and reported ok -
+    // the range assert below then inspected the already-defaulted number and
+    // could never catch it. Default only when the variable is genuinely unset.
+    let transfer_bytes = match std::env::var("COVALENT_QUIC_SCALE_BYTES") {
+        Ok(value) => value.parse::<u64>().unwrap_or_else(|error| {
+            panic!(
+                "COVALENT_QUIC_SCALE_BYTES={value:?} is not a plain byte count ({error}); \
+                 refusing to silently run the 64 MiB default instead"
+            )
+        }),
+        Err(std::env::VarError::NotPresent) => 64_u64 << 20,
+        Err(error) => panic!("COVALENT_QUIC_SCALE_BYTES is unreadable: {error}"),
+    };
+    assert!(
+        (8_u64 << 20..=10_u64 << 30).contains(&transfer_bytes),
+        "COVALENT_QUIC_SCALE_BYTES={transfer_bytes} is outside the 8 MiB..=10 GiB envelope"
+    );
     let source_path = source.path().join("nested/data.bin");
     let mut source_file = File::create(&source_path).expect("source file");
     let mut source_digest = blake3::Hasher::new();
@@ -111,7 +129,14 @@ async fn real_quic_scale_backup_and_restore_is_streaming_and_disk_bounded() {
     options.display_name = "QUIC vertical slice".to_owned();
     options.replica_intent = ReplicaIntent::explicit([provider.device_id()]);
     options.created_at_unix_ms = 3_000;
-    let baseline_rss = resident_set_bytes().unwrap_or(0);
+    // `resident_set_bytes().unwrap_or(0)` used to stand in for both the baseline
+    // and the peak. With `ps` absent from PATH the growth computed as 0 - 0 = 0
+    // and the 192 MiB ceiling below passed having measured nothing at all.
+    // A ceiling that cannot be measured is not a ceiling; say so and stop.
+    let baseline_rss = resident_set_bytes().expect(
+        "resident set size is unreadable on this host, so the streaming RSS ceiling \
+         would assert against a measurement of zero",
+    );
     let rss_sampler = RssSampler::start();
     let disk_sampler = DiskSampler::start([
         owner_data.path().to_path_buf(),
@@ -251,6 +276,11 @@ async fn real_quic_scale_backup_and_restore_is_streaming_and_disk_bounded() {
         "peak encrypted owner/provider storage {peak_disk} exceeded {disk_budget} for {transfer_bytes} source bytes"
     );
     assert!(
+        peak_rss >= baseline_rss,
+        "peak RSS {peak_rss} is below the {baseline_rss} baseline, so the sampler \
+         never observed the transfer"
+    );
+    assert!(
         rss_growth <= 192_u64 << 20,
         "peak RSS grew by {rss_growth} bytes for a {transfer_bytes}-byte transfer"
     );
@@ -340,6 +370,10 @@ fn tree_file_count(root: &std::path::Path) -> u64 {
 struct RssSampler {
     running: Arc<AtomicBool>,
     peak: Arc<AtomicU64>,
+    /// Samples the probe could not take. A silently-skipped sample is
+    /// indistinguishable from a flat memory profile, so count them and refuse
+    /// to report a peak that was never actually observed.
+    failed_samples: Arc<AtomicU64>,
     worker: Option<thread::JoinHandle<()>>,
 }
 
@@ -352,14 +386,26 @@ struct DiskSampler {
 impl RssSampler {
     fn start() -> Self {
         let running = Arc::new(AtomicBool::new(true));
-        let peak = Arc::new(AtomicU64::new(resident_set_bytes().unwrap_or(0)));
+        let peak = Arc::new(AtomicU64::new(
+            resident_set_bytes().expect("resident set size probe"),
+        ));
+        let failed_samples = Arc::new(AtomicU64::new(0));
         let worker = thread::spawn({
             let running = Arc::clone(&running);
             let peak = Arc::clone(&peak);
+            let failed_samples = Arc::clone(&failed_samples);
             move || {
                 while running.load(Ordering::Relaxed) {
-                    if let Some(current) = resident_set_bytes() {
-                        peak.fetch_max(current, Ordering::Relaxed);
+                    match resident_set_bytes() {
+                        Some(current) => {
+                            peak.fetch_max(current, Ordering::Relaxed);
+                        }
+                        // The `if let Some(_)` this replaces dropped failed
+                        // samples on the floor, so a probe that stopped working
+                        // mid-run left a stale peak that still looked plausible.
+                        None => {
+                            failed_samples.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
                     thread::sleep(Duration::from_millis(100));
                 }
@@ -368,6 +414,7 @@ impl RssSampler {
         Self {
             running,
             peak,
+            failed_samples,
             worker: Some(worker),
         }
     }
@@ -377,7 +424,19 @@ impl RssSampler {
         if let Some(worker) = self.worker.take() {
             worker.join().expect("RSS sampler");
         }
-        self.peak.load(Ordering::Relaxed)
+        let failed_samples = self.failed_samples.load(Ordering::Relaxed);
+        assert_eq!(
+            failed_samples, 0,
+            "the resident-set probe failed {failed_samples} times during the transfer, \
+             so the peak below is not a real measurement"
+        );
+        let peak = self.peak.load(Ordering::Relaxed);
+        assert!(
+            peak > 0,
+            "the resident-set probe reported a peak of zero bytes, which no live \
+             process has; the RSS ceiling would be asserting against nothing"
+        );
+        peak
     }
 }
 
