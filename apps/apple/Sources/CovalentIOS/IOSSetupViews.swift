@@ -101,7 +101,11 @@ struct IOSConnectionView: View {
         ) { result in
             guard case let .success(urls) = result, let url = urls.first else {
                 if case let .failure(error) = result {
-                    model.alert = AppAlert(title: "Certificate could not be opened", message: error.localizedDescription)
+                    model.alert = AppAlert(
+                        title: "That certificate couldn't be opened",
+                        message: ErrorPresenter.summary(for: error),
+                        detail: ErrorPresenter.detail(for: error)
+                    )
                 }
                 return
             }

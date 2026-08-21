@@ -4,6 +4,7 @@ struct IOSRootView: View {
     @ObservedObject var model: CovalentAppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var detailedAlert: AppAlert?
+    @State private var pendingRecovery: (@MainActor () async -> Void)?
 
     var body: some View {
         TabView(selection: $model.selectedSection) {
@@ -97,13 +98,21 @@ struct IOSRootView: View {
                     if alert.recoveryOpensSystemSettings {
                         openSystemSettings()
                         model.clearAlert()
-                    } else {
-                        Task { await model.performAlertRecovery() }
+                    } else if let recovery = model.takeAlertRecovery() {
+                        // Taken synchronously: SwiftUI clears the alert as soon
+                        // as this button is tapped, so reading it inside the
+                        // Task below would find it already gone.
+                        Task { await recovery() }
                     }
                 }
             }
             if alert.detail != nil {
-                Button("Details") { detailedAlert = alert }
+                Button("Details") {
+                    // Carry the recovery across, so reading the technical text
+                    // does not cost the user their way out.
+                    pendingRecovery = model.takeAlertRecovery()
+                    detailedAlert = alert
+                }
             }
             Button("OK", role: .cancel) { model.clearAlert() }
         } message: { alert in
@@ -115,14 +124,26 @@ struct IOSRootView: View {
             "Technical details",
             isPresented: Binding(
                 get: { detailedAlert != nil },
-                set: { if !$0 { detailedAlert = nil } }
+                set: { if !$0 { dismissDetails() } }
             ),
             presenting: detailedAlert
-        ) { _ in
-            Button("Done", role: .cancel) { detailedAlert = nil }
+        ) { alert in
+            if let recoveryTitle = alert.recoveryActionTitle, pendingRecovery != nil {
+                Button(recoveryTitle) {
+                    let recovery = pendingRecovery
+                    dismissDetails()
+                    if let recovery { Task { await recovery() } }
+                }
+            }
+            Button("Done", role: .cancel) { dismissDetails() }
         } message: { alert in
             Text(alert.detail ?? "")
         }
+    }
+
+    private func dismissDetails() {
+        detailedAlert = nil
+        pendingRecovery = nil
     }
 
     private func openSystemSettings() {

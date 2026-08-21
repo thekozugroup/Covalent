@@ -5,6 +5,7 @@ struct MacRootView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var selectedSection: AppSection = .overview
     @State private var detailedAlert: AppAlert?
+    @State private var pendingRecovery: (@MainActor () async -> Void)?
 
     var body: some View {
         NavigationSplitView {
@@ -118,14 +119,22 @@ struct MacRootView: View {
                     if alert.recoveryOpensSystemSettings {
                         openNetworkSettings()
                         model.clearAlert()
-                    } else {
-                        Task { await model.performAlertRecovery() }
+                    } else if let recovery = model.takeAlertRecovery() {
+                        // Taken synchronously: SwiftUI clears the alert as soon
+                        // as this button is clicked, so reading it inside the
+                        // Task below would find it already gone.
+                        Task { await recovery() }
                     }
                 }
                 .keyboardShortcut(.defaultAction)
             }
             if alert.detail != nil {
-                Button("Details…") { detailedAlert = alert }
+                Button("Details…") {
+                    // Carry the recovery across, so reading the technical text
+                    // does not cost the user their way out.
+                    pendingRecovery = model.takeAlertRecovery()
+                    detailedAlert = alert
+                }
             }
             Button("OK", role: .cancel) { model.clearAlert() }
                 .keyboardShortcut(.cancelAction)
@@ -138,15 +147,28 @@ struct MacRootView: View {
             "Technical details",
             isPresented: Binding(
                 get: { detailedAlert != nil },
-                set: { if !$0 { detailedAlert = nil } }
+                set: { if !$0 { dismissDetails() } }
             ),
             presenting: detailedAlert
-        ) { _ in
-            Button("Done", role: .cancel) { detailedAlert = nil }
+        ) { alert in
+            if let recoveryTitle = alert.recoveryActionTitle, pendingRecovery != nil {
+                Button(recoveryTitle) {
+                    let recovery = pendingRecovery
+                    dismissDetails()
+                    if let recovery { Task { await recovery() } }
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+            Button("Done", role: .cancel) { dismissDetails() }
                 .keyboardShortcut(.cancelAction)
         } message: { alert in
             Text(alert.detail ?? "")
         }
+    }
+
+    private func dismissDetails() {
+        detailedAlert = nil
+        pendingRecovery = nil
     }
 
     private func openNetworkSettings() {

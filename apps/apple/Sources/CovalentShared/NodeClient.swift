@@ -232,7 +232,7 @@ public actor NodeClient {
         }
         let metadataData = try encoder.encode(metadata)
         guard metadataData.count <= 32 * 1_024 else {
-            throw NodeClientError.invalidPayload("Archive metadata exceeds 32 KiB.")
+            throw NodeClientError.invalidPayload(NodeClientFailure(summary: "This backup's details are too large to send. Try a shorter backup name."))
         }
         // Staging reads and encrypts every file before a single byte is sent,
         // and its size is not known until it finishes, so this phase is
@@ -319,7 +319,7 @@ public actor NodeClient {
             )
             return try decode(BackupResponse.self, from: data)
         }
-        throw NodeClientError.transport("Archive upload did not converge on the durable server offset.")
+        throw NodeClientError.transport(NodeClientFailure(summary: "This upload kept losing its place. Start the backup again.", recovery: .retry))
     }
 
     public func verifySnapshot(_ request: SnapshotRequest) async throws -> VerifyResponse {
@@ -388,7 +388,7 @@ public actor NodeClient {
             )
         )
         guard reboundReference == plan.reference else {
-            throw NodeClientError.invalidPayload("Restore target changed after signed preview.")
+            throw NodeClientError.invalidPayload(NodeClientFailure(summary: "The folder you're restoring into changed since you previewed it. Preview the restore again.", recovery: .previewRestoreAgain))
         }
         let body = try encoder.encode(RestoreExecuteRequest(planId: plan.planId))
         var request = try authenticatedRequest(
@@ -407,7 +407,7 @@ public actor NodeClient {
                 // the denominator comes from the response's content length.
                 // When the server sends none, the total stays nil and the UI
                 // falls back to an indeterminate bar rather than guessing.
-                let progress = TransferProgressDelegate(report: onProgress)
+                let progress = TransferProgressDelegate(observesTaskProgress: true, report: onProgress)
                 (downloadedURL, response) = try await session.download(for: request, delegate: progress)
             } else {
                 (downloadedURL, response) = try await session.download(for: request)
@@ -571,7 +571,7 @@ public actor NodeClient {
               !reference.signature.isEmpty,
               (0...AppleArchiveTransfer.maximumEntries).contains(reference.totalEntries)
         else {
-            throw NodeClientError.invalidPayload("Restore plan reference is invalid or exceeds the Apple archive limit.")
+            throw NodeClientError.invalidPayload(NodeClientFailure(summary: "This restore is too large for Covalent to plan in one pass on this device. Restore a smaller backup."))
         }
         var entries: [RestorePreviewEntry] = []
         entries.reserveCapacity(reference.totalEntries)
@@ -588,16 +588,16 @@ public actor NodeClient {
                   page.entries.count <= 1_000,
                   entries.count + page.entries.count <= reference.totalEntries
             else {
-                throw NodeClientError.invalidPayload("Restore plan pagination changed or repeated unexpectedly.")
+                throw NodeClientError.invalidPayload(NodeClientFailure(summary: "Covalent lost its place while reading the restore plan. Preview the restore again.", recovery: .previewRestoreAgain))
             }
             if let nextCursor = page.nextCursor, nextCursor == cursor {
-                throw NodeClientError.invalidPayload("Restore plan pagination repeated its cursor.")
+                throw NodeClientError.invalidPayload(NodeClientFailure(summary: "Covalent lost its place while reading the restore plan. Preview the restore again.", recovery: .previewRestoreAgain))
             }
             entries.append(contentsOf: page.entries)
             cursor = page.nextCursor
         } while cursor != nil
         guard entries.count == reference.totalEntries else {
-            throw NodeClientError.invalidPayload("Restore plan pagination ended before every signed entry was received.")
+            throw NodeClientError.invalidPayload(NodeClientFailure(summary: "The restore plan arrived incomplete. Preview the restore again.", recovery: .previewRestoreAgain))
         }
         return RestorePlan(reference: reference, entries: entries)
     }
@@ -688,13 +688,13 @@ public actor NodeClient {
                   record.metadataDigest == metadataDigest,
                   record.offset <= record.length
             else {
-                throw NodeClientError.invalidPayload("Durable archive upload identity is invalid.")
+                throw NodeClientError.invalidPayload(NodeClientFailure(summary: "The saved progress for this backup can't be trusted. Start the backup again.", recovery: .retry))
             }
             let identity = try await Task.detached(priority: .userInitiated) {
                 try AppleArchiveTransfer.uploadIdentity(for: URL(fileURLWithPath: record.archivePath))
             }.value
             guard identity.length == record.length, identity.digest == record.digest else {
-                throw NodeClientError.invalidPayload("Durable archive content changed after interruption.")
+                throw NodeClientError.invalidPayload(NodeClientFailure(summary: "The files changed while this backup was interrupted. Start the backup again.", recovery: .retry))
             }
             return record
         }
@@ -750,7 +750,7 @@ public actor NodeClient {
               URL(fileURLWithPath: upload.archivePath).deletingLastPathComponent().standardizedFileURL
                 == transferDirectory.standardizedFileURL
         else {
-            throw NodeClientError.invalidPayload("Durable archive cleanup identity is invalid.")
+            throw NodeClientError.invalidPayload(NodeClientFailure(summary: "The saved progress for this backup can't be trusted. Start the backup again.", recovery: .retry))
         }
         try? FileManager.default.removeItem(atPath: upload.archivePath)
         try FileManager.default.removeItem(at: recordURL)
@@ -900,7 +900,7 @@ public actor NodeClient {
               pairingId.utf8.count <= 128,
               pairingId.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") })
         else {
-            throw NodeClientError.invalidPayload("Invalid network pairing identifier")
+            throw NodeClientError.invalidPayload(NodeClientFailure(summary: "That pairing request isn't one Covalent recognises. Start pairing again.", recovery: .chooseAnotherDevice))
         }
     }
 
@@ -1037,22 +1037,34 @@ private struct DurableArchiveUpload: Codable, Sendable {
 /// Attached per request via `data(for:delegate:)` / `download(for:delegate:)`
 /// so it never disturbs the session-wide certificate-pinning delegate, and so
 /// an injected test session is unaffected.
-private final class TransferProgressDelegate: NSObject,
-    URLSessionTaskDelegate,
-    URLSessionDownloadDelegate,
-    @unchecked Sendable {
+/// Deliberately conforms only to `URLSessionTaskDelegate`. Adopting
+/// `URLSessionDownloadDelegate` would oblige it to implement
+/// `didFinishDownloadingTo`, whose contract deletes the downloaded file once
+/// the method returns — the async `download(for:delegate:)` owns that handoff,
+/// and competing with it is not worth a progress bar. Download progress comes
+/// from the task's own `Progress` instead, observed via `didCreateTask`.
+private final class TransferProgressDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     private let baseOffset: UInt64
     private let declaredTotal: UInt64?
     private let report: @Sendable (TransferProgressSnapshot) -> Void
+    private let observesTaskProgress: Bool
+    private let lock = NSLock()
+    private var progressObservation: NSKeyValueObservation?
 
     init(
         baseOffset: UInt64 = 0,
         declaredTotal: UInt64? = nil,
+        observesTaskProgress: Bool = false,
         report: @escaping @Sendable (TransferProgressSnapshot) -> Void
     ) {
         self.baseOffset = baseOffset
         self.declaredTotal = declaredTotal
+        self.observesTaskProgress = observesTaskProgress
         self.report = report
+    }
+
+    deinit {
+        progressObservation?.invalidate()
     }
 
     func urlSession(
@@ -1072,31 +1084,25 @@ private final class TransferProgressDelegate: NSObject,
         )
     }
 
-    func urlSession(
-        _ session: URLSession,
-        downloadTask: URLSessionDownloadTask,
-        didWriteData bytesWritten: Int64,
-        totalBytesWritten: Int64,
-        totalBytesExpectedToWrite: Int64
-    ) {
-        let total = declaredTotal
-            ?? (totalBytesExpectedToWrite > 0 ? UInt64(totalBytesExpectedToWrite) : nil)
-        report(
-            TransferProgressSnapshot(
-                phase: .transferring,
-                completedBytes: UInt64(max(0, totalBytesWritten)),
-                totalBytes: total
+    /// Downloads report no body-data callback to a plain task delegate, so
+    /// observe the task's `Progress`, which carries received/expected bytes.
+    func urlSession(_ session: URLSession, didCreateTask task: URLSessionTask) {
+        guard observesTaskProgress else { return }
+        let observation = task.progress.observe(\.completedUnitCount, options: [.initial, .new]) {
+            [report] progress, _ in
+            let total = progress.totalUnitCount > 0 ? UInt64(progress.totalUnitCount) : nil
+            report(
+                TransferProgressSnapshot(
+                    phase: .transferring,
+                    completedBytes: UInt64(max(0, progress.completedUnitCount)),
+                    totalBytes: total
+                )
             )
-        )
+        }
+        lock.lock()
+        progressObservation = observation
+        lock.unlock()
     }
-
-    /// Required by `URLSessionDownloadDelegate`. The async `download(for:)`
-    /// owns the downloaded file, so this deliberately does nothing.
-    func urlSession(
-        _ session: URLSession,
-        downloadTask: URLSessionDownloadTask,
-        didFinishDownloadingTo location: URL
-    ) {}
 }
 
 private enum ArchiveUploadBody {
@@ -1104,22 +1110,22 @@ private enum ArchiveUploadBody {
     static func slice(archivePath: String, offset: UInt64, count: UInt64) throws -> InputStream {
         let limit = UInt64(Int64.max)
         guard offset <= limit, count <= limit, offset <= limit - count else {
-            throw NodeClientError.invalidPayload("Archive upload offset exceeds platform limits.")
+            throw NodeClientError.invalidPayload(NodeClientFailure(summary: "This backup is too large for this device to upload in one piece. Try backing up a smaller folder."))
         }
         let required = offset + count
 
         let descriptor = Darwin.open(archivePath, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
         guard descriptor >= 0 else {
-            throw NodeClientError.invalidPayload("Durable archive could not be opened safely.")
+            throw NodeClientError.invalidPayload(NodeClientFailure(summary: "Covalent couldn't reopen the backup it staged. Start the backup again.", recovery: .retry))
         }
         defer { Darwin.close(descriptor) }
 
         var opened = stat()
         guard fstat(descriptor, &opened) == 0, opened.st_mode & S_IFMT == S_IFREG else {
-            throw NodeClientError.invalidPayload("Durable archive is not a regular file.")
+            throw NodeClientError.invalidPayload(NodeClientFailure(summary: "Covalent couldn't reopen the backup it staged. Start the backup again.", recovery: .retry))
         }
         guard opened.st_size >= 0, UInt64(opened.st_size) >= required else {
-            throw NodeClientError.invalidPayload("Durable archive ended before its declared length.")
+            throw NodeClientError.invalidPayload(NodeClientFailure(summary: "The staged backup file is incomplete. Start the backup again.", recovery: .retry))
         }
 
         // Foundation opens the stream by path, so confirm the path still names the exact
@@ -1131,7 +1137,7 @@ private enum ArchiveUploadBody {
               byPath.st_ino == opened.st_ino,
               let stream = InputStream(url: URL(fileURLWithPath: archivePath))
         else {
-            throw NodeClientError.invalidPayload("Durable archive could not be opened safely.")
+            throw NodeClientError.invalidPayload(NodeClientFailure(summary: "Covalent couldn't reopen the backup it staged. Start the backup again.", recovery: .retry))
         }
         stream.setProperty(NSNumber(value: offset), forKey: .fileCurrentOffsetKey)
         return stream

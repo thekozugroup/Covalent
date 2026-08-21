@@ -41,13 +41,6 @@ public struct NodeClientFailure: Equatable, Sendable {
     }
 }
 
-extension NodeClientFailure: ExpressibleByStringLiteral {
-    /// Lets the many already-plain-English throw sites read as plain strings.
-    public init(stringLiteral value: String) {
-        self.init(summary: value)
-    }
-}
-
 /// The single place any Apple surface turns an `Error` into words.
 ///
 /// Nothing in the app should call `String(describing:)` on an error: that

@@ -622,10 +622,20 @@ public final class CovalentAppModel: ObservableObject {
     ///
     /// `CovalentAppModel` is `@MainActor`-isolated and therefore implicitly
     /// `Sendable`, so the escaping closure can hold a weak reference safely.
+    ///
+    /// Callbacks arrive on a background queue and, for a multi-gigabyte
+    /// transfer, arrive very often. Spawning a `Task` per callback would queue
+    /// tens of thousands of main-actor jobs that all write the same property,
+    /// so the sink coalesces: it keeps only the newest snapshot and allows a
+    /// single hop to be in flight at a time. The UI still lands on the final
+    /// value because whichever hop runs last reads the latest snapshot.
     private func progressSink() -> @Sendable (TransferProgressSnapshot) -> Void {
-        { [weak self] snapshot in
+        let coalescer = ProgressCoalescer()
+        return { [weak self] snapshot in
+            guard coalescer.offer(snapshot) else { return }
             Task { @MainActor in
-                self?.activeTask?.progress = snapshot
+                guard let latest = coalescer.take() else { return }
+                self?.activeTask?.progress = latest
             }
         }
     }
@@ -1077,42 +1087,88 @@ public final class CovalentAppModel: ObservableObject {
         )
     }
 
-    /// Runs the alert's recovery action, then dismisses it.
+    /// Removes the pending recovery from the model and hands it back ready to run.
     ///
-    /// ``RecoveryHint/checkNetworkSettings`` is deliberately not handled here:
-    /// opening system Settings is platform-specific, so the iOS and macOS
-    /// alert surfaces do that themselves and then call ``clearAlert()``.
-    public func performAlertRecovery() async {
-        guard let alert else { return }
+    /// **Call this synchronously from the alert's button body.** SwiftUI writes
+    /// `false` into the alert's `isPresented` binding the instant any button is
+    /// tapped, and that setter calls ``clearAlert()``. A recovery that read
+    /// `alert` from inside a deferred `Task` would therefore always find the
+    /// alert already gone and silently do nothing.
+    ///
+    /// Returns `nil` when there is nothing to run — including
+    /// ``RecoveryHint/checkNetworkSettings``, because opening system Settings
+    /// is platform-specific and belongs to the iOS and macOS alert surfaces.
+    public func takeAlertRecovery() -> (@MainActor () async -> Void)? {
+        guard let alert else { return nil }
         let recovery = alert.recovery
         let retry = alertRetry
         clearAlert()
         switch recovery {
+        case .checkNetworkSettings, .freeUpSpace, .none:
+            return nil
         case .retry:
-            if let retry {
-                await retry()
-            } else {
-                await refresh()
+            return { [weak self] in
+                guard let self else { return }
+                if let retry {
+                    await retry()
+                } else {
+                    await self.refresh()
+                }
             }
         case .reconnect:
-            presentation = .connection
+            return { [weak self] in self?.presentation = .connection }
         case .chooseAnotherDevice:
-            presentation = nil
-            selectedSection = .devices
+            return { [weak self] in
+                self?.presentation = nil
+                self?.selectedSection = .devices
+            }
         case .chooseFolderAgain:
-            presentation = nil
-            selectedSection = .settings
+            // Settings only lists and revokes grants; the folder pickers live
+            // on the Backups surface, so that is where "Choose Folder" leads.
+            return { [weak self] in
+                self?.presentation = nil
+                self?.selectedSection = .backups
+            }
         case .previewRestoreAgain:
-            dismissRestorePreview()
-            selectedSection = .backups
-        case .checkNetworkSettings, .freeUpSpace, .none:
-            break
+            return { [weak self] in
+                self?.dismissRestorePreview()
+                self?.selectedSection = .backups
+            }
         }
     }
 
     private static func snapshotIdentifier() -> String {
         let milliseconds = UInt64(Date().timeIntervalSince1970 * 1_000)
         return "s\(milliseconds)-\(UUID().uuidString.lowercased())"
+    }
+}
+
+/// Holds the newest progress snapshot and admits one main-actor hop at a time.
+///
+/// `offer` returns `true` only when the caller should schedule a hop; every
+/// other callback just updates the stored value, so a fast transfer costs one
+/// pending hop rather than one per received chunk.
+private final class ProgressCoalescer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending: TransferProgressSnapshot?
+    private var hopScheduled = false
+
+    func offer(_ snapshot: TransferProgressSnapshot) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        pending = snapshot
+        guard !hopScheduled else { return false }
+        hopScheduled = true
+        return true
+    }
+
+    func take() -> TransferProgressSnapshot? {
+        lock.lock()
+        defer { lock.unlock() }
+        hopScheduled = false
+        let snapshot = pending
+        pending = nil
+        return snapshot
     }
 }
 

@@ -565,10 +565,15 @@ public struct TransferProgressSnapshot: Equatable, Sendable {
     }
 
     /// "1.2 GB of 8.4 GB", or just the completed count when no total is known.
+    ///
+    /// Clamped to the total so a late or over-reported byte count can never
+    /// render the nonsense "8.5 GB of 8.4 GB".
     public var byteSummary: String {
-        let completed = completedBytes.formatted(.byteCount(style: .file))
-        guard let totalBytes, totalBytes > 0 else { return completed }
-        return "\(completed) of \(totalBytes.formatted(.byteCount(style: .file)))"
+        guard let totalBytes, totalBytes > 0 else {
+            return completedBytes.formatted(.byteCount(style: .file))
+        }
+        let shown = min(completedBytes, totalBytes)
+        return "\(shown.formatted(.byteCount(style: .file))) of \(totalBytes.formatted(.byteCount(style: .file)))"
     }
 }
 

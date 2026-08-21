@@ -132,8 +132,9 @@ struct IOSSettingsView: View {
         ) { result in
             if case let .failure(error) = result {
                 model.alert = AppAlert(
-                    title: "Settings could not be saved",
-                    message: error.localizedDescription
+                    title: "Settings couldn't be saved",
+                    message: ErrorPresenter.summary(for: error),
+                    detail: ErrorPresenter.detail(for: error)
                 )
             }
             exportDocument = nil
