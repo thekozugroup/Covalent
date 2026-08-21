@@ -3,10 +3,10 @@
 ## Shape
 
 ```text
-Native macOS + bundled node (T1) ─┐
+Native macOS + bundled node ──────┐
 Native Android/Apple streams ─────├─ local versioned service facade ─ Rust engine
-Docker/Unraid (T1) ┤                                  ├─ encrypted chunk store
-Native iOS (T2) ───┘                                  ├─ signed manifest store
+Docker/Unraid ────────────────────┤                   ├─ encrypted chunk store
+(iOS target, unsupported) ────────┘                   ├─ signed manifest store
 Embedded console ─ local HTTP API ─ node daemon       └─ QUIC peer sessions
 ```
 
@@ -41,8 +41,8 @@ One process owns a node state directory through an exclusive lock. Identity, bac
 - macOS Tier 1: bundled app-owned loopback node, private readiness/token files, inheritance-only helper entitlements, security-scoped and coordinated archive streaming without forwarding PowerBox paths, menus, keyboard, and supported background work.
 - Android Tier 1: API 37 targeting, persisted SAF tree grants, file-descriptor archive streaming without forwarding content URIs, exact create-only restore into an empty tree, opt-in local-network permission for LAN discovery, foreground/resumable work, Compose Material 3, and a restrained floating action toolbar.
 - Docker/Unraid Tier 1: explicit read-only source mounts, durable config/data, explicit writable restore roots, rootless runtime, and clear network mode tradeoffs.
-- iOS Tier 2: selected directories only and coordinated access. Expiration pauses durable node checkpoints and schedules supported refresh work, but process-termination rehydration of the original security-scoped archive request still requires physical-device completion. Full-device backup is neither designed nor claimed.
+- iOS (not supported): the target exists and uses selected directories only with coordinated access, but iOS is out of scope for now. It is not published, not installable, and not gated on. Process-termination rehydration of the original security-scoped archive request was never completed. Full-device backup is neither designed nor claimed.
 
 ## Readiness isolation
 
-Shared engine and contract failures block every affected tier. Tier 1 platform failures block release. iOS-specific UI, signing, simulator, or background gaps remain visible Tier 2 findings but do not change Tier 1 readiness.
+Shared engine and contract failures block every affected supported platform, and any supported-platform failure blocks release. iOS is not a supported platform, so iOS-specific UI, signing, simulator, or background gaps never affect release readiness; the `iOS Tier 2` CI lane runs but is deliberately absent from every release workflow's required-check list.

@@ -2,16 +2,34 @@
 
 Covalent is a lightweight, self-hosted backup and restore system for devices you control. It pairs directly over a LAN or Tailnet, stores encrypted verified chunks on devices you explicitly choose, and restores relative paths only beneath a destination you authorize.
 
-## Platform priorities
+## Supported platforms
 
-| Tier | Platforms | Release policy |
+Covalent supports Unraid, macOS, and Android. These are the Tier 1 platforms,
+and each must pass its production gates before a release.
+
+| Tier 1 platform | Delivery | Release policy |
 | --- | --- | --- |
-| Tier 1 | arm64-only macOS on Apple Silicon, Android, Docker (`linux/amd64` and `linux/arm64`), Unraid | Must pass production gates before a release. |
-| Tier 2 | iOS | Supported and validated independently; never delays Tier 1 readiness. |
+| Unraid | Docker container, `linux/amd64` and `linux/arm64` | Must pass production gates before a release. |
+| macOS on Apple Silicon | arm64-only app bundle | Must pass production gates before a release. |
+| Android | Release APK | Must pass production gates before a release. |
 
-iOS protects user-selected directories through document pickers and security-scoped access. Covalent does not claim or attempt a full-device iOS backup. Windows, hosted accounts, automatic replica placement, and restores outside an authorized root are out of scope.
+**iOS and Windows are not supported.** There is no iOS or Windows build to
+install, neither is covered by the release gates, and neither is being worked
+toward right now. The Apple package in this repository does still contain an iOS
+target built from the same shared sources, and the `iOS Tier 2` CI job still
+compiles and exercises it — that is a statement about what the code contains,
+not a promise of support. That job is deliberately not a required check for any
+release workflow, so it can never block or unblock one.
+
+Hosted accounts, automatic replica placement, and restores outside an authorized root are also out of scope.
 
 ## Install
+
+> **Nothing has been released yet.** There are no git tags, no GitHub releases,
+> and no published container image — `ghcr.io/thekozugroup/covalent` does not
+> resolve, anonymously or otherwise. The instructions below describe the
+> intended install path once a release exists; today none of them will work.
+> Build from source instead (see [Start](#start)).
 
 Download signed artifacts from the [latest release](https://github.com/thekozugroup/Covalent/releases/latest).
 
@@ -28,8 +46,8 @@ Per-release install detail and provenance live in [docs/release/notes](docs/rele
 - `crates/covalent-node`: local daemon, health API, and embedded accessible console.
 - `crates/covalent-ffi`: stable service facade for native clients.
 - `crates/covalent-cli`: deterministic operator and developer commands.
-- `apps/apple`: native SwiftUI macOS Tier 1 and iOS Tier 2 targets plus shared code.
-- `apps/android`: native Kotlin and Jetpack Compose Tier 1 app.
+- `apps/apple`: native SwiftUI macOS app, plus an unsupported iOS target, built from shared code.
+- `apps/android`: native Kotlin and Jetpack Compose app.
 - `packaging`: Docker, Unraid, and embedded web assets.
 - `docs`: product, security, protocol, architecture decisions, and release gates.
 

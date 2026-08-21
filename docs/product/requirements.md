@@ -10,12 +10,12 @@ Core workflows work without a hosted account, cloud coordinator, or subscription
 
 ## Priority policy
 
+Supported platforms are Unraid, macOS, and Android. iOS and Windows are not supported.
+
 | Priority | Platforms | Definition of ready |
 | --- | --- | --- |
-| Tier 1 | macOS, Android, Docker, Unraid | All required functional, safety, accessibility, packaging, and disaster-restore checks pass. |
-| Tier 2 | iOS | Supported with native UX and selected-directory access, but its incomplete or unavailable validation cannot delay Tier 1 readiness. |
-
-The architecture shares protocol and Rust behavior across tiers while validation and release reporting keep iOS evidence separate.
+| Supported | macOS, Android, Docker/Unraid | All required functional, safety, accessibility, packaging, and disaster-restore checks pass. |
+| Not supported | iOS, Windows | No definition of ready. Neither is published or installable, and neither gates a release. Windows has no code at all; the iOS target exists and still builds in the `iOS Tier 2` CI lane, which is deliberately not a required check, but it carries no support promise. |
 
 ## Required journeys
 
@@ -48,7 +48,7 @@ The user exports a versioned file containing the device name, LAN discovery pref
 - macOS Tier 1 uses open panels, security-scoped bookmarks in sandboxed builds, and coordinated file access.
 - Android Tier 1 targets the current stable Android API, uses the Storage Access Framework and persisted URI grants, and requests local-network permission only when the user enables LAN discovery.
 - Docker and Unraid Tier 1 use explicit mounts. Backup sources are read-only by default; restore targets require explicit writable mounts and confirmation.
-- iOS Tier 2 uses document pickers, security-scoped URLs/bookmarks, coordinated access, and durable node checkpoints within platform background limits. Process-termination request rehydration remains a visible Tier 2 acceptance gap; it never claims full-device access.
+- iOS is not a supported platform. The iOS target does use document pickers, security-scoped URLs/bookmarks, and coordinated access, but that behaviour is unreleased, is not held to these requirements, and process-termination request rehydration was never completed.
 
 ## Quality attributes
 
@@ -61,11 +61,11 @@ The user exports a versioned file containing the device name, LAN discovery pref
 
 ## Locked non-goals
 
-- Windows clients or packaging.
+- Windows clients or packaging. Explicitly out of scope for now.
 - Hosted user accounts or required cloud coordination.
 - Automatic replica placement, background selection, or opaque availability promises.
 - Arbitrary filesystem restore or restore outside an explicitly authorized root.
-- Full-device iOS backup, unsupported background execution, or access to other apps' private data.
+- A supported iOS client. Explicitly out of scope for now, along with full-device iOS backup, unsupported background execution, and access to other apps' private data.
 - File sync, photo management, media streaming, password management, or generic object storage.
 
 ## Acceptance boundary

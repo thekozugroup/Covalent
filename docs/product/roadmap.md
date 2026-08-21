@@ -12,10 +12,14 @@ The shared Rust implementation now has real pairing, encrypted backup, explicit 
 
 Performance bounds, corruption repair, migrations, crash recovery, accessibility, container hardening, release artifacts, SBOMs, and independent zero-finding audits.
 
-## Tier 2 iOS track
+## iOS: out of scope for now
 
-iOS develops against the same versioned service contracts with selected-directory access, honest background behavior, and native tests. Its milestones are published independently and do not block Tier 1 release decisions.
+iOS is not a supported platform and is not on this roadmap. The `CovalentIOS`
+target still exists and still compiles in the `iOS Tier 2` CI lane, but it is
+not published, not installable, not gated on, and not being invested in. That
+lane is deliberately excluded from every release workflow's required checks.
+There is no committed milestone for making iOS supported.
 
 ## Later
 
-Only evidence-backed improvements within the locked backup/restore scope. Windows, automatic replica placement, and required hosted services remain excluded.
+Only evidence-backed improvements within the locked backup/restore scope, for the supported platforms: Unraid, macOS, and Android. Windows and iOS clients, automatic replica placement, and required hosted services remain excluded.

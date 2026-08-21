@@ -345,7 +345,11 @@ jobs:
       - rust-and-contracts
       - macos-integration-ui
       - macos-app-bundle
-      - ios-tier2
+      # ios-tier2 is deliberately absent. Supported platforms are Unraid,
+      # macOS, and Android; iOS is out of scope for now. The job still runs on
+      # every commit and is still green - it just must not block a release.
+      # scripts/check-required-checks.sh enforces that this omission is
+      # declared rather than accidental, and fails if the two ever disagree.
       - android-foundation
       - android-device
       - container-foundation
@@ -364,7 +368,6 @@ jobs:
             Shared Rust and contracts=${{ needs.rust-and-contracts.result }}
             macOS integration and UI=${{ needs.macos-integration-ui.result }}
             macOS app bundle=${{ needs.macos-app-bundle.result }}
-            iOS Tier 2=${{ needs.ios-tier2.result }}
             Android foundation=${{ needs.android-foundation.result }}
             Android API 37 device=${{ needs.android-device.result }}
             Container foundation=${{ needs.container-foundation.result }}
