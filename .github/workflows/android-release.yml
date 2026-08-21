@@ -57,13 +57,13 @@ jobs:
         run: cargo install --locked cargo-ndk --version 4.1.2
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
       - run: ./scripts/check-android-jni-contract.sh
+      # Share CI's probe rather than keeping a second, silent copy: this one used
+      # to be three bare `test` commands that printed nothing when they failed,
+      # so a release run could not tell a missing /dev/kvm from a permissions
+      # problem. The shared script also proves acceleration with a live
+      # KVM_GET_API_VERSION ioctl instead of trusting the mode bits.
       - name: Require KVM acceleration for API 37 release verification
-        run: |
-          set -euo pipefail
-          test -c /dev/kvm
-          sudo chown "${USER}:kvm" /dev/kvm || sudo chmod 666 /dev/kvm
-          test -r /dev/kvm
-          test -w /dev/kvm
+        run: ./scripts/require-kvm-acceleration.sh
       - name: Verify immutable version and exact-commit software gates
         env:
           GH_TOKEN: ${{ github.token }}
@@ -80,7 +80,7 @@ jobs:
           test "${RELEASE_VERSION#v}" = "${android_version}"
           test "$(git rev-list -n 1 "${RELEASE_VERSION}")" = "${GITHUB_SHA}"
           checks=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100")
-          for required in "Shared Rust and contracts" "macOS integration and UI" "Android foundation" "Android API 37 device" "Container foundation" "CodeQL java-kotlin" "CodeQL swift" "CodeQL policy" "Release candidate software gates"; do
+          for required in "Shared Rust and contracts" "macOS integration and UI" "macOS app bundle" "iOS Tier 2" "Android foundation" "Android API 37 device" "Container foundation" "Container arm64 image" "CodeQL java-kotlin" "CodeQL swift" "CodeQL policy" "Release candidate software gates"; do
             if ! jq -e --arg name "${required}" '[.check_runs[] | select(.name == $name)] | sort_by(.started_at // .created_at) | last | select(.status == "completed" and .conclusion == "success")' <<<"${checks}" >/dev/null; then
               echo "latest required exact-commit check is not green: ${required}" >&2
               exit 1
@@ -123,6 +123,21 @@ jobs:
           (cd apps/android/app/build && shasum -a 256 -c reports/covalent/SHA256SUMS)
           echo "COVALENT_RELEASE_APK=${apk}" >> "${GITHUB_ENV}"
           echo "COVALENT_APKSIGNER=${apksigner_path}" >> "${GITHUB_ENV}"
+      # scripts/check-android-native-package.sh had no caller anywhere in the
+      # repository: its only mention was a `test -x` in check-android-jni-contract.sh,
+      # which asserts the file's permission bit and never runs it. So the
+      # `zipalign -c -P 16` alignment check, the 80 MiB package budget, the
+      # per-ABI presence of libcovalent_android_jni.so and the 2 MiB per-ABI
+      # budget have never run against any APK or AAB that shipped. Run them here,
+      # on the signed artefacts, where they were always meant to run.
+      - name: Verify the signed native packages
+        run: |
+          set -euo pipefail
+          zipalign_path=$(find "${ANDROID_HOME}/build-tools" -type f -name zipalign -print | sort -V | tail -n 1)
+          test -x "${zipalign_path}"
+          export COVALENT_ANDROID_ZIPALIGN="${zipalign_path}"
+          ./scripts/check-android-native-package.sh "apps/android/app/build/outputs/apk/release/app-release.apk"
+          ./scripts/check-android-native-package.sh "apps/android/app/build/outputs/bundle/release/app-release.aab"
       - name: Resolve prior signed package for a real upgrade gate
         env:
           GH_TOKEN: ${{ github.token }}
@@ -148,6 +163,13 @@ jobs:
             echo "no prior signed Android release exists; rerun only with explicit first_release confirmation" >&2
             exit 1
           fi
+      # The hardware envelope here has to match ci.yml's. Without `profile`,
+      # `cores`, `ram-size`, `heap-size` and `disk-size` the action falls back to
+      # a bare `avdmanager create avd`, which produces a 320x640 device with a
+      # 64 MB Dalvik heap - an envelope ci.yml's own comment records as too small
+      # for an API 37 google_apis x86_64 guest to reach userspace. This lane
+      # omitted all of them, so by that same reasoning its emulator could never
+      # boot and this upgrade gate has very likely never completed. Mirror CI.
       - name: Install and upgrade signed package on API 37
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
@@ -155,14 +177,29 @@ jobs:
           target: google_apis
           arch: x86_64
           avd-name: Covalent_API_37
+          profile: pixel_6
+          cores: 4
+          ram-size: 4096M
+          heap-size: 576M
+          disk-size: 8G
           emulator-port: 5570
           disable-animations: true
           disable-linux-hw-accel: false
+          emulator-boot-timeout: 900
+          pre-emulator-launch-script: |
+            "$ANDROID_HOME/platform-tools/adb" start-server
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-metrics -accel on
           script: |
             set -euo pipefail
             export ANDROID_SERIAL=emulator-5570
             initial_apk="${COVALENT_PREVIOUS_APK:-${COVALENT_RELEASE_APK}}"
+            if [[ "${initial_apk}" == "${COVALENT_RELEASE_APK}" ]]; then
+              echo "NOTE: no prior signed release exists, so this upgrade gate is"
+              echo "installing the release APK over itself. firstInstallTime is"
+              echo "trivially preserved and this run proves nothing about upgrades."
+            else
+              echo "Upgrade gate: ${initial_apk} -> ${COVALENT_RELEASE_APK}"
+            fi
             adb install "${initial_apk}"
             adb shell am start -W -n life.michaelwong.covalent/.MainActivity
             first_install=$(adb shell dumpsys package life.michaelwong.covalent | sed -n 's/.*firstInstallTime=//p' | head -n 1 | tr -d '\r')
