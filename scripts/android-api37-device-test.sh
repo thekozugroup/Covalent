@@ -8,6 +8,10 @@ avd_name=Covalent_API_37
 required_serial=emulator-5570
 serial=${ANDROID_SERIAL:-}
 headless_ci=${COVALENT_ANDROID_HEADLESS_CI:-false}
+# Opt-in, and only ever opt-in: unset means this script builds everything it
+# needs, which is what a developer running it by hand gets. See the block above
+# the build below for what setting it does and does not skip.
+prebuilt=${COVALENT_ANDROID_PREBUILT:-false}
 tls_image=covalent:android-api37-e2e
 tls_hostname=10.0.2.2
 tls_suffix=$$
@@ -129,12 +133,56 @@ fi
 if [ "$headless_ci" != true ]; then
   mobilecli device info --device "$avd_name"
 fi
-"$repo_root/scripts/check-android.sh"
+# Rebuilding here is what kills the guest.
+#
+# check-android.sh and the docker build below are cold Rust compiles. Even with
+# every cache warm they saturate a 4-vCPU CI runner for over a minute, and the
+# API 37 guest does not survive being descheduled through it: run 32499985083's
+# `adb install` died inside StorageManagerService on a null
+# PackageManagerInternal 68 seconds into exactly this load, having accepted an
+# identical install moments before it started.
+#
+# So a caller that has already produced these artifacts *before the guest was
+# launched* - which is what ci.yml's pre-emulator-launch-script does - says so
+# with COVALENT_ANDROID_PREBUILT=true, and this skips the rebuild only. Nothing
+# stops being checked: check-android.sh --verify-prebuilt proves each artifact
+# exists and is newer than every source it is built from, re-reads the unit test
+# and lint reports to confirm they were a clean pass, and runs the
+# instrumentation-result contract battery unchanged; the image check below is
+# the same freshness proof for the container. Unset - a developer running this
+# script by hand - takes the full build-then-test path exactly as before.
+if [ "$prebuilt" = true ]; then
+  "$repo_root/scripts/check-android.sh" --verify-prebuilt
 
-docker build \
-  --file "$repo_root/packaging/docker/Dockerfile" \
-  --tag "$tls_image" \
-  "$repo_root"
+  # The image has to prove it came from this source too, and it already carries
+  # the means: packaging/docker/Dockerfile stamps ARG VCS_REF into
+  # org.opencontainers.image.revision, which is the same label
+  # scripts/check-container-contract.sh verifies in the container jobs. Read it
+  # back and require the commit this checkout is on. An image built without
+  # --build-arg VCS_REF is labelled "unknown" and is rejected here by name,
+  # which is the correct answer: an unlabelled image cannot be shown to match.
+  if ! image_revision=$(docker image inspect \
+    --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
+    "$tls_image" 2>/dev/null); then
+    echo "COVALENT_ANDROID_PREBUILT=true but $tls_image does not exist." >&2
+    echo "build it first: docker build --file packaging/docker/Dockerfile --build-arg VCS_REF=\$(git rev-parse HEAD) --tag $tls_image ." >&2
+    exit 1
+  fi
+  head_revision=$(git -C "$repo_root" rev-parse HEAD)
+  if [ "$image_revision" != "$head_revision" ]; then
+    echo "$tls_image records revision '$image_revision' but this checkout is $head_revision." >&2
+    echo "the prebuilt image does not match this source; rebuild it with --build-arg VCS_REF=$head_revision" >&2
+    exit 1
+  fi
+  echo "  current: $tls_image (revision $image_revision)"
+else
+  "$repo_root/scripts/check-android.sh"
+
+  docker build \
+    --file "$repo_root/packaging/docker/Dockerfile" \
+    --tag "$tls_image" \
+    "$repo_root"
+fi
 
 for volume in \
   "$tls_data_volume" \
@@ -254,15 +302,22 @@ if [ "${#tls_pin}" -ne 64 ] || [ "$tls_pin_valid" != true ]; then
   exit 1
 fi
 
-env \
-  ANDROID_HOME="$android_sdk" \
-  ANDROID_SDK_ROOT="$android_sdk" \
-  ANDROID_SERIAL="$serial" \
-  "$repo_root/apps/android/gradlew" \
-  -p "$repo_root/apps/android" \
-  --no-daemon \
-  assembleDebug \
-  assembleDebugAndroidTest
+# The same reasoning as the build block above, one layer down: both of these
+# artifacts were already produced and then proved current by
+# check-android.sh --verify-prebuilt, and nothing between there and here writes
+# to them. Re-entering Gradle only to be told UP-TO-DATE still costs a
+# daemon-less JVM configuration pass on the runner the guest is sharing.
+if [ "$prebuilt" != true ]; then
+  env \
+    ANDROID_HOME="$android_sdk" \
+    ANDROID_SDK_ROOT="$android_sdk" \
+    ANDROID_SERIAL="$serial" \
+    "$repo_root/apps/android/gradlew" \
+    -p "$repo_root/apps/android" \
+    --no-daemon \
+    assembleDebug \
+    assembleDebugAndroidTest
+fi
 
 apk="$repo_root/apps/android/app/build/outputs/apk/debug/app-debug.apk"
 test_apk="$repo_root/apps/android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"

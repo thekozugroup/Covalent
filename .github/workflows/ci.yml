@@ -290,12 +290,24 @@ jobs:
           #     the system_server binder prints when system_server dies under it,
           #     so no test had run and none could have caused it.
           #
-          # Building here leaves Gradle, cargo and the BuildKit layer cache warm.
-          # The gate script still runs check-android.sh and the same docker build
-          # itself, and still has to pass both - it just reaches `am instrument` a
-          # minute after boot instead of twenty. Nothing the gate proves changes.
-          # BuildKit keys its layer cache on content, so the docker build below
-          # warms the expensive Rust layer even if the script retags the image.
+          # These two lines are not a cache warm-up. They are the gate's build
+          # half, run in full, here, where no guest exists to starve. The device
+          # script is then told so with COVALENT_ANDROID_PREBUILT=true below and
+          # skips the *rebuild* only - it still runs check-android.sh, in
+          # --verify-prebuilt mode, which proves every artifact these two lines
+          # were supposed to produce is present and newer than every source it is
+          # built from, re-reads the unit test and lint reports to confirm they
+          # were a clean pass, applies the same freshness proof to the image
+          # tagged here, and runs the instrumentation-result contract battery
+          # unchanged. Nothing the gate proves changes; the work moves off the
+          # window where the guest is fragile instead of being done twice.
+          #
+          # Warming a cache was the previous attempt at this and it was not
+          # enough. With every cache warm the device script's own re-run of these
+          # two still cost 68 seconds of full-load 4-vCPU time, and run
+          # 32499985083 died inside it: `adb install` hit a null
+          # PackageManagerInternal in StorageManagerService 68 seconds after an
+          # identical install had succeeded. The load has to be absent, not fast.
           #
           # Every line below is one whole command. This action does not run these
           # payloads as a script: it splits them on newlines and runs each line in
@@ -311,7 +323,7 @@ jobs:
           pre-emulator-launch-script: |
             "$ANDROID_HOME/platform-tools/adb" start-server
             ./scripts/check-android.sh
-            docker build --file packaging/docker/Dockerfile --tag covalent:android-api37-e2e .
+            docker build --file packaging/docker/Dockerfile --build-arg VCS_REF=$(git rev-parse HEAD) --tag covalent:android-api37-e2e .
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-metrics -accel on
           # Wait for the unlock, not just for the boot.
           #
@@ -379,11 +391,18 @@ jobs:
           # bounded, and it fails closed with `df /data` attached. Installing the
           # app is a precondition, not an assertion, so nothing the gate proves is
           # weakened by proving the device can accept it first.
+          #
+          # This wait now means what it says. When it was added, the gate script
+          # still rebuilt after it, so a guest that passed the probe was handed 68
+          # seconds of full-load compilation and then asked to install again -
+          # which is the install that died. With COVALENT_ANDROID_PREBUILT=true
+          # below there is no build between this probe and the real install, so
+          # "the guest can accept a package" stays true from here to there.
           script: |
             n=0; until $ANDROID_HOME/platform-tools/adb -s emulator-5570 shell getprop sys.user.0.ce_available | grep -q true; do n=$((n+2)); if [ $n -ge 300 ]; then echo API-37-gate: user 0 never unlocked after ${n}s - sys.user.0.ce_available never became true >&2; $ANDROID_HOME/platform-tools/adb -s emulator-5570 shell dumpsys user >&2; exit 1; fi; sleep 2; done; echo API-37-gate: user 0 unlocked after ${n}s
             n=0; until $ANDROID_HOME/platform-tools/adb -s emulator-5570 install -r apps/android/app/build/outputs/apk/debug/app-debug.apk; do n=$((n+5)); if [ $n -ge 300 ]; then echo API-37-gate: the guest never became able to accept a package install after ${n}s >&2; $ANDROID_HOME/platform-tools/adb -s emulator-5570 shell df /data >&2; exit 1; fi; sleep 5; done; echo API-37-gate: package installer ready after ${n}s
             $ANDROID_HOME/platform-tools/adb -s emulator-5570 shell wm dismiss-keyguard || true
-            COVALENT_ANDROID_EVIDENCE_DIR="${{ runner.temp }}/covalent-android-api37" COVALENT_ANDROID_HEADLESS_CI=true ANDROID_SERIAL=emulator-5570 ./scripts/android-api37-device-test.sh
+            COVALENT_ANDROID_PREBUILT=true COVALENT_ANDROID_EVIDENCE_DIR="${{ runner.temp }}/covalent-android-api37" COVALENT_ANDROID_HEADLESS_CI=true ANDROID_SERIAL=emulator-5570 ./scripts/android-api37-device-test.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
