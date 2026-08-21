@@ -2,6 +2,9 @@
 set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+# Single source of truth for the per-ABI size floor and ceiling, shared with
+# scripts/check-android-native-package.sh so the two gates cannot drift.
+. "$repo_root/scripts/android-native-budgets.sh"
 ndk_version=27.1.12297006
 ndk_root=${COVALENT_ANDROID_NDK_HOME:?Set COVALENT_ANDROID_NDK_HOME to Android NDK 27.1.12297006}
 output_root=${1:-"$repo_root/apps/android/app/build/generated/jniLibs"}
@@ -177,10 +180,20 @@ for abi in arm64-v8a x86_64; do
     echo "JNI library for $abi exports unexpected dynamic symbols: $unexpected_symbols" >&2
     exit 1
   }
-  test "$(wc -c < "$library")" -le 2097152 || {
-    echo "JNI library for $abi exceeds the 2 MiB release budget" >&2
+  library_bytes=$(wc -c < "$library")
+  test "$library_bytes" -le "$COVALENT_JNI_MAX_BYTES" || {
+    echo "JNI library for $abi is $library_bytes bytes, over the ${COVALENT_JNI_MAX_BYTES}-byte release budget" >&2
     exit 1
   }
+  # A maximum alone cannot catch the failure that produced the old 2 MiB number.
+  # See the derivation above: an empty library passes any ceiling. The floor is
+  # what turns "the runtime got dead-stripped again" into a build failure.
+  test "$library_bytes" -ge "$COVALENT_JNI_MIN_BYTES" || {
+    echo "JNI library for $abi is only $library_bytes bytes, under the ${COVALENT_JNI_MIN_BYTES}-byte floor." >&2
+    echo "A library this small cannot contain the node runtime; it has almost certainly been dead-stripped." >&2
+    exit 1
+  }
+  echo "  $abi JNI library: $library_bytes bytes (floor $COVALENT_JNI_MIN_BYTES, budget $COVALENT_JNI_MAX_BYTES)"
 done
 
 metadata_file="$output_root/covalent-android-native-metadata.json"

@@ -64,5 +64,22 @@ undocumented_unsafe_blocks = "deny"
 
 [profile.release]
 codegen-units = 1
-lto = "thin"
+# `fat` rather than `thin`: the Android JNI library links the whole node runtime
+# (QUIC + TLS + HTTP) into one artefact, so cross-crate dead-code elimination is
+# worth real bytes there. Measured on 2026-08-21, arm64-v8a/x86_64 Android and
+# aarch64-apple-darwin host, all four artefacts shrank and none regressed:
+#   libcovalent_android_jni.so arm64-v8a  9,260,232 -> 8,369,248  (-9.6%)
+#   libcovalent_android_jni.so x86_64    10,952,432 -> 9,942,680  (-9.2%)
+#   covalent-node                         9,681,168 -> 9,047,744  (-6.5%)
+#   covalent CLI                          3,597,456 -> 3,334,544  (-7.3%)
+# Cost is build time: a warm-cache release build of covalent-node + covalent-cli
+# went from seconds to 1m36s. That is paid once per release lane and buys ~890 KB
+# off every arm64 phone install, so it is the right side of the trade.
+#
+# `panic = "abort"` would strip a further ~1 MB of .eh_frame/.gcc_except_table,
+# and is deliberately NOT set: crates/covalent-android-jni/src/lib.rs wraps every
+# JNI entry point in `catch_unwind` so a panic in the node runtime surfaces as
+# JNI_ERR. Aborting instead would turn a recoverable error into a process kill on
+# the user's phone. That is cutting function to buy bytes, not an optimisation.
+lto = "fat"
 strip = "symbols"

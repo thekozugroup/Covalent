@@ -126,10 +126,12 @@ jobs:
       # scripts/check-android-native-package.sh had no caller anywhere in the
       # repository: its only mention was a `test -x` in check-android-jni-contract.sh,
       # which asserts the file's permission bit and never runs it. So the
-      # `zipalign -c -P 16` alignment check, the 80 MiB package budget, the
-      # per-ABI presence of libcovalent_android_jni.so and the 2 MiB per-ABI
+      # `zipalign -c -P 16` alignment check, the whole-package budget, the
+      # per-ABI presence of libcovalent_android_jni.so and the per-ABI size
       # budget have never run against any APK or AAB that shipped. Run them here,
       # on the signed artefacts, where they were always meant to run.
+      # The size numbers themselves, and how they were derived by measurement,
+      # live in scripts/android-native-budgets.sh.
       - name: Verify the signed native packages
         run: |
           set -euo pipefail
