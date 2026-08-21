@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.os.ParcelFileDescriptor
 import androidx.test.platform.app.InstrumentationRegistry
 import life.michaelwong.covalent.data.SecureNodeStore
 import org.junit.Assert.assertEquals
@@ -26,6 +27,21 @@ class EmbeddedNodeProviderManifestTest {
                 context.packageName,
             ),
         )
+        // ACCESS_LOCAL_NETWORK is a dangerous permission from API 37, so it is never granted
+        // at install time. The manifest contract is that it is declared and therefore
+        // grantable - `pm grant` fails outright for a permission the package never requested.
+        val requested = packageManager
+            .getPackageInfo(context.packageName, PackageManager.GET_PERMISSIONS)
+            .requestedPermissions
+            .orEmpty()
+        assertTrue(Manifest.permission.ACCESS_LOCAL_NETWORK in requested)
+
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        ParcelFileDescriptor.AutoCloseInputStream(
+            instrumentation.uiAutomation.executeShellCommand(
+                "pm grant ${context.packageName} ${Manifest.permission.ACCESS_LOCAL_NETWORK}",
+            ),
+        ).use { it.readBytes() }
         assertEquals(
             PackageManager.PERMISSION_GRANTED,
             packageManager.checkPermission(

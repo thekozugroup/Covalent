@@ -18,12 +18,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsToggleable
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.lifecycle.SavedStateHandle
 import androidx.test.platform.app.InstrumentationRegistry
 import life.michaelwong.covalent.ui.CovalentApp
@@ -47,6 +51,7 @@ import life.michaelwong.covalent.model.RestorePreviewEntry
 import life.michaelwong.covalent.model.TransferKind
 import life.michaelwong.covalent.model.TransferRecord
 import life.michaelwong.covalent.model.TransferState
+import life.michaelwong.covalent.node.EmbeddedNodeManager
 import life.michaelwong.covalent.work.TransferJobService
 import life.michaelwong.covalent.work.TransferScheduler
 import org.junit.Assert.assertEquals
@@ -141,13 +146,20 @@ class CovalentAppTest {
 
     @Test
     fun eachPartyReplicaRoleRowExposesOneToggleTarget() {
-        val store = isolatedStore("replica_semantics")
-        val state = readyState(store, Screen.PAIR).apply { pairingRole = PairingRole.RESPONDER }
+        // The per-party role selectors only exist under advanced pairing, and only once a
+        // controller connection is resolvable, because the roles are negotiated with a server.
+        val store = connectedStore("replica_semantics")
+        val state = readyState(store, Screen.PAIR).apply {
+            pairingRole = PairingRole.RESPONDER
+            showAdvancedPairing = true
+        }
         compose.setContent { CovalentTheme { CovalentApp(store, state) } }
 
-        val replicaRows = compose.onAllNodesWithText("Store encrypted replica chunks")
-        replicaRows[0].assertIsDisplayed().assertIsToggleable()
-        replicaRows[1].assertIsDisplayed().assertIsToggleable()
+        // Exactly two: the roles this device keeps, and the roles it grants the inviter.
+        val replicaRows = compose.onAllNodesWithText("Store encrypted copies of backups")
+        replicaRows.assertCountEquals(2)
+        replicaRows[0].performScrollTo().assertIsDisplayed().assertIsToggleable()
+        replicaRows[1].performScrollTo().assertIsDisplayed().assertIsToggleable()
     }
 
     @Test
@@ -182,7 +194,9 @@ class CovalentAppTest {
             snapshotCount = 3,
             selectedProviderIds = emptySet(),
         )
-        val store = isolatedStore("restore_page").apply { replaceBackups(listOf(backup)) }
+        // The pagination control pages against the server, so it only renders when a
+        // controller connection is resolvable as well as when the plan has a next cursor.
+        val store = connectedStore("restore_page").apply { replaceBackups(listOf(backup)) }
         val state = readyState(store, Screen.RESTORE).apply {
             selectedRestoreBackupId = backup.backupId
             persistRestorePlan(RestorePlanPage(
@@ -206,9 +220,9 @@ class CovalentAppTest {
         }
         compose.setContent { CovalentTheme { CovalentApp(store, state) } }
 
-        compose.onNodeWithText("Documents/one.txt").assertIsDisplayed()
-        compose.onNodeWithText("Showing paths 1–1").assertIsDisplayed()
-        compose.onNodeWithText("Show next paths").assertIsDisplayed()
+        compose.onNodeWithText("Documents/one.txt").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Showing paths 1–1").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Show next paths").performScrollTo().assertIsDisplayed()
     }
 
     @Test
@@ -230,10 +244,47 @@ class CovalentAppTest {
         }
         compose.setContent { CovalentTheme { CovalentApp(store, state) } }
 
-        compose.onNodeWithText("Review settings changes").assertIsDisplayed()
+        compose.onNodeWithText("Review settings changes").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("This import removes remembered backups from your backup server.")
+            .performScrollTo()
             .assertIsDisplayed()
-        compose.onNodeWithText("Confirm import").assertIsDisplayed()
+        compose.onNodeWithText("Confirm import").performScrollTo().assertIsDisplayed()
+    }
+
+    /**
+     * End-to-end cover for [life.michaelwong.covalent.ui.DestructiveAction.IMPORT_REMOVING_BACKUPS]
+     * on the real Settings screen: the import must stop at a confirmation, and backing out of
+     * that confirmation must leave the candidate unimported.
+     */
+    @Test
+    fun importRemovingBackupsStopsAtConfirmationAndDismissalKeepsTheBackups() {
+        val store = connectedStore("settings_import_confirm")
+        val state = readyState(store, Screen.SETTINGS).apply {
+            setImportCandidate(
+                JSONObject()
+                    .put("schemaVersion", 1)
+                    .put("deviceName", "After")
+                    .put("lanDiscoveryEnabled", false)
+                    .put("rememberedBackups", JSONArray()),
+                JSONObject()
+                    .put("schemaVersion", 1)
+                    .put("deviceName", "Before")
+                    .put("lanDiscoveryEnabled", true)
+                    .put("rememberedBackups", JSONArray().put(JSONObject())),
+            )
+        }
+        compose.setContent { CovalentTheme { CovalentApp(store, state) } }
+
+        // Pressing the import button must not import; it must raise the confirmation.
+        compose.onNodeWithTag("confirm.IMPORT_REMOVING_BACKUPS").assertDoesNotExist()
+        compose.onNodeWithTag("settings.import.confirm").performScrollTo().performClick()
+        compose.onNodeWithTag("confirm.IMPORT_REMOVING_BACKUPS").assertIsDisplayed()
+
+        // Backing out closes the dialog and leaves the candidate waiting, unimported.
+        compose.onNodeWithTag("confirm.IMPORT_REMOVING_BACKUPS.cancel").performClick()
+        compose.onNodeWithTag("confirm.IMPORT_REMOVING_BACKUPS").assertDoesNotExist()
+        compose.runOnIdle { assertNotNull(state.importCandidate) }
+        compose.onNodeWithText("Review settings changes").performScrollTo().assertIsDisplayed()
     }
 
     @Test
@@ -343,6 +394,22 @@ class CovalentAppTest {
         }
     }
 
+
+    /**
+     * An isolated store that already holds controller credentials so
+     * `ActiveNodeConnectionResolver` resolves a live connection. Screens that page or mutate
+     * server state deliberately withhold those controls while no server is reachable, so a
+     * test for one of those controls has to establish a connection first.
+     */
+    private fun connectedStore(suffix: String): SecureNodeStore = isolatedStore(suffix).apply {
+        baseUrl = "https://node.example.test"
+        token = "instrumentation-controller-token"
+        displayName = "Test node"
+        // The active mode lives in application-scoped preferences, not in the isolated store.
+        EmbeddedNodeManager(
+            InstrumentationRegistry.getInstrumentation().targetContext.applicationContext,
+        ).selectExternalMode()
+    }
 
     private fun isolatedStore(suffix: String): SecureNodeStore {
         val base = InstrumentationRegistry.getInstrumentation().targetContext
