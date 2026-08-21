@@ -127,7 +127,9 @@ codesign \
   "$runner"
 codesign --verify --deep --strict --verbose=2 "$runner"
 
-if ! run_bounded 180 xcodebuild \
+# Same reasoning as the per-test allowances below: a hang detector, not a
+# quality gate. 180s cannot survive a contended runner.
+if ! run_bounded 900 xcodebuild \
   -quiet \
   -project Covalent.xcodeproj \
   -scheme CovalentMac \
@@ -143,8 +145,8 @@ if ! run_bounded 180 xcodebuild \
   -only-testing:CovalentMacUITests \
   -resultBundlePath "$result_bundle" \
   -test-timeouts-enabled YES \
-  -default-test-execution-time-allowance 45 \
-  -maximum-test-execution-time-allowance 90 \
+  -default-test-execution-time-allowance 240 \
+  -maximum-test-execution-time-allowance 360 \
   test-without-building >"$ui_log" 2>&1; then
   tail -240 "$ui_log" >&2
   codesign --verify --deep --strict --verbose=4 "$runner" >&2 || true

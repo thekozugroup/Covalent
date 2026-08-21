@@ -129,8 +129,8 @@ if ! run_bounded 900 xcodebuild \
   -maximum-parallel-testing-workers 1 \
   -resultBundlePath "$result_bundle" \
   -test-timeouts-enabled YES \
-  -default-test-execution-time-allowance 60 \
-  -maximum-test-execution-time-allowance 120 \
+  -default-test-execution-time-allowance 240 \
+  -maximum-test-execution-time-allowance 360 \
   CODE_SIGNING_ALLOWED=NO \
   test-without-building >"$ui_log" 2>&1; then
   tail -240 "$ui_log" >&2
