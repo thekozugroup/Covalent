@@ -57,10 +57,22 @@
 #     immediately failed. A probe that cannot fail when the install fails is not
 #     a probe. The checks below therefore make the same round trip the install
 #     makes - `cmd package path android`, `cmd activity get-current-user`,
-#     `dumpsys mount` all transact into system_server and have to be answered -
-#     and additionally require the guest's own one-minute load average to be
-#     back under a ceiling derived from its core count, because a guest whose
-#     runqueue is fifteen deep per core is not ready no matter what it answers.
+#     `dumpsys mount` all transact into system_server and have to be answered,
+#     inside a latency ceiling rather than merely eventually - and additionally
+#     require the guest's runqueue to be no deeper than its cores can serve,
+#     because a guest with ten runnable tasks on two cores is not ready no
+#     matter what it answers.
+#   * ...but read from `/proc/stat`, not `/proc/loadavg`. The first attempt at
+#     that runqueue ceiling used the one-minute load average and run
+#     32526074070 showed why that cannot work here: across 166 samples spanning
+#     the full 900s budget the figure rose to ~30 in two minutes and then never
+#     fell, sitting between 24 and 38 for the remaining thirteen, while the
+#     same guest reported `2/974` - two runnable tasks - and answered every
+#     binder round trip in tens of milliseconds. Linux's load average sums the
+#     runqueue with uninterruptible IO wait, and on this runner's virtual disk
+#     the second term is ~30 permanently. A ceiling on the sum is not a strict
+#     predicate there, it is an unsatisfiable one. `procs_running` is the term
+#     that means what this gate meant.
 #
 # So this waits for the capability and then requires it to survive. The probe
 # install is deliberately performed *before* the stability window rather than
@@ -68,8 +80,8 @@
 # is what triggers dexopt, and if that is going to knock a service over then it
 # has to knock it over while this script is still watching. A guest that
 # installs an APK and still answers a real round trip to `package`, `activity`
-# and `mount` several samples later, at a load its own core count can carry, is
-# ready in a way none of the earlier definitions could express.
+# and `mount` promptly several samples later, with a runqueue its own core count
+# can carry, is ready in a way none of the earlier definitions could express.
 #
 # Nothing here asserts anything about Covalent. Establishing a working device is
 # the harness's job, and doing it properly is what lets the gate's own failures
@@ -101,16 +113,14 @@ fi
 # Bounded in wall-clock, not in attempts, so a guest that is merely slow is
 # given the whole budget while one that is wedged still ends the job.
 #
-# 900s rather than the 600s this used to allow, because the load ceiling below
-# is a condition the old definition simply did not have and it takes real time
-# to satisfy. `/proc/loadavg`'s one-minute figure is an exponential moving
-# average with a 60s time constant, so a guest coming out of a boot storm that
-# peaked at 30.62 needs 60*ln(30.62/4) = 121s of quiet before it reads under a
-# two-core ceiling of 4.00 - and that is the floor, not the expectation. The
-# enclosing job allows 75 minutes and the gate script that follows this one is
-# the long pole, so the extra five minutes are affordable; being unable to
-# afford them would be an argument for a bigger runner, not for handing the
-# install a guest that is still thrashing.
+# 900s rather than the 600s this used to allow. The runqueue and latency
+# ceilings below are conditions the old definition did not have, and a guest
+# leaving a boot storm needs real time to satisfy them - run 32526074070 spent
+# its first two minutes with the runqueue still climbing. The enclosing job
+# allows 75 minutes and the gate script that follows this one is the long pole,
+# so the extra five minutes are affordable; being unable to afford them would be
+# an argument for a bigger runner, not for handing the install a guest that is
+# still thrashing.
 budget=${COVALENT_ANDROID_GUEST_READY_TIMEOUT:-900}
 # Four samples five seconds apart. Long enough to span a system_server restart,
 # which takes tens of seconds to drop and re-register its services, and short
@@ -140,12 +150,21 @@ prop_is_not() {
   [ "$("$adb" -s "$serial" shell getprop "$1" 2>/dev/null | tr -d '\r')" != "$2" ]
 }
 
-# How long one binder round trip is allowed to take before the guest is called
-# unready. Ten seconds is four times the longest single lock hold observed in
-# run 32522700913 (3.3s in UserBackupManagerService.initPackageTracking), so a
-# guest that merely queues behind one storm-era lock still answers, and one that
-# cannot answer inside ten seconds is not a guest an `adb install` will survive.
-probe_deadline=${COVALENT_ANDROID_GUEST_PROBE_TIMEOUT:-10}
+# How long one binder round trip is allowed to take. This is a latency ceiling,
+# not merely a liveness deadline: the question is not whether system_server
+# eventually answers but whether it answers *promptly*, because an `adb install`
+# is a long sequence of transactions and a guest that needs seconds for one
+# needs minutes for the sequence.
+#
+# Three seconds is calibrated against measurements, not chosen. A healthy guest
+# answers `cmd package path android` end to end - adb, shell spawn, binder, and
+# back - in 317ms locally and under 100ms on the CI runner. Run 32522700913's
+# paralysed guest logged `Slow dispatch took 1863ms` and lock holds of
+# 1.2s/1.7s/2.0s/2.4s/3.3s, and under induced starvation locally the same probe
+# took 12499ms while `service check package` still answered in 1165ms. So three
+# seconds is roughly ten times healthy and below every observed pathological
+# hold.
+probe_deadline=${COVALENT_ANDROID_GUEST_PROBE_TIMEOUT:-3}
 
 # Deadlines on both sides of adb, because the two sides fail differently.
 #
@@ -213,12 +232,12 @@ mount_service_answers() {
   bounded_shell dumpsys mount | grep -q 'CE unlocked users:'
 }
 
-# The guest's own core count, so the load ceiling is a statement about this
-# guest rather than a constant that quietly stops matching. `cores` in ci.yml
-# has already been changed twice - 4, then 2 - and the number of cores is
-# exactly what a load average has to be read relative to: a one-minute load of
-# 4.0 is a busy-but-fine four-core guest and a two-core guest with its runqueue
-# twice as deep as it can serve.
+# The guest's own core count, so the runqueue ceiling below is a statement about
+# this guest rather than a constant that quietly stops matching. `cores` in
+# ci.yml has already been changed twice - 4, then 2 - and the number of cores is
+# exactly what a runqueue depth has to be read relative to: four runnable tasks
+# is a busy-but-fine four-core guest and a two-core guest with twice the work it
+# can serve.
 #
 # Deliberately not defaulted: a guest that cannot answer `cat /proc/cpuinfo` has
 # not got far enough to be measured, and saying so is better than inventing a
@@ -230,28 +249,49 @@ guest_core_count() {
   echo "$cores"
 }
 
-# Multiplier over the core count. Two means "the runqueue may be one job deep
+# `procs_running` from /proc/stat, not the one-minute figure from
+# /proc/loadavg, and the difference is the whole reason this predicate was
+# rewritten.
+#
+# Linux's load average counts TASK_RUNNING *and* TASK_UNINTERRUPTIBLE, so it
+# sums CPU demand and disk-IO waiting into one number. On the CI runner those
+# two terms are wildly different sizes. Run 32526074070 sampled the guest 166
+# times across a full 900s budget: the one-minute load started at 7.65, rose to
+# ~30 within two minutes, and then sat between 24 and 38 for the entire
+# remaining fifteen minutes without ever decaying - while the same dump showed
+# `2/974`, only two runnable tasks out of 974, and all three binder round trips
+# answering in tens of milliseconds. Roughly thirty tasks were parked in
+# uninterruptible IO on the runner's virtual disk, permanently. A ceiling on the
+# sum is therefore not a strict predicate on that runner, it is an unsatisfiable
+# one, and an unsatisfiable predicate is a broken predicate however well
+# motivated.
+#
+# The CPU term is the one that matters and it is separately available.
+# `/proc/pressure/cpu` would be the ideal instrument but SELinux denies it to
+# the shell user on this image (`/proc/pressure/io` is readable, `cpu` is not),
+# whereas `/proc/stat` is readable and reports the two terms apart:
+# `procs_running` is the runqueue, `procs_blocked` is the IO wait. Run
+# 32522700913 - the paralysed guest this gate exists to catch - read `10/385`:
+# ten runnable on two cores, five times what they can serve. The healthy guests
+# measured here read 1 or 2.
+guest_runnable() {
+  bounded_shell grep '^procs_running' /proc/stat | awk 'NR==1 { print $2 }' |
+    grep -E '^[0-9]+$' || true
+}
+
+# Kept for the failure dump and the handover line only, never as a predicate.
+# It is still the right thing to *report* - it is how every other post-mortem on
+# this gate described the guest - it is just not something this runner will ever
+# let fall.
+guest_loadavg() {
+  bounded_shell cat /proc/loadavg | tr -d '\n' || true
+}
+
+# Multiplier over the core count. Two means "the runqueue may be one task deep
 # per core beyond the one running" - room for a guest that is working without
 # being a guest that is drowning. Overridable, because the right number is a
 # property of the runner and this file should not be edited to find out.
-load_multiplier=${COVALENT_ANDROID_GUEST_LOAD_MULTIPLIER:-2}
-
-# The one-minute figure specifically. The five- and fifteen-minute averages
-# still carry the boot storm long after it has ended - run 32522700913 read
-# `30.62 9.53 3.37`, so its fifteen-minute figure alone would have passed a
-# ceiling of 4.00 while the guest was at 30 - and the question here is whether
-# the guest is thrashing *now*.
-guest_load1() {
-  bounded_shell cat /proc/loadavg | awk 'NR==1 { print $1 }' |
-    grep -E '^[0-9]+(\.[0-9]+)?$' || true
-}
-
-# awk rather than shell arithmetic because load averages are decimals and `sh`
-# has only integers; scaling them by hand invites `$((08))`, which is an octal
-# parse error and would have made this predicate fail open on a load of x.08.
-load_is_under() {
-  awk -v load="$1" -v ceiling="$2" 'BEGIN { exit (load <= ceiling) ? 0 : 1 }'
-}
+runnable_multiplier=${COVALENT_ANDROID_GUEST_RUNNABLE_MULTIPLIER:-2}
 
 # Until user 0's credential-encrypted key is unlocked, PackageManager matches
 # only direct-boot-aware components, so every activity the tests launch is
@@ -345,14 +385,14 @@ first_unready_reason() {
     echo "the guest did not answer /proc/cpuinfo within ${probe_deadline}s"
     return
   fi
-  ceiling=$((cores * load_multiplier))
-  load=$(guest_load1)
-  if [ -z "$load" ]; then
-    echo "the guest did not answer /proc/loadavg within ${probe_deadline}s"
+  ceiling=$((cores * runnable_multiplier))
+  runnable=$(guest_runnable)
+  if [ -z "$runnable" ]; then
+    echo "the guest did not answer /proc/stat within ${probe_deadline}s"
     return
   fi
-  load_is_under "$load" "$ceiling" || {
-    echo "guest 1-minute load $load exceeds the ceiling $ceiling for its $cores cores"
+  [ "$runnable" -le "$ceiling" ] || {
+    echo "guest has $runnable runnable tasks, above the ceiling $ceiling for its $cores cores"
     return
   }
   package_service_answers ||
@@ -394,9 +434,17 @@ report_and_fail() {
   bounded_shell cmd activity get-current-user >&2 2>&1 || true
   printf 'dumpsys mount CE line: ' >&2
   bounded_shell dumpsys mount 2>/dev/null | grep 'CE unlocked users:' >&2 || true
+  # Both terms of the load average separately, because their ratio is the
+  # diagnosis. Thirty blocked and two runnable is a slow disk; ten runnable on
+  # two cores is the starvation that kills installs.
   echo "--- guest load ---" >&2
   printf '/proc/loadavg: ' >&2
   "$adb" -s "$serial" shell cat /proc/loadavg >&2 2>&1 || true
+  # Two plain patterns rather than one alternation: `adb shell` joins its
+  # arguments and the guest shell re-parses them, so an unescaped `|` becomes a
+  # pipe on the device and the grep reads `^procs_blocked: inaccessible`.
+  "$adb" -s "$serial" shell grep '^procs_running' /proc/stat >&2 2>&1 || true
+  "$adb" -s "$serial" shell grep '^procs_blocked' /proc/stat >&2 2>&1 || true
   printf 'cores: ' >&2
   "$adb" -s "$serial" shell grep -c '^processor' /proc/cpuinfo >&2 2>&1 || true
   echo "--- storage ---" >&2
@@ -517,4 +565,4 @@ if [ "$(user0_state)" != unlocked ]; then
 fi
 
 echo "API-37-gate: guest ready and stable across $stable_samples samples after $(elapsed)s"
-echo "API-37-gate: handover load $(guest_load1) on $(guest_core_count || echo '?') cores"
+echo "API-37-gate: handover with $(guest_runnable) runnable on $(guest_core_count || echo '?') cores, loadavg $(guest_loadavg)"

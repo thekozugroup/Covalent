@@ -440,14 +440,30 @@ jobs:
           # not fit to install anything. A probe that cannot fail when the
           # install fails is not a probe.
           #
+          # The corollary took one more run to get right. The first version of
+          # this ceiling used the guest's one-minute load average, and run
+          # 32526074070 sampled it 166 times across a full 900s budget: it rose
+          # to ~30 within two minutes and then never fell, sitting between 24 and
+          # 38 for the remaining thirteen, while the same guest reported `2/974`
+          # - two runnable tasks - and answered every binder round trip in tens
+          # of milliseconds. Linux's load average sums the runqueue with
+          # uninterruptible IO wait, and on this runner's virtual disk the second
+          # term is pinned near 30. A ceiling on the sum is not a strict
+          # predicate here, it is an unsatisfiable one. `/proc/stat`'s
+          # `procs_running` is the term that was actually meant, and unlike
+          # `/proc/pressure/cpu` (SELinux-denied to the shell user on this image)
+          # it is readable.
+          #
           # So scripts/wait-for-android-guest.sh now waits for the platform to
           # describe itself as ready (boot, user 0 unlocked, boot animation
-          # stopped), for the guest's own one-minute load average to be back
-          # under twice its core count - read from the guest's /proc/cpuinfo, so
-          # halving `cores` above tightens the ceiling instead of silently
-          # invalidating it - and for the package, activity and mount services to
-          # each answer a real binder round trip (`cmd package path android`,
-          # `cmd activity get-current-user`, `dumpsys mount`) inside a deadline.
+          # stopped), for the guest's runqueue to be no deeper than twice its
+          # core count - both read from the guest itself, so changing `cores`
+          # above retunes the ceiling instead of silently invalidating it - and
+          # for the package, activity and mount services to each answer a real
+          # binder round trip (`cmd package path android`, `cmd activity
+          # get-current-user`, `dumpsys mount`) inside a latency ceiling of three
+          # seconds, against a healthy figure of 317ms measured locally and under
+          # 100ms on this runner.
           # It then drains the boot broadcast storm where the image supports it,
           # performs the probe install - deliberately *before* the stability
           # window, because installing is the heaviest thing that happens to a
@@ -455,7 +471,8 @@ jobs:
           # those conditions to hold for four consecutive samples afterwards,
           # starting the count over if any of them lapses and naming the one that
           # lapsed. It fails closed with properties, registered handles and round
-          # trips side by side, load, storage, users and a crash/system logcat
+          # trips side by side, both terms of the load average, storage, users
+          # and a crash/system logcat
           # tail attached, which is the evidence none of the four failures above
           # left behind.
           script: |
