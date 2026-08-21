@@ -2258,9 +2258,8 @@ mod tests {
         .expect("worker");
 
         let other_peer_data = tempdir().expect("other peer");
-        let other_peer = Arc::new(
-            Engine::open(EngineOptions::new(other_peer_data.path())).expect("other peer"),
-        );
+        let other_peer =
+            Arc::new(Engine::open(EngineOptions::new(other_peer_data.path())).expect("other peer"));
         trust_all(&second, &other_peer);
         trust_all(&other_peer, &second);
         let cross_peer_provider = QuicProvider::new(

@@ -5,8 +5,8 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use covalent_core::{CoreError, Engine, PairingSession};
 use covalent_core::PublicIdentity;
+use covalent_core::{CoreError, Engine, PairingSession};
 use covalent_protocol::{DeviceId, PairingInvitation, PeerRole, TransportBinding};
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -137,10 +137,17 @@ pub enum NetworkPairingWireResponse {
         minimum_protocol_version: u16,
         maximum_protocol_version: u16,
     },
-    Invitation { invitation: Box<PairingInvitation> },
-    Session { session: Box<PairingSession> },
+    Invitation {
+        invitation: Box<PairingInvitation>,
+    },
+    Session {
+        session: Box<PairingSession>,
+    },
     Acknowledged,
-    Failed { code: String, message: String },
+    Failed {
+        code: String,
+        message: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -739,9 +746,7 @@ struct WireRequestSigningFields<'a> {
     operation: &'a NetworkPairingWireOperation,
 }
 
-fn wire_request_signing_bytes(
-    request: &NetworkPairingWireRequest,
-) -> Result<Vec<u8>, CoreError> {
+fn wire_request_signing_bytes(request: &NetworkPairingWireRequest) -> Result<Vec<u8>, CoreError> {
     Ok(serde_json::to_vec(&WireRequestSigningFields {
         schema_version: request.schema_version,
         request_id: &request.request_id,
@@ -1249,10 +1254,7 @@ mod tests {
             .expect("sign stale");
         assert!(
             manager
-                .verify_and_consume_wire_request(
-                    &stale,
-                    now + NETWORK_PAIRING_REQUEST_SKEW_MS + 1
-                )
+                .verify_and_consume_wire_request(&stale, now + NETWORK_PAIRING_REQUEST_SKEW_MS + 1)
                 .is_err(),
             "request outside the skew window must be rejected"
         );
@@ -1265,7 +1267,9 @@ mod tests {
             pairing_id: "attacker".to_owned(),
         };
         assert!(
-            manager.verify_and_consume_wire_request(&tampered, now).is_err(),
+            manager
+                .verify_and_consume_wire_request(&tampered, now)
+                .is_err(),
             "operation is covered by the request signature"
         );
     }

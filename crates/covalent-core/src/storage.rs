@@ -661,11 +661,9 @@ impl ChunkStore {
                 return Err(CoreError::AuthenticationFailed);
             }
             let path = self.provider_object_reference_path(locator)?;
-            let reference: ProviderObjectReference = serde_json::from_slice(&read_bounded(
-                &path,
-                MAX_PROVIDER_LEASE_STATE_BYTES,
-            )?)
-            .map_err(|_| CoreError::AuthenticationFailed)?;
+            let reference: ProviderObjectReference =
+                serde_json::from_slice(&read_bounded(&path, MAX_PROVIDER_LEASE_STATE_BYTES)?)
+                    .map_err(|_| CoreError::AuthenticationFailed)?;
             if reference.schema_version != PROVIDER_LEASE_SCHEMA_VERSION
                 || reference.locator != *locator
                 || !reference.owners.contains(&ProviderObjectOwner {

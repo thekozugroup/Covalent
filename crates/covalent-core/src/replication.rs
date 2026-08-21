@@ -644,15 +644,10 @@ impl ReplicationScheduler {
                         if encrypted.plaintext_length != reference.plaintext_length
                             || encrypted.ciphertext_length() != reference.ciphertext_length
                         {
-                            return Err(CoreError::CorruptChunk(
-                                reference.opaque_locator.clone(),
-                            ));
+                            return Err(CoreError::CorruptChunk(reference.opaque_locator.clone()));
                         }
-                        let plaintext = key.decrypt_chunk(
-                            backup_id,
-                            &reference.plaintext_digest,
-                            &encrypted,
-                        )?;
+                        let plaintext =
+                            key.decrypt_chunk(backup_id, &reference.plaintext_digest, &encrypted)?;
                         fetched.push(FetchedChunk {
                             provider_id: provider.device_id(),
                             plaintext,
@@ -743,19 +738,19 @@ impl ReplicationScheduler {
             let result = provider
                 .get_scoped(backup_id, &reference.opaque_locator)
                 .and_then(|record| {
-                control.check()?;
-                let encrypted = EncryptedChunk::decode_provider_record(
-                    reference.opaque_locator.clone(),
-                    reference.plaintext_digest.clone(),
-                    &record,
-                    reference.plaintext_length as usize,
-                )?;
-                if encrypted.plaintext_length != reference.plaintext_length
-                    || encrypted.ciphertext_length() != reference.ciphertext_length
-                {
-                    return Err(CoreError::CorruptChunk(reference.opaque_locator.clone()));
-                }
-                key.decrypt_chunk(backup_id, &reference.plaintext_digest, &encrypted)
+                    control.check()?;
+                    let encrypted = EncryptedChunk::decode_provider_record(
+                        reference.opaque_locator.clone(),
+                        reference.plaintext_digest.clone(),
+                        &record,
+                        reference.plaintext_length as usize,
+                    )?;
+                    if encrypted.plaintext_length != reference.plaintext_length
+                        || encrypted.ciphertext_length() != reference.ciphertext_length
+                    {
+                        return Err(CoreError::CorruptChunk(reference.opaque_locator.clone()));
+                    }
+                    key.decrypt_chunk(backup_id, &reference.plaintext_digest, &encrypted)
                 });
             match result {
                 Ok(plaintext) => {

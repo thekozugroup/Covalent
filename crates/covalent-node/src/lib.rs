@@ -34,8 +34,8 @@ use covalent_protocol::{
     ReplicaIntent, SignedRoster, TargetInventory, TargetInventoryBinding, TargetInventoryEntry,
     TransportBinding,
 };
-use network_pairing::{NetworkPairingItem, NetworkPairingManager, NetworkPairingStatus};
 use http_body_util::BodyExt as _;
+use network_pairing::{NetworkPairingItem, NetworkPairingManager, NetworkPairingStatus};
 use rand_core::{OsRng, RngCore};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
