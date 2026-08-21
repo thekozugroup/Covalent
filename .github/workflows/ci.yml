@@ -262,11 +262,48 @@ jobs:
           disable-animations: true
           disable-linux-hw-accel: false
           emulator-boot-timeout: 900
+          # Two things happen before launch, and the second one is why this job
+          # was red.
+          #
           # Start the adb server before the emulator so it can register itself
           # instead of logging "Unable to connect to adb daemon on port: 5037" and
           # leaving the action to discover the device by port scan.
+          #
+          # Then do the gate's cold build work while no guest is running.
+          # scripts/android-api37-device-test.sh runs check-android.sh and then
+          # builds packaging/docker/Dockerfile, and both are full cold Rust
+          # release compiles. Reached through this action's `script:` payload they
+          # ran with the API 37 guest already booted, so a 4-vCPU runner sat at
+          # full load for 20-23 minutes while the guest was descheduled, and the
+          # guest did not survive it:
+          #
+          #   * Run 32481440600, before the Direct Boot fix, reached
+          #     instrumentation with user 0 STILL LOCKED twenty minutes after
+          #     sys.boot_completed - the app died with "SharedPreferences in
+          #     credential encrypted storage are not available until after user
+          #     (id 0) is unlocked". A healthy API 37 guest reports
+          #     sys.user.0.ce_available=true in the same second it reports
+          #     sys.boot_completed=1; measured cold on this AVD, both flip at 17s.
+          #   * Runs 32488425852 and 32491119888 reported
+          #     "INSTRUMENTATION_ABORTED: System has crashed." with ZERO tests
+          #     recorded. That is the string `am instrument`'s death recipient on
+          #     the system_server binder prints when system_server dies under it,
+          #     so no test had run and none could have caused it.
+          #
+          # Building here leaves Gradle, cargo and the BuildKit layer cache warm.
+          # The gate script still runs check-android.sh and the same docker build
+          # itself, and still has to pass both - it just reaches `am instrument` a
+          # minute after boot instead of twenty. Nothing the gate proves changes.
+          # BuildKit keys its layer cache on content, so the docker build below
+          # warms the expensive Rust layer even if the script retags the image.
           pre-emulator-launch-script: |
+            set -eu
             "$ANDROID_HOME/platform-tools/adb" start-server
+            ./scripts/check-android.sh
+            docker build \
+              --file packaging/docker/Dockerfile \
+              --tag covalent:android-api37-e2e \
+              .
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-metrics -accel on
           script: COVALENT_ANDROID_EVIDENCE_DIR="${{ runner.temp }}/covalent-android-api37" COVALENT_ANDROID_HEADLESS_CI=true ANDROID_SERIAL=emulator-5570 ./scripts/android-api37-device-test.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
