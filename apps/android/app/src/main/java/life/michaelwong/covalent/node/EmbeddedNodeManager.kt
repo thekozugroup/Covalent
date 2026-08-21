@@ -422,13 +422,13 @@ private class LocalEmbeddedNodeStore(context: Context) {
 
     var baseUrl: String
         get() = preferences.getString("base_url", "") ?: ""
-        set(value) = preferences.edit().putString("base_url", value.trim()).apply()
+        set(value) = preferences.edit { putString("base_url", value.trim()) }
 
     var token: String
         get() = preferences.getString("token", null)?.let(::decrypt).orEmpty()
         set(value) {
-            if (value.isBlank()) preferences.edit().remove("token").apply()
-            else preferences.edit().putString("token", encrypt(value)).apply()
+            if (value.isBlank()) preferences.edit { remove("token") }
+            else preferences.edit { putString("token", encrypt(value)) }
         }
 
     private fun key(): SecretKey {
