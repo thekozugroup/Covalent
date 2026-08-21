@@ -86,8 +86,28 @@ for abi in arm64-v8a x86_64; do
     exit 1
   }
   "$llvm_readobj" --dyn-symbols "$library" > "$symbols_directory/$abi.txt"
-  unexpected_symbols=$(sed -n 's/.*Name: \([^ (]*\).*/\1/p' "$symbols_directory/$abi.txt" \
-    | sed '/^$/d' | sort -u | grep -vx 'JNI_OnLoad' || true)
+  # Audit only symbols this library *defines*. The previous `sed` matched every
+  # `Name:` line in the report, so it also flagged all ~68 imported libc symbols
+  # (`read@LIBC`, `malloc@LIBC`, ...) plus the report's own `LoadName: <Not
+  # found>` header — the gate could never pass and so never reported the one
+  # symbol that actually mattered. Parse per-symbol blocks and skip undefined
+  # (imported) entries so this measures the export surface it claims to.
+  unexpected_symbols=$(awk '
+    /^  Symbol \{/ { name = ""; section = ""; in_block = 1; next }
+    in_block && /Name:/ {
+      line = $0
+      sub(/.*Name: */, "", line)
+      sub(/ *\(.*/, "", line)
+      name = line
+      next
+    }
+    in_block && /Section:/ { section = $2; next }
+    in_block && /^  \}/ {
+      if (name != "" && section != "Undefined") print name
+      in_block = 0
+      next
+    }
+  ' "$symbols_directory/$abi.txt" | sort -u | grep -vx 'JNI_OnLoad' || true)
   test -z "$unexpected_symbols" || {
     echo "JNI library for $abi exports unexpected dynamic symbols: $unexpected_symbols" >&2
     exit 1
