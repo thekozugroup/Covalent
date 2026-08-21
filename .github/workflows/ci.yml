@@ -138,7 +138,29 @@ jobs:
       # libraries through the NDK. Install the exact pinned NDK so the gate can
       # actually run instead of failing on a missing toolchain.
       - run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "ndk;27.1.12297006"
+      # Building the JNI libraries is a Rust cross-compile, not just an NDK
+      # invocation. scripts/build-android-jni.sh drives `cargo ndk` to produce
+      # the per-ABI staticlib before it performs the final link itself, so the
+      # rustup-managed toolchain, both Android targets and cargo-ndk 4.1.2 all
+      # have to exist on the runner. Without them the job died at
+      # `:app:buildAndroidJni` with `error: no such command: 'ndk'`; the
+      # staticlib restructure moved the *link* out of rustc's hands but left the
+      # compile step on cargo-ndk. Versions are pinned to what the script
+      # asserts so a drift fails here with a clear message.
+      - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Install the pinned cargo-ndk
+        run: cargo install --locked cargo-ndk --version 4.1.2
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
+      # The "JNI_OnLoad only" export contract is enforced from two sides: this
+      # source-level gate asserts the staticlib + exports.map arrangement that
+      # makes the contract expressible, and the per-ABI .dynsym audit inside
+      # scripts/build-android-jni.sh (run below through assembleRelease) proves
+      # the linked arm64-v8a and x86_64 objects actually honour it. The script
+      # existed with no caller anywhere in the repo, so it gated nothing.
+      - run: ./scripts/check-android-jni-contract.sh
       - run: ./scripts/check-android.sh
       - run: ./apps/android/gradlew -p apps/android :app:generateAndroidSbom
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

@@ -41,8 +41,22 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
-      - run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0"
+      # prepareReleaseCandidate builds the release APK and AAB, which package the
+      # pinned JNI libraries through :app:buildAndroidJni. That task shells out to
+      # scripts/build-android-jni.sh, which cross-compiles the crate with
+      # `cargo ndk` before linking the shared object itself against
+      # crates/covalent-android-jni/exports.map. The pinned NDK, the rustup
+      # toolchain with both Android targets, and cargo-ndk 4.1.2 are therefore all
+      # required here exactly as they are in CI; without them the release build
+      # fails at the native step with `error: no such command: 'ndk'`.
+      - run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "ndk;27.1.12297006"
+      - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+      - name: Install the pinned cargo-ndk
+        run: cargo install --locked cargo-ndk --version 4.1.2
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
+      - run: ./scripts/check-android-jni-contract.sh
       - name: Require KVM acceleration for API 37 release verification
         run: |
           set -euo pipefail
