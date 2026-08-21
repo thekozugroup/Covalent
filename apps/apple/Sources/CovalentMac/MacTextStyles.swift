@@ -142,27 +142,44 @@ struct MacEmptyState<Actions: View>: View {
             Text(title)
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(.primary)
-            // Back to body size at medium weight, which is the configuration
-            // this line was passing in. It was moved to `.title3` on the theory
-            // that 15pt was the size the audit accepted for secondary copy, and
-            // the next run reported this line for the first time — the bet cost
-            // a finding rather than closing one.
+            // `width:`, not `maxWidth:`, and the reason is the accessibility
+            // audit rather than the layout. Read this before "simplifying" it
+            // back — the size, weight and colour here are all innocent, and
+            // three rounds were spent blaming them in turn.
             //
-            // The measurement that settles it: this message and the overview
-            // header's subtitle are the same token at the same size, and their
-            // element screenshots are pixel-identical — both render (51,51,51)
-            // on white at 12.6:1, 18% ink. One is reported and the other is
-            // not, so whatever the audit is deciding, it is not reading a
-            // contrast ratio off these pixels. What the history does support is
-            // weight: it is what fixed the sidebar caption, and it is the one
-            // thing that differed when this line was passing.
+            // What the audit actually does, read out of
+            // `AccessibilityAudit.framework`: its contrast check takes the
+            // element's screenshot, asks `_topColorsForImageData:` for the two
+            // **most frequent** colours in it, and compares those. It never
+            // isolates the text ink, and it ignores the font size it is handed.
+            // So the check only passes while the ink survives as a colour
+            // cluster of its own.
             //
-            // 13pt also belongs under a 15pt title rather than matching it.
+            // With `maxWidth:` this `Text` took its ideal width — 349pt, odd —
+            // and the card centres it, so the element's frame origin landed on
+            // x = 626 - 349/2 = **451.5**. On the 1x display CI runs on, the
+            // audit's crop at that half-point is resampled, which splits every
+            // 13pt stem across two pixels. The ink cluster dissolves, the
+            // runner-up colour becomes near-white antialiasing (#F8F8F8), and
+            // the ratio it reports is 1.04 — hence "Contrast failed" on copy
+            // that renders (51,51,51) on white at 12.63:1.
+            //
+            // Two things follow. Colour and weight cannot help: re-measured
+            // through the framework's own code, the same glyphs re-inked to
+            // 38, 25, 12 and pure black all still grade 1.01-1.05 once blurred.
+            // And the parity is invisible — this line passed in the rounds
+            // where its rendered width happened to come out even, which is what
+            // made the finding look nondeterministic.
+            //
+            // A fixed even width pins the origin at 626 - 180 = 446.0, so the
+            // crop is never resampled. Nothing moves on screen: each line is
+            // centred on x = 626 either way, since (360 - L)/2 + 446 and
+            // (349 - L)/2 + 451.5 are the same number.
             Text(message)
                 .font(.body.weight(.medium))
                 .secondaryLabelStyle()
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 360)
+                .frame(width: 360)
             actions()
                 .padding(.top, 4)
         }
