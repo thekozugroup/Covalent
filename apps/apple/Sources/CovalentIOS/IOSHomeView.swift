@@ -2,6 +2,7 @@ import SwiftUI
 
 struct IOSHomeView: View {
     @ObservedObject var model: CovalentAppModel
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         ScrollView {
@@ -32,33 +33,56 @@ struct IOSHomeView: View {
     }
 
     private var serviceHeader: some View {
-        HStack(spacing: 14) {
-            Image(systemName: serviceSymbol)
-                .scaledSymbolFont(size: 25, weight: .semibold, relativeTo: .title2)
-                .foregroundStyle(serviceColor)
-                .scaledSymbolFrame(48, relativeTo: .title2)
-                .background(serviceColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
-                .accessibilityHidden(true)
+        // Side by side normally; stacked at accessibility text sizes. Keeping
+        // the row horizontal there squeezes the device name into a column one
+        // character wide, because the two glyphs grow with the text and leave
+        // it nothing to wrap into.
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
+            : AnyLayout(HStackLayout(alignment: .center, spacing: 14))
+        return layout {
+            HStack(spacing: 14) {
+                Image(systemName: serviceSymbol)
+                    .scaledSymbolFont(size: 25, weight: .semibold, relativeTo: .title2)
+                    .foregroundStyle(serviceColor)
+                    .scaledSymbolFrame(48, relativeTo: .title2)
+                    .background(serviceColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                    .accessibilityHidden(true)
+                if dynamicTypeSize.isAccessibilitySize {
+                    Spacer(minLength: 0)
+                    protectedBadge
+                }
+            }
             VStack(alignment: .leading, spacing: 3) {
                 Text(model.status?.deviceName ?? "This iPhone or iPad")
                     .font(.title2.weight(.semibold))
+                    .fixedSize(horizontal: false, vertical: true)
                 Text(model.serviceStatusLabel)
                     .font(.subheadline)
                     .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer()
-            if model.phase == .ready {
-                Label("Protected", systemImage: "checkmark.shield.fill")
-                    .labelStyle(.iconOnly)
-                    .font(.title2)
-                    .foregroundStyle(.primary)
-                    .accessibilityLabel("Authenticated service connection")
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if !dynamicTypeSize.isAccessibilitySize {
+                protectedBadge
             }
         }
         .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("home.serviceHeader")
+    }
+
+    @ViewBuilder
+    private var protectedBadge: some View {
+        if model.phase == .ready {
+            Label("Protected", systemImage: "checkmark.shield.fill")
+                .labelStyle(.iconOnly)
+                .font(.title2)
+                .foregroundStyle(.primary)
+                .accessibilityLabel("Authenticated service connection")
+        }
     }
 
     private var connectionCallout: some View {
