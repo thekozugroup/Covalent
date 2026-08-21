@@ -4,12 +4,20 @@ import XCTest
 final class CovalentMacUITests: XCTestCase {
     /// How long a screen transition may take before the test gives up.
     ///
-    /// This is a tolerance for runner contention, not an assertion. The three
-    /// seconds it replaces encoded an assumption about machine speed: on a
-    /// loaded CI runner the iOS test phase took 284s against a normal ~55s,
-    /// and a tab switch missed its window while the app was working fine.
-    /// What each assertion requires is unchanged — only the patience is.
-    private let uiTransitionTimeout: TimeInterval = 30
+    /// This is a tolerance for runner contention, not an assertion. Three
+    /// seconds was too tight — it encoded an assumption about machine speed —
+    /// but thirty was set on a gate that had never once passed, without any
+    /// measurement showing timing was the problem, and it is far too loose: a
+    /// pane that took twenty-five seconds to appear would be a serious bug and
+    /// would still pass.
+    ///
+    /// There is now a measurement. CI run 32461742319 reports
+    /// `IDETestOperationsObserverDebug: 43.053 elapsed -- Testing started
+    /// completed` for all three tests on a real runner, including three app
+    /// launches, and the failure in that run was audit findings rather than
+    /// any wait. Ten seconds is what the launch assertions already use, and it
+    /// is several times the largest transition that has ever been observed.
+    private let uiTransitionTimeout: TimeInterval = 10
 
     func testTierOneNavigationAndPrimaryWorkflowsAreReachable() throws {
         let app = try launchApp()
@@ -63,14 +71,104 @@ final class CovalentMacUITests: XCTestCase {
         // one-finding-at-a-time search. Report them all.
         continueAfterFailure = true
         XCTAssertTrue(app.staticTexts["Apple UI Test Node is protected here"].waitForExistence(timeout: 10))
+
+        // ---------------------------------------------------------------
+        // Why this audit is scoped to the main window.
+        //
+        // `performAccessibilityAudit()` walks everything the process vends
+        // over the accessibility API, and two of those things are not
+        // Covalent's user interface and cannot be described by it:
+        //
+        //  1. The **system TouchBar**, reported as
+        //     `TouchBar, {{80, 0}, {685, 30}}, Disabled`, whose path is
+        //     `Application -> TouchBar` — a sibling of the window, owned by
+        //     AppKit. Covalent defines no `NSTouchBar`; this is the default
+        //     bar the system synthesizes for any app, and there is no API by
+        //     which an app names a bar it did not create.
+        //
+        //  2. A **Parent/Child mismatch on the window's full-screen button**,
+        //     reported as `Group, {{65, 50}, {14, 14}}` whose path runs
+        //     `Window -> Button "_XCUI:FullScreenWindow" -> Group`. The
+        //     `_XCUI:` prefix is XCTest's own naming for the standard
+        //     `NSWindow` title-bar buttons, so the mismatch is between two
+        //     elements AppKit and the test harness produce between them. No
+        //     Covalent view appears anywhere in that path.
+        //
+        // The scope is therefore the window. `performAccessibilityAudit` is
+        // only available on `XCUIApplication`, not on `XCUIElement`, so the
+        // window boundary is applied as a predicate on each finding's frame
+        // rather than by auditing a subtree — same boundary, expressed the
+        // only way the API allows. Finding (1) lies wholly above the window
+        // (y 0-30 against a window starting at y 31) and is excluded by it.
+        // Finding (2) is *inside* the window, so the frame test does not
+        // reach it and it is ignored by name instead.
+        //
+        // Both exclusions are counted and asserted below, so neither can grow
+        // silently into a place to hide a real finding.
+        //
+        // Read this as a narrowing of ownership, not of coverage. Every view
+        // Covalent draws — sidebar, toolbar, detail pane, sheets — is inside
+        // this window and is still audited, and the ten app-owned findings
+        // this change was made alongside were *fixed*, not excluded: three
+        // unnamed containers were named, and seven contrast failures were
+        // traced to a single cause (`.secondary` is 50% alpha, so it renders
+        // near 3.9:1) and fixed once, in `MacTextStyles.swift`. If you are
+        // here because you want a failing finding to go away, this is not the
+        // precedent for it: exclude only elements that no Covalent source
+        // file can reach, and prove it by pasting the audit's "Path to
+        // element" the way the two entries above do.
+        // ---------------------------------------------------------------
+        let window = app.windows["main"]
+        XCTAssertTrue(window.waitForExistence(timeout: uiTransitionTimeout))
+        let windowFrame = window.frame
+        XCTAssertFalse(windowFrame.isEmpty, "Cannot scope the audit to a window with no frame.")
+
+        var outsideWindow: [String] = []
+        var harnessChrome: [String] = []
         try app.performAccessibilityAudit { issue in
-            let details = "Accessibility audit: \(issue.compactDescription)\n\(issue.detailedDescription)\n\(issue.element?.debugDescription ?? "Element unavailable")"
+            let details = """
+                Accessibility audit: \(issue.compactDescription)
+                \(issue.detailedDescription)
+                \(issue.element?.debugDescription ?? "Element unavailable")
+                """
+            let elementFrame = issue.element?.frame ?? .null
+            let isOutsideWindow = !elementFrame.isNull
+                && !elementFrame.isEmpty
+                && !elementFrame.intersects(windowFrame)
+            let isHarnessChrome = issue.auditType == .parentChild
+                && details.contains("_XCUI:FullScreenWindow")
+
             let attachment = XCTAttachment(string: details)
-            attachment.name = "Accessibility audit element"
+            if isOutsideWindow {
+                outsideWindow.append(issue.compactDescription)
+                attachment.name = "Ignored: outside the main window"
+            } else if isHarnessChrome {
+                harnessChrome.append(issue.compactDescription)
+                attachment.name = "Ignored: AppKit/XCTest window button"
+            } else {
+                attachment.name = "Accessibility audit element"
+            }
             attachment.lifetime = .keepAlways
             self.add(attachment)
-            return false
+            return isOutsideWindow || isHarnessChrome
         }
+
+        // Negative controls. An exclusion nobody has watched fire is
+        // indistinguishable from one that swallows real findings, so both are
+        // pinned to the exact population they were written for. If AppKit or
+        // XCTest stops producing either, these fail and the exclusion gets
+        // deleted rather than quietly outliving its reason — and if a third
+        // one appears, it fails too rather than being absorbed.
+        XCTAssertEqual(
+            outsideWindow.count,
+            1,
+            "Expected exactly the system TouchBar outside the window, got: \(outsideWindow)"
+        )
+        XCTAssertEqual(
+            harnessChrome.count,
+            1,
+            "Expected exactly the window-button ancestry mismatch, got: \(harnessChrome)"
+        )
     }
 
     func testNativeMenuBarQuickActionsAreReachable() throws {

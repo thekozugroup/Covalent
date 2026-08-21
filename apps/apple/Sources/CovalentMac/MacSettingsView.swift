@@ -58,7 +58,7 @@ struct MacSettingsView: View {
                 Toggle("Find devices on the local network", isOn: $lanDiscoveryEnabled)
                 Text("Turning this off stops mDNS advertising and browsing. Manual addresses and Tailscale candidates remain available.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .secondaryLabelStyle()
                 HStack {
                     Spacer()
                     Button("Save Changes") {
@@ -82,7 +82,7 @@ struct MacSettingsView: View {
         settingsSection("Settings transfer", systemImage: "arrow.left.arrow.right") {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Export only the device name, LAN discovery preference, and remembered backup descriptors.")
-                    .foregroundStyle(.secondary)
+                    .secondaryLabelStyle()
                 HStack {
                     Button("Export Settings…") { exportSettings() }
                         .disabled(!model.isAuthorized)
@@ -91,7 +91,7 @@ struct MacSettingsView: View {
                 }
                 Label("Private identity keys and folder permissions never leave this device.", systemImage: "lock.shield")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .secondaryLabelStyle()
             }
         }
     }
@@ -100,7 +100,7 @@ struct MacSettingsView: View {
         settingsSection("Folder access", systemImage: "folder.badge.gearshape") {
             if model.directoryGrants.isEmpty {
                 Text("No persistent folder permissions saved.")
-                    .foregroundStyle(.secondary)
+                    .secondaryLabelStyle()
             } else {
                 VStack(spacing: 0) {
                     ForEach(model.directoryGrants) { grant in
@@ -111,7 +111,7 @@ struct MacSettingsView: View {
                                 Text(grant.displayName)
                                 Text(grant.purpose == .backupSource ? "Backup source" : "Restore destination")
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .secondaryLabelStyle()
                             }
                             Spacer()
                             Button("Remove", role: .destructive) { grantToRemove = grant }
@@ -137,7 +137,7 @@ struct MacSettingsView: View {
                 }
                 Text("Authenticated requests use loopback HTTP or HTTPS. Covalent refuses to send the bearer token to another device over plain HTTP.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .secondaryLabelStyle()
             }
         }
     }
@@ -145,7 +145,7 @@ struct MacSettingsView: View {
     private var platformLimits: some View {
         settingsSection("Background work", systemImage: "clock.arrow.circlepath") {
             Text("The node owns durable checkpoints and resumes interrupted jobs. Keep this Mac awake for long local folder operations; Covalent does not claim unrestricted background execution outside APIs macOS grants.")
-                .foregroundStyle(.secondary)
+                .secondaryLabelStyle()
         }
     }
 

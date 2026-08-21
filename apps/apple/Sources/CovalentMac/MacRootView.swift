@@ -13,26 +13,26 @@ struct MacRootView: View {
                 List(AppSection.allCases, selection: $selectedSection) { section in
                     Label(section.label, systemImage: section.systemImage)
                         .tag(section)
-                        .foregroundStyle(.primary)
+                        .primaryLabelStyle()
                         .accessibilityIdentifier("sidebar.\(section.rawValue)")
                 }
                 .listStyle(.sidebar)
-                // Named on the list itself rather than through an enclosing
-                // `.accessibilityElement(children: .contain)`. That wrapper
-                // named a *nested* group and left the column container
-                // NavigationSplitView synthesizes above it undescribed, which
-                // is what the system audit reports: an unlabelled group at
-                // {{8, 39}, {220, 676}} whose sole child was the labelled
-                // wrapper at {{8, 83}, {220, 632}}. Describing the list
-                // directly keeps the name a screen reader needs without
-                // interposing an opaque container between the column and its
-                // describable contents.
+                // The list vends its own accessibility element (an outline), so
+                // a bare label lands on it. That is separate from the column
+                // container named below: the audit tree shows the outline as a
+                // grandchild of the column group, and both need a description.
                 .accessibilityLabel("Covalent sidebar")
 
                 serviceState
             }
             .navigationTitle("Covalent")
             .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 260)
+            // Outermost point in the column the app can reach. The audit
+            // reports an unnamed group at {{8, 39}, {220, 676}} that holds the
+            // list and the service row, so name a container at that level and
+            // keep both children individually reachable.
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Sections and service status")
         } detail: {
             ZStack(alignment: .bottom) {
                 detail
@@ -43,6 +43,14 @@ struct MacRootView: View {
                 }
             }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.activeTask)
+            // The matching unnamed group on the detail side is at
+            // {{0, 31}, {1024, 692}} with the content scroll view as its only
+            // child. A bare label is tried here rather than an explicit
+            // container: the sidebar's `List` took `.accessibilityLabel` on its
+            // own, so a container that SwiftUI has already collapsed may take
+            // one too, and this reads better than nesting another group inside
+            // one that is already a single-child wrapper.
+            .accessibilityLabel(model.selectedSection.label)
         }
         .toolbar {
             ToolbarItemGroup {
@@ -208,7 +216,7 @@ struct MacRootView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(model.serviceStatusLabel)
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
+                    .primaryLabelStyle()
                 if let status = model.status {
                     // The sidebar draws its text vibrantly, and that blend is
                     // stroke-coverage dependent: on the 1x CI display a regular
@@ -217,9 +225,21 @@ struct MacRootView: View {
                     // even though the colour is `.primary`. The semibold status
                     // line directly above renders #272727 (15:1) in the same
                     // vibrancy context, so match its weight here.
+                    //
+                    // Weight alone was not enough: CI run 32461742319, on the
+                    // commit that introduced it, still reported "Contrast
+                    // failed for Service Ready". Weight changes stroke
+                    // coverage, but the *inputs* to the blend were still a
+                    // translucent tint over a vibrant material and a semantic
+                    // colour AppKit is free to reinterpret. Both are now
+                    // pinned: opaque text (`MacLabelColor`) over an opaque
+                    // backdrop, so what the audit samples is what the app
+                    // declared. The weight stays — it is what proved the
+                    // vibrancy theory, and dropping it would re-open the
+                    // 4.0:1 case if the backdrop ever goes translucent again.
                     Text(status.deviceName)
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.primary)
+                        .primaryLabelStyle()
                         .lineLimit(1)
                 }
             }
@@ -227,7 +247,14 @@ struct MacRootView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .background(serviceColor.opacity(0.12))
+        .background {
+            // Opaque base first, tint second. `serviceColor.opacity(0.12)`
+            // alone let the sidebar material show through, which is what made
+            // the rendered contrast depend on the runner rather than on this
+            // file.
+            Color(nsColor: .windowBackgroundColor)
+            serviceColor.opacity(0.12)
+        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Service \(model.serviceStatusLabel)")
     }
@@ -264,7 +291,7 @@ struct MacActiveTaskBar: View {
                 }
                 Text(statusDetail)
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .secondaryLabelStyle()
             }
             Spacer()
             if task.jobId != nil {

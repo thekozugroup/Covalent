@@ -74,7 +74,7 @@ struct MacBackupsView: View {
                                 Text(snapshot.bytesRead.formatted(.byteCount(style: .file)))
                             }
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .secondaryLabelStyle()
                         }
                         .padding(.vertical, 5)
                         .tag(snapshot.id)
@@ -147,7 +147,7 @@ private struct MacSnapshotDetail: View {
                     .font(.largeTitle.weight(.semibold))
                     .accessibilityAddTraits(.isHeader)
                 Text("Snapshot from \(snapshot.createdAt.formatted(date: .long, time: .shortened))")
-                    .foregroundStyle(.secondary)
+                    .secondaryLabelStyle()
             }
             Spacer()
             Menu {
@@ -186,7 +186,7 @@ private struct MacSnapshotDetail: View {
 
     private func detailMetric(_ title: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(title).font(.caption).secondaryLabelStyle()
             Text(value).font(.title3.weight(.semibold)).monospacedDigit()
         }
         .padding(14)
@@ -201,10 +201,10 @@ private struct MacSnapshotDetail: View {
                 .font(.title2.weight(.semibold))
             if snapshot.selectedProviderIds.isEmpty {
                 Label("Local only", systemImage: "desktopcomputer")
-                    .foregroundStyle(.secondary)
+                    .secondaryLabelStyle()
                 Text("No extra storage device was selected for this snapshot.")
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .secondaryLabelStyle()
             } else {
                 ForEach(snapshot.selectedProviderIds, id: \.self) { providerId in
                     HStack {
@@ -214,7 +214,7 @@ private struct MacSnapshotDetail: View {
                             Text(providerName(providerId))
                             Text(providerId.uuidString)
                                 .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
+                                .secondaryLabelStyle()
                                 .lineLimit(1)
                         }
                         Spacer()
@@ -238,7 +238,7 @@ private struct MacSnapshotDetail: View {
             .disabled(model.activeTask != nil)
             Text("Adding or removing a device changes only the next snapshot. Existing snapshots retain their original encrypted copies.")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .secondaryLabelStyle()
         }
     }
 
@@ -247,7 +247,7 @@ private struct MacSnapshotDetail: View {
             Text("Recovery")
                 .font(.title2.weight(.semibold))
             Text("Preview every destination and conflict before Covalent writes anything.")
-                .foregroundStyle(.secondary)
+                .secondaryLabelStyle()
             HStack {
                 Button("Preview Restore…") { onRestore() }
                     .buttonStyle(.borderedProminent)
@@ -276,7 +276,7 @@ private struct MacSnapshotDetail: View {
 
     private func detailRow(_ label: String, _ value: String) -> some View {
         GridRow {
-            Text(label).foregroundStyle(.secondary)
+            Text(label).secondaryLabelStyle()
             Text(value).monospaced().lineLimit(1).truncationMode(.middle)
         }
     }
@@ -301,7 +301,7 @@ struct MacRestoreSetupView: View {
                 Text("Restore \(snapshot.displayName)")
                     .font(.title.weight(.semibold))
                 Text("Choose an authorized destination. Covalent will create a signed, no-write preview first.")
-                    .foregroundStyle(.secondary)
+                    .secondaryLabelStyle()
             }
 
             Form {
@@ -322,7 +322,7 @@ struct MacRestoreSetupView: View {
                 }
                 Text(conflictPolicy.safetyDetail)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .secondaryLabelStyle()
             }
             .formStyle(.grouped)
 
@@ -330,7 +330,7 @@ struct MacRestoreSetupView: View {
                 "Covalent inventories this folder before preview and again immediately before writing. Any change stops the restore.",
                 systemImage: "checkmark.shield"
             )
-            .foregroundStyle(.secondary)
+            .secondaryLabelStyle()
             .font(.subheadline)
 
             HStack {
@@ -419,7 +419,7 @@ struct MacRestorePreviewView: View {
                         Text("Restore Preview")
                             .font(.title.weight(.semibold))
                         Text("No files have been written. The node signed the exact content and actions for local extraction.")
-                            .foregroundStyle(.secondary)
+                            .secondaryLabelStyle()
                     }
                     Spacer()
                     Text("\(context.plan.entries.count) items")
@@ -450,7 +450,7 @@ struct MacRestorePreviewView: View {
                 } else {
                     Label("Restore is confined to \(context.destinationDisplayName)", systemImage: "checkmark.shield")
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .secondaryLabelStyle()
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -501,7 +501,7 @@ struct MacRestoreResultView: View {
                 Text("Restore Complete")
                     .font(.title.weight(.semibold))
                 Text("Covalent restored \(result.filesRestored) files and wrote \(result.bytesWritten.formatted(.byteCount(style: .file))).")
-                    .foregroundStyle(.secondary)
+                    .secondaryLabelStyle()
                     .multilineTextAlignment(.center)
             }
             HStack(spacing: 22) {
@@ -524,7 +524,7 @@ struct MacRestoreResultView: View {
     private func resultMetric(_ label: String, _ value: Int) -> some View {
         VStack(spacing: 3) {
             Text(value.formatted()).font(.title2.weight(.semibold)).monospacedDigit()
-            Text(label).font(.caption).foregroundStyle(.secondary)
+            Text(label).font(.caption).secondaryLabelStyle()
         }
         .frame(minWidth: 80)
         .accessibilityElement(children: .combine)

@@ -27,7 +27,7 @@ struct MacConnectionView: View {
                     Text(model.phase == .ready ? "Service Connection" : "Connect Covalent")
                         .font(.title.weight(.semibold))
                     Text("The API token stays in this Mac's Keychain and is never included in settings exports.")
-                        .foregroundStyle(.secondary)
+                        .secondaryLabelStyle()
                 }
                 Spacer()
             }
@@ -55,7 +55,7 @@ struct MacConnectionView: View {
                     HStack {
                         Text("Find it in the node data directory as local-api-token.")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .secondaryLabelStyle()
                         Spacer()
                         Button("Choose Token File…") { chooseTokenFile() }
                     }
@@ -66,7 +66,7 @@ struct MacConnectionView: View {
                     Toggle("Find devices on the local network", isOn: $lanDiscoveryEnabled)
                     Text("Discovery advertises only a temporary service ID, protocol range, and port. It never advertises backup names or paths.")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .secondaryLabelStyle()
                 }
                 Section("HTTPS trust") {
                     HStack {
@@ -74,7 +74,7 @@ struct MacConnectionView: View {
                             Text(trustedCertificateName ?? "System trust store")
                             Text("For the Docker or Unraid package, choose Caddy's exact root.crt. Hostname verification remains required.")
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .secondaryLabelStyle()
                         }
                         Spacer()
                         if trustedCertificateDER != nil {
@@ -182,7 +182,7 @@ struct MacNewBackupView: View {
                 Text(existingBackupId == nil ? "New Backup" : "Add Snapshot")
                     .font(.title.weight(.semibold))
                 Text("The local node encrypts and checkpoints this folder. Extra copies go only to devices you select below.")
-                    .foregroundStyle(.secondary)
+                    .secondaryLabelStyle()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(24)
@@ -208,7 +208,7 @@ struct MacNewBackupView: View {
                     HStack {
                         Text("Folder access is stored as a security-scoped bookmark.")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .secondaryLabelStyle()
                         Spacer()
                         Button("Choose Folder…") { chooseFolder() }
                     }
@@ -219,7 +219,7 @@ struct MacNewBackupView: View {
                         Label("Local only", systemImage: "desktopcomputer")
                         Text("Pair and connect a storage provider to choose an extra copy. Local-only backups remain fully supported.")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .secondaryLabelStyle()
                     } else {
                         ForEach(model.providers) { provider in
                             Toggle(isOn: providerSelection(provider.peerId)) {
@@ -227,7 +227,7 @@ struct MacNewBackupView: View {
                                     Text(provider.address)
                                     Text(provider.peerId.uuidString)
                                         .font(.caption.monospaced())
-                                        .foregroundStyle(.secondary)
+                                        .secondaryLabelStyle()
                                         .lineLimit(1)
                                     Text("Fresh reachable capacity unavailable — cannot select")
                                         .font(.caption)
@@ -238,7 +238,7 @@ struct MacNewBackupView: View {
                         }
                         Text("This exact set is sent as replica intent. Covalent never substitutes another device.")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .secondaryLabelStyle()
                     }
                 }
 
@@ -256,7 +256,7 @@ struct MacNewBackupView: View {
                     }
                     Text("Every readable item under the selected folder is included. An unreadable or unsupported item stops the backup before commit.")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .secondaryLabelStyle()
                     if existingBackupId != nil {
                         replicaImpact
                     }
@@ -350,7 +350,7 @@ struct MacNewBackupView: View {
         Divider()
         Text("Replica changes apply to this new snapshot only. Existing snapshots keep their original copies.")
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .secondaryLabelStyle()
         if added.isEmpty && removed.isEmpty {
             Label("Replica set unchanged", systemImage: "checkmark.circle")
         } else {
@@ -403,7 +403,7 @@ struct MacSettingsImportView: View {
                 Text("Import Device Settings")
                     .font(.title.weight(.semibold))
                 Text("This replaces the device name, discovery preference, and remembered backup descriptors after confirmation.")
-                    .foregroundStyle(.secondary)
+                    .secondaryLabelStyle()
             }
 
             if let preview {
@@ -414,7 +414,7 @@ struct MacSettingsImportView: View {
                 }
                 Label("Identity keys, backup keys, provider credentials, and folder grants are never imported by this workflow.", systemImage: "checkmark.shield")
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .secondaryLabelStyle()
             } else {
                 ContentUnavailableView {
                     Label("Choose a settings file", systemImage: "doc.badge.arrow.up")

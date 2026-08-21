@@ -51,7 +51,7 @@ struct MacDevicesView: View {
                     .accessibilityAddTraits(.isHeader)
                 Text("Discovery is only a hint. Trust starts after both devices compare the same code.")
                     .font(.title3)
-                    .foregroundStyle(.secondary)
+                    .secondaryLabelStyle()
             }
             Spacer()
             Button("Find Devices") { Task { await model.refreshDiscovery() } }
@@ -92,7 +92,7 @@ struct MacDevicesView: View {
                     : "LAN devices appear automatically. Tailscale does not provide local device enumeration, so enter the other device's MagicDNS hostname or IP once."
             )
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .secondaryLabelStyle()
             if model.startingPairingAddress != nil {
                 ProgressView("Contacting Tailscale device…")
                     .controlSize(.small)
@@ -132,7 +132,7 @@ struct MacDevicesView: View {
                                 .textSelection(.enabled)
                             Text("Untrusted service \(candidate.serviceId)")
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .secondaryLabelStyle()
                                 .lineLimit(1)
                             Button("Pair with This Device") {
                                 Task { await model.startNetworkPairing(candidate: candidate) }
@@ -185,7 +185,7 @@ struct MacDevicesView: View {
                                 Text(provider.address).font(.headline)
                                 Text("Certificate \(provider.certificateFingerprint.prefix(16))…")
                                     .font(.caption.monospaced())
-                                    .foregroundStyle(.secondary)
+                                    .secondaryLabelStyle()
                             }
                             Spacer()
                             Label("Connected", systemImage: "checkmark.circle.fill")
@@ -225,7 +225,7 @@ struct MacDevicesView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Use mutually signed JSON only when direct network pairing is unavailable or you are recovering an older node.")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .secondaryLabelStyle()
                     Button("Offline Pairing with Signed JSON…") { model.requestManualPairing() }
                         .accessibilityIdentifier("devices.offlinePairing")
                     Button("Import Signed Transport JSON…") { showingConnectProvider = true }
@@ -266,7 +266,7 @@ struct MacProviderConnectionView: View {
                 Text("Import Signed Provider Transport")
                     .font(.title.weight(.semibold))
                 Text("Paste the complete transport object from a mutually finalized pairing. Loose fields are never accepted.")
-                    .foregroundStyle(.secondary)
+                    .secondaryLabelStyle()
             }
             Form {
                 VStack(alignment: .leading) {
@@ -278,7 +278,7 @@ struct MacProviderConnectionView: View {
                 }
                 Text("The node exact-compares the peer ID, name, address, certificate, and SHA-256 pin against the mutually signed pairing transcript.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .secondaryLabelStyle()
             }
             .formStyle(.grouped)
             HStack {
@@ -331,7 +331,7 @@ struct MacPairingView: View {
                 Text("Secure Pairing")
                     .font(.title.weight(.semibold))
                 Text("Transfer the signed JSON through AirDrop, Messages, or another channel, then compare the code on both physical devices.")
-                    .foregroundStyle(.secondary)
+                    .secondaryLabelStyle()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(24)
@@ -368,7 +368,7 @@ struct MacPairingView: View {
             pairingStep(1, "Create a 10-minute invitation") {
                 Text("Covalent signs this Mac's reachable transport automatically. No address or certificate entry is required.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .secondaryLabelStyle()
                 Button("Create Invitation") {
                     isWorking = true
                     Task {
@@ -413,7 +413,7 @@ struct MacPairingView: View {
             pairingStep(3, "Finalize mutual trust") {
                 Text("After the other device signs the same code, paste its returned session above.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .secondaryLabelStyle()
                 Button("Finalize Pairing") { finalize(asInviter: true) }
                     .buttonStyle(.borderedProminent)
                     .disabled(!sessionIsMutuallySigned || isWorking)
@@ -477,7 +477,7 @@ struct MacPairingView: View {
                         transferBox(title: "Send this signed session to the inviter", text: sessionJSON)
                         Text("Paste the inviter's returned, mutually signed session into the box below.")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .secondaryLabelStyle()
                         transferEditor(text: $sessionJSON, prompt: "Paste final signed session")
                     }
                 }
@@ -516,7 +516,7 @@ struct MacPairingView: View {
             HStack {
                 Text("Signed protocol 1 transfer · \(text.utf8.count.formatted()) bytes")
                     .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
+                    .secondaryLabelStyle()
                 Spacer()
                 ShareLink(item: text) { Label("Share", systemImage: "square.and.arrow.up") }
                 Button {
@@ -540,7 +540,7 @@ struct MacPairingView: View {
             if text.wrappedValue.isEmpty {
                 Text(prompt)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .secondaryLabelStyle()
                     .padding(.horizontal, 6)
                     .padding(.vertical, 8)
                     .allowsHitTesting(false)
@@ -552,7 +552,7 @@ struct MacPairingView: View {
         VStack(spacing: 5) {
             Text("Comparison code")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .secondaryLabelStyle()
             Text(code)
                 .font(.system(.title2, design: .monospaced, weight: .semibold))
                 .textSelection(.enabled)
@@ -599,7 +599,7 @@ struct MacPairingView: View {
         HStack {
             Label("Nearby advertisements remain untrusted until finalization.", systemImage: "lock.shield")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .secondaryLabelStyle()
             Spacer()
             Button("Close") {
                 // Keep the item-backed sheet binding authoritative. Relying on
@@ -622,13 +622,13 @@ struct MacPairingView: View {
                 .foregroundStyle(.green)
             Text("Pairing Complete").font(.title.weight(.semibold))
             Text("\(peer.displayName) is trusted with exactly the roles both devices approved.")
-                .foregroundStyle(.secondary)
+                .secondaryLabelStyle()
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 480)
             if peer.roles.contains(.storageProvider), let transport = confirmation.peerTransport {
                 Text("Add this signed device now, then choose it only for backups that should keep an extra copy.")
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .secondaryLabelStyle()
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 520)
                 Button("Use as Backup Device") {
@@ -647,7 +647,7 @@ struct MacPairingView: View {
                     ? "This older pairing did not include signed transport details. Use Advanced recovery from Devices."
                     : "Storage access was not granted, so this device will not appear as a backup replica.")
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .secondaryLabelStyle()
                     .multilineTextAlignment(.center)
                 Button("Done") { dismiss() }
                     .buttonStyle(.borderedProminent)
@@ -699,14 +699,14 @@ struct MacNetworkPairingView: View {
                 .accessibilityAddTraits(.isHeader)
             Text("Pairing lets either device store encrypted backup copies for the other. Nothing is copied now—you choose \(current.peerName) separately when creating a backup.")
                 .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
+                .secondaryLabelStyle()
                 .frame(maxWidth: 440)
 
             if current.state != .complete && current.state != .failed {
                 VStack(spacing: 6) {
                     Text("Confirm this code on both devices")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .secondaryLabelStyle()
                     Text(current.authenticationString)
                         .font(.system(.title, design: .monospaced, weight: .semibold))
                         .textSelection(.enabled)
