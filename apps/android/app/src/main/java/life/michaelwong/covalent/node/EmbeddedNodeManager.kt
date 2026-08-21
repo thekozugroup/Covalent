@@ -3,7 +3,6 @@ package life.michaelwong.covalent.node
 import android.Manifest
 import android.content.Context
 import android.content.Intent
-import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.net.wifi.WifiManager
 import android.os.Build
@@ -39,13 +38,20 @@ data class EmbeddedProviderState(
  *
  * The service is only started after [enable]. Until Rust can consume a Keystore-backed
  * identity protector, start remains fail-closed and external-node mode stays available.
+ *
+ * ## Constructing this before the user's first unlock
+ *
+ * Everything this class persists lives in credential-encrypted storage, which Android
+ * seals until the user's first unlock after a reboot. Constructing it in that window used
+ * to throw out of the constructor and, from `Application.onCreate`, killed the process.
+ * It is now safe to construct at any point in the boot sequence: it reports
+ * [KeyProtectionLevel.UNAVAILABLE], refuses to enable, refuses to start, and says it is
+ * waiting for the unlock. See [DirectBoot] for why none of this state is moved to
+ * device-protected storage instead.
  */
 class EmbeddedNodeManager(context: Context) {
     private val applicationContext = context.applicationContext
-    private val preferences: SharedPreferences = applicationContext.getSharedPreferences(
-        PREFERENCES_NAME,
-        Context.MODE_PRIVATE,
-    )
+    private val preferences = CredentialProtectedPreferences(applicationContext, PREFERENCES_NAME)
     private val protector = IdentityKeyProtector()
     private val localStore = LocalEmbeddedNodeStore(applicationContext, protector)
     private var multicastLock: WifiManager.MulticastLock? = null
@@ -68,6 +74,20 @@ class EmbeddedNodeManager(context: Context) {
     }
 
     fun enable(maxBytes: Long, keepFreeBytes: Long, lanDiscoveryRequested: Boolean = false) {
+        // Ahead of the key-protection gate on purpose: while storage is sealed the gate
+        // reports UNAVAILABLE, and answering "this phone cannot protect its identity" to
+        // someone whose phone simply has not been unlocked yet would be permanent-sounding
+        // and wrong.
+        if (!preferences.readable) {
+            publish(
+                enabled = false,
+                running = false,
+                message = LOCKED_STORAGE_MESSAGE,
+                reservedBytes = 0L,
+                availableBytes = 0L,
+            )
+            return
+        }
         if (!keyProtectionAvailable()) {
             publish(
                 enabled = false,
@@ -117,8 +137,16 @@ class EmbeddedNodeManager(context: Context) {
         )
     }
 
-    /** Reconnects only an explicitly enabled local provider after process/service recreation. */
+    /**
+     * Reconnects only an explicitly enabled local provider after process/service recreation.
+     *
+     * Does nothing while credential-encrypted storage is sealed, because whether the
+     * provider is enabled is unknowable then — and starting it would fail anyway, since
+     * both its data directory and its API token envelope are sealed with it. Callers reach
+     * this through [DirectBoot.whenUserUnlocked], which retries once the user unlocks.
+     */
     fun reconnectIfEnabled() {
+        if (!preferences.readable) return
         if (preferences.getBoolean(KEY_ENABLED, false)) startService()
     }
 
@@ -183,6 +211,8 @@ class EmbeddedNodeManager(context: Context) {
     }
 
     private fun serviceStartSafely(): NativeNodeResponse {
+        // First, so a sealed volume is never mistaken for "the user turned this off".
+        if (!preferences.readable) return unavailable(LOCKED_STORAGE_MESSAGE)
         if (!preferences.getBoolean(KEY_ENABLED, false)) {
             return NativeNodeResponse(
                 ok = true,
@@ -361,7 +391,30 @@ class EmbeddedNodeManager(context: Context) {
         state = "stopped",
     )
 
+    /**
+     * What the provider reports before this user's first unlock.
+     *
+     * Every field is the fail-closed answer rather than a persisted one, because none of
+     * the persisted values can be read yet. Nothing is written back: the same sealed
+     * storage that cannot be read cannot be corrected either.
+     */
+    private fun lockedState(): EmbeddedProviderState = EmbeddedProviderState(
+        supported = false,
+        keyProtectionAvailable = false,
+        keyProtectionLevel = KeyProtectionLevel.UNAVAILABLE,
+        enabled = false,
+        running = false,
+        statusMessage = LOCKED_STORAGE_MESSAGE,
+        usedBytes = 0L,
+        reservedBytes = 0L,
+        availableBytes = 0L,
+        maxBytes = 0L,
+        keepFreeBytes = 0L,
+        lanDiscoveryRequested = false,
+    )
+
     private fun readPersistedState(): EmbeddedProviderState {
+        if (!preferences.readable) return lockedState()
         val enabled = preferences.getBoolean(KEY_ENABLED, false)
         return EmbeddedProviderState(
             supported = secureProviderSupported(),
@@ -416,6 +469,16 @@ class EmbeddedNodeManager(context: Context) {
         const val KEY_ACTIVE_MODE = "active_mode"
         const val KEY_RUNNING = "running"
         const val KEY_STATUS = "status"
+
+        /**
+         * Said whenever credential-encrypted storage is still sealed.
+         *
+         * Deliberately distinct from "this phone cannot protect its Covalent identity",
+         * which describes a device that will never be able to store backups. This one
+         * describes a wait that ends by itself.
+         */
+        const val LOCKED_STORAGE_MESSAGE =
+            "Storing backups on this phone starts again once you unlock it after a restart."
         const val MIN_PROVIDER_BYTES = 512L * 1024L * 1024L
         const val DEFAULT_MAX_BYTES = 2L * 1024L * 1024L * 1024L
         const val DEFAULT_KEEP_FREE_BYTES = 512L * 1024L * 1024L
@@ -443,8 +506,19 @@ class EmbeddedNodeManager(context: Context) {
      * identity.  This is a probe, not an assumption: [IdentityKeyProtector] creates the
      * key, seals and opens a canary through it, and reports the level the platform
      * records for the key that actually worked.
+     *
+     * Before the user's first unlock this reports [KeyProtectionLevel.UNAVAILABLE] without
+     * probing at all. Android Keystore keys that are not auth-bound — and this one is not,
+     * so that unattended backups can run with the screen locked — are generally usable in
+     * that window, so a probe would likely succeed. It is skipped anyway: succeeding would
+     * *mint the identity-protecting key during Direct Boot*, a boot state none of the
+     * surrounding key-lifecycle reasoning covers, and the answer buys nothing because the
+     * sealed data directory and sealed token envelope stop the node regardless. The
+     * refusal is not cached, so the real measurement happens on the first call after
+     * unlock.
      */
-    fun keyProtectionLevel(): KeyProtectionLevel = protector.protection()
+    fun keyProtectionLevel(): KeyProtectionLevel =
+        if (!preferences.readable) KeyProtectionLevel.UNAVAILABLE else protector.protection()
 
     /**
      * Fail-closed admission for the on-phone node.  False only when this device cannot
@@ -481,9 +555,14 @@ enum class NodeMode(val wireValue: String) {
  * Keystore key was replaced, wiped, or invalidated — reads as an empty token, which makes
  * the caller mint and seal a fresh one.  See [IdentityKeyProtector] for the full key
  * lifecycle, including what happens on device loss, uninstall, and factory reset.
+ *
+ * The file stays credential-encrypted, and reads through [CredentialProtectedPreferences]
+ * report an empty credential — never a crash — while the volume is sealed.  The sealed
+ * envelope must not follow the enabled flag into device-protected storage: that storage is
+ * readable from a locked phone, which is the one place this credential must never be.
  */
 private class LocalEmbeddedNodeStore(context: Context, private val protector: IdentityKeyProtector) {
-    private val preferences = context.getSharedPreferences("covalent_embedded_node_credentials", Context.MODE_PRIVATE)
+    private val preferences = CredentialProtectedPreferences(context, "covalent_embedded_node_credentials")
 
     var baseUrl: String
         get() = preferences.getString("base_url", "") ?: ""

@@ -13,6 +13,7 @@ import life.michaelwong.covalent.data.SecureNodeStore
 import life.michaelwong.covalent.model.TransferState
 import life.michaelwong.covalent.model.NodeConnection
 import life.michaelwong.covalent.node.ActiveNodeConnectionResolver
+import life.michaelwong.covalent.node.DirectBoot
 import life.michaelwong.covalent.ui.nodeFailureMessage
 
 internal enum class TransferOutcome {
@@ -27,7 +28,7 @@ internal object TransferExecution {
     private val GENERIC_FAILURE = R.string.error_node_action_failed
 
     fun run(context: Context, jobId: String): TransferOutcome {
-        val store = SecureNodeStore(context)
+        val store = openStoreOrDefer(context, jobId) ?: return TransferOutcome.RETRY
         val pending = store.pending(jobId) ?: return TransferOutcome.FAILURE
         val connection = ActiveNodeConnectionResolver(context).activeConnection(store)
         if (connection == null) {
@@ -135,6 +136,32 @@ internal object TransferExecution {
         } catch (error: Exception) {
             failUnlessStopped(store, jobId, nodeFailureMessage(context, error, GENERIC_FAILURE), true)
             TransferOutcome.RETRY
+        }
+    }
+
+    /**
+     * Opens the encrypted transfer store, or returns null to defer this run.
+     *
+     * A scheduled backup is precisely the thing that fires while a phone sits locked, and
+     * between a reboot and the user's first unlock the store's credential-encrypted
+     * preference file throws instead of opening. Null means "defer": the caller returns
+     * [TransferOutcome.RETRY], the platform reschedules, and the request stays queued and
+     * visible in the transfers list. Nothing is skipped and no record is rewritten —
+     * writing a failure detail would itself need the sealed store.
+     *
+     * Only the [IllegalStateException] the platform raises for sealed storage becomes a
+     * deferral. Anything else keeps propagating, so a genuine fault is never disguised as
+     * a locked device.
+     */
+    private fun openStoreOrDefer(context: Context, jobId: String): SecureNodeStore? {
+        if (!DirectBoot.isUserUnlocked(context)) {
+            Log.i(LOG_TAG, "Transfer $jobId deferred until this user unlocks the device")
+            return null
+        }
+        return runCatching { SecureNodeStore(context) }.getOrElse { failure ->
+            if (failure !is IllegalStateException) throw failure
+            Log.i(LOG_TAG, "Transfer $jobId deferred: encrypted storage is not readable yet")
+            null
         }
     }
 
