@@ -18,19 +18,19 @@ struct IOSConnectionView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Service address", text: $serviceAddress, prompt: Text("https://node.example:8787"))
+                    TextField("Service address", text: $serviceAddress, prompt: Text("https://covalent.local:8443"))
                         .textInputAutocapitalization(.never)
                         .keyboardType(.URL)
                         .textContentType(.URL)
                         .accessibilityIdentifier("connection.address")
-                    SecureField("Local API token", text: $token)
+                    SecureField("Server access token", text: $token)
                         .textInputAutocapitalization(.never)
                         .textContentType(.password)
                         .accessibilityIdentifier("connection.token")
                 } header: {
-                    Text("Node connection")
+                    Text("Backup server")
                 } footer: {
-                    Text("Loopback HTTP is allowed for a node on this device or Simulator. Connections to another device must use HTTPS before Covalent sends the bearer token.")
+                    Text("Your access token is only ever sent over an encrypted connection. An unencrypted address is accepted only when the backup server runs on this device.")
                 }
 
                 Section("This device") {
@@ -41,7 +41,7 @@ struct IOSConnectionView: View {
 
                 Section {
                     LabeledContent("Trust", value: trustedCertificateName ?? "System certificates")
-                    Button("Choose exact CA certificate…") { isChoosingCertificate = true }
+                    Button("Choose security certificate…") { isChoosingCertificate = true }
                     if trustedCertificateDER != nil {
                         Button("Use system certificates", role: .destructive) {
                             trustedCertificateDER = nil
@@ -156,13 +156,13 @@ struct IOSNewBackupView: View {
                 } header: {
                     Text("What to protect")
                 } footer: {
-                    Text("Covalent stores a persistent security-scoped bookmark only for the folder you choose.")
+                    Text("Covalent remembers only the folder you choose, and you can remove that access in Settings.")
                 }
 
                 Section {
                     if model.providers.isEmpty {
                         Label("Local only", systemImage: "iphone")
-                        Text("Pair and connect a storage provider before selecting an extra copy.")
+                        Text("Pair and connect a storage device before selecting an extra copy.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {
@@ -174,7 +174,7 @@ struct IOSNewBackupView: View {
                                         .font(.caption.monospaced())
                                         .foregroundStyle(.secondary)
                                         .lineLimit(1)
-                                    Text("Fresh reachable capacity unavailable — cannot select")
+                                    Text("Free space could not be checked just now — this device cannot be selected")
                                         .font(.caption)
                                         .foregroundStyle(.red)
                                 }
@@ -185,7 +185,7 @@ struct IOSNewBackupView: View {
                 } header: {
                     Text("Exact extra copies")
                 } footer: {
-                    Text("Only this exact set is sent to the node. Covalent never substitutes another provider.")
+                    Text("Covalent sends copies to exactly the devices you selected. It never substitutes another device.")
                 }
 
                 Section("Review before backup") {
@@ -194,13 +194,13 @@ struct IOSNewBackupView: View {
                     LabeledContent("Access", value: "Selected folder only")
                     LabeledContent("Copies", value: copySummary)
                     if selectedProviderIds.isEmpty {
-                        Label("This snapshot will stay on this device only.", systemImage: "iphone")
+                        Label("This backup will stay on this device only.", systemImage: "iphone")
                     } else {
                         ForEach(selectedProviders) { provider in
                             Label(provider.address, systemImage: "server.rack")
                         }
                     }
-                    Text("Every readable item under the selected folder is included. An unreadable or unsupported item stops the backup before commit.")
+                    Text("Every readable item under the selected folder is included. An unreadable or unsupported item stops the backup before anything is saved.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     if existingBackupId != nil {
@@ -208,7 +208,7 @@ struct IOSNewBackupView: View {
                     }
                 }
             }
-            .navigationTitle(existingBackupId == nil ? "New Backup" : "Add Snapshot")
+            .navigationTitle(existingBackupId == nil ? "New Backup" : "Add to Backup")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -221,7 +221,7 @@ struct IOSNewBackupView: View {
                 }
             }
             .overlay {
-                if isCreating { ProgressView("Creating encrypted snapshot…").padding().background(.background, in: RoundedRectangle(cornerRadius: 12)) }
+                if isCreating { ProgressView("Creating encrypted backup…").padding().background(.background, in: RoundedRectangle(cornerRadius: 12)) }
             }
             .fileImporter(
                 isPresented: $isChoosingFolder,
@@ -294,18 +294,18 @@ struct IOSNewBackupView: View {
         )
         let added = selectedProviderIds.subtracting(previous)
         let removed = previous.subtracting(selectedProviderIds)
-        Text("Replica changes apply to this new snapshot only. Existing snapshots keep their original copies.")
+        Text("Copy changes apply to this new backup only. Existing backups keep their original copies.")
             .font(.caption)
             .foregroundStyle(.secondary)
         if added.isEmpty && removed.isEmpty {
-            Label("Replica set unchanged", systemImage: "checkmark.circle")
+            Label("Extra copies unchanged", systemImage: "checkmark.circle")
         } else {
             if !added.isEmpty {
                 Label("Add \(added.count) extra \(added.count == 1 ? "copy" : "copies")", systemImage: "plus.circle")
                     .foregroundStyle(.green)
             }
             if !removed.isEmpty {
-                Label("Skip \(removed.count) previous \(removed.count == 1 ? "device" : "devices") for this snapshot", systemImage: "minus.circle")
+                Label("Skip \(removed.count) previous \(removed.count == 1 ? "device" : "devices") for this backup", systemImage: "minus.circle")
                     .foregroundStyle(.orange)
             }
         }
@@ -365,12 +365,12 @@ struct IOSSettingsImportView: View {
                         LabeledContent("Remembered backups", value: preview.rememberedBackups.count.formatted())
                     }
                     Section {
-                        Label("Identity keys, backup keys, API tokens, provider credentials, and folder grants are not imported.", systemImage: "checkmark.shield")
+                        Label("Identity keys, backup keys, access tokens, storage device credentials, and folder permissions are not imported.", systemImage: "checkmark.shield")
                             .foregroundStyle(.secondary)
                     }
                 } else {
                     ContentUnavailableView {
-                        Label("Choose settings JSON", systemImage: "doc.badge.arrow.up")
+                        Label("Choose settings file", systemImage: "doc.badge.arrow.up")
                     } description: {
                         Text("Covalent validates the complete versioned contract before enabling replacement.")
                     } actions: {

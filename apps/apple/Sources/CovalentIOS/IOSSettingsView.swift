@@ -45,7 +45,7 @@ struct IOSSettingsView: View {
             } header: {
                 Text("Settings transfer")
             } footer: {
-                Text("Transfers contain only the device name, discovery preference, and remembered backup descriptors.")
+                Text("Transfers contain only the device name, discovery preference, and remembered backup list.")
             }
 
             Section {
@@ -73,7 +73,7 @@ struct IOSSettingsView: View {
             } header: {
                 Text("Folder access")
             } footer: {
-                Text("Removing access does not delete any encrypted snapshot. Future work with that folder asks you to choose it again.")
+                Text("Removing access does not delete any encrypted backup. Future work with that folder asks you to choose it again.")
             }
 
             Section {
@@ -84,16 +84,16 @@ struct IOSSettingsView: View {
                     Task { await model.disconnect() }
                 }
             } header: {
-                Text("Node service")
+                Text("Backup server")
             } footer: {
-                Text("Covalent refuses to send the bearer token to another device over plain HTTP.")
+                Text("Your access token is only ever sent over an encrypted connection.")
             }
 
             Section {
-                Label("Tier 2 selected-folder support", systemImage: "iphone")
-                Text("iOS grants only finite background time. The app requests that allowance for backup, verify, and restore work, while the node owns durable job checkpoints. Reopen Covalent if the system suspends it.")
+                Label("Selected-folder backups", systemImage: "iphone")
+                Text("iOS allows only a limited amount of background time. Covalent asks for it when backing up, checking, or restoring, and your backup server saves progress along the way. Reopen Covalent if the system suspends it.")
                     .foregroundStyle(.secondary)
-                Text("Covalent does not claim full-device backup or unrestricted continuous execution.")
+                Text("Covalent does not back up your whole device and does not run continuously in the background.")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
             } header: {

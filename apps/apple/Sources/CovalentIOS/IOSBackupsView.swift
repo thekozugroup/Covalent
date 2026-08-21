@@ -8,9 +8,9 @@ struct IOSBackupsView: View {
         Group {
             if model.snapshots.isEmpty {
                 ContentUnavailableView {
-                    Label("No snapshots yet", systemImage: "externaldrive.badge.plus")
+                    Label("No backups yet", systemImage: "externaldrive.badge.plus")
                 } description: {
-                    Text("A backup appears here after the node commits its encrypted snapshot.")
+                    Text("A backup appears here once your backup server finishes encrypting and saving it.")
                 } actions: {
                     Button("New Backup") { model.requestNewBackup() }
                         .buttonStyle(.borderedProminent)
@@ -110,10 +110,10 @@ private struct IOSBackupDetailView: View {
                         LabeledContent("Deduplicated", value: snapshot.chunksDeduplicated.formatted())
                     }
 
-                    Section("Replica placement") {
+                    Section("Where copies are kept") {
                         if snapshot.selectedProviderIds.isEmpty {
                             Label("Local only", systemImage: "iphone")
-                            Text("No extra storage provider was selected for this snapshot.")
+                            Text("No extra storage device was selected for this backup.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         } else {
@@ -127,11 +127,11 @@ private struct IOSBackupDetailView: View {
                                 }
                             }
                         }
-                        Button("Change Replicas for Next Snapshot…") {
+                        Button("Change Extra Copies for Next Backup…") {
                             model.requestNewBackup(existingBackupId: snapshot.backupId)
                         }
                         .disabled(model.activeTask != nil)
-                        Text("Changes apply only to the next snapshot. Existing snapshots retain their original encrypted copies.")
+                        Text("Changes apply only to the next backup. Existing backups keep their original encrypted copies.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -139,11 +139,11 @@ private struct IOSBackupDetailView: View {
                     if snapshot.degradedFailures > 0 || snapshot.integrity == .corrupt {
                         Section {
                             Label(
-                                snapshot.integrity == .corrupt ? "Snapshot needs repair" : "A selected provider was unavailable",
+                                snapshot.integrity == .corrupt ? "Backup needs repair" : "A selected device was unavailable",
                                 systemImage: "exclamationmark.triangle.fill"
                             )
                             .foregroundStyle(.orange)
-                            Text("Repair uses only intact copies from explicitly selected, authorized providers.")
+                            Text("Repair uses only intact copies from the storage devices you selected and approved.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -160,7 +160,7 @@ private struct IOSBackupDetailView: View {
                         Button {
                             verify(snapshot)
                         } label: {
-                            Label("Verify Snapshot", systemImage: "checkmark.shield")
+                            Label("Check Backup", systemImage: "checkmark.shield")
                         }
                         .disabled(model.activeTask != nil)
 
@@ -170,17 +170,17 @@ private struct IOSBackupDetailView: View {
 
                     Section("Technical details") {
                         LabeledContent("Backup ID", value: snapshot.backupId.uuidString)
-                        LabeledContent("Snapshot ID", value: snapshot.snapshotId)
+                        LabeledContent("Backup ID", value: snapshot.snapshotId)
                     }
                     .font(.caption)
                 }
                 .navigationTitle(snapshot.displayName)
                 .navigationBarTitleDisplayMode(.inline)
-                .confirmationDialog("Repair this snapshot?", isPresented: $showingRepairConfirmation) {
+                .confirmationDialog("Repair this backup?", isPresented: $showingRepairConfirmation) {
                     Button("Verify and Repair") { verify(snapshot, repair: true) }
                     Button("Cancel", role: .cancel) {}
                 } message: {
-                    Text("Covalent will use only intact copies from providers selected for this snapshot.")
+                    Text("Covalent will use only intact copies from the storage devices selected for this backup.")
                 }
             } else {
                 ContentUnavailableView("Backup unavailable", systemImage: "externaldrive.badge.xmark")
@@ -193,7 +193,7 @@ private struct IOSBackupDetailView: View {
     }
 
     private func providerName(_ id: UUID) -> String {
-        model.providers.first(where: { $0.peerId == id })?.address ?? "Offline selected provider"
+        model.providers.first(where: { $0.peerId == id })?.address ?? "Selected device is offline"
     }
 
     private func providerStatus(_ id: UUID) -> String {
@@ -235,7 +235,7 @@ struct IOSRestoreSetupView: View {
                 } header: {
                     Text("Authorized destination")
                 } footer: {
-                    Text("The node creates a signed, no-write preview before any restore begins.")
+                    Text("Your backup server creates a signed preview, which writes nothing, before any restore begins.")
                 }
 
                 Section("If a file already exists") {
@@ -251,7 +251,7 @@ struct IOSRestoreSetupView: View {
 
                 Section {
                     Label("Signed destination inventory", systemImage: "checkmark.shield")
-                    Text("Covalent inventories this folder before preview, then inventories it again immediately before writing. Any change stops the restore.")
+                    Text("Covalent lists this folder's contents before the preview, then lists them again right before writing. Any change stops the restore.")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -341,7 +341,7 @@ struct IOSRestorePreviewView: View {
                 } header: {
                     Text("Signed plan")
                 } footer: {
-                    Text("The node signature binds the exact content and actions. Covalent re-inventories the authorized folder immediately before writing and stops if anything changed.")
+                    Text("Your backup server signs the exact contents and actions this restore will perform. Covalent checks the approved folder again right before writing and stops if anything changed.")
                 }
 
                 Section("Planned changes") {
@@ -461,7 +461,7 @@ struct IOSRestoreResultView: View {
                 metric("Skipped", result.filesSkipped)
             }
             if result.rejectedProviderCopies > 0 {
-                Label("\(result.rejectedProviderCopies) invalid provider copies rejected", systemImage: "checkmark.shield")
+                Label("\(result.rejectedProviderCopies) invalid copies from storage devices rejected", systemImage: "checkmark.shield")
                     .foregroundStyle(.orange)
             }
             Button("Done", action: done)

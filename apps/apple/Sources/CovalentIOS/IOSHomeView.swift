@@ -108,7 +108,7 @@ struct IOSHomeView: View {
         VStack(alignment: .leading, spacing: 9) {
             Label("iPhone and iPad support", systemImage: "iphone")
                 .font(.headline)
-            Text("Tier 2 protects only folders you explicitly choose. iOS may suspend the app; the node keeps durable checkpoints so supported jobs can resume when the app is active again.")
+            Text("Covalent protects only the folders you choose. iOS may suspend the app; your backup server saves its progress, so supported work continues when the app is active again.")
                 .font(.subheadline)
                 .foregroundStyle(.primary)
             Label("Not a full-device or continuous background backup", systemImage: "info.circle")
@@ -148,11 +148,11 @@ struct IOSHomeView: View {
                         .scaledSymbolFont(size: 42)
                         .foregroundStyle(.primary)
                         .accessibilityHidden(true)
-                    Text("No snapshots yet")
+                    Text("No backups yet")
                         .font(.title3.weight(.semibold))
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text("Choose a folder to make the first encrypted snapshot.")
+                    Text("Choose a folder to make the first encrypted backup.")
                         .font(.subheadline)
                         .foregroundStyle(.primary)
                         .multilineTextAlignment(.center)
@@ -185,7 +185,7 @@ struct IOSHomeView: View {
             Text("Built-in safeguards")
                 .font(.headline)
                 .fixedSize(horizontal: false, vertical: true)
-            Label("Exact replica devices only", systemImage: "checkmark.shield")
+            Label("Only the devices you choose", systemImage: "checkmark.shield")
                 .fixedSize(horizontal: false, vertical: true)
             Label("Signed no-write restore preview", systemImage: "doc.text.magnifyingglass")
                 .fixedSize(horizontal: false, vertical: true)
@@ -204,8 +204,8 @@ struct IOSHomeView: View {
 
     private var connectionMessage: String {
         model.phase == .needsAuthorization
-            ? "Enter the node address and local API token. The token stays in this device's Keychain."
-            : "The app could not reach the configured node. Check that the node is running and this device can reach its address."
+            ? "Enter your backup server's address and access token. The token stays in this device's Keychain."
+            : "Covalent could not reach your backup server. Check that it is switched on and that this device can reach its address."
     }
 
     private var serviceSymbol: String {

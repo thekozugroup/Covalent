@@ -81,9 +81,9 @@ struct IOSDevicesView: View {
             Section {
                 if model.providers.isEmpty {
                     ContentUnavailableView {
-                        Label("No connected providers", systemImage: "server.rack")
+                        Label("No connected storage devices", systemImage: "server.rack")
                     } description: {
-                        Text("Backups stay local until you connect a confirmed provider and explicitly select it.")
+                        Text("Backups stay on this device until you connect a confirmed storage device and select it yourself.")
                     }
                     .listRowBackground(Color.clear)
                 } else {
@@ -103,7 +103,7 @@ struct IOSDevicesView: View {
                                 Button("Disconnect") { Task { await model.disconnectProvider(provider) } }
                                 Button("Revoke Access…", role: .destructive) { providerToRevoke = provider }
                             } label: {
-                                Label("Provider actions", systemImage: "ellipsis.circle")
+                                Label("Storage device actions", systemImage: "ellipsis.circle")
                                     .labelStyle(.iconOnly)
                             }
                         }
@@ -111,23 +111,23 @@ struct IOSDevicesView: View {
                     }
                 }
             } header: {
-                Text("Connected storage providers")
+                Text("Connected storage devices")
             }
 
             Section("Trust model") {
                 Label("Signed roles and matching code", systemImage: "checkmark.shield")
-                Label("Pinned transport certificate", systemImage: "lock.square")
-                Label("Provider selected separately per backup", systemImage: "checklist")
+                Label("Exact certificate, locked in", systemImage: "lock.square")
+                Label("Storage device chosen separately for each backup", systemImage: "checklist")
             }
 
             Section("Advanced recovery") {
                 DisclosureGroup {
-                    Text("Use mutually signed JSON only when direct network pairing is unavailable or you are recovering an older node.")
+                    Text("Recovery only: exchange signed setup files by hand when direct pairing over the network cannot be used, or when reconnecting an older backup server.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Button("Offline Pairing with Signed JSON…") { model.requestManualPairing() }
+                    Button("Offline Pairing with Signed Files…") { model.requestManualPairing() }
                         .accessibilityIdentifier("devices.offlinePairing")
-                    Button("Import Signed Transport JSON…") { showingProviderConnection = true }
+                    Button("Import Signed Connection File…") { showingProviderConnection = true }
                         .disabled(!model.isAuthorized)
                 } label: {
                     Text("Manual transport details")
@@ -171,7 +171,7 @@ struct IOSDevicesView: View {
             }
             Button("Cancel", role: .cancel) { providerToRevoke = nil }
         } message: {
-            Text("Revocation records a durable tombstone and prevents future access. Existing replica bytes remain encrypted.")
+            Text("Covalent permanently records that this device is no longer trusted and blocks any future access. Copies already stored there stay encrypted.")
         }
     }
 
@@ -192,22 +192,22 @@ private struct IOSProviderConnectionView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Signed transport JSON", text: $signedTransportJSON, axis: .vertical)
+                    TextField("Signed connection details", text: $signedTransportJSON, axis: .vertical)
                         .textInputAutocapitalization(.never)
                         .font(.caption.monospaced())
                         .lineLimit(8...16)
                 } header: {
-                    Text("Mutually signed transport")
+                    Text("Signed connection details")
                 } footer: {
-                    Text("Paste the complete transport object from a finalized pairing. Loose peer IDs, addresses, or certificates are never accepted.")
+                    Text("Paste the complete connection details from a finished pairing. Loose device IDs, addresses, or certificates are never accepted.")
                 }
 
                 Section {
-                    Label("The node exact-compares every field against the signed pairing transcript.", systemImage: "lock.shield")
+                    Label("Your backup server checks every detail against what both devices signed during pairing. All of them must match exactly.", systemImage: "lock.shield")
                         .foregroundStyle(.secondary)
                 }
             }
-            .navigationTitle("Signed Transport")
+            .navigationTitle("Signed Connection")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -267,7 +267,7 @@ struct IOSPairingView: View {
                         }
                         .pickerStyle(.segmented)
 
-                        Text("Transfer signed JSON with Share, then compare the code on both physical devices. Nearby advertisements alone remain untrusted.")
+                        Text("Transfer the signed file with Share, then compare the code on both physical devices. Seeing a device nearby is not enough to trust it.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
 
@@ -306,7 +306,7 @@ struct IOSPairingView: View {
             }
 
             step(2, "Paste the response and compare codes") {
-                transferEditor(text: $sessionJSON, prompt: "Paste responder session JSON")
+                transferEditor(text: $sessionJSON, prompt: "Paste the other device's signed reply")
                 if let session = try? model.pairingSession(from: sessionJSON) {
                     pairingConsent(session)
                     authenticationCode(session.authenticationString)
@@ -322,7 +322,7 @@ struct IOSPairingView: View {
             }
 
             step(3, "Finalize mutual trust") {
-                Text("Paste the other device's returned, mutually signed session above.")
+                Text("Paste the signed reply the other device returned into the box above.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Button("Finalize Pairing") { finalize(asInviter: true) }
@@ -335,7 +335,7 @@ struct IOSPairingView: View {
     private var joinFlow: some View {
         VStack(alignment: .leading, spacing: 18) {
             step(1, "Paste an invitation and choose exact roles") {
-                transferEditor(text: $invitationJSON, prompt: "Paste invitation JSON")
+                transferEditor(text: $invitationJSON, prompt: "Paste the invitation")
                 if let invitation = try? model.pairingInvitation(from: invitationJSON) {
                     Label("Invitation from \(invitation.inviterDeviceName.isEmpty ? "another device" : invitation.inviterDeviceName)", systemImage: "checkmark.seal")
                     DisclosureGroup("Permissions to grant") {
@@ -365,7 +365,7 @@ struct IOSPairingView: View {
                     .disabled(!comparedCode || session.responderConfirmationSignature != nil || isWorking)
                     if session.responderConfirmationSignature != nil {
                         transferCard("Send this session to the inviter", text: sessionJSON)
-                        Text("Replace the text below with the inviter's mutually signed response.")
+                        Text("Replace the text below with the signed reply from the inviting device.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         transferEditor(text: $sessionJSON, prompt: "Paste final signed session")
@@ -509,8 +509,8 @@ struct IOSPairingView: View {
                 .accessibilityIdentifier("pairing.useAsBackupDevice")
             } else {
                 Text(peer.roles.contains(.storageProvider)
-                    ? "This older pairing did not include signed transport details. Use Advanced recovery from Devices."
-                    : "Storage access was not granted, so this device will not appear as a backup replica.")
+                    ? "This older pairing did not include signed connection details. Use Advanced recovery in Devices."
+                    : "Storage access was not granted, so this device cannot keep an extra copy.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -645,7 +645,7 @@ struct IOSNetworkPairingView: View {
                         Button("Done") { finish() }
                             .buttonStyle(.borderedProminent)
                     } else {
-                        ProgressView("Saving signed provider connection…")
+                        ProgressView("Saving the signed connection to this device…")
                     }
                 case .failed:
                     Text(current.failureMessage ?? "The devices could not finish pairing.")

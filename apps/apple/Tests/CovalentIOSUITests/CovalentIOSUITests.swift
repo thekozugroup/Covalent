@@ -40,7 +40,7 @@ final class CovalentIOSUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Secure Pairing"].waitForExistence(timeout: uiTransitionTimeout))
         XCTAssertTrue(
             app.staticTexts
-                .containing(NSPredicate(format: "label CONTAINS %@", "Nearby advertisements alone remain untrusted"))
+                .containing(NSPredicate(format: "label CONTAINS %@", "Seeing a device nearby is not enough to trust it"))
                 .firstMatch
                 .exists
         )
@@ -51,7 +51,7 @@ final class CovalentIOSUITests: XCTestCase {
         let privateTransferNotice = app.staticTexts["Private identity keys, API tokens, backup keys, and folder permissions never leave this device."]
         scrollTo(privateTransferNotice, in: app)
         XCTAssertTrue(privateTransferNotice.exists)
-        let tierNotice = app.staticTexts["Tier 2 selected-folder support"]
+        let tierNotice = app.staticTexts["Selected-folder backups"]
         scrollTo(tierNotice, in: app)
         XCTAssertTrue(tierNotice.exists)
     }
