@@ -50,8 +50,21 @@ test("two browser roles exchange both signed confirmations before finalizing", a
     accepted.authenticationString,
   );
   assert.equal(pairing.mutuallyConfirmed(inviterSigned), true);
-  assert.deepEqual((await pairing.finalize(api, inviterSigned, "inviter")), { finalizedBy: "inviter" });
-  assert.deepEqual((await pairing.finalize(api, inviterSigned, "responder")), { finalizedBy: "responder" });
+  await pairing.finalize(api, inviterSigned, "inviter");
+  await pairing.finalize(api, inviterSigned, "responder");
+
+  // Assert what the module sent, not what the stub chose to hand back: both
+  // finalize requests must carry the same session, with both signatures still
+  // on it and nothing else alongside them.
+  const finalizeBodies = calls.filter((call) => call.path.includes("/finalize/")).map((call) => call.body);
+  assert.equal(finalizeBodies.length, 2);
+  for (const body of finalizeBodies) {
+    assert.deepEqual(Object.keys(body), ["session"]);
+    assert.equal(body.session.responderConfirmationSignature, "responder-signature");
+    assert.equal(body.session.inviterConfirmationSignature, "inviter-signature");
+    assert.equal(body.session.authenticationString, accepted.authenticationString);
+  }
+
   assert.deepEqual(calls.map((call) => call.path), [
     "/api/v1/pair/confirm/responder",
     "/api/v1/pair/confirm/inviter",

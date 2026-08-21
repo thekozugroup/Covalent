@@ -50,6 +50,39 @@
 
       <section id="pair-panel" role="tabpanel" aria-labelledby="pair-tab" data-panel="pair">
         <div class="panel-heading"><div><h2>Pair a device</h2><p class="muted">Pairing requires both people to compare the same short code before a device receives any role.</p></div></div>
+
+        <section class="card">
+          <h3>Devices on your network</h3>
+          <p class="muted">Choose a nearby device, or enter its Tailscale name or address. This node runs the secure exchange itself; you only compare one short code on both screens.</p>
+          <div class="button-row">
+            <button type="button" data-network-discover>Look for devices</button>
+            <p class="muted" data-network-discovery-state aria-live="polite"></p>
+          </div>
+          <ul class="device-list" data-network-list></ul>
+          <p class="muted" data-network-empty hidden>No device on your network answered. Automatic discovery may be off; enter the other device's Tailscale name or address below.</p>
+          <form class="inline-form" data-network-manual>
+            <label for="network-pair-address">Other device's name or address</label>
+            <input id="network-pair-address" name="candidateAddress" maxlength="512" placeholder="node-a.tailnet.ts.net:8787" autocomplete="off" spellcheck="false" required />
+            <button class="secondary">Pair with this address</button>
+          </form>
+        </section>
+
+        <section class="card pairing-consent" data-network-card hidden aria-live="polite">
+          <h3 data-network-peer></h3>
+          <p class="muted" data-network-direction></p>
+          <p>Compare this code on both physical devices. Continue only if every group matches. Pairing copies nothing now; you choose this device separately when creating a backup.</p>
+          <p class="pairing-code" data-network-code role="status"></p>
+          <p class="muted" data-network-expires></p>
+          <p data-network-state></p>
+          <div class="button-row">
+            <button type="button" data-network-confirm disabled>Codes match — use as backup device</button>
+            <button type="button" class="quiet" data-network-cancel>Cancel pairing</button>
+          </div>
+        </section>
+
+        <details class="advanced">
+          <summary>Pair by copying a signed invitation instead</summary>
+          <p class="muted">Use this only when the two devices cannot reach each other directly. Every step below has to be copied between the devices by hand.</p>
         <div class="two-column">
           <form class="card" data-pair-create>
             <h3>Create invitation</h3>
@@ -78,6 +111,7 @@
           <div class="button-row"><button name="side" value="responder" data-pair-action="confirm">Add accepter confirmation</button><button name="side" value="inviter" data-pair-action="confirm" class="secondary">Add creator confirmation</button></div>
           <div class="button-row"><button name="side" value="responder" data-pair-action="finalize" disabled>Finalize as accepter</button><button name="side" value="inviter" data-pair-action="finalize" class="secondary" disabled>Finalize as creator</button><button type="button" class="quiet" data-pair-clear>Clear exchange</button></div>
         </form>
+        </details>
       </section>
 
       <section id="backup-panel" role="tabpanel" aria-labelledby="backup-tab" data-panel="backup" hidden>
@@ -127,6 +161,10 @@
         <aside><h3>Container network choices</h3><p>Bridge mode exposes HTTPS management on TCP 8443 and peer traffic on UDP 8787. Enroll the package CA or use a system-trusted same-host proxy before entering a token. Host networking can improve multicast discovery; a Tailscale sidecar or host Tailnet address is optional.</p></aside>
       </section>
       <output class="toast" data-message aria-live="polite"></output>
+      <details class="toast-details" data-message-details hidden>
+        <summary>Technical details</summary>
+        <pre data-message-detail></pre>
+      </details>
     </main>
     <footer>Core workflows require no Covalent account or hosted coordinator.</footer>
   </body>

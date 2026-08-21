@@ -8,6 +8,14 @@
   const digestPattern = /^[0-9a-f]{64}$/;
   const cursorPattern = /^[0-9]+$/;
 
+  // Authored copy, marked so the console's error presenter can tell a sentence
+  // written in this repository apart from a runtime string it must never show.
+  function guidance(text) {
+    const error = new Error(text);
+    error.covalentGuidance = text;
+    return error;
+  }
+
   function requireReference(value) {
     if (!value || typeof value !== "object"
       || !digestPattern.test(value.planId)
@@ -20,7 +28,7 @@
       || typeof value.jobId !== "string"
       || typeof value.signature !== "string"
       || value.signature.length === 0) {
-      throw new Error("The node returned an invalid durable restore-plan reference.");
+      throw guidance("The node returned an invalid durable restore-plan reference.");
     }
     return value;
   }
@@ -45,7 +53,7 @@
       || page.entries.length > limit
       || page.entryOffset + page.entries.length > reference.totalEntries
       || (page.nextCursor !== null && !cursorPattern.test(page.nextCursor))) {
-      throw new Error("The restore-plan page does not match the signed durable reference.");
+      throw guidance("The restore-plan page does not match the signed durable reference.");
     }
     return page;
   }
@@ -53,10 +61,10 @@
   async function page(api, reference, cursor = null, limit = 100) {
     requireReference(reference);
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
-      throw new Error("Restore-plan page size must be between 1 and 1,000.");
+      throw guidance("Restore-plan page size must be between 1 and 1,000.");
     }
     if (cursor !== null && !cursorPattern.test(cursor)) {
-      throw new Error("Restore-plan cursor is invalid.");
+      throw guidance("Restore-plan cursor is invalid.");
     }
     const query = new URLSearchParams({ limit: String(limit) });
     if (cursor !== null) query.set("cursor", cursor);
@@ -81,5 +89,5 @@
     });
   }
 
-  return { discard, execute, page, requirePage, requireReference };
+  return { discard, execute, guidance, page, requirePage, requireReference };
 });
