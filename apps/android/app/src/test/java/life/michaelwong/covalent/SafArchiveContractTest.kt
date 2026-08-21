@@ -2,7 +2,9 @@ package life.michaelwong.covalent
 
 import life.michaelwong.covalent.data.CovalentNodeClient
 import life.michaelwong.covalent.data.SafArchivePath
+import life.michaelwong.covalent.data.safRootIdentity
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
 
@@ -31,5 +33,13 @@ class SafArchiveContractTest {
                 "application/json",
             )
         }
+    }
+
+    @Test
+    fun reusedTreeUriCannotHideAChangedProviderRootSnapshot() {
+        val tree = "content://provider/tree/shared"
+        val original = safRootIdentity(tree, "saf-sha256=${"a".repeat(64)}")
+        assertEquals(original, safRootIdentity(tree, "saf-sha256=${"a".repeat(64)}"))
+        assertNotEquals(original, safRootIdentity(tree, "saf-sha256=${"b".repeat(64)}"))
     }
 }

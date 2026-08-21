@@ -44,6 +44,35 @@ data class TransportIdentity(
     val certificateFingerprint: String,
 )
 
+enum class NetworkPairingDirection { INCOMING, OUTGOING }
+
+enum class NetworkPairingState {
+    AWAITING_LOCAL_CONFIRMATION,
+    AWAITING_PEER_CONFIRMATION,
+    COMPLETE,
+    FAILED,
+}
+
+data class PeerTransport(
+    val peerId: String,
+    val displayName: String,
+    val address: String,
+    val certificateDer: String,
+    val certificateFingerprint: String,
+)
+
+data class NetworkPairing(
+    val pairingId: String,
+    val direction: NetworkPairingDirection,
+    val peerName: String,
+    val authenticationString: String,
+    val expiresAtUnixMs: Long,
+    val state: NetworkPairingState,
+    val failureCode: String?,
+    val failureMessage: String?,
+    val peerTransport: PeerTransport?,
+)
+
 data class PeerGrant(
     val peerDeviceId: String,
     val displayName: String,
@@ -59,6 +88,45 @@ data class RememberedBackup(
     val latestCommittedAtUnixMs: Long?,
     val snapshotCount: Long,
     val selectedProviderIds: Set<String>,
+)
+
+enum class RestoreConflictPolicy(val wireValue: String) {
+    FAIL("fail"),
+    SKIP("skip"),
+    RENAME("rename"),
+}
+
+data class TargetInventoryEntry(
+    val path: String,
+    val kind: String,
+    val length: Long,
+    val modifiedAtUnixMs: Long?,
+    val identityToken: String,
+)
+
+data class TargetInventoryDraft(
+    val rootIdentity: String,
+    val totalBytes: Long,
+    val entries: List<TargetInventoryEntry>,
+)
+
+data class TargetInventoryReference(
+    val inventoryId: String,
+    val jobId: String,
+    val schemaVersion: Int,
+    val rootIdentity: String,
+    val entryCount: Long,
+    val totalBytes: Long,
+    val inventoryDigest: String,
+)
+
+data class TargetInventoryBinding(
+    val schemaVersion: Int,
+    val rootIdentity: String,
+    val entryCount: Long,
+    val totalBytes: Long,
+    val inventoryDigest: String,
+    val actionsDigest: String,
 )
 
 /**
@@ -78,6 +146,7 @@ data class RestorePlanReference(
     val signerDeviceId: String,
     val signature: String,
     val totalEntries: Long,
+    val targetInventory: TargetInventoryBinding? = null,
     val legacyPlanJson: String? = null,
 )
 
@@ -85,6 +154,7 @@ data class RestorePreviewEntry(
     val destinationPath: String,
     val kind: String,
     val action: String,
+    val sourcePath: String = destinationPath,
 )
 
 data class RestorePlanPage(

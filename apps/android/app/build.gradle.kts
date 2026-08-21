@@ -72,6 +72,9 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
+        ndk {
+            abiFilters += setOf("arm64-v8a", "x86_64")
+        }
     }
 
     signingConfigs {
@@ -116,6 +119,12 @@ android {
         resources.merges += setOf("/META-INF/AL2.0", "/META-INF/LGPL2.1")
     }
 
+    sourceSets {
+        getByName("main").jniLibs.directories.add(
+            layout.buildDirectory.dir("generated/jniLibs").get().asFile.absolutePath,
+        )
+    }
+
     lint {
         abortOnError = true
         warningsAsErrors = true
@@ -140,6 +149,21 @@ val verifyReleaseSigningConfigured = tasks.register("verifyReleaseSigningConfigu
             "COVALENT_ANDROID_KEYSTORE_PATH does not identify a readable keystore file."
         }
     }
+}
+
+val buildAndroidJni = tasks.register<Exec>("buildAndroidJni") {
+    group = "build"
+    description = "Builds pinned Android arm64 and x86_64 JNI libraries with 16 KiB ELF alignment."
+    workingDir = rootProject.projectDir.parentFile
+    commandLine("./scripts/build-android-jni.sh", layout.buildDirectory.dir("generated/jniLibs").get().asFile.absolutePath)
+    inputs.dir(rootProject.projectDir.parentFile.resolve("crates/covalent-android-jni"))
+    inputs.file(rootProject.projectDir.parentFile.resolve("Cargo.lock"))
+    outputs.dir(layout.buildDirectory.dir("generated/jniLibs"))
+}
+
+tasks.matching { it.name == "assembleRelease" }.configureEach { dependsOn(buildAndroidJni) }
+tasks.matching { it.name == "preBuild" }.configureEach {
+    if (providers.gradleProperty("covalentBuildNative").orNull == "true") dependsOn(buildAndroidJni)
 }
 
 val generateAndroidSbom = tasks.register("generateAndroidSbom") {

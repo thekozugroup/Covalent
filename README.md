@@ -6,7 +6,7 @@ Covalent is a lightweight, self-hosted backup and restore system for devices you
 
 | Tier | Platforms | Release policy |
 | --- | --- | --- |
-| Tier 1 | macOS on Apple Silicon, Android, Docker, Unraid | Must pass production gates before a release. |
+| Tier 1 | arm64-only macOS on Apple Silicon, Android, Docker (`linux/amd64` and `linux/arm64`), Unraid | Must pass production gates before a release. |
 | Tier 2 | iOS | Supported and validated independently; never delays Tier 1 readiness. |
 
 iOS protects user-selected directories through document pickers and security-scoped access. Covalent does not claim or attempt a full-device iOS backup. Windows, hosted accounts, automatic replica placement, and restores outside an authorized root are out of scope.

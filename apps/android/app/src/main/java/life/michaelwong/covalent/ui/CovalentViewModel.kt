@@ -14,9 +14,11 @@ import life.michaelwong.covalent.data.restorePlanPageFromPersistence
 import life.michaelwong.covalent.data.toPersistenceJson
 import life.michaelwong.covalent.model.DiscoveryCandidate
 import life.michaelwong.covalent.model.NodeStatus
+import life.michaelwong.covalent.model.NetworkPairing
 import life.michaelwong.covalent.model.Provider
 import life.michaelwong.covalent.model.RememberedBackup
 import life.michaelwong.covalent.model.RestorePlanPage
+import life.michaelwong.covalent.model.RestoreConflictPolicy
 import life.michaelwong.covalent.model.TransferRecord
 import org.json.JSONObject
 
@@ -52,6 +54,11 @@ internal class CovalentViewModel(private val savedStateHandle: SavedStateHandle)
     var pendingPermissionSetup by savedBoolean("pending_permission_setup", false)
     var pendingPermissionLanEnable by savedBoolean("pending_permission_lan_enable", false)
     var pendingPermissionDiscovery by savedBoolean("pending_permission_discovery", false)
+    var pendingProviderEnable by savedBoolean("pending_provider_enable", false)
+    var providerMaximumGiB by savedString("provider_maximum_gib", "2")
+    var providerKeepFreeGiB by savedString("provider_keep_free_gib", "0.5")
+    var providerLanDiscovery by savedBoolean("provider_lan_discovery", false)
+    private var providerDraftLoaded by savedBoolean("provider_draft_loaded", false)
 
     var selectedSourceText by savedString("selected_source", "")
     var selectedSource: Uri?
@@ -62,24 +69,31 @@ internal class CovalentViewModel(private val savedStateHandle: SavedStateHandle)
         get() = selectedTargetText.takeIf(String::isNotBlank)?.let(Uri::parse)
         set(value) { selectedTargetText = value?.toString().orEmpty() }
     var backupName by savedString("backup_name", "")
+    var selectedBackupId by savedString("backup_existing_id", "")
     var selectedProviderIdsText by savedString("selected_provider_ids", "")
     var selectedProviderIds: Set<String>
         get() = selectedProviderIdsText.split(',').filter(String::isNotBlank).toSet()
         set(value) { selectedProviderIdsText = value.sorted().joinToString(",") }
     var selectedRestoreBackupId by savedString("restore_backup_id", "")
+    private var selectedRestorePolicyName by savedString(
+        "restore_conflict_policy",
+        RestoreConflictPolicy.FAIL.name,
+    )
+    var selectedRestorePolicy: RestoreConflictPolicy
+        get() = runCatching { RestoreConflictPolicy.valueOf(selectedRestorePolicyName) }
+            .getOrDefault(RestoreConflictPolicy.FAIL)
+        set(value) { selectedRestorePolicyName = value.name }
 
     private var pairingRoleName by savedString("pairing_role", PairingRole.INVITER.name)
     var pairingRole: PairingRole
         get() = runCatching { PairingRole.valueOf(pairingRoleName) }.getOrDefault(PairingRole.INVITER)
         set(value) { pairingRoleName = value.name }
     var pairingInput by savedString("pairing_input", "")
-    var pairingEndpoint by savedString("pairing_endpoint", "")
     var pairingDisplayName by savedString("pairing_display_name", "Android")
+    var tailscaleCandidateAddress by savedString("tailscale_candidate_address", "")
+    var showAdvancedPairing by savedBoolean("show_advanced_pairing", false)
     var responderRolesText by savedString("responder_roles", "backup_writer")
     var inviterRolesText by savedString("inviter_roles", "storage_provider")
-    var providerIdentityInput by savedString("provider_identity", "")
-    var providerAddress by savedString("provider_address", "")
-    var localIdentityPacket by savedString("local_identity_packet", "")
     var pairingError by savedString("pairing_error", "")
 
     var status by mutableStateOf<NodeStatus?>(null)
@@ -93,6 +107,8 @@ internal class CovalentViewModel(private val savedStateHandle: SavedStateHandle)
     var discoveryRunning by mutableStateOf(false)
     var discoveryError by mutableStateOf<String?>(null)
     var discoveryCompleted by mutableStateOf(false)
+    var networkPairings by mutableStateOf(emptyList<NetworkPairing>())
+    var activeNetworkPairing by mutableStateOf<NetworkPairing?>(null)
     var backups by mutableStateOf(emptyList<RememberedBackup>())
     var transfers by mutableStateOf(emptyList<TransferRecord>())
     var restorePlan by mutableStateOf<RestorePlanPage?>(null)
@@ -139,6 +155,14 @@ internal class CovalentViewModel(private val savedStateHandle: SavedStateHandle)
         transfers = activeStore.transfers()
     }
 
+    fun loadProviderDraft(maximumGiB: String, keepFreeGiB: String, lanDiscovery: Boolean) {
+        if (providerDraftLoaded) return
+        providerMaximumGiB = maximumGiB
+        providerKeepFreeGiB = keepFreeGiB
+        providerLanDiscovery = lanDiscovery
+        providerDraftLoaded = true
+    }
+
     fun persistRestorePlan(value: RestorePlanPage?) {
         restorePlan = value
         store?.saveWorkflow(WORKFLOW_RESTORE_PLAN, value?.toPersistenceJson())
@@ -169,12 +193,20 @@ internal class CovalentViewModel(private val savedStateHandle: SavedStateHandle)
     fun clearPairing() {
         pairingInput = ""
         pairingError = ""
-        providerIdentityInput = ""
-        providerAddress = ""
-        localIdentityPacket = ""
         persistPairingInvitation(null)
         persistPairingSession(null)
         persistPairingConfirmation(null)
+    }
+
+    fun updateNetworkPairing(value: NetworkPairing) {
+        networkPairings = (networkPairings.filterNot { it.pairingId == value.pairingId } + value)
+            .sortedBy(NetworkPairing::expiresAtUnixMs)
+        activeNetworkPairing = value
+    }
+
+    fun removeNetworkPairing(pairingId: String) {
+        networkPairings = networkPairings.filterNot { it.pairingId == pairingId }
+        if (activeNetworkPairing?.pairingId == pairingId) activeNetworkPairing = null
     }
 
     fun pendingEnrolledTrust(): EnrolledTrust? = when {

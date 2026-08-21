@@ -38,6 +38,7 @@ struct IOSRootView: View {
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.activeTask)
         .task { await model.start() }
+        .task { await model.pollNetworkPairings() }
         .sheet(item: $model.presentation) { presentation in
             switch presentation {
             case .connection:
@@ -46,6 +47,10 @@ struct IOSRootView: View {
                 IOSNewBackupView(model: model)
             case .pairDevice:
                 IOSPairingView(model: model)
+            case .networkPairing:
+                if let pairing = model.activeNetworkPairing {
+                    IOSNetworkPairingView(model: model, pairing: pairing)
+                }
             case .importSettings:
                 IOSSettingsImportView(model: model)
             }

@@ -92,6 +92,27 @@ impl DeviceIdentity {
         }
     }
 
+    pub(crate) fn from_recovery_secret(
+        device_id: DeviceId,
+        secret: [u8; 32],
+    ) -> Result<Self, CoreError> {
+        let signing_key = SigningKey::from_bytes(&secret);
+        let identity = Self {
+            device_id,
+            signing_key,
+        };
+        identity.public_identity().verifying_key()?;
+        Ok(identity)
+    }
+
+    pub(crate) fn recovery_secret(&self) -> Zeroizing<[u8; 32]> {
+        Zeroizing::new(self.signing_key.to_bytes())
+    }
+
+    pub(crate) fn persist_recovered(&self, path: &Path) -> Result<(), CoreError> {
+        self.persist_new(path)
+    }
+
     /// Loads an existing identity or creates one with crash-safe, private persistence.
     pub fn load_or_create(path: impl AsRef<Path>) -> Result<Self, CoreError> {
         let path = path.as_ref();

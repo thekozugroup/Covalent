@@ -232,6 +232,13 @@ private struct MacSnapshotDetail: View {
                     .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
                 }
             }
+            Button("Change Replicas for Next Snapshot…") {
+                model.requestNewBackup(existingBackupId: snapshot.backupId)
+            }
+            .disabled(model.activeTask != nil)
+            Text("Adding or removing a device changes only the next snapshot. Existing snapshots retain their original encrypted copies.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -285,6 +292,8 @@ struct MacRestoreSetupView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var destinationGrantId: UUID?
     @State private var isPreparing = false
+    @State private var conflictPolicy: ConflictPolicy = .fail
+    @State private var showReplacePreviewConfirmation = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -306,12 +315,19 @@ struct MacRestoreSetupView: View {
                     Spacer()
                     Button("Choose New Folder…") { chooseFolder() }
                 }
-                LabeledContent("Restore safety", value: "Empty folder required")
+                Picker("If a file already exists", selection: $conflictPolicy) {
+                    ForEach(ConflictPolicy.allCases) { policy in
+                        Text(policy.label).tag(policy)
+                    }
+                }
+                Text(conflictPolicy.safetyDetail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             .formStyle(.grouped)
 
             Label(
-                "An empty destination keeps every streamed write identical to the node's signed preview.",
+                "Covalent inventories this folder before preview and again immediately before writing. Any change stops the restore.",
                 systemImage: "checkmark.shield"
             )
             .foregroundStyle(.secondary)
@@ -321,20 +337,7 @@ struct MacRestoreSetupView: View {
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Spacer()
-                Button("Create Preview") {
-                    guard let destinationGrantId else { return }
-                    isPreparing = true
-                    Task {
-                        if await model.previewRestore(
-                            record: snapshot,
-                            destinationGrantId: destinationGrantId,
-                            conflictPolicy: .fail
-                        ) != nil {
-                            dismiss()
-                        }
-                        isPreparing = false
-                    }
-                }
+                Button("Create Preview") { requestPreview() }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
                 .disabled(destinationGrantId == nil || isPreparing)
@@ -343,6 +346,38 @@ struct MacRestoreSetupView: View {
         .padding(24)
         .frame(width: 520)
         .onAppear { destinationGrantId = model.restoreGrants.first?.id }
+        .confirmationDialog(
+            "Preview replacement of existing files?",
+            isPresented: $showReplacePreviewConfirmation
+        ) {
+            Button("Preview Replacements", role: .destructive) { preparePreview() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The preview writes nothing. Continuing later can overwrite only destinations marked Replace in the signed plan.")
+        }
+    }
+
+    private func requestPreview() {
+        if conflictPolicy.isDestructive {
+            showReplacePreviewConfirmation = true
+        } else {
+            preparePreview()
+        }
+    }
+
+    private func preparePreview() {
+        guard let destinationGrantId else { return }
+        isPreparing = true
+        Task {
+            if await model.previewRestore(
+                record: snapshot,
+                destinationGrantId: destinationGrantId,
+                conflictPolicy: conflictPolicy
+            ) != nil {
+                dismiss()
+            }
+            isPreparing = false
+        }
     }
 
     private func chooseFolder() {
@@ -366,7 +401,15 @@ struct MacRestorePreviewView: View {
     @ObservedObject var model: CovalentAppModel
     let context: RestorePreviewContext
     @Environment(\.dismiss) private var dismiss
-    @State private var confirmReplace = false
+
+    private var hasUnavailableConflictActions: Bool {
+        context.plan.entries.contains { entry in
+            switch entry.action {
+            case .createFile, .createDirectory, .keepDirectory: false
+            case .skipFile, .replaceFile, .renameFile: true
+            }
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -400,8 +443,8 @@ struct MacRestorePreviewView: View {
             .frame(minHeight: 340)
             Divider()
             HStack {
-                if context.plan.conflictPolicy.isDestructive {
-                    Label("Existing files marked Replace will be overwritten.", systemImage: "exclamationmark.triangle.fill")
+                if hasUnavailableConflictActions {
+                    Label("Destination changed. Choose an empty folder and refresh the preview.", systemImage: "exclamationmark.triangle.fill")
                         .font(.subheadline)
                         .foregroundStyle(.orange)
                 } else {
@@ -416,26 +459,14 @@ struct MacRestorePreviewView: View {
                     model.dismissRestorePreview()
                     dismiss()
                 }
-                Button(context.plan.conflictPolicy.isDestructive ? "Replace and Restore" : "Restore") {
-                    if context.plan.conflictPolicy.isDestructive {
-                        confirmReplace = true
-                    } else {
-                        runRestore()
-                    }
-                }
+                Button("Restore") { runRestore() }
                 .buttonStyle(.borderedProminent)
-                .disabled(model.activeTask != nil)
+                .disabled(model.activeTask != nil || hasUnavailableConflictActions)
                 .accessibilityIdentifier("restore.execute")
             }
             .padding(18)
         }
         .frame(minWidth: 780, idealWidth: 900, minHeight: 520, idealHeight: 620)
-        .confirmationDialog("Replace existing files?", isPresented: $confirmReplace, titleVisibility: .visible) {
-            Button("Replace and Restore", role: .destructive) { runRestore() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Only files listed as Replace in this signed preview can be overwritten beneath the authorized folder.")
-        }
     }
 
     private func runRestore() {
@@ -451,9 +482,7 @@ struct MacRestorePreviewView: View {
         case .createFile: "Create file"
         case .createDirectory: "Create folder"
         case .keepDirectory: "Keep folder"
-        case .skipFile: "Skip file"
-        case .replaceFile: "Replace file"
-        case .renameFile: "Keep both"
+        case .skipFile, .replaceFile, .renameFile: "Blocked conflict"
         }
     }
 }

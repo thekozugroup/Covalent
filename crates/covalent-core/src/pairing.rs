@@ -5,9 +5,12 @@ use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use covalent_protocol::{PROTOCOL_VERSION, PairingInvitation, PeerGrant, PeerRole};
+use covalent_protocol::{
+    PROTOCOL_VERSION, PairingInvitation, PeerGrant, PeerRole, TransportBinding,
+};
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::atomic::{read_json_bounded, write_json_atomic};
@@ -50,6 +53,8 @@ pub struct PairingSession {
     responder_device_id: covalent_protocol::DeviceId,
     responder_public_key: String,
     responder_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    responder_transport: Option<TransportBinding>,
     responder_roles: BTreeSet<PeerRole>,
     inviter_roles: BTreeSet<PeerRole>,
     authentication_string: ShortAuthenticationString,
@@ -91,6 +96,47 @@ impl PairingSession {
         inviter_roles: BTreeSet<PeerRole>,
         now_unix_ms: u64,
     ) -> Result<Self, CoreError> {
+        Self::accept_inner(
+            invitation,
+            responder,
+            responder_name.into(),
+            None,
+            responder_roles,
+            inviter_roles,
+            now_unix_ms,
+        )
+    }
+
+    /// Begins acceptance and binds the responder's exact TLS endpoint into the transcript.
+    pub fn accept_with_transport(
+        invitation: PairingInvitation,
+        responder: &DeviceIdentity,
+        responder_transport: TransportBinding,
+        responder_roles: BTreeSet<PeerRole>,
+        inviter_roles: BTreeSet<PeerRole>,
+        now_unix_ms: u64,
+    ) -> Result<Self, CoreError> {
+        let responder_name = responder_transport.display_name.clone();
+        Self::accept_inner(
+            invitation,
+            responder,
+            responder_name,
+            Some(responder_transport),
+            responder_roles,
+            inviter_roles,
+            now_unix_ms,
+        )
+    }
+
+    fn accept_inner(
+        invitation: PairingInvitation,
+        responder: &DeviceIdentity,
+        responder_name: String,
+        responder_transport: Option<TransportBinding>,
+        responder_roles: BTreeSet<PeerRole>,
+        inviter_roles: BTreeSet<PeerRole>,
+        now_unix_ms: u64,
+    ) -> Result<Self, CoreError> {
         validate_invitation(&invitation, now_unix_ms)?;
         let inviter = invitation_identity(&invitation)?;
         inviter.verify(
@@ -101,13 +147,16 @@ impl PairingSession {
         if inviter.device_id == responder.device_id() {
             return Err(CoreError::IdentityMismatch);
         }
-        let responder_name = responder_name.into();
         validate_display_name(&responder_name)?;
         let responder_public = responder.public_identity();
+        if let Some(binding) = responder_transport.as_ref() {
+            validate_transport_binding(binding, &responder_public, &responder_name)?;
+        }
         let transcript = acceptance_transcript(
             &invitation,
             &responder_public,
             &responder_name,
+            responder_transport.as_ref(),
             &responder_roles,
             &inviter_roles,
         )?;
@@ -120,6 +169,7 @@ impl PairingSession {
             responder_device_id: responder_public.device_id,
             responder_public_key: responder_public.public_key,
             responder_name,
+            responder_transport,
             responder_roles,
             inviter_roles,
             authentication_string,
@@ -139,6 +189,86 @@ impl PairingSession {
     #[must_use]
     pub const fn invitation(&self) -> &PairingInvitation {
         &self.invitation
+    }
+
+    /// Responder identity bound into the signed acceptance transcript.
+    #[must_use]
+    pub const fn responder_device_id(&self) -> covalent_protocol::DeviceId {
+        self.responder_device_id
+    }
+
+    /// Responder display name bound into the signed acceptance transcript.
+    #[must_use]
+    pub fn responder_name(&self) -> &str {
+        &self.responder_name
+    }
+
+    /// Responder transport identity bound into the signed acceptance transcript.
+    #[must_use]
+    pub const fn responder_transport(&self) -> Option<&TransportBinding> {
+        self.responder_transport.as_ref()
+    }
+
+    /// Exact responder roles bound into the signed acceptance transcript.
+    #[must_use]
+    pub const fn responder_roles(&self) -> &BTreeSet<PeerRole> {
+        &self.responder_roles
+    }
+
+    /// Exact inviter roles bound into the signed acceptance transcript.
+    #[must_use]
+    pub const fn inviter_roles(&self) -> &BTreeSet<PeerRole> {
+        &self.inviter_roles
+    }
+
+    /// Whether the responder's local consent signature is present.
+    #[must_use]
+    pub const fn responder_is_confirmed(&self) -> bool {
+        self.responder_confirmation_signature.is_some()
+    }
+
+    /// Whether the inviter's local consent signature is present.
+    #[must_use]
+    pub const fn inviter_is_confirmed(&self) -> bool {
+        self.inviter_confirmation_signature.is_some()
+    }
+
+    /// Merges only independently verifiable consent signatures from the same immutable transcript.
+    pub fn merge_confirmations_from(
+        &mut self,
+        peer: &Self,
+        now_unix_ms: u64,
+    ) -> Result<(), CoreError> {
+        self.validate(now_unix_ms)?;
+        peer.validate(now_unix_ms)?;
+        let transcript = self.transcript()?;
+        if transcript != peer.transcript()?
+            || self.authentication_string != peer.authentication_string
+            || self.invitation.invitation_id != peer.invitation.invitation_id
+        {
+            return Err(CoreError::IdentityMismatch);
+        }
+        let responder = self.responder_identity()?;
+        let inviter = self.inviter_identity()?;
+        merge_confirmation_signature(
+            &mut self.responder_confirmation_signature,
+            peer.responder_confirmation_signature.as_deref(),
+            &responder,
+            RESPONDER_CONFIRMATION_DOMAIN,
+            &transcript,
+        )?;
+        merge_confirmation_signature(
+            &mut self.inviter_confirmation_signature,
+            peer.inviter_confirmation_signature.as_deref(),
+            &inviter,
+            INVITER_CONFIRMATION_DOMAIN,
+            &transcript,
+        )
+    }
+
+    /// Verifies the invitation, acceptance, roles, transport bindings, and authentication string.
+    pub fn validate_exchange(&self, now_unix_ms: u64) -> Result<(), CoreError> {
+        self.validate(now_unix_ms)
     }
 
     /// Responder records an explicit comparison and approval with its identity key.
@@ -190,6 +320,7 @@ impl PairingSession {
             &self.invitation,
             &self.responder_identity()?,
             &self.responder_name,
+            self.responder_transport.as_ref(),
             &self.responder_roles,
             &self.inviter_roles,
         )
@@ -205,6 +336,12 @@ impl PairingSession {
             &self.invitation.signature,
         )?;
         let responder = self.responder_identity()?;
+        if let Some(binding) = self.invitation.transport_binding.as_ref() {
+            validate_transport_binding(binding, &inviter, &self.invitation.inviter_device_name)?;
+        }
+        if let Some(binding) = self.responder_transport.as_ref() {
+            validate_transport_binding(binding, &responder, &self.responder_name)?;
+        }
         let transcript = self.transcript()?;
         responder.verify(
             ACCEPTANCE_SIGNATURE_DOMAIN,
@@ -256,8 +393,31 @@ impl PairingSession {
                 confirmed_at_unix_ms: now_unix_ms,
                 revoked: false,
             },
+            inviter_transport: self.invitation.transport_binding.clone(),
+            responder_transport: self.responder_transport.clone(),
         })
     }
+}
+
+fn merge_confirmation_signature(
+    destination: &mut Option<String>,
+    source: Option<&str>,
+    signer: &PublicIdentity,
+    domain: &[u8],
+    transcript: &[u8],
+) -> Result<(), CoreError> {
+    let Some(source) = source else {
+        return Ok(());
+    };
+    signer.verify(domain, transcript, source)?;
+    if destination
+        .as_deref()
+        .is_some_and(|incumbent| incumbent != source)
+    {
+        return Err(CoreError::IdentityMismatch);
+    }
+    *destination = Some(source.to_owned());
+    Ok(())
 }
 
 impl fmt::Debug for PairingSession {
@@ -287,6 +447,10 @@ pub struct PairingConfirmation {
     pub inviter_grant: PeerGrant,
     /// Grant stored by the responder for the inviter.
     pub responder_grant: PeerGrant,
+    /// Inviter TLS endpoint authenticated by the complete pairing transcript.
+    pub inviter_transport: Option<TransportBinding>,
+    /// Responder TLS endpoint authenticated by the complete pairing transcript.
+    pub responder_transport: Option<TransportBinding>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -407,12 +571,36 @@ impl PairingManager {
         lifetime_ms: u64,
         endpoints: Vec<String>,
     ) -> Result<PairingInvitation, CoreError> {
+        self.create_invitation_inner(now_unix_ms, lifetime_ms, endpoints, None)
+    }
+
+    /// Creates an invitation that signs the inviter's exact TLS transport identity.
+    pub fn create_invitation_with_transport(
+        &self,
+        now_unix_ms: u64,
+        lifetime_ms: u64,
+        endpoints: Vec<String>,
+        transport_binding: TransportBinding,
+    ) -> Result<PairingInvitation, CoreError> {
+        self.create_invitation_inner(now_unix_ms, lifetime_ms, endpoints, Some(transport_binding))
+    }
+
+    fn create_invitation_inner(
+        &self,
+        now_unix_ms: u64,
+        lifetime_ms: u64,
+        endpoints: Vec<String>,
+        transport_binding: Option<TransportBinding>,
+    ) -> Result<PairingInvitation, CoreError> {
         let device_name = self
             .device_name
             .lock()
             .map_err(|_| CoreError::Synchronization)?
             .clone();
         validate_display_name(&device_name)?;
+        if let Some(binding) = transport_binding.as_ref() {
+            validate_transport_binding(binding, &self.identity.public_identity(), &device_name)?;
+        }
         if lifetime_ms == 0
             || lifetime_ms > MAX_INVITATION_LIFETIME_MS
             || endpoints.len() > 16
@@ -449,6 +637,7 @@ impl PairingManager {
             invitation_secret_commitment: invitation_secret_commitment.clone(),
             expires_at_unix_ms,
             endpoints,
+            transport_binding,
             signature: String::new(),
         };
         invitation.signature = self.identity.sign(
@@ -475,6 +664,27 @@ impl PairingManager {
             .lock()
             .map_err(|_| CoreError::Synchronization)? = device_name;
         Ok(())
+    }
+
+    /// Cancels one pending invitation and durably rejects its replay until the original expiry.
+    pub fn cancel_invitation(
+        &self,
+        invitation_id: &str,
+        now_unix_ms: u64,
+    ) -> Result<(), CoreError> {
+        if !valid_invitation_id(invitation_id) {
+            return Err(CoreError::InvitationUnavailable);
+        }
+        let mut state = self.state.lock().map_err(|_| CoreError::Synchronization)?;
+        prune_state(&mut state, now_unix_ms);
+        let pending = state
+            .pending
+            .remove(invitation_id)
+            .ok_or(CoreError::InvitationUnavailable)?;
+        state
+            .consumed_until
+            .insert(invitation_id.to_owned(), pending.expires_at_unix_ms);
+        self.persist_state(&state)
     }
 
     /// Inviter verifies the live exchange and signs its explicit local approval.
@@ -654,6 +864,8 @@ struct InvitationSigningFields<'a> {
     invitation_secret_commitment: &'a str,
     expires_at_unix_ms: u64,
     endpoints: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transport_binding: Option<&'a TransportBinding>,
 }
 
 fn invitation_signing_bytes(invitation: &PairingInvitation) -> Result<Vec<u8>, CoreError> {
@@ -668,6 +880,7 @@ fn invitation_signing_bytes(invitation: &PairingInvitation) -> Result<Vec<u8>, C
         invitation_secret_commitment: &invitation.invitation_secret_commitment,
         expires_at_unix_ms: invitation.expires_at_unix_ms,
         endpoints: &invitation.endpoints,
+        transport_binding: invitation.transport_binding.as_ref(),
     })?)
 }
 
@@ -682,6 +895,8 @@ struct AcceptanceTranscript<'a> {
     responder_device_id: covalent_protocol::DeviceId,
     responder_public_key: &'a str,
     responder_name: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    responder_transport: Option<&'a TransportBinding>,
     responder_roles: &'a BTreeSet<PeerRole>,
     inviter_roles: &'a BTreeSet<PeerRole>,
     protocol_version: u16,
@@ -691,6 +906,7 @@ fn acceptance_transcript(
     invitation: &PairingInvitation,
     responder: &PublicIdentity,
     responder_name: &str,
+    responder_transport: Option<&TransportBinding>,
     responder_roles: &BTreeSet<PeerRole>,
     inviter_roles: &BTreeSet<PeerRole>,
 ) -> Result<Vec<u8>, CoreError> {
@@ -703,10 +919,56 @@ fn acceptance_transcript(
         responder_device_id: responder.device_id,
         responder_public_key: &responder.public_key,
         responder_name,
+        responder_transport,
         responder_roles,
         inviter_roles,
         protocol_version: PROTOCOL_VERSION,
     })?)
+}
+
+pub(crate) fn validate_transport_binding(
+    binding: &TransportBinding,
+    identity: &PublicIdentity,
+    expected_name: &str,
+) -> Result<(), CoreError> {
+    use std::net::SocketAddr;
+
+    if binding.peer_id != identity.device_id
+        || binding.display_name != expected_name
+        || binding.address.len() > 128
+        || binding.certificate_der.len() > 128 * 1_024
+        || binding.certificate_fingerprint.len() != 64
+    {
+        return Err(CoreError::IdentityMismatch);
+    }
+    let address: SocketAddr = binding
+        .address
+        .parse()
+        .map_err(|_| CoreError::InvalidState("invalid paired transport address".to_owned()))?;
+    if address.port() == 0 || address.to_string() != binding.address {
+        return Err(CoreError::InvalidState(
+            "paired transport address is not canonical".to_owned(),
+        ));
+    }
+    let certificate = URL_SAFE_NO_PAD
+        .decode(&binding.certificate_der)
+        .map_err(|_| CoreError::InvalidKeyMaterial)?;
+    if certificate.is_empty() || certificate.len() > 64 * 1_024 {
+        return Err(CoreError::InvalidKeyMaterial);
+    }
+    let expected = Sha256::digest(certificate)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    if expected != binding.certificate_fingerprint
+        || binding
+            .certificate_fingerprint
+            .bytes()
+            .any(|byte| !byte.is_ascii_hexdigit() || byte.is_ascii_uppercase())
+    {
+        return Err(CoreError::IdentityMismatch);
+    }
+    Ok(())
 }
 
 fn authentication_string(secret: &[u8; 32], transcript: &[u8]) -> ShortAuthenticationString {

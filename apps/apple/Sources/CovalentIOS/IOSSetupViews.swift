@@ -170,14 +170,38 @@ struct IOSNewBackupView: View {
                                         .font(.caption.monospaced())
                                         .foregroundStyle(.secondary)
                                         .lineLimit(1)
+                                    Text("Fresh reachable capacity unavailable — cannot select")
+                                        .font(.caption)
+                                        .foregroundStyle(.red)
                                 }
                             }
+                            .disabled(true)
                         }
                     }
                 } header: {
                     Text("Exact extra copies")
                 } footer: {
                     Text("Only this exact set is sent to the node. Covalent never substitutes another provider.")
+                }
+
+                Section("Review before backup") {
+                    LabeledContent("Source", value: selectedSourceName)
+                    LabeledContent("Exclusions", value: "None configured")
+                    LabeledContent("Access", value: "Selected folder only")
+                    LabeledContent("Copies", value: copySummary)
+                    if selectedProviderIds.isEmpty {
+                        Label("This snapshot will stay on this device only.", systemImage: "iphone")
+                    } else {
+                        ForEach(selectedProviders) { provider in
+                            Label(provider.address, systemImage: "server.rack")
+                        }
+                    }
+                    Text("Every readable item under the selected folder is included. An unreadable or unsupported item stops the backup before commit.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if existingBackupId != nil {
+                        replicaImpact
+                    }
                 }
             }
             .navigationTitle(existingBackupId == nil ? "New Backup" : "Add Snapshot")
@@ -212,18 +236,27 @@ struct IOSNewBackupView: View {
                 }
             }
         }
-        .onAppear { sourceGrantId = model.sourceGrants.first?.id }
+        .onAppear {
+            sourceGrantId = model.sourceGrants.first?.id
+            if let requested = model.backupDraftBackupId {
+                existingBackupId = requested
+                configureExistingBackup(requested)
+            }
+        }
+        .onDisappear { model.backupDraftBackupId = nil }
         .onChange(of: existingBackupId) { _, backupId in
-            guard let backupId,
-                  let remembered = model.rememberedBackups.first(where: { $0.backupId == backupId })
-            else { return }
-            displayName = remembered.name
+            guard let backupId else {
+                selectedProviderIds = []
+                return
+            }
+            configureExistingBackup(backupId)
         }
     }
 
     private var canCreate: Bool {
         !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && sourceGrantId != nil
+            && selectedProviderIds.isEmpty
             && !isCreating
     }
 
@@ -234,6 +267,52 @@ struct IOSNewBackupView: View {
             if enabled { selectedProviderIds.insert(id) }
             else { selectedProviderIds.remove(id) }
         }
+    }
+
+    private var selectedSourceName: String {
+        model.sourceGrants.first(where: { $0.id == sourceGrantId })?.displayName ?? "Not selected"
+    }
+
+    private var selectedProviders: [ProviderConnection] {
+        model.providers.filter { selectedProviderIds.contains($0.peerId) }
+    }
+
+    private var copySummary: String {
+        selectedProviderIds.isEmpty
+            ? "1 local copy"
+            : "1 local + \(selectedProviderIds.count) exact extra \(selectedProviderIds.count == 1 ? "copy" : "copies")"
+    }
+
+    @ViewBuilder
+    private var replicaImpact: some View {
+        let previous = Set(
+            model.backups.first(where: { $0.backupId == existingBackupId })?.selectedProviderIds ?? []
+        )
+        let added = selectedProviderIds.subtracting(previous)
+        let removed = previous.subtracting(selectedProviderIds)
+        Text("Replica changes apply to this new snapshot only. Existing snapshots keep their original copies.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        if added.isEmpty && removed.isEmpty {
+            Label("Replica set unchanged", systemImage: "checkmark.circle")
+        } else {
+            if !added.isEmpty {
+                Label("Add \(added.count) extra \(added.count == 1 ? "copy" : "copies")", systemImage: "plus.circle")
+                    .foregroundStyle(.green)
+            }
+            if !removed.isEmpty {
+                Label("Skip \(removed.count) previous \(removed.count == 1 ? "device" : "devices") for this snapshot", systemImage: "minus.circle")
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
+
+    private func configureExistingBackup(_ backupId: UUID) {
+        if let remembered = model.rememberedBackups.first(where: { $0.backupId == backupId }) {
+            displayName = remembered.name
+        }
+        // Fail closed until the node returns fresh signed reachability and reservable capacity.
+        selectedProviderIds = []
     }
 
     private func createBackup() {

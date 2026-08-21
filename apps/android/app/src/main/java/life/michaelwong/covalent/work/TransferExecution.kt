@@ -10,6 +10,8 @@ import life.michaelwong.covalent.data.NodeApiException
 import life.michaelwong.covalent.data.SafTransferBridge
 import life.michaelwong.covalent.data.SecureNodeStore
 import life.michaelwong.covalent.model.TransferState
+import life.michaelwong.covalent.model.NodeConnection
+import life.michaelwong.covalent.node.ActiveNodeConnectionResolver
 
 internal enum class TransferOutcome {
     SUCCESS,
@@ -22,6 +24,17 @@ internal object TransferExecution {
     fun run(context: Context, jobId: String): TransferOutcome {
         val store = SecureNodeStore(context)
         val pending = store.pending(jobId) ?: return TransferOutcome.FAILURE
+        val connection = ActiveNodeConnectionResolver(context).activeConnection(store)
+        if (connection == null) {
+            store.updateTransfer(jobId) {
+                it.copy(
+                    state = TransferState.FAILED,
+                    detail = "Select the node that owns this transfer, then retry.",
+                    retryable = true,
+                )
+            }
+            return TransferOutcome.FAILURE
+        }
         when (store.transfer(jobId)?.state) {
             TransferState.PAUSED, TransferState.CANCELLED, TransferState.COMPLETED -> {
                 return TransferOutcome.FAILURE
@@ -44,27 +57,27 @@ internal object TransferExecution {
             val completed = when (mode) {
                 TransferWorker.MODE_SAF_BACKUP -> SafTransferBridge(client).createBackup(
                     context,
-                    store.baseUrl,
-                    store.token,
+                    connection.baseUrl,
+                    connection.token,
                     pending.getString("treeUri").toUri(),
                     payload,
                     progress::record,
                 )
                 TransferWorker.MODE_SAF_RESTORE -> SafTransferBridge(client).restore(
                     context,
-                    store.baseUrl,
-                    store.token,
+                    connection.baseUrl,
+                    connection.token,
                     pending.getString("treeUri").toUri(),
                     payload,
                     progress::record,
                 )
                 else -> ArchiveTransferResult(
-                    body = client.post(store.baseUrl, store.token, path, payload),
+                    body = client.post(connection.baseUrl, connection.token, path, payload),
                     acknowledgementRequired = false,
                 )
             }
             if (mode == TransferWorker.MODE_SAF_BACKUP || path == "/api/v1/backups") {
-                store.replaceBackups(client.backups(store.baseUrl, store.token))
+                store.replaceBackups(client.backups(connection.baseUrl, connection.token))
             }
             val completion = completionDetail(context, mode, completed.body)
             if (completed.acknowledgementRequired) {
@@ -84,7 +97,7 @@ internal object TransferExecution {
             }
             store.removePending(jobId)
             if (completed.acknowledgementRequired) {
-                runCatching { client.acknowledgeJob(store.baseUrl, store.token, jobId) }.onSuccess {
+                runCatching { client.acknowledgeJob(connection.baseUrl, connection.token, jobId) }.onSuccess {
                     store.removePendingAcknowledgement(jobId)
                     store.updateTransfer(jobId) { it.copy(detail = completion) }
                 }
@@ -156,10 +169,14 @@ internal object TransferExecution {
             else -> context.getString(R.string.transfer_complete_detail)
         }
 
-    fun reconcileAcknowledgements(store: SecureNodeStore, client: CovalentNodeClient): Int {
+    fun reconcileAcknowledgements(
+        store: SecureNodeStore,
+        client: CovalentNodeClient,
+        connection: NodeConnection,
+    ): Int {
         var reconciled = 0
         store.pendingAcknowledgementJobIds().forEach { jobId ->
-            runCatching { client.acknowledgeJob(store.baseUrl, store.token, jobId) }.onSuccess {
+            runCatching { client.acknowledgeJob(connection.baseUrl, connection.token, jobId) }.onSuccess {
                 val completion = store.acknowledgementCompletionDetail(jobId)
                 store.removePendingAcknowledgement(jobId)
                 store.removePending(jobId)
@@ -170,7 +187,7 @@ internal object TransferExecution {
             }
         }
         store.pendingDiscardJobIds().forEach { jobId ->
-            runCatching { client.discardJob(store.baseUrl, store.token, jobId) }.onSuccess {
+            runCatching { client.discardJob(connection.baseUrl, connection.token, jobId) }.onSuccess {
                 val completion = store.discardCompletionDetail(jobId)
                 store.removePendingDiscard(jobId)
                 store.removePending(jobId)

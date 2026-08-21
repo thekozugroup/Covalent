@@ -207,6 +207,7 @@ impl CovalentService {
                     conflict_policy: request.conflict_policy,
                     selected_paths: Default::default(),
                     job_id: request.job_id,
+                    target_inventory: None,
                 },
             )
             .map_err(|error| ServiceError::from_engine(&error))?;

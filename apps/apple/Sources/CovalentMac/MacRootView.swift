@@ -11,6 +11,7 @@ struct MacRootView: View {
                 List(AppSection.allCases, selection: $selectedSection) { section in
                     Label(section.label, systemImage: section.systemImage)
                         .tag(section)
+                        .foregroundStyle(.primary)
                         .accessibilityIdentifier("sidebar.\(section.rawValue)")
                 }
                 .listStyle(.sidebar)
@@ -64,6 +65,7 @@ struct MacRootView: View {
             }
         }
         .task { await model.start() }
+        .task { await model.pollNetworkPairings() }
         .sheet(item: $model.presentation) { presentation in
             switch presentation {
             case .connection:
@@ -72,6 +74,10 @@ struct MacRootView: View {
                 MacNewBackupView(model: model)
             case .pairDevice:
                 MacPairingView(model: model)
+            case .networkPairing:
+                if let pairing = model.activeNetworkPairing {
+                    MacNetworkPairingView(model: model, pairing: pairing)
+                }
             case .importSettings:
                 MacSettingsImportView(model: model)
             }
@@ -134,11 +140,12 @@ struct MacRootView: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text(model.serviceStatusLabel)
-                    .font(.caption.weight(.medium))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
                 if let status = model.status {
                     Text(status.deviceName)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
                 }
             }
@@ -146,7 +153,7 @@ struct MacRootView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(serviceColor.opacity(0.12))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Service \(model.serviceStatusLabel)")
     }

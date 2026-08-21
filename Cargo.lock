@@ -438,6 +438,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
+name = "covalent-android-jni"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "covalent-core",
+ "covalent-node",
+ "covalent-protocol",
+ "jni",
+ "serde",
+ "serde_json",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
 name = "covalent-cli"
 version = "0.1.0"
 dependencies = [
@@ -506,9 +521,11 @@ dependencies = [
  "quinn",
  "rand_core 0.6.4",
  "rcgen",
+ "rustix",
  "rustls",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tokio-util",

@@ -1,6 +1,8 @@
 //! Local authenticated API, embedded accessible console, discovery, and peer transport.
 
 pub mod discovery;
+pub mod network_pairing;
+pub mod runtime;
 pub mod transport;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -18,23 +20,27 @@ use axum::extract::rejection::JsonRejection;
 use axum::extract::{DefaultBodyLimit, FromRequest, Path as AxumPath, Query, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use covalent_core::{
     BackupOptions, ChunkProvider, CoreError, Engine, JobControl, JobState, PairingConfirmation,
     PairingSession, PreviewAction, RestoreOptions, RestorePlan, RestorePreviewEntry, RosterCursor,
+    canonical_target_inventory_digest,
 };
 use covalent_protocol::{
     ApiErrorBody, BackupId, BackupSummary, ConflictPolicy, DeviceId, EntryKind, NodeStatus,
     PROTOCOL_VERSION, PairingInvitation, PeerRole, PlatformTier, RelativePath, ReplicaAvailability,
-    ReplicaIntent, SignedRoster,
+    ReplicaIntent, SignedRoster, TargetInventory, TargetInventoryBinding, TargetInventoryEntry,
+    TransportBinding,
 };
+use network_pairing::{NetworkPairingItem, NetworkPairingManager, NetworkPairingStatus};
 use http_body_util::BodyExt as _;
 use rand_core::{OsRng, RngCore};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncWriteExt as _;
+use sha2::{Digest as _, Sha256};
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::io::ReaderStream;
 use walkdir::WalkDir;
@@ -57,6 +63,9 @@ const DEFAULT_MAX_ARCHIVE_COMPRESSED_BYTES: u64 = 64_u64 << 30;
 const DEFAULT_MAX_ARCHIVE_UNCOMPRESSED_BYTES: u64 = 256_u64 << 30;
 const DEFAULT_MAX_ARCHIVE_ENTRIES: usize = 250_000;
 const DEFAULT_MAX_ARCHIVE_JOBS: usize = 256;
+const DEFAULT_MAX_ARCHIVE_STAGING_BYTES: u64 = 512_u64 << 30;
+const DEFAULT_MAX_RETAINED_RESULT_BYTES: u64 = 64_u64 << 30;
+const DEFAULT_MAX_RETAINED_RESULTS: usize = 64;
 const DEFAULT_ARCHIVE_FREE_SPACE_RESERVE_BYTES: u64 = 512_u64 << 20;
 const ARCHIVE_UPLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const ARCHIVE_UPLOAD_MAX_DURATION: Duration = Duration::from_secs(24 * 60 * 60);
@@ -75,6 +84,14 @@ const RESTORE_PLAN_ID_HEADER: &str = "x-covalent-restore-plan-id";
 const RESTORE_PLAN_DIGEST_HEADER: &str = "x-covalent-restore-plan-digest";
 const RESTORE_PLAN_ID_DOMAIN: &[u8] = b"covalent/restore-plan-id/v1";
 const JOB_ACK_REQUIRED_HEADER: &str = "x-covalent-job-ack-required";
+const ARCHIVE_UPLOAD_OFFSET_HEADER: &str = "x-covalent-upload-offset";
+const ARCHIVE_UPLOAD_LENGTH_HEADER: &str = "x-covalent-upload-length";
+const ARCHIVE_UPLOAD_DIGEST_HEADER: &str = "x-covalent-upload-digest";
+const ARCHIVE_UPLOAD_SESSION_SCHEMA_VERSION: u16 = 1;
+const TARGET_INVENTORY_SCHEMA_VERSION: u16 = 1;
+const MAX_TARGET_INVENTORY_ENTRIES: u64 = 250_000;
+const MAX_TARGET_INVENTORY_STAGING_BYTES: u64 = 256 * 1_024 * 1_024;
+const TARGET_INVENTORY_OFFSET_HEADER: &str = "x-covalent-inventory-offset";
 
 /// Configurable admission limits for streamed mobile archives.
 #[derive(Clone, Copy, Debug)]
@@ -87,6 +104,12 @@ pub struct ArchiveLimits {
     pub maximum_entries: usize,
     /// Maximum durable staged archive jobs.
     pub maximum_jobs: usize,
+    /// Maximum bytes across all active and retained archive staging.
+    pub maximum_staging_bytes: u64,
+    /// Maximum bytes across completed results waiting for acknowledgement.
+    pub maximum_retained_result_bytes: u64,
+    /// Maximum completed results waiting for acknowledgement.
+    pub maximum_retained_results: usize,
     /// Free space that must remain after admission.
     pub free_space_reserve_bytes: u64,
 }
@@ -98,6 +121,9 @@ impl Default for ArchiveLimits {
             maximum_uncompressed_bytes: DEFAULT_MAX_ARCHIVE_UNCOMPRESSED_BYTES,
             maximum_entries: DEFAULT_MAX_ARCHIVE_ENTRIES,
             maximum_jobs: DEFAULT_MAX_ARCHIVE_JOBS,
+            maximum_staging_bytes: DEFAULT_MAX_ARCHIVE_STAGING_BYTES,
+            maximum_retained_result_bytes: DEFAULT_MAX_RETAINED_RESULT_BYTES,
+            maximum_retained_results: DEFAULT_MAX_RETAINED_RESULTS,
             free_space_reserve_bytes: DEFAULT_ARCHIVE_FREE_SPACE_RESERVE_BYTES,
         }
     }
@@ -110,6 +136,11 @@ impl ArchiveLimits {
             || self.maximum_uncompressed_bytes > 4_u64 << 40
             || !(1..=1_000_000).contains(&self.maximum_entries)
             || !(1..=4_096).contains(&self.maximum_jobs)
+            || self.maximum_staging_bytes < self.maximum_uncompressed_bytes
+            || self.maximum_staging_bytes > 8_u64 << 40
+            || self.maximum_retained_result_bytes < self.maximum_compressed_bytes
+            || self.maximum_retained_result_bytes > self.maximum_staging_bytes
+            || !(1..=self.maximum_jobs).contains(&self.maximum_retained_results)
         {
             return Err(CoreError::InvalidState(
                 "invalid archive resource limits".to_owned(),
@@ -117,6 +148,245 @@ impl ArchiveLimits {
         }
         Ok(self)
     }
+}
+
+#[derive(Default)]
+struct ArchiveStagingAdmission {
+    reserved_bytes: u64,
+}
+
+struct ArchiveStagingReservation {
+    admission: Arc<Mutex<ArchiveStagingAdmission>>,
+    bytes: u64,
+}
+
+impl Drop for ArchiveStagingReservation {
+    fn drop(&mut self) {
+        if let Ok(mut admission) = self.admission.lock() {
+            admission.reserved_bytes = admission.reserved_bytes.saturating_sub(self.bytes);
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ArchiveUploadSession {
+    schema_version: u16,
+    total_length: u64,
+    sha256_digest: String,
+    metadata_digest: String,
+}
+
+#[cfg(unix)]
+struct SafeUploadDirectory {
+    descriptor: std::os::fd::OwnedFd,
+    owner: u32,
+}
+
+#[cfg(unix)]
+impl SafeUploadDirectory {
+    fn open(path: &Path) -> Result<Self, ApiError> {
+        use rustix::fs::{FileType, Mode, OFlags, fstat, open};
+
+        let descriptor = open(
+            path,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|_| ApiError::internal("archive upload directory could not be opened safely"))?;
+        let stat = fstat(&descriptor)
+            .map_err(|_| ApiError::internal("archive upload directory could not be inspected"))?;
+        if FileType::from_raw_mode(stat.st_mode) != FileType::Directory || stat.st_mode & 0o077 != 0
+        {
+            return Err(ApiError::internal(
+                "archive upload directory is not private",
+            ));
+        }
+        Ok(Self {
+            descriptor,
+            owner: stat.st_uid,
+        })
+    }
+
+    fn read_private_file(
+        &self,
+        name: &str,
+        maximum_bytes: u64,
+    ) -> Result<Option<Vec<u8>>, ApiError> {
+        use rustix::fs::{FileType, Mode, OFlags, fstat, openat};
+        use std::io::Read as _;
+
+        let descriptor = match openat(
+            &self.descriptor,
+            name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(descriptor) => descriptor,
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(_) => {
+                return Err(ApiError::internal(
+                    "archive upload file could not be opened safely",
+                ));
+            }
+        };
+        let stat = fstat(&descriptor)
+            .map_err(|_| ApiError::internal("archive upload file could not be inspected"))?;
+        if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
+            || stat.st_uid != self.owner
+            || stat.st_mode & 0o077 != 0
+            || stat.st_size < 0
+            || stat.st_size as u64 > maximum_bytes
+        {
+            return Err(ApiError::internal(
+                "archive upload file is not a private regular file",
+            ));
+        }
+        let mut bytes = Vec::with_capacity(usize::try_from(stat.st_size).unwrap_or(0));
+        File::from(descriptor)
+            .take(maximum_bytes.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|_| ApiError::internal("archive upload file could not be read"))?;
+        if bytes.len() as u64 > maximum_bytes {
+            return Err(ApiError::internal(
+                "archive upload file exceeds its safe bound",
+            ));
+        }
+        Ok(Some(bytes))
+    }
+
+    fn create_private_file(&self, name: &str, bytes: &[u8]) -> Result<(), ApiError> {
+        use rustix::fs::{Mode, OFlags, fsync, openat};
+        use std::io::Write as _;
+
+        let descriptor = openat(
+            &self.descriptor,
+            name,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::RUSR | Mode::WUSR,
+        )
+        .map_err(|_| ApiError::internal("archive upload state could not be created safely"))?;
+        let mut file = File::from(descriptor);
+        file.write_all(bytes)
+            .and_then(|()| file.sync_all())
+            .map_err(|_| ApiError::internal("archive upload state could not be persisted"))?;
+        fsync(&self.descriptor)
+            .map_err(|_| ApiError::internal("archive upload directory could not be synced"))
+    }
+
+    fn private_file_length(&self, name: &str, maximum_bytes: u64) -> Result<u64, ApiError> {
+        use rustix::fs::{FileType, Mode, OFlags, fstat, openat};
+
+        let descriptor = match openat(
+            &self.descriptor,
+            name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(descriptor) => descriptor,
+            Err(rustix::io::Errno::NOENT) => return Ok(0),
+            Err(_) => {
+                return Err(ApiError::internal(
+                    "archive partial upload could not be opened safely",
+                ));
+            }
+        };
+        let stat = fstat(&descriptor)
+            .map_err(|_| ApiError::internal("archive partial upload could not be inspected"))?;
+        if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
+            || stat.st_uid != self.owner
+            || stat.st_mode & 0o077 != 0
+            || stat.st_size < 0
+            || stat.st_size as u64 > maximum_bytes
+        {
+            return Err(ApiError::internal(
+                "archive partial upload is not a private regular file",
+            ));
+        }
+        Ok(stat.st_size as u64)
+    }
+
+    fn open_private_reader(&self, name: &str, maximum_bytes: u64) -> Result<File, ApiError> {
+        use rustix::fs::{FileType, Mode, OFlags, fstat, openat};
+
+        let descriptor = openat(
+            &self.descriptor,
+            name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|_| ApiError::internal("archive upload file could not be opened safely"))?;
+        let stat = fstat(&descriptor)
+            .map_err(|_| ApiError::internal("archive upload file could not be inspected"))?;
+        if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
+            || stat.st_uid != self.owner
+            || stat.st_mode & 0o077 != 0
+            || stat.st_size < 0
+            || stat.st_size as u64 > maximum_bytes
+        {
+            return Err(ApiError::internal(
+                "archive upload file is not a private regular file",
+            ));
+        }
+        Ok(File::from(descriptor))
+    }
+
+    fn open_partial_append(&self, name: &str) -> Result<File, ApiError> {
+        use rustix::fs::{FileType, Mode, OFlags, fstat, openat};
+
+        let descriptor = openat(
+            &self.descriptor,
+            name,
+            OFlags::WRONLY | OFlags::APPEND | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::RUSR | Mode::WUSR,
+        )
+        .map_err(|_| ApiError::internal("archive staging file could not be created safely"))?;
+        let stat = fstat(&descriptor)
+            .map_err(|_| ApiError::internal("archive staging file could not be inspected"))?;
+        if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
+            || stat.st_uid != self.owner
+            || stat.st_mode & 0o077 != 0
+        {
+            return Err(ApiError::internal(
+                "archive staging file is not a private regular file",
+            ));
+        }
+        Ok(File::from(descriptor))
+    }
+
+    fn commit(&self, temporary_name: &str, final_name: &str) -> Result<(), ApiError> {
+        use rustix::fs::{RenameFlags, fsync, renameat_with};
+
+        renameat_with(
+            &self.descriptor,
+            temporary_name,
+            &self.descriptor,
+            final_name,
+            RenameFlags::NOREPLACE,
+        )
+        .map_err(|_| ApiError::internal("archive staging commit failed safely"))?;
+        fsync(&self.descriptor)
+            .map_err(|_| ApiError::internal("archive staging commit could not be synced"))
+    }
+
+    fn remove(&self, name: &str) {
+        use rustix::fs::{AtFlags, fsync, unlinkat};
+        let _ = unlinkat(&self.descriptor, name, AtFlags::empty());
+        let _ = fsync(&self.descriptor);
+    }
+
+    fn sync(&self) -> Result<(), ApiError> {
+        rustix::fs::fsync(&self.descriptor)
+            .map_err(|_| ApiError::internal("private archive directory could not be synced"))
+    }
+}
+
+#[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ArchivePreparedSource {
+    schema_version: u16,
+    metadata_digest: String,
+    upload_digest: String,
 }
 
 struct JobEntry {
@@ -230,16 +500,18 @@ pub struct AppState {
     platform_tier: PlatformTier,
     api_token: Arc<Zeroizing<String>>,
     jobs: Arc<Mutex<JobRegistry>>,
-    peer_port: u16,
+    peer_address: Option<SocketAddr>,
     provider_connections: Arc<Mutex<BTreeMap<DeviceId, ProviderConnection>>>,
     provider_state_path: Option<Arc<PathBuf>>,
     transport_certificate: Option<Arc<Vec<u8>>>,
+    network_pairing: Arc<NetworkPairingManager>,
     discovery_controller: Option<Arc<discovery::DiscoveryController>>,
     archive_limits: ArchiveLimits,
     archive_backup_root: Arc<PathBuf>,
     archive_backup_lock: Arc<Mutex<()>>,
     archive_restore_root: Arc<PathBuf>,
     archive_restore_lock: Arc<Mutex<()>>,
+    archive_staging_admission: Arc<Mutex<ArchiveStagingAdmission>>,
     restore_plan_root: Arc<PathBuf>,
     restore_plan_lock: Arc<Mutex<()>>,
     engine_job_permits: Arc<Semaphore>,
@@ -272,31 +544,37 @@ impl AppState {
             MAX_RESTORE_PLAN_BYTES,
             valid_plan_identifier,
         )?;
+        let network_pairing = Arc::new(NetworkPairingManager::open(
+            Arc::clone(&engine),
+            data_directory.join("network-pairing.json"),
+        )?);
         Ok(Self {
             engine,
             platform_tier,
             api_token: Arc::new(Zeroizing::new(api_token)),
             jobs: Arc::new(Mutex::new(JobRegistry::default())),
-            peer_port: 8787,
+            peer_address: None,
             provider_connections: Arc::new(Mutex::new(BTreeMap::new())),
             provider_state_path: None,
             transport_certificate: None,
+            network_pairing,
             discovery_controller: None,
             archive_limits: ArchiveLimits::default(),
             archive_backup_root: Arc::new(archive_backup_root),
             archive_backup_lock: Arc::new(Mutex::new(())),
             archive_restore_root: Arc::new(archive_restore_root),
             archive_restore_lock: Arc::new(Mutex::new(())),
+            archive_staging_admission: Arc::new(Mutex::new(ArchiveStagingAdmission::default())),
             restore_plan_root: Arc::new(restore_plan_root),
             restore_plan_lock: Arc::new(Mutex::new(())),
             engine_job_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_ENGINE_JOBS)),
         })
     }
 
-    /// Overrides the advertised/discovered QUIC port after the daemon binds it.
+    /// Sets the exact advertised/discovered QUIC endpoint after the daemon binds it.
     #[must_use]
-    pub const fn with_peer_port(mut self, peer_port: u16) -> Self {
-        self.peer_port = peer_port;
+    pub const fn with_peer_address(mut self, peer_address: SocketAddr) -> Self {
+        self.peer_address = Some(peer_address);
         self
     }
 
@@ -305,6 +583,28 @@ impl AppState {
     pub fn with_transport_certificate(mut self, certificate_der: Vec<u8>) -> Self {
         self.transport_certificate = Some(Arc::new(certificate_der));
         self
+    }
+
+    fn local_transport_binding(&self) -> Result<TransportBinding, CoreError> {
+        let certificate = self.transport_certificate.as_deref().ok_or_else(|| {
+            CoreError::InvalidState("transport identity is unavailable".to_owned())
+        })?;
+        let display_name = self.engine.config()?.device_name;
+        let address = self.peer_address.ok_or_else(|| {
+            CoreError::InvalidState("advertised peer endpoint is unavailable".to_owned())
+        })?;
+        if address.ip().is_unspecified() || address.port() == 0 {
+            return Err(CoreError::InvalidState(
+                "advertised peer endpoint must be concrete".to_owned(),
+            ));
+        }
+        Ok(TransportBinding {
+            peer_id: self.engine.device_id(),
+            display_name,
+            address: address.to_string(),
+            certificate_der: URL_SAFE_NO_PAD.encode(certificate),
+            certificate_fingerprint: sha256_hex(certificate),
+        })
     }
 
     /// Connects persisted discovery settings to the live network advertiser.
@@ -374,10 +674,31 @@ impl AppState {
                 "unsupported or excessive provider connection state".to_owned(),
             ));
         }
-        state.providers.retain(|peer_id, _| {
-            self.engine
-                .authorized_peer(*peer_id, PeerRole::StorageProvider)
-                .is_ok()
+        state.providers.retain(|peer_id, provider| {
+            let Ok(binding) = self
+                .engine
+                .trusted_peer_transport(*peer_id, PeerRole::StorageProvider)
+            else {
+                return false;
+            };
+            let Ok(certificate) = URL_SAFE_NO_PAD.decode(&binding.certificate_der) else {
+                return false;
+            };
+            let Ok(address) = binding.address.parse::<SocketAddr>() else {
+                return false;
+            };
+            if certificate.is_empty()
+                || certificate.len() > 64 * 1_024
+                || !valid_lowercase_digest(&binding.certificate_fingerprint)
+                || sha256_hex(&certificate) != binding.certificate_fingerprint
+            {
+                return false;
+            }
+            // Persisted version-1 records did not label their fingerprint algorithm. Migrate
+            // only from the signed DER retained by pairing; never trust a stored digest alone.
+            provider.address = address;
+            provider.certificate_der = binding.certificate_der;
+            true
         });
         self.activate_provider_connections(&state.providers)?;
         *self
@@ -470,6 +791,48 @@ impl AppState {
                     "The node is already processing another storage job. Retry shortly.",
                 )
             })
+    }
+
+    fn reserve_archive_staging(
+        &self,
+        additional_bytes: u64,
+    ) -> Result<ArchiveStagingReservation, ApiError> {
+        let mut admission = self
+            .archive_staging_admission
+            .lock()
+            .map_err(|_| ApiError::internal("archive staging admission lock failed"))?;
+        let used_bytes = archive_tree_bytes(self.archive_backup_root.as_path())?
+            .checked_add(archive_tree_bytes(self.archive_restore_root.as_path())?)
+            .ok_or_else(|| ApiError::payload_too_large("Archive staging size overflowed."))?;
+        let admitted_bytes = used_bytes
+            .checked_add(admission.reserved_bytes)
+            .and_then(|bytes| bytes.checked_add(additional_bytes))
+            .ok_or_else(|| ApiError::payload_too_large("Archive staging size overflowed."))?;
+        if admitted_bytes > self.archive_limits.maximum_staging_bytes {
+            return Err(ApiError::insufficient_storage(
+                "The node archive staging byte budget is exhausted.",
+            ));
+        }
+        let available = fs2::available_space(self.archive_backup_root.as_path())
+            .map_err(|_| ApiError::internal("archive staging capacity is unavailable"))?;
+        let required_available = admission
+            .reserved_bytes
+            .checked_add(additional_bytes)
+            .and_then(|bytes| bytes.checked_add(self.archive_limits.free_space_reserve_bytes))
+            .ok_or_else(|| ApiError::payload_too_large("Archive staging size overflowed."))?;
+        if available < required_available {
+            return Err(ApiError::insufficient_storage(
+                "The node does not have enough reserved capacity for this archive.",
+            ));
+        }
+        admission.reserved_bytes = admission
+            .reserved_bytes
+            .checked_add(additional_bytes)
+            .ok_or_else(|| ApiError::payload_too_large("Archive staging size overflowed."))?;
+        Ok(ArchiveStagingReservation {
+            admission: Arc::clone(&self.archive_staging_admission),
+            bytes: additional_bytes,
+        })
     }
 
     fn activate_provider_connections(
@@ -566,6 +929,37 @@ impl AppState {
         }
         Ok(())
     }
+
+    fn connect_completed_network_pairing(
+        &self,
+        item: &NetworkPairingItem,
+    ) -> Result<(), CoreError> {
+        if item.state != NetworkPairingStatus::Complete {
+            return Ok(());
+        }
+        let transport = item
+            .peer_transport
+            .as_ref()
+            .ok_or(CoreError::AuthenticationFailed)?;
+        let address = transport
+            .address
+            .parse::<SocketAddr>()
+            .map_err(|_| CoreError::AuthenticationFailed)?;
+        let certificate = URL_SAFE_NO_PAD
+            .decode(&transport.certificate_der)
+            .map_err(|_| CoreError::AuthenticationFailed)?;
+        if certificate.is_empty()
+            || certificate.len() > 64 * 1_024
+            || sha256_hex(&certificate) != transport.certificate_fingerprint
+        {
+            return Err(CoreError::AuthenticationFailed);
+        }
+        self.connect_provider(ProviderConnection {
+            peer_id: transport.peer_id,
+            address,
+            certificate_der: transport.certificate_der.clone(),
+        })
+    }
 }
 
 impl fmt::Debug for AppState {
@@ -610,6 +1004,15 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/config/export", post(config_export))
         .route("/api/v1/config/import", post(config_import))
         .route("/api/v1/pair/invitations", post(pair_invitation))
+        .route("/api/v1/pair/network/pending", get(pair_network_pending))
+        .route(
+            "/api/v1/pair/network/{pairing_id}/confirm",
+            post(pair_network_confirm),
+        )
+        .route(
+            "/api/v1/pair/network/{pairing_id}",
+            delete(pair_network_cancel),
+        )
         .route("/api/v1/pair/accept", post(pair_accept))
         .route(
             "/api/v1/pair/confirm/responder",
@@ -637,6 +1040,18 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/restores/preview", post(restore_preview))
         .route("/api/v1/restores/execute", post(restore_execute))
         .route("/api/v1/restores/plans/{plan_id}", get(restore_plan_page))
+        .route(
+            "/api/v1/restores/archive/inventories",
+            post(begin_target_inventory),
+        )
+        .route(
+            "/api/v1/restores/archive/inventories/{inventory_id}/pages",
+            post(append_target_inventory_page),
+        )
+        .route(
+            "/api/v1/restores/archive/inventories/{inventory_id}/finalize",
+            post(finalize_target_inventory),
+        )
         .route(
             "/api/v1/restores/archive/preview",
             post(restore_archive_preview),
@@ -825,7 +1240,7 @@ pub fn remove_node_ready_file(path: &Path, process_id: u32) -> Result<(), CoreEr
     }
 }
 
-fn persist_private_file(path: &Path, bytes: &[u8]) -> Result<(), CoreError> {
+pub(crate) fn persist_private_file(path: &Path, bytes: &[u8]) -> Result<(), CoreError> {
     let parent = path
         .parent()
         .ok_or_else(|| CoreError::InvalidState("private state path has no parent".to_owned()))?;
@@ -1076,6 +1491,7 @@ async fn not_found(uri: Uri) -> Response {
             code: "route_not_found",
             message: "The requested versioned API route does not exist.",
             retryable: false,
+            upload_offset: None,
         }
         .into_response()
     } else {
@@ -1089,6 +1505,7 @@ async fn method_not_allowed() -> Response {
         code: "method_not_allowed",
         message: "This API route does not support the requested HTTP method.",
         retryable: false,
+        upload_offset: None,
     }
     .into_response()
 }
@@ -1158,9 +1575,12 @@ async fn transport_identity(
         .ok_or_else(|| ApiError::internal("transport identity is unavailable"))?;
     Ok(axum::Json(TransportIdentityResponse {
         device_id: state.engine.device_id(),
-        peer_port: state.peer_port,
+        peer_port: state
+            .peer_address
+            .ok_or_else(|| ApiError::internal("peer endpoint is unavailable"))?
+            .port(),
         certificate_der: URL_SAFE_NO_PAD.encode(certificate),
-        certificate_fingerprint: blake3::hash(certificate).to_hex().to_string(),
+        certificate_fingerprint: sha256_hex(certificate),
     }))
 }
 
@@ -1174,7 +1594,10 @@ async fn discovery_candidates(
         .config()
         .map_err(ApiError::from_core)?
         .lan_discovery_enabled;
-    let peer_port = state.peer_port;
+    let peer_port = state
+        .peer_address
+        .ok_or_else(|| ApiError::internal("peer endpoint is unavailable"))?
+        .port();
     let candidates = tokio::task::spawn_blocking(move || {
         let mut candidates = discovery::LanDiscovery::browse(enabled, Duration::from_secs(1))?;
         candidates.extend(discovery::discover_tailscale_candidates(peer_port)?);
@@ -1258,7 +1681,60 @@ async fn config_import(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PairInvitationRequest {
     lifetime_ms: u64,
+    #[serde(default)]
     endpoints: Vec<String>,
+}
+
+async fn pair_network_pending(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<axum::Json<Vec<NetworkPairingItem>>, ApiError> {
+    authorize(&state, &headers)?;
+    let items = state
+        .network_pairing
+        .items(now_unix_ms())
+        .map_err(ApiError::from_core)?;
+    Ok(axum::Json(items))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PairNetworkConfirmRequest {
+    displayed_code: String,
+}
+
+async fn pair_network_confirm(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(pairing_id): AxumPath<String>,
+    ContractJson(request): ContractJson<PairNetworkConfirmRequest>,
+) -> Result<axum::Json<NetworkPairingItem>, ApiError> {
+    authorize(&state, &headers)?;
+    state
+        .network_pairing
+        .confirm_local(&pairing_id, &request.displayed_code, now_unix_ms())
+        .map_err(ApiError::from_core)?;
+    let item = state
+        .network_pairing
+        .item(&pairing_id, now_unix_ms())
+        .map_err(ApiError::from_core)?;
+    state
+        .connect_completed_network_pairing(&item)
+        .map_err(ApiError::from_core)?;
+    Ok(axum::Json(item))
+}
+
+async fn pair_network_cancel(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(pairing_id): AxumPath<String>,
+) -> Result<StatusCode, ApiError> {
+    authorize(&state, &headers)?;
+    state
+        .network_pairing
+        .remove(&pairing_id, now_unix_ms())
+        .map_err(ApiError::from_core)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn pair_invitation(
@@ -1267,10 +1743,28 @@ async fn pair_invitation(
     ContractJson(request): ContractJson<PairInvitationRequest>,
 ) -> Result<axum::Json<PairingInvitation>, ApiError> {
     authorize(&state, &headers)?;
+    let binding = state
+        .local_transport_binding()
+        .map_err(ApiError::from_core)?;
+    if request
+        .endpoints
+        .iter()
+        .any(|endpoint| endpoint != &binding.address)
+    {
+        return Err(ApiError::bad_request(
+            "pairing_endpoint_mismatch",
+            "Pairing endpoints must match the node's signed transport address.",
+        ));
+    }
     let invitation = state
         .engine
         .pairing_manager()
-        .create_invitation(now_unix_ms(), request.lifetime_ms, request.endpoints)
+        .create_invitation_with_transport(
+            now_unix_ms(),
+            request.lifetime_ms,
+            vec![binding.address.clone()],
+            binding,
+        )
         .map_err(ApiError::from_core)?;
     Ok(axum::Json(invitation))
 }
@@ -1292,11 +1786,17 @@ async fn pair_accept(
     ContractJson(request): ContractJson<PairAcceptRequest>,
 ) -> Result<axum::Json<PairingSession>, ApiError> {
     authorize(&state, &headers)?;
+    let binding = state
+        .local_transport_binding()
+        .map_err(ApiError::from_core)?;
     let session = state
         .engine
-        .accept_pairing(
+        .accept_pairing_with_transport(
             request.invitation,
-            request.responder_name,
+            TransportBinding {
+                display_name: request.responder_name,
+                ..binding
+            },
             request.responder_roles,
             request.inviter_roles,
             now_unix_ms(),
@@ -1344,30 +1844,70 @@ struct PairFinalizeRequest {
     session: PairingSession,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PairFinalizeResponse {
+    inviter_grant: covalent_protocol::PeerGrant,
+    responder_grant: covalent_protocol::PeerGrant,
+    peer_transport: Option<TransportBinding>,
+}
+
+fn finalization_response(
+    confirmation: PairingConfirmation,
+    local_is_inviter: bool,
+) -> PairFinalizeResponse {
+    let peer_grant = if local_is_inviter {
+        &confirmation.responder_grant
+    } else {
+        &confirmation.inviter_grant
+    };
+    let peer_transport = if peer_grant.roles.contains(&PeerRole::StorageProvider) {
+        if local_is_inviter {
+            confirmation.responder_transport.clone()
+        } else {
+            confirmation.inviter_transport.clone()
+        }
+    } else {
+        None
+    };
+    PairFinalizeResponse {
+        inviter_grant: confirmation.inviter_grant,
+        responder_grant: confirmation.responder_grant,
+        peer_transport,
+    }
+}
+
 async fn pair_finalize_responder(
     State(state): State<AppState>,
     headers: HeaderMap,
     ContractJson(request): ContractJson<PairFinalizeRequest>,
-) -> Result<axum::Json<PairingConfirmation>, ApiError> {
+) -> Result<axum::Json<PairFinalizeResponse>, ApiError> {
     authorize(&state, &headers)?;
     let confirmation = state
         .engine
         .finalize_pairing_as_responder(&request.session, now_unix_ms())
         .map_err(ApiError::from_core)?;
-    Ok(axum::Json(confirmation))
+    Ok(axum::Json(finalization_response(confirmation, false)))
 }
 
 async fn pair_finalize_inviter(
     State(state): State<AppState>,
     headers: HeaderMap,
     ContractJson(request): ContractJson<PairFinalizeRequest>,
-) -> Result<axum::Json<PairingConfirmation>, ApiError> {
+) -> Result<axum::Json<PairFinalizeResponse>, ApiError> {
     authorize(&state, &headers)?;
     let confirmation = state
         .engine
         .finalize_pairing_as_inviter(&request.session, now_unix_ms())
         .map_err(ApiError::from_core)?;
-    Ok(axum::Json(confirmation))
+    Ok(axum::Json(finalization_response(confirmation, true)))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -1581,9 +2121,7 @@ async fn revoke_peer(
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ConnectProviderRequest {
-    peer_id: DeviceId,
-    address: SocketAddr,
-    certificate_der: String,
+    peer_transport: TransportBinding,
 }
 
 #[derive(Serialize)]
@@ -1600,8 +2138,18 @@ async fn connect_provider(
     ContractJson(request): ContractJson<ConnectProviderRequest>,
 ) -> Result<axum::Json<ProviderConnectionResponse>, ApiError> {
     authorize(&state, &headers)?;
+    let trusted = state
+        .engine
+        .trusted_peer_transport(request.peer_transport.peer_id, PeerRole::StorageProvider)
+        .map_err(ApiError::from_core)?;
+    if request.peer_transport != trusted {
+        return Err(ApiError::conflict(
+            "provider_binding_mismatch",
+            "Provider transport does not match the mutually signed pairing binding.",
+        ));
+    }
     let certificate = URL_SAFE_NO_PAD
-        .decode(&request.certificate_der)
+        .decode(&trusted.certificate_der)
         .map_err(|_| {
             ApiError::bad_request("invalid_certificate", "Certificate encoding is invalid.")
         })?;
@@ -1611,16 +2159,31 @@ async fn connect_provider(
             "Certificate size is invalid.",
         ));
     }
+    let fingerprint = sha256_hex(&certificate);
+    if !valid_lowercase_digest(&trusted.certificate_fingerprint)
+        || fingerprint != trusted.certificate_fingerprint
+    {
+        return Err(ApiError::conflict(
+            "provider_binding_mismatch",
+            "Provider certificate does not match the mutually signed pairing pin.",
+        ));
+    }
+    let address = trusted.address.parse::<SocketAddr>().map_err(|_| {
+        ApiError::bad_request(
+            "invalid_provider_address",
+            "Signed provider address is not a valid socket address.",
+        )
+    })?;
     let response = ProviderConnectionResponse {
-        peer_id: request.peer_id,
-        address: request.address,
-        certificate_fingerprint: blake3::hash(&certificate).to_hex().to_string(),
+        peer_id: trusted.peer_id,
+        address,
+        certificate_fingerprint: fingerprint,
     };
     state
         .connect_provider(ProviderConnection {
-            peer_id: request.peer_id,
-            address: request.address,
-            certificate_der: request.certificate_der,
+            peer_id: trusted.peer_id,
+            address,
+            certificate_der: trusted.certificate_der,
         })
         .map_err(ApiError::from_core)?;
     Ok(axum::Json(response))
@@ -1661,7 +2224,7 @@ async fn list_providers(
         providers.push(ProviderConnectionResponse {
             peer_id: config.peer_id,
             address: config.address,
-            certificate_fingerprint: blake3::hash(&certificate).to_hex().to_string(),
+            certificate_fingerprint: sha256_hex(&certificate),
         });
     }
     Ok(axum::Json(providers))
@@ -1845,38 +2408,80 @@ async fn backup_archive(
         }
     };
     let control = lease.control();
-    let archive_path =
-        match receive_archive(body, &headers, &job_directory, state.archive_limits).await {
-            Ok(path) => path,
+    let source_root = job_directory.join("source");
+    let metadata_digest =
+        blake3::hash(&serde_json::to_vec(&metadata).map_err(ApiError::from_json)?)
+            .to_hex()
+            .to_string();
+    let prepared_source = prepared_archive_source(&job_directory, &metadata_digest)?;
+    let archive_path = if prepared_source.is_some() {
+        None
+    } else {
+        match receive_archive(body, &headers, &state, &job_directory, &metadata_digest).await {
+            Ok(path) => Some(path),
             Err(error) => {
-                if !existed {
-                    let _ = remove_private_job_directory(
-                        state.archive_backup_root.as_path(),
-                        &job_directory,
-                    );
-                    lease.finish().map_err(ApiError::from_core)?;
-                } else {
+                if job_directory.join("upload-session.json").is_file() {
                     lease.preserve_for_resume().map_err(ApiError::from_core)?;
+                } else {
+                    if !existed {
+                        let _ = remove_private_job_directory(
+                            state.archive_backup_root.as_path(),
+                            &job_directory,
+                        );
+                    }
+                    lease.finish().map_err(ApiError::from_core)?;
                 }
                 return Err(error);
             }
-        };
-    let source_root = job_directory.join("source");
+        }
+    };
     let request = metadata.with_source_root(source_root.clone());
     let worker_job_directory = job_directory.clone();
-    let engine = Arc::clone(&state.engine);
-    let limits = state.archive_limits;
+    let worker_state = state.clone();
     let result = tokio::task::spawn_blocking(move || {
         let _admission = admission;
-        if !source_root.exists() {
-            extract_backup_archive(&archive_path, &source_root, limits, &control)?;
+        if prepared_source.is_none() {
+            if source_root.exists() {
+                fs::remove_dir_all(&source_root)
+                    .map_err(|_| ApiError::internal("incomplete archive source cleanup failed"))?;
+            }
+            let archive_path = archive_path
+                .as_deref()
+                .ok_or_else(|| ApiError::internal("archive upload disappeared"))?;
+            extract_backup_archive(archive_path, &source_root, &worker_state, &control)?;
+            let upload_digest = archive_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(|name| name.strip_prefix("upload-"))
+                .and_then(|name| name.strip_suffix(".zip"))
+                .filter(|digest| valid_lowercase_digest(digest))
+                .ok_or_else(|| ApiError::internal("archive upload identity is invalid"))?;
+            persist_private_file(
+                &worker_job_directory.join("source-ready.json"),
+                &serde_json::to_vec(&ArchivePreparedSource {
+                    schema_version: 1,
+                    metadata_digest: metadata_digest.clone(),
+                    upload_digest: upload_digest.to_owned(),
+                })
+                .map_err(ApiError::from_json)?,
+            )
+            .map_err(ApiError::from_core)?;
+            fs::remove_file(archive_path)
+                .map_err(|_| ApiError::internal("consumed archive upload cleanup failed"))?;
+            let _ = fs::remove_file(worker_job_directory.join("upload-session.json"));
+            File::open(&worker_job_directory)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|_| ApiError::internal("archive source commit could not be synced"))?;
         }
+        let source_bytes = archive_tree_bytes(&source_root)?;
+        let _backup_disk_reservation = worker_state.reserve_archive_staging(source_bytes)?;
         let backup_id = request.backup_id.unwrap_or_default();
         let mut options = BackupOptions::new(backup_id, request.snapshot_id, request.job_id);
         options.display_name = request.display_name;
         options.created_at_unix_ms = now_unix_ms();
         options.replica_intent = ReplicaIntent::explicit(request.selected_provider_ids);
-        let result = engine
+        let result = worker_state
+            .engine
             .backup(request.source_root, &options, &control, |_| {})
             .map_err(ApiError::from_core)?;
         let response = BackupResponse {
@@ -1889,11 +2494,21 @@ async fn backup_archive(
             selected_providers: result.manifest.replica_intent.selected_providers.len(),
             degraded_failures: result.replication.failures.len(),
         };
-        persist_private_file(
-            &worker_job_directory.join("result.json"),
-            &serde_json::to_vec(&response).map_err(ApiError::from_json)?,
-        )
-        .map_err(ApiError::from_core)?;
+        let response_bytes = serde_json::to_vec(&response).map_err(ApiError::from_json)?;
+        let retained_bytes = u64::try_from(response_bytes.len())
+            .ok()
+            .and_then(|bytes| {
+                bytes.checked_add(
+                    fs::metadata(worker_job_directory.join("metadata.json"))
+                        .ok()?
+                        .len(),
+                )
+            })
+            .ok_or_else(|| ApiError::payload_too_large("Archive result size overflowed."))?;
+        ensure_retained_archive_capacity(&worker_state, 1, retained_bytes)?;
+        persist_private_file(&worker_job_directory.join("result.json"), &response_bytes)
+            .map_err(ApiError::from_core)?;
+        compact_completed_backup_job(&worker_job_directory);
         Ok::<_, ApiError>(response)
     })
     .await
@@ -2004,6 +2619,7 @@ async fn restore_preview(
         conflict_policy: request.conflict_policy,
         selected_paths: Default::default(),
         job_id: request.job_id,
+        target_inventory: None,
     };
     let engine = Arc::clone(&state.engine);
     let worker_state = state.clone();
@@ -2025,6 +2641,443 @@ async fn restore_preview(
     persisted_plan_response(&state, plan)
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TargetInventoryUploadSession {
+    schema_version: u16,
+    inventory_id: String,
+    job_id: String,
+    root_identity: String,
+    entry_count: u64,
+    total_bytes: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BeginTargetInventoryRequest {
+    job_id: String,
+    schema_version: u16,
+    root_identity: String,
+    entry_count: u64,
+    total_bytes: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TargetInventoryUploadResponse {
+    inventory_id: String,
+    job_id: String,
+    next_offset: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TargetInventoryPageRequest {
+    job_id: String,
+    offset: u64,
+    page_digest: String,
+    entries: Vec<TargetInventoryEntry>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct FinalizeTargetInventoryRequest {
+    job_id: String,
+    entry_count: u64,
+    total_bytes: u64,
+    #[serde(default)]
+    inventory_digest: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TargetInventoryReference {
+    inventory_id: String,
+    job_id: String,
+    schema_version: u16,
+    root_identity: String,
+    entry_count: u64,
+    total_bytes: u64,
+    inventory_digest: String,
+}
+
+async fn begin_target_inventory(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ContractJson(request): ContractJson<BeginTargetInventoryRequest>,
+) -> Result<axum::Json<TargetInventoryUploadResponse>, ApiError> {
+    authorize(&state, &headers)?;
+    if !valid_job_identifier(&request.job_id)
+        || request.schema_version != TARGET_INVENTORY_SCHEMA_VERSION
+        || request.root_identity.trim().is_empty()
+        || request.root_identity.len() > 512
+        || request.root_identity.chars().any(char::is_control)
+        || request.entry_count > MAX_TARGET_INVENTORY_ENTRIES
+    {
+        return Err(ApiError::bad_request(
+            "invalid_target_inventory",
+            "Target inventory metadata is invalid or exceeds its bounded contract.",
+        ));
+    }
+    let job_directory = create_or_open_archive_restore_job(&state, &request.job_id)?;
+    let directory = SafeUploadDirectory::open(&job_directory)?;
+    let mut random = [0_u8; 32];
+    OsRng.fill_bytes(&mut random);
+    let inventory_id = lowercase_hex(&random);
+    let session = TargetInventoryUploadSession {
+        schema_version: TARGET_INVENTORY_SCHEMA_VERSION,
+        inventory_id: inventory_id.clone(),
+        job_id: request.job_id.clone(),
+        root_identity: request.root_identity,
+        entry_count: request.entry_count,
+        total_bytes: request.total_bytes,
+    };
+    directory.create_private_file(
+        &target_inventory_session_name(&inventory_id),
+        &serde_json::to_vec(&session).map_err(ApiError::from_json)?,
+    )?;
+    Ok(axum::Json(TargetInventoryUploadResponse {
+        inventory_id,
+        job_id: request.job_id,
+        next_offset: 0,
+    }))
+}
+
+async fn append_target_inventory_page(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(inventory_id): AxumPath<String>,
+    ContractJson(request): ContractJson<TargetInventoryPageRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    if !valid_lowercase_digest(&inventory_id) || !valid_job_identifier(&request.job_id) {
+        return Err(ApiError::bad_request(
+            "invalid_target_inventory",
+            "Target inventory upload identity is invalid.",
+        ));
+    }
+    if request.entries.is_empty()
+        || request.entries.len() as u64 > MAX_TARGET_INVENTORY_ENTRIES
+        || !valid_lowercase_digest(&request.page_digest)
+        || target_inventory_page_digest(&request.entries) != request.page_digest
+    {
+        return Err(ApiError::unprocessable(
+            "target_inventory_page_mismatch",
+            "Target inventory page content does not match its declared digest.",
+        ));
+    }
+    let job_directory = existing_archive_restore_job(&state, &request.job_id)?;
+    let directory = SafeUploadDirectory::open(&job_directory)?;
+    let session = load_target_inventory_session(&directory, &inventory_id)?;
+    if session.job_id != request.job_id {
+        return Err(ApiError::conflict(
+            "target_inventory_job_mismatch",
+            "Target inventory upload is bound to a different restore job.",
+        ));
+    }
+    let entries = load_target_inventory_entries(&directory, &inventory_id)?;
+    let next_offset = entries.len() as u64;
+    if request.offset != next_offset {
+        if request.offset < next_offset {
+            let start = usize::try_from(request.offset).unwrap_or(usize::MAX);
+            let end = start.saturating_add(request.entries.len());
+            if end <= entries.len() && entries[start..end] == request.entries {
+                return Ok(inventory_upload_response(
+                    &inventory_id,
+                    &request.job_id,
+                    next_offset,
+                ));
+            }
+        }
+        return Ok(inventory_offset_conflict(next_offset));
+    }
+    validate_target_inventory_page(&session, &entries, &request.entries)?;
+    let serialized = serde_json::to_vec(&request.entries).map_err(ApiError::from_json)?;
+    let current_length = directory.private_file_length(
+        &target_inventory_entries_name(&inventory_id),
+        MAX_TARGET_INVENTORY_STAGING_BYTES,
+    )?;
+    if current_length
+        .saturating_add(serialized.len() as u64)
+        .saturating_add(1)
+        > MAX_TARGET_INVENTORY_STAGING_BYTES
+    {
+        return Err(ApiError::payload_too_large(
+            "Target inventory staging exceeds its bounded byte limit.",
+        ));
+    }
+    let _reservation = state.reserve_archive_staging(serialized.len() as u64 + 1)?;
+    let mut file = directory.open_partial_append(&target_inventory_entries_name(&inventory_id))?;
+    use std::io::Write as _;
+    file.write_all(&serialized)
+        .and_then(|()| file.write_all(b"\n"))
+        .and_then(|()| file.sync_all())
+        .map_err(|_| ApiError::internal("target inventory page could not be persisted"))?;
+    directory.sync()?;
+    Ok(inventory_upload_response(
+        &inventory_id,
+        &request.job_id,
+        next_offset + request.entries.len() as u64,
+    ))
+}
+
+async fn finalize_target_inventory(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(inventory_id): AxumPath<String>,
+    ContractJson(request): ContractJson<FinalizeTargetInventoryRequest>,
+) -> Result<axum::Json<TargetInventoryReference>, ApiError> {
+    authorize(&state, &headers)?;
+    if !valid_lowercase_digest(&inventory_id) || !valid_job_identifier(&request.job_id) {
+        return Err(ApiError::bad_request(
+            "invalid_target_inventory",
+            "Target inventory upload identity is invalid.",
+        ));
+    }
+    let job_directory = existing_archive_restore_job(&state, &request.job_id)?;
+    let directory = SafeUploadDirectory::open(&job_directory)?;
+    let final_name = target_inventory_final_name(&inventory_id);
+    if let Some(bytes) =
+        directory.read_private_file(&final_name, MAX_TARGET_INVENTORY_STAGING_BYTES)?
+    {
+        let inventory: TargetInventory =
+            serde_json::from_slice(&bytes).map_err(ApiError::from_json)?;
+        return Ok(axum::Json(target_inventory_reference(
+            &inventory_id,
+            &request.job_id,
+            &inventory,
+        )));
+    }
+    let session = load_target_inventory_session(&directory, &inventory_id)?;
+    if session.job_id != request.job_id
+        || session.entry_count != request.entry_count
+        || session.total_bytes != request.total_bytes
+    {
+        return Err(ApiError::conflict(
+            "target_inventory_job_mismatch",
+            "Target inventory finalization does not match its immutable upload metadata.",
+        ));
+    }
+    let entries = load_target_inventory_entries(&directory, &inventory_id)?;
+    if entries.len() as u64 != session.entry_count {
+        return Err(ApiError::conflict(
+            "target_inventory_incomplete",
+            "Target inventory pages are incomplete.",
+        ));
+    }
+    validate_target_inventory_page(&session, &[], &entries)?;
+    let digest = canonical_target_inventory_digest(&session.root_identity, &entries)
+        .map_err(ApiError::from_core)?;
+    if !request.inventory_digest.is_empty() && request.inventory_digest != digest {
+        directory.remove(&target_inventory_session_name(&inventory_id));
+        directory.remove(&target_inventory_entries_name(&inventory_id));
+        return Err(ApiError::unprocessable(
+            "target_inventory_digest_mismatch",
+            "Target inventory content does not match its final declared digest.",
+        ));
+    }
+    let inventory = TargetInventory {
+        schema_version: TARGET_INVENTORY_SCHEMA_VERSION,
+        root_identity: session.root_identity,
+        entry_count: session.entry_count,
+        total_bytes: session.total_bytes,
+        inventory_digest: digest,
+        entries,
+    };
+    directory.create_private_file(
+        &final_name,
+        &serde_json::to_vec(&inventory).map_err(ApiError::from_json)?,
+    )?;
+    directory.remove(&target_inventory_session_name(&inventory_id));
+    directory.remove(&target_inventory_entries_name(&inventory_id));
+    Ok(axum::Json(target_inventory_reference(
+        &inventory_id,
+        &request.job_id,
+        &inventory,
+    )))
+}
+
+fn target_inventory_page_digest(entries: &[TargetInventoryEntry]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"covalent/target-inventory-page/v1");
+    hasher.update((entries.len() as u64).to_be_bytes());
+    for entry in entries {
+        let path = entry.path.as_str().as_bytes();
+        hasher.update((path.len() as u64).to_be_bytes());
+        hasher.update(path);
+        hasher.update([match entry.kind {
+            EntryKind::File => 1,
+            EntryKind::Directory => 2,
+        }]);
+        hasher.update(entry.length.to_be_bytes());
+        match entry.modified_at_unix_ms {
+            Some(value) => {
+                hasher.update([1]);
+                hasher.update(value.to_be_bytes());
+            }
+            None => hasher.update([0]),
+        }
+        let identity = entry.identity_token.as_bytes();
+        hasher.update((identity.len() as u64).to_be_bytes());
+        hasher.update(identity);
+    }
+    lowercase_hex(&hasher.finalize())
+}
+
+fn validate_target_inventory_page(
+    session: &TargetInventoryUploadSession,
+    previous: &[TargetInventoryEntry],
+    page: &[TargetInventoryEntry],
+) -> Result<(), ApiError> {
+    let mut prior = previous.last().map(|entry| &entry.path);
+    let previous_total = previous
+        .iter()
+        .try_fold(0_u64, |total, entry| {
+            total.checked_add(if entry.kind == EntryKind::File {
+                entry.length
+            } else {
+                0
+            })
+        })
+        .ok_or_else(|| ApiError::payload_too_large("Target inventory byte count overflowed."))?;
+    let mut total = previous_total;
+    for entry in page {
+        if prior.is_some_and(|path| path >= &entry.path)
+            || entry.identity_token.trim().is_empty()
+            || entry.identity_token.len() > 512
+            || entry.identity_token.chars().any(char::is_control)
+            || (entry.kind == EntryKind::Directory && entry.length != 0)
+        {
+            return Err(ApiError::bad_request(
+                "invalid_target_inventory",
+                "Target inventory entries must be canonical, sorted, unique, and bounded.",
+            ));
+        }
+        if entry.kind == EntryKind::File {
+            total = total.checked_add(entry.length).ok_or_else(|| {
+                ApiError::payload_too_large("Target inventory byte count overflowed.")
+            })?;
+        }
+        prior = Some(&entry.path);
+    }
+    if previous.len().saturating_add(page.len()) as u64 > session.entry_count
+        || total > session.total_bytes
+        || (previous.len().saturating_add(page.len()) as u64 == session.entry_count
+            && total != session.total_bytes)
+    {
+        return Err(ApiError::bad_request(
+            "invalid_target_inventory",
+            "Target inventory counts do not match immutable upload metadata.",
+        ));
+    }
+    Ok(())
+}
+
+fn load_target_inventory_entries(
+    directory: &SafeUploadDirectory,
+    inventory_id: &str,
+) -> Result<Vec<TargetInventoryEntry>, ApiError> {
+    use std::io::BufRead as _;
+
+    let name = target_inventory_entries_name(inventory_id);
+    if directory.private_file_length(&name, MAX_TARGET_INVENTORY_STAGING_BYTES)? == 0 {
+        return Ok(Vec::new());
+    }
+    let file = directory.open_private_reader(&name, MAX_TARGET_INVENTORY_STAGING_BYTES)?;
+    let mut entries = Vec::new();
+    for line in std::io::BufReader::new(file).lines() {
+        let line =
+            line.map_err(|_| ApiError::internal("target inventory page could not be read"))?;
+        let page: Vec<TargetInventoryEntry> =
+            serde_json::from_str(&line).map_err(ApiError::from_json)?;
+        entries.extend(page);
+        if entries.len() as u64 > MAX_TARGET_INVENTORY_ENTRIES {
+            return Err(ApiError::payload_too_large(
+                "Target inventory exceeds its entry limit.",
+            ));
+        }
+    }
+    Ok(entries)
+}
+
+fn load_target_inventory_session(
+    directory: &SafeUploadDirectory,
+    inventory_id: &str,
+) -> Result<TargetInventoryUploadSession, ApiError> {
+    let bytes = directory
+        .read_private_file(
+            &target_inventory_session_name(inventory_id),
+            MAX_ARCHIVE_METADATA_BYTES as u64,
+        )?
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "target_inventory_not_found",
+                "Target inventory upload is unavailable or already finalized.",
+            )
+        })?;
+    let session: TargetInventoryUploadSession =
+        serde_json::from_slice(&bytes).map_err(ApiError::from_json)?;
+    if session.schema_version != TARGET_INVENTORY_SCHEMA_VERSION
+        || session.inventory_id != inventory_id
+    {
+        return Err(ApiError::internal(
+            "target inventory upload state is invalid",
+        ));
+    }
+    Ok(session)
+}
+
+fn target_inventory_session_name(inventory_id: &str) -> String {
+    format!("inventory-{inventory_id}.session.json")
+}
+
+fn target_inventory_entries_name(inventory_id: &str) -> String {
+    format!("inventory-{inventory_id}.pages")
+}
+
+fn target_inventory_final_name(inventory_id: &str) -> String {
+    format!("inventory-{inventory_id}.json")
+}
+
+fn target_inventory_reference(
+    inventory_id: &str,
+    job_id: &str,
+    inventory: &TargetInventory,
+) -> TargetInventoryReference {
+    TargetInventoryReference {
+        inventory_id: inventory_id.to_owned(),
+        job_id: job_id.to_owned(),
+        schema_version: inventory.schema_version,
+        root_identity: inventory.root_identity.clone(),
+        entry_count: inventory.entry_count,
+        total_bytes: inventory.total_bytes,
+        inventory_digest: inventory.inventory_digest.clone(),
+    }
+}
+
+fn inventory_upload_response(inventory_id: &str, job_id: &str, next_offset: u64) -> Response {
+    axum::Json(TargetInventoryUploadResponse {
+        inventory_id: inventory_id.to_owned(),
+        job_id: job_id.to_owned(),
+        next_offset,
+    })
+    .into_response()
+}
+
+fn inventory_offset_conflict(next_offset: u64) -> Response {
+    let mut response = ApiError::conflict(
+        "target_inventory_offset_mismatch",
+        "Target inventory page offset does not match the durable server offset.",
+    )
+    .into_response();
+    if let Ok(value) = HeaderValue::from_str(&next_offset.to_string()) {
+        response
+            .headers_mut()
+            .insert(TARGET_INVENTORY_OFFSET_HEADER, value);
+    }
+    response
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RestoreArchivePreviewRequest {
@@ -2032,24 +3085,71 @@ struct RestoreArchivePreviewRequest {
     snapshot_id: String,
     conflict_policy: ConflictPolicy,
     job_id: String,
+    #[serde(default)]
+    target_inventory: Option<TargetInventory>,
+    #[serde(default)]
+    target_inventory_id: Option<String>,
 }
 
 async fn restore_archive_preview(
     State(state): State<AppState>,
     headers: HeaderMap,
-    ContractJson(request): ContractJson<RestoreArchivePreviewRequest>,
+    ContractJson(mut request): ContractJson<RestoreArchivePreviewRequest>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    if request.conflict_policy != ConflictPolicy::Fail {
+    if request.target_inventory.is_some() && request.target_inventory_id.is_some() {
         return Err(ApiError::bad_request(
-            "streamed_restore_requires_empty_destination",
-            "Streamed restores require fail-on-conflict and an empty client-authorized destination.",
+            "invalid_target_inventory",
+            "Use either an inline target inventory or one finalized inventory reference.",
+        ));
+    }
+    if let Some(inventory_id) = request.target_inventory_id.as_deref() {
+        request.target_inventory = Some(load_finalized_target_inventory(
+            &state,
+            &request.job_id,
+            inventory_id,
+        )?);
+    }
+    if let Some(inventory) = &mut request.target_inventory {
+        let canonical_digest =
+            canonical_target_inventory_digest(&inventory.root_identity, &inventory.entries)
+                .map_err(ApiError::from_core)?;
+        if !inventory.inventory_digest.is_empty() && inventory.inventory_digest != canonical_digest
+        {
+            return Err(ApiError::unprocessable(
+                "target_inventory_digest_mismatch",
+                "Target inventory content does not match its declared digest.",
+            ));
+        }
+        inventory.inventory_digest = canonical_digest;
+    }
+    if request.conflict_policy != ConflictPolicy::Fail && request.target_inventory.is_none() {
+        return Err(ApiError::bad_request(
+            "target_inventory_required",
+            "Skip, replace, and rename restores require a bounded client target inventory.",
         ));
     }
     if let Some(plan) = find_restore_plan_by_job(&state, &request.job_id)? {
+        let requested_inventory = request.target_inventory.as_ref().map(|inventory| {
+            (
+                inventory.root_identity.as_str(),
+                inventory.entry_count,
+                inventory.total_bytes,
+                inventory.inventory_digest.as_str(),
+            )
+        });
+        let persisted_inventory = plan.target_inventory.as_ref().map(|inventory| {
+            (
+                inventory.root_identity.as_str(),
+                inventory.entry_count,
+                inventory.total_bytes,
+                inventory.inventory_digest.as_str(),
+            )
+        });
         if plan.backup_id != request.backup_id
             || plan.snapshot_id != request.snapshot_id
             || plan.conflict_policy != request.conflict_policy
+            || persisted_inventory != requested_inventory
             || validate_archive_restore_plan(&state, &plan).is_err()
         {
             return Err(ApiError::conflict(
@@ -2065,6 +3165,7 @@ async fn restore_archive_preview(
         conflict_policy: request.conflict_policy,
         selected_paths: Default::default(),
         job_id: request.job_id,
+        target_inventory: request.target_inventory,
     };
     let engine = Arc::clone(&state.engine);
     let worker_target_root = target_root.clone();
@@ -2168,6 +3269,8 @@ struct RestorePlanPage {
     plan_digest: String,
     signer_device_id: DeviceId,
     signature: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_inventory: Option<TargetInventoryBinding>,
     entry_offset: usize,
     total_entries: usize,
     entries: Vec<RestorePreviewEntry>,
@@ -2187,6 +3290,8 @@ struct RestorePlanReference {
     job_id: String,
     signer_device_id: DeviceId,
     signature: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_inventory: Option<TargetInventoryBinding>,
     total_entries: usize,
 }
 
@@ -2237,6 +3342,7 @@ async fn restore_plan_page(
         plan_digest: plan.plan_digest,
         signer_device_id: plan.signer_device_id,
         signature: plan.signature,
+        target_inventory: plan.target_inventory,
         entry_offset: cursor,
         total_entries: plan.entries.len(),
         entries: plan.entries[cursor..end].to_vec(),
@@ -2257,6 +3363,7 @@ fn persisted_plan_response(state: &AppState, plan: RestorePlan) -> Result<Respon
         job_id: plan.job_id,
         signer_device_id: plan.signer_device_id,
         signature: plan.signature,
+        target_inventory: plan.target_inventory,
         total_entries: plan.entries.len(),
     };
     let mut response = axum::Json(summary).into_response();
@@ -2355,24 +3462,25 @@ async fn restore_archive_execute(
     authorize(&state, &headers)?;
     let (plan_id, plan) = request.resolve(&state)?;
     let plan_digest = plan.plan_digest.clone();
-    if plan.conflict_policy != ConflictPolicy::Fail
-        || plan.entries.iter().any(|entry| {
-            !matches!(
-                (entry.kind, entry.action),
-                (EntryKind::Directory, PreviewAction::CreateDirectory)
-                    | (EntryKind::File, PreviewAction::CreateFile)
-            )
-        })
+    if plan.target_inventory.is_none()
+        && (plan.conflict_policy != ConflictPolicy::Fail
+            || plan.entries.iter().any(|entry| {
+                !matches!(
+                    (entry.kind, entry.action),
+                    (EntryKind::Directory, PreviewAction::CreateDirectory)
+                        | (EntryKind::File, PreviewAction::CreateFile)
+                )
+            }))
     {
         return Err(ApiError::bad_request(
             "invalid_streamed_restore_plan",
             "A streamed restore plan may only create content in an empty destination.",
         ));
     }
-    let target_root = validate_archive_restore_plan(&state, &plan)?;
     if let Some(response) = completed_archive_restore_response(&plan_id, &plan).await? {
         return Ok(response);
     }
+    let target_root = validate_archive_restore_plan(&state, &plan)?;
     let admission = state.admit_engine_job()?;
     let job_directory = target_root
         .parent()
@@ -2383,14 +3491,32 @@ async fn restore_archive_execute(
     let worker_result_archive_path = result_archive_path.clone();
     let worker_result_json_path = result_json_path.clone();
     let worker_plan_id = plan_id.clone();
-    let engine = Arc::clone(&state.engine);
-    let limits = state.archive_limits;
+    let worker_state = state.clone();
     let job_id = plan.job_id.clone();
     let mut lease = state.start_job(&job_id)?;
     let control = lease.control();
     let outcome = tokio::task::spawn_blocking(move || {
         let _admission = admission;
-        let report = engine
+        let manifest = worker_state
+            .engine
+            .load_manifest(plan.backup_id, &plan.snapshot_id)
+            .map_err(ApiError::from_core)?;
+        let expected_restore_bytes = manifest.entries.iter().try_fold(0_u64, |total, entry| {
+            total
+                .checked_add(if entry.kind == EntryKind::File {
+                    entry.length
+                } else {
+                    0
+                })
+                .ok_or_else(|| ApiError::payload_too_large("Restore staging size overflowed."))
+        })?;
+        let peak_growth = expected_restore_bytes
+            .checked_mul(2)
+            .ok_or_else(|| ApiError::payload_too_large("Restore staging size overflowed."))?;
+        let _staging_reservation = worker_state.reserve_archive_staging(peak_growth)?;
+        prepare_external_restore_staging(&target_root, &plan)?;
+        let report = worker_state
+            .engine
             .restore(&plan, &control)
             .map_err(ApiError::from_core)?;
         let response = RestoreResponse {
@@ -2400,18 +3526,30 @@ async fn restore_archive_execute(
             bytes_written: report.bytes_written,
             rejected_provider_copies: report.rejected_provider_copies.len(),
         };
-        let length =
-            zip_restore_directory(&target_root, &worker_result_archive_path, &control, limits)?;
+        let length = zip_restore_directory(
+            &target_root,
+            &worker_result_archive_path,
+            &control,
+            worker_state.archive_limits,
+            &plan,
+        )?;
         let completion = ArchiveRestoreCompletion {
             plan_id: worker_plan_id,
             plan_digest: plan.plan_digest.clone(),
             result: response.clone(),
         };
-        persist_private_file(
-            &worker_result_json_path,
-            &serde_json::to_vec(&completion).map_err(ApiError::from_json)?,
-        )
-        .map_err(ApiError::from_core)?;
+        let completion_bytes = serde_json::to_vec(&completion).map_err(ApiError::from_json)?;
+        ensure_retained_archive_capacity(
+            &worker_state,
+            1,
+            length.saturating_add(
+                u64::try_from(completion_bytes.len())
+                    .map_err(|_| ApiError::payload_too_large("Restore result size overflowed."))?,
+            ),
+        )?;
+        persist_private_file(&worker_result_json_path, &completion_bytes)
+            .map_err(ApiError::from_core)?;
+        compact_completed_restore_job(&target_root);
         Ok::<_, ApiError>((length, response))
     })
     .await
@@ -2507,6 +3645,7 @@ fn prepare_archive_backup_job(
             true
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            ensure_retained_archive_capacity(state, 1, 0)?;
             let count = fs::read_dir(state.archive_backup_root.as_path())
                 .map_err(|_| ApiError::internal("archive backup staging could not be inspected"))?
                 .count();
@@ -2558,104 +3697,227 @@ fn prepare_archive_backup_job(
 async fn receive_archive(
     body: Body,
     headers: &HeaderMap,
+    state: &AppState,
     job_directory: &Path,
-    limits: ArchiveLimits,
+    metadata_digest: &str,
 ) -> Result<PathBuf, ApiError> {
-    let temporary_path = job_directory.join("upload.part");
-    let result = receive_archive_inner(body, headers, job_directory, limits).await;
-    if result.is_err() {
-        let _ = tokio::fs::remove_file(temporary_path).await;
-    }
-    result
+    receive_archive_inner(body, headers, state, job_directory, metadata_digest).await
 }
 
 async fn receive_archive_inner(
     mut body: Body,
     headers: &HeaderMap,
+    state: &AppState,
     job_directory: &Path,
-    limits: ArchiveLimits,
+    metadata_digest: &str,
 ) -> Result<PathBuf, ApiError> {
-    let expected_length = match headers.get(header::CONTENT_LENGTH) {
-        Some(value) => Some(
-            value
-                .to_str()
-                .ok()
-                .and_then(|value| value.parse::<u64>().ok())
-                .filter(|length| *length > 0)
-                .ok_or_else(|| {
-                    ApiError::bad_request(
-                        "invalid_content_length",
-                        "Archive Content-Length is invalid.",
-                    )
-                })?,
-        ),
-        None => None,
-    };
-    if expected_length.is_some_and(|length| length > limits.maximum_compressed_bytes) {
+    let upload_directory = SafeUploadDirectory::open(job_directory)?;
+    let offset = required_archive_u64_header(headers, ARCHIVE_UPLOAD_OFFSET_HEADER, true)?;
+    let total_length = required_archive_u64_header(headers, ARCHIVE_UPLOAD_LENGTH_HEADER, false)?;
+    let expected_digest = headers
+        .get(ARCHIVE_UPLOAD_DIGEST_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| valid_lowercase_digest(value))
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "invalid_upload_digest",
+                "Archive upload digest must be a lowercase SHA-256 digest.",
+            )
+        })?
+        .to_owned();
+    if total_length > state.archive_limits.maximum_compressed_bytes {
         return Err(ApiError::payload_too_large(
             "Archive exceeds the streamed transfer limit.",
         ));
     }
-    if let Some(length) = expected_length {
-        ensure_archive_capacity(job_directory, length, limits.free_space_reserve_bytes)?;
+    if offset > total_length {
+        return Err(ApiError::upload_offset(
+            StatusCode::CONFLICT,
+            "upload_offset_mismatch",
+            "Archive upload offset is outside the declared archive length.",
+            0,
+            true,
+        ));
     }
-    let temporary_path = job_directory.join("upload.part");
-    let mut archive = tokio::fs::File::create(&temporary_path)
-        .await
-        .map_err(|_| ApiError::internal("archive staging file could not be created"))?;
-    let mut received = 0_u64;
-    let started = Instant::now();
-    let mut hasher = blake3::Hasher::new();
-    loop {
-        if started.elapsed() > ARCHIVE_UPLOAD_MAX_DURATION {
-            let _ = tokio::fs::remove_file(&temporary_path).await;
-            return Err(ApiError::payload_too_large(
-                "Archive upload exceeded the maximum duration.",
+    let request_length = optional_archive_u64_header(headers, header::CONTENT_LENGTH.as_str())?;
+    if request_length.is_some_and(|length| length > total_length - offset) {
+        return Err(ApiError::payload_too_large(
+            "Archive request body exceeds the declared remaining length.",
+        ));
+    }
+
+    let session = ArchiveUploadSession {
+        schema_version: ARCHIVE_UPLOAD_SESSION_SCHEMA_VERSION,
+        total_length,
+        sha256_digest: expected_digest.clone(),
+        metadata_digest: metadata_digest.to_owned(),
+    };
+    let session_name = "upload-session.json";
+    let temporary_name = "upload.part";
+    match upload_directory.read_private_file(session_name, MAX_ARCHIVE_METADATA_BYTES as u64)? {
+        Some(bytes) => {
+            let stored: ArchiveUploadSession =
+                serde_json::from_slice(&bytes).map_err(ApiError::from_json)?;
+            if stored != session {
+                let durable_offset = upload_directory.private_file_length(
+                    temporary_name,
+                    state.archive_limits.maximum_compressed_bytes,
+                )?;
+                return Err(ApiError::upload_offset(
+                    StatusCode::CONFLICT,
+                    "upload_identity_mismatch",
+                    "This archive job is bound to different metadata, length, or content digest.",
+                    durable_offset,
+                    false,
+                ));
+            }
+        }
+        None if offset == 0 => {
+            upload_directory.create_private_file(
+                session_name,
+                &serde_json::to_vec(&session).map_err(ApiError::from_json)?,
+            )?;
+        }
+        None => {
+            return Err(ApiError::upload_offset(
+                StatusCode::CONFLICT,
+                "upload_offset_mismatch",
+                "No resumable archive upload exists for the requested offset.",
+                0,
+                true,
             ));
         }
-        let next = tokio::time::timeout(ARCHIVE_UPLOAD_IDLE_TIMEOUT, body.frame())
-            .await
-            .map_err(|_| {
-                ApiError::bad_request(
-                    "archive_upload_stalled",
-                    "Archive upload stopped making progress.",
-                )
-            })?;
+    }
+    let final_name = format!("upload-{expected_digest}.zip");
+    let final_length = upload_directory
+        .private_file_length(&final_name, state.archive_limits.maximum_compressed_bytes)?;
+    if final_length != 0 {
+        if final_length == total_length {
+            return Ok(job_directory.join(final_name));
+        }
+        return Err(ApiError::internal(
+            "durable archive upload length is invalid",
+        ));
+    }
+    let durable_offset = upload_directory.private_file_length(
+        temporary_name,
+        state.archive_limits.maximum_compressed_bytes,
+    )?;
+    if offset != durable_offset {
+        return Err(ApiError::upload_offset(
+            StatusCode::CONFLICT,
+            "upload_offset_mismatch",
+            "Archive upload offset does not match the durable server offset.",
+            durable_offset,
+            true,
+        ));
+    }
+    let remaining = total_length - durable_offset;
+    let _reservation = state.reserve_archive_staging(remaining)?;
+    let mut hasher = Sha256::new();
+    if durable_offset > 0 {
+        let mut prefix = tokio::fs::File::from_std(upload_directory.open_private_reader(
+            temporary_name,
+            state.archive_limits.maximum_compressed_bytes,
+        )?);
+        let mut buffer = [0_u8; 64 * 1_024];
+        loop {
+            let read = prefix
+                .read(&mut buffer)
+                .await
+                .map_err(|_| ApiError::internal("archive partial upload could not be read"))?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+        }
+    }
+    let mut archive =
+        tokio::fs::File::from_std(upload_directory.open_partial_append(temporary_name)?);
+    let mut received = durable_offset;
+    let mut request_received = 0_u64;
+    let started = Instant::now();
+    loop {
+        if started.elapsed() > ARCHIVE_UPLOAD_MAX_DURATION {
+            archive
+                .sync_all()
+                .await
+                .map_err(|_| ApiError::internal("archive staging sync failed"))?;
+            return Err(ApiError::upload_offset(
+                StatusCode::CONFLICT,
+                "upload_incomplete",
+                "Archive upload reached the request duration limit and can be resumed.",
+                received,
+                true,
+            ));
+        }
+        let next = match tokio::time::timeout(ARCHIVE_UPLOAD_IDLE_TIMEOUT, body.frame()).await {
+            Ok(next) => next,
+            Err(_) => {
+                archive
+                    .sync_all()
+                    .await
+                    .map_err(|_| ApiError::internal("archive staging sync failed"))?;
+                return Err(ApiError::upload_offset(
+                    StatusCode::CONFLICT,
+                    "upload_incomplete",
+                    "Archive upload stopped making progress and can be resumed.",
+                    received,
+                    true,
+                ));
+            }
+        };
         let Some(frame) = next else {
             break;
         };
-        let frame = frame.map_err(|_| {
-            ApiError::bad_request(
-                "invalid_archive",
-                "The streamed archive ended unexpectedly.",
-            )
-        })?;
+        let frame = match frame {
+            Ok(frame) => frame,
+            Err(_) => {
+                archive
+                    .sync_all()
+                    .await
+                    .map_err(|_| ApiError::internal("archive staging sync failed"))?;
+                return Err(ApiError::upload_offset(
+                    StatusCode::CONFLICT,
+                    "upload_incomplete",
+                    "The interrupted archive upload can be resumed.",
+                    received,
+                    true,
+                ));
+            }
+        };
         let Ok(data) = frame.into_data() else {
             continue;
         };
         received = received
             .checked_add(u64::try_from(data.len()).unwrap_or(u64::MAX))
             .ok_or_else(|| ApiError::payload_too_large("Archive size overflowed."))?;
-        if received > limits.maximum_compressed_bytes {
+        request_received = request_received
+            .checked_add(u64::try_from(data.len()).unwrap_or(u64::MAX))
+            .ok_or_else(|| ApiError::payload_too_large("Archive size overflowed."))?;
+        if received > total_length {
+            drop(archive);
+            upload_directory.remove(temporary_name);
+            upload_directory.remove(session_name);
             return Err(ApiError::payload_too_large(
-                "Archive exceeds the streamed transfer limit.",
+                "Archive request body exceeds the declared total length.",
             ));
         }
         if started.elapsed() >= Duration::from_secs(60)
-            && received / started.elapsed().as_secs().max(1) < MIN_ARCHIVE_UPLOAD_BYTES_PER_SECOND
+            && request_received / started.elapsed().as_secs().max(1)
+                < MIN_ARCHIVE_UPLOAD_BYTES_PER_SECOND
         {
-            let _ = tokio::fs::remove_file(&temporary_path).await;
-            return Err(ApiError::bad_request(
-                "archive_upload_too_slow",
-                "Archive upload remained below the minimum transfer rate.",
+            archive
+                .sync_all()
+                .await
+                .map_err(|_| ApiError::internal("archive staging sync failed"))?;
+            return Err(ApiError::upload_offset(
+                StatusCode::CONFLICT,
+                "upload_incomplete",
+                "Archive upload remained below the minimum transfer rate and can be resumed.",
+                received,
+                true,
             ));
-        }
-        if expected_length.is_none() {
-            ensure_archive_capacity(
-                job_directory,
-                u64::try_from(data.len()).unwrap_or(u64::MAX),
-                limits.free_space_reserve_bytes,
-            )?;
         }
         hasher.update(&data);
         archive
@@ -2668,73 +3930,253 @@ async fn receive_archive_inner(
         .await
         .map_err(|_| ApiError::internal("archive staging sync failed"))?;
     drop(archive);
-    if received == 0 || expected_length.is_some_and(|length| length != received) {
-        let _ = tokio::fs::remove_file(&temporary_path).await;
-        return Err(ApiError::bad_request(
-            "invalid_archive",
-            "Archive length did not match the request.",
+    if request_length.is_some_and(|length| length != request_received) || received < total_length {
+        return Err(ApiError::upload_offset(
+            StatusCode::CONFLICT,
+            "upload_incomplete",
+            "Archive upload is incomplete and can be resumed from the durable offset.",
+            received,
+            true,
         ));
     }
-    let digest = hasher.finalize().to_hex().to_string();
-    let archive_path = job_directory.join(format!("upload-{digest}.zip"));
-    match existing_archive_upload(job_directory, limits.maximum_compressed_bytes)? {
-        Some((stored, existing_path)) if stored == digest => {
-            tokio::fs::remove_file(&temporary_path)
-                .await
-                .map_err(|_| ApiError::internal("duplicate archive staging cleanup failed"))?;
-            return Ok(existing_path);
-        }
-        Some(_) => {
-            let _ = tokio::fs::remove_file(&temporary_path).await;
-            return Err(ApiError::conflict(
-                "job_conflict",
-                "This archive job ID is bound to different content.",
-            ));
-        }
-        None => {
-            tokio::fs::rename(&temporary_path, &archive_path)
-                .await
-                .map_err(|_| ApiError::internal("archive staging commit failed"))?;
-            File::open(job_directory)
-                .and_then(|directory| directory.sync_all())
-                .map_err(|_| ApiError::internal("archive staging commit could not be synced"))?;
-        }
+    let digest = lowercase_hex(&hasher.finalize());
+    if digest != expected_digest {
+        upload_directory.remove(temporary_name);
+        upload_directory.remove(session_name);
+        return Err(ApiError::unprocessable(
+            "archive_digest_mismatch",
+            "Archive content did not match its declared SHA-256 digest.",
+        ));
     }
-    Ok(archive_path)
+    let final_name = format!("upload-{digest}.zip");
+    upload_directory.commit(temporary_name, &final_name)?;
+    Ok(job_directory.join(final_name))
 }
 
-fn existing_archive_upload(
-    job_directory: &Path,
-    maximum_bytes: u64,
-) -> Result<Option<(String, PathBuf)>, ApiError> {
-    let mut found = None;
-    for entry in fs::read_dir(job_directory)
-        .map_err(|_| ApiError::internal("archive staging could not be inspected"))?
-    {
-        let entry = entry.map_err(|_| ApiError::internal("archive staging entry is invalid"))?;
-        let name = entry.file_name();
-        let Some(digest) = name
-            .to_str()
-            .and_then(|name| name.strip_prefix("upload-"))
-            .and_then(|name| name.strip_suffix(".zip"))
-        else {
-            continue;
-        };
-        let path = entry.path();
-        let metadata = fs::symlink_metadata(&path)
-            .map_err(|_| ApiError::internal("archive upload could not be inspected"))?;
-        if !valid_lowercase_digest(digest)
-            || metadata.file_type().is_symlink()
-            || !metadata.is_file()
-            || metadata.len() == 0
-            || metadata.len() > maximum_bytes
-            || found.is_some()
-        {
-            return Err(ApiError::internal("durable archive upload is invalid"));
-        }
-        found = Some((digest.to_owned(), path));
+fn required_archive_u64_header(
+    headers: &HeaderMap,
+    name: &'static str,
+    allow_zero: bool,
+) -> Result<u64, ApiError> {
+    let value = optional_archive_u64_header(headers, name)?.ok_or_else(|| {
+        ApiError::bad_request(
+            "archive_upload_headers_required",
+            "Archive upload offset, total length, and digest headers are required.",
+        )
+    })?;
+    if !allow_zero && value == 0 {
+        return Err(ApiError::bad_request(
+            "invalid_upload_length",
+            "Archive upload length must be greater than zero.",
+        ));
     }
-    Ok(found)
+    Ok(value)
+}
+
+fn optional_archive_u64_header(headers: &HeaderMap, name: &str) -> Result<Option<u64>, ApiError> {
+    headers
+        .get(name)
+        .map(|value| {
+            value
+                .to_str()
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .ok_or_else(|| {
+                    ApiError::bad_request(
+                        "invalid_upload_offset",
+                        "Archive upload byte headers must contain unsigned decimal integers.",
+                    )
+                })
+        })
+        .transpose()
+}
+
+fn lowercase_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
+}
+
+fn prepared_archive_source(
+    job_directory: &Path,
+    metadata_digest: &str,
+) -> Result<Option<ArchivePreparedSource>, ApiError> {
+    let marker_path = job_directory.join("source-ready.json");
+    let bytes = match fs::read(&marker_path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => {
+            return Err(ApiError::internal(
+                "archive source marker could not be read",
+            ));
+        }
+    };
+    let marker_metadata = fs::symlink_metadata(&marker_path)
+        .map_err(|_| ApiError::internal("archive source marker could not be inspected"))?;
+    let source_root = job_directory.join("source");
+    let source_metadata = fs::symlink_metadata(&source_root)
+        .map_err(|_| ApiError::internal("prepared archive source is unavailable"))?;
+    if marker_metadata.file_type().is_symlink()
+        || !marker_metadata.is_file()
+        || marker_metadata.len() > MAX_ARCHIVE_METADATA_BYTES as u64
+        || source_metadata.file_type().is_symlink()
+        || !source_metadata.is_dir()
+    {
+        return Err(ApiError::internal("prepared archive source is invalid"));
+    }
+    let marker: ArchivePreparedSource =
+        serde_json::from_slice(&bytes).map_err(ApiError::from_json)?;
+    if marker.schema_version != 1
+        || marker.metadata_digest != metadata_digest
+        || !valid_lowercase_digest(&marker.upload_digest)
+    {
+        return Err(ApiError::conflict(
+            "job_conflict",
+            "Prepared archive source is bound to different job metadata.",
+        ));
+    }
+    Ok(Some(marker))
+}
+
+fn compact_completed_backup_job(job_directory: &Path) {
+    for path in [
+        job_directory.join("source"),
+        job_directory.join("source-ready.json"),
+        job_directory.join("upload-session.json"),
+        job_directory.join("upload.part"),
+    ] {
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+                if let Err(error) = fs::remove_dir_all(&path) {
+                    tracing::warn!(path = %path.display(), %error, "completed archive source cleanup deferred");
+                }
+            }
+            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+                if let Err(error) = fs::remove_file(&path) {
+                    tracing::warn!(path = %path.display(), %error, "completed archive artifact cleanup deferred");
+                }
+            }
+            Ok(_) => {
+                tracing::warn!(path = %path.display(), "completed archive artifact was not a private regular entry")
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                tracing::warn!(path = %path.display(), %error, "completed archive artifact inspection failed")
+            }
+        }
+    }
+    if let Ok(entries) = fs::read_dir(job_directory) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if name
+                .to_str()
+                .is_some_and(|name| name.starts_with("upload-") && name.ends_with(".zip"))
+                && let Err(error) = fs::remove_file(entry.path())
+            {
+                tracing::warn!(path = %entry.path().display(), %error, "completed archive upload cleanup deferred");
+            }
+        }
+    }
+    if let Err(error) = File::open(job_directory).and_then(|directory| directory.sync_all()) {
+        tracing::warn!(path = %job_directory.display(), %error, "completed archive compaction sync deferred");
+    }
+}
+
+fn compact_completed_restore_job(target_root: &Path) {
+    match fs::symlink_metadata(target_root) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+            if let Err(error) = fs::remove_dir_all(target_root) {
+                tracing::warn!(path = %target_root.display(), %error, "completed restore target cleanup deferred");
+            }
+        }
+        Ok(_) => {
+            tracing::warn!(path = %target_root.display(), "completed restore target was not a private directory")
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            tracing::warn!(path = %target_root.display(), %error, "completed restore target inspection failed")
+        }
+    }
+    if let Some(job_directory) = target_root.parent()
+        && let Err(error) = File::open(job_directory).and_then(|directory| directory.sync_all())
+    {
+        tracing::warn!(path = %job_directory.display(), %error, "completed restore compaction sync deferred");
+    }
+}
+
+fn archive_tree_bytes(root: &Path) -> Result<u64, ApiError> {
+    let mut total = 0_u64;
+    for entry in WalkDir::new(root).follow_links(false) {
+        let entry = entry.map_err(|_| ApiError::internal("archive staging could not be walked"))?;
+        if entry.path() == root {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(entry.path())
+            .map_err(|_| ApiError::internal("archive staging entry could not be inspected"))?;
+        if metadata.file_type().is_symlink() {
+            return Err(ApiError::internal(
+                "archive staging unexpectedly contained a symbolic link",
+            ));
+        }
+        if metadata.is_file() {
+            total = total
+                .checked_add(metadata.len())
+                .ok_or_else(|| ApiError::payload_too_large("Archive staging size overflowed."))?;
+        } else if !metadata.is_dir() {
+            return Err(ApiError::internal(
+                "archive staging contained an unsupported entry",
+            ));
+        }
+    }
+    Ok(total)
+}
+
+fn retained_archive_usage(state: &AppState) -> Result<(usize, u64), ApiError> {
+    let mut count = 0_usize;
+    let mut bytes = 0_u64;
+    for root in [
+        state.archive_backup_root.as_path(),
+        state.archive_restore_root.as_path(),
+    ] {
+        for entry in fs::read_dir(root)
+            .map_err(|_| ApiError::internal("archive result store could not be inspected"))?
+        {
+            let entry = entry
+                .map_err(|_| ApiError::internal("archive result entry could not be inspected"))?;
+            let path = entry.path();
+            if !path.join("result.json").is_file() {
+                continue;
+            }
+            count = count
+                .checked_add(1)
+                .ok_or_else(|| ApiError::payload_too_large("Archive result count overflowed."))?;
+            bytes = bytes
+                .checked_add(archive_tree_bytes(&path)?)
+                .ok_or_else(|| ApiError::payload_too_large("Archive result size overflowed."))?;
+        }
+    }
+    Ok((count, bytes))
+}
+
+fn ensure_retained_archive_capacity(
+    state: &AppState,
+    additional_results: usize,
+    additional_bytes: u64,
+) -> Result<(), ApiError> {
+    let (count, bytes) = retained_archive_usage(state)?;
+    if count.saturating_add(additional_results) > state.archive_limits.maximum_retained_results
+        || bytes.saturating_add(additional_bytes)
+            > state.archive_limits.maximum_retained_result_bytes
+    {
+        return Err(ApiError::insufficient_storage(
+            "Acknowledge completed archive jobs before retaining another result.",
+        ));
+    }
+    Ok(())
 }
 
 fn ensure_archive_capacity(
@@ -2750,6 +4192,7 @@ fn ensure_archive_capacity(
             code: "insufficient_storage",
             message: "The node does not have enough reserved capacity for this archive.",
             retryable: true,
+            upload_offset: None,
         });
     }
     Ok(())
@@ -2778,9 +4221,10 @@ fn remove_private_job_directory(root: &Path, job_directory: &Path) -> Result<(),
 fn extract_backup_archive(
     archive_path: &Path,
     source_root: &Path,
-    limits: ArchiveLimits,
+    state: &AppState,
     control: &JobControl,
 ) -> Result<(), ApiError> {
+    let limits = state.archive_limits;
     let started = Instant::now();
     let file = File::open(archive_path)
         .map_err(|_| ApiError::internal("archive staging file could not be opened"))?;
@@ -2820,13 +4264,7 @@ fn extract_backup_archive(
             "Archive compression ratio exceeds the configured limit.",
         ));
     }
-    ensure_archive_capacity(
-        source_root
-            .parent()
-            .ok_or_else(|| ApiError::internal("archive source has no parent"))?,
-        declared_expanded.saturating_mul(2),
-        limits.free_space_reserve_bytes,
-    )?;
+    let _extraction_reservation = state.reserve_archive_staging(declared_expanded)?;
     drop(archive);
     create_private_directory(source_root.to_path_buf()).map_err(ApiError::from_core)?;
     let file = File::open(archive_path)
@@ -2929,6 +4367,7 @@ fn check_archive_control(control: &JobControl, started: Instant) -> Result<(), A
             code: "archive_processing_timeout",
             message: "Archive processing exceeded the maximum duration.",
             retryable: true,
+            upload_offset: None,
         });
     }
     Ok(())
@@ -3343,6 +4782,7 @@ fn evict_oldest_incomplete_archive_job(state: &AppState, root: &Path) -> Result<
         if metadata.file_type().is_symlink()
             || !metadata.is_dir()
             || path.join("result.json").exists()
+            || job_has_inventory_upload_session(&path)?
             || jobs.entries.get(&job_id).is_some_and(|job| job.active)
         {
             continue;
@@ -3363,6 +4803,27 @@ fn evict_oldest_incomplete_archive_job(state: &AppState, root: &Path) -> Result<
     Ok(true)
 }
 
+fn job_has_inventory_upload_session(job_directory: &Path) -> Result<bool, ApiError> {
+    for entry in fs::read_dir(job_directory)
+        .map_err(|_| ApiError::internal("archive job could not be inspected"))?
+    {
+        let entry = entry.map_err(|_| ApiError::internal("archive job entry is invalid"))?;
+        let name = entry.file_name();
+        if name
+            .to_str()
+            .is_some_and(|name| name.starts_with("inventory-") && name.ends_with(".session.json"))
+        {
+            let metadata = fs::symlink_metadata(entry.path())
+                .map_err(|_| ApiError::internal("inventory session could not be inspected"))?;
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(ApiError::internal("inventory session is invalid"));
+            }
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn create_archive_restore_target(state: &AppState, job_id: &str) -> Result<PathBuf, ApiError> {
     if !valid_job_identifier(job_id) {
         return Err(ApiError::bad_request(
@@ -3374,6 +4835,90 @@ fn create_archive_restore_target(state: &AppState, job_id: &str) -> Result<PathB
         .archive_restore_lock
         .lock()
         .map_err(|_| ApiError::internal("archive restore staging lock failed"))?;
+    let job_directory = state.archive_restore_root.join(job_id);
+    let job_directory = match fs::symlink_metadata(&job_directory) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => job_directory,
+        Ok(_) => {
+            return Err(ApiError::internal(
+                "archive restore job directory is invalid",
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            create_archive_restore_job_unlocked(state, job_id)?
+        }
+        Err(_) => {
+            return Err(ApiError::internal(
+                "archive restore staging could not be inspected",
+            ));
+        }
+    };
+    let target = job_directory.join("target");
+    match fs::create_dir(&target) {
+        Ok(()) => create_private_directory(target).map_err(ApiError::from_core),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Err(ApiError::conflict(
+            "job_conflict",
+            "This archive restore job ID already has a preview target.",
+        )),
+        Err(_) => Err(ApiError::internal(
+            "archive restore target could not be created",
+        )),
+    }
+}
+
+fn create_or_open_archive_restore_job(state: &AppState, job_id: &str) -> Result<PathBuf, ApiError> {
+    if !valid_job_identifier(job_id) {
+        return Err(ApiError::bad_request(
+            "invalid_job_id",
+            "The restore job ID is invalid.",
+        ));
+    }
+    let _guard = state
+        .archive_restore_lock
+        .lock()
+        .map_err(|_| ApiError::internal("archive restore staging lock failed"))?;
+    let path = state.archive_restore_root.join(job_id);
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => Ok(path),
+        Ok(_) => Err(ApiError::internal(
+            "archive restore job directory is invalid",
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            create_archive_restore_job_unlocked(state, job_id)
+        }
+        Err(_) => Err(ApiError::internal(
+            "archive restore staging could not be inspected",
+        )),
+    }
+}
+
+fn existing_archive_restore_job(state: &AppState, job_id: &str) -> Result<PathBuf, ApiError> {
+    let path = state.archive_restore_root.join(job_id);
+    let metadata = fs::symlink_metadata(&path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            ApiError::not_found(
+                "target_inventory_not_found",
+                "Target inventory upload is unavailable or expired.",
+            )
+        } else {
+            ApiError::internal("archive restore job directory could not be inspected")
+        }
+    })?;
+    if path.parent() != Some(state.archive_restore_root.as_path())
+        || metadata.file_type().is_symlink()
+        || !metadata.is_dir()
+    {
+        return Err(ApiError::internal(
+            "archive restore job directory is invalid",
+        ));
+    }
+    Ok(path)
+}
+
+fn create_archive_restore_job_unlocked(
+    state: &AppState,
+    job_id: &str,
+) -> Result<PathBuf, ApiError> {
+    ensure_retained_archive_capacity(state, 1, 0)?;
     let target_count = fs::read_dir(state.archive_restore_root.as_path())
         .map_err(|_| ApiError::internal("archive restore staging could not be inspected"))?
         .count();
@@ -3384,24 +4929,45 @@ fn create_archive_restore_target(state: &AppState, job_id: &str) -> Result<PathB
             "Too many archive restore previews are waiting for execution.",
         ));
     }
-    let job_directory = state.archive_restore_root.join(job_id);
-    match fs::create_dir(&job_directory) {
-        Ok(()) => {
-            let job_directory =
-                create_private_directory(job_directory).map_err(ApiError::from_core)?;
-            let target = job_directory.join("target");
-            fs::create_dir(&target)
-                .map_err(|_| ApiError::internal("archive restore target could not be created"))?;
-            create_private_directory(target).map_err(ApiError::from_core)
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Err(ApiError::conflict(
-            "job_conflict",
-            "This archive restore job ID already exists.",
-        )),
-        Err(_) => Err(ApiError::internal(
-            "archive restore staging directory could not be created",
-        )),
+    let path = state.archive_restore_root.join(job_id);
+    fs::create_dir(&path)
+        .map_err(|_| ApiError::internal("archive restore job directory could not be created"))?;
+    create_private_directory(path).map_err(ApiError::from_core)
+}
+
+fn load_finalized_target_inventory(
+    state: &AppState,
+    job_id: &str,
+    inventory_id: &str,
+) -> Result<TargetInventory, ApiError> {
+    if !valid_lowercase_digest(inventory_id) {
+        return Err(ApiError::bad_request(
+            "invalid_target_inventory",
+            "Target inventory reference is invalid.",
+        ));
     }
+    let directory = SafeUploadDirectory::open(&existing_archive_restore_job(state, job_id)?)?;
+    let bytes = directory
+        .read_private_file(
+            &target_inventory_final_name(inventory_id),
+            MAX_TARGET_INVENTORY_STAGING_BYTES,
+        )?
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "target_inventory_not_found",
+                "Finalized target inventory is unavailable or expired.",
+            )
+        })?;
+    let inventory: TargetInventory = serde_json::from_slice(&bytes).map_err(ApiError::from_json)?;
+    let digest = canonical_target_inventory_digest(&inventory.root_identity, &inventory.entries)
+        .map_err(ApiError::from_core)?;
+    if inventory.schema_version != TARGET_INVENTORY_SCHEMA_VERSION
+        || inventory.entry_count != inventory.entries.len() as u64
+        || inventory.inventory_digest != digest
+    {
+        return Err(ApiError::internal("finalized target inventory is invalid"));
+    }
+    Ok(inventory)
 }
 
 fn validate_archive_restore_plan(
@@ -3435,12 +5001,69 @@ fn validate_archive_restore_plan(
     Ok(target)
 }
 
+fn prepare_external_restore_staging(root: &Path, plan: &RestorePlan) -> Result<(), ApiError> {
+    if plan.target_inventory.is_none() {
+        return Ok(());
+    }
+    for entry in &plan.entries {
+        let destination = entry
+            .destination_path
+            .components()
+            .fold(root.to_path_buf(), |path, component| path.join(component));
+        match entry.action {
+            PreviewAction::KeepDirectory => {
+                fs::create_dir_all(&destination).map_err(|_| {
+                    ApiError::internal("external restore directory adapter could not be staged")
+                })?;
+            }
+            PreviewAction::SkipFile | PreviewAction::ReplaceFile => {
+                let parent = destination.parent().ok_or_else(|| {
+                    ApiError::internal("external restore file adapter has no parent")
+                })?;
+                fs::create_dir_all(parent).map_err(|_| {
+                    ApiError::internal("external restore parent adapter could not be staged")
+                })?;
+                let file = File::options()
+                    .write(true)
+                    .create_new(true)
+                    .open(&destination)
+                    .map_err(|_| {
+                        ApiError::internal("external restore file adapter could not be staged")
+                    })?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    file.set_permissions(fs::Permissions::from_mode(0o600))
+                        .map_err(|_| {
+                            ApiError::internal("external restore adapter could not be protected")
+                        })?;
+                }
+                file.sync_all().map_err(|_| {
+                    ApiError::internal("external restore adapter could not be synced")
+                })?;
+            }
+            PreviewAction::CreateFile
+            | PreviewAction::CreateDirectory
+            | PreviewAction::RenameFile => {}
+        }
+    }
+    File::open(root)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| ApiError::internal("external restore adapter could not be committed"))
+}
+
 fn zip_restore_directory(
     root: &Path,
     result_path: &Path,
     control: &JobControl,
     limits: ArchiveLimits,
+    plan: &RestorePlan,
 ) -> Result<u64, ApiError> {
+    let planned_actions: BTreeMap<_, _> = plan
+        .entries
+        .iter()
+        .map(|entry| (entry.destination_path.clone(), entry.action))
+        .collect();
     let started = Instant::now();
     let mut entry_count = 0_usize;
     let mut total_uncompressed = 0_u64;
@@ -3518,6 +5141,16 @@ fn zip_restore_directory(
             .join("/");
         let relative = RelativePath::new(relative_string)
             .map_err(|_| ApiError::internal("restore path was not canonical"))?;
+        let action = planned_actions
+            .get(&relative)
+            .copied()
+            .ok_or_else(|| ApiError::internal("restore staging contained an unplanned entry"))?;
+        if matches!(
+            action,
+            PreviewAction::SkipFile | PreviewAction::KeepDirectory
+        ) {
+            continue;
+        }
         if entry.file_type().is_dir() {
             writer
                 .add_directory(format!("{relative}/"), directory_options)
@@ -3586,6 +5219,7 @@ fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
             code: "authentication_required",
             message: "A valid local API token is required.",
             retryable: false,
+            upload_offset: None,
         })
     }
 }
@@ -3618,6 +5252,7 @@ struct ApiError {
     code: &'static str,
     message: &'static str,
     retryable: bool,
+    upload_offset: Option<u64>,
 }
 
 impl ApiError {
@@ -3638,24 +5273,28 @@ impl ApiError {
                 code: "confirmation_required",
                 message: "Explicit local confirmation is required.",
                 retryable: false,
+                upload_offset: None,
             },
             CoreError::Paused => Self {
                 status: StatusCode::CONFLICT,
                 code: "job_paused",
                 message: "The job is paused and can be resumed with the same job ID.",
                 retryable: false,
+                upload_offset: None,
             },
             CoreError::Cancelled => Self {
                 status: StatusCode::CONFLICT,
                 code: "job_cancelled",
                 message: "The job was cancelled and its checkpoint was discarded.",
                 retryable: false,
+                upload_offset: None,
             },
             CoreError::RestoreConflict(_) => Self {
                 status: StatusCode::CONFLICT,
                 code: "restore_conflict",
                 message: "The restore preview found a destination conflict.",
                 retryable: false,
+                upload_offset: None,
             },
             CoreError::RestorePlanMismatch => Self::conflict(
                 "restore_plan_mismatch",
@@ -3666,6 +5305,7 @@ impl ApiError {
                 code: "invitation_unavailable",
                 message: "The pairing invitation is invalid, expired, or already used.",
                 retryable: false,
+                upload_offset: None,
             },
             CoreError::ProtocolNegotiationFailed => Self::conflict(
                 "protocol_incompatible",
@@ -3676,30 +5316,35 @@ impl ApiError {
                 code: "source_changed",
                 message: "The source changed while it was being backed up. Retry after writes stop.",
                 retryable: true,
+                upload_offset: None,
             },
             CoreError::UnsupportedSourceEntry(_) | CoreError::SourcePermissionDenied(_) => Self {
                 status: StatusCode::UNPROCESSABLE_ENTITY,
                 code: "source_unreadable",
                 message: "The source contains an unsupported or unreadable entry.",
                 retryable: false,
+                upload_offset: None,
             },
             CoreError::CorruptChunk(_) | CoreError::AuthenticationFailed => Self {
                 status: StatusCode::UNPROCESSABLE_ENTITY,
                 code: "backup_corrupt",
                 message: "Backup data failed authenticated integrity verification.",
                 retryable: false,
+                upload_offset: None,
             },
             CoreError::MissingChunk(_) | CoreError::ProvidersExhausted(_) => Self {
                 status: StatusCode::SERVICE_UNAVAILABLE,
                 code: "backup_unavailable",
                 message: "No intact authorized copy is currently available.",
                 retryable: true,
+                upload_offset: None,
             },
             CoreError::ResourceLimit(_) | CoreError::SettingsTooLarge => Self {
                 status: StatusCode::PAYLOAD_TOO_LARGE,
                 code: "resource_limit",
                 message: "The request exceeded a configured resource limit.",
                 retryable: false,
+                upload_offset: None,
             },
             CoreError::PeerRevoked
             | CoreError::UnselectedProvider
@@ -3708,6 +5353,7 @@ impl ApiError {
                 code: "not_authorized",
                 message: "The requested peer or provider is not authorized.",
                 retryable: false,
+                upload_offset: None,
             },
             CoreError::InvalidKeyMaterial
             | CoreError::UnsupportedCipherSuite(_)
@@ -3723,6 +5369,7 @@ impl ApiError {
                 code: "node_state_locked",
                 message: "Another Covalent process currently owns this node state.",
                 retryable: true,
+                upload_offset: None,
             },
             _ => Self::internal("The local engine could not complete the request."),
         }
@@ -3738,6 +5385,7 @@ impl ApiError {
                 code: "invalid_content_type",
                 message: "JSON requests require Content-Type: application/json.",
                 retryable: false,
+                upload_offset: None,
             },
             _ => Self::from_json_contract(),
         }
@@ -3749,6 +5397,7 @@ impl ApiError {
             code: "invalid_json",
             message: "The request does not match the versioned contract.",
             retryable: false,
+            upload_offset: None,
         }
     }
 
@@ -3762,6 +5411,7 @@ impl ApiError {
             code,
             message,
             retryable: false,
+            upload_offset: None,
         }
     }
 
@@ -3771,6 +5421,7 @@ impl ApiError {
             code,
             message,
             retryable: false,
+            upload_offset: None,
         }
     }
 
@@ -3780,6 +5431,7 @@ impl ApiError {
             code,
             message,
             retryable: false,
+            upload_offset: None,
         }
     }
 
@@ -3789,6 +5441,7 @@ impl ApiError {
             code: "resource_limit",
             message,
             retryable: false,
+            upload_offset: None,
         }
     }
 
@@ -3798,6 +5451,7 @@ impl ApiError {
             code: "node_busy",
             message,
             retryable: true,
+            upload_offset: None,
         }
     }
 
@@ -3807,6 +5461,43 @@ impl ApiError {
             code: "internal_error",
             message,
             retryable: true,
+            upload_offset: None,
+        }
+    }
+
+    const fn insufficient_storage(message: &'static str) -> Self {
+        Self {
+            status: StatusCode::INSUFFICIENT_STORAGE,
+            code: "insufficient_storage",
+            message,
+            retryable: true,
+            upload_offset: None,
+        }
+    }
+
+    const fn unprocessable(code: &'static str, message: &'static str) -> Self {
+        Self {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            code,
+            message,
+            retryable: false,
+            upload_offset: None,
+        }
+    }
+
+    const fn upload_offset(
+        status: StatusCode,
+        code: &'static str,
+        message: &'static str,
+        upload_offset: u64,
+        retryable: bool,
+    ) -> Self {
+        Self {
+            status,
+            code,
+            message,
+            retryable,
+            upload_offset: Some(upload_offset),
         }
     }
 }
@@ -3828,6 +5519,13 @@ impl IntoResponse for ApiError {
             response
                 .headers_mut()
                 .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+        }
+        if let Some(offset) = self.upload_offset
+            && let Ok(value) = HeaderValue::from_str(&offset.to_string())
+        {
+            response
+                .headers_mut()
+                .insert(ARCHIVE_UPLOAD_OFFSET_HEADER, value);
         }
         response
     }
@@ -3853,6 +5551,10 @@ mod tests {
         let engine =
             Arc::new(Engine::open(EngineOptions::new(directory.path())).expect("test engine"));
         AppState::new(engine, PlatformTier::Tier1, TEST_TOKEN.to_owned()).expect("state")
+    }
+
+    fn upload_sha256(bytes: &[u8]) -> String {
+        lowercase_hex(&Sha256::digest(bytes))
     }
 
     async fn assert_contract_error(
@@ -4401,6 +6103,7 @@ mod tests {
         let state = test_state(&directory)
             .with_archive_limits(ArchiveLimits {
                 maximum_jobs: 1,
+                maximum_retained_results: 1,
                 ..ArchiveLimits::default()
             })
             .expect("archive limits");
@@ -4430,7 +6133,7 @@ mod tests {
         .expect("retained result marker");
         let error = prepare_archive_backup_job(&state, &metadata("third-job"))
             .expect_err("completed result must not be evicted");
-        assert_eq!(error.status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(error.status, StatusCode::INSUFFICIENT_STORAGE);
         assert!(second.exists());
     }
 
@@ -4465,6 +6168,12 @@ mod tests {
                     .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
                     .header(header::CONTENT_TYPE, "application/vnd.covalent.backup+zip")
                     .header(ARCHIVE_METADATA_HEADER, metadata)
+                    .header(ARCHIVE_UPLOAD_OFFSET_HEADER, "0")
+                    .header(
+                        ARCHIVE_UPLOAD_LENGTH_HEADER,
+                        ((1_u64 << 20) + 1).to_string(),
+                    )
+                    .header(ARCHIVE_UPLOAD_DIGEST_HEADER, "00".repeat(32))
                     .header(header::CONTENT_LENGTH, ((1_u64 << 20) + 1).to_string())
                     .body(Body::empty())
                     .expect("request"),
@@ -4693,6 +6402,131 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn interrupted_archive_upload_resumes_from_fsynced_offset_and_compacts_staging() {
+        let directory = TempDir::new().expect("directory");
+        let state = test_state(&directory)
+            .with_archive_limits(ArchiveLimits {
+                maximum_compressed_bytes: 8 << 20,
+                maximum_uncompressed_bytes: 16 << 20,
+                maximum_staging_bytes: 40 << 20,
+                maximum_retained_result_bytes: 8 << 20,
+                maximum_retained_results: 4,
+                free_space_reserve_bytes: 0,
+                ..ArchiveLimits::default()
+            })
+            .expect("archive limits");
+        let archive_root = Arc::clone(&state.archive_backup_root);
+        let app = router(state);
+        let payload = vec![0xa5_u8; 4 * 1_024 * 1_024];
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file(
+                "payload.bin",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .expect("archive entry");
+        writer.write_all(&payload).expect("archive payload");
+        let archive = writer.finish().expect("archive").into_inner();
+        let digest = upload_sha256(&archive);
+        let split = archive.len() / 3;
+        let metadata = URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&serde_json::json!({
+                "protocolVersion": PROTOCOL_VERSION,
+                "displayName": "Interrupted upload",
+                "snapshotId": "interrupted-snapshot",
+                "jobId": "interrupted-upload-job",
+                "selectedProviderIds": []
+            }))
+            .expect("metadata"),
+        );
+
+        let interrupted = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/backups/archive")
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/vnd.covalent.backup+zip")
+                    .header(ARCHIVE_METADATA_HEADER, &metadata)
+                    .header(ARCHIVE_UPLOAD_OFFSET_HEADER, "0")
+                    .header(ARCHIVE_UPLOAD_LENGTH_HEADER, archive.len().to_string())
+                    .header(ARCHIVE_UPLOAD_DIGEST_HEADER, &digest)
+                    .body(Body::from(archive[..split].to_vec()))
+                    .expect("partial request"),
+            )
+            .await
+            .expect("partial response");
+        assert_eq!(interrupted.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            interrupted.headers()[ARCHIVE_UPLOAD_OFFSET_HEADER],
+            split.to_string()
+        );
+        let partial_usage = archive_tree_bytes(archive_root.as_path()).expect("partial usage");
+        assert!(partial_usage >= u64::try_from(split).expect("split length"));
+        assert!(partial_usage < u64::try_from(split).expect("split length") + 64 * 1_024);
+        assert_contract_error(interrupted, StatusCode::CONFLICT, "upload_incomplete", true).await;
+
+        let wrong_identity = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/backups/archive")
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/vnd.covalent.backup+zip")
+                    .header(ARCHIVE_METADATA_HEADER, &metadata)
+                    .header(ARCHIVE_UPLOAD_OFFSET_HEADER, split.to_string())
+                    .header(ARCHIVE_UPLOAD_LENGTH_HEADER, archive.len().to_string())
+                    .header(ARCHIVE_UPLOAD_DIGEST_HEADER, "11".repeat(32))
+                    .body(Body::from(archive[split..].to_vec()))
+                    .expect("wrong identity request"),
+            )
+            .await
+            .expect("wrong identity response");
+        assert_eq!(wrong_identity.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            wrong_identity.headers()[ARCHIVE_UPLOAD_OFFSET_HEADER],
+            split.to_string()
+        );
+        assert_contract_error(
+            wrong_identity,
+            StatusCode::CONFLICT,
+            "upload_identity_mismatch",
+            false,
+        )
+        .await;
+
+        let completed = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/backups/archive")
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/vnd.covalent.backup+zip")
+                    .header(ARCHIVE_METADATA_HEADER, metadata)
+                    .header(ARCHIVE_UPLOAD_OFFSET_HEADER, split.to_string())
+                    .header(ARCHIVE_UPLOAD_LENGTH_HEADER, archive.len().to_string())
+                    .header(ARCHIVE_UPLOAD_DIGEST_HEADER, digest)
+                    .body(Body::from(archive[split..].to_vec()))
+                    .expect("resume request"),
+            )
+            .await
+            .expect("resume response");
+        assert_eq!(completed.status(), StatusCode::OK);
+        assert_eq!(completed.headers()[JOB_ACK_REQUIRED_HEADER], "true");
+        let job_directory = archive_root.join("interrupted-upload-job");
+        assert!(job_directory.join("result.json").is_file());
+        assert!(!job_directory.join("upload.part").exists());
+        assert!(!job_directory.join("upload-session.json").exists());
+        assert!(!job_directory.join("source").exists());
+        assert!(
+            archive_tree_bytes(&job_directory).expect("retained usage") < 64 * 1_024,
+            "completed backup retains only bounded metadata and result"
+        );
+    }
+
+    #[tokio::test]
     async fn streamed_archive_bridge_never_requires_a_daemon_visible_android_path() {
         let directory = TempDir::new().expect("directory");
         let state = test_state(&directory);
@@ -4724,6 +6558,7 @@ mod tests {
             }))
             .expect("metadata"),
         );
+        let upload_digest = upload_sha256(&archive);
         let backup_response = app
             .clone()
             .oneshot(
@@ -4733,6 +6568,9 @@ mod tests {
                     .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
                     .header(header::CONTENT_TYPE, "application/vnd.covalent.backup+zip")
                     .header(ARCHIVE_METADATA_HEADER, metadata.clone())
+                    .header(ARCHIVE_UPLOAD_OFFSET_HEADER, "0")
+                    .header(ARCHIVE_UPLOAD_LENGTH_HEADER, archive.len().to_string())
+                    .header(ARCHIVE_UPLOAD_DIGEST_HEADER, &upload_digest)
                     .body(Body::from(archive.clone()))
                     .expect("request"),
             )
@@ -4957,5 +6795,312 @@ mod tests {
         }
         assert!(!archive_root.join("android-saf-restore-job").exists());
         assert!(!archive_backup_root.join("android-saf-backup-job").exists());
+    }
+
+    #[tokio::test]
+    async fn paged_target_inventory_is_ordered_crash_durable_and_exceeds_json_limit() {
+        let directory = TempDir::new().expect("directory");
+        let state = test_state(&directory);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {TEST_TOKEN}")).expect("authorization"),
+        );
+        let total_entries = MAX_TARGET_INVENTORY_ENTRIES;
+        let started = begin_target_inventory(
+            State(state.clone()),
+            headers.clone(),
+            ContractJson(BeginTargetInventoryRequest {
+                job_id: "large-inventory-job".to_owned(),
+                schema_version: TARGET_INVENTORY_SCHEMA_VERSION,
+                root_identity: "powerbox-root-dev-1-ino-2".to_owned(),
+                entry_count: total_entries,
+                total_bytes: 0,
+            }),
+        )
+        .await
+        .expect("begin inventory")
+        .0;
+        let inventory_id = started.inventory_id;
+
+        let first_entry = TargetInventoryEntry {
+            path: RelativePath::new("entry-000000".to_owned()).expect("path"),
+            kind: EntryKind::File,
+            length: 0,
+            modified_at_unix_ms: Some(1),
+            identity_token: "dev=1;ino=1".to_owned(),
+        };
+        let out_of_order = append_target_inventory_page(
+            State(state.clone()),
+            headers.clone(),
+            AxumPath(inventory_id.clone()),
+            ContractJson(TargetInventoryPageRequest {
+                job_id: "large-inventory-job".to_owned(),
+                offset: 1,
+                page_digest: target_inventory_page_digest(std::slice::from_ref(&first_entry)),
+                entries: vec![first_entry.clone()],
+            }),
+        )
+        .await
+        .expect("offset response");
+        assert_eq!(out_of_order.status(), StatusCode::CONFLICT);
+        assert_eq!(out_of_order.headers()[TARGET_INVENTORY_OFFSET_HEADER], "0");
+
+        let tampered = match append_target_inventory_page(
+            State(state.clone()),
+            headers.clone(),
+            AxumPath(inventory_id.clone()),
+            ContractJson(TargetInventoryPageRequest {
+                job_id: "large-inventory-job".to_owned(),
+                offset: 0,
+                page_digest: "0".repeat(64),
+                entries: vec![first_entry],
+            }),
+        )
+        .await
+        {
+            Ok(_) => panic!("tampered target inventory page was accepted"),
+            Err(error) => error,
+        };
+        assert_eq!(tampered.code, "target_inventory_page_mismatch");
+
+        // Simulate a daemon process boundary after the durable upload session is fsynced.
+        drop(state);
+        let state = test_state(&directory);
+        let page_size = 10_000_u64;
+        let mut offset = 0_u64;
+        while offset < total_entries {
+            let end = (offset + page_size).min(total_entries);
+            let entries: Vec<_> = (offset..end)
+                .map(|index| TargetInventoryEntry {
+                    path: RelativePath::new(format!("entry-{index:06}")).expect("inventory path"),
+                    kind: EntryKind::File,
+                    length: 0,
+                    modified_at_unix_ms: Some(index),
+                    identity_token: format!("dev=1;ino={index}"),
+                })
+                .collect();
+            let response = append_target_inventory_page(
+                State(state.clone()),
+                headers.clone(),
+                AxumPath(inventory_id.clone()),
+                ContractJson(TargetInventoryPageRequest {
+                    job_id: "large-inventory-job".to_owned(),
+                    offset,
+                    page_digest: target_inventory_page_digest(&entries),
+                    entries,
+                }),
+            )
+            .await
+            .expect("append inventory page");
+            assert_eq!(response.status(), StatusCode::OK);
+            offset = end;
+        }
+        let job_directory = state.archive_restore_root.join("large-inventory-job");
+        assert!(
+            fs::metadata(job_directory.join(target_inventory_entries_name(&inventory_id)))
+                .expect("inventory pages")
+                .len()
+                > MAX_LOCAL_API_BODY_BYTES as u64
+        );
+        let finalized = finalize_target_inventory(
+            State(state),
+            headers,
+            AxumPath(inventory_id.clone()),
+            ContractJson(FinalizeTargetInventoryRequest {
+                job_id: "large-inventory-job".to_owned(),
+                entry_count: total_entries,
+                total_bytes: 0,
+                inventory_digest: String::new(),
+            }),
+        )
+        .await
+        .expect("finalize inventory")
+        .0;
+        assert_eq!(finalized.inventory_id, inventory_id);
+        assert_eq!(finalized.entry_count, total_entries);
+        assert!(valid_lowercase_digest(&finalized.inventory_digest));
+        assert!(
+            !job_directory
+                .join(target_inventory_session_name(&inventory_id))
+                .exists()
+        );
+        assert!(
+            !job_directory
+                .join(target_inventory_entries_name(&inventory_id))
+                .exists()
+        );
+        assert!(
+            job_directory
+                .join(target_inventory_final_name(&inventory_id))
+                .is_file()
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn archive_upload_rejects_session_part_and_final_symlink_substitution() {
+        use std::os::unix::fs::symlink;
+
+        let directory = TempDir::new().expect("directory");
+        let state = test_state(&directory);
+        let payload = b"safe archive bytes";
+        let digest = upload_sha256(payload);
+        let mut headers = HeaderMap::new();
+        headers.insert(ARCHIVE_UPLOAD_OFFSET_HEADER, HeaderValue::from_static("0"));
+        headers.insert(
+            ARCHIVE_UPLOAD_LENGTH_HEADER,
+            HeaderValue::from_str(&payload.len().to_string()).expect("length"),
+        );
+        headers.insert(
+            ARCHIVE_UPLOAD_DIGEST_HEADER,
+            HeaderValue::from_str(&digest).expect("digest"),
+        );
+        let outside = directory.path().join("outside");
+        fs::write(&outside, b"must remain unchanged").expect("outside");
+
+        for (index, artifact) in [
+            "upload-session.json".to_owned(),
+            "upload.part".to_owned(),
+            format!("upload-{digest}.zip"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let job_directory = state
+                .archive_backup_root
+                .join(format!("symlink-job-{index}"));
+            create_private_directory(job_directory.clone()).expect("job directory");
+            symlink(&outside, job_directory.join(artifact)).expect("adversarial symlink");
+            let result = receive_archive(
+                Body::from(payload.as_slice()),
+                &headers,
+                &state,
+                &job_directory,
+                "metadata-digest",
+            )
+            .await;
+            let error = match result {
+                Ok(_) => panic!("symlink substitution was accepted"),
+                Err(error) => error,
+            };
+            assert_eq!(error.code, "internal_error");
+            assert_eq!(
+                fs::read(&outside).expect("outside content"),
+                b"must remain unchanged"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn target_inventory_sessions_enforce_job_quota_expiry_and_terminal_cleanup() {
+        let directory = TempDir::new().expect("directory");
+        let state = test_state(&directory)
+            .with_archive_limits(ArchiveLimits {
+                maximum_jobs: 1,
+                maximum_retained_results: 1,
+                free_space_reserve_bytes: 0,
+                ..ArchiveLimits::default()
+            })
+            .expect("limits");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {TEST_TOKEN}")).expect("authorization"),
+        );
+        let started = begin_target_inventory(
+            State(state.clone()),
+            headers.clone(),
+            ContractJson(BeginTargetInventoryRequest {
+                job_id: "inventory-owner".to_owned(),
+                schema_version: 1,
+                root_identity: "root-owner".to_owned(),
+                entry_count: 1,
+                total_bytes: 1,
+            }),
+        )
+        .await
+        .expect("begin")
+        .0;
+        let quota = begin_target_inventory(
+            State(state.clone()),
+            headers.clone(),
+            ContractJson(BeginTargetInventoryRequest {
+                job_id: "inventory-second".to_owned(),
+                schema_version: 1,
+                root_identity: "root-second".to_owned(),
+                entry_count: 0,
+                total_bytes: 0,
+            }),
+        )
+        .await;
+        assert!(quota.is_err(), "inventory job quota must fail closed");
+
+        let entry = TargetInventoryEntry {
+            path: RelativePath::new("file.txt".to_owned()).expect("path"),
+            kind: EntryKind::File,
+            length: 1,
+            modified_at_unix_ms: None,
+            identity_token: "dev=1;ino=2".to_owned(),
+        };
+        let wrong_job = append_target_inventory_page(
+            State(state.clone()),
+            headers.clone(),
+            AxumPath(started.inventory_id.clone()),
+            ContractJson(TargetInventoryPageRequest {
+                job_id: "inventory-second".to_owned(),
+                offset: 0,
+                page_digest: target_inventory_page_digest(std::slice::from_ref(&entry)),
+                entries: vec![entry.clone()],
+            }),
+        )
+        .await;
+        assert!(
+            wrong_job.is_err(),
+            "inventory ID must be isolated to its job directory"
+        );
+        append_target_inventory_page(
+            State(state.clone()),
+            headers.clone(),
+            AxumPath(started.inventory_id.clone()),
+            ContractJson(TargetInventoryPageRequest {
+                job_id: "inventory-owner".to_owned(),
+                offset: 0,
+                page_digest: target_inventory_page_digest(std::slice::from_ref(&entry)),
+                entries: vec![entry],
+            }),
+        )
+        .await
+        .expect("page");
+        let terminal = finalize_target_inventory(
+            State(state.clone()),
+            headers,
+            AxumPath(started.inventory_id.clone()),
+            ContractJson(FinalizeTargetInventoryRequest {
+                job_id: "inventory-owner".to_owned(),
+                entry_count: 1,
+                total_bytes: 1,
+                inventory_digest: "0".repeat(64),
+            }),
+        )
+        .await;
+        assert!(terminal.is_err(), "wrong final digest must be rejected");
+        let job = state.archive_restore_root.join("inventory-owner");
+        assert!(
+            !job.join(target_inventory_session_name(&started.inventory_id))
+                .exists()
+        );
+        assert!(
+            !job.join(target_inventory_entries_name(&started.inventory_id))
+                .exists()
+        );
+
+        let handle = File::open(&job).expect("job directory");
+        handle
+            .set_times(fs::FileTimes::new().set_modified(UNIX_EPOCH))
+            .expect("age inventory job");
+        prune_stale_archive_restore_targets(state.archive_restore_root.as_path())
+            .expect("prune expired inventory");
+        assert!(!job.exists());
     }
 }

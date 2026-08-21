@@ -7,7 +7,9 @@ use covalent_protocol::{BackupId, ChunkReference, DeviceId, ReplicaIntent};
 use zeroize::Zeroizing;
 
 use crate::engine::JobControl;
-use crate::{BackupKey, ChunkStore, CoreError, EncryptedChunk};
+use crate::{BackupKey, ChunkStore, CoreError, EncryptedChunk, RecoveryCapsule};
+
+const MAXIMUM_FETCH_BATCH_BYTES: u64 = 8 * 1_024 * 1_024;
 
 /// Coarse provider reachability and integrity state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -36,6 +38,8 @@ pub struct ProviderFailure {
 pub struct ReplicationReport {
     /// Durable object acknowledgements per explicitly selected provider.
     pub acknowledgements: BTreeMap<DeviceId, BTreeSet<String>>,
+    /// Providers that durably committed the signed encrypted recovery capsule.
+    pub recovery_catalog_acknowledgements: BTreeSet<DeviceId>,
     /// Current state for every selected provider.
     pub provider_health: BTreeMap<DeviceId, ProviderHealth>,
     /// Visible per-object errors.
@@ -55,6 +59,7 @@ impl ReplicationReport {
                 .acknowledgements
                 .values()
                 .all(|locators| locators.len() == required_objects)
+            && self.recovery_catalog_acknowledgements.len() == self.acknowledgements.len()
     }
 }
 
@@ -64,12 +69,78 @@ pub trait ChunkProvider: Send + Sync {
     fn device_id(&self) -> DeviceId;
     /// Current transport reachability.
     fn health(&self) -> ProviderHealth;
+    /// Reserves one bounded lease for the exact backup replication batch.
+    fn begin_backup_write(
+        &self,
+        _backup_id: BackupId,
+        _maximum_new_bytes: u64,
+        _maximum_new_objects: u64,
+    ) -> Result<(), CoreError> {
+        Ok(())
+    }
     /// Durably stores one opaque encrypted record.
     fn put(&self, locator: &str, record: &[u8]) -> Result<(), CoreError>;
+    /// Durably stores one record under an exact backup-scoped provider lease.
+    fn put_scoped(
+        &self,
+        _backup_id: BackupId,
+        locator: &str,
+        record: &[u8],
+    ) -> Result<(), CoreError> {
+        self.put(locator, record)
+    }
     /// Fetches one bounded opaque encrypted record.
     fn get(&self, locator: &str) -> Result<Vec<u8>, CoreError>;
+    /// Fetches one opaque record bound to an exact authorized backup scope.
+    fn get_scoped(&self, _backup_id: BackupId, locator: &str) -> Result<Vec<u8>, CoreError> {
+        self.get(locator)
+    }
+    /// Fetches an exact ordered batch while observing pause/cancel between
+    /// bounded provider operations. Network providers should override this to
+    /// cancel the in-flight transport rather than waiting for its I/O timeout.
+    fn get_many_controlled(
+        &self,
+        backup_id: BackupId,
+        locators: &[String],
+        control: &JobControl,
+    ) -> Result<Vec<Vec<u8>>, CoreError> {
+        let mut records = Vec::with_capacity(locators.len());
+        for locator in locators {
+            control.check()?;
+            records.push(self.get_scoped(backup_id, locator)?);
+        }
+        control.check()?;
+        Ok(records)
+    }
     /// Returns whether this provider currently advertises the object.
     fn contains(&self, locator: &str) -> Result<bool, CoreError>;
+    /// Returns scoped availability without exposing objects from another backup.
+    fn contains_scoped(&self, _backup_id: BackupId, locator: &str) -> Result<bool, CoreError> {
+        self.contains(locator)
+    }
+    /// Durably stores one owner-signed encrypted recovery catalog.
+    fn put_recovery_capsule(&self, _capsule: &RecoveryCapsule) -> Result<(), CoreError> {
+        Err(CoreError::InvalidState(
+            "provider does not support recovery catalogs".to_owned(),
+        ))
+    }
+    /// Durably stores one recovery capsule under its backup-scoped lease.
+    fn put_recovery_capsule_scoped(
+        &self,
+        backup_id: BackupId,
+        capsule: &RecoveryCapsule,
+    ) -> Result<(), CoreError> {
+        if backup_id != capsule.backup_id {
+            return Err(CoreError::AuthenticationFailed);
+        }
+        self.put_recovery_capsule(capsule)
+    }
+    /// Lists bounded opaque catalogs for authentication by a recovered owner.
+    fn list_recovery_capsules(&self) -> Result<Vec<RecoveryCapsule>, CoreError> {
+        Err(CoreError::InvalidState(
+            "provider does not support recovery catalogs".to_owned(),
+        ))
+    }
 }
 
 /// Adapter exposing a local `ChunkStore` as one explicitly identified provider.
@@ -107,6 +178,14 @@ impl ChunkProvider for StoreProvider {
     fn contains(&self, locator: &str) -> Result<bool, CoreError> {
         self.store.contains(locator)
     }
+
+    fn put_recovery_capsule(&self, capsule: &RecoveryCapsule) -> Result<(), CoreError> {
+        self.store.put_recovery_capsule(capsule).map(|_| ())
+    }
+
+    fn list_recovery_capsules(&self) -> Result<Vec<RecoveryCapsule>, CoreError> {
+        self.store.list_recovery_capsules()
+    }
 }
 
 /// Bounded scheduler for explicit replication and multi-source verified reads.
@@ -137,6 +216,74 @@ impl ReplicationScheduler {
             providers: Arc::new(indexed),
             maximum_parallelism,
         })
+    }
+
+    pub(crate) fn replicate_recovery_capsule(
+        &self,
+        intent: &ReplicaIntent,
+        capsule: &RecoveryCapsule,
+        report: &mut ReplicationReport,
+    ) {
+        for provider_id in &intent.selected_providers {
+            let Some(provider) = self.providers.get(provider_id) else {
+                report.failures.push(ProviderFailure {
+                    provider_id: *provider_id,
+                    locator: None,
+                    reason: "recovery_catalog_provider_unavailable".to_owned(),
+                });
+                continue;
+            };
+            if provider.health() != ProviderHealth::Online {
+                report.failures.push(ProviderFailure {
+                    provider_id: *provider_id,
+                    locator: None,
+                    reason: "recovery_catalog_provider_offline".to_owned(),
+                });
+                continue;
+            }
+            match provider.put_recovery_capsule_scoped(capsule.backup_id, capsule) {
+                Ok(()) => {
+                    report
+                        .recovery_catalog_acknowledgements
+                        .insert(*provider_id);
+                }
+                Err(error) => report.failures.push(ProviderFailure {
+                    provider_id: *provider_id,
+                    locator: None,
+                    reason: format!("recovery_catalog_{}", error_category(&error)),
+                }),
+            }
+        }
+        report.failures.sort_by(|left, right| {
+            (left.provider_id, &left.locator, &left.reason).cmp(&(
+                right.provider_id,
+                &right.locator,
+                &right.reason,
+            ))
+        });
+    }
+
+    pub(crate) fn recovery_capsules(&self) -> Result<Vec<(DeviceId, RecoveryCapsule)>, CoreError> {
+        let mut capsules = Vec::new();
+        for (provider_id, provider) in self.providers.iter() {
+            if provider.health() != ProviderHealth::Online {
+                continue;
+            }
+            for capsule in provider.list_recovery_capsules()? {
+                capsules.push((*provider_id, capsule));
+                if capsules.len() > 1_000_000 {
+                    return Err(CoreError::ResourceLimit("recovery catalog listing"));
+                }
+            }
+        }
+        capsules.sort_by(|left, right| {
+            (left.1.backup_id, &left.1.snapshot_id, left.0).cmp(&(
+                right.1.backup_id,
+                &right.1.snapshot_id,
+                right.0,
+            ))
+        });
+        Ok(capsules)
     }
 
     /// No-provider scheduler for local-only backups.
@@ -174,6 +321,15 @@ impl ReplicationScheduler {
         self.maximum_parallelism
     }
 
+    pub(crate) const fn maximum_fetch_batch(&self) -> usize {
+        let batch = self.maximum_parallelism.saturating_mul(4);
+        if batch < 32 { batch } else { 32 }
+    }
+
+    pub(crate) const fn maximum_fetch_batch_bytes(&self) -> u64 {
+        MAXIMUM_FETCH_BATCH_BYTES
+    }
+
     pub(crate) fn verify_provider_copy(
         &self,
         provider_id: DeviceId,
@@ -190,7 +346,7 @@ impl ReplicationScheduler {
                 reference.opaque_locator.clone(),
             ));
         }
-        let record = provider.get(&reference.opaque_locator)?;
+        let record = provider.get_scoped(backup_id, &reference.opaque_locator)?;
         let encrypted = EncryptedChunk::decode_provider_record(
             reference.opaque_locator.clone(),
             reference.plaintext_digest.clone(),
@@ -260,7 +416,13 @@ impl ReplicationScheduler {
         intent: &ReplicaIntent,
         locators: &BTreeSet<String>,
     ) -> Result<ReplicationReport, CoreError> {
-        self.replicate_controlled(source, intent, locators, &JobControl::new())
+        self.replicate_controlled(
+            source,
+            intent,
+            locators,
+            &JobControl::new(),
+            BackupId::default(),
+        )
     }
 
     pub(crate) fn replicate_controlled(
@@ -269,6 +431,7 @@ impl ReplicationScheduler {
         intent: &ReplicaIntent,
         locators: &BTreeSet<String>,
         control: &JobControl,
+        backup_id: BackupId,
     ) -> Result<ReplicationReport, CoreError> {
         control.check()?;
         let mut report = ReplicationReport::default();
@@ -302,6 +465,33 @@ impl ReplicationScheduler {
         }
 
         let locator_list: Vec<_> = locators.iter().cloned().collect();
+        let mut maximum_new_bytes = 0_u64;
+        for locator in &locator_list {
+            maximum_new_bytes = maximum_new_bytes
+                .checked_add(source.provider_record_length(locator)?)
+                .ok_or(CoreError::ResourceLimit("replication lease bytes"))?;
+        }
+        let maximum_new_objects = u64::try_from(locator_list.len())
+            .map_err(|_| CoreError::ResourceLimit("replication lease objects"))?;
+        if maximum_new_objects > 0 {
+            for (provider_id, provider) in &online_providers {
+                if let Err(error) =
+                    provider.begin_backup_write(backup_id, maximum_new_bytes, maximum_new_objects)
+                {
+                    report.failures.push(ProviderFailure {
+                        provider_id: *provider_id,
+                        locator: None,
+                        reason: error_category(&error).to_owned(),
+                    });
+                }
+            }
+            online_providers.retain(|(provider_id, _)| {
+                !report
+                    .failures
+                    .iter()
+                    .any(|failure| failure.provider_id == *provider_id && failure.locator.is_none())
+            });
+        }
         let job_count = locator_list
             .len()
             .checked_mul(online_providers.len())
@@ -332,7 +522,7 @@ impl ReplicationScheduler {
                                 &online_providers[index % online_providers.len()];
                             let result = source.get_provider_record(locator).and_then(|record| {
                                 control.check()?;
-                                provider.put(locator, &record)
+                                provider.put_scoped(backup_id, locator, &record)
                             });
                             match result {
                                 Ok(()) => {
@@ -405,6 +595,79 @@ impl ReplicationScheduler {
             return Ok(Vec::new());
         }
         control.check()?;
+        let common_providers: Vec<_> = self
+            .providers
+            .iter()
+            .filter(|(provider_id, provider)| {
+                provider.health() == ProviderHealth::Online
+                    && requests
+                        .iter()
+                        .all(|(_, allowed)| allowed.contains(provider_id))
+            })
+            .collect();
+        let unique_locators = requests
+            .iter()
+            .map(|(reference, _)| reference.opaque_locator.as_str())
+            .collect::<BTreeSet<_>>();
+        let batch_ciphertext_bytes = requests
+            .iter()
+            .map(|(reference, _)| u64::from(reference.ciphertext_length))
+            .fold(0_u64, u64::saturating_add);
+        if let [(_, provider)] = common_providers.as_slice()
+            && unique_locators.len() == requests.len()
+            && requests.len() <= self.maximum_fetch_batch()
+            && batch_ciphertext_bytes <= self.maximum_fetch_batch_bytes()
+        {
+            let locators = requests
+                .iter()
+                .map(|(reference, _)| reference.opaque_locator.clone())
+                .collect::<Vec<_>>();
+            match provider.get_many_controlled(backup_id, &locators, control) {
+                Ok(records) => {
+                    if records.len() != requests.len() {
+                        return Err(CoreError::AuthenticationFailed);
+                    }
+                    let mut fetched = Vec::with_capacity(records.len());
+                    for (((reference, _), record), locator) in
+                        requests.iter().zip(records).zip(&locators)
+                    {
+                        control.check()?;
+                        if locator != &reference.opaque_locator {
+                            return Err(CoreError::AuthenticationFailed);
+                        }
+                        let encrypted = EncryptedChunk::decode_provider_record(
+                            reference.opaque_locator.clone(),
+                            reference.plaintext_digest.clone(),
+                            &record,
+                            reference.plaintext_length as usize,
+                        )?;
+                        if encrypted.plaintext_length != reference.plaintext_length
+                            || encrypted.ciphertext_length() != reference.ciphertext_length
+                        {
+                            return Err(CoreError::CorruptChunk(
+                                reference.opaque_locator.clone(),
+                            ));
+                        }
+                        let plaintext = key.decrypt_chunk(
+                            backup_id,
+                            &reference.plaintext_digest,
+                            &encrypted,
+                        )?;
+                        fetched.push(FetchedChunk {
+                            provider_id: provider.device_id(),
+                            plaintext,
+                            failures: Vec::new(),
+                        });
+                    }
+                    return Ok(fetched);
+                }
+                Err(error @ (CoreError::Paused | CoreError::Cancelled)) => return Err(error),
+                Err(_) => {
+                    // Preserve multi-source recovery semantics below. A failed
+                    // batch never releases a partial response to this caller.
+                }
+            }
+        }
         let next = AtomicUsize::new(0);
         let results = Mutex::new(
             std::iter::repeat_with(|| None)
@@ -477,7 +740,9 @@ impl ReplicationScheduler {
         for index in 0..candidates.len() {
             control.check()?;
             let provider = &candidates[(start + index) % candidates.len()];
-            let result = provider.get(&reference.opaque_locator).and_then(|record| {
+            let result = provider
+                .get_scoped(backup_id, &reference.opaque_locator)
+                .and_then(|record| {
                 control.check()?;
                 let encrypted = EncryptedChunk::decode_provider_record(
                     reference.opaque_locator.clone(),
@@ -491,7 +756,7 @@ impl ReplicationScheduler {
                     return Err(CoreError::CorruptChunk(reference.opaque_locator.clone()));
                 }
                 key.decrypt_chunk(backup_id, &reference.plaintext_digest, &encrypted)
-            });
+                });
             match result {
                 Ok(plaintext) => {
                     return Ok(FetchedChunk {
@@ -550,11 +815,27 @@ fn provider_stripe(locator: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use tempfile::tempdir;
 
     use super::*;
+
+    /// `replicate` replicates chunks only; the owner recovery capsule is replicated
+    /// separately by the engine, so `ReplicationReport::is_complete` cannot hold for
+    /// a bare `replicate` report. Assert the completeness this entry point does
+    /// establish: no failures, every selected provider online, every object acked.
+    fn chunk_replication_is_complete(report: &ReplicationReport, required_objects: usize) -> bool {
+        report.failures.is_empty()
+            && report
+                .provider_health
+                .values()
+                .all(|health| *health == ProviderHealth::Online)
+            && report
+                .acknowledgements
+                .values()
+                .all(|locators| locators.len() == required_objects)
+    }
 
     struct ToggleProvider {
         id: DeviceId,
@@ -584,6 +865,11 @@ mod tests {
         store: ChunkStore,
         control: JobControl,
         puts: AtomicUsize,
+    }
+
+    struct StalledReadProvider {
+        id: DeviceId,
+        batch_started: AtomicBool,
     }
 
     impl ChunkProvider for ConcurrentPutProvider {
@@ -671,6 +957,41 @@ mod tests {
         }
     }
 
+    impl ChunkProvider for StalledReadProvider {
+        fn device_id(&self) -> DeviceId {
+            self.id
+        }
+
+        fn health(&self) -> ProviderHealth {
+            ProviderHealth::Online
+        }
+
+        fn put(&self, _locator: &str, _record: &[u8]) -> Result<(), CoreError> {
+            Err(CoreError::InvalidState("stalled test provider".to_owned()))
+        }
+
+        fn get(&self, _locator: &str) -> Result<Vec<u8>, CoreError> {
+            panic!("the stalled provider must use the controlled batch boundary")
+        }
+
+        fn get_many_controlled(
+            &self,
+            _backup_id: BackupId,
+            _locators: &[String],
+            control: &JobControl,
+        ) -> Result<Vec<Vec<u8>>, CoreError> {
+            self.batch_started.store(true, Ordering::Release);
+            loop {
+                control.check()?;
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        fn contains(&self, _locator: &str) -> Result<bool, CoreError> {
+            Ok(false)
+        }
+    }
+
     impl ChunkProvider for ToggleProvider {
         fn device_id(&self) -> DeviceId {
             self.id
@@ -732,7 +1053,7 @@ mod tests {
                 &BTreeSet::from([chunk.opaque_locator.clone()]),
             )
             .expect("replicate");
-        assert!(report.is_complete(1));
+        assert!(chunk_replication_is_complete(&report, 1));
         assert!(
             selected
                 .store
@@ -785,7 +1106,7 @@ mod tests {
                 &BTreeSet::from([chunk.opaque_locator]),
             )
             .expect("replicate");
-        assert!(report.is_complete(1));
+        assert!(chunk_replication_is_complete(&report, 1));
         assert_eq!(maximum_active.load(Ordering::Acquire), 2);
     }
 
@@ -932,9 +1253,60 @@ mod tests {
                 &ReplicaIntent::explicit([write_provider.id]),
                 &locators,
                 &replication_control,
+                backup_id,
             ),
             Err(CoreError::Cancelled)
         ));
         assert_eq!(write_provider.puts.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn stalled_provider_restore_fetch_cancels_within_five_seconds() {
+        let backup_id = BackupId::new();
+        let key = BackupKey::generate();
+        let chunk = key
+            .encrypt_chunk(backup_id, 1, b"stalled provider cancellation")
+            .expect("chunk");
+        let ciphertext_length = chunk.ciphertext_length();
+        let reference = ChunkReference {
+            plaintext_digest: chunk.plaintext_digest,
+            opaque_locator: chunk.opaque_locator,
+            plaintext_length: chunk.plaintext_length,
+            ciphertext_length,
+        };
+        let provider = Arc::new(StalledReadProvider {
+            id: DeviceId::new(),
+            batch_started: AtomicBool::new(false),
+        });
+        let scheduler =
+            ReplicationScheduler::new([Arc::clone(&provider) as Arc<dyn ChunkProvider>], 1)
+                .expect("scheduler");
+        let allowed = BTreeSet::from([provider.id]);
+        let control = JobControl::new();
+        let canceller = std::thread::spawn({
+            let provider = Arc::clone(&provider);
+            let control = control.clone();
+            move || {
+                while !provider.batch_started.load(Ordering::Acquire) {
+                    std::thread::yield_now();
+                }
+                control.cancel();
+            }
+        });
+        let started = Instant::now();
+        let result = scheduler.fetch_plaintexts_parallel(
+            &[(&reference, &allowed)],
+            backup_id,
+            &key,
+            &control,
+            0,
+        );
+        canceller.join().expect("canceller");
+        assert!(matches!(result, Err(CoreError::Cancelled)));
+        assert!(
+            started.elapsed() <= Duration::from_secs(5),
+            "stalled provider cancellation took {:?}",
+            started.elapsed()
+        );
     }
 }

@@ -5,6 +5,7 @@ struct MacDevicesView: View {
     @ObservedObject var model: CovalentAppModel
     @State private var showingConnectProvider = false
     @State private var providerToRevoke: ProviderConnection?
+    @State private var tailscaleAddress = ""
 
     var body: some View {
         ScrollView {
@@ -52,7 +53,7 @@ struct MacDevicesView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Pair Device") { model.presentation = .pairDevice }
+            Button("Find Devices") { Task { await model.refreshDiscovery() } }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .disabled(!model.isAuthorized)
@@ -63,7 +64,7 @@ struct MacDevicesView: View {
     private var nearby: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Nearby and Tailnet candidates")
+                Text("Nearby devices")
                     .font(.title2.weight(.semibold))
                 Spacer()
                 Button {
@@ -73,10 +74,32 @@ struct MacDevicesView: View {
                 }
                 .disabled(!model.isAuthorized)
             }
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                TextField("Tailscale hostname or IP", text: $tailscaleAddress, prompt: Text("nas.tailnet-name.ts.net:8788"))
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { startTailscalePairing() }
+                    .accessibilityHint("Enter the address shown by the other device in Tailscale")
+                Button("Use as Backup Device") { startTailscalePairing() }
+                    .disabled(
+                        tailscaleAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                        !model.isAuthorized || model.startingPairingAddress != nil
+                    )
+            }
+            Text(
+                model.status?.lanDiscovery == false
+                    ? "Automatic LAN discovery is off. Enter a one-time Tailscale MagicDNS hostname or IP; both devices still confirm the same code."
+                    : "LAN devices appear automatically. Tailscale does not provide local device enumeration, so enter the other device's MagicDNS hostname or IP once."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            if model.startingPairingAddress != nil {
+                ProgressView("Contacting Tailscale device…")
+                    .controlSize(.small)
+            }
             if model.status?.lanDiscovery == false && model.discoveryCandidates.isEmpty {
                 MacCallout(
                     title: "LAN discovery is off",
-                    message: "Manual pairing and bounded Tailscale reachability remain available. Enable LAN discovery in Settings if you want nearby hints.",
+                    message: "Enter a Tailscale address above, or enable LAN discovery in Settings for automatic nearby-device hints.",
                     systemImage: "network.slash",
                     tint: .secondary
                 ) {
@@ -86,7 +109,7 @@ struct MacDevicesView: View {
                 ContentUnavailableView {
                     Label("No candidates found", systemImage: "dot.radiowaves.left.and.right")
                 } description: {
-                    Text("The device may still be reachable manually. Discovery never grants trust automatically.")
+                    Text("No LAN devices replied. You can enter a Tailscale address above; discovery never grants trust automatically.")
                 }
                 .frame(maxWidth: .infinity, minHeight: 180)
                 .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
@@ -110,8 +133,15 @@ struct MacDevicesView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
-                            Button("Start Secure Pairing") { model.presentation = .pairDevice }
+                            Button("Pair with This Device") {
+                                Task { await model.startNetworkPairing(candidate: candidate) }
+                            }
                                 .disabled(!candidate.isCompatible)
+                                .accessibilityHint("Starts a direct pairing request; both devices must confirm the same code")
+                            if model.startingPairingCandidateID == candidate.id {
+                                ProgressView("Contacting device…")
+                                    .controlSize(.small)
+                            }
                         }
                         .padding(15)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -122,14 +152,17 @@ struct MacDevicesView: View {
         }
     }
 
+    private func startTailscalePairing() {
+        let address = tailscaleAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !address.isEmpty else { return }
+        Task { await model.startNetworkPairing(candidateAddress: address) }
+    }
+
     private var providers: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Connected storage providers")
                     .font(.title2.weight(.semibold))
-                Spacer()
-                Button("Connect Confirmed Provider…") { showingConnectProvider = true }
-                    .disabled(!model.isAuthorized)
             }
             if model.providers.isEmpty {
                 ContentUnavailableView {
@@ -178,6 +211,21 @@ struct MacDevicesView: View {
                 }
                 .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
             }
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Use mutually signed JSON only when direct network pairing is unavailable or you are recovering an older node.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Offline Pairing with Signed JSON…") { model.requestManualPairing() }
+                        .accessibilityIdentifier("devices.offlinePairing")
+                    Button("Import Signed Transport JSON…") { showingConnectProvider = true }
+                        .disabled(!model.isAuthorized)
+                }
+                .padding(.top, 6)
+            } label: {
+                Text("Advanced recovery")
+                    .accessibilityIdentifier("devices.advancedRecovery")
+            }
         }
     }
 
@@ -196,30 +244,26 @@ struct MacDevicesView: View {
 struct MacProviderConnectionView: View {
     @ObservedObject var model: CovalentAppModel
     @Environment(\.dismiss) private var dismiss
-    @State private var peerId = ""
-    @State private var address = ""
-    @State private var certificateDer = ""
+    @State private var signedTransportJSON = ""
     @State private var isConnecting = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("Connect Confirmed Provider")
+                Text("Import Signed Provider Transport")
                     .font(.title.weight(.semibold))
-                Text("Use the exact identity, numeric QUIC address, and certificate sent through the mutually confirmed pairing channel.")
+                Text("Paste the complete transport object from a mutually finalized pairing. Loose fields are never accepted.")
                     .foregroundStyle(.secondary)
             }
             Form {
-                TextField("Peer device ID", text: $peerId, prompt: Text("00000000-0000-0000-0000-000000000000"))
-                TextField("Address", text: $address, prompt: Text("192.0.2.10:8787"))
                 VStack(alignment: .leading) {
-                    Text("Base64url certificate DER")
-                    TextEditor(text: $certificateDer)
+                    Text("Signed transport JSON")
+                    TextEditor(text: $signedTransportJSON)
                         .font(.caption.monospaced())
-                        .frame(height: 120)
+                        .frame(height: 220)
                         .overlay { RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.25)) }
                 }
-                Text("The node validates the peer's confirmed storage-provider role and persists the certificate fingerprint. Discovery alone is never enough.")
+                Text("The node exact-compares the peer ID, name, address, certificate, and SHA-256 pin against the mutually signed pairing transcript.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -228,10 +272,9 @@ struct MacProviderConnectionView: View {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
                 Button("Connect") {
-                    guard let id = UUID(uuidString: peerId.trimmingCharacters(in: .whitespacesAndNewlines)) else { return }
                     isConnecting = true
                     Task {
-                        if await model.connectProvider(peerId: id, address: address, certificateDer: certificateDer) {
+                        if await model.connectProvider(signedTransportJSON: signedTransportJSON) {
                             dismiss()
                         }
                         isConnecting = false
@@ -240,9 +283,7 @@ struct MacProviderConnectionView: View {
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
                 .disabled(
-                    UUID(uuidString: peerId.trimmingCharacters(in: .whitespacesAndNewlines)) == nil
-                        || address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        || certificateDer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    signedTransportJSON.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         || isConnecting
                 )
             }
@@ -262,14 +303,14 @@ struct MacPairingView: View {
     @ObservedObject var model: CovalentAppModel
     @Environment(\.dismiss) private var dismiss
     @State private var mode: Mode = .invite
-    @State private var endpoint = ""
     @State private var transferJSON = ""
     @State private var sessionJSON = ""
     @State private var responderRoles: Set<PeerRole> = [.storageProvider]
     @State private var inviterRoles: Set<PeerRole> = []
     @State private var comparedCode = false
-    @State private var completedMessage: String?
+    @State private var completedConfirmation: PairingConfirmation?
     @State private var isWorking = false
+    @State private var isAddingBackupDevice = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -283,8 +324,8 @@ struct MacPairingView: View {
             .padding(24)
             Divider()
 
-            if let completedMessage {
-                completion(completedMessage)
+            if let completedConfirmation {
+                completion(completedConfirmation)
             } else {
                 ScrollView {
                     VStack(spacing: 18) {
@@ -302,11 +343,6 @@ struct MacPairingView: View {
             }
         }
         .frame(width: 620, height: 620)
-        .task {
-            if endpoint.isEmpty {
-                endpoint = await model.defaultInvitationEndpoint() ?? ""
-            }
-        }
         .onChange(of: mode) { _, _ in
             transferJSON = ""
             sessionJSON = ""
@@ -317,22 +353,21 @@ struct MacPairingView: View {
     private var inviteFlow: some View {
         VStack(alignment: .leading, spacing: 16) {
             pairingStep(1, "Create a 10-minute invitation") {
-                HStack {
-                    TextField("Reachable host and port", text: $endpoint, prompt: Text("192.0.2.10:8787"))
-                        .textFieldStyle(.roundedBorder)
-                    Button("Create") {
-                        isWorking = true
-                        Task {
-                            if let invitation = await model.createInvitation(endpoint: endpoint),
-                               let json = try? model.transferJSON(invitation) {
-                                transferJSON = json
-                            }
-                            isWorking = false
+                Text("Covalent signs this Mac's reachable transport automatically. No address or certificate entry is required.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Create Invitation") {
+                    isWorking = true
+                    Task {
+                        if let invitation = await model.createInvitation(),
+                           let json = try? model.transferJSON(invitation) {
+                            transferJSON = json
                         }
+                        isWorking = false
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isWorking)
                 }
+                .buttonStyle(.borderedProminent)
+                .disabled(isWorking)
                 if !transferJSON.isEmpty {
                     transferBox(title: "Send this invitation to the other device", text: transferJSON)
                 }
@@ -565,25 +600,46 @@ struct MacPairingView: View {
         }
     }
 
-    private func completion(_ message: String) -> some View {
-        VStack(spacing: 18) {
+    private func completion(_ confirmation: PairingConfirmation) -> some View {
+        let peer = peerGrant(in: confirmation)
+        return VStack(spacing: 18) {
             Spacer()
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 54))
                 .foregroundStyle(.green)
             Text("Pairing Complete").font(.title.weight(.semibold))
-            Text(message)
+            Text("\(peer.displayName) is trusted with exactly the roles both devices approved.")
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 480)
-            Text("To use this device as a replica, connect its numeric address and pinned certificate from the confirmed channel. You still choose it separately for each backup.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 520)
-            Button("Done") { dismiss() }
+            if peer.roles.contains(.storageProvider), let transport = confirmation.peerTransport {
+                Text("Add this signed device now, then choose it only for backups that should keep an extra copy.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 520)
+                Button("Use as Backup Device") {
+                    isAddingBackupDevice = true
+                    Task {
+                        if await model.connectProvider(using: transport) { dismiss() }
+                        isAddingBackupDevice = false
+                    }
+                }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
+                .disabled(isAddingBackupDevice)
+                .accessibilityIdentifier("pairing.useAsBackupDevice")
+            } else {
+                Text(peer.roles.contains(.storageProvider)
+                    ? "This older pairing did not include signed transport details. Use Advanced recovery from Devices."
+                    : "Storage access was not granted, so this device will not appear as a backup replica.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                Button("Done") { dismiss() }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+            }
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -598,9 +654,119 @@ struct MacPairingView: View {
         isWorking = true
         Task {
             if let confirmation = await model.finalizePairing(sessionJSON: sessionJSON, asInviter: asInviter) {
-                let peer = asInviter ? confirmation.inviterGrant : confirmation.responderGrant
-                completedMessage = "\(peer.displayName) is trusted with exactly the roles both devices approved."
+                completedConfirmation = confirmation
             }
+            isWorking = false
+        }
+    }
+
+    private func peerGrant(in confirmation: PairingConfirmation) -> PeerGrant {
+        mode == .invite ? confirmation.inviterGrant : confirmation.responderGrant
+    }
+}
+
+struct MacNetworkPairingView: View {
+    @ObservedObject var model: CovalentAppModel
+    let pairing: NetworkPairing
+    @Environment(\.dismiss) private var dismiss
+    @State private var isWorking = false
+
+    private var current: NetworkPairing {
+        model.activeNetworkPairing?.id == pairing.id ? model.activeNetworkPairing ?? pairing : pairing
+    }
+
+    var body: some View {
+        VStack(spacing: 22) {
+            Image(systemName: current.state == .complete ? "checkmark.shield.fill" : "laptopcomputer.and.iphone")
+                .font(.system(size: 52))
+                .foregroundStyle(current.state == .failed ? .red : .blue)
+                .accessibilityHidden(true)
+            Text(title)
+                .font(.title.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
+            Text("Pairing lets either device store encrypted backup copies for the other. Nothing is copied now—you choose \(current.peerName) separately when creating a backup.")
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: 440)
+
+            if current.state != .complete && current.state != .failed {
+                VStack(spacing: 6) {
+                    Text("Confirm this code on both devices")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(current.authenticationString)
+                        .font(.system(.title, design: .monospaced, weight: .semibold))
+                        .textSelection(.enabled)
+                        .accessibilityLabel("Comparison code \(current.authenticationString.replacingOccurrences(of: "-", with: " "))")
+                }
+                .padding(16)
+                .frame(maxWidth: 400)
+                .background(Color.blue.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
+            }
+
+            switch current.state {
+            case .awaitingLocalConfirmation:
+                Button("Codes Match — Use as Backup Device") {
+                    isWorking = true
+                    Task {
+                        await model.confirmNetworkPairing(current)
+                        isWorking = false
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(isWorking)
+                .accessibilityIdentifier("networkPairing.confirm")
+            case .awaitingPeerConfirmation:
+                ProgressView("Confirmed here. Waiting for \(current.peerName)…")
+            case .complete:
+                if model.isProviderReady(for: current) {
+                    Label("Backup device ready", systemImage: "checkmark.circle.fill")
+                        .font(.headline)
+                        .foregroundStyle(.green)
+                    Button("Done") { finish() }
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut(.defaultAction)
+                } else {
+                    ProgressView("Saving signed provider connection…")
+                }
+            case .failed:
+                Text(current.failureMessage ?? "The devices could not finish pairing.")
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                Button("Close") { finish() }
+                    .buttonStyle(.borderedProminent)
+            }
+
+            if current.state != .complete && current.state != .failed {
+                Button("Cancel Pairing", role: .destructive) { finish() }
+                    .disabled(isWorking)
+            }
+        }
+        .padding(32)
+        .frame(width: 560, height: 520)
+        .task {
+            while !Task.isCancelled && model.activeNetworkPairing?.id == current.id {
+                await model.refreshNetworkPairings()
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
+
+    private var title: String {
+        switch current.state {
+        case .awaitingLocalConfirmation: current.direction == .incoming ? "Pair with \(current.peerName)?" : "Confirm \(current.peerName)"
+        case .awaitingPeerConfirmation: "Waiting for Other Device"
+        case .complete: "Pairing Complete"
+        case .failed: "Pairing Failed"
+        }
+    }
+
+    private func finish() {
+        isWorking = true
+        Task {
+            await model.dismissNetworkPairing(current)
+            dismiss()
             isWorking = false
         }
     }

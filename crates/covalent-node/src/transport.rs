@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::fs;
+use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
@@ -10,8 +11,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use covalent_core::{ChunkProvider, CoreError, Engine, ProviderHealth, PublicIdentity};
-use covalent_protocol::{DeviceId, PeerRole, SignedRoster};
+use covalent_core::{
+    ChunkProvider, CoreError, Engine, JobControl, JobState, ProviderHealth, PublicIdentity,
+    RecoveryCapsule, RecoveryCapsuleDescriptor,
+};
+use covalent_protocol::{BackupId, DeviceId, PeerRole, SignedRoster, StorageLease};
 use quinn::{
     ClientConfig, ConnectionError, Endpoint, ServerConfig, TransportConfig, TransportErrorCode,
     VarInt,
@@ -19,6 +23,7 @@ use quinn::{
 use rand_core::{OsRng, RngCore};
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use zeroize::Zeroizing;
@@ -33,6 +38,11 @@ const TLS_ALERT_NO_APPLICATION_PROTOCOL: u8 = 0x78;
 const MAX_REPLAY_NONCES_PER_PEER: usize = 4_096;
 const MAX_REQUEST_CLOCK_SKEW: Duration = Duration::from_secs(5 * 60);
 const MAX_PROVIDER_RECORD_BYTES: usize = 8 * 1_024 * 1_024 + 128;
+const MAX_PROVIDER_READ_BATCH_RECORDS: usize = 32;
+const MAX_PROVIDER_READ_BATCH_BYTES: usize = 8 * 1_024 * 1_024 + 4 * 1_024;
+const JOB_CONTROL_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const RECOVERY_CAPSULE_SEGMENT_BYTES: usize = 4 * 1_024 * 1_024;
+const MAX_RECOVERY_CAPSULE_BYTES: u64 = 320 * 1_024 * 1_024;
 const MAX_HELLO_FRAME_BYTES: usize = 8 * 1_024;
 const MAX_OPERATION_FRAME_BYTES: usize = 12 * 1_024 * 1_024;
 const MAX_RESPONSE_FRAME_BYTES: usize = 12 * 1_024 * 1_024;
@@ -47,6 +57,42 @@ const PEER_REQUESTS_PER_SECOND: f64 = 256.0;
 const PEER_BYTE_BURST: f64 = 512.0 * 1_024.0 * 1_024.0;
 const PEER_BYTES_PER_SECOND: f64 = 256.0 * 1_024.0 * 1_024.0;
 const TLS_IDENTITY_SCHEMA_VERSION: u16 = 1;
+
+fn sha256_fingerprint(certificate_der: &[u8]) -> String {
+    Sha256::digest(certificate_der)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn hash_and_rewind_file(file: &mut fs::File, path: &Path) -> Result<String, CoreError> {
+    file.seek(SeekFrom::Start(0))
+        .map_err(|source| CoreError::Io {
+            operation: "rewind recovery capsule spool",
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let mut hasher = blake3::Hasher::new();
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(|source| CoreError::Io {
+            operation: "hash recovery capsule spool",
+            path: path.to_path_buf(),
+            source,
+        })?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    file.seek(SeekFrom::Start(0))
+        .map_err(|source| CoreError::Io {
+            operation: "rewind recovery capsule spool",
+            path: path.to_path_buf(),
+            source,
+        })?;
+    Ok(hasher.finalize().to_hex().to_string())
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -222,10 +268,10 @@ impl TlsIdentity {
         &self.certificate_der
     }
 
-    /// BLAKE3 pin bound into application identity transcripts.
+    /// Lowercase SHA-256 pin bound into application identity transcripts.
     #[must_use]
     pub fn certificate_fingerprint(&self) -> String {
-        blake3::hash(&self.certificate_der).to_hex().to_string()
+        sha256_fingerprint(&self.certificate_der)
     }
 
     fn server_config(&self) -> Result<ServerConfig, CoreError> {
@@ -419,6 +465,7 @@ pub struct QuicProvider {
     local_engine: Weak<Engine>,
     request_timeout: Duration,
     client_state: Arc<tokio::sync::Mutex<Option<QuicClientState>>>,
+    write_leases: Arc<Mutex<BTreeMap<BackupId, StorageLease>>>,
 }
 
 struct QuicClientState {
@@ -445,11 +492,25 @@ impl QuicProvider {
             local_engine: Arc::downgrade(&local_engine),
             request_timeout: Duration::from_secs(15),
             client_state: Arc::new(tokio::sync::Mutex::new(None)),
+            write_leases: Arc::new(Mutex::new(BTreeMap::new())),
         })
     }
 
     fn request(&self, operation: Operation) -> Result<ResponsePayload, CoreError> {
         quic_runtime()?.block_on(self.request_async(operation))
+    }
+
+    fn request_controlled(
+        &self,
+        operation: Operation,
+        control: &JobControl,
+    ) -> Result<ResponsePayload, CoreError> {
+        quic_runtime()?.block_on(async {
+            tokio::select! {
+                result = self.request_async(operation) => result,
+                error = wait_for_job_stop(control) => Err(error),
+            }
+        })
     }
 
     async fn connection(&self) -> Result<quinn::Connection, CoreError> {
@@ -504,8 +565,7 @@ impl QuicProvider {
         let mut nonce = [0_u8; 24];
         OsRng.fill_bytes(&mut nonce);
         let nonce = URL_SAFE_NO_PAD.encode(nonce);
-        let expected_certificate_fingerprint =
-            blake3::hash(&self.remote_certificate).to_hex().to_string();
+        let expected_certificate_fingerprint = sha256_fingerprint(&self.remote_certificate);
         let mut hello = ClientHello {
             device_id: local_engine.device_id(),
             minimum_transport_version: QUIC_TRANSPORT_VERSION,
@@ -540,12 +600,12 @@ impl QuicProvider {
         .await
         .map_err(|_| CoreError::ResourceLimit("QUIC operation timeout"))??;
         let response: WireResponse = serde_json::from_slice(&response_bytes)?;
-        let remote_certificate_fingerprint = blake3::hash(&self.remote_certificate).to_hex();
+        let remote_certificate_fingerprint = sha256_fingerprint(&self.remote_certificate);
         verify_server_response(
             &request,
             &response,
             &self.remote_identity,
-            remote_certificate_fingerprint.as_ref(),
+            &remote_certificate_fingerprint,
         )?;
         if response.ok {
             Ok(response.payload)
@@ -576,6 +636,54 @@ impl QuicProvider {
             _ => Err(CoreError::AuthenticationFailed),
         }
     }
+}
+
+async fn wait_for_job_stop(control: &JobControl) -> CoreError {
+    loop {
+        match control.state() {
+            JobState::Running => tokio::time::sleep(JOB_CONTROL_POLL_INTERVAL).await,
+            JobState::Paused => return CoreError::Paused,
+            JobState::Cancelled => return CoreError::Cancelled,
+        }
+    }
+}
+
+fn decode_provider_read_batch(
+    payload: ResponsePayload,
+    backup_id: BackupId,
+    locators: &[String],
+) -> Result<Vec<Vec<u8>>, CoreError> {
+    let ResponsePayload::Records {
+        backup_id: response_backup_id,
+        records,
+    } = payload
+    else {
+        return Err(CoreError::AuthenticationFailed);
+    };
+    if response_backup_id != backup_id || records.len() != locators.len() {
+        return Err(CoreError::AuthenticationFailed);
+    }
+    let mut total_bytes = 0_usize;
+    let mut decoded = Vec::with_capacity(records.len());
+    for (expected, record) in locators.iter().zip(records) {
+        if record.locator != *expected {
+            return Err(CoreError::AuthenticationFailed);
+        }
+        let bytes = URL_SAFE_NO_PAD
+            .decode(record.record)
+            .map_err(|_| CoreError::AuthenticationFailed)?;
+        if bytes.is_empty() || bytes.len() > MAX_PROVIDER_RECORD_BYTES {
+            return Err(CoreError::ResourceLimit("provider record"));
+        }
+        total_bytes = total_bytes
+            .checked_add(bytes.len())
+            .ok_or(CoreError::ResourceLimit("provider read batch"))?;
+        if total_bytes > MAX_PROVIDER_READ_BATCH_BYTES {
+            return Err(CoreError::ResourceLimit("provider read batch"));
+        }
+        decoded.push(bytes);
+    }
+    Ok(decoded)
 }
 
 fn quic_runtime() -> Result<&'static tokio::runtime::Runtime, CoreError> {
@@ -621,7 +729,7 @@ impl fmt::Debug for QuicProvider {
             .field("remote_identity", &self.remote_identity)
             .field(
                 "certificate_fingerprint",
-                &blake3::hash(&self.remote_certificate).to_hex().to_string(),
+                &sha256_fingerprint(&self.remote_certificate),
             )
             .finish()
     }
@@ -636,11 +744,49 @@ impl ChunkProvider for QuicProvider {
         ProviderHealth::Online
     }
 
+    fn begin_backup_write(
+        &self,
+        backup_id: BackupId,
+        maximum_new_bytes: u64,
+        maximum_new_objects: u64,
+    ) -> Result<(), CoreError> {
+        let lease =
+            self.acquire_storage_lease(backup_id, maximum_new_bytes, maximum_new_objects)?;
+        self.write_leases
+            .lock()
+            .map_err(|_| CoreError::Synchronization)?
+            .insert(backup_id, lease);
+        Ok(())
+    }
+
     fn put(&self, locator: &str, record: &[u8]) -> Result<(), CoreError> {
+        let _ = (locator, record);
+        Err(CoreError::InvalidState(
+            "remote provider writes require a backup scope".to_owned(),
+        ))
+    }
+
+    fn put_scoped(
+        &self,
+        backup_id: BackupId,
+        locator: &str,
+        record: &[u8],
+    ) -> Result<(), CoreError> {
         if record.len() > MAX_PROVIDER_RECORD_BYTES {
             return Err(CoreError::ResourceLimit("provider record"));
         }
+        let lease = self
+            .write_leases
+            .lock()
+            .map_err(|_| CoreError::Synchronization)?
+            .get(&backup_id)
+            .cloned()
+            .ok_or_else(|| {
+                CoreError::InvalidState("backup storage lease was not preflighted".to_owned())
+            })?;
         match self.request(Operation::Put {
+            backup_id,
+            lease,
             locator: locator.to_owned(),
             record: URL_SAFE_NO_PAD.encode(record),
         })? {
@@ -649,11 +795,23 @@ impl ChunkProvider for QuicProvider {
         }
     }
 
-    fn get(&self, locator: &str) -> Result<Vec<u8>, CoreError> {
-        match self.request(Operation::Get {
+    fn get(&self, _locator: &str) -> Result<Vec<u8>, CoreError> {
+        Err(CoreError::AuthenticationFailed)
+    }
+
+    fn get_scoped(&self, backup_id: BackupId, locator: &str) -> Result<Vec<u8>, CoreError> {
+        match self.request(Operation::GetScoped {
+            backup_id,
             locator: locator.to_owned(),
         })? {
-            ResponsePayload::Record { record } => {
+            ResponsePayload::ScopedRecord {
+                backup_id: response_backup_id,
+                locator: response_locator,
+                record,
+            } => {
+                if response_backup_id != backup_id || response_locator != locator {
+                    return Err(CoreError::AuthenticationFailed);
+                }
                 let decoded = URL_SAFE_NO_PAD
                     .decode(record)
                     .map_err(|_| CoreError::AuthenticationFailed)?;
@@ -666,11 +824,296 @@ impl ChunkProvider for QuicProvider {
         }
     }
 
-    fn contains(&self, locator: &str) -> Result<bool, CoreError> {
-        match self.request(Operation::Contains {
+    fn get_many_controlled(
+        &self,
+        backup_id: BackupId,
+        locators: &[String],
+        control: &JobControl,
+    ) -> Result<Vec<Vec<u8>>, CoreError> {
+        if locators.is_empty()
+            || locators.len() > MAX_PROVIDER_READ_BATCH_RECORDS
+            || locators.iter().collect::<BTreeSet<_>>().len() != locators.len()
+        {
+            return Err(CoreError::ResourceLimit("provider read batch"));
+        }
+        decode_provider_read_batch(
+            self.request_controlled(
+                Operation::GetBatch {
+                    backup_id,
+                    locators: locators.to_vec(),
+                },
+                control,
+            )?,
+            backup_id,
+            locators,
+        )
+    }
+
+    fn contains(&self, _locator: &str) -> Result<bool, CoreError> {
+        Err(CoreError::AuthenticationFailed)
+    }
+
+    fn contains_scoped(&self, backup_id: BackupId, locator: &str) -> Result<bool, CoreError> {
+        match self.request(Operation::ContainsScoped {
+            backup_id,
             locator: locator.to_owned(),
         })? {
-            ResponsePayload::Presence { present } => Ok(present),
+            ResponsePayload::ScopedPresence {
+                backup_id: response_backup_id,
+                locator: response_locator,
+                present,
+            } if response_backup_id == backup_id && response_locator == locator => Ok(present),
+            _ => Err(CoreError::AuthenticationFailed),
+        }
+    }
+
+    fn put_recovery_capsule(&self, capsule: &RecoveryCapsule) -> Result<(), CoreError> {
+        self.put_recovery_capsule_scoped(capsule.backup_id, capsule)
+    }
+
+    fn put_recovery_capsule_scoped(
+        &self,
+        backup_id: BackupId,
+        capsule: &RecoveryCapsule,
+    ) -> Result<(), CoreError> {
+        if backup_id != capsule.backup_id {
+            return Err(CoreError::AuthenticationFailed);
+        }
+        let mut encoded = tempfile::NamedTempFile::new().map_err(|source| CoreError::Io {
+            operation: "create recovery capsule spool",
+            path: std::env::temp_dir(),
+            source,
+        })?;
+        serde_json::to_writer(encoded.as_file_mut(), capsule)?;
+        encoded
+            .as_file_mut()
+            .flush()
+            .map_err(|source| CoreError::Io {
+                operation: "flush recovery capsule spool",
+                path: encoded.path().to_path_buf(),
+                source,
+            })?;
+        let total_bytes = encoded
+            .as_file()
+            .metadata()
+            .map_err(|source| CoreError::Io {
+                operation: "inspect recovery capsule spool",
+                path: encoded.path().to_path_buf(),
+                source,
+            })?
+            .len();
+        if total_bytes == 0 || total_bytes > MAX_RECOVERY_CAPSULE_BYTES {
+            return Err(CoreError::ResourceLimit("recovery capsule"));
+        }
+        let encoded_path = encoded.path().to_path_buf();
+        let capsule_digest = hash_and_rewind_file(encoded.as_file_mut(), &encoded_path)?;
+        let lease = self.acquire_storage_lease(backup_id, total_bytes, 1)?;
+        if total_bytes > RECOVERY_CAPSULE_SEGMENT_BYTES as u64 {
+            let upload_id = uuid::Uuid::new_v4().to_string();
+            let total_segments =
+                u32::try_from(total_bytes.div_ceil(RECOVERY_CAPSULE_SEGMENT_BYTES as u64))
+                    .map_err(|_| CoreError::ResourceLimit("recovery capsule segments"))?;
+            let descriptor = RecoveryCapsuleDescriptor {
+                backup_id,
+                snapshot_id: capsule.snapshot_id.clone(),
+                key_epoch: capsule.key_epoch,
+                committed_at_unix_ms: capsule.committed_at_unix_ms,
+                signer_device_id: capsule.signer_device_id,
+                total_bytes,
+                capsule_digest: capsule_digest.clone(),
+            };
+            match self.request(Operation::BeginRecoveryCapsuleUpload {
+                backup_id,
+                lease: lease.clone(),
+                upload_id: upload_id.clone(),
+                total_bytes,
+                total_segments,
+                capsule_digest,
+                descriptor,
+            })? {
+                ResponsePayload::Stored => {}
+                _ => return Err(CoreError::AuthenticationFailed),
+            }
+            let mut segment = vec![0_u8; RECOVERY_CAPSULE_SEGMENT_BYTES];
+            for index in 0..total_segments {
+                let offset = u64::from(index) * RECOVERY_CAPSULE_SEGMENT_BYTES as u64;
+                let length = usize::try_from(
+                    (total_bytes - offset).min(RECOVERY_CAPSULE_SEGMENT_BYTES as u64),
+                )
+                .map_err(|_| CoreError::ResourceLimit("recovery capsule segment"))?;
+                encoded
+                    .as_file_mut()
+                    .read_exact(&mut segment[..length])
+                    .map_err(|source| CoreError::Io {
+                        operation: "read recovery capsule spool",
+                        path: encoded.path().to_path_buf(),
+                        source,
+                    })?;
+                let segment = &segment[..length];
+                match self.request(Operation::PutRecoveryCapsuleSegment {
+                    backup_id,
+                    lease: lease.clone(),
+                    upload_id: upload_id.clone(),
+                    index,
+                    segment: URL_SAFE_NO_PAD.encode(segment),
+                    segment_digest: blake3::hash(segment).to_hex().to_string(),
+                })? {
+                    ResponsePayload::Stored => {}
+                    _ => return Err(CoreError::AuthenticationFailed),
+                }
+            }
+            return match self.request(Operation::CommitRecoveryCapsuleUpload {
+                backup_id,
+                lease,
+                upload_id,
+            })? {
+                ResponsePayload::Stored => Ok(()),
+                _ => Err(CoreError::AuthenticationFailed),
+            };
+        }
+        match self.request(Operation::PutRecoveryCapsule {
+            backup_id,
+            lease,
+            capsule: capsule.clone(),
+        })? {
+            ResponsePayload::Stored => Ok(()),
+            _ => Err(CoreError::AuthenticationFailed),
+        }
+    }
+
+    fn list_recovery_capsules(&self) -> Result<Vec<RecoveryCapsule>, CoreError> {
+        let mut all = Vec::new();
+        let mut cursor = None;
+        loop {
+            match self.request(Operation::ListRecoveryCapsules {
+                backup_id: None,
+                cursor: cursor.clone(),
+                limit: 128,
+            })? {
+                ResponsePayload::RecoveryCapsuleDescriptors {
+                    descriptors,
+                    next_cursor,
+                } => {
+                    for descriptor in descriptors {
+                        all.push(self.fetch_recovery_capsule(&descriptor)?);
+                    }
+                    if all.len() > 1_000_000 {
+                        return Err(CoreError::ResourceLimit("recovery capsule listing"));
+                    }
+                    let Some(next) = next_cursor else {
+                        return Ok(all);
+                    };
+                    if cursor.as_ref().is_some_and(|previous| previous >= &next) {
+                        return Err(CoreError::AuthenticationFailed);
+                    }
+                    cursor = Some(next);
+                }
+                _ => return Err(CoreError::AuthenticationFailed),
+            }
+        }
+    }
+}
+
+impl QuicProvider {
+    fn fetch_recovery_capsule(
+        &self,
+        descriptor: &RecoveryCapsuleDescriptor,
+    ) -> Result<RecoveryCapsule, CoreError> {
+        if descriptor.total_bytes == 0 || descriptor.total_bytes > MAX_RECOVERY_CAPSULE_BYTES {
+            return Err(CoreError::ResourceLimit("recovery capsule"));
+        }
+        let mut spool = tempfile::NamedTempFile::new().map_err(|source| CoreError::Io {
+            operation: "create recovery capsule download spool",
+            path: std::env::temp_dir(),
+            source,
+        })?;
+        let mut hasher = blake3::Hasher::new();
+        let mut offset = 0_u64;
+        while offset < descriptor.total_bytes {
+            match self.request(Operation::GetRecoveryCapsuleSegment {
+                backup_id: descriptor.backup_id,
+                snapshot_id: descriptor.snapshot_id.clone(),
+                offset,
+                maximum_bytes: RECOVERY_CAPSULE_SEGMENT_BYTES as u32,
+            })? {
+                ResponsePayload::RecoveryCapsuleSegment {
+                    segment,
+                    total_bytes,
+                    capsule_digest,
+                } => {
+                    if total_bytes != descriptor.total_bytes
+                        || capsule_digest != descriptor.capsule_digest
+                    {
+                        return Err(CoreError::AuthenticationFailed);
+                    }
+                    let segment = URL_SAFE_NO_PAD
+                        .decode(segment)
+                        .map_err(|_| CoreError::AuthenticationFailed)?;
+                    if segment.is_empty() || segment.len() > RECOVERY_CAPSULE_SEGMENT_BYTES {
+                        return Err(CoreError::AuthenticationFailed);
+                    }
+                    if offset
+                        .checked_add(segment.len() as u64)
+                        .is_none_or(|end| end > descriptor.total_bytes)
+                    {
+                        return Err(CoreError::AuthenticationFailed);
+                    }
+                    spool
+                        .as_file_mut()
+                        .write_all(&segment)
+                        .map_err(|source| CoreError::Io {
+                            operation: "write recovery capsule download spool",
+                            path: spool.path().to_path_buf(),
+                            source,
+                        })?;
+                    hasher.update(&segment);
+                    offset = offset
+                        .checked_add(segment.len() as u64)
+                        .ok_or(CoreError::ResourceLimit("recovery capsule offset"))?;
+                }
+                _ => return Err(CoreError::AuthenticationFailed),
+            }
+        }
+        if offset != descriptor.total_bytes
+            || hasher.finalize().to_hex().as_str() != descriptor.capsule_digest
+        {
+            return Err(CoreError::AuthenticationFailed);
+        }
+        spool
+            .as_file_mut()
+            .seek(SeekFrom::Start(0))
+            .map_err(|source| CoreError::Io {
+                operation: "rewind recovery capsule download spool",
+                path: spool.path().to_path_buf(),
+                source,
+            })?;
+        let capsule: RecoveryCapsule = serde_json::from_reader(BufReader::new(spool.as_file()))?;
+        if capsule.backup_id != descriptor.backup_id
+            || capsule.snapshot_id != descriptor.snapshot_id
+            || capsule.signer_device_id != descriptor.signer_device_id
+        {
+            return Err(CoreError::AuthenticationFailed);
+        }
+        Ok(capsule)
+    }
+
+    fn acquire_storage_lease(
+        &self,
+        backup_id: BackupId,
+        max_new_bytes: u64,
+        max_new_objects: u64,
+    ) -> Result<StorageLease, CoreError> {
+        let issued_at_unix_ms = current_unix_ms()?;
+        let expires_at_unix_ms = issued_at_unix_ms
+            .checked_add(5 * 60 * 1_000)
+            .ok_or(CoreError::ResourceLimit("storage lease expiry"))?;
+        match self.request(Operation::AcquireStorageLease {
+            backup_id,
+            max_new_bytes,
+            max_new_objects,
+            expires_at_unix_ms,
+        })? {
+            ResponsePayload::StorageLease { lease } => Ok(lease),
             _ => Err(CoreError::AuthenticationFailed),
         }
     }
@@ -722,19 +1165,88 @@ struct WireResponse {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum Operation {
-    Put { locator: String, record: String },
-    Get { locator: String },
-    Contains { locator: String },
+    AcquireStorageLease {
+        backup_id: BackupId,
+        max_new_bytes: u64,
+        max_new_objects: u64,
+        expires_at_unix_ms: u64,
+    },
+    Put {
+        backup_id: BackupId,
+        lease: StorageLease,
+        locator: String,
+        record: String,
+    },
+    GetScoped {
+        backup_id: BackupId,
+        locator: String,
+    },
+    GetBatch {
+        backup_id: BackupId,
+        locators: Vec<String>,
+    },
+    ContainsScoped {
+        backup_id: BackupId,
+        locator: String,
+    },
+    PutRecoveryCapsule {
+        backup_id: BackupId,
+        lease: StorageLease,
+        capsule: RecoveryCapsule,
+    },
+    BeginRecoveryCapsuleUpload {
+        backup_id: BackupId,
+        lease: StorageLease,
+        upload_id: String,
+        total_bytes: u64,
+        total_segments: u32,
+        capsule_digest: String,
+        descriptor: RecoveryCapsuleDescriptor,
+    },
+    PutRecoveryCapsuleSegment {
+        backup_id: BackupId,
+        lease: StorageLease,
+        upload_id: String,
+        index: u32,
+        segment: String,
+        segment_digest: String,
+    },
+    CommitRecoveryCapsuleUpload {
+        backup_id: BackupId,
+        lease: StorageLease,
+        upload_id: String,
+    },
+    ListRecoveryCapsules {
+        backup_id: Option<BackupId>,
+        cursor: Option<String>,
+        limit: u16,
+    },
+    GetRecoveryCapsuleSegment {
+        backup_id: BackupId,
+        snapshot_id: String,
+        offset: u64,
+        maximum_bytes: u32,
+    },
     GetRoster,
-    SubmitRoster { roster: SignedRoster },
+    SubmitRoster {
+        roster: SignedRoster,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum OperationType {
+    AcquireStorageLease,
     Put,
-    Get,
-    Contains,
+    GetScoped,
+    GetBatch,
+    ContainsScoped,
+    PutRecoveryCapsule,
+    BeginRecoveryCapsuleUpload,
+    PutRecoveryCapsuleSegment,
+    CommitRecoveryCapsuleUpload,
+    ListRecoveryCapsules,
+    GetRecoveryCapsuleSegment,
     GetRoster,
     SubmitRoster,
 }
@@ -742,9 +1254,17 @@ enum OperationType {
 impl Operation {
     const fn kind(&self) -> OperationType {
         match self {
+            Self::AcquireStorageLease { .. } => OperationType::AcquireStorageLease,
             Self::Put { .. } => OperationType::Put,
-            Self::Get { .. } => OperationType::Get,
-            Self::Contains { .. } => OperationType::Contains,
+            Self::GetScoped { .. } => OperationType::GetScoped,
+            Self::GetBatch { .. } => OperationType::GetBatch,
+            Self::ContainsScoped { .. } => OperationType::ContainsScoped,
+            Self::PutRecoveryCapsule { .. } => OperationType::PutRecoveryCapsule,
+            Self::BeginRecoveryCapsuleUpload { .. } => OperationType::BeginRecoveryCapsuleUpload,
+            Self::PutRecoveryCapsuleSegment { .. } => OperationType::PutRecoveryCapsuleSegment,
+            Self::CommitRecoveryCapsuleUpload { .. } => OperationType::CommitRecoveryCapsuleUpload,
+            Self::ListRecoveryCapsules { .. } => OperationType::ListRecoveryCapsules,
+            Self::GetRecoveryCapsuleSegment { .. } => OperationType::GetRecoveryCapsuleSegment,
             Self::GetRoster => OperationType::GetRoster,
             Self::SubmitRoster { .. } => OperationType::SubmitRoster,
         }
@@ -754,12 +1274,45 @@ impl Operation {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum ResponsePayload {
+    StorageLease {
+        lease: StorageLease,
+    },
     Stored,
-    Record { record: String },
-    Presence { present: bool },
-    Roster { roster: Option<SignedRoster> },
+    ScopedRecord {
+        backup_id: BackupId,
+        locator: String,
+        record: String,
+    },
+    Records {
+        backup_id: BackupId,
+        records: Vec<WireProviderRecord>,
+    },
+    ScopedPresence {
+        backup_id: BackupId,
+        locator: String,
+        present: bool,
+    },
+    RecoveryCapsuleDescriptors {
+        descriptors: Vec<RecoveryCapsuleDescriptor>,
+        next_cursor: Option<String>,
+    },
+    RecoveryCapsuleSegment {
+        segment: String,
+        total_bytes: u64,
+        capsule_digest: String,
+    },
+    Roster {
+        roster: Option<SignedRoster>,
+    },
     RosterAccepted,
     Error,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WireProviderRecord {
+    locator: String,
+    record: String,
 }
 
 #[derive(Default)]
@@ -946,8 +1499,12 @@ async fn handle_stream(
         return Err(CoreError::AuthenticationFailed);
     }
     let worker_engine = Arc::clone(&engine);
+    let peer_device_id = hello.device_id;
     let (permit, (ok, payload, error_code)) = tokio::task::spawn_blocking(move || {
-        (permit, process_operation(&operation, &worker_engine))
+        (
+            permit,
+            process_operation(&operation, &worker_engine, peer_device_id),
+        )
     })
     .await
     .map_err(|_| CoreError::InvalidState("QUIC storage worker failed".to_owned()))?;
@@ -1006,8 +1563,19 @@ fn authenticate_client_hello(
         return Err(CoreError::ProtocolNegotiationFailed);
     }
     let peer = match hello.operation_type {
-        OperationType::Put => engine.authorized_peer(hello.device_id, PeerRole::BackupWriter)?,
-        OperationType::Get | OperationType::Contains => {
+        OperationType::AcquireStorageLease
+        | OperationType::Put
+        | OperationType::PutRecoveryCapsule
+        | OperationType::BeginRecoveryCapsuleUpload
+        | OperationType::PutRecoveryCapsuleSegment
+        | OperationType::CommitRecoveryCapsuleUpload => {
+            engine.authorized_peer(hello.device_id, PeerRole::BackupWriter)?
+        }
+        OperationType::GetScoped
+        | OperationType::GetBatch
+        | OperationType::ContainsScoped
+        | OperationType::ListRecoveryCapsules
+        | OperationType::GetRecoveryCapsuleSegment => {
             engine.authorized_peer(hello.device_id, PeerRole::BackupReader)?
         }
         OperationType::GetRoster | OperationType::SubmitRoster => {
@@ -1050,32 +1618,247 @@ fn validate_negotiated_transport_version(
 fn process_operation(
     operation: &Operation,
     engine: &Engine,
+    peer_device_id: DeviceId,
 ) -> (bool, ResponsePayload, Option<String>) {
     let result = match operation {
-        Operation::Put { locator, record } => URL_SAFE_NO_PAD
+        Operation::AcquireStorageLease {
+            backup_id,
+            max_new_bytes,
+            max_new_objects,
+            expires_at_unix_ms,
+        } => current_unix_ms().and_then(|issued_at_unix_ms| {
+            engine
+                .issue_storage_lease(
+                    peer_device_id,
+                    *backup_id,
+                    *max_new_bytes,
+                    *max_new_objects,
+                    issued_at_unix_ms,
+                    *expires_at_unix_ms,
+                )
+                .map(|lease| ResponsePayload::StorageLease { lease })
+        }),
+        Operation::Put {
+            backup_id,
+            lease,
+            locator,
+            record,
+        } => URL_SAFE_NO_PAD
             .decode(record)
             .map_err(|_| CoreError::AuthenticationFailed)
             .and_then(|record| {
                 if record.len() > MAX_PROVIDER_RECORD_BYTES {
                     return Err(CoreError::ResourceLimit("provider record"));
                 }
+                if lease.backup_id != *backup_id {
+                    return Err(CoreError::AuthenticationFailed);
+                }
                 engine
-                    .store()
-                    .put_provider_record(locator, &record)
+                    .put_leased_provider_record(
+                        peer_device_id,
+                        lease,
+                        locator,
+                        &record,
+                        current_unix_ms()?,
+                    )
                     .map(|_| ResponsePayload::Stored)
             }),
-        Operation::Get { locator } => {
-            engine
-                .store()
-                .get_provider_record(locator)
-                .map(|record| ResponsePayload::Record {
-                    record: URL_SAFE_NO_PAD.encode(record),
-                })
+        Operation::GetScoped { backup_id, locator } => engine
+            .authorize_provider_read_batch(
+                peer_device_id,
+                *backup_id,
+                std::slice::from_ref(locator),
+            )
+            .and_then(|()| engine.store().get_provider_record(locator))
+            .map(|record| ResponsePayload::ScopedRecord {
+                backup_id: *backup_id,
+                locator: locator.clone(),
+                record: URL_SAFE_NO_PAD.encode(record),
+            }),
+        Operation::GetBatch {
+            backup_id,
+            locators,
+        } => {
+            if locators.is_empty()
+                || locators.len() > MAX_PROVIDER_READ_BATCH_RECORDS
+                || locators.iter().collect::<BTreeSet<_>>().len() != locators.len()
+            {
+                Err(CoreError::ResourceLimit("provider read batch"))
+            } else {
+                engine
+                    .authorize_provider_read_batch(peer_device_id, *backup_id, locators)
+                    .and_then(|()| {
+                        let mut total_bytes = 0_usize;
+                        let mut records = Vec::with_capacity(locators.len());
+                        for locator in locators {
+                            let record = engine.store().get_provider_record(locator)?;
+                            total_bytes = total_bytes
+                                .checked_add(record.len())
+                                .ok_or(CoreError::ResourceLimit("provider read batch"))?;
+                            if total_bytes > MAX_PROVIDER_READ_BATCH_BYTES {
+                                return Err(CoreError::ResourceLimit("provider read batch"));
+                            }
+                            records.push(WireProviderRecord {
+                                locator: locator.clone(),
+                                record: URL_SAFE_NO_PAD.encode(record),
+                            });
+                        }
+                        Ok(ResponsePayload::Records {
+                            backup_id: *backup_id,
+                            records,
+                        })
+                    })
+            }
         }
-        Operation::Contains { locator } => engine
-            .store()
-            .contains(locator)
-            .map(|present| ResponsePayload::Presence { present }),
+        Operation::ContainsScoped { backup_id, locator } => engine
+            .authorize_provider_read_batch(
+                peer_device_id,
+                *backup_id,
+                std::slice::from_ref(locator),
+            )
+            .and_then(|()| engine.store().contains(locator))
+            .map(|present| ResponsePayload::ScopedPresence {
+                backup_id: *backup_id,
+                locator: locator.clone(),
+                present,
+            }),
+        Operation::PutRecoveryCapsule {
+            backup_id,
+            lease,
+            capsule,
+        } => {
+            if lease.backup_id != *backup_id || capsule.backup_id != *backup_id {
+                Err(CoreError::AuthenticationFailed)
+            } else {
+                current_unix_ms().and_then(|now_unix_ms| {
+                    engine
+                        .put_leased_recovery_capsule(peer_device_id, lease, capsule, now_unix_ms)
+                        .map(|_| ResponsePayload::Stored)
+                })
+            }
+        }
+        Operation::BeginRecoveryCapsuleUpload {
+            backup_id,
+            lease,
+            upload_id,
+            total_bytes,
+            total_segments,
+            capsule_digest,
+            descriptor,
+        } => {
+            if lease.backup_id != *backup_id {
+                Err(CoreError::AuthenticationFailed)
+            } else {
+                current_unix_ms().and_then(|now_unix_ms| {
+                    engine
+                        .begin_leased_recovery_capsule_upload(
+                            peer_device_id,
+                            lease,
+                            upload_id,
+                            *total_bytes,
+                            *total_segments,
+                            capsule_digest,
+                            descriptor,
+                            now_unix_ms,
+                        )
+                        .map(|()| ResponsePayload::Stored)
+                })
+            }
+        }
+        Operation::PutRecoveryCapsuleSegment {
+            backup_id,
+            lease,
+            upload_id,
+            index,
+            segment,
+            segment_digest,
+        } => {
+            if lease.backup_id != *backup_id {
+                Err(CoreError::AuthenticationFailed)
+            } else {
+                URL_SAFE_NO_PAD
+                    .decode(segment)
+                    .map_err(|_| CoreError::AuthenticationFailed)
+                    .and_then(|segment| {
+                        if segment.len() > RECOVERY_CAPSULE_SEGMENT_BYTES {
+                            return Err(CoreError::ResourceLimit("recovery capsule segment"));
+                        }
+                        engine
+                            .put_leased_recovery_capsule_segment(
+                                peer_device_id,
+                                lease,
+                                upload_id,
+                                *index,
+                                &segment,
+                                segment_digest,
+                                current_unix_ms()?,
+                            )
+                            .map(|()| ResponsePayload::Stored)
+                    })
+            }
+        }
+        Operation::CommitRecoveryCapsuleUpload {
+            backup_id,
+            lease,
+            upload_id,
+        } => {
+            if lease.backup_id != *backup_id {
+                Err(CoreError::AuthenticationFailed)
+            } else {
+                current_unix_ms().and_then(|now_unix_ms| {
+                    engine
+                        .commit_leased_recovery_capsule_upload(
+                            peer_device_id,
+                            lease,
+                            upload_id,
+                            now_unix_ms,
+                        )
+                        .map(|_| ResponsePayload::Stored)
+                })
+            }
+        }
+        Operation::ListRecoveryCapsules {
+            backup_id,
+            cursor,
+            limit,
+        } => engine
+            .recovery_capsule_descriptors_for_peer(
+                peer_device_id,
+                *backup_id,
+                cursor.as_deref(),
+                *limit,
+            )
+            .and_then(|(descriptors, next_cursor)| {
+                if serde_json::to_vec(&descriptors)?.len()
+                    > MAX_RESPONSE_FRAME_BYTES.saturating_sub(MAX_HELLO_FRAME_BYTES)
+                {
+                    return Err(CoreError::ResourceLimit("QUIC recovery capsule listing"));
+                }
+                Ok(ResponsePayload::RecoveryCapsuleDescriptors {
+                    descriptors,
+                    next_cursor,
+                })
+            }),
+        Operation::GetRecoveryCapsuleSegment {
+            backup_id,
+            snapshot_id,
+            offset,
+            maximum_bytes,
+        } => engine
+            .recovery_capsule_segment_for_peer(
+                peer_device_id,
+                *backup_id,
+                snapshot_id,
+                *offset,
+                *maximum_bytes,
+            )
+            .map(|(segment, total_bytes, capsule_digest)| {
+                ResponsePayload::RecoveryCapsuleSegment {
+                    segment: URL_SAFE_NO_PAD.encode(segment),
+                    total_bytes,
+                    capsule_digest,
+                }
+            }),
         Operation::GetRoster => engine
             .current_roster()
             .map(|roster| ResponsePayload::Roster { roster }),
@@ -1332,6 +2115,70 @@ mod tests {
             .expect("trust peer");
     }
 
+    #[test]
+    fn provider_read_batch_rejects_partial_reordered_wrong_scope_and_oversized_responses() {
+        let backup_id = BackupId::new();
+        let locators = vec!["1".repeat(64), "2".repeat(64)];
+        let record = |locator: &str, bytes: &[u8]| WireProviderRecord {
+            locator: locator.to_owned(),
+            record: URL_SAFE_NO_PAD.encode(bytes),
+        };
+        let payload = |backup_id, records| ResponsePayload::Records { backup_id, records };
+
+        assert!(matches!(
+            decode_provider_read_batch(
+                payload(backup_id, vec![record(&locators[0], b"first")]),
+                backup_id,
+                &locators,
+            ),
+            Err(CoreError::AuthenticationFailed)
+        ));
+        assert!(matches!(
+            decode_provider_read_batch(
+                payload(
+                    backup_id,
+                    vec![
+                        record(&locators[1], b"second"),
+                        record(&locators[0], b"first"),
+                    ],
+                ),
+                backup_id,
+                &locators,
+            ),
+            Err(CoreError::AuthenticationFailed)
+        ));
+        assert!(matches!(
+            decode_provider_read_batch(
+                payload(
+                    BackupId::new(),
+                    vec![
+                        record(&locators[0], b"first"),
+                        record(&locators[1], b"second"),
+                    ],
+                ),
+                backup_id,
+                &locators,
+            ),
+            Err(CoreError::AuthenticationFailed)
+        ));
+        let half = MAX_PROVIDER_READ_BATCH_BYTES / 2 + 1;
+        let oversized_record = vec![0_u8; half];
+        assert!(matches!(
+            decode_provider_read_batch(
+                payload(
+                    backup_id,
+                    vec![
+                        record(&locators[0], &oversized_record),
+                        record(&locators[1], &oversized_record),
+                    ],
+                ),
+                backup_id,
+                &locators,
+            ),
+            Err(CoreError::ResourceLimit("provider read batch"))
+        ));
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn authenticated_quic_provider_round_trip_and_pin_rejection() {
         let first_data = tempdir().expect("first");
@@ -1358,8 +2205,9 @@ mod tests {
         )
         .expect("provider");
         let key = BackupKey::generate();
+        let backup_id = BackupId::new();
         let chunk = key
-            .encrypt_chunk(covalent_protocol::BackupId::new(), 1, b"over QUIC")
+            .encrypt_chunk(backup_id, 1, b"over QUIC")
             .expect("chunk");
         let locator = chunk.opaque_locator.clone();
         let record = chunk.encode_provider_record();
@@ -1367,10 +2215,35 @@ mod tests {
             .current_roster()
             .expect("current roster")
             .expect("issued roster");
+        let cross_peer_locator = locator.clone();
         tokio::task::spawn_blocking(move || {
-            provider.put(&locator, &record).expect("put");
-            assert!(provider.contains(&locator).expect("contains"));
-            assert_eq!(provider.get(&locator).expect("get"), record);
+            assert!(provider.put(&locator, &record).is_err());
+            provider
+                .begin_backup_write(backup_id, record.len() as u64, 1)
+                .expect("lease preflight");
+            provider
+                .put_scoped(backup_id, &locator, &record)
+                .expect("leased put");
+            assert!(
+                provider
+                    .contains_scoped(backup_id, &locator)
+                    .expect("contains")
+            );
+            assert_eq!(
+                provider.get_scoped(backup_id, &locator).expect("get"),
+                record
+            );
+            assert!(provider.contains(&locator).is_err());
+            assert!(provider.get(&locator).is_err());
+            let other_backup = BackupId::new();
+            assert!(matches!(
+                provider.contains_scoped(other_backup, &locator),
+                Err(CoreError::AuthenticationFailed)
+            ));
+            assert!(matches!(
+                provider.get_scoped(other_backup, &locator),
+                Err(CoreError::AuthenticationFailed)
+            ));
             let remote_roster = provider
                 .fetch_roster()
                 .expect("fetch roster")
@@ -1383,6 +2256,32 @@ mod tests {
         })
         .await
         .expect("worker");
+
+        let other_peer_data = tempdir().expect("other peer");
+        let other_peer = Arc::new(
+            Engine::open(EngineOptions::new(other_peer_data.path())).expect("other peer"),
+        );
+        trust_all(&second, &other_peer);
+        trust_all(&other_peer, &second);
+        let cross_peer_provider = QuicProvider::new(
+            address,
+            second.public_identity(),
+            tls.certificate_der().to_vec(),
+            Arc::clone(&other_peer),
+        )
+        .expect("cross-peer provider");
+        tokio::task::spawn_blocking(move || {
+            assert!(matches!(
+                cross_peer_provider.contains_scoped(backup_id, &cross_peer_locator),
+                Err(CoreError::AuthenticationFailed)
+            ));
+            assert!(matches!(
+                cross_peer_provider.get_scoped(backup_id, &cross_peer_locator),
+                Err(CoreError::AuthenticationFailed)
+            ));
+        })
+        .await
+        .expect("cross-peer worker");
 
         let wrong_tls =
             TlsIdentity::load_or_create(first_data.path().join("other-tls")).expect("other TLS");
@@ -1402,6 +2301,59 @@ mod tests {
         })
         .await
         .expect("wrong-pin worker");
+        task.abort();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn segmented_recovery_capsule_exceeding_frame_round_trips_tenant_scoped() {
+        let owner_data = tempdir().expect("owner");
+        let provider_data = tempdir().expect("provider");
+        let owner = Arc::new(Engine::open(EngineOptions::new(owner_data.path())).expect("owner"));
+        let remote =
+            Arc::new(Engine::open(EngineOptions::new(provider_data.path())).expect("provider"));
+        trust_all(&owner, &remote);
+        trust_all(&remote, &owner);
+        let tls = TlsIdentity::load_or_create(provider_data.path().join("tls")).expect("TLS");
+        let node = QuicNode::bind(
+            "127.0.0.1:0".parse().expect("address"),
+            Arc::clone(&remote),
+            &tls,
+        )
+        .expect("node");
+        let address = node.local_addr().expect("local address");
+        let task = tokio::spawn(node.run());
+        let provider = QuicProvider::new(
+            address,
+            remote.public_identity(),
+            tls.certificate_der().to_vec(),
+            Arc::clone(&owner),
+        )
+        .expect("provider");
+        let backup_id = BackupId::new();
+        let capsule = RecoveryCapsule {
+            schema_version: 1,
+            cipher_suite: "XCHACHA20-POLY1305-HKDF-SHA256".to_owned(),
+            backup_id,
+            snapshot_id: "large-capsule".to_owned(),
+            key_epoch: 1,
+            committed_at_unix_ms: 1,
+            nonce: "opaque".to_owned(),
+            ciphertext: "A".repeat(13 * 1_024 * 1_024),
+            signer_device_id: owner.device_id(),
+            signature: "opaque".to_owned(),
+        };
+        let expected = capsule.clone();
+        tokio::task::spawn_blocking(move || {
+            provider
+                .put_recovery_capsule_scoped(backup_id, &capsule)
+                .expect("segmented capsule put");
+            assert_eq!(
+                provider.list_recovery_capsules().expect("streamed list"),
+                vec![expected]
+            );
+        })
+        .await
+        .expect("worker");
         task.abort();
     }
 

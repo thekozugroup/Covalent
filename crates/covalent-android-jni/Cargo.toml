@@ -1,0 +1,32 @@
+[package]
+name = "covalent-android-jni"
+description = "Bounded Android JNI lifecycle bridge for an embedded Covalent node"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow.workspace = true
+covalent-core = { version = "0.1.0", path = "../covalent-core" }
+covalent-node = { version = "0.1.0", path = "../covalent-node" }
+covalent-protocol = { version = "0.1.0", path = "../covalent-protocol" }
+jni.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync", "time"] }
+zeroize.workspace = true
+
+# JNI load and native-method registration require narrowly documented FFI calls.
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+undocumented_unsafe_blocks = "deny"

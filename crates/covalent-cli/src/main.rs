@@ -511,6 +511,7 @@ fn main() -> Result<()> {
                     conflict_policy: conflict.into(),
                     selected_paths: Default::default(),
                     job_id,
+                    target_inventory: None,
                 },
             )?;
             let bytes = serde_json::to_vec_pretty(&plan)?;

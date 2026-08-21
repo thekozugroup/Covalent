@@ -136,7 +136,7 @@ jobs:
 
   android-device:
     name: Android API 37 device
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -146,6 +146,13 @@ jobs:
           java-version: "17"
       - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
+      - name: Require usable KVM acceleration
+        run: |
+          set -euo pipefail
+          test -c /dev/kvm
+          sudo chown "${USER}:kvm" /dev/kvm || sudo chmod 666 /dev/kvm
+          test -r /dev/kvm
+          test -w /dev/kvm
       - uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: "37.0"
@@ -154,7 +161,8 @@ jobs:
           avd-name: Covalent_API_37
           emulator-port: 5570
           disable-animations: true
-          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          disable-linux-hw-accel: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-metrics -accel on
           script: COVALENT_ANDROID_EVIDENCE_DIR="${{ runner.temp }}/covalent-android-api37" COVALENT_ANDROID_HEADLESS_CI=true ANDROID_SERIAL=emulator-5570 ./scripts/android-api37-device-test.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
@@ -169,10 +177,15 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - run: docker build --build-arg VCS_REF=${{ github.sha }} -f packaging/docker/Dockerfile -t covalent:ci .
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - run: docker buildx build --platform linux/amd64 --load --build-arg VCS_REF=${{ github.sha }} -f packaging/docker/Dockerfile -t covalent:ci .
+      - run: docker buildx build --platform linux/arm64 --load --build-arg VCS_REF=${{ github.sha }} -f packaging/docker/Dockerfile -t covalent:ci-arm64 .
+      - run: ./scripts/check-container-contract.sh covalent:ci "${GITHUB_SHA}"
       - run: docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp --entrypoint covalent covalent:ci doctor
       - run: ./scripts/check-container-runtime.sh covalent:ci
-      - run: ./scripts/check-artifact-budgets.sh --image-only covalent:ci
+      - run: ./scripts/check-artifact-budgets.sh --image-only covalent:ci --platform linux/amd64
+      - run: ./scripts/check-artifact-budgets.sh --image-only covalent:ci-arm64 --platform linux/arm64
       - run: ./scripts/validate-unraid-template.sh
       - run: ./scripts/docker-compose-e2e.sh covalent:ci
 

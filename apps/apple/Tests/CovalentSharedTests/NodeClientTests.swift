@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 @testable import CovalentShared
@@ -32,6 +33,108 @@ import Testing
     let client = try makeClient(recorder: recorder, token: token)
     let settings = try await client.exportSettings()
     #expect(settings.deviceName == "Home Mac")
+}
+
+@Test func networkPairingUsesOneStepSASContract() async throws {
+    let token = String(repeating: "9", count: 32)
+    let peerId = UUID()
+    let pairingId = "pairing_network_test"
+    let fingerprint = String(repeating: "a", count: 64)
+    let sequence = RequestSequence()
+    let recorder = RequestRecorder(removeAfterRequest: false) { request in
+        switch sequence.next() {
+        case 0:
+            #expect(request.url?.path == "/api/v1/pair/network/start")
+            let body = try #require(requestBody(request))
+            let payload = try #require(JSONSerialization.jsonObject(with: body) as? [String: String])
+            #expect(payload["candidateAddress"] == "nas.example.ts.net:8788")
+            return TestResponse.response(
+                request,
+                status: 200,
+                json: #"{"pairingId":"\#(pairingId)","direction":"outgoing","peerName":"NAS","authenticationString":"1234-5678-9012-3456","expiresAtUnixMs":9999999999999,"state":"awaiting_local_confirmation","failureCode":null,"failureMessage":null,"peerTransport":null}"#
+            )
+        case 1:
+            #expect(request.url?.path == "/api/v1/pair/network/\(pairingId)/confirm")
+            let body = try #require(requestBody(request))
+            let payload = try #require(JSONSerialization.jsonObject(with: body) as? [String: String])
+            #expect(payload["displayedCode"] == "1234-5678-9012-3456")
+            return TestResponse.response(
+                request,
+                status: 200,
+                json: #"{"pairingId":"\#(pairingId)","direction":"outgoing","peerName":"NAS","authenticationString":"1234-5678-9012-3456","expiresAtUnixMs":9999999999999,"state":"complete","failureCode":null,"failureMessage":null,"peerTransport":{"peerId":"\#(peerId.uuidString.lowercased())","displayName":"NAS","address":"100.100.100.10:8788","certificateDer":"signed-der","certificateFingerprint":"\#(fingerprint)"}}"#
+            )
+        default:
+            Issue.record("Unexpected network-pairing request")
+            return TestResponse.response(request, status: 500, json: "{}")
+        }
+    }
+    let client = try makeClient(recorder: recorder, token: token)
+    let started = try await client.startNetworkPairing(candidateAddress: "nas.example.ts.net:8788")
+    #expect(started.state == .awaitingLocalConfirmation)
+    let completed = try await client.confirmNetworkPairing(
+        pairingId: started.id,
+        displayedCode: started.authenticationString
+    )
+    #expect(completed.state == .complete)
+    #expect(completed.peerTransport?.certificateFingerprint == fingerprint)
+}
+
+@Test func signedSHA256ProviderPinIsAcceptedAndPersistedExactly() async throws {
+    let token = String(repeating: "8", count: 32)
+    let peerId = UUID()
+    let fingerprint = String(repeating: "b", count: 64)
+    let transport = PeerTransport(
+        peerId: peerId,
+        displayName: "Backup NAS",
+        address: "100.100.100.11:8788",
+        certificateDer: "signed-der",
+        certificateFingerprint: fingerprint
+    )
+    let providerJSON = #"{"peerId":"\#(peerId.uuidString.lowercased())","address":"100.100.100.11:8788","certificateFingerprint":"\#(fingerprint)"}"#
+    let sequence = RequestSequence()
+    let recorder = RequestRecorder(removeAfterRequest: false) { request in
+        switch sequence.next() {
+        case 0:
+            #expect(request.url?.path == "/api/v1/providers/connect")
+            let body = try #require(requestBody(request))
+            let payload = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            let signed = try #require(payload["peerTransport"] as? [String: String])
+            #expect(payload["peerId"] == nil)
+            #expect(signed["peerId"]?.lowercased() == peerId.uuidString.lowercased())
+            #expect(signed["certificateFingerprint"] == fingerprint)
+            return TestResponse.response(request, status: 200, json: providerJSON)
+        case 1:
+            #expect(request.url?.path == "/api/v1/providers")
+            return TestResponse.response(request, status: 200, json: "[\(providerJSON)]")
+        default:
+            Issue.record("Unexpected provider request")
+            return TestResponse.response(request, status: 500, json: "{}")
+        }
+    }
+    let client = try makeClient(recorder: recorder, token: token)
+    let connected = try await client.connectProvider(using: transport)
+    try CovalentAppModel.validateProviderBinding(connected, transport: transport)
+    let persisted = try await client.providers()
+    #expect(persisted.contains { $0.peerId == peerId && $0.certificateFingerprint == fingerprint })
+}
+
+@Test func signedProviderPinMismatchIsRejected() throws {
+    let peerId = UUID()
+    let transport = PeerTransport(
+        peerId: peerId,
+        displayName: "Backup NAS",
+        address: "100.100.100.12:8788",
+        certificateDer: "signed-der",
+        certificateFingerprint: String(repeating: "c", count: 64)
+    )
+    let wrong = ProviderConnection(
+        peerId: peerId,
+        address: transport.address,
+        certificateFingerprint: String(repeating: "d", count: 64)
+    )
+    #expect(throws: AppModelError.providerBindingMismatch) {
+        try CovalentAppModel.validateProviderBinding(wrong, transport: transport)
+    }
 }
 
 @Test func apiErrorsPreserveServerRecoveryMessage() async throws {
@@ -290,7 +393,8 @@ import Testing
         backupId: backupId,
         snapshotId: snapshotId,
         conflictPolicy: .fail,
-        jobId: restoreJobId
+        jobId: restoreJobId,
+        targetURL: restore
     )
     #expect(plan.entries.contains { $0.destinationPath.hasSuffix("Documents/notes.txt") })
     let result = try await client.executeArchiveRestore(plan, targetURL: restore)
@@ -311,6 +415,123 @@ import Testing
         try AppleArchiveTransfer.requireEmptyDirectory(directory)
     }
     #expect(try String(contentsOf: directory.appending(path: "keep.txt"), encoding: .utf8) == "existing")
+}
+
+@Test func downloadedArchiveAdoptionAvoidsASecondDiskCopyAndHashesIncrementally() throws {
+    let source = FileManager.default.temporaryDirectory.appending(path: "download-\(UUID().uuidString).zip")
+    try Data("abc".utf8).write(to: source)
+    var before = stat()
+    #expect(source.path.withCString { lstat($0, &before) } == 0)
+
+    let adopted = try AppleArchiveTransfer.copyDownloadedArchive(source)
+    defer { try? FileManager.default.removeItem(at: adopted) }
+    var after = stat()
+    #expect(adopted.path.withCString { lstat($0, &after) } == 0)
+    #expect(before.st_dev == after.st_dev)
+    #expect(before.st_ino == after.st_ino)
+    #expect(!FileManager.default.fileExists(atPath: source.path))
+
+    let identity = try AppleArchiveTransfer.uploadIdentity(for: adopted)
+    #expect(identity.length == 3)
+    #expect(identity.digest == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+}
+
+@Test func backupArchiveRejectsAFileSwappedToSymlinkBeforeDescriptorOpen() throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    let source = root.appending(path: "source", directoryHint: .isDirectory)
+    let outside = root.appending(path: "outside.txt")
+    let victim = source.appending(path: "victim.txt")
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+    try Data("private".utf8).write(to: victim)
+    try Data("outside".utf8).write(to: outside)
+
+    #expect(throws: AppleArchiveTransferError.sourceChanged("victim.txt")) {
+        _ = try AppleArchiveTransfer.makeBackupArchive(sourceURL: source) { components in
+            if components == ["victim.txt"] {
+                try FileManager.default.removeItem(at: victim)
+                try FileManager.default.createSymbolicLink(at: victim, withDestinationURL: outside)
+            }
+        }
+    }
+}
+
+@Test func archiveUploadResumesOnlyTheAuthoritativeSuffixAfterProcessRelaunch() async throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    let source = root.appending(path: "source", directoryHint: .isDirectory)
+    let transfers = root.appending(path: "transfers", directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+    var payload = Data(count: 512 * 1_024)
+    payload.withUnsafeMutableBytes { bytes in
+        guard let values = bytes.bindMemory(to: UInt8.self).baseAddress else { return }
+        for index in 0..<bytes.count { values[index] = UInt8(truncatingIfNeeded: index &* 31 &+ 7) }
+    }
+    try payload.write(to: source.appending(path: "payload.bin"))
+    let metadata = ArchiveBackupMetadata(
+        displayName: "Resume proof",
+        snapshotId: "resume-1",
+        jobId: "apple-resume-relaunch",
+        selectedProviderIds: []
+    )
+    let token = String(repeating: "r", count: 40)
+    let interrupted = RequestRecorder { request in
+        #expect(request.url?.path == "/api/v1/backups/archive")
+        #expect(request.value(forHTTPHeaderField: AppleArchiveTransfer.uploadOffsetHeader) == "0")
+        _ = try #require(requestBody(request))
+        throw URLError(.networkConnectionLost)
+    }
+    let first = try makeClient(recorder: interrupted, token: token, transferDirectory: transfers)
+    do {
+        _ = try await first.createBackupArchive(sourceURL: source, metadata: metadata)
+        Issue.record("Interrupted upload unexpectedly succeeded")
+    } catch {
+        // Durable state must survive this actor/session just as it survives process termination.
+    }
+    let archiveURL = try #require(
+        FileManager.default.contentsOfDirectory(at: transfers, includingPropertiesForKeys: nil)
+            .first { $0.pathExtension == "zip" }
+    )
+    let archiveBytes = try Data(contentsOf: archiveURL)
+    let split = archiveBytes.count / 3
+    let sequence = RequestSequence()
+    let resumed = RequestRecorder(removeAfterRequest: false) { request in
+        switch sequence.next() {
+        case 0:
+            #expect(request.url?.path == "/api/v1/backups/archive")
+            #expect(request.value(forHTTPHeaderField: AppleArchiveTransfer.uploadOffsetHeader) == "0")
+            #expect(requestBody(request) == archiveBytes)
+            return TestResponse.response(
+                request,
+                status: 409,
+                json: #"{"protocolVersion":1,"code":"upload_offset_mismatch","message":"resume","retryable":true}"#,
+                headers: [AppleArchiveTransfer.uploadOffsetHeader: String(split)]
+            )
+        case 1:
+            #expect(request.value(forHTTPHeaderField: AppleArchiveTransfer.uploadOffsetHeader) == String(split))
+            #expect(requestBody(request) == archiveBytes.suffix(from: split))
+            return TestResponse.response(
+                request,
+                status: 200,
+                json: #"{"backupId":"11111111-2222-4333-8444-555555555555","snapshotId":"resume-1","entries":1,"bytesRead":524288,"chunksStored":1,"chunksDeduplicated":0,"selectedProviders":0,"degradedFailures":0}"#,
+                headers: [AppleArchiveTransfer.jobAcknowledgementRequiredHeader: "true"]
+            )
+        case 2:
+            #expect(request.url?.path == "/api/v1/jobs/acknowledge")
+            return TestResponse.response(request, status: 204, json: "")
+        default:
+            Issue.record("Unexpected resumed upload request")
+            return TestResponse.response(request, status: 500, json: "{}")
+        }
+    }
+    let second = try makeClient(recorder: resumed, token: token, transferDirectory: transfers)
+    let response = try await second.createBackupArchive(sourceURL: source, metadata: metadata)
+    #expect(response.snapshotId == "resume-1")
+    #expect(sequence.count == 2)
+    #expect(try FileManager.default.contentsOfDirectory(atPath: transfers.path).count == 2)
+    try await second.acknowledgeJob(jobId: metadata.jobId)
+    #expect(sequence.count == 3)
+    #expect(try FileManager.default.contentsOfDirectory(atPath: transfers.path).isEmpty)
 }
 
 @Test func archiveRestoreUsesDescriptorAnchoredNoFollowTraversal() throws {
@@ -376,6 +597,160 @@ import Testing
     #expect(try FileManager.default.contentsOfDirectory(atPath: outside.path).isEmpty)
 }
 
+@Test func archiveRestoreAppliesSignedSkipReplaceAndRenamePolicies() throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let target = root.appending(path: "target", directoryHint: .isDirectory)
+    let source = root.appending(path: "source", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+    let existing = target.appending(path: "note.txt")
+    try Data("old".utf8).write(to: existing)
+
+    let skipInventory = try AppleArchiveTransfer.makeTargetInventory(targetURL: target)
+    let emptyArchive = try AppleArchiveTransfer.makeBackupArchive(sourceURL: source)
+    defer { try? FileManager.default.removeItem(at: emptyArchive) }
+    try AppleArchiveTransfer.extractRestoreArchive(
+        emptyArchive,
+        to: target,
+        plan: policyRestorePlan(
+            inventory: skipInventory,
+            policy: .skip,
+            entries: [RestorePreviewEntry(
+                sourcePath: "note.txt",
+                destinationPath: "note.txt",
+                kind: .file,
+                action: .skipFile
+            )]
+        ),
+        expectedInventory: skipInventory
+    )
+    #expect(try String(contentsOf: existing, encoding: .utf8) == "old")
+
+    try Data("replacement".utf8).write(to: source.appending(path: "note.txt"))
+    let replaceArchive = try AppleArchiveTransfer.makeBackupArchive(sourceURL: source)
+    defer { try? FileManager.default.removeItem(at: replaceArchive) }
+    let replaceInventory = try AppleArchiveTransfer.makeTargetInventory(targetURL: target)
+    try AppleArchiveTransfer.extractRestoreArchive(
+        replaceArchive,
+        to: target,
+        plan: policyRestorePlan(
+            inventory: replaceInventory,
+            policy: .replace,
+            entries: [RestorePreviewEntry(
+                sourcePath: "note.txt",
+                destinationPath: "note.txt",
+                kind: .file,
+                action: .replaceFile
+            )]
+        ),
+        expectedInventory: replaceInventory
+    )
+    #expect(try String(contentsOf: existing, encoding: .utf8) == "replacement")
+
+    try FileManager.default.removeItem(at: source.appending(path: "note.txt"))
+    try Data("renamed".utf8).write(to: source.appending(path: "note.txt.covalent-restored-1"))
+    let renameArchive = try AppleArchiveTransfer.makeBackupArchive(sourceURL: source)
+    defer { try? FileManager.default.removeItem(at: renameArchive) }
+    let renameInventory = try AppleArchiveTransfer.makeTargetInventory(targetURL: target)
+    try AppleArchiveTransfer.extractRestoreArchive(
+        renameArchive,
+        to: target,
+        plan: policyRestorePlan(
+            inventory: renameInventory,
+            policy: .rename,
+            entries: [RestorePreviewEntry(
+                sourcePath: "note.txt",
+                destinationPath: "note.txt.covalent-restored-1",
+                kind: .file,
+                action: .renameFile
+            )]
+        ),
+        expectedInventory: renameInventory
+    )
+    #expect(try String(contentsOf: existing, encoding: .utf8) == "replacement")
+    #expect(try String(contentsOf: target.appending(path: "note.txt.covalent-restored-1"), encoding: .utf8) == "renamed")
+}
+
+@Test func archiveRestoreRollsBackAtomicReplacementWhenLaterEntryFails() throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let target = root.appending(path: "target", directoryHint: .isDirectory)
+    let source = root.appending(path: "source", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+    try Data("old".utf8).write(to: target.appending(path: "a-existing.txt"))
+    try Data("new".utf8).write(to: source.appending(path: "a-existing.txt"))
+    try Data("later".utf8).write(to: source.appending(path: "z-after.txt"))
+    let archive = try AppleArchiveTransfer.makeBackupArchive(sourceURL: source)
+    defer { try? FileManager.default.removeItem(at: archive) }
+    let inventory = try AppleArchiveTransfer.makeTargetInventory(targetURL: target)
+    let plan = policyRestorePlan(
+        inventory: inventory,
+        policy: .replace,
+        entries: [
+            RestorePreviewEntry(
+                sourcePath: "a-existing.txt",
+                destinationPath: "a-existing.txt",
+                kind: .file,
+                action: .replaceFile
+            ),
+            RestorePreviewEntry(
+                sourcePath: "z-after.txt",
+                destinationPath: "z-after.txt",
+                kind: .file,
+                action: .createFile
+            ),
+        ]
+    )
+    #expect(throws: AppleArchiveTransferError.destinationChanged) {
+        try AppleArchiveTransfer.extractRestoreArchive(
+            archive,
+            to: target,
+            plan: plan,
+            expectedInventory: inventory,
+            beforeEntry: { components in
+                if components == ["z-after.txt"] {
+                    throw AppleArchiveTransferError.destinationChanged
+                }
+            }
+        )
+    }
+    #expect(try String(contentsOf: target.appending(path: "a-existing.txt"), encoding: .utf8) == "old")
+    #expect(!FileManager.default.fileExists(atPath: target.appending(path: "z-after.txt").path))
+}
+
+private func policyRestorePlan(
+    inventory: AppleArchiveTransfer.TargetInventoryDraft,
+    policy: ConflictPolicy,
+    entries: [RestorePreviewEntry]
+) -> RestorePlan {
+    RestorePlan(
+        reference: RestorePlanReference(
+            planId: String(repeating: "c", count: 64),
+            backupId: UUID(),
+            snapshotId: "snapshot-policy",
+            authorizedRoot: "/",
+            manifestDigest: String(repeating: "a", count: 64),
+            conflictPolicy: policy,
+            jobId: "restore-policy",
+            planDigest: String(repeating: "b", count: 64),
+            signerDeviceId: UUID(),
+            signature: "test",
+            totalEntries: entries.count,
+            targetInventory: TargetInventoryBinding(
+                schemaVersion: 1,
+                rootIdentity: inventory.rootIdentity,
+                entryCount: UInt64(inventory.entries.count),
+                totalBytes: inventory.totalBytes,
+                inventoryDigest: String(repeating: "d", count: 64),
+                actionsDigest: String(repeating: "e", count: 64)
+            )
+        ),
+        entries: entries
+    )
+}
+
 private func testRestorePlan() -> RestorePlan {
     RestorePlan(
         reference: RestorePlanReference(
@@ -389,7 +764,8 @@ private func testRestorePlan() -> RestorePlan {
             planDigest: String(repeating: "b", count: 64),
             signerDeviceId: UUID(),
             signature: "test",
-            totalEntries: 2
+            totalEntries: 2,
+            targetInventory: nil
         ),
         entries: [
             RestorePreviewEntry(
@@ -408,7 +784,11 @@ private func testRestorePlan() -> RestorePlan {
     )
 }
 
-private func makeClient(recorder: RequestRecorder, token: String?) throws -> NodeClient {
+private func makeClient(
+    recorder: RequestRecorder,
+    token: String?,
+    transferDirectory: URL? = nil
+) throws -> NodeClient {
     let sessionConfiguration = URLSessionConfiguration.ephemeral
     sessionConfiguration.protocolClasses = [RecordingURLProtocol.self]
     let port = RecordingURLProtocol.recorder.install(recorder)
@@ -417,7 +797,11 @@ private func makeClient(recorder: RequestRecorder, token: String?) throws -> Nod
         baseURL: URL(string: "http://127.0.0.1:\(port)")!,
         apiToken: token
     )
-    return NodeClient(configuration: configuration, session: session)
+    return NodeClient(
+        configuration: configuration,
+        session: session,
+        transferDirectory: transferDirectory
+    )
 }
 
 private func requestBody(_ request: URLRequest) -> Data? {

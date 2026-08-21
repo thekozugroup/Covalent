@@ -2,6 +2,7 @@
 set -eu
 
 repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+. "$repo_root/scripts/android-instrumentation-result.sh"
 android_sdk=${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}
 avd_name=Covalent_API_37
 required_serial=emulator-5570
@@ -269,8 +270,8 @@ if ! "$adb" -s "$serial" shell am instrument -w -r \
   exit 1
 fi
 cat "$instrumentation_log"
-if ! grep -Eq '^INSTRUMENTATION_CODE: 0$' "$instrumentation_log"; then
-  echo "Android instrumentation reported a nonzero result on $serial." >&2
+if ! validate_android_api37_result "$instrumentation_log"; then
+  echo "Android instrumentation result is invalid on $serial." >&2
   exit 1
 fi
 "$adb" -s "$serial" shell pm clear life.michaelwong.covalent >/dev/null

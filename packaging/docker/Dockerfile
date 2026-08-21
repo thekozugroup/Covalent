@@ -1,4 +1,4 @@
-FROM rust:1.97.1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97 AS builder
+FROM rust:1.97.1-alpine3.23@sha256:c4a364ddbf684fe038e6fa6a4f25b30c8dc85247423e0e660676ece0d17be4a2 AS builder
 WORKDIR /source
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
@@ -6,30 +6,30 @@ COPY packaging/web ./packaging/web
 RUN cargo build --locked --release -p covalent-node -p covalent-cli
 
 FROM caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d AS caddy
+# Create a capability-free inode in this throwaway stage. Only this copy enters
+# the runtime image, avoiding cap_net_bind_service and a duplicated Caddy layer.
+RUN cp /usr/bin/caddy /caddy.unprivileged \
+    && chmod 0555 /caddy.unprivileged
 
-FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
+FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40
 ARG VCS_REF=unknown
 LABEL org.opencontainers.image.title="Covalent" \
       org.opencontainers.image.description="Private distributed backup node" \
       org.opencontainers.image.source="https://github.com/thekozugroup/Covalent" \
       org.opencontainers.image.revision="$VCS_REF" \
-      org.opencontainers.image.licenses="MIT"
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.base.name="docker.io/library/alpine:3.23" \
+      org.opencontainers.image.base.digest="sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40"
 
-RUN groupadd --system --gid 65532 covalent \
-    && useradd --system --uid 65532 --gid 65532 --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin covalent \
+RUN addgroup -S -g 65532 covalent \
+    && adduser -S -D -H -u 65532 -G covalent -s /sbin/nologin covalent \
     && install -d -m 0700 -o 65532 -g 65532 /config /data /restore
 COPY --from=builder /source/target/release/covalent-node /usr/local/bin/covalent-node
 COPY --from=builder /source/target/release/covalent /usr/local/bin/covalent
-COPY --from=caddy /usr/bin/caddy /usr/local/bin/caddy
-COPY packaging/docker/entrypoint.sh /usr/local/bin/covalent-entrypoint
+COPY --from=caddy /caddy.unprivileged /usr/local/bin/caddy
+COPY --from=caddy /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --chmod=0555 packaging/docker/entrypoint.sh /usr/local/bin/covalent-entrypoint
 COPY packaging/docker/Caddyfile /etc/caddy/Caddyfile
-# The upstream Caddy binary carries cap_net_bind_service. Linux refuses to exec
-# a file-capability binary when the runtime intentionally drops the complete
-# capability bounding set. Covalent only binds Caddy to unprivileged port 8443,
-# so copy to a fresh inode without xattrs and retain a true cap-drop=ALL runtime.
-RUN cp --no-preserve=all /usr/local/bin/caddy /usr/local/bin/caddy.unprivileged \
-    && mv /usr/local/bin/caddy.unprivileged /usr/local/bin/caddy \
-    && chmod 0555 /usr/local/bin/caddy /usr/local/bin/covalent-entrypoint
 
 ENV COVALENT_LISTEN=127.0.0.1:8787 \
     COVALENT_PEER_LISTEN=0.0.0.0:8787 \

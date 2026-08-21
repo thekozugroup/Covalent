@@ -49,6 +49,7 @@ import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -74,6 +75,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -88,6 +90,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.semantics.Role
@@ -119,26 +122,39 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.roundToLong
 import life.michaelwong.covalent.R
 import life.michaelwong.covalent.data.CovalentNodeClient
 import life.michaelwong.covalent.data.EnrolledTrust
 import life.michaelwong.covalent.data.NodeApiException
+import life.michaelwong.covalent.data.SafTransferBridge
 import life.michaelwong.covalent.data.SecureNodeStore
 import life.michaelwong.covalent.data.encodeEnrolledCertificate
 import life.michaelwong.covalent.data.newId
 import life.michaelwong.covalent.data.normalizeSha256Pin
 import life.michaelwong.covalent.data.restoreTransferPayload
+import life.michaelwong.covalent.data.isSafeSafRestoreAction
 import life.michaelwong.covalent.model.DiscoveryCandidate
 import life.michaelwong.covalent.model.NodeStatus
+import life.michaelwong.covalent.model.NetworkPairing
+import life.michaelwong.covalent.model.NetworkPairingDirection
+import life.michaelwong.covalent.model.NetworkPairingState
+import life.michaelwong.covalent.model.NodeConnection
 import life.michaelwong.covalent.model.PrimaryAction
+import life.michaelwong.covalent.model.PeerTransport
 import life.michaelwong.covalent.model.Provider
 import life.michaelwong.covalent.model.ProviderReachability
 import life.michaelwong.covalent.model.RememberedBackup
 import life.michaelwong.covalent.model.RestorePlanPage
+import life.michaelwong.covalent.model.RestoreConflictPolicy
 import life.michaelwong.covalent.model.TransferKind
 import life.michaelwong.covalent.model.TransferRecord
 import life.michaelwong.covalent.model.TransferState
 import life.michaelwong.covalent.ui.theme.CovalentTheme
+import life.michaelwong.covalent.node.ActiveNodeConnectionResolver
+import life.michaelwong.covalent.node.EmbeddedNodeManager
+import life.michaelwong.covalent.node.EmbeddedProviderState
+import life.michaelwong.covalent.node.NodeMode
 import life.michaelwong.covalent.work.TransferScheduler
 import life.michaelwong.covalent.work.TransferExecution
 import life.michaelwong.covalent.work.TransferWorker
@@ -248,7 +264,28 @@ private fun isLoopbackHost(host: String): Boolean =
 private const val LOCAL_NETWORK_PERMISSION = "android.permission.ACCESS_LOCAL_NETWORK"
 private const val STATUS_POLL_MILLIS = 4_000L
 private const val TRANSFER_POLL_MILLIS = 750L
+private const val PAIRING_POLL_MILLIS = 2_000L
 private val ALL_PAIRING_ROLES = listOf("storage_provider", "backup_reader", "backup_writer")
+private const val GIBIBYTE = 1_073_741_824L
+
+internal fun providerCapacityBytes(maximumGiB: String, keepFreeGiB: String): Pair<Long, Long>? {
+    fun parse(value: String): Long? {
+        val gibibytes = value.trim().toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0.0 } ?: return null
+        val bytes = gibibytes * GIBIBYTE.toDouble()
+        return bytes.takeIf { it <= Long.MAX_VALUE.toDouble() }?.roundToLong()
+    }
+    val maximum = parse(maximumGiB) ?: return null
+    val keepFree = parse(keepFreeGiB) ?: return null
+    return (maximum to keepFree).takeIf {
+        maximum >= GIBIBYTE / 2 && keepFree <= maximum - GIBIBYTE / 2
+    }
+}
+
+private fun providerGiBText(bytes: Long): String {
+    val halfGiB = GIBIBYTE / 2
+    val halfSteps = ((bytes.coerceAtLeast(0L) + halfGiB / 2) / halfGiB)
+    return if (halfSteps % 2L == 0L) (halfSteps / 2L).toString() else "${halfSteps / 2L}.5"
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -260,9 +297,21 @@ internal fun CovalentApp(
     val resources = LocalResources.current
     val store = remember(storeOverride) { storeOverride ?: SecureNodeStore(context.applicationContext) }
     val state = stateOverride ?: viewModel()
+    val embeddedManager = remember(context) { EmbeddedNodeManager(context.applicationContext) }
+    val connectionResolver = remember(context) { ActiveNodeConnectionResolver(context.applicationContext) }
+    val embeddedProvider by embeddedManager.state.collectAsState()
+    val activeConnection = connectionResolver.activeConnection(store)
     val node = remember(store, state) { CovalentNodeClient(state::pendingEnrolledTrust) }
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
+
+    LaunchedEffect(embeddedProvider.maxBytes, embeddedProvider.keepFreeBytes, embeddedProvider.lanDiscoveryRequested) {
+        state.loadProviderDraft(
+            providerGiBText(embeddedProvider.maxBytes),
+            providerGiBText(embeddedProvider.keepFreeBytes),
+            embeddedProvider.lanDiscoveryRequested,
+        )
+    }
 
     fun submitSetup() {
         api(context, state, scope, onError = { error ->
@@ -276,6 +325,7 @@ internal fun CovalentApp(
                 state.setupToken,
                 state.pendingEnrolledTrust(),
             )
+            embeddedManager.selectExternalMode()
             state.status = validated.status
             state.backups = validated.backups
             state.connectionHealth = ConnectionHealth.READY
@@ -287,12 +337,14 @@ internal fun CovalentApp(
     }
 
     fun setLan(enabled: Boolean) {
+        val connection = activeConnection ?: return
         api(context, state, scope) {
-            setLanDiscovery(context, state, node, store, enabled)
+            setLanDiscovery(context, state, node, store, connection, enabled)
         }
     }
 
     fun discover() {
+        val connection = activeConnection ?: return
         state.discoveryRunning = true
         state.discoveryCompleted = false
         state.discoveryError = null
@@ -301,9 +353,57 @@ internal fun CovalentApp(
             state.discoveryCompleted = true
             state.discoveryError = error.message ?: resources.getString(R.string.discovery_error)
         }) {
-            state.discovered = node.discovery(store.baseUrl, store.token)
+            state.discovered = node.discovery(connection.baseUrl, connection.token)
             state.discoveryRunning = false
             state.discoveryCompleted = true
+        }
+    }
+
+    val providerPermissions = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { grants ->
+        if (!state.pendingProviderEnable) return@rememberLauncherForActivityResult
+        state.pendingProviderEnable = false
+        if (grants.values.all { it }) {
+            providerCapacityBytes(state.providerMaximumGiB, state.providerKeepFreeGiB)?.let { (maximum, keepFree) ->
+                embeddedManager.enable(maximum, keepFree, state.providerLanDiscovery)
+            }
+        } else {
+            state.notice = resources.getString(R.string.phone_provider_permission_denied)
+        }
+    }
+
+    fun requestProviderEnable() {
+        val capacity = providerCapacityBytes(state.providerMaximumGiB, state.providerKeepFreeGiB)
+        if (capacity == null) {
+            state.notice = resources.getString(R.string.phone_provider_invalid_capacity)
+            return
+        }
+        if (!embeddedProvider.supported || !embeddedProvider.keyProtectionAvailable) {
+            state.notice = resources.getString(R.string.phone_provider_locked)
+            return
+        }
+        val missing = buildList {
+            if (
+                Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(
+                    context,
+                    android.Manifest.permission.POST_NOTIFICATIONS,
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                add(android.Manifest.permission.POST_NOTIFICATIONS)
+            }
+            if (
+                state.providerLanDiscovery && Build.VERSION.SDK_INT >= 37 &&
+                ContextCompat.checkSelfPermission(context, LOCAL_NETWORK_PERMISSION) != PackageManager.PERMISSION_GRANTED
+            ) {
+                add(LOCAL_NETWORK_PERMISSION)
+            }
+        }
+        if (missing.isEmpty()) {
+            embeddedManager.enable(capacity.first, capacity.second, state.providerLanDiscovery)
+        } else {
+            state.pendingProviderEnable = true
+            providerPermissions.launch(missing.toTypedArray())
         }
     }
 
@@ -411,8 +511,9 @@ internal fun CovalentApp(
         ActivityResultContracts.CreateDocument("application/json"),
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
+        val connection = activeConnection ?: return@rememberLauncherForActivityResult
         api(context, state, scope) {
-            val exported = node.post(store.baseUrl, store.token, "/api/v1/config/export", JSONObject())
+            val exported = node.post(connection.baseUrl, connection.token, "/api/v1/config/export", JSONObject())
             context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(exported.toString(2)) }
                 ?: error(resources.getString(R.string.error_file_not_writable))
             state.notice = resources.getString(R.string.settings_exported)
@@ -420,6 +521,7 @@ internal fun CovalentApp(
     }
     val importSettings = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
+        val connection = activeConnection ?: return@rememberLauncherForActivityResult
         api(context, state, scope) {
             val text = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
                 ?: error(resources.getString(R.string.error_file_not_readable))
@@ -427,7 +529,7 @@ internal fun CovalentApp(
                 resources.getString(R.string.error_settings_file_too_large)
             }
             val candidate = JSONObject(text)
-            val current = node.post(store.baseUrl, store.token, "/api/v1/config/export", JSONObject())
+            val current = node.post(connection.baseUrl, connection.token, "/api/v1/config/export", JSONObject())
             validateSettingsCandidate(context, candidate)
             state.setImportCandidate(candidate, current)
         }
@@ -436,16 +538,19 @@ internal fun CovalentApp(
     LaunchedEffect(store, state) {
         state.initialize(store)
     }
-    LaunchedEffect(state.screen, store.baseUrl) {
-        if (store.baseUrl.isBlank()) return@LaunchedEffect
+    LaunchedEffect(state.screen, activeConnection?.baseUrl, activeConnection?.token) {
+        val connection = activeConnection ?: run {
+            state.connectionHealth = ConnectionHealth.DISCONNECTED
+            return@LaunchedEffect
+        }
         while (isActive) {
             if (state.connectionHealth != ConnectionHealth.READY) {
                 state.connectionHealth = ConnectionHealth.CONNECTING
             }
             runCatching {
                 withContext(startupRefreshDispatcher()) {
-                    refreshStatus(state, node, store)
-                    TransferExecution.reconcileAcknowledgements(store, node)
+                    refreshStatus(state, node, store, connection)
+                    TransferExecution.reconcileAcknowledgements(store, node, connection)
                 }
             }.onSuccess {
                 state.connectionHealth = ConnectionHealth.READY
@@ -459,12 +564,14 @@ internal fun CovalentApp(
             delay(STATUS_POLL_MILLIS)
         }
     }
-    LaunchedEffect(Unit) {
-        runCatching {
+    LaunchedEffect(activeConnection?.baseUrl, activeConnection?.token) {
+        val connection = activeConnection
+        if (connection != null) runCatching {
             withContext(Dispatchers.IO) {
                 TransferExecution.reconcileAcknowledgements(
                     store,
                     CovalentNodeClient(store::enrolledTrust),
+                    connection,
                 )
                 TransferScheduler.requeuePending(context, store)
             }
@@ -474,6 +581,48 @@ internal fun CovalentApp(
         while (isActive) {
             state.refreshDurableState()
             delay(TRANSFER_POLL_MILLIS)
+        }
+    }
+    LaunchedEffect(activeConnection?.baseUrl, activeConnection?.token) {
+        val connection = activeConnection
+        while (isActive) {
+            if (connection != null) {
+                runCatching {
+                    withContext(Dispatchers.IO) {
+                        node.pendingNetworkPairings(connection.baseUrl, connection.token)
+                    }
+                }.onSuccess { pending ->
+                    state.networkPairings = pending.sortedBy(NetworkPairing::expiresAtUnixMs)
+                    val active = state.activeNetworkPairing
+                    val updated = active?.let { current ->
+                        pending.firstOrNull { it.pairingId == current.pairingId }
+                    }
+                    when {
+                        updated != null -> state.activeNetworkPairing = updated
+                        active != null -> state.activeNetworkPairing = null
+                        else -> state.activeNetworkPairing = pending.firstOrNull {
+                            it.direction == NetworkPairingDirection.INCOMING &&
+                                it.state != NetworkPairingState.FAILED
+                        }
+                    }
+                    if (state.activeNetworkPairing != null && state.screen != Screen.SETUP) {
+                        state.screen = Screen.PAIR
+                    }
+                }
+                state.activeNetworkPairing
+                    ?.takeIf { it.state == NetworkPairingState.COMPLETE }
+                    ?.let { completed ->
+                        runCatching {
+                            withContext(Dispatchers.IO) {
+                                completeNetworkPairingConnection(state, node, connection, completed)
+                            }
+                        }.onFailure { error ->
+                            state.pairingError = error.message
+                                ?: resources.getString(R.string.error_pairing_failed)
+                        }
+                    }
+            }
+            delay(PAIRING_POLL_MILLIS)
         }
     }
     LaunchedEffect(state.notice) {
@@ -530,14 +679,14 @@ internal fun CovalentApp(
         Box(Modifier.fillMaxSize().padding(innerPadding), contentAlignment = Alignment.TopCenter) {
             val page = Modifier.widthIn(max = 860.dp).fillMaxSize()
             when (state.screen) {
-                Screen.HOME -> Home(state, node, store, scope, page)
+                Screen.HOME -> Home(state, node, store, activeConnection, scope, page)
                 Screen.SETUP -> Setup(
                     state,
                     page,
                     ::requestSetup,
                     pickCaCertificate = { caCertificatePicker.launch(arrayOf("application/x-x509-ca-cert", "application/pkix-cert", "text/plain")) },
                 )
-                Screen.PAIR -> Pair(state, node, store, scope, page) {
+                Screen.PAIR -> Pair(state, node, activeConnection, scope, page) {
                     if (
                         Build.VERSION.SDK_INT >= 37 &&
                         ContextCompat.checkSelfPermission(context, LOCAL_NETWORK_PERMISSION) != PackageManager.PERMISSION_GRANTED
@@ -548,12 +697,15 @@ internal fun CovalentApp(
                         discover()
                     }
                 }
-                Screen.BACKUP -> Backup(state, node, store, scope, page) { sourcePicker.launch(null) }
-                Screen.RESTORE -> Restore(state, node, store, scope, page) { targetPicker.launch(null) }
+                Screen.BACKUP -> Backup(state, node, store, activeConnection, scope, page) { sourcePicker.launch(null) }
+                Screen.RESTORE -> Restore(state, node, store, activeConnection, scope, page) { targetPicker.launch(null) }
                 Screen.SETTINGS -> Settings(
                     state,
                     node,
                     store,
+                    activeConnection,
+                    embeddedProvider,
+                    embeddedManager.activeMode(),
                     scope,
                     page,
                     createSettings::launch,
@@ -569,6 +721,20 @@ internal fun CovalentApp(
                             setLan(enabled)
                         }
                     },
+                    onSelectExternal = {
+                        embeddedManager.selectExternalMode()
+                        state.connectionHealth = ConnectionHealth.CONNECTING
+                    },
+                    onSelectLocal = {
+                        if (embeddedManager.selectLocalMode()) {
+                            state.connectionHealth = ConnectionHealth.CONNECTING
+                        } else {
+                            state.notice = resources.getString(R.string.phone_provider_mode_unavailable)
+                        }
+                    },
+                    onTogglePhoneProvider = { enabled ->
+                        if (enabled) requestProviderEnable() else embeddedManager.disable()
+                    },
                 )
             }
         }
@@ -580,6 +746,7 @@ private fun Home(
     state: CovalentViewModel,
     node: CovalentNodeClient,
     store: SecureNodeStore,
+    connection: NodeConnection?,
     scope: kotlinx.coroutines.CoroutineScope,
     modifier: Modifier,
 ) {
@@ -607,14 +774,14 @@ private fun Home(
         }
         item {
             ConnectionCard(state) {
-                reconnectNode(context, state, node, store, scope)
+                connection?.let { reconnectNode(context, state, node, store, it, scope) }
             }
         }
         if (state.transfers.isNotEmpty()) {
             item { SectionTitle(stringResource(R.string.transfers_title)) }
             items(state.transfers, key = TransferRecord::jobId) { record ->
                 TransferCard(record) { action ->
-                    controlTransfer(context, state, node, store, scope, record, action)
+                    connection?.let { controlTransfer(context, state, node, store, it, scope, record, action) }
                 }
             }
         }
@@ -623,7 +790,7 @@ private fun Home(
                 SectionTitle(stringResource(R.string.remembered_backups), Modifier.weight(1f))
                 IconButton(
                     enabled = state.connectionHealth == ConnectionHealth.READY && !state.busy,
-                    onClick = { reconnectNode(context, state, node, store, scope) },
+                    onClick = { connection?.let { reconnectNode(context, state, node, store, it, scope) } },
                 ) {
                     Icon(Icons.Rounded.Refresh, stringResource(R.string.action_refresh_backups))
                 }
@@ -638,23 +805,36 @@ private fun Home(
             }
         }
         items(state.backups, key = RememberedBackup::backupId) { backup ->
-            BackupSummaryCard(backup) {
-                api(context, state, scope) {
-                    val snapshotId = backup.latestSnapshotId ?: return@api
-                    val response = node.post(
-                        store.baseUrl,
-                        store.token,
-                        "/api/v1/backups/verify",
-                        JSONObject()
-                            .put("backupId", backup.backupId)
-                            .put("snapshotId", snapshotId)
-                            .put("verifyProviders", true),
-                    )
-                    state.notice = resources.getString(
-                        if (response.getBoolean("intact")) R.string.verify_intact else R.string.verify_damaged,
-                    )
-                }
-            }
+            BackupSummaryCard(
+                backup = backup,
+                providers = state.providers,
+                verify = {
+                    connection?.let { selectedConnection ->
+                        api(context, state, scope) {
+                            val snapshotId = backup.latestSnapshotId ?: return@api
+                            val response = node.post(
+                                selectedConnection.baseUrl,
+                                selectedConnection.token,
+                                "/api/v1/backups/verify",
+                                JSONObject()
+                                    .put("backupId", backup.backupId)
+                                    .put("snapshotId", snapshotId)
+                                    .put("verifyProviders", true),
+                            )
+                            state.notice = resources.getString(
+                                if (response.getBoolean("intact")) R.string.verify_intact else R.string.verify_damaged,
+                            )
+                        }
+                    }
+                },
+                manageReplicas = {
+                    state.selectedBackupId = backup.backupId
+                    state.backupName = backup.name
+                    val eligible = state.providers.filter(::isProviderEligibleForBackup).map(Provider::peerId).toSet()
+                    state.selectedProviderIds = backup.selectedProviderIds.intersect(eligible)
+                    state.screen = Screen.BACKUP
+                },
+            )
         }
     }
 }
@@ -719,7 +899,12 @@ private fun ConnectionCard(state: CovalentViewModel, reconnect: () -> Unit) {
 }
 
 @Composable
-private fun BackupSummaryCard(backup: RememberedBackup, verify: () -> Unit) {
+private fun BackupSummaryCard(
+    backup: RememberedBackup,
+    providers: List<Provider>,
+    verify: () -> Unit,
+    manageReplicas: () -> Unit,
+) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
             Text(backup.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -746,10 +931,41 @@ private fun BackupSummaryCard(backup: RememberedBackup, verify: () -> Unit) {
                     ),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                backup.selectedProviderIds.sorted().forEach { providerId ->
+                    val provider = providers.firstOrNull { it.peerId == providerId }
+                    val status = when (provider?.reachability) {
+                        ProviderReachability.CONNECTED -> stringResource(R.string.provider_connected_state)
+                        ProviderReachability.OFFLINE, null -> stringResource(R.string.provider_offline_state)
+                        ProviderReachability.UNKNOWN -> stringResource(R.string.provider_unknown_state)
+                    }
+                    Text(
+                        stringResource(
+                            R.string.backup_replica_status,
+                            provider?.displayName ?: provider?.address ?: stringResource(R.string.provider_unnamed),
+                            status,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (provider?.reachability == ProviderReachability.CONNECTED) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
+                    )
+                }
             }
-            if (backup.latestSnapshotId != null) {
-                OutlinedButton(onClick = verify) { Text(stringResource(R.string.action_verify)) }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (backup.latestSnapshotId != null) {
+                    OutlinedButton(onClick = verify) { Text(stringResource(R.string.action_verify)) }
+                }
+                OutlinedButton(onClick = manageReplicas) {
+                    Text(stringResource(R.string.action_change_replicas))
+                }
             }
+            Text(
+                stringResource(R.string.replica_change_existing_impact),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -852,6 +1068,7 @@ private fun controlTransfer(
     state: CovalentViewModel,
     node: CovalentNodeClient,
     store: SecureNodeStore,
+    connection: NodeConnection,
     scope: kotlinx.coroutines.CoroutineScope,
     record: TransferRecord,
     action: TransferAction,
@@ -859,7 +1076,7 @@ private fun controlTransfer(
     api(context, state, scope) {
         when (action) {
             TransferAction.PAUSE -> {
-                runCatching { node.controlJob(store.baseUrl, store.token, record.jobId, "pause") }
+                runCatching { node.controlJob(connection.baseUrl, connection.token, record.jobId, "pause") }
                 store.updateTransfer(record.jobId) {
                     it.copy(
                         state = TransferState.PAUSED,
@@ -870,7 +1087,7 @@ private fun controlTransfer(
                 TransferScheduler.cancelScheduled(context, record.jobId)
             }
             TransferAction.RESUME, TransferAction.RETRY -> {
-                runCatching { node.controlJob(store.baseUrl, store.token, record.jobId, "resume") }
+                runCatching { node.controlJob(connection.baseUrl, connection.token, record.jobId, "resume") }
                 check(store.pending(record.jobId) != null) {
                     context.getString(R.string.error_transfer_request_missing)
                 }
@@ -885,11 +1102,11 @@ private fun controlTransfer(
             }
             TransferAction.CANCEL -> {
                 runCatching {
-                    node.controlJob(store.baseUrl, store.token, record.jobId, "cancel")
+                    node.controlJob(connection.baseUrl, connection.token, record.jobId, "cancel")
                 }
                 TransferScheduler.cancelScheduled(context, record.jobId)
                 val discarded = runCatching {
-                    node.discardJob(store.baseUrl, store.token, record.jobId)
+                    node.discardJob(connection.baseUrl, connection.token, record.jobId)
                 }
                 val confirmedDetail = context.getString(R.string.transfer_cancelled_detail)
                 if (discarded.isSuccess) {
@@ -1093,53 +1310,160 @@ private fun OnboardingChoice(icon: ImageVector, title: String, detail: String) {
 private fun Pair(
     state: CovalentViewModel,
     node: CovalentNodeClient,
-    store: SecureNodeStore,
+    connection: NodeConnection?,
     scope: kotlinx.coroutines.CoroutineScope,
     modifier: Modifier,
     discover: () -> Unit,
 ) {
+    val context = LocalContext.current
     val resources = LocalResources.current
     val focusManager = LocalFocusManager.current
+    fun startNetworkPairing(address: String) {
+        val selectedConnection = connection ?: return
+        val candidateAddress = address.trim()
+        if (candidateAddress.isEmpty()) return
+        api(context, state, scope, pairingError = true) {
+            val pairing = node.startNetworkPairing(selectedConnection.baseUrl, selectedConnection.token, candidateAddress)
+            state.updateNetworkPairing(pairing)
+            if (pairing.state == NetworkPairingState.COMPLETE) {
+                completeNetworkPairingConnection(state, node, selectedConnection, pairing)
+            }
+        }
+    }
     FormPage(
         modifier,
         stringResource(R.string.pair_title),
         stringResource(R.string.pair_subtitle),
     ) {
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(
-                selected = state.pairingRole == PairingRole.INVITER,
-                onClick = {
-                    if (state.pairingRole != PairingRole.INVITER) state.clearPairing()
-                    state.pairingRole = PairingRole.INVITER
-                },
-                label = { Text(stringResource(R.string.pair_invite_device)) },
-            )
-            FilterChip(
-                selected = state.pairingRole == PairingRole.RESPONDER,
-                onClick = {
-                    if (state.pairingRole != PairingRole.RESPONDER) state.clearPairing()
-                    state.pairingRole = PairingRole.RESPONDER
-                },
-                label = { Text(stringResource(R.string.pair_join_device)) },
-            )
+        DiscoverySection(state, discover) { candidate -> startNetworkPairing(candidate.endpoint) }
+        SectionTitle(stringResource(R.string.tailscale_candidate_title))
+        OutlinedTextField(
+            value = state.tailscaleCandidateAddress,
+            onValueChange = { state.tailscaleCandidateAddress = it; state.pairingError = "" },
+            label = { Text(stringResource(R.string.tailscale_candidate_field)) },
+            placeholder = { Text(stringResource(R.string.tailscale_candidate_example)) },
+            supportingText = {
+                Text(
+                    stringResource(
+                        if (state.status?.lanDiscovery == false) {
+                            R.string.tailscale_candidate_lan_off_detail
+                        } else {
+                            R.string.tailscale_candidate_detail
+                        },
+                    ),
+                )
+            },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.None,
+                autoCorrectEnabled = false,
+                keyboardType = KeyboardType.Uri,
+                imeAction = ImeAction.Done,
+            ),
+            keyboardActions = KeyboardActions(onDone = {
+                focusManager.clearFocus()
+                startNetworkPairing(state.tailscaleCandidateAddress)
+            }),
+            modifier = Modifier.fillMaxWidth().testTag("pair.tailscaleAddress"),
+        )
+        FilledTonalButton(
+            enabled = state.tailscaleCandidateAddress.trim().isNotEmpty() && !state.busy &&
+                state.connectionHealth == ConnectionHealth.READY,
+            onClick = { startNetworkPairing(state.tailscaleCandidateAddress) },
+            modifier = Modifier.testTag("pair.tailscaleStart"),
+        ) {
+            Icon(Icons.Rounded.AddLink, null)
+            Text(stringResource(R.string.action_use_backup_device), Modifier.padding(start = 8.dp))
         }
-        DiscoverySection(state, discover)
-        HorizontalDivider()
-        if (state.pairingRole == PairingRole.INVITER) {
-            InviterPairing(state, node, store, scope)
-        } else {
-            ResponderPairing(state, node, store, scope, focusManager)
+        state.activeNetworkPairing?.let { pairing ->
+            NetworkPairingCard(
+                pairing = pairing,
+                providerPersisted = pairing.peerTransport?.let { transport ->
+                    state.providers.any {
+                        it.peerId == transport.peerId && it.fingerprint == transport.certificateFingerprint
+                    }
+                } == true,
+                busy = state.busy,
+                confirm = {
+                    connection?.let { selectedConnection ->
+                        api(context, state, scope, pairingError = true) {
+                            val updated = node.confirmNetworkPairing(
+                                selectedConnection.baseUrl,
+                                selectedConnection.token,
+                                pairing.pairingId,
+                                pairing.authenticationString,
+                            )
+                            state.updateNetworkPairing(updated)
+                            if (updated.state == NetworkPairingState.COMPLETE) {
+                                completeNetworkPairingConnection(state, node, selectedConnection, updated)
+                            }
+                        }
+                    }
+                },
+                dismiss = {
+                    connection?.let { selectedConnection ->
+                        api(context, state, scope, pairingError = true) {
+                            node.cancelNetworkPairing(selectedConnection.baseUrl, selectedConnection.token, pairing.pairingId)
+                            state.removeNetworkPairing(pairing.pairingId)
+                        }
+                    }
+                },
+            )
         }
         if (state.pairingError.isNotBlank()) InlineError(state.pairingError)
-        if (state.pairingConfirmation != null) {
-            ProviderExchange(state, node, store, scope)
+        TextButton(
+            onClick = { state.showAdvancedPairing = !state.showAdvancedPairing },
+            modifier = Modifier.testTag("pair.advanced"),
+        ) {
+            Icon(Icons.Rounded.Security, null)
+            Text(
+                stringResource(
+                    if (state.showAdvancedPairing) R.string.action_hide_advanced_pairing
+                    else R.string.action_show_advanced_pairing,
+                ),
+                Modifier.padding(start = 8.dp),
+            )
         }
-        TextButton(onClick = {
-            state.clearPairing()
-            state.notice = resources.getString(R.string.pair_local_state_cleared)
-        }) {
-            Icon(Icons.Rounded.Cancel, null)
-            Text(stringResource(R.string.action_cancel_pairing))
+        if (state.showAdvancedPairing && connection != null) {
+            HorizontalDivider()
+            Text(
+                stringResource(R.string.advanced_pairing_detail),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = state.pairingRole == PairingRole.INVITER,
+                    onClick = {
+                        if (state.pairingRole != PairingRole.INVITER) state.clearPairing()
+                        state.pairingRole = PairingRole.INVITER
+                    },
+                    label = { Text(stringResource(R.string.pair_invite_device)) },
+                )
+                FilterChip(
+                    selected = state.pairingRole == PairingRole.RESPONDER,
+                    onClick = {
+                        if (state.pairingRole != PairingRole.RESPONDER) state.clearPairing()
+                        state.pairingRole = PairingRole.RESPONDER
+                    },
+                    label = { Text(stringResource(R.string.pair_join_device)) },
+                )
+            }
+            if (state.pairingRole == PairingRole.INVITER) {
+                InviterPairing(state, node, connection, scope)
+            } else {
+                ResponderPairing(state, node, connection, scope, focusManager)
+            }
+            if (state.pairingConfirmation != null) {
+                ProviderExchange(state, node, connection, scope)
+            }
+            TextButton(onClick = {
+                state.clearPairing()
+                state.notice = resources.getString(R.string.pair_local_state_cleared)
+            }) {
+                Icon(Icons.Rounded.Cancel, null)
+                Text(stringResource(R.string.action_cancel_pairing))
+            }
         }
     }
 }
@@ -1148,8 +1472,8 @@ private fun Pair(
 private fun DiscoverySection(
     state: CovalentViewModel,
     discover: () -> Unit,
+    select: (DiscoveryCandidate) -> Unit,
 ) {
-    val resources = LocalResources.current
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
         OutlinedButton(
             enabled = !state.busy && state.connectionHealth == ConnectionHealth.READY,
@@ -1167,14 +1491,14 @@ private fun DiscoverySection(
     if (state.discoveryCompleted && state.discovered.isEmpty() && state.discoveryError == null) {
         EmptyState(
             stringResource(R.string.discovery_empty_title),
-            stringResource(R.string.discovery_empty_detail),
+            stringResource(
+                if (state.status?.lanDiscovery == false) R.string.discovery_lan_off_detail
+                else R.string.discovery_empty_detail,
+            ),
         )
     }
     state.discovered.forEach { candidate ->
-        DiscoveryCandidateRow(candidate) {
-            state.pairingEndpoint = candidate.endpoint
-            state.notice = resources.getString(R.string.discovery_candidate_selected)
-        }
+        DiscoveryCandidateRow(candidate) { select(candidate) }
     }
 }
 
@@ -1193,35 +1517,170 @@ private fun DiscoveryCandidateRow(candidate: DiscoveryCandidate, select: () -> U
 }
 
 @Composable
+private fun NetworkPairingCard(
+    pairing: NetworkPairing,
+    providerPersisted: Boolean,
+    busy: Boolean,
+    confirm: () -> Unit,
+    dismiss: () -> Unit,
+) {
+    val direction = stringResource(
+        if (pairing.direction == NetworkPairingDirection.INCOMING) {
+            R.string.network_pairing_incoming
+        } else {
+            R.string.network_pairing_outgoing
+        },
+    )
+    OutlinedCard(Modifier.fillMaxWidth().testTag("pair.networkRequest")) {
+        Column(
+            Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.Security, null)
+                Column(Modifier.padding(start = 10.dp).weight(1f)) {
+                    Text(pairing.peerName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        direction,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Text(
+                stringResource(R.string.network_pairing_compare),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                pairing.authenticationString,
+                style = MaterialTheme.typography.headlineSmall,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("pair.authenticationString")
+                    .clearAndSetSemantics {
+                        contentDescription = pairing.authenticationString.replace('-', ' ')
+                    },
+            )
+            Text(
+                stringResource(
+                    R.string.network_pairing_expires,
+                    DateUtils.getRelativeTimeSpanString(pairing.expiresAtUnixMs),
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            when (pairing.state) {
+                NetworkPairingState.AWAITING_LOCAL_CONFIRMATION -> {
+                    FilledTonalButton(
+                        enabled = !busy,
+                        onClick = confirm,
+                        modifier = Modifier.testTag("pair.confirmNetwork"),
+                    ) {
+                        Icon(Icons.Rounded.CheckCircle, null)
+                        Text(stringResource(R.string.action_confirm_backup_device), Modifier.padding(start = 8.dp))
+                    }
+                }
+                NetworkPairingState.AWAITING_PEER_CONFIRMATION -> {
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator()
+                        Text(stringResource(R.string.network_pairing_waiting_peer))
+                    }
+                }
+                NetworkPairingState.COMPLETE -> {
+                    if (providerPersisted) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Rounded.CheckCircle, null, tint = MaterialTheme.colorScheme.primary)
+                            Text(stringResource(R.string.network_pairing_complete), fontWeight = FontWeight.SemiBold)
+                        }
+                    } else {
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator()
+                            Text(stringResource(R.string.network_pairing_securing_provider))
+                        }
+                    }
+                }
+                NetworkPairingState.FAILED -> InlineError(
+                    pairing.failureMessage ?: stringResource(R.string.network_pairing_failed),
+                )
+            }
+            if (pairing.state == NetworkPairingState.FAILED ||
+                pairing.state == NetworkPairingState.COMPLETE && providerPersisted
+            ) {
+                FilledTonalButton(enabled = !busy, onClick = dismiss) {
+                    Text(stringResource(R.string.action_done))
+                }
+            } else {
+                TextButton(enabled = !busy, onClick = dismiss) {
+                    Text(stringResource(R.string.action_cancel_pairing))
+                }
+            }
+        }
+    }
+}
+
+internal fun validateSignedProviderBinding(transport: PeerTransport, connected: Provider) {
+    check(transport.certificateFingerprint.matches(Regex("[0-9a-f]{64}"))) {
+        "The signed certificate fingerprint is invalid."
+    }
+    check(connected.peerId == transport.peerId &&
+        connected.fingerprint == transport.certificateFingerprint
+    ) {
+        "The connected provider certificate does not match the signed pairing."
+    }
+}
+
+internal fun completeNetworkPairingConnection(
+    state: CovalentViewModel,
+    node: CovalentNodeClient,
+    connection: NodeConnection,
+    pairing: NetworkPairing,
+) {
+    check(pairing.state == NetworkPairingState.COMPLETE) {
+        "The pairing is not complete."
+    }
+    val transport = checkNotNull(pairing.peerTransport) {
+        "The completed pairing omitted its signed transport."
+    }
+    val current = node.providers(connection.baseUrl, connection.token)
+    val connected = current.firstOrNull { it.peerId == transport.peerId }
+        ?: node.connectProvider(
+            connection.baseUrl,
+            connection.token,
+            transport,
+        )
+    validateSignedProviderBinding(transport, connected)
+    val persisted = node.providers(connection.baseUrl, connection.token)
+    check(persisted.any {
+        it.peerId == transport.peerId && it.fingerprint == transport.certificateFingerprint
+    }) {
+        "The signed provider connection was not persisted."
+    }
+    state.providers = persisted
+}
+
+@Composable
 private fun InviterPairing(
     state: CovalentViewModel,
     node: CovalentNodeClient,
-    store: SecureNodeStore,
+    connection: NodeConnection,
     scope: kotlinx.coroutines.CoroutineScope,
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
     if (state.pairingInvitation == null) {
-        OutlinedTextField(
-            state.pairingEndpoint,
-            { state.pairingEndpoint = it },
-            label = { Text(stringResource(R.string.field_reachable_endpoint)) },
-            placeholder = { Text(stringResource(R.string.pair_endpoint_example)) },
-            supportingText = { Text(stringResource(R.string.pair_endpoint_support)) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
         FilledTonalButton(
-            enabled = state.pairingEndpoint.isNotBlank() && !state.busy,
+            enabled = !state.busy,
             onClick = {
                 api(context, state, scope, pairingError = true) {
                     val invitation = node.post(
-                        store.baseUrl,
-                        store.token,
+                        connection.baseUrl,
+                        connection.token,
                         "/api/v1/pair/invitations",
                         JSONObject()
                             .put("lifetimeMs", 15 * 60 * 1_000)
-                            .put("endpoints", JSONArray().put(state.pairingEndpoint.trim())),
+                            .put("endpoints", JSONArray()),
                     )
                     state.persistPairingInvitation(invitation)
                 }
@@ -1261,8 +1720,8 @@ private fun InviterPairing(
             !inviterConfirmed -> FilledTonalButton(enabled = !state.busy && !isExpired(session), onClick = {
                 api(context, state, scope, pairingError = true) {
                     val confirmed = node.post(
-                        store.baseUrl,
-                        store.token,
+                        connection.baseUrl,
+                        connection.token,
                         "/api/v1/pair/confirm/inviter",
                         JSONObject()
                             .put("session", session)
@@ -1285,8 +1744,8 @@ private fun InviterPairing(
                     api(context, state, scope, pairingError = true) {
                         state.persistPairingConfirmation(
                             node.post(
-                                store.baseUrl,
-                                store.token,
+                                connection.baseUrl,
+                                connection.token,
                                 "/api/v1/pair/finalize/inviter",
                                 JSONObject().put("session", session),
                             ),
@@ -1302,7 +1761,7 @@ private fun InviterPairing(
 private fun ResponderPairing(
     state: CovalentViewModel,
     node: CovalentNodeClient,
-    store: SecureNodeStore,
+    connection: NodeConnection,
     scope: kotlinx.coroutines.CoroutineScope,
     focusManager: androidx.compose.ui.focus.FocusManager,
 ) {
@@ -1340,8 +1799,8 @@ private fun ResponderPairing(
                 state.persistPairingInvitation(invitation)
                 state.persistPairingSession(
                     node.post(
-                        store.baseUrl,
-                        store.token,
+                        connection.baseUrl,
+                        connection.token,
                         "/api/v1/pair/accept",
                         JSONObject()
                             .put("invitation", invitation)
@@ -1361,8 +1820,8 @@ private fun ResponderPairing(
             !responderConfirmed -> FilledTonalButton(enabled = !state.busy && !isExpired(session), onClick = {
                 api(context, state, scope, pairingError = true) {
                     val confirmed = node.post(
-                        store.baseUrl,
-                        store.token,
+                        connection.baseUrl,
+                        connection.token,
                         "/api/v1/pair/confirm/responder",
                         JSONObject()
                             .put("session", session)
@@ -1407,8 +1866,8 @@ private fun ResponderPairing(
                     api(context, state, scope, pairingError = true) {
                         state.persistPairingConfirmation(
                             node.post(
-                                store.baseUrl,
-                                store.token,
+                                connection.baseUrl,
+                                connection.token,
                                 "/api/v1/pair/finalize/responder",
                                 JSONObject().put("session", session),
                             ),
@@ -1557,7 +2016,7 @@ private fun ExchangeCard(title: String, detail: String, json: JSONObject, shareL
 private fun ProviderExchange(
     state: CovalentViewModel,
     node: CovalentNodeClient,
-    store: SecureNodeStore,
+    connection: NodeConnection,
     scope: kotlinx.coroutines.CoroutineScope,
 ) {
     val context = LocalContext.current
@@ -1574,85 +2033,60 @@ private fun ProviderExchange(
         stringResource(R.string.pair_exact_roles, roles.joinToString(", ").ifBlank { none }),
         Icons.Rounded.CheckCircle,
     )
-    OutlinedTextField(
-        state.providerAddress,
-        { state.providerAddress = it },
-        label = { Text(stringResource(R.string.field_provider_address)) },
-        placeholder = { Text(stringResource(R.string.provider_address_example)) },
-        supportingText = { Text(stringResource(R.string.provider_address_detail)) },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-    )
-    OutlinedButton(enabled = state.providerAddress.isNotBlank() && !state.busy, onClick = {
-        api(context, state, scope, pairingError = true) {
-            val identity = node.transportIdentity(store.baseUrl, store.token)
-            val packet = JSONObject()
-                .put("protocolVersion", 1)
-                .put("peerId", identity.deviceId)
-                .put("deviceName", state.status?.deviceName ?: store.displayName)
-                .put("address", state.providerAddress.trim())
-                .put("certificateDer", identity.certificateDer)
-                .put("certificateFingerprint", identity.certificateFingerprint)
-            state.localIdentityPacket = packet.toString()
-        }
-    }) { Text(stringResource(R.string.action_prepare_identity)) }
-    if (state.localIdentityPacket.isNotBlank()) {
-        val packet = runCatching { JSONObject(state.localIdentityPacket) }.getOrNull()
-        if (packet != null) {
-            ExchangeCard(
-                title = stringResource(R.string.provider_identity_ready),
-                detail = stringResource(R.string.provider_identity_detail),
-                json = packet,
-                shareLabel = stringResource(R.string.action_share_identity),
-            )
-        }
-    }
     if ("storage_provider" !in roles) {
         Text(
             stringResource(R.string.provider_role_not_granted),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     } else {
-        OutlinedTextField(
-            state.providerIdentityInput,
-            { state.providerIdentityInput = it; state.pairingError = "" },
-            label = { Text(stringResource(R.string.field_peer_identity)) },
-            minLines = 3,
-            maxLines = 6,
-            keyboardOptions = pairingInvitationKeyboardOptions,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        FilledTonalButton(
-            enabled = state.providerIdentityInput.isNotBlank() && !state.busy,
-            onClick = {
-                api(context, state, scope, pairingError = true) {
-                    val identity = parseBoundedJson(state.providerIdentityInput)
-                    val expectedPeerId = peerGrant.getString("peerDeviceId")
-                    val peerId = identity.optString("peerId", identity.optString("deviceId"))
-                    check(peerId == expectedPeerId) {
-                        resources.getString(R.string.error_provider_identity_mismatch)
+        val transport = runCatching { signedPeerTransport(confirmation) }.getOrNull()
+        if (transport == null) {
+            InlineError(stringResource(R.string.error_signed_transport_missing))
+        } else {
+            Text(
+                stringResource(R.string.signed_transport_ready),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FilledTonalButton(
+                enabled = !state.busy,
+                onClick = {
+                    api(context, state, scope, pairingError = true) {
+                        val connected = node.connectProvider(connection.baseUrl, connection.token, transport)
+                        validateSignedProviderBinding(transport, connected)
+                        val persisted = node.providers(connection.baseUrl, connection.token)
+                        check(persisted.any {
+                            it.peerId == transport.peerId &&
+                                it.fingerprint == transport.certificateFingerprint
+                        }) { resources.getString(R.string.error_provider_fingerprint_mismatch) }
+                        state.providers = persisted
+                        state.notice = resources.getString(R.string.provider_connected, transport.displayName)
                     }
-                    val address = identity.optString("address").ifBlank { state.providerAddress.trim() }
-                    check(validProviderSocketAddress(address)) {
-                        resources.getString(R.string.error_provider_address_invalid)
-                    }
-                    val expectedFingerprint = identity.getString("certificateFingerprint")
-                    val connected = node.connectProvider(
-                        store.baseUrl,
-                        store.token,
-                        peerId,
-                        address,
-                        identity.getString("certificateDer"),
-                    )
-                    check(connected.fingerprint == expectedFingerprint) {
-                        resources.getString(R.string.error_provider_fingerprint_mismatch)
-                    }
-                    state.providers = node.providers(store.baseUrl, store.token)
-                    state.notice = resources.getString(R.string.provider_connected, peerGrant.getString("displayName"))
-                }
-            },
-        ) { Text(stringResource(R.string.action_connect_provider)) }
+                },
+            ) { Text(stringResource(R.string.action_use_backup_device)) }
+        }
     }
+}
+
+internal fun signedPeerTransport(confirmation: JSONObject): PeerTransport {
+    val value = confirmation.getJSONObject("peerTransport")
+    return PeerTransport(
+        peerId = value.getString("peerId").also {
+            require(it.matches(Regex("[A-Za-z0-9_-]{1,128}")))
+        },
+        displayName = value.getString("displayName").also {
+            require(it.isNotBlank() && it.length <= 128)
+        },
+        address = value.getString("address").also {
+            require(it.isNotBlank() && it.length <= 253 && it.none(Char::isWhitespace))
+        },
+        certificateDer = value.getString("certificateDer").also {
+            require(it.isNotBlank() && it.length <= 512 * 1_024)
+        },
+        certificateFingerprint = value.getString("certificateFingerprint").also {
+            require(it.matches(Regex("[0-9a-f]{64}")))
+        },
+    )
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -1661,17 +2095,28 @@ private fun Backup(
     state: CovalentViewModel,
     node: CovalentNodeClient,
     store: SecureNodeStore,
+    connection: NodeConnection?,
     scope: kotlinx.coroutines.CoroutineScope,
     modifier: Modifier,
     pickSource: () -> Unit,
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
-    LaunchedEffect(Unit) {
-        if (state.providers.isEmpty() && state.connectionHealth == ConnectionHealth.READY) {
-            runCatching { withContext(Dispatchers.IO) { node.providers(store.baseUrl, store.token) } }
+    LaunchedEffect(connection?.baseUrl, connection?.token) {
+        if (connection != null && state.providers.isEmpty() && state.connectionHealth == ConnectionHealth.READY) {
+            runCatching { withContext(Dispatchers.IO) { node.providers(connection.baseUrl, connection.token) } }
                 .onSuccess { state.providers = it }
                 .onFailure { state.notice = it.message }
+        }
+    }
+    LaunchedEffect(state.selectedBackupId, state.backups, state.providers) {
+        val selectedBackup = state.backups.firstOrNull { it.backupId == state.selectedBackupId }
+        if (state.selectedBackupId.isNotBlank() && selectedBackup == null) {
+            state.selectedBackupId = ""
+        } else if (selectedBackup != null && state.backupName.isBlank()) {
+            state.backupName = selectedBackup.name
+            val connected = state.providers.map(Provider::peerId).toSet()
+            state.selectedProviderIds = selectedBackup.selectedProviderIds.intersect(connected)
         }
     }
     FormPage(
@@ -1679,6 +2124,29 @@ private fun Backup(
         stringResource(R.string.backup_title),
         stringResource(R.string.backup_subtitle),
     ) {
+        SectionTitle(stringResource(R.string.backup_mode))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = state.selectedBackupId.isBlank(),
+                onClick = {
+                    state.selectedBackupId = ""
+                    state.selectedProviderIds = emptySet()
+                },
+                label = { Text(stringResource(R.string.backup_create_new)) },
+            )
+            state.backups.forEach { backup ->
+                FilterChip(
+                    selected = state.selectedBackupId == backup.backupId,
+                    onClick = {
+                        state.selectedBackupId = backup.backupId
+                        state.backupName = backup.name
+                        val eligible = state.providers.filter(::isProviderEligibleForBackup).map(Provider::peerId).toSet()
+                        state.selectedProviderIds = backup.selectedProviderIds.intersect(eligible)
+                    },
+                    label = { Text(stringResource(R.string.backup_add_snapshot, backup.name)) },
+                )
+            }
+        }
         OutlinedButton(onClick = pickSource) {
             Icon(Icons.Rounded.FolderOpen, null)
             Text(stringResource(R.string.action_choose_source), Modifier.padding(start = 8.dp))
@@ -1710,6 +2178,7 @@ private fun Backup(
             ProviderSelectionRow(
                 provider,
                 selected = provider.peerId in state.selectedProviderIds,
+                enabled = isProviderEligibleForBackup(provider),
             ) { checked ->
                 state.selectedProviderIds = if (checked) {
                     state.selectedProviderIds + provider.peerId
@@ -1718,12 +2187,29 @@ private fun Backup(
                 }
             }
         }
+        BackupPreflight(
+            sourceName = state.selectedSource?.let {
+                DocumentFile.fromTreeUri(context, it)?.name ?: it.toString()
+            },
+            selectedProviders = state.providers.filter { it.peerId in state.selectedProviderIds },
+            previousProviderIds = state.backups
+                .firstOrNull { it.backupId == state.selectedBackupId }
+                ?.selectedProviderIds
+                .orEmpty(),
+        )
         FilledTonalButton(
             enabled = state.selectedSource != null && state.backupName.isNotBlank() && !state.busy &&
-                state.connectionHealth == ConnectionHealth.READY,
+                connection != null && state.connectionHealth == ConnectionHealth.READY &&
+                state.selectedProviderIds.all { selectedId ->
+                    state.providers.any { it.peerId == selectedId && isProviderEligibleForBackup(it) }
+            },
             onClick = {
+                connection ?: return@FilledTonalButton
                 val source = state.selectedSource ?: return@FilledTonalButton
                 api(context, state, scope) {
+                    check(state.selectedProviderIds.all { selectedId ->
+                        state.providers.any { it.peerId == selectedId && isProviderEligibleForBackup(it) }
+                    }) { resources.getString(R.string.provider_capacity_required) }
                     ensureReadableSource(context, source)
                     val jobId = newId("backup")
                     val payload = JSONObject()
@@ -1731,6 +2217,9 @@ private fun Backup(
                         .put("snapshotId", newId("snapshot"))
                         .put("jobId", jobId)
                         .put("selectedProviderIds", JSONArray(state.selectedProviderIds.sorted()))
+                    if (state.selectedBackupId.isNotBlank()) {
+                        payload.put("backupId", state.selectedBackupId)
+                    }
                     queueTransfer(
                         context,
                         store,
@@ -1749,6 +2238,8 @@ private fun Backup(
                     state.refreshDurableState()
                     state.notice = resources.getString(R.string.backup_queued)
                     state.backupName = ""
+                    state.selectedBackupId = ""
+                    state.selectedProviderIds = emptySet()
                     state.screen = Screen.HOME
                 }
             },
@@ -1760,7 +2251,74 @@ private fun Backup(
 }
 
 @Composable
-private fun ProviderSelectionRow(provider: Provider, selected: Boolean, onSelected: (Boolean) -> Unit) {
+private fun BackupPreflight(
+    sourceName: String?,
+    selectedProviders: List<Provider>,
+    previousProviderIds: Set<String>,
+) {
+    val selectedIds = selectedProviders.map(Provider::peerId).toSet()
+    val added = selectedIds - previousProviderIds
+    val removed = previousProviderIds - selectedIds
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            Text(
+                stringResource(R.string.backup_review_title),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.semantics { heading() },
+            )
+            Text(stringResource(R.string.backup_review_source, sourceName ?: stringResource(R.string.no_source_selected)))
+            Text(stringResource(R.string.backup_review_exclusions))
+            Text(stringResource(R.string.backup_review_access))
+            Text(
+                if (selectedProviders.isEmpty()) {
+                    stringResource(R.string.backup_review_local_only)
+                } else {
+                    pluralStringResource(
+                        R.plurals.backup_review_copy_count,
+                        selectedProviders.size,
+                        selectedProviders.size,
+                    )
+                },
+            )
+            selectedProviders.forEach { provider ->
+                Text("• ${provider.displayName ?: provider.address}")
+            }
+            Text(
+                stringResource(R.string.backup_review_readability),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (previousProviderIds.isNotEmpty()) {
+                HorizontalDivider()
+                Text(
+                    stringResource(R.string.replica_change_existing_impact),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                when {
+                    added.isEmpty() && removed.isEmpty() -> Text(stringResource(R.string.replica_set_unchanged))
+                    else -> {
+                        if (added.isNotEmpty()) Text(pluralStringResource(R.plurals.replica_add_impact, added.size, added.size))
+                        if (removed.isNotEmpty()) Text(pluralStringResource(R.plurals.replica_remove_impact, removed.size, removed.size))
+                    }
+                }
+            }
+        }
+    }
+}
+
+internal fun isProviderEligibleForBackup(provider: Provider): Boolean =
+    provider.reachability == ProviderReachability.CONNECTED &&
+        provider.capacityBytes != null && provider.capacityBytes > 0
+
+@Composable
+private fun ProviderSelectionRow(
+    provider: Provider,
+    selected: Boolean,
+    enabled: Boolean,
+    onSelected: (Boolean) -> Unit,
+) {
     val title = provider.displayName ?: stringResource(R.string.provider_unnamed)
     val reachability = when (provider.reachability) {
         ProviderReachability.CONNECTED -> stringResource(R.string.provider_connected_state)
@@ -1771,11 +2329,16 @@ private fun ProviderSelectionRow(provider: Provider, selected: Boolean, onSelect
     OutlinedCard(
         Modifier
             .fillMaxWidth()
-            .toggleable(value = selected, role = Role.Checkbox, onValueChange = onSelected)
+            .toggleable(
+                value = selected,
+                enabled = enabled,
+                role = Role.Checkbox,
+                onValueChange = onSelected,
+            )
             .semantics(mergeDescendants = true) {},
     ) {
         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(selected, onCheckedChange = null)
+            Checkbox(selected, onCheckedChange = null, enabled = enabled)
             Column(Modifier.padding(start = 10.dp).weight(1f)) {
                 Text(title, fontWeight = FontWeight.SemiBold)
                 Text(provider.address)
@@ -1790,9 +2353,22 @@ private fun ProviderSelectionRow(provider: Provider, selected: Boolean, onSelect
                     fontFamily = FontFamily.Monospace,
                 )
                 Text(
-                    stringResource(R.string.provider_capacity_unavailable),
+                    when {
+                        provider.reachability == ProviderReachability.OFFLINE ->
+                            stringResource(R.string.provider_capacity_offline)
+                        provider.reachability == ProviderReachability.UNKNOWN ->
+                            stringResource(R.string.provider_reachability_unverified)
+                        provider.capacityBytes == null ->
+                            stringResource(R.string.provider_capacity_unavailable)
+                        provider.capacityBytes <= 0 ->
+                            stringResource(R.string.provider_capacity_insufficient)
+                        else -> stringResource(
+                            R.string.provider_capacity_available,
+                            Formatter.formatFileSize(LocalContext.current, provider.capacityBytes),
+                        )
+                    },
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                 )
             }
         }
@@ -1804,6 +2380,7 @@ private fun Restore(
     state: CovalentViewModel,
     node: CovalentNodeClient,
     store: SecureNodeStore,
+    connection: NodeConnection?,
     scope: kotlinx.coroutines.CoroutineScope,
     modifier: Modifier,
     pickTarget: () -> Unit,
@@ -1818,6 +2395,33 @@ private fun Restore(
         }
     }
     val selected = available.firstOrNull { it.backupId == state.selectedRestoreBackupId }
+    fun queueRestore(plan: RestorePlanPage) {
+        val target = state.selectedTarget ?: return
+        api(context, state, scope) {
+            ensureWritableTarget(context, target)
+            val reference = plan.reference
+            queueTransfer(
+                context,
+                store,
+                TransferRecord(
+                    jobId = reference.jobId,
+                    label = selected?.name ?: resources.getString(R.string.restore_title),
+                    kind = TransferKind.RESTORE,
+                    state = TransferState.QUEUED,
+                    detail = resources.getString(R.string.transfer_queued_detail),
+                    totalEntries = reference.totalEntries,
+                ),
+                "/api/v1/restores/archive/execute",
+                restoreTransferPayload(reference),
+                TransferWorker.MODE_SAF_RESTORE,
+                target,
+            )
+            state.persistRestorePlan(null)
+            state.refreshDurableState()
+            state.notice = resources.getString(R.string.restore_queued)
+            state.screen = Screen.HOME
+        }
+    }
     FormPage(
         modifier,
         stringResource(R.string.restore_title),
@@ -1857,6 +2461,47 @@ private fun Restore(
                 }
             }
         }
+        SectionTitle(stringResource(R.string.restore_conflict_title))
+        RestoreConflictPolicy.entries.forEach { policy ->
+            val selectedPolicy = state.selectedRestorePolicy == policy
+            val title = when (policy) {
+                RestoreConflictPolicy.FAIL -> stringResource(R.string.restore_policy_fail)
+                RestoreConflictPolicy.SKIP -> stringResource(R.string.restore_policy_skip)
+                RestoreConflictPolicy.RENAME -> stringResource(R.string.restore_policy_rename)
+            }
+            val detail = when (policy) {
+                RestoreConflictPolicy.FAIL -> stringResource(R.string.restore_policy_fail_detail)
+                RestoreConflictPolicy.SKIP -> stringResource(R.string.restore_policy_skip_detail)
+                RestoreConflictPolicy.RENAME -> stringResource(R.string.restore_policy_rename_detail)
+            }
+            OutlinedCard(
+                Modifier
+                    .fillMaxWidth()
+                    .toggleable(value = selectedPolicy, role = Role.RadioButton) {
+                        state.selectedRestorePolicy = policy
+                        state.persistRestorePlan(null)
+                    }
+                    .semantics(mergeDescendants = true) {}
+                    .testTag("restore.policy.${policy.wireValue}"),
+            ) {
+                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    androidx.compose.material3.RadioButton(selectedPolicy, onClick = null)
+                    Column(Modifier.padding(start = 10.dp)) {
+                        Text(title, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            detail,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+        Text(
+            stringResource(R.string.restore_policy_replace_unavailable),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         OutlinedButton(onClick = pickTarget) {
             Icon(Icons.Rounded.FolderOpen, null)
             Text(stringResource(R.string.action_choose_restore_folder), Modifier.padding(start = 8.dp))
@@ -1867,74 +2512,62 @@ private fun Restore(
         )
         OutlinedButton(
             enabled = selected != null && state.selectedTarget != null && !state.busy &&
-                state.connectionHealth == ConnectionHealth.READY,
+                connection != null && state.connectionHealth == ConnectionHealth.READY,
             onClick = {
+                val selectedConnection = connection ?: return@OutlinedButton
                 val target = state.selectedTarget ?: return@OutlinedButton
                 val backup = selected ?: return@OutlinedButton
                 api(context, state, scope) {
                     ensureWritableTarget(context, target)
+                    val jobId = newId("restore")
+                    val inventory = SafTransferBridge(node).targetInventory(context, target)
+                    val uploaded = node.uploadTargetInventory(
+                        selectedConnection.baseUrl,
+                        selectedConnection.token,
+                        jobId,
+                        inventory,
+                    )
                     state.persistRestorePlan(
                         node.previewArchiveRestore(
-                            store.baseUrl,
-                            store.token,
+                            selectedConnection.baseUrl,
+                            selectedConnection.token,
                             JSONObject()
                                 .put("backupId", backup.backupId)
                                 .put("snapshotId", backup.latestSnapshotId)
-                                .put("conflictPolicy", "fail")
-                                .put("jobId", newId("restore")),
+                                .put("conflictPolicy", state.selectedRestorePolicy.wireValue)
+                                .put("jobId", jobId)
+                                .put("targetInventoryId", uploaded.inventoryId),
                         ),
                     )
                 }
             },
         ) { Text(stringResource(R.string.action_preview_restore)) }
         state.restorePlan?.let { plan ->
+            val selectedConnection = connection
             RestorePlanPreview(
                 plan = plan,
                 busy = state.busy,
-                onNextPage = plan.nextCursor?.let { cursor ->
+                onNextPage = selectedConnection?.let { active -> plan.nextCursor?.let { cursor ->
                     {
                         api(context, state, scope) {
                             state.persistRestorePlan(
                                 node.restorePlanPage(
-                                    store.baseUrl,
-                                    store.token,
+                                    active.baseUrl,
+                                    active.token,
                                     plan.reference,
                                     cursor,
                                 ),
                             )
                         }
                     }
-                },
+                } },
             )
             FilledTonalButton(
-                enabled = !state.busy && state.connectionHealth == ConnectionHealth.READY,
-                onClick = {
-                    val target = state.selectedTarget ?: return@FilledTonalButton
-                    api(context, state, scope) {
-                        ensureWritableTarget(context, target)
-                        val reference = plan.reference
-                        queueTransfer(
-                            context,
-                            store,
-                            TransferRecord(
-                                jobId = reference.jobId,
-                                label = selected?.name ?: resources.getString(R.string.restore_title),
-                                kind = TransferKind.RESTORE,
-                                state = TransferState.QUEUED,
-                                detail = resources.getString(R.string.transfer_queued_detail),
-                                totalEntries = reference.totalEntries,
-                            ),
-                            "/api/v1/restores/archive/execute",
-                            restoreTransferPayload(reference),
-                            TransferWorker.MODE_SAF_RESTORE,
-                            target,
-                        )
-                        state.persistRestorePlan(null)
-                        state.refreshDurableState()
-                        state.notice = resources.getString(R.string.restore_queued)
-                        state.screen = Screen.HOME
-                    }
-                },
+                enabled = connection != null && !state.busy && state.connectionHealth == ConnectionHealth.READY &&
+                    plan.reference.targetInventory != null &&
+                    plan.reference.conflictPolicy == state.selectedRestorePolicy.wireValue &&
+                    plan.entries.all { isSafeSafRestoreAction(it.kind, it.action) },
+                onClick = { queueRestore(plan) },
             ) {
                 Icon(Icons.Rounded.FolderOpen, null)
                 Text(stringResource(R.string.action_queue_restore), Modifier.padding(start = 8.dp))
@@ -1942,6 +2575,9 @@ private fun Restore(
         }
     }
 }
+
+private fun safeRestoreActionLabel(kind: String, action: String): String =
+    if (isSafeSafRestoreAction(kind, action)) action else "blocked_conflict"
 
 @Composable
 private fun RestorePlanPreview(plan: RestorePlanPage, busy: Boolean, onNextPage: (() -> Unit)?) {
@@ -1981,7 +2617,7 @@ private fun RestorePlanPreview(plan: RestorePlanPage, busy: Boolean, onNextPage:
                             stringResource(
                                 R.string.restore_entry_metadata,
                                 entry.kind,
-                                entry.action,
+                                safeRestoreActionLabel(entry.kind, entry.action),
                             ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2003,11 +2639,17 @@ private fun Settings(
     state: CovalentViewModel,
     node: CovalentNodeClient,
     store: SecureNodeStore,
+    connection: NodeConnection?,
+    embeddedProvider: EmbeddedProviderState,
+    activeMode: NodeMode,
     scope: kotlinx.coroutines.CoroutineScope,
     modifier: Modifier,
     export: (String) -> Unit,
     import: (Array<String>) -> Unit,
     onLanChange: (Boolean) -> Unit,
+    onSelectExternal: () -> Unit,
+    onSelectLocal: () -> Unit,
+    onTogglePhoneProvider: (Boolean) -> Unit,
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
@@ -2017,6 +2659,30 @@ private fun Settings(
         stringResource(R.string.settings_title),
         stringResource(R.string.settings_subtitle),
     ) {
+        SectionTitle(stringResource(R.string.node_mode_title))
+        NodeModeChoice(
+            title = stringResource(R.string.node_mode_external),
+            detail = stringResource(R.string.node_mode_external_detail),
+            selected = activeMode == NodeMode.EXTERNAL,
+            enabled = !state.busy,
+            testTag = "settings.mode.external",
+            onClick = onSelectExternal,
+        )
+        NodeModeChoice(
+            title = stringResource(R.string.node_mode_phone),
+            detail = stringResource(R.string.node_mode_phone_detail),
+            selected = activeMode == NodeMode.LOCAL,
+            enabled = !state.busy && embeddedProvider.enabled && embeddedProvider.running &&
+                embeddedProvider.keyProtectionAvailable,
+            testTag = "settings.mode.phone",
+            onClick = onSelectLocal,
+        )
+        PhoneProviderSettings(
+            state = state,
+            provider = embeddedProvider,
+            onToggle = onTogglePhoneProvider,
+        )
+        HorizontalDivider()
         val lanDescription = stringResource(if (lanEnabled) R.string.covalent_state_on else R.string.covalent_state_off)
         Row(
             Modifier
@@ -2055,16 +2721,17 @@ private fun Settings(
             val preview = settingsPreview(state.currentExportedSettings, candidate)
             SettingsImportPreview(preview)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilledTonalButton(enabled = !state.busy, onClick = {
+                FilledTonalButton(enabled = !state.busy && connection != null, onClick = {
+                    val selectedConnection = connection ?: return@FilledTonalButton
                     api(context, state, scope) {
                         node.postNoContent(
-                            store.baseUrl,
-                            store.token,
+                            selectedConnection.baseUrl,
+                            selectedConnection.token,
                             "/api/v1/config/import",
                             JSONObject().put("confirmed", true).put("settings", candidate),
                         )
                         state.setImportCandidate(null)
-                        refreshStatus(state, node, store)
+                        refreshStatus(state, node, store, selectedConnection)
                         state.notice = resources.getString(R.string.settings_imported)
                     }
                 }) { Text(stringResource(R.string.action_confirm_import)) }
@@ -2073,7 +2740,10 @@ private fun Settings(
                 }
             }
         }
-        OutlinedButton(onClick = { state.screen = Screen.SETUP }) {
+        OutlinedButton(onClick = {
+            onSelectExternal()
+            state.screen = Screen.SETUP
+        }) {
             Text(stringResource(R.string.action_change_connection))
         }
         Text(
@@ -2081,6 +2751,153 @@ private fun Settings(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+@Composable
+private fun NodeModeChoice(
+    title: String,
+    detail: String,
+    selected: Boolean,
+    enabled: Boolean,
+    testTag: String,
+    onClick: () -> Unit,
+) {
+    OutlinedCard(
+        Modifier
+            .fillMaxWidth()
+            .toggleable(
+                value = selected,
+                enabled = enabled,
+                role = Role.RadioButton,
+                onValueChange = { onClick() },
+            )
+            .testTag(testTag)
+            .semantics(mergeDescendants = true) {},
+    ) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            androidx.compose.material3.RadioButton(selected = selected, onClick = null, enabled = enabled)
+            Column(Modifier.padding(start = 10.dp).weight(1f)) {
+                Text(title, fontWeight = FontWeight.SemiBold)
+                Text(
+                    detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PhoneProviderSettings(
+    state: CovalentViewModel,
+    provider: EmbeddedProviderState,
+    onToggle: (Boolean) -> Unit,
+) {
+    val context = LocalContext.current
+    val capacity = providerCapacityBytes(state.providerMaximumGiB, state.providerKeepFreeGiB)
+    val canConfigure = provider.supported && provider.keyProtectionAvailable && !state.busy && !provider.enabled
+    SectionTitle(stringResource(R.string.phone_provider_title))
+    Text(
+        stringResource(R.string.phone_provider_detail),
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    OutlinedCard(Modifier.fillMaxWidth().testTag("settings.phoneProvider.status")) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            Text(stringResource(R.string.phone_provider_status), style = MaterialTheme.typography.titleMedium)
+            Text(provider.statusMessage)
+            Text(
+                stringResource(
+                    R.string.phone_provider_storage,
+                    Formatter.formatFileSize(context, provider.usedBytes),
+                    Formatter.formatFileSize(context, provider.reservedBytes),
+                    Formatter.formatFileSize(context, provider.availableBytes),
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+    when {
+        !provider.keyProtectionAvailable -> Text(
+            stringResource(R.string.phone_provider_locked),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("settings.phoneProvider.locked"),
+        )
+        !provider.supported -> Text(
+            stringResource(R.string.phone_provider_runtime_missing),
+            color = MaterialTheme.colorScheme.error,
+        )
+        else -> {
+            OutlinedTextField(
+                value = state.providerMaximumGiB,
+                onValueChange = { state.providerMaximumGiB = it },
+                enabled = canConfigure,
+                isError = capacity == null,
+                label = { Text(stringResource(R.string.phone_provider_use_up_to)) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
+                modifier = Modifier.fillMaxWidth().testTag("settings.phoneProvider.maximum"),
+            )
+            OutlinedTextField(
+                value = state.providerKeepFreeGiB,
+                onValueChange = { state.providerKeepFreeGiB = it },
+                enabled = canConfigure,
+                isError = capacity == null,
+                label = { Text(stringResource(R.string.phone_provider_keep_free)) },
+                supportingText = if (capacity == null) {
+                    { Text(stringResource(R.string.phone_provider_invalid_capacity)) }
+                } else null,
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+                modifier = Modifier.fillMaxWidth().testTag("settings.phoneProvider.keepFree"),
+            )
+            val lanDescription = stringResource(
+                if (state.providerLanDiscovery) R.string.covalent_state_on else R.string.covalent_state_off,
+            )
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .toggleable(
+                        value = state.providerLanDiscovery,
+                        enabled = canConfigure,
+                        role = Role.Switch,
+                        onValueChange = { state.providerLanDiscovery = it },
+                    )
+                    .semantics(mergeDescendants = true) { stateDescription = lanDescription }
+                    .testTag("settings.phoneProvider.lan")
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(stringResource(R.string.phone_provider_lan), style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        stringResource(R.string.phone_provider_lan_detail),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = state.providerLanDiscovery,
+                    onCheckedChange = null,
+                    enabled = canConfigure,
+                    modifier = Modifier.clearAndSetSemantics {},
+                )
+            }
+            FilledTonalButton(
+                enabled = !state.busy && (provider.enabled || capacity != null),
+                onClick = { onToggle(!provider.enabled) },
+                modifier = Modifier.testTag("settings.phoneProvider.toggle"),
+            ) {
+                Text(
+                    stringResource(
+                        if (provider.enabled) R.string.action_disable_phone_provider
+                        else R.string.action_enable_phone_provider,
+                    ),
+                )
+            }
+        }
     }
 }
 
@@ -2297,12 +3114,18 @@ private fun api(
     }
 }
 
-private fun refreshStatus(state: CovalentViewModel, node: CovalentNodeClient, store: SecureNodeStore) {
-    val status = node.status(store.baseUrl)
-    val backups = if (store.token.isNotBlank()) node.backups(store.baseUrl, store.token) else emptyList()
+private fun refreshStatus(
+    state: CovalentViewModel,
+    node: CovalentNodeClient,
+    store: SecureNodeStore,
+    connection: NodeConnection,
+) {
+    val status = node.status(connection.baseUrl)
+    val backups = node.backups(connection.baseUrl, connection.token)
     state.status = status
     store.replaceBackups(backups)
     state.backups = backups
+    state.providers = node.providers(connection.baseUrl, connection.token)
     state.transfers = store.transfers()
 }
 
@@ -2311,6 +3134,7 @@ private fun reconnectNode(
     state: CovalentViewModel,
     node: CovalentNodeClient,
     store: SecureNodeStore,
+    connection: NodeConnection,
     scope: kotlinx.coroutines.CoroutineScope,
 ) {
     state.connectionHealth = ConnectionHealth.CONNECTING
@@ -2319,8 +3143,8 @@ private fun reconnectNode(
         state.connectionError = error.message ?: context.getString(R.string.error_connection_failed)
         if (shouldReturnToSetupAfterRefreshFailure(error)) state.screen = Screen.SETUP
     }) {
-        refreshStatus(state, node, store)
-        TransferExecution.reconcileAcknowledgements(store, node)
+        refreshStatus(state, node, store, connection)
+        TransferExecution.reconcileAcknowledgements(store, node, connection)
         state.connectionHealth = ConnectionHealth.READY
         state.connectionError = null
         state.lastConnectedAtUnixMs = System.currentTimeMillis()
@@ -2332,17 +3156,18 @@ private fun setLanDiscovery(
     state: CovalentViewModel,
     node: CovalentNodeClient,
     store: SecureNodeStore,
+    connection: NodeConnection,
     enabled: Boolean,
 ) {
-    val settings = node.post(store.baseUrl, store.token, "/api/v1/config/export", JSONObject())
+    val settings = node.post(connection.baseUrl, connection.token, "/api/v1/config/export", JSONObject())
     settings.put("lanDiscoveryEnabled", enabled)
     node.postNoContent(
-        store.baseUrl,
-        store.token,
+        connection.baseUrl,
+        connection.token,
         "/api/v1/config/import",
         JSONObject().put("confirmed", true).put("settings", settings),
     )
-    refreshStatus(state, node, store)
+    refreshStatus(state, node, store, connection)
     state.notice = if (enabled) {
         context.getString(R.string.lan_discovery_enabled)
     } else {

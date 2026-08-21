@@ -1,18 +1,12 @@
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
-use covalent_core::{Engine, EngineOptions};
-use covalent_node::discovery::DiscoveryController;
-use covalent_node::transport::{QuicNode, TlsIdentity};
-use covalent_node::{
-    AppState, ArchiveLimits, NodeReadyInfo, load_or_create_local_api_token, remove_node_ready_file,
-    router, validate_cleartext_api_bind, write_node_ready_file,
-};
+use covalent_node::ArchiveLimits;
+use covalent_node::runtime::{LocalApiTokenSource, NodeRuntime, NodeRuntimeConfig};
 use covalent_protocol::PlatformTier;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -91,6 +85,24 @@ struct ArchiveLimitArguments {
     archive_max_jobs: usize,
     #[arg(
         long,
+        env = "COVALENT_ARCHIVE_MAX_STAGING_BYTES",
+        default_value_t = 512_u64 << 30
+    )]
+    archive_max_staging_bytes: u64,
+    #[arg(
+        long,
+        env = "COVALENT_ARCHIVE_MAX_RETAINED_RESULT_BYTES",
+        default_value_t = 64_u64 << 30
+    )]
+    archive_max_retained_result_bytes: u64,
+    #[arg(
+        long,
+        env = "COVALENT_ARCHIVE_MAX_RETAINED_RESULTS",
+        default_value_t = 64
+    )]
+    archive_max_retained_results: usize,
+    #[arg(
+        long,
         env = "COVALENT_ARCHIVE_FREE_SPACE_RESERVE_BYTES",
         default_value_t = 512_u64 << 20
     )]
@@ -104,6 +116,9 @@ impl From<ArchiveLimitArguments> for ArchiveLimits {
             maximum_uncompressed_bytes: value.archive_max_uncompressed_bytes,
             maximum_entries: value.archive_max_entries,
             maximum_jobs: value.archive_max_jobs,
+            maximum_staging_bytes: value.archive_max_staging_bytes,
+            maximum_retained_result_bytes: value.archive_max_retained_result_bytes,
+            maximum_retained_results: value.archive_max_retained_results,
             free_space_reserve_bytes: value.archive_free_space_reserve_bytes,
         }
     }
@@ -152,6 +167,9 @@ async fn main() -> Result<()> {
             archive_max_uncompressed_bytes: 256_u64 << 30,
             archive_max_entries: 250_000,
             archive_max_jobs: 256,
+            archive_max_staging_bytes: 512_u64 << 30,
+            archive_max_retained_result_bytes: 64_u64 << 30,
+            archive_max_retained_results: 64,
             archive_free_space_reserve_bytes: 512_u64 << 20,
         },
     }) {
@@ -192,72 +210,16 @@ async fn serve(configuration: ServeConfiguration) -> Result<()> {
         ready_file,
         archive_limits,
     } = configuration;
-    std::fs::create_dir_all(&data_dir)
-        .with_context(|| format!("create data directory {}", data_dir.display()))?;
-    validate_cleartext_api_bind(listen).context("validate local API transport")?;
-    let listener = tokio::net::TcpListener::bind(listen)
-        .await
-        .with_context(|| format!("bind {listen}"))?;
-    let api_address = listener
-        .local_addr()
-        .context("inspect local API endpoint")?;
-    if !api_address.ip().is_loopback() && ready_file.is_some() {
-        bail!("an app-owned node readiness file requires a loopback API bind");
-    }
-    let mut engine_options = EngineOptions::new(&data_dir);
-    engine_options.initial_device_name = device_name;
-    engine_options.initial_lan_discovery_enabled = lan_discovery;
-    let engine = Arc::new(Engine::open(engine_options).context("open Covalent engine")?);
-    let token = load_or_create_local_api_token(data_dir.join("local-api-token"))
-        .context("load local API token")?;
-    let tls_identity =
-        TlsIdentity::load_or_create(data_dir.join("tls")).context("load QUIC identity")?;
-    let discovery_enabled = engine
-        .config()
-        .context("load persisted discovery preference")?
-        .lan_discovery_enabled;
-    let quic_node = QuicNode::bind(peer_listen, Arc::clone(&engine), &tls_identity)
-        .context("bind QUIC peer endpoint")?;
-    let peer_address = quic_node
-        .local_addr()
-        .context("inspect QUIC peer endpoint")?;
-    let discovery = Arc::new(
-        DiscoveryController::new(discovery_enabled, peer_address.port())
-            .context("start LAN discovery controller")?,
-    );
-    let state = AppState::new(Arc::clone(&engine), platform_tier, token)
-        .context("create local API state")?
-        .with_archive_limits(archive_limits)
-        .context("validate archive resource limits")?
-        .with_peer_port(peer_address.port())
-        .with_transport_certificate(tls_identity.certificate_der().to_vec())
-        .with_discovery_controller(Arc::clone(&discovery))
-        .with_provider_state(data_dir.join("provider-connections.json"))
-        .context("load remembered provider connections")?;
-    let quic_task = tokio::spawn(quic_node.run());
-    if let Some(path) = ready_file.as_deref() {
-        write_node_ready_file(
-            path,
-            &NodeReadyInfo {
-                schema_version: 1,
-                api_base_url: format!("http://{api_address}"),
-                peer_address,
-                process_id: std::process::id(),
-            },
-        )
-        .context("publish node readiness")?;
-    }
-    info!(listen = %api_address, %peer_address, data_dir = %data_dir.display(), "Covalent node ready");
-    let result = axum::serve(listener, router(state))
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("serve local API");
-    quic_task.abort();
-    discovery.set_enabled(false).context("stop LAN discovery")?;
-    if let Some(path) = ready_file.as_deref() {
-        remove_node_ready_file(path, std::process::id()).context("remove node readiness")?;
-    }
-    result
+    let mut runtime_configuration = NodeRuntimeConfig::new(data_dir, listen, peer_listen);
+    runtime_configuration.device_name = device_name;
+    runtime_configuration.lan_discovery_enabled = lan_discovery;
+    runtime_configuration.platform_tier = platform_tier;
+    runtime_configuration.archive_limits = archive_limits;
+    runtime_configuration.api_token = LocalApiTokenSource::Persisted;
+    runtime_configuration.ready_file = ready_file;
+    let runtime = NodeRuntime::start(runtime_configuration).await?;
+    shutdown_signal().await;
+    runtime.stop().await
 }
 
 async fn shutdown_signal() {

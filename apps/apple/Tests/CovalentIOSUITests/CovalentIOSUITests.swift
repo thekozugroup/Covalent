@@ -6,7 +6,8 @@ final class CovalentIOSUITests: XCTestCase {
         let app = try launchApp()
         continueAfterFailure = false
         XCTAssertTrue(app.navigationBars["Covalent"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["Apple UI Test Node"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any)["home.serviceHeader"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["Apple UI Test Node"].waitForExistence(timeout: 20))
         XCTAssertTrue(app.staticTexts["Not a full-device or continuous background backup"].exists)
 
         app.tabBars.buttons["Backups"].tap()
@@ -19,7 +20,14 @@ final class CovalentIOSUITests: XCTestCase {
 
         app.tabBars.buttons["Devices"].tap()
         XCTAssertTrue(app.navigationBars["Devices"].waitForExistence(timeout: 3))
-        app.buttons["devices.pair"].tap()
+        let advanced = app.buttons["devices.advancedRecovery"]
+        scrollTo(advanced, in: app)
+        XCTAssertTrue(advanced.exists)
+        advanced.tap()
+        let offlinePairing = app.buttons["devices.offlinePairing"]
+        scrollTo(offlinePairing, in: app)
+        XCTAssertTrue(offlinePairing.exists)
+        offlinePairing.tap()
         XCTAssertTrue(app.navigationBars["Secure Pairing"].waitForExistence(timeout: 3))
         XCTAssertTrue(
             app.staticTexts
@@ -42,7 +50,8 @@ final class CovalentIOSUITests: XCTestCase {
     func testHomePassesSystemAccessibilityAudit() throws {
         let app = try launchApp()
         continueAfterFailure = false
-        XCTAssertTrue(app.staticTexts["Apple UI Test Node"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any)["home.serviceHeader"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["Apple UI Test Node"].waitForExistence(timeout: 20))
         try app.performAccessibilityAudit { issue in
             let elementDescription = issue.element?.debugDescription ?? "unknown element"
             print(

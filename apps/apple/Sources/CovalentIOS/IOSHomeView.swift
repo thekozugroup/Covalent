@@ -57,6 +57,8 @@ struct IOSHomeView: View {
         }
         .padding(16)
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("home.serviceHeader")
     }
 
     private var connectionCallout: some View {

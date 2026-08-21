@@ -118,9 +118,22 @@ private struct IOSBackupDetailView: View {
                                 .foregroundStyle(.secondary)
                         } else {
                             ForEach(snapshot.selectedProviderIds, id: \.self) { providerId in
-                                Label(providerName(providerId), systemImage: "server.rack")
+                                HStack {
+                                    Label(providerName(providerId), systemImage: "server.rack")
+                                    Spacer()
+                                    Label(providerStatus(providerId), systemImage: model.providers.contains(where: { $0.peerId == providerId }) ? "checkmark.circle.fill" : "bolt.slash")
+                                        .font(.caption)
+                                        .foregroundStyle(model.providers.contains(where: { $0.peerId == providerId }) ? Color.green : Color.orange)
+                                }
                             }
                         }
+                        Button("Change Replicas for Next Snapshot…") {
+                            model.requestNewBackup(existingBackupId: snapshot.backupId)
+                        }
+                        .disabled(model.activeTask != nil)
+                        Text("Changes apply only to the next snapshot. Existing snapshots retain their original encrypted copies.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
 
                     if snapshot.degradedFailures > 0 || snapshot.integrity == .corrupt {
@@ -183,6 +196,10 @@ private struct IOSBackupDetailView: View {
         model.providers.first(where: { $0.peerId == id })?.address ?? "Offline selected provider"
     }
 
+    private func providerStatus(_ id: UUID) -> String {
+        model.providers.contains(where: { $0.peerId == id }) ? "Connected" : "Offline"
+    }
+
     private func verify(_ snapshot: SnapshotRecord, repair: Bool = false) {
         Task {
             _ = await IOSBackgroundExecution.perform(
@@ -201,6 +218,8 @@ struct IOSRestoreSetupView: View {
     @State private var destinationGrantId: UUID?
     @State private var isChoosingFolder = false
     @State private var isPreparing = false
+    @State private var conflictPolicy: ConflictPolicy = .fail
+    @State private var showReplacePreviewConfirmation = false
 
     var body: some View {
         NavigationStack {
@@ -219,9 +238,20 @@ struct IOSRestoreSetupView: View {
                     Text("The node creates a signed, no-write preview before any restore begins.")
                 }
 
+                Section("If a file already exists") {
+                    Picker("Action", selection: $conflictPolicy) {
+                        ForEach(ConflictPolicy.allCases) { policy in
+                            Text(policy.label).tag(policy)
+                        }
+                    }
+                    Text(conflictPolicy.safetyDetail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section {
-                    Label("Choose an empty folder", systemImage: "folder.badge.plus")
-                    Text("An empty destination keeps every streamed write identical to the node's signed preview.")
+                    Label("Signed destination inventory", systemImage: "checkmark.shield")
+                    Text("Covalent inventories this folder before preview, then inventories it again immediately before writing. Any change stops the restore.")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -232,7 +262,7 @@ struct IOSRestoreSetupView: View {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Preview") { preparePreview() }
+                    Button("Preview") { requestPreview() }
                         .disabled(destinationGrantId == nil || isPreparing)
                 }
             }
@@ -254,8 +284,26 @@ struct IOSRestoreSetupView: View {
                     )
                 }
             }
+            .confirmationDialog(
+                "Preview replacement of existing files?",
+                isPresented: $showReplacePreviewConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Preview Replacements", role: .destructive) { preparePreview() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("The preview writes nothing. If you continue later, only files listed as Replace in the signed plan can be overwritten.")
+            }
         }
         .onAppear { destinationGrantId = model.restoreGrants.first?.id }
+    }
+
+    private func requestPreview() {
+        if conflictPolicy.isDestructive {
+            showReplacePreviewConfirmation = true
+        } else {
+            preparePreview()
+        }
     }
 
     private func preparePreview() {
@@ -265,7 +313,7 @@ struct IOSRestoreSetupView: View {
             let plan = await model.previewRestore(
                 record: snapshot,
                 destinationGrantId: destinationGrantId,
-                conflictPolicy: .fail
+                conflictPolicy: conflictPolicy
             )
             if plan != nil { dismiss() }
             isPreparing = false
@@ -277,8 +325,8 @@ struct IOSRestorePreviewView: View {
     @ObservedObject var model: CovalentAppModel
     let context: RestorePreviewContext
     @Environment(\.dismiss) private var dismiss
-    @State private var confirmReplace = false
     @State private var isRestoring = false
+    @State private var showReplaceExecutionConfirmation = false
 
     var body: some View {
         NavigationStack {
@@ -287,12 +335,13 @@ struct IOSRestorePreviewView: View {
                     Label("No files have been written", systemImage: "checkmark.shield")
                         .foregroundStyle(.green)
                     LabeledContent("Items", value: context.plan.entries.count.formatted())
+                    LabeledContent("Outcome", value: outcomeSummary)
                     LabeledContent("Conflict policy", value: context.plan.conflictPolicy.label)
                     LabeledContent("Authorized folder", value: context.destinationDisplayName)
                 } header: {
                     Text("Signed plan")
                 } footer: {
-                    Text("The node signature binds the exact content and actions. The local folder permission confines extraction to the authorized empty folder.")
+                    Text("The node signature binds the exact content and actions. Covalent re-inventories the authorized folder immediately before writing and stops if anything changed.")
                 }
 
                 Section("Planned changes") {
@@ -327,10 +376,7 @@ struct IOSRestorePreviewView: View {
                     .disabled(isRestoring)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(context.plan.conflictPolicy.isDestructive ? "Replace & Restore" : "Restore") {
-                        if context.plan.conflictPolicy.isDestructive { confirmReplace = true }
-                        else { restore() }
-                    }
+                    Button("Restore") { requestRestore() }
                     .disabled(isRestoring || model.activeTask != nil)
                     .accessibilityIdentifier("restore.execute")
                 }
@@ -338,12 +384,24 @@ struct IOSRestorePreviewView: View {
             .overlay {
                 if isRestoring { ProgressView("Restoring files…").padding().background(.background, in: RoundedRectangle(cornerRadius: 12)) }
             }
-            .alert("Replace existing files?", isPresented: $confirmReplace) {
+            .confirmationDialog(
+                "Replace existing files?",
+                isPresented: $showReplaceExecutionConfirmation,
+                titleVisibility: .visible
+            ) {
                 Button("Replace and Restore", role: .destructive) { restore() }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Only items marked Replace in this signed plan can be overwritten under the authorized folder.")
+                Text("Only destinations marked Replace in this signed plan can be overwritten. Covalent stops if the folder changed since preview.")
             }
+        }
+    }
+
+    private func requestRestore() {
+        if context.plan.conflictPolicy.isDestructive {
+            showReplaceExecutionConfirmation = true
+        } else {
+            restore()
         }
     }
 
@@ -366,10 +424,18 @@ struct IOSRestorePreviewView: View {
         case .createFile: "Create file"
         case .createDirectory: "Create folder"
         case .keepDirectory: "Keep folder"
-        case .skipFile: "Skip file"
-        case .replaceFile: "Replace file"
+        case .skipFile: "Skip existing"
+        case .replaceFile: "Replace existing"
         case .renameFile: "Keep both"
         }
+    }
+
+    private var outcomeSummary: String {
+        let create = context.plan.entries.count { $0.action == .createFile || $0.action == .createDirectory }
+        let skip = context.plan.entries.count { $0.action == .skipFile }
+        let keepBoth = context.plan.entries.count { $0.action == .renameFile }
+        let replace = context.plan.entries.count { $0.action == .replaceFile }
+        return "\(create) create · \(skip) skip · \(keepBoth) keep both · \(replace) replace"
     }
 }
 

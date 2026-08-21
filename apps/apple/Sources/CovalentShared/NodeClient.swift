@@ -1,3 +1,5 @@
+import CryptoKit
+import Darwin
 import Foundation
 import Security
 
@@ -44,10 +46,12 @@ public actor NodeClient {
     private let trustDelegate: PinnedServerTrustDelegate?
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
+    private let transferDirectory: URL
 
     public init(
         configuration: NodeConnectionConfiguration = .localDefault,
-        session: URLSession? = nil
+        session: URLSession? = nil,
+        transferDirectory: URL? = nil
     ) {
         self.configuration = configuration
         if let session {
@@ -70,6 +74,7 @@ public actor NodeClient {
         encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         self.encoder = encoder
+        self.transferDirectory = transferDirectory ?? Self.defaultTransferDirectory()
     }
 
     public func status() async throws -> NodeStatus {
@@ -86,6 +91,43 @@ public actor NodeClient {
 
     public func discoveryCandidates() async throws -> [DiscoveryCandidate] {
         try await send(path: "api/v1/discovery")
+    }
+
+    public func startNetworkPairing(candidateAddress: String) async throws -> NetworkPairing {
+        try await send(
+            path: "api/v1/pair/network/start",
+            method: "POST",
+            body: NetworkPairingStartRequest(candidateAddress: candidateAddress)
+        )
+    }
+
+    public func pendingNetworkPairings() async throws -> [NetworkPairing] {
+        try await send(path: "api/v1/pair/network/pending")
+    }
+
+    public func confirmNetworkPairing(
+        pairingId: String,
+        displayedCode: String
+    ) async throws -> NetworkPairing {
+        try validatePairingIdentifier(pairingId)
+        return try await send(
+            path: "api/v1/pair/network/\(pairingId)/confirm",
+            method: "POST",
+            body: NetworkPairingConfirmRequest(displayedCode: displayedCode)
+        )
+    }
+
+    public func cancelNetworkPairing(pairingId: String) async throws {
+        try validatePairingIdentifier(pairingId)
+        _ = try await execute(
+            path: "api/v1/pair/network/\(pairingId)",
+            queryItems: [],
+            method: "DELETE",
+            bodyData: nil,
+            authenticated: true,
+            timeout: nil,
+            expectedStatusCodes: [204]
+        )
     }
 
     public func exportSettings() async throws -> ExportedDeviceSettings {
@@ -157,11 +199,11 @@ public actor NodeClient {
         try await send(path: "api/v1/backups")
     }
 
-    public func connectProvider(peerId: UUID, address: String, certificateDer: String) async throws -> ProviderConnection {
+    public func connectProvider(using transport: PeerTransport) async throws -> ProviderConnection {
         try await send(
             path: "api/v1/providers/connect",
             method: "POST",
-            body: ConnectProviderRequest(peerId: peerId, address: address, certificateDer: certificateDer)
+            body: ConnectProviderRequest(peerTransport: transport)
         )
     }
 
@@ -184,35 +226,69 @@ public actor NodeClient {
         guard metadata.protocolVersion == covalentProtocolVersion else {
             throw NodeClientError.unsupportedProtocol(metadata.protocolVersion)
         }
-        let archiveURL = try await Task.detached(priority: .userInitiated) {
-            try AppleArchiveTransfer.makeBackupArchive(sourceURL: sourceURL)
-        }.value
-        defer { try? FileManager.default.removeItem(at: archiveURL) }
         let metadataData = try encoder.encode(metadata)
         guard metadataData.count <= 32 * 1_024 else {
             throw NodeClientError.invalidPayload("Archive metadata exceeds 32 KiB.")
         }
-        var request = try authenticatedRequest(
-            path: "api/v1/backups/archive",
-            method: "POST",
-            accept: "application/json"
+        var upload = try await prepareArchiveUpload(
+            sourceURL: sourceURL,
+            metadata: metadata,
+            metadataData: metadataData
         )
-        request.timeoutInterval = 86_400
-        request.setValue(AppleArchiveTransfer.backupContentType, forHTTPHeaderField: "Content-Type")
-        request.setValue(metadataData.base64URLEncodedString, forHTTPHeaderField: AppleArchiveTransfer.metadataHeader)
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await session.upload(for: request, fromFile: archiveURL)
-        } catch {
-            throw NodeClientError.transport(String(describing: error))
+        for _ in 0..<8 {
+            var request = try authenticatedRequest(
+                path: "api/v1/backups/archive",
+                method: "POST",
+                accept: "application/json"
+            )
+            request.timeoutInterval = 86_400
+            request.setValue(AppleArchiveTransfer.backupContentType, forHTTPHeaderField: "Content-Type")
+            request.setValue(metadataData.base64URLEncodedString, forHTTPHeaderField: AppleArchiveTransfer.metadataHeader)
+            request.setValue(String(upload.offset), forHTTPHeaderField: AppleArchiveTransfer.uploadOffsetHeader)
+            request.setValue(String(upload.length), forHTTPHeaderField: AppleArchiveTransfer.uploadLengthHeader)
+            request.setValue(upload.digest, forHTTPHeaderField: AppleArchiveTransfer.uploadDigestHeader)
+            request.setValue(String(upload.length - upload.offset), forHTTPHeaderField: "Content-Length")
+            request.httpBodyStream = try UploadSliceInputStream(
+                url: URL(fileURLWithPath: upload.archivePath),
+                offset: upload.offset,
+                length: upload.length - upload.offset
+            )
+            let data: Data
+            let response: URLResponse
+            do {
+                (data, response) = try await session.data(for: request)
+            } catch {
+                throw NodeClientError.transport(String(describing: error))
+            }
+            let http = try requireHTTPResponse(response)
+            if http.statusCode == 409,
+               let authoritative = http.value(forHTTPHeaderField: AppleArchiveTransfer.uploadOffsetHeader)
+                    .flatMap(UInt64.init),
+               authoritative <= upload.length
+            {
+                let payload = try? decoder.decode(APIErrorPayload.self, from: data)
+                if let code = payload?.code,
+                   payload?.retryable == true,
+                   ["upload_offset_mismatch", "upload_incomplete"].contains(code)
+                {
+                    guard authoritative != upload.offset || upload.offset != upload.length else {
+                        try validateHTTPResponse(data: data, response: http, expectedStatusCodes: [200])
+                        throw NodeClientError.invalidResponse
+                    }
+                    upload.offset = authoritative
+                    try persistArchiveUpload(upload)
+                    continue
+                }
+            }
+            try validateHTTPResponse(data: data, response: http, expectedStatusCodes: [200])
+            guard http.value(forHTTPHeaderField: AppleArchiveTransfer.jobAcknowledgementRequiredHeader) == "true" else {
+                throw NodeClientError.invalidResponse
+            }
+            upload.offset = upload.length
+            try persistArchiveUpload(upload)
+            return try decode(BackupResponse.self, from: data)
         }
-        let http = try requireHTTPResponse(response)
-        try validateHTTPResponse(data: data, response: http, expectedStatusCodes: [200])
-        guard http.value(forHTTPHeaderField: AppleArchiveTransfer.jobAcknowledgementRequiredHeader) == "true" else {
-            throw NodeClientError.invalidResponse
-        }
-        return try decode(BackupResponse.self, from: data)
+        throw NodeClientError.transport("Archive upload did not converge on the durable server offset.")
     }
 
     public func verifySnapshot(_ request: SnapshotRequest) async throws -> VerifyResponse {
@@ -231,15 +307,18 @@ public actor NodeClient {
         backupId: UUID,
         snapshotId: String,
         conflictPolicy: ConflictPolicy,
-        jobId: String
+        jobId: String,
+        targetURL: URL
     ) async throws -> RestorePlan {
+        let inventory = try await uploadTargetInventory(targetURL: targetURL, jobId: jobId)
         let reference = try await previewRestoreReference(
             path: "api/v1/restores/archive/preview",
             body: RestoreArchivePreviewRequest(
                 backupId: backupId,
                 snapshotId: snapshotId,
                 conflictPolicy: conflictPolicy,
-                jobId: jobId
+                jobId: jobId,
+                targetInventoryId: inventory.reference.inventoryId
             )
         )
         return try await materializeRestorePlan(reference)
@@ -261,9 +340,20 @@ public actor NodeClient {
     }
 
     public func executeArchiveRestore(_ plan: RestorePlan, targetURL: URL) async throws -> RestoreResponse {
-        try await Task.detached(priority: .userInitiated) {
-            try AppleArchiveTransfer.requireEmptyDirectory(targetURL)
-        }.value
+        let freshInventory = try await uploadTargetInventory(targetURL: targetURL, jobId: plan.jobId)
+        let reboundReference = try await previewRestoreReference(
+            path: "api/v1/restores/archive/preview",
+            body: RestoreArchivePreviewRequest(
+                backupId: plan.backupId,
+                snapshotId: plan.snapshotId,
+                conflictPolicy: plan.conflictPolicy,
+                jobId: plan.jobId,
+                targetInventoryId: freshInventory.reference.inventoryId
+            )
+        )
+        guard reboundReference == plan.reference else {
+            throw NodeClientError.invalidPayload("Restore target changed after signed preview.")
+        }
         let body = try encoder.encode(RestoreExecuteRequest(planId: plan.planId))
         var request = try authenticatedRequest(
             path: "api/v1/restores/archive/execute",
@@ -305,17 +395,111 @@ public actor NodeClient {
         }.value
         defer { try? FileManager.default.removeItem(at: archiveURL) }
         try await Task.detached(priority: .userInitiated) {
-            try AppleArchiveTransfer.extractRestoreArchive(archiveURL, to: targetURL, plan: plan)
+            try AppleArchiveTransfer.extractRestoreArchive(
+                archiveURL,
+                to: targetURL,
+                plan: plan,
+                expectedInventory: freshInventory.draft
+            )
         }.value
         return result
     }
 
+    private func uploadTargetInventory(
+        targetURL: URL,
+        jobId: String
+    ) async throws -> UploadedTargetInventory {
+        let draft = try await Task.detached(priority: .userInitiated) {
+            try AppleArchiveTransfer.makeTargetInventory(targetURL: targetURL)
+        }.value
+        let started: TargetInventoryUploadResponse = try await send(
+            path: "api/v1/restores/archive/inventories",
+            method: "POST",
+            body: BeginTargetInventoryRequest(
+                jobId: jobId,
+                schemaVersion: 1,
+                rootIdentity: draft.rootIdentity,
+                entryCount: UInt64(draft.entries.count),
+                totalBytes: draft.totalBytes
+            )
+        )
+        var offset = 0
+        let pageSize = 5_000
+        while offset < draft.entries.count {
+            let end = min(offset + pageSize, draft.entries.count)
+            let entries = Array(draft.entries[offset..<end])
+            let response: TargetInventoryUploadResponse = try await send(
+                path: "api/v1/restores/archive/inventories/\(started.inventoryId)/pages",
+                method: "POST",
+                body: TargetInventoryPageRequest(
+                    jobId: jobId,
+                    offset: UInt64(offset),
+                    pageDigest: Self.targetInventoryPageDigest(entries),
+                    entries: entries
+                )
+            )
+            guard response.inventoryId == started.inventoryId,
+                  response.jobId == jobId,
+                  response.nextOffset == UInt64(end)
+            else { throw NodeClientError.invalidResponse }
+            offset = end
+        }
+        let finalized: TargetInventoryReference = try await send(
+            path: "api/v1/restores/archive/inventories/\(started.inventoryId)/finalize",
+            method: "POST",
+            body: FinalizeTargetInventoryRequest(
+                jobId: jobId,
+                entryCount: UInt64(draft.entries.count),
+                totalBytes: draft.totalBytes,
+                inventoryDigest: ""
+            )
+        )
+        guard finalized.inventoryId == started.inventoryId,
+              finalized.jobId == jobId,
+              finalized.rootIdentity == draft.rootIdentity,
+              finalized.entryCount == UInt64(draft.entries.count),
+              finalized.totalBytes == draft.totalBytes,
+              finalized.inventoryDigest.utf8.count == 64
+        else { throw NodeClientError.invalidResponse }
+        return UploadedTargetInventory(reference: finalized, draft: draft)
+    }
+
+    private static func targetInventoryPageDigest(_ entries: [TargetInventoryEntry]) -> String {
+        var digest = SHA256()
+        digest.update(data: Data("covalent/target-inventory-page/v1".utf8))
+        digest.update(data: bigEndian(UInt64(entries.count)))
+        for entry in entries {
+            let path = Data(entry.path.utf8)
+            digest.update(data: bigEndian(UInt64(path.count)))
+            digest.update(data: path)
+            digest.update(data: Data([entry.kind == .file ? 1 : 2]))
+            digest.update(data: bigEndian(entry.length))
+            if let modified = entry.modifiedAtUnixMs {
+                digest.update(data: Data([1]))
+                digest.update(data: bigEndian(modified))
+            } else {
+                digest.update(data: Data([0]))
+            }
+            let identity = Data(entry.identityToken.utf8)
+            digest.update(data: bigEndian(UInt64(identity.count)))
+            digest.update(data: identity)
+        }
+        return digest.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func bigEndian(_ value: UInt64) -> Data {
+        var value = value.bigEndian
+        return withUnsafeBytes(of: &value) { Data($0) }
+    }
+
     public func acknowledgeJob(jobId: String) async throws {
         try await sendNoContent(path: "api/v1/jobs/acknowledge", body: JobReferenceRequest(jobId: jobId))
+        try removeArchiveUpload(jobId: jobId)
     }
 
     public func discardJob(jobId: String) async throws {
         try await sendNoContent(path: "api/v1/jobs/discard", body: JobReferenceRequest(jobId: jobId))
+        try removeArchiveUpload(jobId: jobId)
     }
 
     public func controlJob(jobId: String, action: JobAction) async throws -> JobControlResponse {
@@ -432,6 +616,122 @@ public actor NodeClient {
         )
     }
 
+    private func prepareArchiveUpload(
+        sourceURL: URL,
+        metadata: ArchiveBackupMetadata,
+        metadataData: Data
+    ) async throws -> DurableArchiveUpload {
+        try Self.prepareTransferDirectory(transferDirectory)
+        let recordURL = archiveUploadRecordURL(jobId: metadata.jobId)
+        let metadataDigest = Self.sha256Hex(metadataData)
+        if FileManager.default.fileExists(atPath: recordURL.path) {
+            let record = try decoder.decode(
+                DurableArchiveUpload.self,
+                from: Data(contentsOf: recordURL, options: [.mappedIfSafe])
+            )
+            guard record.schemaVersion == 1,
+                  record.jobId == metadata.jobId,
+                  record.metadataDigest == metadataDigest,
+                  record.offset <= record.length
+            else {
+                throw NodeClientError.invalidPayload("Durable archive upload identity is invalid.")
+            }
+            let identity = try await Task.detached(priority: .userInitiated) {
+                try AppleArchiveTransfer.uploadIdentity(for: URL(fileURLWithPath: record.archivePath))
+            }.value
+            guard identity.length == record.length, identity.digest == record.digest else {
+                throw NodeClientError.invalidPayload("Durable archive content changed after interruption.")
+            }
+            return record
+        }
+        let temporary = try await Task.detached(priority: .userInitiated) {
+            try AppleArchiveTransfer.makeBackupArchive(sourceURL: sourceURL)
+        }.value
+        let identity = try await Task.detached(priority: .userInitiated) {
+            try AppleArchiveTransfer.uploadIdentity(for: temporary)
+        }.value
+        let archiveURL = transferDirectory.appending(
+            path: "upload-\(Self.jobToken(metadata.jobId)).zip",
+            directoryHint: .notDirectory
+        )
+        do {
+            try FileManager.default.moveItem(at: temporary, to: archiveURL)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: archiveURL.path)
+        } catch {
+            try? FileManager.default.removeItem(at: temporary)
+            throw error
+        }
+        let record = DurableArchiveUpload(
+            schemaVersion: 1,
+            jobId: metadata.jobId,
+            metadataDigest: metadataDigest,
+            archivePath: archiveURL.path,
+            length: identity.length,
+            digest: identity.digest,
+            offset: 0
+        )
+        try persistArchiveUpload(record)
+        return record
+    }
+
+    private func persistArchiveUpload(_ upload: DurableArchiveUpload) throws {
+        try Self.prepareTransferDirectory(transferDirectory)
+        let data = try encoder.encode(upload)
+        let recordURL = archiveUploadRecordURL(jobId: upload.jobId)
+        #if os(iOS)
+        let writeOptions: Data.WritingOptions = [.atomic, .completeFileProtection]
+        #else
+        let writeOptions: Data.WritingOptions = [.atomic]
+        #endif
+        try data.write(to: recordURL, options: writeOptions)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: recordURL.path)
+    }
+
+    private func removeArchiveUpload(jobId: String) throws {
+        let recordURL = archiveUploadRecordURL(jobId: jobId)
+        guard FileManager.default.fileExists(atPath: recordURL.path) else { return }
+        let data = try Data(contentsOf: recordURL, options: [.mappedIfSafe])
+        let upload = try decoder.decode(DurableArchiveUpload.self, from: data)
+        guard upload.jobId == jobId,
+              URL(fileURLWithPath: upload.archivePath).deletingLastPathComponent().standardizedFileURL
+                == transferDirectory.standardizedFileURL
+        else {
+            throw NodeClientError.invalidPayload("Durable archive cleanup identity is invalid.")
+        }
+        try? FileManager.default.removeItem(atPath: upload.archivePath)
+        try FileManager.default.removeItem(at: recordURL)
+    }
+
+    private func archiveUploadRecordURL(jobId: String) -> URL {
+        transferDirectory.appending(
+            path: "upload-\(Self.jobToken(jobId)).json",
+            directoryHint: .notDirectory
+        )
+    }
+
+    private static func defaultTransferDirectory() -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return base.appending(path: "Covalent/Transfers", directoryHint: .isDirectory)
+    }
+
+    private static func prepareTransferDirectory(_ directory: URL) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        var mutable = directory
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? mutable.setResourceValues(values)
+    }
+
+    private static func jobToken(_ jobId: String) -> String {
+        sha256Hex(Data(jobId.utf8))
+    }
+
+    private static func sha256Hex(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
     private func send<Response: Decodable & Sendable>(
         path: String,
         queryItems: [URLQueryItem],
@@ -541,6 +841,15 @@ public actor NodeClient {
         return result
     }
 
+    private func validatePairingIdentifier(_ pairingId: String) throws {
+        guard !pairingId.isEmpty,
+              pairingId.utf8.count <= 128,
+              pairingId.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") })
+        else {
+            throw NodeClientError.invalidPayload("Invalid network pairing identifier")
+        }
+    }
+
     private func requireHTTPResponse(_ response: URLResponse) throws -> HTTPURLResponse {
         guard let response = response as? HTTPURLResponse else { throw NodeClientError.invalidResponse }
         return response
@@ -632,11 +941,89 @@ private struct PairInvitationRequest: Codable, Sendable {
     let endpoints: [String]
 }
 
+private struct NetworkPairingStartRequest: Codable, Sendable {
+    let candidateAddress: String
+}
+
+private struct NetworkPairingConfirmRequest: Codable, Sendable {
+    let displayedCode: String
+}
+
 private struct PairAcceptRequest: Codable, Sendable {
     let invitation: PairingInvitation
     let responderName: String
     let responderRoles: Set<PeerRole>
     let inviterRoles: Set<PeerRole>
+}
+
+private struct DurableArchiveUpload: Codable, Sendable {
+    let schemaVersion: UInt16
+    let jobId: String
+    let metadataDigest: String
+    let archivePath: String
+    let length: UInt64
+    let digest: String
+    var offset: UInt64
+}
+
+private final class UploadSliceInputStream: InputStream, @unchecked Sendable {
+    private let descriptor: Int32
+    private var remaining: UInt64
+    private var currentStatus: Stream.Status = .notOpen
+    private var currentError: Error?
+
+    init(url: URL, offset: UInt64, length: UInt64) throws {
+        guard offset <= UInt64(Int64.max), length <= UInt64(Int64.max) else {
+            throw NodeClientError.invalidPayload("Archive upload offset exceeds platform limits.")
+        }
+        let descriptor = Darwin.open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else {
+            throw NodeClientError.invalidPayload("Durable archive could not be opened safely.")
+        }
+        guard lseek(descriptor, off_t(offset), SEEK_SET) == off_t(offset) else {
+            Darwin.close(descriptor)
+            throw NodeClientError.invalidPayload("Durable archive offset is unavailable.")
+        }
+        self.descriptor = descriptor
+        self.remaining = length
+        super.init(data: Data())
+    }
+
+    deinit { Darwin.close(descriptor) }
+
+    override func open() {
+        currentStatus = remaining == 0 ? .atEnd : .open
+    }
+
+    override func close() {
+        currentStatus = .closed
+    }
+
+    override var streamStatus: Stream.Status { currentStatus }
+    override var streamError: Error? { currentError }
+    override var hasBytesAvailable: Bool { currentStatus == .open && remaining > 0 }
+
+    override func read(_ buffer: UnsafeMutablePointer<UInt8>, maxLength len: Int) -> Int {
+        guard currentStatus == .open, remaining > 0 else { return 0 }
+        let requested = min(len, Int(min(remaining, UInt64(Int.max))))
+        while true {
+            let count = Darwin.read(descriptor, buffer, requested)
+            if count < 0, errno == EINTR { continue }
+            if count < 0 {
+                currentError = NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                currentStatus = .error
+                return -1
+            }
+            if count == 0 {
+                currentError = NodeClientError.invalidPayload("Durable archive ended before its declared length.")
+                currentStatus = .error
+                return -1
+            }
+            remaining -= UInt64(count)
+            if remaining == 0 { currentStatus = .atEnd }
+            return count
+        }
+    }
 }
 
 private struct PairConfirmRequest: Codable, Sendable {
@@ -653,9 +1040,7 @@ private struct PeerRequest: Codable, Sendable {
 }
 
 private struct ConnectProviderRequest: Codable, Sendable {
-    let peerId: UUID
-    let address: String
-    let certificateDer: String
+    let peerTransport: PeerTransport
 }
 
 private struct RestoreExecuteRequest: Codable, Sendable {
@@ -667,6 +1052,50 @@ private struct RestoreArchivePreviewRequest: Codable, Sendable {
     let snapshotId: String
     let conflictPolicy: ConflictPolicy
     let jobId: String
+    let targetInventoryId: String
+}
+
+private struct BeginTargetInventoryRequest: Codable, Sendable {
+    let jobId: String
+    let schemaVersion: UInt16
+    let rootIdentity: String
+    let entryCount: UInt64
+    let totalBytes: UInt64
+}
+
+private struct TargetInventoryPageRequest: Codable, Sendable {
+    let jobId: String
+    let offset: UInt64
+    let pageDigest: String
+    let entries: [TargetInventoryEntry]
+}
+
+private struct FinalizeTargetInventoryRequest: Codable, Sendable {
+    let jobId: String
+    let entryCount: UInt64
+    let totalBytes: UInt64
+    let inventoryDigest: String
+}
+
+private struct TargetInventoryUploadResponse: Codable, Sendable {
+    let inventoryId: String
+    let jobId: String
+    let nextOffset: UInt64
+}
+
+private struct TargetInventoryReference: Codable, Sendable {
+    let inventoryId: String
+    let jobId: String
+    let schemaVersion: UInt16
+    let rootIdentity: String
+    let entryCount: UInt64
+    let totalBytes: UInt64
+    let inventoryDigest: String
+}
+
+private struct UploadedTargetInventory: Sendable {
+    let reference: TargetInventoryReference
+    let draft: AppleArchiveTransfer.TargetInventoryDraft
 }
 
 private struct JobControlRequest: Codable, Sendable {
@@ -691,6 +1120,7 @@ private extension RestorePlanPage {
             && signerDeviceId == reference.signerDeviceId
             && signature == reference.signature
             && totalEntries == reference.totalEntries
+            && targetInventory == reference.targetInventory
     }
 }
 

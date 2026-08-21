@@ -204,6 +204,43 @@ public struct PeerGrant: Codable, Equatable, Identifiable, Sendable {
 public struct PairingConfirmation: Codable, Equatable, Sendable {
     public let inviterGrant: PeerGrant
     public let responderGrant: PeerGrant
+    /// Caller-relative transport identity covered by the mutually signed pairing transcript.
+    /// Older protocol-1 fixtures omit this additive field; the normal provider path requires it.
+    public let peerTransport: PeerTransport?
+}
+
+public struct PeerTransport: Codable, Equatable, Sendable {
+    public let peerId: UUID
+    public let displayName: String
+    public let address: String
+    public let certificateDer: String
+    public let certificateFingerprint: String
+}
+
+public enum NetworkPairingDirection: String, Codable, Sendable {
+    case incoming
+    case outgoing
+}
+
+public enum NetworkPairingState: String, Codable, Sendable {
+    case awaitingLocalConfirmation = "awaiting_local_confirmation"
+    case awaitingPeerConfirmation = "awaiting_peer_confirmation"
+    case complete
+    case failed
+}
+
+public struct NetworkPairing: Codable, Equatable, Identifiable, Sendable {
+    public let pairingId: String
+    public let direction: NetworkPairingDirection
+    public let peerName: String
+    public let authenticationString: String
+    public let expiresAtUnixMs: UInt64
+    public let state: NetworkPairingState
+    public let failureCode: String?
+    public let failureMessage: String?
+    public let peerTransport: PeerTransport?
+
+    public var id: String { pairingId }
 }
 
 public struct ProviderConnection: Codable, Equatable, Identifiable, Sendable {
@@ -323,6 +360,15 @@ public enum ConflictPolicy: String, Codable, CaseIterable, Identifiable, Sendabl
     }
 
     public var isDestructive: Bool { self == .replace }
+
+    public var safetyDetail: String {
+        switch self {
+        case .fail: "Safest. Nothing is written if any destination file already exists."
+        case .skip: "Existing files stay unchanged; only missing items are restored."
+        case .replace: "Existing files in the signed plan can be overwritten after confirmation."
+        case .rename: "Existing files stay unchanged and restored copies receive a new name."
+        }
+    }
 }
 
 public struct RestorePreviewRequest: Codable, Equatable, Sendable {
@@ -356,6 +402,23 @@ public struct RestorePreviewEntry: Codable, Equatable, Identifiable, Sendable {
     public var id: String { "\(destinationPath):\(action.rawValue)" }
 }
 
+public struct TargetInventoryEntry: Codable, Equatable, Sendable {
+    public let path: String
+    public let kind: RestoreEntryKind
+    public let length: UInt64
+    public let modifiedAtUnixMs: UInt64?
+    public let identityToken: String
+}
+
+public struct TargetInventoryBinding: Codable, Equatable, Sendable {
+    public let schemaVersion: UInt16
+    public let rootIdentity: String
+    public let entryCount: UInt64
+    public let totalBytes: UInt64
+    public let inventoryDigest: String
+    public let actionsDigest: String
+}
+
 public struct RestorePlanReference: Codable, Equatable, Sendable {
     public let planId: String
     public let backupId: UUID
@@ -368,6 +431,7 @@ public struct RestorePlanReference: Codable, Equatable, Sendable {
     public let signerDeviceId: UUID
     public let signature: String
     public let totalEntries: Int
+    public let targetInventory: TargetInventoryBinding?
 }
 
 public struct RestorePlanPage: Codable, Equatable, Sendable {
@@ -385,6 +449,7 @@ public struct RestorePlanPage: Codable, Equatable, Sendable {
     public let totalEntries: Int
     public let entries: [RestorePreviewEntry]
     public let nextCursor: String?
+    public let targetInventory: TargetInventoryBinding?
 }
 
 public struct RestorePlan: Equatable, Sendable {
@@ -402,6 +467,7 @@ public struct RestorePlan: Equatable, Sendable {
     public var signerDeviceId: UUID { reference.signerDeviceId }
     public var signature: String { reference.signature }
     public var totalEntries: Int { reference.totalEntries }
+    public var targetInventory: TargetInventoryBinding? { reference.targetInventory }
 
     public init(reference: RestorePlanReference, entries: [RestorePreviewEntry]) {
         self.reference = reference

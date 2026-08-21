@@ -1,11 +1,12 @@
 #!/bin/sh
 set -eu
 
-repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 node_binary="$repo_root/target/release/covalent-node"
 cli_binary="$repo_root/target/release/covalent"
 image=""
 image_only=false
+platform=""
 
 if [ "${1:-}" = "--image-only" ]; then
   image_only=true
@@ -16,6 +17,16 @@ if [ "${1:-}" = "--image-only" ]; then
   fi
 else
   image="${1:-}"
+fi
+
+if [ "${3:-}" = "--platform" ]; then
+  platform="${4:-}"
+elif [ "${2:-}" = "--platform" ]; then
+  platform="${3:-}"
+fi
+if [ -n "$platform" ] && [ -z "$image" ]; then
+  echo "--platform requires a Docker image reference" >&2
+  exit 2
 fi
 
 max_node_bytes=$((16 * 1024 * 1024))
@@ -55,5 +66,15 @@ if [ -n "$image" ]; then
     echo "container image exceeds budget: $image_size bytes > $max_image_bytes bytes" >&2
     exit 1
   fi
-  echo "container image size: $image_size bytes (budget $max_image_bytes)"
+  if [ -n "$platform" ]; then
+    expected_arch=${platform#linux/}
+    actual_arch=$(docker image inspect "$image" --format '{{.Architecture}}')
+    if [ "$actual_arch" != "$expected_arch" ]; then
+      echo "container image architecture mismatch: expected $expected_arch for $platform, got $actual_arch" >&2
+      exit 1
+    fi
+    echo "container image size ($platform): $image_size bytes (budget $max_image_bytes)"
+  else
+    echo "container image size: $image_size bytes (budget $max_image_bytes)"
+  fi
 fi

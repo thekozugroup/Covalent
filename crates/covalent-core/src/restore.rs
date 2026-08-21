@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use covalent_protocol::{
     BackupId, ConflictPolicy, DeviceId, EntryKind, EntryMetadata, Manifest, ManifestEntry,
-    RelativePath,
+    RelativePath, TargetInventory, TargetInventoryBinding,
 };
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +33,8 @@ pub struct RestoreOptions {
     pub selected_paths: BTreeSet<RelativePath>,
     /// Stable resumable job identifier.
     pub job_id: String,
+    /// Optional bounded client-target inventory and action binding.
+    pub target_inventory: Option<TargetInventory>,
 }
 
 impl RestoreOptions {
@@ -43,6 +45,7 @@ impl RestoreOptions {
             conflict_policy: ConflictPolicy::Fail,
             selected_paths: BTreeSet::new(),
             job_id: job_id.into(),
+            target_inventory: None,
         }
     }
 }
@@ -101,6 +104,9 @@ pub struct RestorePlan {
     pub job_id: String,
     /// Fully resolved actions.
     pub entries: Vec<RestorePreviewEntry>,
+    /// Optional client target inventory and exact-action digest covered by the plan signature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_inventory: Option<TargetInventoryBinding>,
     /// Digest over every preceding field.
     pub plan_digest: String,
     /// Device that signed the preview.
@@ -182,22 +188,32 @@ pub(crate) fn preview_restore(
     manifest.validate()?;
     validate_restore_options(options)?;
     let (root_device, root_inode) = filesystem_identity(authorized_root.canonical_path())?;
-    let mut entries = Vec::new();
-    for entry in planned_manifest_entries(manifest, &options.selected_paths)? {
-        let destination = authorized_root.resolve(&entry.path)?;
-        let (destination_path, action) = preview_action(
-            authorized_root,
-            &entry,
-            &destination,
+    let entries = if let Some(inventory) = &options.target_inventory {
+        preview_actions_from_inventory(
+            manifest,
+            &options.selected_paths,
             options.conflict_policy,
-        )?;
-        entries.push(RestorePreviewEntry {
-            source_path: entry.path,
-            destination_path,
-            kind: entry.kind,
-            action,
-        });
-    }
+            inventory,
+        )?
+    } else {
+        let mut entries = Vec::new();
+        for entry in planned_manifest_entries(manifest, &options.selected_paths)? {
+            let destination = authorized_root.resolve(&entry.path)?;
+            let (destination_path, action) = preview_action(
+                authorized_root,
+                &entry,
+                &destination,
+                options.conflict_policy,
+            )?;
+            entries.push(RestorePreviewEntry {
+                source_path: entry.path,
+                destination_path,
+                kind: entry.kind,
+                action,
+            });
+        }
+        entries
+    };
     let authorized_root_string = authorized_root
         .canonical_path()
         .to_str()
@@ -208,6 +224,20 @@ pub(crate) fn preview_restore(
     let manifest_digest = blake3::hash(&serde_json::to_vec(manifest)?)
         .to_hex()
         .to_string();
+    let target_inventory = options
+        .target_inventory
+        .as_ref()
+        .map(|inventory| {
+            Ok::<_, CoreError>(TargetInventoryBinding {
+                schema_version: inventory.schema_version,
+                root_identity: inventory.root_identity.clone(),
+                entry_count: inventory.entry_count,
+                total_bytes: inventory.total_bytes,
+                inventory_digest: inventory.inventory_digest.clone(),
+                actions_digest: canonical_restore_actions_digest(&entries)?,
+            })
+        })
+        .transpose()?;
     let mut plan = RestorePlan {
         backup_id: manifest.backup_id,
         snapshot_id: manifest.snapshot_id.clone(),
@@ -218,6 +248,7 @@ pub(crate) fn preview_restore(
         conflict_policy: options.conflict_policy,
         job_id: options.job_id.clone(),
         entries,
+        target_inventory,
         plan_digest: String::new(),
         signer_device_id: signer.device_id(),
         signature: String::new(),
@@ -435,16 +466,251 @@ pub(crate) fn execute_restore(
 }
 
 fn validate_restore_options(options: &RestoreOptions) -> Result<(), CoreError> {
-    if options.job_id.is_empty()
-        || options.job_id.len() > 128
-        || !options
-            .job_id
+    validate_restore_job_id(&options.job_id)?;
+    if let Some(inventory) = &options.target_inventory {
+        validate_target_inventory(inventory)?;
+    }
+    Ok(())
+}
+
+fn validate_restore_job_id(job_id: &str) -> Result<(), CoreError> {
+    if job_id.is_empty()
+        || job_id.len() > 128
+        || !job_id
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     {
         return Err(CoreError::InvalidState("invalid restore job id".to_owned()));
     }
     Ok(())
+}
+
+fn valid_lower_hex_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn validate_target_inventory(inventory: &TargetInventory) -> Result<(), CoreError> {
+    if inventory.schema_version != 1
+        || inventory.root_identity.trim().is_empty()
+        || inventory.root_identity.len() > 512
+        || inventory.root_identity.chars().any(char::is_control)
+        || inventory.entries.len() > 250_000
+        || inventory.entry_count != inventory.entries.len() as u64
+        || !valid_lower_hex_digest(&inventory.inventory_digest)
+    {
+        return Err(CoreError::InvalidState(
+            "invalid target inventory binding".to_owned(),
+        ));
+    }
+    let mut previous: Option<&RelativePath> = None;
+    let mut observed_files = BTreeSet::new();
+    let mut total_bytes = 0_u64;
+    for entry in &inventory.entries {
+        if previous.is_some_and(|path| path >= &entry.path)
+            || entry.identity_token.trim().is_empty()
+            || entry.identity_token.len() > 512
+            || entry.identity_token.chars().any(char::is_control)
+            || (entry.kind == EntryKind::Directory && entry.length != 0)
+        {
+            return Err(CoreError::InvalidState(
+                "target inventory is not canonical".to_owned(),
+            ));
+        }
+        if entry.kind == EntryKind::File {
+            total_bytes = total_bytes
+                .checked_add(entry.length)
+                .ok_or(CoreError::ResourceLimit("target inventory bytes"))?;
+            observed_files.insert(entry.path.clone());
+        }
+        if relative_ancestors(&entry.path)
+            .iter()
+            .any(|ancestor| observed_files.contains(ancestor))
+        {
+            return Err(CoreError::InvalidState(
+                "target inventory contains a file ancestor".to_owned(),
+            ));
+        }
+        previous = Some(&entry.path);
+    }
+    if total_bytes != inventory.total_bytes
+        || canonical_target_inventory_digest(&inventory.root_identity, &inventory.entries)?
+            != inventory.inventory_digest
+    {
+        return Err(CoreError::AuthenticationFailed);
+    }
+    Ok(())
+}
+
+/// Computes the exact portable digest native clients must recompute immediately before apply.
+pub fn canonical_target_inventory_digest(
+    root_identity: &str,
+    entries: &[covalent_protocol::TargetInventoryEntry],
+) -> Result<String, CoreError> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CanonicalInventory<'a> {
+        schema_version: u16,
+        root_identity: &'a str,
+        entries: &'a [covalent_protocol::TargetInventoryEntry],
+    }
+    Ok(blake3::hash(&serde_json::to_vec(&CanonicalInventory {
+        schema_version: 1,
+        root_identity,
+        entries,
+    })?)
+    .to_hex()
+    .to_string())
+}
+
+/// Computes the action digest bound into the signed restore plan.
+pub fn canonical_restore_actions_digest(
+    entries: &[RestorePreviewEntry],
+) -> Result<String, CoreError> {
+    Ok(blake3::hash(&serde_json::to_vec(entries)?)
+        .to_hex()
+        .to_string())
+}
+
+fn preview_actions_from_inventory(
+    manifest: &Manifest,
+    selected_paths: &BTreeSet<RelativePath>,
+    policy: ConflictPolicy,
+    inventory: &TargetInventory,
+) -> Result<Vec<RestorePreviewEntry>, CoreError> {
+    validate_target_inventory(inventory)?;
+    let observed: BTreeMap<_, _> = inventory
+        .entries
+        .iter()
+        .map(|entry| (&entry.path, entry))
+        .collect();
+    let mut occupied: BTreeSet<_> = inventory
+        .entries
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect();
+    let mut destinations = BTreeSet::new();
+    let mut actions = Vec::new();
+    for entry in planned_manifest_entries(manifest, selected_paths)? {
+        let existing = observed.get(&entry.path).copied();
+        if observed_file_ancestor(&entry.path, &observed).is_some() {
+            return Err(CoreError::RestoreConflict(PathBuf::from(
+                entry.path.as_str(),
+            )));
+        }
+        if entry.kind == EntryKind::File
+            && existing.is_none()
+            && occupied_has_descendant(&occupied, &entry.path)
+        {
+            return Err(CoreError::RestoreConflict(PathBuf::from(
+                entry.path.as_str(),
+            )));
+        }
+        let (destination_path, action) = match (entry.kind, existing.map(|item| item.kind)) {
+            (EntryKind::Directory, Some(EntryKind::Directory)) => {
+                (entry.path.clone(), PreviewAction::KeepDirectory)
+            }
+            (EntryKind::Directory, Some(EntryKind::File)) => {
+                return Err(CoreError::RestoreConflict(PathBuf::from(
+                    entry.path.as_str(),
+                )));
+            }
+            (EntryKind::Directory, None) => (entry.path.clone(), PreviewAction::CreateDirectory),
+            (EntryKind::File, Some(EntryKind::Directory)) => {
+                return Err(CoreError::RestoreConflict(PathBuf::from(
+                    entry.path.as_str(),
+                )));
+            }
+            (EntryKind::File, Some(EntryKind::File)) => match policy {
+                ConflictPolicy::Fail => {
+                    return Err(CoreError::RestoreConflict(PathBuf::from(
+                        entry.path.as_str(),
+                    )));
+                }
+                ConflictPolicy::Skip => (entry.path.clone(), PreviewAction::SkipFile),
+                ConflictPolicy::Replace => (entry.path.clone(), PreviewAction::ReplaceFile),
+                ConflictPolicy::Rename => (
+                    find_renamed_inventory_path(&entry.path, &occupied, &observed)?,
+                    PreviewAction::RenameFile,
+                ),
+            },
+            (EntryKind::File, None) => (entry.path.clone(), PreviewAction::CreateFile),
+        };
+        if !destinations.insert(destination_path.clone()) {
+            return Err(CoreError::RestorePlanMismatch);
+        }
+        if action != PreviewAction::SkipFile {
+            occupied.insert(destination_path.clone());
+        }
+        actions.push(RestorePreviewEntry {
+            source_path: entry.path,
+            destination_path,
+            kind: entry.kind,
+            action,
+        });
+    }
+    Ok(actions)
+}
+
+fn find_renamed_inventory_path(
+    original: &RelativePath,
+    occupied: &BTreeSet<RelativePath>,
+    observed: &BTreeMap<&RelativePath, &covalent_protocol::TargetInventoryEntry>,
+) -> Result<RelativePath, CoreError> {
+    let (parent, file_name) = original
+        .as_str()
+        .rsplit_once('/')
+        .map_or((None, original.as_str()), |(parent, name)| {
+            (Some(parent), name)
+        });
+    for index in 1..=10_000 {
+        let candidate = match parent {
+            Some(parent) => format!("{parent}/{file_name}.covalent-restored-{index}"),
+            None => format!("{file_name}.covalent-restored-{index}"),
+        };
+        let relative = RelativePath::new(candidate)?;
+        if !occupied.contains(&relative)
+            && !occupied_has_descendant(occupied, &relative)
+            && observed_file_ancestor(&relative, observed).is_none()
+        {
+            return Ok(relative);
+        }
+    }
+    Err(CoreError::ResourceLimit("restore rename attempts"))
+}
+
+fn relative_ancestors(path: &RelativePath) -> Vec<RelativePath> {
+    let mut ancestors = Vec::new();
+    let mut offset = 0;
+    while let Some(relative) = path.as_str()[offset..].find('/') {
+        let end = offset + relative;
+        if let Ok(ancestor) = RelativePath::new(&path.as_str()[..end]) {
+            ancestors.push(ancestor);
+        }
+        offset = end + 1;
+    }
+    ancestors
+}
+
+fn observed_file_ancestor<'a>(
+    path: &RelativePath,
+    observed: &BTreeMap<&'a RelativePath, &'a covalent_protocol::TargetInventoryEntry>,
+) -> Option<RelativePath> {
+    relative_ancestors(path).into_iter().find(|ancestor| {
+        observed
+            .get(ancestor)
+            .is_some_and(|entry| entry.kind == EntryKind::File)
+    })
+}
+
+fn occupied_has_descendant(occupied: &BTreeSet<RelativePath>, path: &RelativePath) -> bool {
+    let prefix = format!("{}/", path.as_str());
+    occupied
+        .range(path.clone()..)
+        .find(|candidate| *candidate != path)
+        .is_some_and(|candidate| candidate.as_str().starts_with(&prefix))
 }
 
 fn validate_plan(
@@ -454,11 +720,18 @@ fn validate_plan(
     signer: &PublicIdentity,
 ) -> Result<(), CoreError> {
     manifest.validate()?;
-    validate_restore_options(&RestoreOptions {
-        conflict_policy: plan.conflict_policy,
-        selected_paths: BTreeSet::new(),
-        job_id: plan.job_id.clone(),
-    })?;
+    validate_restore_job_id(&plan.job_id)?;
+    if let Some(inventory) = &plan.target_inventory
+        && (inventory.schema_version != 1
+            || inventory.root_identity.trim().is_empty()
+            || inventory.root_identity.len() > 512
+            || inventory.root_identity.chars().any(char::is_control)
+            || inventory.entry_count > 250_000
+            || !valid_lower_hex_digest(&inventory.inventory_digest)
+            || inventory.actions_digest != canonical_restore_actions_digest(&plan.entries)?)
+    {
+        return Err(CoreError::RestorePlanMismatch);
+    }
     if plan.backup_id != manifest.backup_id
         || plan.snapshot_id != manifest.snapshot_id
         || plan.signer_device_id != signer.device_id
@@ -548,6 +821,8 @@ struct UnsignedPlan<'a> {
     conflict_policy: ConflictPolicy,
     job_id: &'a str,
     entries: &'a [RestorePreviewEntry],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_inventory: Option<&'a TargetInventoryBinding>,
     signer_device_id: DeviceId,
 }
 
@@ -562,6 +837,7 @@ fn compute_plan_digest(plan: &RestorePlan) -> Result<String, CoreError> {
         conflict_policy: plan.conflict_policy,
         job_id: &plan.job_id,
         entries: &plan.entries,
+        target_inventory: plan.target_inventory.as_ref(),
         signer_device_id: plan.signer_device_id,
     })?)
     .to_hex()
@@ -1497,8 +1773,9 @@ impl SafeRestoreRoot {
                 control.check()?;
                 let batch_start = reference_index;
                 let mut batch_remaining = remaining;
-                let mut requests = Vec::with_capacity(scheduler.maximum_parallelism());
-                while requests.len() < scheduler.maximum_parallelism() && batch_remaining > 0 {
+                let mut requests = Vec::with_capacity(scheduler.maximum_fetch_batch());
+                let mut batch_bytes = 0_u64;
+                while requests.len() < scheduler.maximum_fetch_batch() && batch_remaining > 0 {
                     let reference = entry
                         .chunks
                         .get(reference_index + requests.len())
@@ -1507,12 +1784,23 @@ impl SafeRestoreRoot {
                     if reference_length > batch_remaining {
                         return Err(CoreError::RestorePlanMismatch);
                     }
+                    // Bound how much ciphertext one batched provider fetch may
+                    // hold in memory. Always admit the first chunk so a single
+                    // oversized chunk cannot stall the batch loop.
+                    let next_batch_bytes =
+                        batch_bytes.saturating_add(u64::from(reference.ciphertext_length));
+                    if !requests.is_empty()
+                        && next_batch_bytes > scheduler.maximum_fetch_batch_bytes()
+                    {
+                        break;
+                    }
                     requests.push((
                         reference,
                         allowed_providers
                             .get(&reference.opaque_locator)
                             .ok_or(CoreError::RestorePlanMismatch)?,
                     ));
+                    batch_bytes = next_batch_bytes;
                     batch_remaining -= reference_length;
                 }
                 let fetched_chunks = scheduler.fetch_plaintexts_parallel(
@@ -1895,6 +2183,7 @@ mod tests {
 
     use covalent_protocol::{
         ChunkReference, EntryMetadata, Manifest, ManifestEntry, PROTOCOL_VERSION, ReplicaIntent,
+        TargetInventoryEntry,
     };
     use tempfile::tempdir;
 
@@ -1936,6 +2225,160 @@ mod tests {
             }],
             provider_acknowledgements: BTreeMap::from([(provider_id, BTreeSet::from([locator]))]),
         }
+    }
+
+    fn inventory(entries: Vec<TargetInventoryEntry>) -> TargetInventory {
+        let total_bytes = entries
+            .iter()
+            .filter(|entry| entry.kind == EntryKind::File)
+            .map(|entry| entry.length)
+            .sum();
+        let root_identity = "saf:tree-primary-documents".to_owned();
+        TargetInventory {
+            schema_version: 1,
+            root_identity: root_identity.clone(),
+            entry_count: entries.len() as u64,
+            total_bytes,
+            inventory_digest: canonical_target_inventory_digest(&root_identity, &entries)
+                .expect("inventory digest"),
+            entries,
+        }
+    }
+
+    #[test]
+    fn external_inventory_drives_and_authenticates_exact_rename_actions() {
+        let data = tempdir().expect("data");
+        let restore = tempdir().expect("restore");
+        let store = ChunkStore::open(data.path(), 1_048_576).expect("store");
+        let provider_id = DeviceId::new();
+        let key = BackupKey::generate();
+        let manifest = single_file_manifest(BackupId::new(), &key, &store, provider_id);
+        let identity = DeviceIdentity::generate();
+        let root = AuthorizedRoot::open(restore.path()).expect("root");
+        let entries = vec![
+            TargetInventoryEntry {
+                path: RelativePath::new("nested/file.txt").expect("path"),
+                kind: EntryKind::File,
+                length: 3,
+                modified_at_unix_ms: Some(1),
+                identity_token: "document-id:original:1".to_owned(),
+            },
+            TargetInventoryEntry {
+                path: RelativePath::new("nested/file.txt.covalent-restored-1").expect("path"),
+                kind: EntryKind::File,
+                length: 4,
+                modified_at_unix_ms: Some(2),
+                identity_token: "document-id:collision:2".to_owned(),
+            },
+            TargetInventoryEntry {
+                path: RelativePath::new("nested/file.txt.covalent-restored-2/child").expect("path"),
+                kind: EntryKind::File,
+                length: 5,
+                modified_at_unix_ms: Some(3),
+                identity_token: "document-id:descendant-collision:3".to_owned(),
+            },
+        ];
+        let mut options = RestoreOptions::all("external-rename");
+        options.conflict_policy = ConflictPolicy::Rename;
+        options.target_inventory = Some(inventory(entries));
+        let plan = preview_restore(&manifest, &root, &options, &identity).expect("preview");
+        assert_eq!(plan.entries.len(), 2);
+        let file_entry = plan
+            .entries
+            .iter()
+            .find(|entry| entry.source_path.as_str() == "nested/file.txt")
+            .expect("file action");
+        assert_eq!(file_entry.action, PreviewAction::RenameFile);
+        assert_eq!(
+            file_entry.destination_path.as_str(),
+            "nested/file.txt.covalent-restored-3"
+        );
+        let binding = plan.target_inventory.as_ref().expect("binding");
+        assert_eq!(
+            binding.actions_digest,
+            canonical_restore_actions_digest(&plan.entries).expect("actions digest")
+        );
+        validate_plan(&manifest, &plan, &root, &identity.public_identity()).expect("valid plan");
+
+        let mut tampered = plan.clone();
+        let tampered_file = tampered
+            .entries
+            .iter_mut()
+            .find(|entry| entry.source_path.as_str() == "nested/file.txt")
+            .expect("file action");
+        tampered_file.destination_path = RelativePath::new("nested/attacker.txt").expect("path");
+        assert!(matches!(
+            validate_plan(&manifest, &tampered, &root, &identity.public_identity()),
+            Err(CoreError::RestorePlanMismatch)
+        ));
+    }
+
+    #[test]
+    fn external_inventory_rejects_stale_digest_and_duplicate_paths() {
+        let data = tempdir().expect("data");
+        let restore = tempdir().expect("restore");
+        let store = ChunkStore::open(data.path(), 1_048_576).expect("store");
+        let provider_id = DeviceId::new();
+        let key = BackupKey::generate();
+        let manifest = single_file_manifest(BackupId::new(), &key, &store, provider_id);
+        let identity = DeviceIdentity::generate();
+        let root = AuthorizedRoot::open(restore.path()).expect("root");
+        let entry = TargetInventoryEntry {
+            path: RelativePath::new("nested/file.txt").expect("path"),
+            kind: EntryKind::File,
+            length: 3,
+            modified_at_unix_ms: None,
+            identity_token: "document-id:1".to_owned(),
+        };
+        let mut stale = inventory(vec![entry.clone()]);
+        stale.entries[0].length = 9;
+        let mut options = RestoreOptions::all("stale-inventory");
+        options.conflict_policy = ConflictPolicy::Skip;
+        options.target_inventory = Some(stale);
+        assert!(preview_restore(&manifest, &root, &options, &identity).is_err());
+
+        options.target_inventory = Some(inventory(vec![entry.clone(), entry]));
+        assert!(preview_restore(&manifest, &root, &options, &identity).is_err());
+    }
+
+    #[test]
+    fn external_inventory_rejects_file_ancestors_and_desired_file_descendants() {
+        let data = tempdir().expect("data");
+        let restore = tempdir().expect("restore");
+        let store = ChunkStore::open(data.path(), 1_048_576).expect("store");
+        let provider_id = DeviceId::new();
+        let key = BackupKey::generate();
+        let manifest = single_file_manifest(BackupId::new(), &key, &store, provider_id);
+        let identity = DeviceIdentity::generate();
+        let root = AuthorizedRoot::open(restore.path()).expect("root");
+
+        let mut ancestor_options = RestoreOptions::all("file-ancestor");
+        ancestor_options.conflict_policy = ConflictPolicy::Replace;
+        ancestor_options.target_inventory = Some(inventory(vec![TargetInventoryEntry {
+            path: RelativePath::new("nested").expect("path"),
+            kind: EntryKind::File,
+            length: 1,
+            modified_at_unix_ms: None,
+            identity_token: "file-ancestor".to_owned(),
+        }]));
+        assert!(matches!(
+            preview_restore(&manifest, &root, &ancestor_options, &identity),
+            Err(CoreError::RestoreConflict(_))
+        ));
+
+        let mut descendant_options = RestoreOptions::all("file-descendant");
+        descendant_options.conflict_policy = ConflictPolicy::Replace;
+        descendant_options.target_inventory = Some(inventory(vec![TargetInventoryEntry {
+            path: RelativePath::new("nested/file.txt/child").expect("path"),
+            kind: EntryKind::File,
+            length: 1,
+            modified_at_unix_ms: None,
+            identity_token: "file-descendant".to_owned(),
+        }]));
+        assert!(matches!(
+            preview_restore(&manifest, &root, &descendant_options, &identity),
+            Err(CoreError::RestoreConflict(_))
+        ));
     }
 
     #[test]

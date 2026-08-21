@@ -7,8 +7,10 @@ mod chunker;
 mod crypto;
 mod engine;
 mod identity;
+mod key_envelope;
 mod manifest;
 mod pairing;
+mod recovery;
 mod replication;
 mod restore;
 mod storage;
@@ -23,18 +25,28 @@ pub use backup::{BackupOptions, BackupProgress, BackupResult, ExclusionRules, Sy
 pub use chunker::{ChunkingConfig, ContentDefinedChunker, DEFAULT_AVERAGE_CHUNK_SIZE};
 pub use crypto::{BackupKey, EncryptedChunk};
 pub use engine::{
-    Engine, EngineOptions, JobControl, JobState, NodeConfig, RememberedBackupState, RosterCursor,
-    SnapshotAvailabilityReport,
+    Engine, EngineOptions, JobControl, JobState, NodeConfig, RecoveredBackup,
+    RememberedBackupState, RosterCursor, SnapshotAvailabilityReport,
 };
 pub use identity::{DeviceIdentity, PublicIdentity};
+pub use key_envelope::{KeyEncryptionKey, SecretBinding, WrappedSecret};
 pub use manifest::{SignedRosterBuilder, decrypt_manifest, encrypt_manifest, verify_roster};
 pub use pairing::{PairingConfirmation, PairingManager, PairingSession, ShortAuthenticationString};
+pub use recovery::{
+    RecoveryCapsule, RecoveryKit, RecoveryProviderDirectoryEntry, RecoveryUnlockKey,
+};
 pub use replication::{
     ChunkProvider, ProviderFailure, ProviderHealth, ReplicationReport, ReplicationScheduler,
     StoreProvider,
 };
-pub use restore::{PreviewAction, RestoreOptions, RestorePlan, RestorePreviewEntry, RestoreReport};
-pub use storage::{ChunkStore, GarbageCollectionReport, IntegrityReport, StoredSnapshot};
+pub use restore::{
+    PreviewAction, RestoreOptions, RestorePlan, RestorePreviewEntry, RestoreReport,
+    canonical_restore_actions_digest, canonical_target_inventory_digest,
+};
+pub use storage::{
+    ChunkStore, GarbageCollectionReport, IntegrityReport, ProviderCapacity, ProviderQuotaPolicy,
+    RecoveryCapsuleDescriptor, StoredSnapshot,
+};
 
 /// A canonical directory explicitly authorized as one restore boundary.
 #[derive(Clone, Debug, Eq, PartialEq)]

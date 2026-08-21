@@ -404,6 +404,42 @@ fn validate_backup_name(value: &str) -> Result<(), ContractError> {
     Ok(())
 }
 
+/// Transport endpoint and TLS identity bound into a mutually confirmed pairing.
+///
+/// Discovery may suggest an address, but callers must use this record only after
+/// the surrounding pairing transcript has been verified and finalized.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TransportBinding {
+    /// Device identity that owns the transport endpoint.
+    pub peer_id: DeviceId,
+    /// User-confirmed device name.
+    pub display_name: String,
+    /// Canonical numeric socket address, including the peer port.
+    pub address: String,
+    /// Base64url-encoded DER certificate pinned by the QUIC client.
+    pub certificate_der: String,
+    /// Lowercase SHA-256 digest of the DER certificate.
+    pub certificate_fingerprint: String,
+}
+
+/// Provider-issued, backup-scoped reservation required for every remote object write.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StorageLease {
+    pub schema_version: u16,
+    pub lease_id: String,
+    pub peer_device_id: DeviceId,
+    pub provider_device_id: DeviceId,
+    pub backup_id: BackupId,
+    pub max_new_bytes: u64,
+    pub max_new_objects: u64,
+    pub issued_at_unix_ms: u64,
+    pub expires_at_unix_ms: u64,
+    pub nonce: String,
+    pub signature: String,
+}
+
 /// An expiring, single-use pairing invitation.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -432,6 +468,9 @@ pub struct PairingInvitation {
     pub expires_at_unix_ms: u64,
     /// Candidate connection hints; never trusted as identity.
     pub endpoints: Vec<String>,
+    /// Inviter transport identity covered by the invitation signature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transport_binding: Option<TransportBinding>,
     /// Base64url Ed25519 signature over all preceding invitation fields.
     #[serde(default)]
     pub signature: String,
@@ -459,6 +498,59 @@ pub enum EntryKind {
     File,
     /// Empty or metadata-bearing directory.
     Directory,
+}
+
+/// One client-observed target entry used to compute external restore actions.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TargetInventoryEntry {
+    /// Safe path relative to the selected SAF or PowerBox root.
+    pub path: RelativePath,
+    /// Observed target kind. Symlinks and unsupported kinds are rejected client-side.
+    pub kind: EntryKind,
+    /// Observed regular-file length, or zero for directories.
+    pub length: u64,
+    /// Observed modification time when the provider exposes one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified_at_unix_ms: Option<u64>,
+    /// Bounded client/provider identity token used to detect replacement before apply.
+    pub identity_token: String,
+}
+
+/// Canonical client-owned target inventory supplied to preview generation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TargetInventory {
+    pub schema_version: u16,
+    /// Stable client-owned identity for the authorized SAF tree or PowerBox root.
+    pub root_identity: String,
+    pub entry_count: u64,
+    pub total_bytes: u64,
+    pub inventory_digest: String,
+    /// Strictly path-sorted entries used by the engine to compute actions.
+    pub entries: Vec<TargetInventoryEntry>,
+}
+
+/// Bounded summary of a client-owned restore target inventory.
+///
+/// The inventory digest is BLAKE3 over canonical JSON entries sorted by relative
+/// path. The actions digest is BLAKE3 over the exact ordered restore actions the
+/// client previewed against that inventory.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TargetInventoryBinding {
+    /// Binding schema; currently one.
+    pub schema_version: u16,
+    /// Stable client-owned identity for the authorized SAF tree or PowerBox root.
+    pub root_identity: String,
+    /// Exact number of canonical target entries represented by the digest.
+    pub entry_count: u64,
+    /// Sum of regular-file lengths with checked arithmetic.
+    pub total_bytes: u64,
+    /// Lowercase BLAKE3 digest of canonical inventory entries.
+    pub inventory_digest: String,
+    /// Lowercase BLAKE3 digest of exact client-side conflict actions.
+    pub actions_digest: String,
 }
 
 /// One safe relative entry inside an encrypted manifest.

@@ -11,22 +11,29 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use covalent_protocol::{
     BackupId, BackupSummary, DeviceId, ExportedDeviceSettings, Manifest, PairingInvitation,
     PeerGrant, PeerRole, RememberedBackup, ReplicaAvailability, ReplicaIntent, SignedRoster,
+    StorageLease, TransportBinding,
 };
 use fs2::FileExt as _;
+use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 use crate::atomic::{read_json_bounded, sync_directory, write_atomic, write_json_atomic};
 use crate::backup::{BackupProgress, scan_source};
 use crate::manifest::{SignedRosterBuilder, roster_digest, verify_roster};
+use crate::recovery::{
+    MAX_RECOVERY_KIT_BYTES, RecoveryCapsule, RecoveryKit, RecoveryMasterKey,
+    RecoveryProviderDirectoryEntry, RecoveryUnlockKey, load_or_create_recovery_master,
+    persist_recovery_master,
+};
 use crate::replication::ProviderFailure;
 use crate::restore::{execute_restore, preview_restore};
 use crate::{
     AuthorizedRoot, BackupKey, BackupOptions, BackupResult, ChunkProvider, ChunkStore, CoreError,
     DeviceIdentity, IntegrityReport, PairingConfirmation, PairingManager, PairingSession,
-    PublicIdentity, ReplicationScheduler, RestoreOptions, RestorePlan, RestoreReport,
-    StoreProvider, StoredSnapshot, decrypt_manifest, encrypt_manifest, export_settings,
-    import_settings,
+    ProviderQuotaPolicy, PublicIdentity, RecoveryCapsuleDescriptor, ReplicationScheduler,
+    RestoreOptions, RestorePlan, RestoreReport, StoreProvider, StoredSnapshot, decrypt_manifest,
+    encrypt_manifest, export_settings, import_settings,
 };
 
 const NODE_CONFIG_SCHEMA_VERSION: u16 = 1;
@@ -38,6 +45,7 @@ const ROSTER_TRANSACTION_SCHEMA_VERSION: u16 = 1;
 const MAX_ROSTER_TRANSACTION_BYTES: usize = MAX_NODE_CONFIG_BYTES + MAX_ROSTER_BYTES;
 const BACKUP_TRANSACTION_SCHEMA_VERSION: u16 = 1;
 const MAX_BACKUP_TRANSACTION_BYTES: usize = 256 * 1_024 * 1_024;
+const STORAGE_LEASE_SIGNATURE_DOMAIN: &[u8] = b"covalent/storage-lease/v1";
 
 /// Persisted non-key backup state.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -74,6 +82,14 @@ pub struct SnapshotAvailabilityReport {
     pub failures: Vec<ProviderFailure>,
 }
 
+/// One latest snapshot authenticated and imported from selected replica catalogs.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecoveredBackup {
+    pub backup_id: BackupId,
+    pub snapshot_id: String,
+    pub source_providers: BTreeSet<DeviceId>,
+}
+
 /// Versioned durable node configuration. Private identity and backup keys live separately.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -88,6 +104,9 @@ pub struct NodeConfig {
     pub remembered_backups: BTreeMap<BackupId, RememberedBackupState>,
     /// Explicitly confirmed peer grants, including revocation tombstones.
     pub trusted_peers: BTreeMap<DeviceId, PeerGrant>,
+    /// Exact peer transport pins retained only from a mutually signed pairing transcript.
+    #[serde(default)]
+    pub trusted_peer_transports: BTreeMap<DeviceId, TransportBinding>,
     /// Highest locally issued roster epoch.
     pub roster_epoch: u64,
     /// Digest chained by the next roster.
@@ -111,6 +130,7 @@ impl NodeConfig {
             lan_discovery_enabled,
             remembered_backups: BTreeMap::new(),
             trusted_peers: BTreeMap::new(),
+            trusted_peer_transports: BTreeMap::new(),
             roster_epoch: 0,
             roster_digest: String::new(),
             peer_roster_cursors: BTreeMap::new(),
@@ -159,7 +179,24 @@ impl NodeConfig {
             }
             PublicIdentity::from_encoded(grant.peer_device_id, grant.public_key.clone())?;
         }
-        if self.trusted_peers.len() > 128 || self.peer_roster_cursors.len() > 128 {
+        for (peer_id, binding) in &self.trusted_peer_transports {
+            let grant = self
+                .trusted_peers
+                .get(peer_id)
+                .ok_or_else(|| CoreError::InvalidState("orphaned peer transport".to_owned()))?;
+            if grant.revoked || binding.peer_id != *peer_id {
+                return Err(CoreError::InvalidState(
+                    "invalid trusted peer transport".to_owned(),
+                ));
+            }
+            let identity =
+                PublicIdentity::from_encoded(grant.peer_device_id, grant.public_key.clone())?;
+            crate::pairing::validate_transport_binding(binding, &identity, &grant.display_name)?;
+        }
+        if self.trusted_peers.len() > 128
+            || self.trusted_peer_transports.len() > 128
+            || self.peer_roster_cursors.len() > 128
+        {
             return Err(CoreError::InvalidState(
                 "excessive trusted peer state".to_owned(),
             ));
@@ -207,11 +244,66 @@ fn valid_identifier(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
+fn recovery_provider_directory(
+    config: &NodeConfig,
+    selected: Option<&BTreeSet<DeviceId>>,
+) -> Result<Vec<RecoveryProviderDirectoryEntry>, CoreError> {
+    let mut entries = Vec::new();
+    for (peer_id, grant) in &config.trusted_peers {
+        if grant.revoked
+            || !grant.roles.contains(&PeerRole::StorageProvider)
+            || selected.is_some_and(|ids| !ids.contains(peer_id))
+        {
+            continue;
+        }
+        let Some(transport) = config.trusted_peer_transports.get(peer_id) else {
+            continue;
+        };
+        entries.push(RecoveryProviderDirectoryEntry {
+            grant: grant.clone(),
+            transport: transport.clone(),
+        });
+    }
+    if entries.len() > 128 {
+        return Err(CoreError::ResourceLimit("recovery provider directory"));
+    }
+    Ok(entries)
+}
+
 fn valid_lower_hex_digest(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn storage_lease_signing_bytes(lease: &StorageLease) -> Result<Vec<u8>, CoreError> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Fields<'a> {
+        schema_version: u16,
+        lease_id: &'a str,
+        peer_device_id: DeviceId,
+        provider_device_id: DeviceId,
+        backup_id: BackupId,
+        max_new_bytes: u64,
+        max_new_objects: u64,
+        issued_at_unix_ms: u64,
+        expires_at_unix_ms: u64,
+        nonce: &'a str,
+    }
+    Ok(serde_json::to_vec(&Fields {
+        schema_version: lease.schema_version,
+        lease_id: &lease.lease_id,
+        peer_device_id: lease.peer_device_id,
+        provider_device_id: lease.provider_device_id,
+        backup_id: lease.backup_id,
+        max_new_bytes: lease.max_new_bytes,
+        max_new_objects: lease.max_new_objects,
+        issued_at_unix_ms: lease.issued_at_unix_ms,
+        expires_at_unix_ms: lease.expires_at_unix_ms,
+        nonce: &lease.nonce,
+    })?)
 }
 
 /// Engine construction and resource limits.
@@ -227,6 +319,8 @@ pub struct EngineOptions {
     pub maximum_chunk_size: usize,
     /// Hard maximum concurrent provider operations.
     pub maximum_parallel_transfers: usize,
+    /// Provider byte/object quotas and real free-space reserve.
+    pub provider_quota_policy: ProviderQuotaPolicy,
 }
 
 impl EngineOptions {
@@ -239,6 +333,7 @@ impl EngineOptions {
             initial_lan_discovery_enabled: false,
             maximum_chunk_size: 1_024 * 1_024,
             maximum_parallel_transfers: 8,
+            provider_quota_policy: ProviderQuotaPolicy::default(),
         }
     }
 }
@@ -324,6 +419,7 @@ pub struct Engine {
     keys: Mutex<BTreeMap<BackupId, BackupKey>>,
     scheduler: Mutex<ReplicationScheduler>,
     backup_lock: Mutex<()>,
+    recovery_master: RecoveryMasterKey,
 }
 
 impl Engine {
@@ -368,6 +464,8 @@ impl Engine {
         let identity = Arc::new(DeviceIdentity::load_or_create(
             options.data_directory.join("identity.json"),
         )?);
+        let recovery_master =
+            load_or_create_recovery_master(&options.data_directory.join("recovery-master.json"))?;
         let config_path = options.data_directory.join("config.json");
         let mut config = load_or_create_config(&config_path, &options)?;
         recover_roster_transaction(
@@ -393,9 +491,10 @@ impl Engine {
                 },
             )?;
         }
-        let store = ChunkStore::open(
+        let store = ChunkStore::open_with_provider_quotas(
             options.data_directory.join("store"),
             options.maximum_chunk_size,
+            options.provider_quota_policy.clone(),
         )?;
         recover_backup_transactions(
             &options.data_directory,
@@ -425,7 +524,173 @@ impl Engine {
             config: Mutex::new(config),
             keys: Mutex::new(BTreeMap::new()),
             backup_lock: Mutex::new(()),
+            recovery_master,
         })
+    }
+
+    /// Recreates the original authenticated recovery principal from a stable kit.
+    pub fn recover_from_kit(
+        mut options: EngineOptions,
+        kit_bytes: &[u8],
+        unlock: &RecoveryUnlockKey,
+    ) -> Result<Self, CoreError> {
+        if kit_bytes.len() > MAX_RECOVERY_KIT_BYTES {
+            return Err(CoreError::ResourceLimit("recovery kit"));
+        }
+        let kit: RecoveryKit = serde_json::from_slice(kit_bytes)?;
+        let opened = kit.open(unlock)?;
+        fs::create_dir_all(&options.data_directory).map_err(|source| CoreError::Io {
+            operation: "create recovered engine directory",
+            path: options.data_directory.clone(),
+            source,
+        })?;
+        if fs::read_dir(&options.data_directory)
+            .map_err(|source| CoreError::Io {
+                operation: "inspect recovered engine directory",
+                path: options.data_directory.clone(),
+                source,
+            })?
+            .next()
+            .is_some()
+        {
+            return Err(CoreError::InvalidState(
+                "recovery target directory is not empty".to_owned(),
+            ));
+        }
+        opened
+            .identity
+            .persist_recovered(&options.data_directory.join("identity.json"))?;
+        persist_recovery_master(
+            &options.data_directory.join("recovery-master.json"),
+            &opened.master,
+        )?;
+        let mut recovered_config = NodeConfig::new(opened.display_name.clone(), false)?;
+        for entry in opened.provider_directory {
+            let peer_id = entry.grant.peer_device_id;
+            recovered_config.trusted_peers.insert(peer_id, entry.grant);
+            recovered_config
+                .trusted_peer_transports
+                .insert(peer_id, entry.transport);
+        }
+        recovered_config.validate()?;
+        write_json_atomic(
+            &options.data_directory.join("config.json"),
+            &recovered_config,
+            true,
+        )?;
+        options.initial_device_name = opened.display_name;
+        Self::open(options)
+    }
+
+    /// Exports one stable kit. Future snapshot capsules remain recoverable without re-export.
+    pub fn export_recovery_kit(&self, unlock: &RecoveryUnlockKey) -> Result<Vec<u8>, CoreError> {
+        let config = self.config.lock().map_err(|_| CoreError::Synchronization)?;
+        let provider_directory = recovery_provider_directory(&config, None)?;
+        let kit = RecoveryKit::seal(
+            &self.identity,
+            &config.device_name,
+            &self.recovery_master,
+            unlock,
+            provider_directory,
+        )?;
+        let bytes = serde_json::to_vec_pretty(&kit)?;
+        if bytes.len() > MAX_RECOVERY_KIT_BYTES {
+            return Err(CoreError::ResourceLimit("recovery kit"));
+        }
+        Ok(bytes)
+    }
+
+    /// Authenticates connected-provider catalogs and imports the latest snapshot per backup.
+    pub fn import_recovery_catalogs(&self) -> Result<Vec<RecoveredBackup>, CoreError> {
+        let scheduler = self
+            .scheduler
+            .lock()
+            .map_err(|_| CoreError::Synchronization)?
+            .clone();
+        let mut candidates =
+            BTreeMap::<(BackupId, String), (RecoveryCapsule, BTreeSet<DeviceId>)>::new();
+        for (provider_id, capsule) in scheduler.recovery_capsules()? {
+            let key = (capsule.backup_id, capsule.snapshot_id.clone());
+            match candidates.get_mut(&key) {
+                Some((incumbent, providers)) => {
+                    if incumbent != &capsule {
+                        return Err(CoreError::AuthenticationFailed);
+                    }
+                    providers.insert(provider_id);
+                }
+                None => {
+                    candidates.insert(key, (capsule, BTreeSet::from([provider_id])));
+                }
+            }
+        }
+        let mut latest = BTreeMap::<BackupId, (RecoveryCapsule, BTreeSet<DeviceId>)>::new();
+        for ((backup_id, _), candidate) in candidates {
+            let replace = latest.get(&backup_id).is_none_or(|(current, _)| {
+                (candidate.0.committed_at_unix_ms, &candidate.0.snapshot_id)
+                    > (current.committed_at_unix_ms, &current.snapshot_id)
+            });
+            if replace {
+                latest.insert(backup_id, candidate);
+            }
+        }
+        let mut recovered = Vec::with_capacity(latest.len());
+        let mut config = self.config.lock().map_err(|_| CoreError::Synchronization)?;
+        let mut candidate_config = config.clone();
+        for (backup_id, (capsule, providers)) in latest {
+            let opened = capsule.open(&self.recovery_master, &self.identity.public_identity())?;
+            let manifest = decrypt_manifest(
+                &opened.snapshot.envelope,
+                &opened.backup_key,
+                &self.identity.public_identity(),
+            )?;
+            let capsule_provider_ids: BTreeSet<_> = opened
+                .provider_directory
+                .iter()
+                .map(|entry| entry.grant.peer_device_id)
+                .collect();
+            if !capsule_provider_ids.is_empty()
+                && (capsule_provider_ids != manifest.replica_intent.selected_providers
+                    || !providers.is_subset(&capsule_provider_ids))
+            {
+                return Err(CoreError::AuthenticationFailed);
+            }
+            if manifest.backup_id != backup_id
+                || manifest.snapshot_id != opened.snapshot.snapshot_id
+                || manifest.created_at_unix_ms != opened.snapshot.committed_at_unix_ms
+                || !manifest_locators_match(&manifest, &opened.snapshot.chunk_locators)
+            {
+                return Err(CoreError::AuthenticationFailed);
+            }
+            persist_or_validate_backup_key_file(&self.key_path(backup_id), &opened.backup_key)?;
+            self.keys
+                .lock()
+                .map_err(|_| CoreError::Synchronization)?
+                .insert(backup_id, opened.backup_key);
+            self.store.commit_recovery_snapshot(&opened.snapshot)?;
+            candidate_config.remembered_backups.insert(
+                backup_id,
+                RememberedBackupState {
+                    descriptor: RememberedBackup {
+                        backup_id,
+                        name: opened.backup_display_name,
+                        owner_device_id: self.device_id(),
+                    },
+                    key_epoch: capsule.key_epoch,
+                    latest_snapshot_id: Some(capsule.snapshot_id.clone()),
+                    replica_intent: manifest.replica_intent,
+                },
+            );
+            recovered.push(RecoveredBackup {
+                backup_id,
+                snapshot_id: capsule.snapshot_id,
+                source_providers: providers,
+            });
+        }
+        candidate_config.validate()?;
+        write_json_atomic(&self.config_path, &candidate_config, true)?;
+        *config = candidate_config;
+        recovered.sort_by_key(|item| item.backup_id);
+        Ok(recovered)
     }
 
     /// Public local identity.
@@ -471,6 +736,25 @@ impl Engine {
         )
     }
 
+    /// Accepts an invitation while binding this node's exact TLS endpoint.
+    pub fn accept_pairing_with_transport(
+        &self,
+        invitation: PairingInvitation,
+        responder_transport: TransportBinding,
+        responder_roles: BTreeSet<PeerRole>,
+        inviter_roles: BTreeSet<PeerRole>,
+        now_unix_ms: u64,
+    ) -> Result<PairingSession, CoreError> {
+        PairingSession::accept_with_transport(
+            invitation,
+            &self.identity,
+            responder_transport,
+            responder_roles,
+            inviter_roles,
+            now_unix_ms,
+        )
+    }
+
     /// Records the responder user's explicit short-code confirmation.
     pub fn confirm_pairing_as_responder(
         &self,
@@ -499,7 +783,10 @@ impl Engine {
         now_unix_ms: u64,
     ) -> Result<PairingConfirmation, CoreError> {
         let confirmation = self.pairing.finalize(session, now_unix_ms)?;
-        self.trust_peer(confirmation.inviter_grant.clone())?;
+        self.trust_peer_with_transport(
+            confirmation.inviter_grant.clone(),
+            confirmation.responder_transport.clone(),
+        )?;
         Ok(confirmation)
     }
 
@@ -510,7 +797,10 @@ impl Engine {
         now_unix_ms: u64,
     ) -> Result<PairingConfirmation, CoreError> {
         let confirmation = session.finalize_for_responder(&self.identity, now_unix_ms)?;
-        self.trust_peer(confirmation.responder_grant.clone())?;
+        self.trust_peer_with_transport(
+            confirmation.responder_grant.clone(),
+            confirmation.inviter_transport.clone(),
+        )?;
         Ok(confirmation)
     }
 
@@ -528,6 +818,220 @@ impl Engine {
         transcript: &[u8],
     ) -> String {
         self.identity.sign(domain, transcript)
+    }
+
+    /// Issues and durably reserves one backup-scoped remote storage lease.
+    pub fn issue_storage_lease(
+        &self,
+        peer_device_id: DeviceId,
+        backup_id: BackupId,
+        max_new_bytes: u64,
+        max_new_objects: u64,
+        issued_at_unix_ms: u64,
+        expires_at_unix_ms: u64,
+    ) -> Result<StorageLease, CoreError> {
+        self.authorized_peer(peer_device_id, PeerRole::BackupWriter)?;
+        let mut nonce = [0_u8; 24];
+        OsRng.fill_bytes(&mut nonce);
+        let mut lease = StorageLease {
+            schema_version: 1,
+            lease_id: uuid::Uuid::new_v4().to_string(),
+            peer_device_id,
+            provider_device_id: self.device_id(),
+            backup_id,
+            max_new_bytes,
+            max_new_objects,
+            issued_at_unix_ms,
+            expires_at_unix_ms,
+            nonce: URL_SAFE_NO_PAD.encode(nonce),
+            signature: String::new(),
+        };
+        lease.signature = self.identity.sign(
+            STORAGE_LEASE_SIGNATURE_DOMAIN,
+            &storage_lease_signing_bytes(&lease)?,
+        );
+        self.store.reserve_provider_lease(&lease)?;
+        Ok(lease)
+    }
+
+    /// Verifies and atomically consumes a lease for one opaque remote chunk.
+    pub fn put_leased_provider_record(
+        &self,
+        peer_device_id: DeviceId,
+        lease: &StorageLease,
+        locator: &str,
+        record: &[u8],
+        now_unix_ms: u64,
+    ) -> Result<bool, CoreError> {
+        self.verify_storage_lease(peer_device_id, lease, now_unix_ms)?;
+        self.store.put_provider_record_leased(
+            peer_device_id,
+            lease.backup_id,
+            lease,
+            locator,
+            record,
+            now_unix_ms,
+        )
+    }
+
+    /// Authorizes one bounded provider read batch for the exact peer and backup scope.
+    pub fn authorize_provider_read_batch(
+        &self,
+        peer_device_id: DeviceId,
+        backup_id: BackupId,
+        locators: &[String],
+    ) -> Result<(), CoreError> {
+        self.authorized_peer(peer_device_id, PeerRole::BackupReader)?;
+        self.store
+            .authorize_provider_record_batch(peer_device_id, backup_id, locators)
+    }
+
+    /// Verifies and atomically consumes a lease for one owner-signed recovery capsule.
+    pub fn put_leased_recovery_capsule(
+        &self,
+        peer_device_id: DeviceId,
+        lease: &StorageLease,
+        capsule: &RecoveryCapsule,
+        now_unix_ms: u64,
+    ) -> Result<bool, CoreError> {
+        self.verify_storage_lease(peer_device_id, lease, now_unix_ms)?;
+        if capsule.signer_device_id != peer_device_id || capsule.backup_id != lease.backup_id {
+            return Err(CoreError::AuthenticationFailed);
+        }
+        self.store.put_recovery_capsule_leased(
+            peer_device_id,
+            lease.backup_id,
+            lease,
+            capsule,
+            now_unix_ms,
+        )
+    }
+
+    /// Starts one segmented recovery-capsule upload after verifying its lease.
+    #[allow(clippy::too_many_arguments)]
+    pub fn begin_leased_recovery_capsule_upload(
+        &self,
+        peer_device_id: DeviceId,
+        lease: &StorageLease,
+        upload_id: &str,
+        total_bytes: u64,
+        total_segments: u32,
+        capsule_digest: &str,
+        descriptor: &RecoveryCapsuleDescriptor,
+        now_unix_ms: u64,
+    ) -> Result<(), CoreError> {
+        self.verify_storage_lease(peer_device_id, lease, now_unix_ms)?;
+        self.store.begin_recovery_capsule_upload(
+            peer_device_id,
+            lease.backup_id,
+            lease,
+            upload_id,
+            total_bytes,
+            total_segments,
+            capsule_digest,
+            descriptor,
+            now_unix_ms,
+        )
+    }
+
+    /// Persists one authenticated segment under an existing capsule upload lease.
+    #[allow(clippy::too_many_arguments)]
+    pub fn put_leased_recovery_capsule_segment(
+        &self,
+        peer_device_id: DeviceId,
+        lease: &StorageLease,
+        upload_id: &str,
+        index: u32,
+        segment: &[u8],
+        segment_digest: &str,
+        now_unix_ms: u64,
+    ) -> Result<(), CoreError> {
+        self.verify_storage_lease(peer_device_id, lease, now_unix_ms)?;
+        self.store.put_recovery_capsule_segment(
+            peer_device_id,
+            lease.backup_id,
+            lease,
+            upload_id,
+            index,
+            segment,
+            segment_digest,
+            now_unix_ms,
+        )
+    }
+
+    /// Verifies and commits all ordered capsule segments through lease accounting.
+    pub fn commit_leased_recovery_capsule_upload(
+        &self,
+        peer_device_id: DeviceId,
+        lease: &StorageLease,
+        upload_id: &str,
+        now_unix_ms: u64,
+    ) -> Result<bool, CoreError> {
+        self.verify_storage_lease(peer_device_id, lease, now_unix_ms)?;
+        self.store.commit_recovery_capsule_upload(
+            peer_device_id,
+            lease.backup_id,
+            lease,
+            upload_id,
+            now_unix_ms,
+        )
+    }
+
+    /// Lists one owner-scoped page of bounded recovery capsule descriptors.
+    pub fn recovery_capsule_descriptors_for_peer(
+        &self,
+        peer_device_id: DeviceId,
+        backup_id: Option<BackupId>,
+        cursor: Option<&str>,
+        limit: u16,
+    ) -> Result<(Vec<RecoveryCapsuleDescriptor>, Option<String>), CoreError> {
+        self.authorized_peer(peer_device_id, PeerRole::BackupReader)?;
+        self.store.list_recovery_capsule_descriptors_for_owner(
+            peer_device_id,
+            backup_id,
+            cursor,
+            limit,
+        )
+    }
+
+    /// Reads one bounded owner-scoped capsule segment.
+    pub fn recovery_capsule_segment_for_peer(
+        &self,
+        peer_device_id: DeviceId,
+        backup_id: BackupId,
+        snapshot_id: &str,
+        offset: u64,
+        maximum_bytes: u32,
+    ) -> Result<(Vec<u8>, u64, String), CoreError> {
+        self.authorized_peer(peer_device_id, PeerRole::BackupReader)?;
+        self.store.read_recovery_capsule_segment_for_owner(
+            peer_device_id,
+            backup_id,
+            snapshot_id,
+            offset,
+            maximum_bytes,
+        )
+    }
+
+    fn verify_storage_lease(
+        &self,
+        peer_device_id: DeviceId,
+        lease: &StorageLease,
+        now_unix_ms: u64,
+    ) -> Result<(), CoreError> {
+        self.authorized_peer(peer_device_id, PeerRole::BackupWriter)?;
+        if lease.schema_version != 1
+            || lease.peer_device_id != peer_device_id
+            || lease.provider_device_id != self.device_id()
+            || lease.expires_at_unix_ms <= now_unix_ms
+        {
+            return Err(CoreError::AuthenticationFailed);
+        }
+        self.public_identity().verify(
+            STORAGE_LEASE_SIGNATURE_DOMAIN,
+            &storage_lease_signing_bytes(lease)?,
+            &lease.signature,
+        )
     }
 
     /// Resolves one non-revoked peer with an exact required role.
@@ -648,12 +1152,24 @@ impl Engine {
 
     /// Persists one mutually confirmed grant.
     pub fn trust_peer(&self, grant: PeerGrant) -> Result<SignedRoster, CoreError> {
+        self.trust_peer_with_transport(grant, None)
+    }
+
+    fn trust_peer_with_transport(
+        &self,
+        grant: PeerGrant,
+        transport: Option<TransportBinding>,
+    ) -> Result<SignedRoster, CoreError> {
         if grant.revoked {
             return Err(CoreError::InvalidState(
                 "new trust grant cannot already be revoked".to_owned(),
             ));
         }
-        PublicIdentity::from_encoded(grant.peer_device_id, grant.public_key.clone())?;
+        let identity =
+            PublicIdentity::from_encoded(grant.peer_device_id, grant.public_key.clone())?;
+        if let Some(binding) = transport.as_ref() {
+            crate::pairing::validate_transport_binding(binding, &identity, &grant.display_name)?;
+        }
         let mut config = self.config.lock().map_err(|_| CoreError::Synchronization)?;
         let mut candidate = config.clone();
         if candidate.trusted_peers.len() >= 128
@@ -661,10 +1177,32 @@ impl Engine {
         {
             return Err(CoreError::ResourceLimit("trusted peers"));
         }
-        candidate.trusted_peers.insert(grant.peer_device_id, grant);
+        let peer_id = grant.peer_device_id;
+        candidate.trusted_peers.insert(peer_id, grant);
+        if let Some(binding) = transport {
+            candidate.trusted_peer_transports.insert(peer_id, binding);
+        } else {
+            candidate.trusted_peer_transports.remove(&peer_id);
+        }
         let roster = self.issue_roster_locked(&config, &mut candidate)?;
         *config = candidate;
         Ok(roster)
+    }
+
+    /// Returns an exact transport pin retained from a mutually signed pairing transcript.
+    pub fn trusted_peer_transport(
+        &self,
+        peer_id: DeviceId,
+        required_role: PeerRole,
+    ) -> Result<TransportBinding, CoreError> {
+        self.authorized_peer(peer_id, required_role)?;
+        self.config
+            .lock()
+            .map_err(|_| CoreError::Synchronization)?
+            .trusted_peer_transports
+            .get(&peer_id)
+            .cloned()
+            .ok_or(CoreError::IdentityMismatch)
     }
 
     /// Verifies and durably advances one peer's sequential signed roster gossip.
@@ -718,6 +1256,7 @@ impl Engine {
             .get_mut(&peer_id)
             .ok_or(CoreError::IdentityMismatch)?;
         grant.revoked = true;
+        candidate.trusted_peer_transports.remove(&peer_id);
         let roster = self.issue_roster_locked(&config, &mut candidate)?;
         *config = candidate;
         drop(config);
@@ -860,11 +1399,12 @@ impl Engine {
             .lock()
             .map_err(|_| CoreError::Synchronization)?
             .clone();
-        let replication = scheduler.replicate_controlled(
+        let mut replication = scheduler.replicate_controlled(
             &self.store,
             &options.replica_intent,
             &scanned.chunk_locators,
             control,
+            options.backup_id,
         )?;
         let mut manifest = scanned.manifest;
         manifest.provider_acknowledgements = replication.acknowledgements.clone();
@@ -877,6 +1417,24 @@ impl Engine {
             scanned.chunk_locators,
             options.created_at_unix_ms,
         )?;
+        let recovery_provider_directory = {
+            let config = self.config.lock().map_err(|_| CoreError::Synchronization)?;
+            recovery_provider_directory(&config, Some(&options.replica_intent.selected_providers))?
+        };
+        let recovery_capsule = RecoveryCapsule::seal(
+            &stored_snapshot,
+            &options.display_name,
+            &key,
+            &self.recovery_master,
+            &self.identity,
+            recovery_provider_directory,
+        )?;
+        self.store.put_recovery_capsule(&recovery_capsule)?;
+        scheduler.replicate_recovery_capsule(
+            &options.replica_intent,
+            &recovery_capsule,
+            &mut replication,
+        );
         let remembered = remembered_backup_state(options, self.device_id())?;
         let transaction = PendingBackupCommit {
             schema_version: BACKUP_TRANSACTION_SCHEMA_VERSION,
@@ -1933,6 +2491,31 @@ fn persist_backup_key_file(path: &Path, key: &BackupKey) -> Result<(), CoreError
         key: Zeroizing::new(URL_SAFE_NO_PAD.encode(key.to_bytes().as_ref())),
     };
     write_atomic(path, &serde_json::to_vec_pretty(&encoded)?, true)
+}
+
+fn persist_or_validate_backup_key_file(path: &Path, key: &BackupKey) -> Result<(), CoreError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(CoreError::InvalidState(
+                    "backup key path is not a regular file".to_owned(),
+                ));
+            }
+            let incumbent = load_backup_key_file(path)?;
+            if incumbent.to_bytes().as_ref() != key.to_bytes().as_ref() {
+                return Err(CoreError::AuthenticationFailed);
+            }
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            persist_backup_key_file(path, key)
+        }
+        Err(source) => Err(CoreError::Io {
+            operation: "inspect recovered backup key",
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
 }
 
 fn load_backup_key_file(path: &Path) -> Result<BackupKey, CoreError> {

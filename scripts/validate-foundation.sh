@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repo_root"
 
 required_paths="
@@ -15,6 +15,7 @@ docs/architecture/overview.md
 docs/security/threat-model.md
 docs/protocol/protocol.md
 docs/release/validation-matrix.md
+docs/release/signed-history-policy.md
 crates/covalent-core/Cargo.toml
 crates/covalent-protocol/Cargo.toml
 crates/covalent-node/Cargo.toml
@@ -27,6 +28,7 @@ packaging/unraid/covalent.xml
 .github/workflows/ci.yml
 .github/workflows/apple-release.yml
 scripts/verify-apple-silicon-bundle.sh
+scripts/verify-release-commit-signature.sh
 "
 
 for path in $required_paths; do
@@ -72,6 +74,7 @@ if ARCHS='arm64 x86_64' apps/apple/Scripts/build-node-helper.sh >/dev/null 2>&1;
 fi
 
 ./scripts/validate-unraid-template.sh
+./scripts/check-container-contract.sh
 
 if command -v jq >/dev/null 2>&1; then
   jq empty fixtures/contracts/settings-v1.json
@@ -82,6 +85,8 @@ fi
 for script in scripts/*.sh; do
   sh -n "$script"
 done
+
+./scripts/test-zero-open-codeql-alerts.sh
 
 if rg -n --glob '!docs/**' --glob '!README.md' --glob '!working.md' --glob '!CONTRIBUTING.md' --glob '!scripts/validate-foundation.sh' --glob '!target/**' '(automatically (choose|select|place) replica|supports full-device iOS backup)' .; then
   echo "unsafe product claim found outside explicit documentation" >&2

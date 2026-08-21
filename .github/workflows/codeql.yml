@@ -47,3 +47,21 @@ jobs:
       - uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: /language:${{ matrix.language }}
+
+  zero-open-alerts:
+    name: CodeQL policy
+    needs: analyze
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Require zero open CodeQL alerts repository-wide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/code-scanning/alerts?state=open&per_page=100" \
+            | ./scripts/check-zero-open-codeql-alerts.sh
+          echo "CodeQL policy: zero repository-wide open alerts."

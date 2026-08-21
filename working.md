@@ -4,7 +4,7 @@ Updated: 2026-08-16
 
 ## Status
 
-The active root-cause remediation is an uncommitted, unpushed worktree based on `cfe4eda50c431375e82f25eb2f96647aafdf6e10`. It is not a release candidate and no older ignored artifact is exact-current evidence. Tier 1 remains macOS, Android, Docker, and Unraid; iOS remains a separately reported Tier 2 track.
+The active remediation is an uncommitted, unpushed worktree based on `e241381211ff2be5030255cc359892a9be1e445f`. It is not a release candidate and no older ignored artifact is exact-current evidence. Tier 1 remains macOS, Android, Docker, and Unraid; iOS remains a separately reported Tier 2 track.
 
 ## Completed in this iteration
 
@@ -17,7 +17,8 @@ The active root-cause remediation is an uncommitted, unpushed worktree based on 
 - Repaired the Xcode 26 macOS UI runner assembly hang by building first, re-sealing the completed runner, then running with process-group timeouts and uploaded diagnostics. The harness still fails immediately with exit 75 if the headed login session is locked; the current unlocked session completed the UI tests without an authentication bypass.
 - Added hardened runtime/nested secure timestamp rules and a fail-closed Developer ID/notarization/stapling workflow. Added source, Apple, Android, and container inventory/SBOM/checksum policy and third-party notices.
 - Restricted macOS to Apple Silicon: the Xcode project, Rust helper build, CI, release workflow, validation scripts, and release evidence require exact arm64 app/helper binaries and explicitly reject x86_64 or multi-architecture requests.
-- Pinned CI actions and container bases, added required platform gates, safe scan-before-tag container promotion, CodeQL, Dependabot, repository templates/CODEOWNERS, and a protected-main ruleset that preserves owner direct-main bypass.
+- Pinned CI actions and container bases, added required platform gates, safe scan-before-tag container promotion, CodeQL, Dependabot, repository templates/CODEOWNERS, and protected-main direct delivery. Production releases additionally require a verified signed commit and zero open CodeQL alerts; remote ruleset separation is documented in `docs/release/signed-history-policy.md` and awaits maintainer signing-key setup.
+- The container now uses a pinned Alpine 3.23 runtime for both `linux/amd64` and `linux/arm64`; CI asserts the documented base, OCI base labels, exact revision label, and the 96 MiB budget on both architectures.
 
 ## Current executable evidence
 
@@ -51,7 +52,7 @@ The active root-cause remediation is an uncommitted, unpushed worktree based on 
 
 1. Decide whether release scope requires closing the real 1/10 GiB QUIC, streaming archive, million-chunk concurrent-GC, and prior-package fixture gates before versioning.
 2. With the owner present, unlock the headed macOS session and run `apps/apple/Scripts/macos-ui-test.sh`.
-3. After review, commit as `thekozugroup <thekozugroup@gmail.com>` without co-author tags and push through the preserved owner direct-main bypass.
+3. Register the maintainer signing key, split the remote rulesets as documented, and make a verified signed commit before a credentialed release.
 4. Supply signing/notary secrets to the guarded workflows, promote immutable artifacts, then perform the documented physical Unraid and Tailnet drills.
 
 ## Release-prep iteration 2 (2026-08-16)

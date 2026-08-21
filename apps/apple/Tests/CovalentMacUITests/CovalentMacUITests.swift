@@ -16,7 +16,12 @@ final class CovalentMacUITests: XCTestCase {
 
         app.staticTexts["Devices"].click()
         XCTAssertTrue(app.staticTexts["Your backup network"].waitForExistence(timeout: 3))
-        app.buttons["devices.pair"].click()
+        let advanced = app.descendants(matching: .any)["devices.advancedRecovery"]
+        XCTAssertTrue(advanced.waitForExistence(timeout: 3))
+        advanced.click()
+        let offlinePairing = app.buttons["devices.offlinePairing"]
+        XCTAssertTrue(offlinePairing.waitForExistence(timeout: 3))
+        offlinePairing.click()
         XCTAssertTrue(app.staticTexts["Secure Pairing"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Nearby advertisements remain untrusted until finalization."].exists)
         let close = app.buttons["pairing.close"]
@@ -49,8 +54,9 @@ final class CovalentMacUITests: XCTestCase {
         continueAfterFailure = false
         XCTAssertTrue(app.staticTexts["Apple UI Test Node is protected here"].waitForExistence(timeout: 10))
 
-        let statusItem = app.statusItems.firstMatch
-        XCTAssertTrue(statusItem.waitForExistence(timeout: 5))
+        let statusItem = app.statusItems["Covalent"].firstMatch
+        XCTAssertTrue(statusItem.waitForExistence(timeout: 10))
+        XCTAssertTrue(statusItem.isHittable)
         statusItem.click()
 
         XCTAssertTrue(app.menuItems["Open Covalent"].waitForExistence(timeout: 3))

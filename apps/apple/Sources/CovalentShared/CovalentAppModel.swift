@@ -44,6 +44,7 @@ public enum AppPresentation: String, Identifiable, Sendable {
     case connection
     case newBackup
     case pairDevice
+    case networkPairing
     case importSettings
 
     public var id: String { rawValue }
@@ -114,6 +115,11 @@ public final class CovalentAppModel: ObservableObject {
     @Published public private(set) var providers: [ProviderConnection] = []
     @Published public private(set) var backups: [BackupSummary] = []
     @Published public private(set) var discoveryCandidates: [DiscoveryCandidate] = []
+    @Published public var backupDraftBackupId: UUID?
+    @Published public private(set) var networkPairings: [NetworkPairing] = []
+    @Published public private(set) var activeNetworkPairing: NetworkPairing?
+    @Published public private(set) var startingPairingCandidateID: String?
+    @Published public private(set) var startingPairingAddress: String?
     @Published public private(set) var directoryGrants: [SelectedDirectoryGrant] = []
     @Published public private(set) var snapshots: [SnapshotRecord] = []
     @Published public private(set) var activeTask: ActiveTask?
@@ -180,9 +186,116 @@ public final class CovalentAppModel: ObservableObject {
         }
     }
 
-    public func requestNewBackup() {
+    public func requestNewBackup(existingBackupId: UUID? = nil) {
         selectedSection = .backups
+        backupDraftBackupId = existingBackupId
         presentation = .newBackup
+    }
+
+    public func requestManualPairing() {
+        selectedSection = .devices
+        presentation = .pairDevice
+    }
+
+    public func startNetworkPairing(candidate: DiscoveryCandidate) async {
+        guard candidate.isCompatible else {
+            alert = AppAlert(
+                title: "Device is not compatible",
+                message: "This device does not support Covalent protocol 1."
+            )
+            return
+        }
+        startingPairingCandidateID = candidate.id
+        defer { startingPairingCandidateID = nil }
+        await startNetworkPairing(candidateAddress: candidate.endpoint)
+    }
+
+    public func startNetworkPairing(candidateAddress: String) async {
+        let address = candidateAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !address.isEmpty, address.utf8.count <= 253, !address.contains(where: \Character.isWhitespace) else {
+            alert = AppAlert(
+                title: "Tailscale address is not valid",
+                message: "Enter a MagicDNS hostname or IP address, including the Covalent peer port when required."
+            )
+            return
+        }
+        startingPairingAddress = address
+        defer { startingPairingAddress = nil }
+        do {
+            let pairing = try await client.startNetworkPairing(candidateAddress: address)
+            upsertNetworkPairing(pairing)
+            activeNetworkPairing = pairing
+            presentation = .networkPairing
+        } catch {
+            report(error, title: "Secure pairing could not start")
+        }
+    }
+
+    public func refreshNetworkPairings(reportErrors: Bool = false) async {
+        guard isAuthorized else { return }
+        do {
+            let pending = try await client.pendingNetworkPairings()
+            networkPairings = pending.sorted { $0.expiresAtUnixMs < $1.expiresAtUnixMs }
+            if let activeNetworkPairing,
+               let updated = pending.first(where: { $0.id == activeNetworkPairing.id }) {
+                self.activeNetworkPairing = updated
+                if updated.state == .complete {
+                    try await establishProviderConnection(for: updated)
+                }
+            } else if presentation == nil,
+                      activeTask == nil,
+                      let incoming = pending.first(where: {
+                          $0.direction == .incoming && $0.state != .failed
+                      }) {
+                activeNetworkPairing = incoming
+                presentation = .networkPairing
+            }
+        } catch where !reportErrors {
+            // Status refresh remains authoritative; transient pairing polling errors are retried.
+        } catch {
+            self.report(error, title: "Pairing requests could not be refreshed")
+        }
+    }
+
+    public func pollNetworkPairings() async {
+        while !Task.isCancelled {
+            await refreshNetworkPairings()
+            do {
+                try await Task.sleep(for: .seconds(2))
+            } catch {
+                return
+            }
+        }
+    }
+
+    public func confirmNetworkPairing(_ pairing: NetworkPairing) async {
+        do {
+            let updated = try await client.confirmNetworkPairing(
+                pairingId: pairing.id,
+                displayedCode: pairing.authenticationString
+            )
+            upsertNetworkPairing(updated)
+            activeNetworkPairing = updated
+            if updated.state == .complete {
+                try await establishProviderConnection(for: updated)
+            }
+        } catch {
+            report(error, title: "Pairing confirmation failed")
+        }
+    }
+
+    public func dismissNetworkPairing(_ pairing: NetworkPairing) async {
+        do {
+            try await client.cancelNetworkPairing(pairingId: pairing.id)
+        } catch {
+            report(error, title: pairing.state == .complete ? "Pairing could not be acknowledged" : "Pairing could not be cancelled")
+            return
+        }
+        networkPairings.removeAll { $0.id == pairing.id }
+        if activeNetworkPairing?.id == pairing.id {
+            activeNetworkPairing = nil
+        }
+        presentation = nil
     }
 
     public func requestRestoreLatest() {
@@ -359,6 +472,9 @@ public final class CovalentAppModel: ObservableObject {
             guard selectedProviderIds.isSubset(of: connectedIds) else {
                 throw AppModelError.providerNotConnected
             }
+            guard selectedProviderIds.isEmpty else {
+                throw AppModelError.providerCapacityUnverified
+            }
             let jobId = "backup-\(UUID().uuidString.lowercased())"
             let snapshotId = Self.snapshotIdentifier()
             activeTask = ActiveTask(kind: .backup, jobId: jobId, title: name)
@@ -474,14 +590,12 @@ public final class CovalentAppModel: ObservableObject {
             let resolved = try grant.resolve()
             let client = self.client
             let plan = try await resolved.withCoordinatedWrite { targetURL in
-                try await Task.detached(priority: .userInitiated) {
-                    try AppleArchiveTransfer.requireEmptyDirectory(targetURL)
-                }.value
                 return try await client.previewArchiveRestore(
                         backupId: record.backupId,
                         snapshotId: record.snapshotId,
                         conflictPolicy: conflictPolicy,
-                        jobId: jobId
+                        jobId: jobId,
+                        targetURL: targetURL
                 )
             }
             let previousPreview = restorePreview
@@ -599,6 +713,12 @@ public final class CovalentAppModel: ObservableObject {
         }
     }
 
+    private func upsertNetworkPairing(_ pairing: NetworkPairing) {
+        networkPairings.removeAll { $0.id == pairing.id }
+        networkPairings.append(pairing)
+        networkPairings.sort { $0.expiresAtUnixMs < $1.expiresAtUnixMs }
+    }
+
     public func defaultInvitationEndpoint() async -> String? {
         do {
             let identity = try await client.transportIdentity()
@@ -609,15 +729,11 @@ public final class CovalentAppModel: ObservableObject {
         }
     }
 
-    public func createInvitation(endpoint: String) async -> PairingInvitation? {
+    public func createInvitation() async -> PairingInvitation? {
         do {
-            let cleanEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !cleanEndpoint.isEmpty, cleanEndpoint.utf8.count <= 512 else {
-                throw AppModelError.invalidEndpoint
-            }
             return try await client.createPairingInvitation(
                 lifetimeMilliseconds: 10 * 60 * 1_000,
-                endpoints: [cleanEndpoint]
+                endpoints: []
             )
         } catch {
             report(error, title: "Invitation could not be created")
@@ -682,19 +798,76 @@ public final class CovalentAppModel: ObservableObject {
         }
     }
 
-    public func connectProvider(peerId: UUID, address: String, certificateDer: String) async -> Bool {
+    public func connectProvider(using transport: PeerTransport) async -> Bool {
         do {
-            _ = try await client.connectProvider(
-                peerId: peerId,
-                address: address.trimmingCharacters(in: .whitespacesAndNewlines),
-                certificateDer: certificateDer.trimmingCharacters(in: .whitespacesAndNewlines)
-            )
-            providers = try await client.providers()
+            let connected = try await client.connectProvider(using: transport)
+            try Self.validateProviderBinding(connected, transport: transport)
+            let persisted = try await client.providers()
+            guard persisted.contains(where: {
+                $0.peerId == transport.peerId &&
+                    $0.certificateFingerprint == transport.certificateFingerprint
+            }) else { throw AppModelError.providerBindingMismatch }
+            providers = persisted
             return true
         } catch {
-            report(error, title: "Provider connection failed")
+            report(error, title: "Backup device could not be added")
             return false
         }
+    }
+
+    public func connectProvider(signedTransportJSON: String) async -> Bool {
+        let transport: PeerTransport
+        do {
+            transport = try decode(PeerTransport.self, from: signedTransportJSON)
+            guard !transport.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !transport.address.isEmpty,
+                  !transport.address.contains(where: \Character.isWhitespace),
+                  !transport.certificateDer.isEmpty
+            else { throw AppModelError.providerBindingMismatch }
+        } catch {
+            report(error, title: "Signed provider transport is not valid")
+            return false
+        }
+        return await connectProvider(using: transport)
+    }
+
+    public func isProviderReady(for pairing: NetworkPairing) -> Bool {
+        guard pairing.state == .complete, let transport = pairing.peerTransport else { return false }
+        return providers.contains {
+            $0.peerId == transport.peerId &&
+                $0.certificateFingerprint == transport.certificateFingerprint
+        }
+    }
+
+    nonisolated static func validateProviderBinding(
+        _ connected: ProviderConnection,
+        transport: PeerTransport
+    ) throws {
+        let allowed = CharacterSet(charactersIn: "0123456789abcdef")
+        guard transport.certificateFingerprint.utf8.count == 64,
+              transport.certificateFingerprint.unicodeScalars.allSatisfy(allowed.contains),
+              connected.peerId == transport.peerId,
+              connected.certificateFingerprint == transport.certificateFingerprint
+        else { throw AppModelError.providerBindingMismatch }
+    }
+
+    private func establishProviderConnection(for pairing: NetworkPairing) async throws {
+        guard pairing.state == .complete, let transport = pairing.peerTransport else {
+            throw AppModelError.providerBindingMismatch
+        }
+        let existing = try await client.providers().first { $0.peerId == transport.peerId }
+        if let existing {
+            try Self.validateProviderBinding(existing, transport: transport)
+        } else {
+            let connected = try await client.connectProvider(using: transport)
+            try Self.validateProviderBinding(connected, transport: transport)
+        }
+        let persisted = try await client.providers()
+        guard persisted.contains(where: {
+            $0.peerId == transport.peerId &&
+                $0.certificateFingerprint == transport.certificateFingerprint
+        }) else { throw AppModelError.providerBindingMismatch }
+        providers = persisted
     }
 
     public func disconnectProvider(_ provider: ProviderConnection) async {
@@ -774,6 +947,7 @@ public enum AppModelError: Error, Equatable, Sendable {
     case noControllableOperation
     case folderPermissionMissing
     case providerNotConnected
+    case providerCapacityUnverified
     case restorePreviewMissing
     case invalidDeviceName
     case invalidBackupName
@@ -782,6 +956,7 @@ public enum AppModelError: Error, Equatable, Sendable {
     case settingsFileTooLarge
     case transferTooLarge
     case pairingNotMutuallyConfirmed
+    case providerBindingMismatch
 }
 
 extension AppModelError: LocalizedError {
@@ -792,6 +967,7 @@ extension AppModelError: LocalizedError {
         case .noControllableOperation: "The current operation cannot be paused or cancelled."
         case .folderPermissionMissing: "Choose the folder again to restore access."
         case .providerNotConnected: "One of the selected replica devices is no longer connected."
+        case .providerCapacityUnverified: "Every replica must report fresh reachability and enough reservable capacity before Covalent opens the source folder."
         case .restorePreviewMissing: "Create a fresh restore preview before restoring files."
         case .invalidDeviceName: "Use a device name from 1 to 80 characters."
         case .invalidBackupName: "Use a backup name from 1 to 120 characters."
@@ -800,6 +976,7 @@ extension AppModelError: LocalizedError {
         case .settingsFileTooLarge: "The settings file is larger than the 2 MiB limit."
         case .transferTooLarge: "The pairing transfer is larger than the 2 MiB limit."
         case .pairingNotMutuallyConfirmed: "Both devices must sign the matching code before pairing can finish."
+        case .providerBindingMismatch: "The connected device did not match the transport identity signed during pairing."
         }
     }
 }

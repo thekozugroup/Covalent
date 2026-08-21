@@ -26,3 +26,5 @@ if [ -n "$android_java" ]; then
 else
   env ANDROID_HOME="$android_sdk" ANDROID_SDK_ROOT="$android_sdk" "$repo_root/apps/android/gradlew" -p "$repo_root/apps/android" --no-daemon test lint assembleDebug assembleRelease assembleDebugAndroidTest
 fi
+
+"$repo_root/scripts/test-android-instrumentation-result.sh"

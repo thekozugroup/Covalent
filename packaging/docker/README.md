@@ -31,19 +31,23 @@ LAN discovery defaults to `false`. Bridge mode publishes TLS management on TCP 8
 
 ## Multi-architecture, reproducibility, and supply chain
 
-Build the release image for both supported container architectures with Buildx:
+The image supports exactly `linux/amd64` and `linux/arm64`. It uses a pinned Rust Alpine builder, a throwaway pinned Caddy Alpine stage, and a pinned Alpine 3.23 runtime base. The OCI labels record the runtime base name and digest so CI can reject documentation or image-metadata drift.
+
+Create a local two-architecture OCI archive with Buildx:
 
 ```sh
 docker buildx build --platform linux/amd64,linux/arm64 \
-  -f packaging/docker/Dockerfile -t ghcr.io/thekozugroup/covalent:local --load .
+  -f packaging/docker/Dockerfile -t ghcr.io/thekozugroup/covalent:local \
+  --output type=oci,dest=covalent-local.oci .
 ```
 
-The release workflow builds the same pinned Rust toolchain and Debian base for `linux/amd64` and `linux/arm64`, emits an SPDX SBOM, scans the image with Grype, and keylessly signs release-tag image digests with Cosign OIDC. Verification commands are recorded with the release artifact; a signature is not implied for local developer tags.
+The release workflow builds the same pinned Rust toolchain and Alpine runtime independently for `linux/amd64` and `linux/arm64`, enforces the 96 MiB budget on both images, then assembles one manifest. It emits an SPDX SBOM, scans the image with Grype, and keylessly signs release-tag image digests with Cosign OIDC. Verification commands are recorded with the release artifact; a signature is not implied for local developer tags.
 
 Run deterministic container checks locally:
 
 ```sh
 docker build -f packaging/docker/Dockerfile -t covalent:e2e .
+./scripts/check-container-contract.sh covalent:e2e
 ./scripts/check-container-runtime.sh covalent:e2e
 ./scripts/docker-compose-e2e.sh covalent:e2e
 ```

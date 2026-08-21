@@ -9,6 +9,7 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
 import java.lang.reflect.Proxy
+import java.nio.ByteBuffer
 import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.cert.CertificateException
@@ -28,13 +29,21 @@ import org.json.JSONArray
 import org.json.JSONObject
 import life.michaelwong.covalent.model.DiscoveryCandidate
 import life.michaelwong.covalent.model.NodeStatus
+import life.michaelwong.covalent.model.NetworkPairing
+import life.michaelwong.covalent.model.NetworkPairingDirection
+import life.michaelwong.covalent.model.NetworkPairingState
 import life.michaelwong.covalent.model.PeerGrant
+import life.michaelwong.covalent.model.PeerTransport
 import life.michaelwong.covalent.model.Provider
 import life.michaelwong.covalent.model.ProviderReachability
 import life.michaelwong.covalent.model.RememberedBackup
 import life.michaelwong.covalent.model.RestorePlanPage
 import life.michaelwong.covalent.model.RestorePlanReference
 import life.michaelwong.covalent.model.RestorePreviewEntry
+import life.michaelwong.covalent.model.TargetInventoryBinding
+import life.michaelwong.covalent.model.TargetInventoryDraft
+import life.michaelwong.covalent.model.TargetInventoryEntry
+import life.michaelwong.covalent.model.TargetInventoryReference
 import life.michaelwong.covalent.model.TransferKind
 import life.michaelwong.covalent.model.TransferRecord
 import life.michaelwong.covalent.model.TransferState
@@ -134,18 +143,13 @@ class CovalentNodeClient(
     fun connectProvider(
         baseUrl: String,
         token: String,
-        peerId: String,
-        address: String,
-        certificateDer: String,
+        peerTransport: PeerTransport,
     ): Provider {
         val json = post(
             baseUrl,
             token,
             "/api/v1/providers/connect",
-            JSONObject()
-                .put("peerId", peerId)
-                .put("address", address)
-                .put("certificateDer", certificateDer),
+            peerTransportConnectPayload(peerTransport),
         )
         return Provider(
             peerId = json.getString("peerId"),
@@ -153,6 +157,34 @@ class CovalentNodeClient(
             fingerprint = json.getString("certificateFingerprint"),
             reachability = ProviderReachability.CONNECTED,
         )
+    }
+
+    fun startNetworkPairing(baseUrl: String, token: String, candidateAddress: String): NetworkPairing {
+        requireNetworkPairingAddress(candidateAddress)
+        return post(baseUrl, token, "/api/v1/pair/network/start", JSONObject()
+            .put("candidateAddress", candidateAddress)).toNetworkPairing()
+    }
+
+    fun pendingNetworkPairings(baseUrl: String, token: String): List<NetworkPairing> {
+        val values = request(baseUrl, "GET", "/api/v1/pair/network/pending", token, null).array
+        return List(values.length()) { values.getJSONObject(it).toNetworkPairing() }
+    }
+
+    fun confirmNetworkPairing(
+        baseUrl: String,
+        token: String,
+        pairingId: String,
+        displayedCode: String,
+    ): NetworkPairing {
+        requireNetworkPairingId(pairingId)
+        require(displayedCode.matches(SAFE_AUTHENTICATION_STRING)) { "The pairing confirmation code is invalid." }
+        return post(baseUrl, token, "/api/v1/pair/network/$pairingId/confirm", JSONObject()
+            .put("displayedCode", displayedCode)).toNetworkPairing()
+    }
+
+    fun cancelNetworkPairing(baseUrl: String, token: String, pairingId: String) {
+        requireNetworkPairingId(pairingId)
+        request(baseUrl, "DELETE", "/api/v1/pair/network/$pairingId", token, null)
     }
 
     fun controlJob(baseUrl: String, token: String, jobId: String, action: String): String =
@@ -201,6 +233,75 @@ class CovalentNodeClient(
         }
     }
 
+    /** Uploads one immutable, bounded target inventory without exceeding normal JSON limits. */
+    fun uploadTargetInventory(
+        baseUrl: String,
+        token: String,
+        jobId: String,
+        draft: TargetInventoryDraft,
+        pageSize: Int = TARGET_INVENTORY_PAGE_SIZE,
+    ): TargetInventoryReference {
+        require(pageSize in 1..MAX_TARGET_INVENTORY_PAGE_SIZE) {
+            "Target inventory pages must contain between 1 and 5,000 entries."
+        }
+        validateTargetInventoryDraft(draft)
+        val started = post(
+            baseUrl,
+            token,
+            "/api/v1/restores/archive/inventories",
+            JSONObject()
+                .put("jobId", jobId)
+                .put("schemaVersion", 1)
+                .put("rootIdentity", draft.rootIdentity)
+                .put("entryCount", draft.entries.size)
+                .put("totalBytes", draft.totalBytes),
+        ).toTargetInventoryUpload(jobId)
+        check(started.nextOffset == 0L) { "The node returned a nonzero target inventory start offset." }
+
+        var offset = 0
+        while (offset < draft.entries.size) {
+            val end = minOf(offset + pageSize, draft.entries.size)
+            val entries = draft.entries.subList(offset, end)
+            val payload = JSONObject()
+                .put("jobId", jobId)
+                .put("offset", offset)
+                .put("pageDigest", targetInventoryPageDigest(entries))
+                .put("entries", JSONArray().apply { entries.forEach { put(it.toJson()) } })
+            val response = try {
+                post(
+                    baseUrl,
+                    token,
+                    "/api/v1/restores/archive/inventories/${started.inventoryId}/pages",
+                    payload,
+                ).toTargetInventoryUpload(jobId, started.inventoryId)
+            } catch (error: NodeApiException) {
+                val authoritative = error.inventoryOffset
+                if (error.code != "target_inventory_offset_mismatch" ||
+                    authoritative == null || authoritative !in 0..draft.entries.size.toLong()
+                ) {
+                    throw error
+                }
+                offset = authoritative.toInt()
+                continue
+            }
+            check(response.nextOffset == end.toLong()) {
+                "The node returned a different target inventory page offset."
+            }
+            offset = end
+        }
+
+        return post(
+            baseUrl,
+            token,
+            "/api/v1/restores/archive/inventories/${started.inventoryId}/finalize",
+            JSONObject()
+                .put("jobId", jobId)
+                .put("entryCount", draft.entries.size)
+                .put("totalBytes", draft.totalBytes)
+                .put("inventoryDigest", ""),
+        ).toTargetInventoryReference(jobId, started.inventoryId, draft)
+    }
+
     /** Creates a no-write restore plan and immediately fetches only its first bounded page. */
     fun previewArchiveRestore(
         baseUrl: String,
@@ -245,19 +346,36 @@ class CovalentNodeClient(
         }
         val page = request(baseUrl, "GET", path, token, null).body
         val pageReference = page.toRestorePlanReference()
-        check(pageReference.planId == reference.planId) { "The node returned a different restore plan ID." }
-        check(pageReference.planDigest == reference.planDigest) {
+        check(sameSignedRestorePlan(pageReference, reference)) {
             "The node returned a different signed restore plan."
-        }
-        check(pageReference.jobId == reference.jobId) { "The node returned a different restore job." }
-        check(pageReference.totalEntries == reference.totalEntries) {
-            "The restore plan changed while previewing it."
         }
         return page.toRestorePlanPage(pageReference).also {
             check(it.entryOffset == (parsedCursor?.toLong() ?: 0L)) {
                 "The node returned a different restore preview page."
             }
         }
+    }
+
+    /** Materializes bounded pages while keeping the signed reference exact across every page. */
+    fun restorePlanEntries(
+        baseUrl: String,
+        token: String,
+        firstPage: RestorePlanPage,
+        pageSize: Int = MAX_RESTORE_PREVIEW_PAGE_SIZE,
+    ): List<RestorePreviewEntry> {
+        val entries = firstPage.entries.toMutableList()
+        var page = firstPage
+        while (page.nextCursor != null) {
+            page = restorePlanPage(baseUrl, token, firstPage.reference, page.nextCursor, pageSize)
+            entries += page.entries
+        }
+        check(entries.size.toLong() == firstPage.reference.totalEntries) {
+            "The node omitted part of the signed restore plan."
+        }
+        check(entries.map(RestorePreviewEntry::destinationPath).toSet().size == entries.size) {
+            "The signed restore plan contains duplicate destination paths."
+        }
+        return entries
     }
 
     fun post(baseUrl: String, token: String, path: String, payload: JSONObject): JSONObject =
@@ -347,6 +465,8 @@ class CovalentNodeClient(
 
     internal fun readResponse(connection: HttpURLConnection): String {
         val code = connection.responseCode
+        val uploadOffset = connection.getHeaderField("X-Covalent-Upload-Offset")?.toLongOrNull()
+        val inventoryOffset = connection.getHeaderField("X-Covalent-Inventory-Offset")?.toLongOrNull()
         val stream = if (code in 200..299) connection.inputStream else connection.errorStream
         val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
         connection.disconnect()
@@ -363,6 +483,8 @@ class CovalentNodeClient(
                 code = payload?.optString("code").orEmpty().ifBlank { "http_$code" },
                 retryable = payload?.optBoolean("retryable", code >= 500) ?: (code >= 500),
                 message = payload?.optString("message").orEmpty().ifBlank { "Node returned HTTP $code." },
+                uploadOffset = uploadOffset,
+                inventoryOffset = inventoryOffset,
             )
         }
         return text
@@ -376,10 +498,196 @@ class CovalentNodeClient(
     }
 }
 
+internal fun peerTransportConnectPayload(peerTransport: PeerTransport): JSONObject = JSONObject()
+    .put("peerTransport", JSONObject()
+        .put("peerId", peerTransport.peerId)
+        .put("displayName", peerTransport.displayName)
+        .put("address", peerTransport.address)
+        .put("certificateDer", peerTransport.certificateDer)
+        .put("certificateFingerprint", peerTransport.certificateFingerprint))
+
 private const val COVALENT_PROTOCOL_VERSION = 1
 private const val RESTORE_PREVIEW_PAGE_SIZE = 100
 private const val MAX_RESTORE_PREVIEW_PAGE_SIZE = 1_000
+private const val TARGET_INVENTORY_PAGE_SIZE = 5_000
+private const val MAX_TARGET_INVENTORY_PAGE_SIZE = 5_000
+private const val MAX_TARGET_INVENTORY_ENTRIES = 250_000
 private val SAFE_PLAN_ID = Regex("[A-Za-z0-9_-]{16,128}")
+private val SAFE_AUTHENTICATION_STRING = Regex("(?:[0-9]{4}-){3}[0-9]{4}")
+private val SAFE_NETWORK_PAIRING_ID = Regex("[A-Za-z0-9_-]{1,128}")
+private val SAFE_LOWERCASE_DIGEST = Regex("[0-9a-f]{64}")
+
+private data class TargetInventoryUpload(
+    val inventoryId: String,
+    val jobId: String,
+    val nextOffset: Long,
+)
+
+private fun JSONObject.toTargetInventoryUpload(
+    expectedJobId: String,
+    expectedInventoryId: String? = null,
+): TargetInventoryUpload = TargetInventoryUpload(
+    inventoryId = getString("inventoryId").also {
+        check(it.matches(SAFE_LOWERCASE_DIGEST) && (expectedInventoryId == null || it == expectedInventoryId)) {
+            "The node returned a different target inventory ID."
+        }
+    },
+    jobId = getString("jobId").also {
+        check(it == expectedJobId) { "The node returned a different target inventory job." }
+    },
+    nextOffset = getLong("nextOffset").also {
+        check(it >= 0) { "The node returned an invalid target inventory offset." }
+    },
+)
+
+private fun JSONObject.toTargetInventoryReference(
+    expectedJobId: String,
+    expectedInventoryId: String,
+    draft: TargetInventoryDraft,
+): TargetInventoryReference = TargetInventoryReference(
+    inventoryId = getString("inventoryId"),
+    jobId = getString("jobId"),
+    schemaVersion = getInt("schemaVersion"),
+    rootIdentity = getString("rootIdentity"),
+    entryCount = getLong("entryCount"),
+    totalBytes = getLong("totalBytes"),
+    inventoryDigest = getString("inventoryDigest"),
+).also { reference ->
+    check(reference.inventoryId == expectedInventoryId && reference.inventoryId.matches(SAFE_LOWERCASE_DIGEST))
+    check(reference.jobId == expectedJobId && reference.schemaVersion == 1)
+    check(reference.rootIdentity == draft.rootIdentity)
+    check(reference.entryCount == draft.entries.size.toLong() && reference.totalBytes == draft.totalBytes)
+    check(reference.inventoryDigest.matches(SAFE_LOWERCASE_DIGEST)) {
+        "The node returned an invalid target inventory digest."
+    }
+}
+
+private fun TargetInventoryEntry.toJson(): JSONObject = JSONObject()
+    .put("path", path)
+    .put("kind", kind)
+    .put("length", length)
+    .put("identityToken", identityToken)
+    .also { value -> modifiedAtUnixMs?.let { value.put("modifiedAtUnixMs", it) } }
+
+internal fun targetInventoryPageDigest(entries: List<TargetInventoryEntry>): String {
+    require(entries.isNotEmpty() && entries.size <= MAX_TARGET_INVENTORY_ENTRIES)
+    val digest = MessageDigest.getInstance("SHA-256")
+    digest.update("covalent/target-inventory-page/v1".encodeToByteArray())
+    digest.update(ByteBuffer.allocate(Long.SIZE_BYTES).putLong(entries.size.toLong()).array())
+    entries.forEach { entry ->
+        val path = entry.path.encodeToByteArray()
+        digest.update(ByteBuffer.allocate(Long.SIZE_BYTES).putLong(path.size.toLong()).array())
+        digest.update(path)
+        digest.update(byteArrayOf(if (entry.kind == "file") 1 else 2))
+        digest.update(ByteBuffer.allocate(Long.SIZE_BYTES).putLong(entry.length).array())
+        entry.modifiedAtUnixMs?.let { modified ->
+            digest.update(byteArrayOf(1))
+            digest.update(ByteBuffer.allocate(Long.SIZE_BYTES).putLong(modified).array())
+        } ?: digest.update(byteArrayOf(0))
+        val identity = entry.identityToken.encodeToByteArray()
+        digest.update(ByteBuffer.allocate(Long.SIZE_BYTES).putLong(identity.size.toLong()).array())
+        digest.update(identity)
+    }
+    return digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+}
+
+internal fun compareUtf8(left: String, right: String): Int {
+    val leftBytes = left.encodeToByteArray()
+    val rightBytes = right.encodeToByteArray()
+    val shared = minOf(leftBytes.size, rightBytes.size)
+    for (index in 0 until shared) {
+        val comparison = (leftBytes[index].toInt() and 0xff).compareTo(rightBytes[index].toInt() and 0xff)
+        if (comparison != 0) return comparison
+    }
+    return leftBytes.size.compareTo(rightBytes.size)
+}
+
+private fun validateTargetInventoryDraft(draft: TargetInventoryDraft) {
+    require(draft.rootIdentity.isNotBlank() && draft.rootIdentity.length <= 512 &&
+        draft.rootIdentity.none(Char::isISOControl)) { "The restore target identity is invalid." }
+    require(draft.entries.size <= MAX_TARGET_INVENTORY_ENTRIES) {
+        "The restore target contains too many entries."
+    }
+    require(draft.totalBytes >= 0) { "The restore target byte count is invalid." }
+    var prior: String? = null
+    var totalBytes = 0L
+    draft.entries.forEach { entry ->
+        val directory = when (entry.kind) {
+            "file" -> false
+            "directory" -> true
+            else -> throw IllegalArgumentException("The restore target contains an unsupported entry.")
+        }
+        SafArchivePath.parse(entry.path, directory)
+        require(prior == null || compareUtf8(checkNotNull(prior), entry.path) < 0) {
+            "Restore target entries must be sorted and unique."
+        }
+        require(entry.length >= 0 && (!directory || entry.length == 0L)) {
+            "The restore target contains an invalid entry length."
+        }
+        require(entry.modifiedAtUnixMs == null || entry.modifiedAtUnixMs >= 0)
+        require(entry.identityToken.isNotBlank() && entry.identityToken.length <= 512 &&
+            entry.identityToken.none(Char::isISOControl)) { "The restore target contains an invalid identity token." }
+        if (!directory) totalBytes = Math.addExact(totalBytes, entry.length)
+        prior = entry.path
+    }
+    require(totalBytes == draft.totalBytes) { "The restore target byte count changed while inventorying." }
+}
+
+private fun requireNetworkPairingId(value: String) {
+    require(value.matches(SAFE_NETWORK_PAIRING_ID)) { "The network pairing ID is invalid." }
+}
+
+private fun requireNetworkPairingAddress(value: String) {
+    require(value.isNotBlank() && value.length <= 253 && value.none(Char::isWhitespace)) {
+        "The discovered network pairing address is invalid."
+    }
+}
+
+private fun JSONObject.toNetworkPairing(): NetworkPairing {
+    val pairingId = getString("pairingId")
+    requireNetworkPairingId(pairingId)
+    val authenticationString = getString("authenticationString")
+    check(authenticationString.matches(SAFE_AUTHENTICATION_STRING)) {
+        "The node returned an invalid network pairing confirmation code."
+    }
+    val expiresAt = getLong("expiresAtUnixMs")
+    check(expiresAt > 0) { "The node returned an invalid network pairing expiry." }
+    val state = when (getString("state")) {
+        "awaiting_local_confirmation" -> NetworkPairingState.AWAITING_LOCAL_CONFIRMATION
+        "awaiting_peer_confirmation" -> NetworkPairingState.AWAITING_PEER_CONFIRMATION
+        "complete" -> NetworkPairingState.COMPLETE
+        "failed" -> NetworkPairingState.FAILED
+        else -> error("The node returned an unknown network pairing state.")
+    }
+    val peerTransport = optionalJSONObject("peerTransport")?.let { transport ->
+        PeerTransport(
+            peerId = transport.getString("peerId").also(::requireNetworkPairingId),
+            displayName = transport.getString("displayName").also { check(it.isNotBlank() && it.length <= 128) },
+            address = transport.getString("address").also(::requireNetworkPairingAddress),
+            certificateDer = transport.getString("certificateDer").also { check(it.isNotBlank() && it.length <= 512 * 1024) },
+            certificateFingerprint = transport.getString("certificateFingerprint")
+                .also { check(it.matches(Regex("[0-9a-f]{64}"))) },
+        )
+    }
+    check(state != NetworkPairingState.COMPLETE || peerTransport != null) {
+        "A completed network pairing omitted its authenticated peer transport."
+    }
+    return NetworkPairing(
+        pairingId = pairingId,
+        direction = when (getString("direction")) {
+            "incoming" -> NetworkPairingDirection.INCOMING
+            "outgoing" -> NetworkPairingDirection.OUTGOING
+            else -> error("The node returned an unknown network pairing direction.")
+        },
+        peerName = getString("peerName").also { check(it.isNotBlank() && it.length <= 128) },
+        authenticationString = authenticationString,
+        expiresAtUnixMs = expiresAt,
+        state = state,
+        failureCode = optionalString("failureCode"),
+        failureMessage = optionalString("failureMessage"),
+        peerTransport = peerTransport,
+    )
+}
 
 private class NodeResponse(private val raw: String) {
     val body: JSONObject get() = if (raw.isBlank()) JSONObject() else JSONObject(raw)
@@ -389,7 +697,7 @@ private class NodeResponse(private val raw: String) {
 }
 
 internal fun restoreTransferPayload(reference: RestorePlanReference): JSONObject {
-    check(reference.totalEntries in 0..100_000) {
+    check(reference.totalEntries in 0..MAX_TARGET_INVENTORY_ENTRIES.toLong()) {
         "The restore plan exceeds Android's streamed entry limit."
     }
     val request = reference.legacyPlanJson?.let { JSONObject().put("plan", JSONObject(it)) }
@@ -399,6 +707,7 @@ internal fun restoreTransferPayload(reference: RestorePlanReference): JSONObject
         .put("expectedTotalEntries", reference.totalEntries)
         .put("expectedPlanId", reference.planId)
         .put("expectedPlanDigest", reference.planDigest)
+        .put("planReference", reference.toJson())
 }
 
 internal fun RestorePlanPage.toPersistenceJson(): JSONObject = JSONObject()
@@ -407,6 +716,7 @@ internal fun RestorePlanPage.toPersistenceJson(): JSONObject = JSONObject()
     .put("entries", JSONArray().apply {
         entries.forEach { entry ->
             put(JSONObject()
+                .put("sourcePath", entry.sourcePath)
                 .put("destinationPath", entry.destinationPath)
                 .put("kind", entry.kind)
                 .put("action", entry.action))
@@ -421,6 +731,9 @@ internal fun restorePlanPageFromPersistence(json: JSONObject): RestorePlanPage =
     nextCursor = json.optionalString("nextCursor"),
 )
 
+internal fun restorePlanReferenceFromPersistence(json: JSONObject): RestorePlanReference =
+    json.toRestorePlanReference()
+
 private fun JSONObject.toRestorePlanReference(): RestorePlanReference {
     val inlineEntries = optJSONArray("entries")
     val durablePlanId = optionalString("planId")
@@ -430,7 +743,9 @@ private fun JSONObject.toRestorePlanReference(): RestorePlanReference {
         inlineEntries != null -> inlineEntries.length().toLong()
         else -> error("The node omitted the restore entry count.")
     }
-    require(entryCount in 0..100_000) { "The restore plan exceeds Android's streamed entry limit." }
+    require(entryCount in 0..MAX_TARGET_INVENTORY_ENTRIES.toLong()) {
+        "The restore plan exceeds Android's streamed entry limit."
+    }
     return RestorePlanReference(
         planId = durablePlanId,
         planDigest = getString("planDigest"),
@@ -443,14 +758,44 @@ private fun JSONObject.toRestorePlanReference(): RestorePlanReference {
         signerDeviceId = getString("signerDeviceId"),
         signature = getString("signature"),
         totalEntries = entryCount,
+        targetInventory = optionalJSONObject("targetInventory")?.toTargetInventoryBinding(),
         legacyPlanJson = persistedLegacyPlan
             ?: if (durablePlanId == null && inlineEntries != null) toString() else null,
     ).also {
-        check(it.conflictPolicy == "fail") {
-            "Streamed restores require the fail-on-conflict policy and an empty folder."
+        check(it.conflictPolicy in setOf("fail", "skip", "rename")) {
+            "Android supports Fail, Skip, or Rename restore conflicts."
+        }
+        check(it.targetInventory != null || it.conflictPolicy == "fail") {
+            "Nonempty restore policies require a signed target inventory."
         }
     }
 }
+
+private fun JSONObject.toTargetInventoryBinding(): TargetInventoryBinding = TargetInventoryBinding(
+    schemaVersion = getInt("schemaVersion"),
+    rootIdentity = getString("rootIdentity"),
+    entryCount = getLong("entryCount"),
+    totalBytes = getLong("totalBytes"),
+    inventoryDigest = getString("inventoryDigest"),
+    actionsDigest = getString("actionsDigest"),
+).also { binding ->
+    check(binding.schemaVersion == 1)
+    check(binding.rootIdentity.isNotBlank() && binding.rootIdentity.length <= 512 &&
+        binding.rootIdentity.none(Char::isISOControl))
+    check(binding.entryCount in 0..MAX_TARGET_INVENTORY_ENTRIES.toLong() && binding.totalBytes >= 0)
+    check(binding.inventoryDigest.matches(SAFE_LOWERCASE_DIGEST) &&
+        binding.actionsDigest.matches(SAFE_LOWERCASE_DIGEST)) {
+        "The signed restore inventory binding is invalid."
+    }
+}
+
+private fun TargetInventoryBinding.toJson(): JSONObject = JSONObject()
+    .put("schemaVersion", schemaVersion)
+    .put("rootIdentity", rootIdentity)
+    .put("entryCount", entryCount)
+    .put("totalBytes", totalBytes)
+    .put("inventoryDigest", inventoryDigest)
+    .put("actionsDigest", actionsDigest)
 
 private fun RestorePlanReference.toJson(): JSONObject = JSONObject()
     .put("planId", planId)
@@ -464,11 +809,13 @@ private fun RestorePlanReference.toJson(): JSONObject = JSONObject()
     .put("signerDeviceId", signerDeviceId)
     .put("signature", signature)
     .put("totalEntries", totalEntries)
+    .also { value -> targetInventory?.let { value.put("targetInventory", it.toJson()) } }
     .put("legacyPlanJson", legacyPlanJson)
 
 private fun JSONArray.toRestorePreviewEntries(): List<RestorePreviewEntry> = List(length()) { index ->
     getJSONObject(index).let { entry ->
         RestorePreviewEntry(
+            sourcePath = entry.optionalString("sourcePath") ?: entry.getString("destinationPath"),
             destinationPath = entry.getString("destinationPath"),
             kind = entry.getString("kind"),
             action = entry.getString("action"),
@@ -476,26 +823,59 @@ private fun JSONArray.toRestorePreviewEntries(): List<RestorePreviewEntry> = Lis
             check(it.kind == "directory" || it.kind == "file") {
                 "The restore preview contains an unknown entry kind."
             }
-            check(
-                it.action == if (it.kind == "directory") "create_directory" else "create_file",
-            ) { "The restore preview could modify existing content." }
+            check(isSafeSafRestoreAction(it.kind, it.action)) {
+                "The restore preview contains an action Android cannot apply safely."
+            }
+            SafArchivePath.parse(it.sourcePath, it.kind == "directory")
             SafArchivePath.parse(it.destinationPath, it.kind == "directory")
         }
     }
 }
 
+internal fun isSafeSafRestoreAction(kind: String, action: String): Boolean = when (kind) {
+    "directory" -> action == "create_directory" || action == "keep_directory"
+    "file" -> action == "create_file" || action == "skip_file" || action == "rename_file"
+    else -> false
+}
+
+internal fun sameSignedRestorePlan(left: RestorePlanReference, right: RestorePlanReference): Boolean =
+    left.planId == right.planId &&
+        left.planDigest == right.planDigest &&
+        left.backupId == right.backupId &&
+        left.snapshotId == right.snapshotId &&
+        left.authorizedRoot == right.authorizedRoot &&
+        left.manifestDigest == right.manifestDigest &&
+        left.conflictPolicy == right.conflictPolicy &&
+        left.jobId == right.jobId &&
+        left.signerDeviceId == right.signerDeviceId &&
+        left.signature == right.signature &&
+        left.totalEntries == right.totalEntries &&
+        left.targetInventory == right.targetInventory
+
 private fun JSONObject.toRestorePlanPage(reference: RestorePlanReference): RestorePlanPage {
     val offset = optLong("entryOffset", 0)
     val entries = getJSONArray("entries").toRestorePreviewEntries()
+    check(entries.size <= MAX_RESTORE_PREVIEW_PAGE_SIZE) {
+        "The restore preview page exceeds its signed page limit."
+    }
     check(entries.map(RestorePreviewEntry::destinationPath).toSet().size == entries.size) {
         "The restore preview page contains a duplicate path."
     }
-    check(offset >= 0 && offset + entries.size <= reference.totalEntries) {
+    if (reference.targetInventory == null) {
+        check(reference.conflictPolicy == "fail" && entries.all {
+            it.action == if (it.kind == "directory") "create_directory" else "create_file"
+        }) { "A legacy streamed restore may only create content in an empty folder." }
+    }
+    val pageEnd = try {
+        Math.addExact(offset, entries.size.toLong())
+    } catch (_: ArithmeticException) {
+        error("The restore preview page offset overflows its signed plan.")
+    }
+    check(offset >= 0 && pageEnd <= reference.totalEntries) {
         "The restore preview page is outside its signed plan."
     }
     val cursor = optionalString("nextCursor")
     cursor?.let { check(it.all(Char::isDigit)) { "The restore plan cursor is invalid." } }
-    val pageEnd = offset + entries.size
     check(
         (pageEnd == reference.totalEntries && cursor == null) ||
             (pageEnd < reference.totalEntries && cursor == pageEnd.toString()),
@@ -532,6 +912,8 @@ class NodeApiException(
     val code: String,
     val retryable: Boolean,
     override val message: String,
+    val uploadOffset: Long? = null,
+    val inventoryOffset: Long? = null,
 ) : Exception(message)
 
 class NodeProtocolException(version: Int) : IllegalStateException(
@@ -639,6 +1021,9 @@ private fun systemTrustManager(): X509TrustManager =
 
 private fun JSONObject.optionalString(key: String): String? =
     if (has(key) && !isNull(key)) getString(key) else null
+
+private fun JSONObject.optionalJSONObject(key: String): JSONObject? =
+    if (has(key) && !isNull(key)) getJSONObject(key) else null
 
 private fun JSONObject.optionalLong(key: String): Long? =
     if (has(key) && !isNull(key)) getLong(key) else null

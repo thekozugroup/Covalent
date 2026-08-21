@@ -17,7 +17,6 @@ struct CovalentMacApp: App {
         Window("Covalent", id: "main") {
             MacRootView(model: model)
                 .frame(minWidth: 900, minHeight: 640)
-                .background(MacWindowAccessibilityBridge())
         }
         .defaultSize(width: 1_080, height: 720)
         .commands {
@@ -29,7 +28,8 @@ struct CovalentMacApp: App {
                 .disabled(!model.isAuthorized || model.activeTask != nil)
 
                 Button("Pair Device…") {
-                    model.presentation = .pairDevice
+                    model.selectedSection = .devices
+                    Task { await model.refreshDiscovery() }
                 }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
                 .disabled(!model.isAuthorized)
@@ -59,13 +59,8 @@ struct CovalentMacApp: App {
                 .frame(width: 620, height: 540)
         }
 
-        MenuBarExtra {
+        MenuBarExtra("Covalent", systemImage: menuBarSymbol) {
             MacMenuBarMenu(model: model)
-        } label: {
-            Image(systemName: menuBarSymbol)
-                .accessibilityLabel("Covalent")
-                .accessibilityValue(model.serviceStatusLabel)
-                .help("Covalent — \(model.serviceStatusLabel)")
         }
         .menuBarExtraStyle(.menu)
     }
@@ -76,71 +71,6 @@ struct CovalentMacApp: App {
         case .ready: "externaldrive.badge.checkmark"
         case .needsAuthorization: "externaldrive.badge.questionmark"
         case .offline: "externaldrive.badge.xmark"
-        }
-    }
-}
-
-private struct MacWindowAccessibilityBridge: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = WindowReaderView()
-        view.setAccessibilityElement(false)
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        (nsView as? WindowReaderView)?.applyAccessibilityPolicy()
-    }
-
-    private final class WindowReaderView: NSView {
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            applyAccessibilityPolicy()
-        }
-
-        override func layout() {
-            super.layout()
-            applyAccessibilityPolicy()
-        }
-
-        func applyAccessibilityPolicy() {
-            guard let contentView = window?.contentView else { return }
-            contentView.setAccessibilityLabel("Covalent content")
-            for delay in [0.0, 0.1, 0.5] {
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, weak contentView] in
-                    guard let self, let contentView else { return }
-                    self.labelSidebarContainer(in: contentView)
-                }
-            }
-        }
-
-        private func labelSidebarContainer(in element: NSObject) {
-            let childrenSelector = NSSelectorFromString("accessibilityChildren")
-            guard element.responds(to: childrenSelector),
-                  let children = element.perform(childrenSelector)?.takeUnretainedValue() as? [NSObject]
-            else {
-                return
-            }
-            for child in children {
-                let labelSelector = NSSelectorFromString("accessibilityLabel")
-                let childLabel = child.responds(to: labelSelector)
-                    ? child.perform(labelSelector)?.takeUnretainedValue() as? String
-                    : nil
-                if childLabel == "Covalent sidebar" {
-                    setSidebarContainerAccessibility(on: element)
-                    return
-                }
-                labelSidebarContainer(in: child)
-            }
-        }
-
-        private func setSidebarContainerAccessibility(on element: NSObject) {
-            if let view = element as? NSView {
-                view.setAccessibilityLabel("Covalent navigation")
-                view.setAccessibilityIdentifier("navigation.sidebar.container")
-            } else if let accessibilityElement = element as? NSAccessibilityElement {
-                accessibilityElement.setAccessibilityLabel("Covalent navigation")
-                accessibilityElement.setAccessibilityIdentifier("navigation.sidebar.container")
-            }
         }
     }
 }
