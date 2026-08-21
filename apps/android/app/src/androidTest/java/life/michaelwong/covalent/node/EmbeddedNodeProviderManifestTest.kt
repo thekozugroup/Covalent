@@ -37,7 +37,9 @@ class EmbeddedNodeProviderManifestTest {
             ComponentName(context, NodeProviderService::class.java),
             PackageManager.GET_META_DATA,
         )
-        assertTrue(service.foregroundServiceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE != 0)
+        val connectedDeviceType =
+            service.foregroundServiceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+        assertEquals(ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE, connectedDeviceType)
         assertTrue(!service.exported)
     }
 

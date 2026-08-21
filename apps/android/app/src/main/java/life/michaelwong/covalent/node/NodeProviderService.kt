@@ -88,7 +88,10 @@ class NodeProviderService : Service() {
     }
 
     private fun notification(status: String): Notification {
-        val stopIntent = Intent(this, NodeProviderService::class.java).setAction(ACTION_STOP)
+        // setClass binds the destination component explicitly, so the stop action can never
+        // resolve to another package; FLAG_IMMUTABLE additionally stops any holder of the
+        // PendingIntent from retargeting or populating it.
+        val stopIntent = Intent(ACTION_STOP).setClass(this, NodeProviderService::class.java)
         val stopPendingIntent = android.app.PendingIntent.getService(
             this,
             0,
