@@ -70,8 +70,8 @@ class CovalentAppTest {
                 CovalentApp(isolatedStore, state)
             }
         }
-        compose.onNodeWithText("Connect your node").assertIsDisplayed()
-        compose.onNodeWithText("Local node token").assertIsDisplayed()
+        compose.onNodeWithText("Connect your backup server").assertIsDisplayed()
+        compose.onNodeWithText("Server access token").assertIsDisplayed()
     }
 
     @Test
@@ -136,7 +136,7 @@ class CovalentAppTest {
         val state = readyState(store, Screen.SETTINGS)
         compose.setContent { CovalentTheme { CovalentApp(store, state) } }
 
-        compose.onNodeWithText("LAN discovery").assertIsDisplayed().assertIsToggleable()
+        compose.onNodeWithText("Nearby discovery").assertIsDisplayed().assertIsToggleable()
     }
 
     @Test
@@ -231,7 +231,7 @@ class CovalentAppTest {
         compose.setContent { CovalentTheme { CovalentApp(store, state) } }
 
         compose.onNodeWithText("Review settings changes").assertIsDisplayed()
-        compose.onNodeWithText("This import removes remembered backup definitions from this node.")
+        compose.onNodeWithText("This import removes remembered backups from your backup server.")
             .assertIsDisplayed()
         compose.onNodeWithText("Confirm import").assertIsDisplayed()
     }

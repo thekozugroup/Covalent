@@ -60,7 +60,7 @@ internal object CovalentNative {
             NativeNodeResponse(
                 ok = objectValue.optBoolean("ok", false),
                 code = objectValue.optString("code", "native_response_invalid"),
-                message = objectValue.optString("message", "Embedded provider is unavailable."),
+                message = objectValue.optString("message", "On-phone backup storage is unavailable."),
                 handle = objectValue.optLong("handle", 0L).takeIf { it > 0L },
                 apiBaseUrl = objectValue.optString("apiBaseUrl").takeIf(String::isNotBlank),
                 peerAddress = objectValue.optString("peerAddress").takeIf(String::isNotBlank),
@@ -93,7 +93,7 @@ internal data class NativeNodeResponse(
         fun unavailable() = NativeNodeResponse(
             ok = false,
             code = "native_runtime_unavailable",
-            message = "Embedded provider is unavailable on this device.",
+            message = "On-phone backup storage is unavailable on this device.",
             handle = null,
             apiBaseUrl = null,
             peerAddress = null,

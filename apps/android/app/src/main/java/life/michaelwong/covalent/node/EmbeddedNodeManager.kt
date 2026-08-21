@@ -66,7 +66,7 @@ class EmbeddedNodeManager(context: Context) {
             publish(
                 enabled = false,
                 running = false,
-                message = "Android provider needs protected local identity storage before it can be enabled.",
+                message = "This phone cannot protect its Covalent identity yet, so it cannot store backups.",
                 reservedBytes = 0L,
                 availableBytes = availableBytes(),
             )
@@ -105,7 +105,7 @@ class EmbeddedNodeManager(context: Context) {
         publish(
             enabled = false,
             running = false,
-            message = "Android provider is off. External node connections remain unchanged.",
+            message = "Storing backups on this phone is off. External node connections remain unchanged.",
             reservedBytes = 0L,
             availableBytes = availableBytes(),
         )
@@ -128,7 +128,7 @@ class EmbeddedNodeManager(context: Context) {
         publish(
             enabled = enabled,
             running = preferences.getBoolean(KEY_RUNNING, false),
-            message = "External node is selected. Android provider remains separately opt-in.",
+            message = "A separate backup server is selected. Storing backups on this phone stays a separate choice.",
             reservedBytes = if (enabled) preferences.getLong(KEY_MAX_BYTES, DEFAULT_MAX_BYTES) else 0L,
             availableBytes = availableBytes(),
         )
@@ -142,7 +142,7 @@ class EmbeddedNodeManager(context: Context) {
             publish(
                 enabled = enabled,
                 running = running,
-                message = "Android provider is not ready to become the active node.",
+                message = "This phone is not ready to act as your backup server.",
                 reservedBytes = if (enabled) preferences.getLong(KEY_MAX_BYTES, DEFAULT_MAX_BYTES) else 0L,
                 availableBytes = availableBytes(),
             )
@@ -152,7 +152,7 @@ class EmbeddedNodeManager(context: Context) {
         publish(
             enabled = true,
             running = true,
-            message = "This phone is selected as the active node.",
+            message = "This phone is selected as your backup server.",
             reservedBytes = preferences.getLong(KEY_MAX_BYTES, DEFAULT_MAX_BYTES),
             availableBytes = availableBytes(),
         )
@@ -172,7 +172,7 @@ class EmbeddedNodeManager(context: Context) {
             serviceStartSafely()
         }.getOrElse {
             releaseMulticastLock()
-            unavailable("Android provider could not access private storage.")
+            unavailable("Covalent could not reach this app's private storage.")
         }
     }
 
@@ -181,7 +181,7 @@ class EmbeddedNodeManager(context: Context) {
             return NativeNodeResponse(
                 ok = true,
                 code = "disabled",
-                message = "Android provider is off.",
+                message = "Storing backups on this phone is off.",
                 handle = null,
                 apiBaseUrl = null,
                 peerAddress = null,
@@ -192,7 +192,7 @@ class EmbeddedNodeManager(context: Context) {
         val keepFreeBytes = preferences.getLong(KEY_KEEP_FREE_BYTES, DEFAULT_KEEP_FREE_BYTES)
         capacityValidationMessage(maxBytes, keepFreeBytes)?.let { return unavailable(it) }
         if (!hasPeerNetworkPermission()) {
-            return unavailable("Allow local network access before starting this phone as a provider.")
+            return unavailable("Allow local network access before this phone can start storing backups.")
         }
         val token = protectedTokenBytes()
         return try {
@@ -222,7 +222,7 @@ class EmbeddedNodeManager(context: Context) {
         return if (handle > 0L) CovalentNative.stop(handle) else NativeNodeResponse(
             ok = true,
             code = "ok",
-            message = "Android provider is stopped.",
+            message = "Storing backups on this phone is stopped.",
             handle = null,
             apiBaseUrl = null,
             peerAddress = null,
@@ -305,11 +305,11 @@ class EmbeddedNodeManager(context: Context) {
         }
         val used = usedBytes()
         if (used > maxBytes) {
-            return "This phone already stores more provider data than the new limit. Choose a limit at least as large as current use."
+            return "This phone already holds more than the new limit. Choose a limit at least as large as what is already stored."
         }
         val allocatableAfterReserve = availableBytes().saturatingSub(keepFreeBytes)
         if (maxBytes > used.saturatingAdd(allocatableAfterReserve)) {
-            return "The new provider limit exceeds storage available after the kept-free reserve."
+            return "The new limit is larger than the space left once the free space you asked to keep is set aside."
         }
         return null
     }
@@ -344,7 +344,7 @@ class EmbeddedNodeManager(context: Context) {
             enabled = enabled,
             running = preferences.getBoolean(KEY_RUNNING, false),
             statusMessage = preferences.getString(KEY_STATUS, null)
-                ?: if (enabled) "Android provider will reconnect when secure storage is available." else "Android provider is off.",
+                ?: if (enabled) "This phone will start storing backups again once secure storage is available." else "Storing backups on this phone is off.",
             usedBytes = usedBytes(),
             reservedBytes = if (enabled) preferences.getLong(KEY_MAX_BYTES, DEFAULT_MAX_BYTES) else 0L,
             availableBytes = availableBytes(),
@@ -393,7 +393,7 @@ class EmbeddedNodeManager(context: Context) {
         const val DEFAULT_MAX_BYTES = 2L * 1024L * 1024L * 1024L
         const val DEFAULT_KEEP_FREE_BYTES = 512L * 1024L * 1024L
         val sharedState = MutableStateFlow(
-            EmbeddedProviderState(false, false, false, false, "Android provider is off.", 0L, 0L, 0L, 0L, 0L, false),
+            EmbeddedProviderState(false, false, false, false, "Storing backups on this phone is off.", 0L, 0L, 0L, 0L, 0L, false),
         )
     }
 

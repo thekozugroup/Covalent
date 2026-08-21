@@ -50,6 +50,9 @@ internal class CovalentViewModel(private val savedStateHandle: SavedStateHandle)
     var setupCaCertificateLabel by savedString("setup_ca_label", "")
     var setupCertificatePin by savedString("setup_certificate_pin", "")
     var setupCertificatePinError by savedString("setup_certificate_pin_error", "")
+    // A covalent:// link handed over by another app. Untrusted: it can only prefill the
+    // address field, never a token, a certificate, or a connection.
+    var pendingSetupLink by savedString("pending_setup_link", "")
     var localPermissionDenied by savedBoolean("local_permission_denied", false)
     var pendingPermissionSetup by savedBoolean("pending_permission_setup", false)
     var pendingPermissionLanEnable by savedBoolean("pending_permission_lan_enable", false)

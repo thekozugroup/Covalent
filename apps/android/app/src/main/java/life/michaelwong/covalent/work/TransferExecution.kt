@@ -29,7 +29,7 @@ internal object TransferExecution {
             store.updateTransfer(jobId) {
                 it.copy(
                     state = TransferState.FAILED,
-                    detail = "Select the node that owns this transfer, then retry.",
+                    detail = context.getString(R.string.transfer_no_connection_detail),
                     retryable = true,
                 )
             }

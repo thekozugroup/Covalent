@@ -239,6 +239,47 @@ internal fun normalizeEndpointInput(raw: String): String {
         .removeSuffix("/")
 }
 
+/**
+ * Extracts a usable server address from a `covalent://connect?endpoint=…` link.
+ *
+ * Links arrive from other apps and are untrusted, so anything that is not a well-formed
+ * Covalent setup link — or that carries an address Covalent would refuse to type by hand —
+ * yields an empty string and is ignored. A link can only prefill the address field; the
+ * access token and any certificate are still entered by the person setting the app up.
+ */
+internal fun setupLinkEndpoint(link: String): String {
+    val trimmed = link.trim()
+    if (!trimmed.startsWith("covalent://connect?")) return ""
+    val endpoint = normalizeEndpointInput(trimmed)
+    return if (validateNodeAddress(endpoint) == AddressIssue.NONE) endpoint else ""
+}
+
+internal sealed interface SetupLinkOutcome {
+    /** The link is well formed and this app has no server yet, so it may prefill setup. */
+    data class Apply(val endpoint: String) : SetupLinkOutcome
+
+    /** The link is malformed, or names an address the setup form would refuse. */
+    object Rejected : SetupLinkOutcome
+
+    /** A server is already saved. An outside app must not redirect a configured install. */
+    object AlreadyConnected : SetupLinkOutcome
+}
+
+/**
+ * Decides what a `covalent://` link may do.
+ *
+ * Any app on the phone can send one of these links, so a link is never allowed to point an
+ * already-configured install at a different server — that would put a familiar-looking
+ * token field in front of an address the person never chose. Once a server is saved, the
+ * only way to change it is Settings.
+ */
+internal fun setupLinkOutcome(link: String, hasSavedServer: Boolean): SetupLinkOutcome {
+    val endpoint = setupLinkEndpoint(link)
+    if (endpoint.isEmpty()) return SetupLinkOutcome.Rejected
+    if (hasSavedServer) return SetupLinkOutcome.AlreadyConnected
+    return SetupLinkOutcome.Apply(endpoint)
+}
+
 internal fun requiresLocalNetworkPermission(raw: String, sdkInt: Int): Boolean {
     if (sdkInt < 37) return false
     val host = runCatching { URI(normalizeEndpointInput(raw)).host?.lowercase() }.getOrNull() ?: return false
@@ -315,7 +356,8 @@ internal fun CovalentApp(
 
     fun submitSetup() {
         api(context, state, scope, onError = { error ->
-            state.setupConnectionError = error.message ?: resources.getString(R.string.error_connection_failed)
+            state.setupConnectionError =
+                nodeFailureMessage(context, error, R.string.error_connection_failed)
         }) {
             val validated = validateAndPersistSetup(
                 node,
@@ -351,7 +393,7 @@ internal fun CovalentApp(
         api(context, state, scope, onError = { error ->
             state.discoveryRunning = false
             state.discoveryCompleted = true
-            state.discoveryError = error.message ?: resources.getString(R.string.discovery_error)
+            state.discoveryError = nodeFailureMessage(context, error, R.string.discovery_error)
         }) {
             state.discovered = node.discovery(connection.baseUrl, connection.token)
             state.discoveryRunning = false
@@ -537,6 +579,24 @@ internal fun CovalentApp(
 
     LaunchedEffect(store, state) {
         state.initialize(store)
+    }
+    LaunchedEffect(state.pendingSetupLink) {
+        val link = state.pendingSetupLink
+        if (link.isBlank()) return@LaunchedEffect
+        state.pendingSetupLink = ""
+        when (val outcome = setupLinkOutcome(link, store.baseUrl.isNotBlank())) {
+            is SetupLinkOutcome.Apply -> {
+                state.setupAddress = outcome.endpoint
+                state.setupAddressError = ""
+                state.setupConnectionError = ""
+                state.screen = Screen.SETUP
+                state.notice = resources.getString(R.string.setup_link_applied)
+            }
+            SetupLinkOutcome.AlreadyConnected ->
+                state.notice = resources.getString(R.string.setup_link_ignored)
+            SetupLinkOutcome.Rejected ->
+                state.notice = resources.getString(R.string.setup_link_rejected)
+        }
     }
     LaunchedEffect(state.screen, activeConnection?.baseUrl, activeConnection?.token) {
         val connection = activeConnection ?: run {
@@ -975,6 +1035,18 @@ private enum class TransferAction { PAUSE, RESUME, RETRY, CANCEL }
 @Composable
 private fun TransferCard(record: TransferRecord, onAction: (TransferAction) -> Unit) {
     val context = LocalContext.current
+    var confirmCancel by remember(record.jobId) { mutableStateOf(false) }
+    if (confirmCancel) {
+        DestructiveConfirmDialog(
+            action = DestructiveAction.CANCEL_TRANSFER,
+            subject = record.label,
+            onConfirm = {
+                confirmCancel = false
+                onAction(TransferAction.CANCEL)
+            },
+            onDismiss = { confirmCancel = false },
+        )
+    }
     val stateText = when (record.state) {
         TransferState.QUEUED -> stringResource(R.string.transfer_state_queued)
         TransferState.RUNNING -> stringResource(R.string.transfer_state_running)
@@ -1035,7 +1107,10 @@ private fun TransferCard(record: TransferRecord, onAction: (TransferAction) -> U
                             Icon(Icons.Rounded.Pause, null)
                             Text(stringResource(R.string.action_pause))
                         }
-                        TextButton(onClick = { onAction(TransferAction.CANCEL) }) {
+                        TextButton(
+                            onClick = { confirmCancel = true },
+                            modifier = Modifier.testTag("transfer.cancel"),
+                        ) {
                             Icon(Icons.Rounded.Cancel, null)
                             Text(stringResource(R.string.action_cancel))
                         }
@@ -1045,7 +1120,10 @@ private fun TransferCard(record: TransferRecord, onAction: (TransferAction) -> U
                             Icon(Icons.Rounded.PlayArrow, null)
                             Text(stringResource(R.string.action_resume))
                         }
-                        TextButton(onClick = { onAction(TransferAction.CANCEL) }) {
+                        TextButton(
+                            onClick = { confirmCancel = true },
+                            modifier = Modifier.testTag("transfer.cancel"),
+                        ) {
                             Icon(Icons.Rounded.Cancel, null)
                             Text(stringResource(R.string.action_cancel))
                         }
@@ -1318,6 +1396,18 @@ private fun Pair(
     val context = LocalContext.current
     val resources = LocalResources.current
     val focusManager = LocalFocusManager.current
+    var confirmDiscardPairing by remember { mutableStateOf(false) }
+    if (confirmDiscardPairing) {
+        DestructiveConfirmDialog(
+            action = DestructiveAction.DISCARD_PAIRING_PROGRESS,
+            onConfirm = {
+                confirmDiscardPairing = false
+                state.clearPairing()
+                state.notice = resources.getString(R.string.pair_local_state_cleared)
+            },
+            onDismiss = { confirmDiscardPairing = false },
+        )
+    }
     fun startNetworkPairing(address: String) {
         val selectedConnection = connection ?: return
         val candidateAddress = address.trim()
@@ -1457,10 +1547,10 @@ private fun Pair(
             if (state.pairingConfirmation != null) {
                 ProviderExchange(state, node, connection, scope)
             }
-            TextButton(onClick = {
-                state.clearPairing()
-                state.notice = resources.getString(R.string.pair_local_state_cleared)
-            }) {
+            TextButton(
+                onClick = { confirmDiscardPairing = true },
+                modifier = Modifier.testTag("pair.discardAdvanced"),
+            ) {
                 Icon(Icons.Rounded.Cancel, null)
                 Text(stringResource(R.string.action_cancel_pairing))
             }
@@ -1531,6 +1621,18 @@ private fun NetworkPairingCard(
             R.string.network_pairing_outgoing
         },
     )
+    var confirmCancelRequest by remember(pairing.pairingId) { mutableStateOf(false) }
+    if (confirmCancelRequest) {
+        DestructiveConfirmDialog(
+            action = DestructiveAction.CANCEL_DEVICE_REQUEST,
+            subject = pairing.peerName,
+            onConfirm = {
+                confirmCancelRequest = false
+                dismiss()
+            },
+            onDismiss = { confirmCancelRequest = false },
+        )
+    }
     OutlinedCard(Modifier.fillMaxWidth().testTag("pair.networkRequest")) {
         Column(
             Modifier.padding(18.dp),
@@ -1612,7 +1714,11 @@ private fun NetworkPairingCard(
                     Text(stringResource(R.string.action_done))
                 }
             } else {
-                TextButton(enabled = !busy, onClick = dismiss) {
+                TextButton(
+                    enabled = !busy,
+                    onClick = { confirmCancelRequest = true },
+                    modifier = Modifier.testTag("pair.cancelNetworkRequest"),
+                ) {
                     Text(stringResource(R.string.action_cancel_pairing))
                 }
             }
@@ -2654,6 +2760,7 @@ private fun Settings(
     val context = LocalContext.current
     val resources = LocalResources.current
     val lanEnabled = state.status?.lanDiscovery == true
+    var confirmImport by remember { mutableStateOf(false) }
     FormPage(
         modifier,
         stringResource(R.string.settings_title),
@@ -2719,23 +2826,49 @@ private fun Settings(
         }) { Text(stringResource(R.string.action_import_settings)) }
         state.importCandidate?.let { candidate ->
             val preview = settingsPreview(state.currentExportedSettings, candidate)
+            val removedBackups = (preview.oldBackups - preview.newBackups).coerceAtLeast(0)
+            fun applyImport() {
+                val selectedConnection = connection ?: return
+                api(context, state, scope) {
+                    node.postNoContent(
+                        selectedConnection.baseUrl,
+                        selectedConnection.token,
+                        "/api/v1/config/import",
+                        JSONObject().put("confirmed", true).put("settings", candidate),
+                    )
+                    state.setImportCandidate(null)
+                    refreshStatus(state, node, store, selectedConnection)
+                    state.notice = resources.getString(R.string.settings_imported)
+                }
+            }
             SettingsImportPreview(preview)
+            if (confirmImport) {
+                DestructiveConfirmDialog(
+                    action = DestructiveAction.IMPORT_REMOVING_BACKUPS,
+                    subject = pluralStringResource(
+                        R.plurals.settings_removed_backup_count,
+                        removedBackups,
+                        removedBackups,
+                    ),
+                    onConfirm = {
+                        confirmImport = false
+                        applyImport()
+                    },
+                    onDismiss = { confirmImport = false },
+                )
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilledTonalButton(enabled = !state.busy && connection != null, onClick = {
-                    val selectedConnection = connection ?: return@FilledTonalButton
-                    api(context, state, scope) {
-                        node.postNoContent(
-                            selectedConnection.baseUrl,
-                            selectedConnection.token,
-                            "/api/v1/config/import",
-                            JSONObject().put("confirmed", true).put("settings", candidate),
-                        )
-                        state.setImportCandidate(null)
-                        refreshStatus(state, node, store, selectedConnection)
-                        state.notice = resources.getString(R.string.settings_imported)
-                    }
-                }) { Text(stringResource(R.string.action_confirm_import)) }
-                TextButton(onClick = { state.setImportCandidate(null) }) {
+                FilledTonalButton(
+                    enabled = !state.busy && connection != null,
+                    onClick = {
+                        if (preview.removesBackups) confirmImport = true else applyImport()
+                    },
+                    modifier = Modifier.testTag("settings.import.confirm"),
+                ) { Text(stringResource(R.string.action_confirm_import)) }
+                TextButton(onClick = {
+                    confirmImport = false
+                    state.setImportCandidate(null)
+                }) {
                     Text(stringResource(R.string.action_cancel))
                 }
             }
@@ -2798,6 +2931,17 @@ private fun PhoneProviderSettings(
     val context = LocalContext.current
     val capacity = providerCapacityBytes(state.providerMaximumGiB, state.providerKeepFreeGiB)
     val canConfigure = provider.supported && provider.keyProtectionAvailable && !state.busy && !provider.enabled
+    var confirmDisable by remember { mutableStateOf(false) }
+    if (confirmDisable) {
+        DestructiveConfirmDialog(
+            action = DestructiveAction.DISABLE_PHONE_STORAGE,
+            onConfirm = {
+                confirmDisable = false
+                onToggle(false)
+            },
+            onDismiss = { confirmDisable = false },
+        )
+    }
     SectionTitle(stringResource(R.string.phone_provider_title))
     Text(
         stringResource(R.string.phone_provider_detail),
@@ -2887,7 +3031,7 @@ private fun PhoneProviderSettings(
             }
             FilledTonalButton(
                 enabled = !state.busy && (provider.enabled || capacity != null),
-                onClick = { onToggle(!provider.enabled) },
+                onClick = { if (provider.enabled) confirmDisable = true else onToggle(true) },
                 modifier = Modifier.testTag("settings.phoneProvider.toggle"),
             ) {
                 Text(
@@ -3106,8 +3250,10 @@ private fun api(
         runCatching { withContext(Dispatchers.IO) { work() } }.onFailure { error ->
             when {
                 onError != null -> onError(error)
-                pairingError -> state.pairingError = error.message ?: context.getString(R.string.error_pairing_failed)
-                else -> state.notice = error.message ?: context.getString(R.string.error_node_action_failed)
+                pairingError -> state.pairingError =
+                    nodeFailureMessage(context, error, R.string.error_pairing_failed)
+                else -> state.notice =
+                    nodeFailureMessage(context, error, R.string.error_node_action_failed)
             }
         }
         state.busy = false
@@ -3140,7 +3286,7 @@ private fun reconnectNode(
     state.connectionHealth = ConnectionHealth.CONNECTING
     api(context, state, scope, onError = { error ->
         state.connectionHealth = ConnectionHealth.STALE
-        state.connectionError = error.message ?: context.getString(R.string.error_connection_failed)
+        state.connectionError = nodeFailureMessage(context, error, R.string.error_connection_failed)
         if (shouldReturnToSetupAfterRefreshFailure(error)) state.screen = Screen.SETUP
     }) {
         refreshStatus(state, node, store, connection)
