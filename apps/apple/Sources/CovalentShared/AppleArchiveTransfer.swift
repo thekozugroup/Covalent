@@ -1035,7 +1035,7 @@ enum AppleArchiveTransferError: Error, Equatable, Sendable {
 extension AppleArchiveTransferError: LocalizedError {
     var errorDescription: String? {
         switch self {
-        case .notFileURL: "Choose a folder on this device or a connected file provider."
+        case .notFileURL: "Choose a folder on this device, or one from a connected cloud drive."
         case .notDirectory: "The selected folder is unavailable or is a symbolic link."
         case .pathTooDeep: "The selected folder is nested beyond the supported transfer depth."
         case let .unsafePath(path): "The transfer contains an unsafe path: \(path)"
@@ -1048,7 +1048,7 @@ extension AppleArchiveTransferError: LocalizedError {
         case .restoreDestinationMustBeEmpty:
             "Choose an empty restore folder so the signed no-write preview remains exact."
         case .nonEmptyRestorePlan:
-            "The node returned a streamed restore plan that could modify existing files."
+            "Your backup server sent a restore plan that could change files already in that folder."
         case let .restorePlanMismatch(path): "The restore archive did not match its signed plan at \(path)."
         case .destinationChanged: "The restore folder changed after preview. Choose an empty folder and preview again."
         case let .sourceChanged(path): "The backup source changed while reading \(path). Retry after writes stop."

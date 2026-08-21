@@ -6,10 +6,13 @@ public enum PlatformTier: String, Codable, Sendable {
     case tier1
     case tier2
 
+    /// What this device can do, said in words a reader can use. The raw
+    /// values stay `tier1`/`tier2` because the engine speaks them; the label
+    /// never does, because "Tier 2" tells a person nothing.
     public var label: String {
         switch self {
-        case .tier1: "Tier 1"
-        case .tier2: "Tier 2"
+        case .tier1: "Full backup server"
+        case .tier2: "Backs up folders you choose"
         }
     }
 }
@@ -125,7 +128,7 @@ public enum PeerRole: String, Codable, CaseIterable, Identifiable, Sendable {
         switch self {
         case .storageProvider: "Store extra copies"
         case .backupReader: "Restore this device's backups"
-        case .backupWriter: "Add snapshots to this device's backups"
+        case .backupWriter: "Add backups to this device"
         }
     }
 }

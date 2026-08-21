@@ -960,7 +960,7 @@ public final class CovalentAppModel: ObservableObject {
                   !transport.certificateDer.isEmpty
             else { throw AppModelError.providerBindingMismatch }
         } catch {
-            report(error, title: "Signed provider transport is not valid")
+            report(error, title: "That connection file isn't valid")
             return false
         }
         return await connectProvider(using: transport)
@@ -1197,8 +1197,9 @@ extension AppModelError: LocalizedError {
         case .operationInProgress: "Wait for the current backup, verification, or restore to finish."
         case .noControllableOperation: "The current operation cannot be paused or cancelled."
         case .folderPermissionMissing: "Choose the folder again to restore access."
-        case .providerNotConnected: "One of the selected replica devices is no longer connected."
-        case .providerCapacityUnverified: "Every replica must report fresh reachability and enough reservable capacity before Covalent opens the source folder."
+        case .providerNotConnected: "One of the storage devices you chose is no longer connected."
+        case .providerCapacityUnverified:
+            "Every storage device you chose has to answer and have enough room before Covalent starts reading your folder."
         case .restorePreviewMissing: "Create a fresh restore preview before restoring files."
         case .invalidDeviceName: "Use a device name from 1 to 80 characters."
         case .invalidBackupName: "Use a backup name from 1 to 120 characters."

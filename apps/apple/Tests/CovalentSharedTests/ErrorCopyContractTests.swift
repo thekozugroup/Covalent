@@ -154,6 +154,9 @@ import Testing
     }
 
     @Test func theNewPairingAndClaimCodesCarryTheRightRecovery() {
+        // Deliberately not asserting `.recovery == .none` anywhere here: it is
+        // the fallback's own value for these statuses, so such an assertion
+        // passes just as happily when the mapping has been deleted.
         #expect(
             NodeAPIErrorCopy.describe(status: 502, code: "pairing_peer_unreachable", message: "", retryable: false)
                 .recovery == .chooseAnotherDevice
@@ -166,10 +169,52 @@ import Testing
             NodeAPIErrorCopy.describe(status: 503, code: "claim_certificate_unavailable", message: "", retryable: true)
                 .recovery == .retry
         )
-        #expect(
-            NodeAPIErrorCopy.describe(status: 409, code: "claim_unavailable", message: "", retryable: false)
-                .recovery == .none
+    }
+
+    /// The first-run codes are what a person meets before anything else works,
+    /// so each says something different about what to do next. Asserting the
+    /// distinction, not just the presence, is what stops them collapsing into
+    /// one another.
+    @Test func theFirstRunClaimCodesAreToldApart() {
+        func summary(_ code: String, _ status: Int) -> String {
+            NodeAPIErrorCopy.describe(status: status, code: code, message: "", retryable: false).summary
+        }
+        let incorrect = summary("claim_code_incorrect", 401)
+        let expired = summary("claim_window_expired", 410)
+        let exhausted = summary("claim_window_exhausted", 410)
+        let alreadyOwned = summary("claim_unavailable", 409)
+
+        #expect(Set([incorrect, expired, exhausted, alreadyOwned]).count == 4)
+        // A mistyped code invites another attempt; a closed window must not.
+        #expect(incorrect.localizedCaseInsensitiveContains("again"))
+        #expect(expired.localizedCaseInsensitiveContains("restart"))
+        #expect(exhausted.localizedCaseInsensitiveContains("restart"))
+        #expect(!exhausted.localizedCaseInsensitiveContains("try again"))
+        // Someone else may have set this server up; say so rather than
+        // implying the person did something wrong.
+        #expect(alreadyOwned.localizedCaseInsensitiveContains("already"))
+    }
+
+    @Test func aBareSwiftErrorDoesNotBecomeFoundationsSynthesizedSentence() {
+        struct UnexpectedState: Error {}
+        let failure = ErrorPresenter.present(UnexpectedState())
+        // Foundation renders this one as "The operation couldn't be
+        // completed. (… error 1.)" — a struct dump in sentence clothing.
+        #expect(!failure.summary.contains("error 1"))
+        #expect(!failure.summary.contains("UnexpectedState"))
+        #expect(failure.summary == "Covalent couldn't finish that. Try again in a moment.")
+        #expect(failure.detail?.contains("UnexpectedState") == true)
+    }
+
+    @Test func aFoundationErrorKeepsItsOwnSentence() {
+        let failure = ErrorPresenter.present(
+            NSError(
+                domain: NSCocoaErrorDomain,
+                code: 640,
+                userInfo: [NSLocalizedDescriptionKey: "The file is too large."]
+            )
         )
+        #expect(failure.summary == "The file is too large.")
     }
 
     // MARK: - Helpers

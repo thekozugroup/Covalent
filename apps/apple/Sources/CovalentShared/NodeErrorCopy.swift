@@ -67,9 +67,17 @@ public enum ErrorPresenter {
             return NodeClientFailure(summary: described, detail: nil, recovery: .none)
         }
         // Last resort: a Foundation or POSIX error with no copy of its own.
-        // `localizedDescription` is at least a sentence; the raw dump is not.
+        // `localizedDescription` is a real sentence *only* for those. For a
+        // bare Swift error Foundation synthesizes "The operation couldn't be
+        // completed. (CovalentShared.FooError error 0.)", which is a struct
+        // dump wearing a sentence — the exact thing the rule above forbids,
+        // arriving through a different door. Take the description only from
+        // domains Foundation actually writes copy for.
+        let nsError = error as NSError
+        let hasFoundationCopy = (nsError.domain.hasPrefix("NS") || nsError.domain.hasPrefix("kCF"))
+            && !error.localizedDescription.isEmpty
         return NodeClientFailure(
-            summary: error.localizedDescription.isEmpty ? genericSummary : error.localizedDescription,
+            summary: hasFoundationCopy ? error.localizedDescription : genericSummary,
             detail: ErrorDiagnostic.describe(error),
             recovery: .retry
         )

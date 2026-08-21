@@ -155,7 +155,7 @@ final class CovalentMacUITests: XCTestCase {
 
         var outsideWindow: [String] = []
         var harnessChrome: [String] = []
-        var splitViewColumns: [String] = []
+        var splitViewColumns: [CGRect] = []
         try app.performAccessibilityAudit { issue in
             let details = """
                 Accessibility audit: \(issue.compactDescription)
@@ -169,14 +169,20 @@ final class CovalentMacUITests: XCTestCase {
             let isHarnessChrome = issue.auditType == .parentChild
                 && details.contains("_XCUI:FullScreenWindow")
             // Deliberately narrow. "Descends from the split view" would match
-            // nearly every element in the app, so this also requires the
-            // element to be an unnamed group that spans the column full height
-            // — which is what a column container is and what no content view is.
+            // nearly every element in the app, so the element must also be an
+            // unnamed group with the shape of a column: either the whole
+            // window (the detail column reports the window's own frame) or a
+            // full-height strip no wider than a third of it. Height alone was
+            // not enough — the detail pane *is* the window height, so any
+            // full-height content group would have qualified.
+            let looksLikeAColumn = elementFrame == windowFrame
+                || (elementFrame.width <= windowFrame.width / 3
+                    && elementFrame.height >= windowFrame.height * 0.9)
             let isSplitViewColumn = issue.auditType == .sufficientElementDescription
                 && issue.element?.elementType == .group
                 && issue.element?.label.isEmpty == true
                 && details.contains("SidebarNavigationSplitView")
-                && elementFrame.height >= windowFrame.height * 0.9
+                && looksLikeAColumn
 
             let attachment = XCTAttachment(string: details)
             if isOutsideWindow {
@@ -186,7 +192,7 @@ final class CovalentMacUITests: XCTestCase {
                 harnessChrome.append(issue.compactDescription)
                 attachment.name = "Ignored: AppKit/XCTest window button"
             } else if isSplitViewColumn {
-                splitViewColumns.append("\(issue.compactDescription) \(elementFrame)")
+                splitViewColumns.append(elementFrame)
                 attachment.name = "Ignored: NavigationSplitView column container"
             } else {
                 attachment.name = "Accessibility audit element"
@@ -211,6 +217,20 @@ final class CovalentMacUITests: XCTestCase {
             harnessChrome.count,
             1,
             "Expected exactly the window-button ancestry mismatch, got: \(harnessChrome)"
+        )
+        // Not just "there were two". A count alone would still hold if SwiftUI
+        // started naming one column while the app grew an unnamed full-height
+        // group of its own — the total would stay at two and a real finding
+        // would disappear into the exclusion. Assert one of each shape.
+        XCTAssertEqual(
+            splitViewColumns.filter { $0 == windowFrame }.count,
+            1,
+            "Expected exactly one detail-column container spanning the window, got: \(splitViewColumns)"
+        )
+        XCTAssertEqual(
+            splitViewColumns.filter { $0 != windowFrame }.count,
+            1,
+            "Expected exactly one sidebar-column container, got: \(splitViewColumns)"
         )
         XCTAssertEqual(
             splitViewColumns.count,

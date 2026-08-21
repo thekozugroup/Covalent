@@ -86,7 +86,7 @@ struct IOSSettingsView: View {
             } header: {
                 Text("Backup server")
             } footer: {
-                Text("Your access token is only ever sent over an encrypted connection.")
+                Text("Your access token is never sent to another device over an unencrypted connection.")
             }
 
             Section {

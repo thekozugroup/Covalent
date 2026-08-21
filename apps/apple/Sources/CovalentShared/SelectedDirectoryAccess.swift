@@ -174,7 +174,7 @@ public enum SelectedDirectoryError: Error, Equatable, Sendable {
 extension SelectedDirectoryError: LocalizedError {
     public var errorDescription: String? {
         switch self {
-        case .notAFileURL: "Choose a folder on this device or a connected file provider."
+        case .notAFileURL: "Choose a folder on this device, or one from a connected cloud drive."
         case .notADirectory: "Choose a folder, not an individual file."
         case .staleBookmark: "Folder access changed. Choose the folder again to continue."
         case .permissionRevoked: "This folder is no longer available. Choose it again to restore access."
