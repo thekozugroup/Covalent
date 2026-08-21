@@ -142,12 +142,24 @@ struct MacEmptyState<Actions: View>: View {
             Text(title)
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(.primary)
-            // `.title3`, matching the one piece of secondary copy on this
-            // screen that the audit has ever accepted in this colour — the
-            // overview header's subtitle, same token, 15pt. At 13pt the same
-            // colour was refused twice, at both regular and medium weight.
+            // Back to body size at medium weight, which is the configuration
+            // this line was passing in. It was moved to `.title3` on the theory
+            // that 15pt was the size the audit accepted for secondary copy, and
+            // the next run reported this line for the first time — the bet cost
+            // a finding rather than closing one.
+            //
+            // The measurement that settles it: this message and the overview
+            // header's subtitle are the same token at the same size, and their
+            // element screenshots are pixel-identical — both render (51,51,51)
+            // on white at 12.6:1, 18% ink. One is reported and the other is
+            // not, so whatever the audit is deciding, it is not reading a
+            // contrast ratio off these pixels. What the history does support is
+            // weight: it is what fixed the sidebar caption, and it is the one
+            // thing that differed when this line was passing.
+            //
+            // 13pt also belongs under a 15pt title rather than matching it.
             Text(message)
-                .font(.title3)
+                .font(.body.weight(.medium))
                 .secondaryLabelStyle()
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 360)

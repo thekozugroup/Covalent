@@ -209,12 +209,12 @@ struct MacRootView: View {
 
     private var serviceState: some View {
         HStack(spacing: 9) {
-            // Deliberately not `serviceColor`: that is the *tint*, chosen to
-            // sit at 12% behind the row. Drawn solid at 8pt on that same tint,
+            // Deliberately not the phase tint itself. That tint is chosen to
+            // sit at 12% behind the row; drawn solid at 8pt on its own wash,
             // system green measures about 1.7:1 — and because this row is one
             // combined accessibility element, the audit grades that dot along
-            // with the text and reported the whole row as failing. Same
-            // meaning, dark enough to be graded.
+            // with the text. Same meaning, dark enough to be graded: see
+            // `serviceGlyphColor`, which now measures 12.5:1 on the wash.
             Circle()
                 .fill(serviceGlyphColor)
                 .frame(width: 8, height: 8)
@@ -257,25 +257,64 @@ struct MacRootView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .background {
-            // Opaque base first, tint second. `serviceColor.opacity(0.12)`
-            // alone let the sidebar material show through, which is what made
-            // the rendered contrast depend on the runner rather than on this
-            // file.
-            Color(nsColor: .windowBackgroundColor)
-            serviceColor.opacity(0.12)
-        }
+        // One flat, non-semantic colour rather than an opaque base plus a 12%
+        // tint. The two-layer version was meant to stop the sidebar material
+        // showing through, and it did not: measured off the audit's own element
+        // screenshot, the row's backdrop is still a four-step vertical gradient
+        // — (231,248,235) over 48% of it, then 230/229/228 down the rest —
+        // where a flat fill would be one value.
+        //
+        // The reason is the same one this file already documents for text.
+        // `windowBackgroundColor` is a semantic system colour, and semantic
+        // colours are what AppKit's vibrancy blends against the material behind
+        // them; that applies to fills, not only to glyphs. A colour the app
+        // mixes itself does not participate, so it paints the value it
+        // declares. This is what "take the row out of the vibrant path"
+        // actually means here, and it is the only part of the row that was
+        // still in it: its two text runs already measure (35,38,36) on that
+        // backdrop, 13.8:1.
+        //
+        // Same colour as before, arrived at by mixing rather than by layering,
+        // so nothing about how the row looks changes.
+        .background(serviceWashColor)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Service \(model.serviceStatusLabel)")
     }
 
-    /// The 12% wash behind the service row.
-    private var serviceColor: Color {
+    /// The wash behind the service row: the phase tint at 12% over the window
+    /// background, mixed here rather than composited by AppKit so that it is a
+    /// single flat value. See the comment at `.background` above.
+    ///
+    /// The light halves are the tint over white, which is what
+    /// `windowBackgroundColor` renders as on this appearance — measured from
+    /// the audit's app screenshot, where the ready wash is (231,248,235) and
+    /// 12% system green over white is (229,249,232).
+    private var serviceWashColor: Color {
         switch model.phase {
-        case .starting: .orange
-        case .ready: .green
-        case .needsAuthorization: .blue
-        case .offline: .red
+        case .starting:
+            MacLabelColor.dynamic(
+                named: "CovalentServiceWashStarting",
+                light: NSColor(red: 1.0, green: 0.950, blue: 0.880, alpha: 1),
+                dark: NSColor(red: 0.293, green: 0.247, blue: 0.177, alpha: 1)
+            )
+        case .ready:
+            MacLabelColor.dynamic(
+                named: "CovalentServiceWashReady",
+                light: NSColor(red: 0.899, green: 0.976, blue: 0.910, alpha: 1),
+                dark: NSColor(red: 0.195, green: 0.271, blue: 0.214, alpha: 1)
+            )
+        case .needsAuthorization:
+            MacLabelColor.dynamic(
+                named: "CovalentServiceWashAuthorization",
+                light: NSColor(red: 0.880, green: 0.937, blue: 1.0, alpha: 1),
+                dark: NSColor(red: 0.177, green: 0.235, blue: 0.293, alpha: 1)
+            )
+        case .offline:
+            MacLabelColor.dynamic(
+                named: "CovalentServiceWashOffline",
+                light: NSColor(red: 1.0, green: 0.908, blue: 0.903, alpha: 1),
+                dark: NSColor(red: 0.293, green: 0.205, blue: 0.200, alpha: 1)
+            )
         }
     }
 
