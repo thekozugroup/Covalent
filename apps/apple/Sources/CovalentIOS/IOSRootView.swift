@@ -200,8 +200,8 @@ private struct IOSActiveTaskBar: View {
 
     private var statusDetail: String {
         task.statusDetail(
-            pausedText: "Paused on the node",
-            checkpointText: "Resumable checkpoint active"
+            pausedText: "Paused on your backup server",
+            checkpointText: "Progress is being saved as it goes"
         )
     }
 }

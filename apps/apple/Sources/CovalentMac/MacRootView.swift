@@ -355,8 +355,8 @@ struct MacActiveTaskBar: View {
 
     private var statusDetail: String {
         task.statusDetail(
-            pausedText: "Paused. This resumable job stays on the local node.",
-            checkpointText: "The local node checkpoints resumable progress."
+            pausedText: "Paused. Your backup server is holding this job, so it can carry on later.",
+            checkpointText: "Your backup server is saving progress as it goes."
         )
     }
 }
