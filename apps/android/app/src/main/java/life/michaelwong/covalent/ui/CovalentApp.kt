@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.text.format.DateUtils
+import android.util.Log
 import android.text.format.Formatter
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -154,12 +155,15 @@ import life.michaelwong.covalent.ui.theme.CovalentTheme
 import life.michaelwong.covalent.node.ActiveNodeConnectionResolver
 import life.michaelwong.covalent.node.EmbeddedNodeManager
 import life.michaelwong.covalent.node.EmbeddedProviderState
+import life.michaelwong.covalent.node.KeyProtectionLevel
 import life.michaelwong.covalent.node.NodeMode
 import life.michaelwong.covalent.work.TransferScheduler
 import life.michaelwong.covalent.work.TransferExecution
 import life.michaelwong.covalent.work.TransferWorker
 import org.json.JSONArray
 import org.json.JSONObject
+
+private const val UI_LOG_TAG = "CovalentUi"
 
 internal enum class Screen { HOME, SETUP, PAIR, BACKUP, RESTORE, SETTINGS }
 
@@ -536,7 +540,8 @@ internal fun CovalentApp(
             state.setupCertificatePin = ""
             state.setupCertificatePinError = ""
         }.onFailure {
-            state.setupConnectionError = it.message ?: resources.getString(R.string.error_ca_certificate_invalid)
+            Log.w(UI_LOG_TAG, "CA certificate enrolment failed", it)
+            state.setupConnectionError = resources.getString(R.string.error_ca_certificate_invalid)
         }
     }
     val targetPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -618,7 +623,7 @@ internal fun CovalentApp(
                 state.lastConnectedAtUnixMs = System.currentTimeMillis()
             }.onFailure { error ->
                 state.connectionHealth = ConnectionHealth.STALE
-                state.connectionError = error.message
+                state.connectionError = nodeFailureMessage(context, error, R.string.error_connection_failed)
                 if (shouldReturnToSetupAfterRefreshFailure(error)) state.screen = Screen.SETUP
             }
             delay(STATUS_POLL_MILLIS)
@@ -636,7 +641,7 @@ internal fun CovalentApp(
                 TransferScheduler.requeuePending(context, store)
             }
         }.onFailure {
-            state.notice = it.message ?: resources.getString(R.string.error_resume_transfer)
+            state.notice = nodeFailureMessage(context, it, R.string.error_resume_transfer)
         }
         while (isActive) {
             state.refreshDurableState()
@@ -677,8 +682,8 @@ internal fun CovalentApp(
                                 completeNetworkPairingConnection(state, node, connection, completed)
                             }
                         }.onFailure { error ->
-                            state.pairingError = error.message
-                                ?: resources.getString(R.string.error_pairing_failed)
+                            state.pairingError =
+                                nodeFailureMessage(context, error, R.string.error_pairing_failed)
                         }
                     }
             }
@@ -930,7 +935,7 @@ private fun ConnectionCard(state: CovalentViewModel, reconnect: () -> Unit) {
             ) {
                 Icon(
                     if (ready) Icons.Rounded.Storage else Icons.Rounded.CloudOff,
-                    null,
+                    contentDescription = null,
                     Modifier.padding(12.dp),
                 )
             }
@@ -949,7 +954,7 @@ private fun ConnectionCard(state: CovalentViewModel, reconnect: () -> Unit) {
                 }
                 if (!ready) {
                     OutlinedButton(onClick = reconnect, enabled = !state.busy) {
-                        Icon(Icons.Rounded.Refresh, null)
+                        Icon(Icons.Rounded.Refresh, contentDescription = null)
                         Text(stringResource(R.string.action_reconnect), Modifier.padding(start = 8.dp))
                     }
                 }
@@ -1064,7 +1069,7 @@ private fun TransferCard(record: TransferRecord, onAction: (TransferAction) -> U
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     if (record.state == TransferState.FAILED) Icons.Rounded.ErrorOutline else Icons.Rounded.Backup,
-                    null,
+                    contentDescription = null,
                 )
                 Text(
                     record.label,
@@ -1104,33 +1109,33 @@ private fun TransferCard(record: TransferRecord, onAction: (TransferAction) -> U
                 when (record.state) {
                     TransferState.RUNNING, TransferState.QUEUED -> {
                         TextButton(onClick = { onAction(TransferAction.PAUSE) }) {
-                            Icon(Icons.Rounded.Pause, null)
+                            Icon(Icons.Rounded.Pause, contentDescription = null)
                             Text(stringResource(R.string.action_pause))
                         }
                         TextButton(
                             onClick = { confirmCancel = true },
                             modifier = Modifier.testTag("transfer.cancel"),
                         ) {
-                            Icon(Icons.Rounded.Cancel, null)
+                            Icon(Icons.Rounded.Cancel, contentDescription = null)
                             Text(stringResource(R.string.action_cancel))
                         }
                     }
                     TransferState.PAUSED -> {
                         TextButton(onClick = { onAction(TransferAction.RESUME) }) {
-                            Icon(Icons.Rounded.PlayArrow, null)
+                            Icon(Icons.Rounded.PlayArrow, contentDescription = null)
                             Text(stringResource(R.string.action_resume))
                         }
                         TextButton(
                             onClick = { confirmCancel = true },
                             modifier = Modifier.testTag("transfer.cancel"),
                         ) {
-                            Icon(Icons.Rounded.Cancel, null)
+                            Icon(Icons.Rounded.Cancel, contentDescription = null)
                             Text(stringResource(R.string.action_cancel))
                         }
                     }
                     TransferState.FAILED -> if (record.retryable) {
                         TextButton(onClick = { onAction(TransferAction.RETRY) }) {
-                            Icon(Icons.Rounded.Refresh, null)
+                            Icon(Icons.Rounded.Refresh, contentDescription = null)
                             Text(stringResource(R.string.action_retry))
                         }
                     }
@@ -1298,7 +1303,7 @@ private fun Setup(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         OutlinedButton(onClick = pickCaCertificate) {
-            Icon(Icons.Rounded.Security, null)
+            Icon(Icons.Rounded.Security, contentDescription = null)
             Text(stringResource(R.string.action_choose_ca_certificate), Modifier.padding(start = 8.dp))
         }
         if (state.setupCaCertificateDer.isNotBlank()) {
@@ -1375,7 +1380,7 @@ private fun Setup(
 private fun OnboardingChoice(icon: ImageVector, title: String, detail: String) {
     OutlinedCard(Modifier.fillMaxWidth()) {
         Row(Modifier.padding(14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Icon(icon, null)
+            Icon(icon, contentDescription = null)
             Column {
                 Text(title, fontWeight = FontWeight.SemiBold)
                 Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1462,7 +1467,7 @@ private fun Pair(
             onClick = { startNetworkPairing(state.tailscaleCandidateAddress) },
             modifier = Modifier.testTag("pair.tailscaleStart"),
         ) {
-            Icon(Icons.Rounded.AddLink, null)
+            Icon(Icons.Rounded.AddLink, contentDescription = null)
             Text(stringResource(R.string.action_use_backup_device), Modifier.padding(start = 8.dp))
         }
         state.activeNetworkPairing?.let { pairing ->
@@ -1505,7 +1510,7 @@ private fun Pair(
             onClick = { state.showAdvancedPairing = !state.showAdvancedPairing },
             modifier = Modifier.testTag("pair.advanced"),
         ) {
-            Icon(Icons.Rounded.Security, null)
+            Icon(Icons.Rounded.Security, contentDescription = null)
             Text(
                 stringResource(
                     if (state.showAdvancedPairing) R.string.action_hide_advanced_pairing
@@ -1551,7 +1556,7 @@ private fun Pair(
                 onClick = { confirmDiscardPairing = true },
                 modifier = Modifier.testTag("pair.discardAdvanced"),
             ) {
-                Icon(Icons.Rounded.Cancel, null)
+                Icon(Icons.Rounded.Cancel, contentDescription = null)
                 Text(stringResource(R.string.action_cancel_pairing))
             }
         }
@@ -1569,7 +1574,7 @@ private fun DiscoverySection(
             enabled = !state.busy && state.connectionHealth == ConnectionHealth.READY,
             onClick = discover,
         ) {
-            Icon(Icons.Rounded.Search, null)
+            Icon(Icons.Rounded.Search, contentDescription = null)
             Text(stringResource(R.string.action_find_devices), Modifier.padding(start = 8.dp))
         }
         if (state.discoveryRunning) {
@@ -1639,7 +1644,7 @@ private fun NetworkPairingCard(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.Security, null)
+                Icon(Icons.Rounded.Security, contentDescription = null)
                 Column(Modifier.padding(start = 10.dp).weight(1f)) {
                     Text(pairing.peerName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Text(
@@ -1680,7 +1685,7 @@ private fun NetworkPairingCard(
                         onClick = confirm,
                         modifier = Modifier.testTag("pair.confirmNetwork"),
                     ) {
-                        Icon(Icons.Rounded.CheckCircle, null)
+                        Icon(Icons.Rounded.CheckCircle, contentDescription = null)
                         Text(stringResource(R.string.action_confirm_backup_device), Modifier.padding(start = 8.dp))
                     }
                 }
@@ -1693,7 +1698,7 @@ private fun NetworkPairingCard(
                 NetworkPairingState.COMPLETE -> {
                     if (providerPersisted) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Rounded.CheckCircle, null, tint = MaterialTheme.colorScheme.primary)
+                            Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                             Text(stringResource(R.string.network_pairing_complete), fontWeight = FontWeight.SemiBold)
                         }
                     } else {
@@ -1814,7 +1819,10 @@ private fun InviterPairing(
                 requireSameInvitation(invitation, session)
                 state.persistPairingSession(session)
                 state.pairingError = ""
-            }.onFailure { state.pairingError = it.message ?: resources.getString(R.string.error_invalid_pairing_exchange) }
+            }.onFailure {
+                Log.w(UI_LOG_TAG, "Pairing exchange could not be read", it)
+                state.pairingError = resources.getString(R.string.error_invalid_pairing_exchange)
+            }
         }
     }
     state.pairingSession?.let { session ->
@@ -1836,7 +1844,7 @@ private fun InviterPairing(
                     state.persistPairingSession(confirmed)
                 }
             }) {
-                Icon(Icons.Rounded.Security, null)
+                Icon(Icons.Rounded.Security, contentDescription = null)
                 Text(stringResource(R.string.action_confirm_inviter), Modifier.padding(start = 8.dp))
             }
             state.pairingConfirmation == null -> {
@@ -1936,7 +1944,7 @@ private fun ResponderPairing(
                     state.persistPairingSession(confirmed)
                 }
             }) {
-                Icon(Icons.Rounded.Security, null)
+                Icon(Icons.Rounded.Security, contentDescription = null)
                 Text(stringResource(R.string.action_confirm_responder), Modifier.padding(start = 8.dp))
             }
             !inviterConfirmed -> {
@@ -1962,7 +1970,8 @@ private fun ResponderPairing(
                         state.persistPairingSession(updated)
                         state.pairingError = ""
                     }.onFailure {
-                        state.pairingError = it.message ?: resources.getString(R.string.error_invalid_pairing_exchange)
+                        Log.w(UI_LOG_TAG, "Pairing exchange could not be confirmed", it)
+                        state.pairingError = resources.getString(R.string.error_invalid_pairing_exchange)
                     }
                 }
             }
@@ -2106,11 +2115,11 @@ private fun ExchangeCard(title: String, detail: String, json: JSONObject, shareL
             )
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { copyText(context, title, serialized) }) {
-                    Icon(Icons.Rounded.ContentCopy, null)
+                    Icon(Icons.Rounded.ContentCopy, contentDescription = null)
                     Text(stringResource(R.string.action_copy), Modifier.padding(start = 8.dp))
                 }
                 OutlinedButton(onClick = { shareText(context, title, serialized) }) {
-                    Icon(Icons.Rounded.AddLink, null)
+                    Icon(Icons.Rounded.AddLink, contentDescription = null)
                     Text(shareLabel, Modifier.padding(start = 8.dp))
                 }
             }
@@ -2212,7 +2221,7 @@ private fun Backup(
         if (connection != null && state.providers.isEmpty() && state.connectionHealth == ConnectionHealth.READY) {
             runCatching { withContext(Dispatchers.IO) { node.providers(connection.baseUrl, connection.token) } }
                 .onSuccess { state.providers = it }
-                .onFailure { state.notice = it.message }
+                .onFailure { state.notice = nodeFailureMessage(context, it, R.string.error_node_action_failed) }
         }
     }
     LaunchedEffect(state.selectedBackupId, state.backups, state.providers) {
@@ -2254,7 +2263,7 @@ private fun Backup(
             }
         }
         OutlinedButton(onClick = pickSource) {
-            Icon(Icons.Rounded.FolderOpen, null)
+            Icon(Icons.Rounded.FolderOpen, contentDescription = null)
             Text(stringResource(R.string.action_choose_source), Modifier.padding(start = 8.dp))
         }
         Text(
@@ -2350,7 +2359,7 @@ private fun Backup(
                 }
             },
         ) {
-            Icon(Icons.Rounded.Backup, null)
+            Icon(Icons.Rounded.Backup, contentDescription = null)
             Text(stringResource(R.string.action_queue_backup), Modifier.padding(start = 8.dp))
         }
     }
@@ -2609,7 +2618,7 @@ private fun Restore(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         OutlinedButton(onClick = pickTarget) {
-            Icon(Icons.Rounded.FolderOpen, null)
+            Icon(Icons.Rounded.FolderOpen, contentDescription = null)
             Text(stringResource(R.string.action_choose_restore_folder), Modifier.padding(start = 8.dp))
         }
         Text(
@@ -2675,7 +2684,7 @@ private fun Restore(
                     plan.entries.all { isSafeSafRestoreAction(it.kind, it.action) },
                 onClick = { queueRestore(plan) },
             ) {
-                Icon(Icons.Rounded.FolderOpen, null)
+                Icon(Icons.Rounded.FolderOpen, contentDescription = null)
                 Text(stringResource(R.string.action_queue_restore), Modifier.padding(start = 8.dp))
             }
         }
@@ -2715,7 +2724,7 @@ private fun RestorePlanPreview(plan: RestorePlanPage, busy: Boolean, onNextPage:
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
                     Icon(
                         if (entry.kind == "directory") Icons.Rounded.FolderOpen else Icons.Rounded.Storage,
-                        null,
+                        contentDescription = null,
                     )
                     Column(Modifier.weight(1f)) {
                         Text(entry.destinationPath, fontFamily = FontFamily.Monospace)
@@ -2922,6 +2931,17 @@ private fun NodeModeChoice(
     }
 }
 
+/**
+ * Copy for the measured Android Keystore protection level, or null when the device cannot
+ * protect its identity at all — that case is covered by the blocking message below.
+ */
+internal fun keyProtectionCopyRes(level: KeyProtectionLevel): Int? = when (level) {
+    KeyProtectionLevel.UNAVAILABLE -> null
+    KeyProtectionLevel.SOFTWARE -> R.string.phone_provider_protection_software
+    KeyProtectionLevel.TRUSTED_ENVIRONMENT -> R.string.phone_provider_protection_hardware
+    KeyProtectionLevel.STRONGBOX -> R.string.phone_provider_protection_strongbox
+}
+
 @Composable
 private fun PhoneProviderSettings(
     state: CovalentViewModel,
@@ -2961,6 +2981,17 @@ private fun PhoneProviderSettings(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            // Say which protection this phone actually measured, rather than implying
+            // hardware backing everywhere. A software-only device is allowed to store
+            // backups and is told plainly that it is the weaker case.
+            keyProtectionCopyRes(provider.keyProtectionLevel)?.let { copy ->
+                Text(
+                    stringResource(copy),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("settings.phoneProvider.protection"),
+                )
+            }
         }
     }
     when {
@@ -3130,7 +3161,7 @@ private fun StatusCard(title: String, value: String, detail: String, icon: Image
             verticalAlignment = Alignment.Top,
         ) {
             Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.secondaryContainer) {
-                Icon(icon, null, Modifier.padding(12.dp))
+                Icon(icon, contentDescription = null, Modifier.padding(12.dp))
             }
             Column {
                 Text(title, style = MaterialTheme.typography.labelLarge)
@@ -3146,7 +3177,7 @@ private fun StatusCard(title: String, value: String, detail: String, icon: Image
 private fun EmptyState(title: String, detail: String) {
     Card(Modifier.fillMaxWidth()) {
         Row(Modifier.padding(18.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            Icon(Icons.Rounded.CloudOff, null)
+            Icon(Icons.Rounded.CloudOff, contentDescription = null)
             Column {
                 Text(title, fontWeight = FontWeight.SemiBold)
                 Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -3162,7 +3193,7 @@ private fun InlineError(message: String) {
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        Icon(Icons.Rounded.ErrorOutline, null, tint = MaterialTheme.colorScheme.error)
+        Icon(Icons.Rounded.ErrorOutline, contentDescription = null, tint = MaterialTheme.colorScheme.error)
         Text(message, color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
     }
 }
@@ -3230,7 +3261,7 @@ private fun ToolbarButton(
             enabled = enabled,
             contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
         ) {
-            Icon(icon, null)
+            Icon(icon, contentDescription = null)
             Text(label, Modifier.padding(start = 7.dp))
         }
     }
@@ -3355,7 +3386,11 @@ private fun queueTransfer(
         TransferScheduler.enqueue(context, record.jobId)
     } catch (error: Exception) {
         store.updateTransfer(record.jobId) {
-            it.copy(state = TransferState.FAILED, detail = error.message.orEmpty(), retryable = true)
+            it.copy(
+                state = TransferState.FAILED,
+                detail = nodeFailureMessage(context, error, R.string.error_node_action_failed),
+                retryable = true,
+            )
         }
         throw error
     }

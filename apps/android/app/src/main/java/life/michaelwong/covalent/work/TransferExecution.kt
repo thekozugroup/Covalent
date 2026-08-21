@@ -1,6 +1,7 @@
 package life.michaelwong.covalent.work
 
 import android.content.Context
+import android.util.Log
 import androidx.core.net.toUri
 import java.io.InterruptedIOException
 import life.michaelwong.covalent.R
@@ -12,6 +13,7 @@ import life.michaelwong.covalent.data.SecureNodeStore
 import life.michaelwong.covalent.model.TransferState
 import life.michaelwong.covalent.model.NodeConnection
 import life.michaelwong.covalent.node.ActiveNodeConnectionResolver
+import life.michaelwong.covalent.ui.nodeFailureMessage
 
 internal enum class TransferOutcome {
     SUCCESS,
@@ -21,6 +23,9 @@ internal enum class TransferOutcome {
 
 /** Runs one encrypted, persisted transfer request without coupling it to an Android scheduler. */
 internal object TransferExecution {
+    private const val LOG_TAG = "CovalentTransfer"
+    private val GENERIC_FAILURE = R.string.error_node_action_failed
+
     fun run(context: Context, jobId: String): TransferOutcome {
         val store = SecureNodeStore(context)
         val pending = store.pending(jobId) ?: return TransferOutcome.FAILURE
@@ -104,7 +109,7 @@ internal object TransferExecution {
             }
             TransferOutcome.SUCCESS
         } catch (error: NodeApiException) {
-            failUnlessStopped(store, jobId, error.message, error.retryable)
+            failUnlessStopped(store, jobId, nodeFailureMessage(context, error, GENERIC_FAILURE), error.retryable)
             if (error.retryable) TransferOutcome.RETRY else TransferOutcome.FAILURE
         } catch (error: InterruptedIOException) {
             val state = store.transfer(jobId)?.state
@@ -119,24 +124,30 @@ internal object TransferExecution {
             }
             TransferOutcome.RETRY
         } catch (error: SecurityException) {
-            failUnlessStopped(store, jobId, error.message, false)
+            failUnlessStopped(store, jobId, context.getString(R.string.error_target_access_revoked), false)
             TransferOutcome.FAILURE
         } catch (error: IllegalArgumentException) {
-            failUnlessStopped(store, jobId, error.message, false)
+            failUnlessStopped(store, jobId, authoredDetail(context, error), false)
             TransferOutcome.FAILURE
         } catch (error: IllegalStateException) {
-            failUnlessStopped(store, jobId, error.message, false)
+            failUnlessStopped(store, jobId, authoredDetail(context, error), false)
             TransferOutcome.FAILURE
         } catch (error: Exception) {
-            failUnlessStopped(store, jobId, error.message, true)
+            failUnlessStopped(store, jobId, nodeFailureMessage(context, error, GENERIC_FAILURE), true)
             TransferOutcome.RETRY
         }
     }
 
+    /**
+     * Records a failure detail that a person reads in the transfers list.
+     *
+     * [message] must already be authored copy. Passing `Throwable.message` here put
+     * developer text such as "Expected BEGIN_OBJECT but was STRING" straight into the UI.
+     */
     private fun failUnlessStopped(
         store: SecureNodeStore,
         jobId: String,
-        message: String?,
+        message: String,
         retryable: Boolean,
     ) {
         store.updateTransfer(jobId) { current ->
@@ -145,11 +156,20 @@ internal object TransferExecution {
             } else {
                 current.copy(
                     state = if (retryable) TransferState.QUEUED else TransferState.FAILED,
-                    detail = message.orEmpty(),
+                    detail = message,
                     retryable = retryable,
                 )
             }
         }
+    }
+
+    /**
+     * Plain copy for a local precondition failure. These are thrown with developer text,
+     * so the raw message is logged and a person is shown an authored sentence.
+     */
+    private fun authoredDetail(context: Context, error: Throwable): String {
+        Log.w(LOG_TAG, "Transfer stopped by a local precondition", error)
+        return context.getString(R.string.error_transfer_precondition)
     }
 
     private fun completionDetail(context: Context, mode: String, result: org.json.JSONObject): String =

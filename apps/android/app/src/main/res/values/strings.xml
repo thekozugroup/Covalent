@@ -114,6 +114,7 @@
     <string name="transfer_backup_complete_detail">Backup complete · items %1$d · bytes %2$d · devices with a copy %3$d · copies not made %4$d.</string>
     <string name="transfer_restore_complete_detail">Restore complete · files %1$d · bytes written %2$d.</string>
     <string name="error_transfer_request_missing">The encrypted pending request is no longer available.</string>
+    <string name="error_transfer_precondition">Covalent stopped this transfer because something it needed changed. Check the folder you chose, then start it again.</string>
     <string name="error_resume_transfer">Android could not resume a pending transfer.</string>
 
     <string name="setup_title">Connect your backup server</string>
@@ -274,7 +275,10 @@
     <string name="node_mode_phone_detail">Use the server built into this phone while its storage service is running. Your saved separate-server details are kept.</string>
     <string name="phone_provider_title">Store backups on this phone</string>
     <string name="phone_provider_detail">Choose to keep encrypted copies in this app’s private storage. Android shows an ongoing notification and may pause this to protect battery or storage.</string>
-    <string name="phone_provider_locked">Unavailable until this phone can protect its Covalent identity in secure hardware. Storing backups on this phone cannot start in this build.</string>
+    <string name="phone_provider_locked">This phone cannot protect its Covalent identity, so it cannot store backups. Set a screen lock, restart the phone, then open this screen again.</string>
+    <string name="phone_provider_protection_strongbox">Protected by this phone’s dedicated security chip. The key never leaves it.</string>
+    <string name="phone_provider_protection_hardware">Protected by this phone’s secure hardware. The key never leaves it.</string>
+    <string name="phone_provider_protection_software">Protected in software only — this phone has no secure hardware Covalent can use. Backups kept here are still encrypted, but a stolen unlocked phone is easier to attack.</string>
     <string name="phone_provider_runtime_missing">The on-phone storage service is not included in this installation.</string>
     <string name="phone_provider_status">Storage status</string>
     <string name="phone_provider_use_up_to">Use up to (GB)</string>
@@ -308,6 +312,80 @@
     <string name="value_none">None</string>
 
     <string name="primary_actions">Primary actions</string>
+    <!--
+      Backup-server error codes, mapped to plain copy.
+
+      The vocabulary here is deliberately identical to packaging/web/app.js so a person
+      who sets up on the web console and then opens the phone reads the same sentences.
+      An unmapped code never renders the server's own text: it falls back to
+      error_node_action_failed and the code is logged. See ui/NodeFailure.kt.
+    -->
+    <string name="node_error_insufficient_storage">Your backup server is out of space. Free some up, or choose a different device to keep this copy.</string>
+    <string name="node_error_resource_limit">This is larger than your backup server can handle in one pass. Try backing up a smaller folder.</string>
+    <string name="node_error_job_paused">This job is paused. Resume it to carry on where it left off.</string>
+    <string name="node_error_job_cancelled">This job was cancelled, and the progress it had saved was discarded.</string>
+    <string name="node_error_job_active">Another job is already running. Wait for it to finish, then try again.</string>
+    <string name="node_error_job_conflict">This clashes with a job already running. Wait for it to finish, then try again.</string>
+    <string name="node_error_job_not_complete">This job hasn’t finished yet. Wait for it to complete.</string>
+    <string name="node_error_job_not_found">Covalent couldn’t find this job. It may have already finished.</string>
+    <string name="node_error_invalid_job_id">Covalent couldn’t read this job’s identifier. Start the operation again.</string>
+    <string name="node_error_node_busy">Your backup server is busy with something else. Try again in a moment.</string>
+    <string name="node_error_node_state_locked">Your backup server is applying another change. Try again in a moment.</string>
+    <string name="node_error_archive_processing_timeout">Your backup server took too long to work through this backup. Try again, or choose a smaller folder.</string>
+    <string name="node_error_archive_processing_too_slow">This transfer was running too slowly to continue safely. Check the network between the two devices, then try again.</string>
+    <string name="node_error_confirmation_required">This has to be confirmed on the other device before it can finish.</string>
+    <string name="node_error_source_changed">Files changed while Covalent was copying them. Try again once they stop changing.</string>
+    <string name="node_error_source_unreadable">Covalent couldn’t read part of the folder you chose. Choose the folder again.</string>
+    <string name="node_error_invalid_authorized_root">The folder you chose is no longer available to Covalent. Choose it again.</string>
+    <string name="node_error_unsafe_restore_path">This backup holds a file that would land outside the folder you chose, so Covalent stopped the restore to keep your files safe.</string>
+    <string name="node_error_restore_conflict">Some files already exist in the folder you’re restoring into. Preview the restore again and choose how to handle them.</string>
+    <string name="node_error_restore_plan_mismatch">This restore changed after you previewed it. Preview it again before restoring.</string>
+    <string name="node_error_restore_plan_not_found">This restore preview has expired. Preview the restore again.</string>
+    <string name="node_error_invalid_restore_plan_id">Covalent couldn’t read this restore plan. Preview the restore again.</string>
+    <string name="node_error_invalid_restore_execute_request">Covalent couldn’t read this restore request. Preview the restore again.</string>
+    <string name="node_error_invalid_streamed_restore_plan">Covalent couldn’t read the restore plan your server sent. Preview the restore again.</string>
+    <string name="node_error_invalid_target_inventory">Covalent couldn’t finish checking the folder you’re restoring into. Preview the restore again.</string>
+    <string name="node_error_target_inventory_required">Covalent needs to check the folder you’re restoring into first. Preview the restore again.</string>
+    <string name="node_error_target_inventory_not_found">The check of your restore folder has expired. Preview the restore again.</string>
+    <string name="node_error_target_inventory_incomplete">Covalent didn’t finish checking the folder you’re restoring into. Preview the restore again.</string>
+    <string name="node_error_target_inventory_digest_mismatch">The folder you’re restoring into changed while Covalent was checking it. Preview the restore again.</string>
+    <string name="node_error_target_inventory_job_mismatch">This restore check belongs to a different job. Preview the restore again.</string>
+    <string name="node_error_target_inventory_offset_mismatch">Covalent lost its place while checking your restore folder. Preview the restore again.</string>
+    <string name="node_error_target_inventory_page_mismatch">Covalent lost its place while checking your restore folder. Preview the restore again.</string>
+    <string name="node_error_backup_corrupt">Some of this backup’s encrypted data is damaged. Verify the backup to see what can still be restored.</string>
+    <string name="node_error_backup_unavailable">This backup isn’t available on your backup server right now.</string>
+    <string name="node_error_invalid_archive">Covalent couldn’t verify this backup’s contents. Start the backup again.</string>
+    <string name="node_error_invalid_archive_entry">Covalent couldn’t verify one of the files in this backup. Start the backup again.</string>
+    <string name="node_error_invalid_archive_metadata">Covalent couldn’t verify this backup’s details. Start the backup again.</string>
+    <string name="node_error_archive_metadata_required">This backup arrived without its details. Start the backup again.</string>
+    <string name="node_error_archive_upload_headers_required">This upload arrived incomplete. Start the backup again.</string>
+    <string name="node_error_archive_digest_mismatch">The backup that arrived didn’t match what this device sent. Start the backup again.</string>
+    <string name="node_error_duplicate_archive_entry">This backup listed the same file twice. Start the backup again.</string>
+    <string name="node_error_invalid_upload_digest">The upload didn’t match what this device sent. Start the backup again.</string>
+    <string name="node_error_invalid_upload_length">The upload lost its place. Start the backup again.</string>
+    <string name="node_error_invalid_upload_offset">The upload lost its place. Start the backup again.</string>
+    <string name="node_error_invitation_unavailable">This pairing invitation has expired or was already used. Start pairing again.</string>
+    <string name="node_error_protocol_incompatible">These two devices run versions of Covalent that can’t work together. Update both, then try again.</string>
+    <string name="node_error_pairing_endpoint_mismatch">That device answered from a different address than the one you paired with. Pair with it again.</string>
+    <string name="node_error_peer_endpoint_unavailable">This server doesn’t know which address other devices should dial yet. Set the address other devices dial in its settings, then try again.</string>
+    <string name="node_error_claim_unavailable">This server already has an owner, so it can’t be set up again.</string>
+    <string name="node_error_claim_code_incorrect">That setup code isn’t correct. Check the code shown in your server’s log and try again.</string>
+    <string name="node_error_claim_window_expired">That setup code has expired. Restart Covalent on your server to get a new one.</string>
+    <string name="node_error_claim_window_exhausted">That setup code can no longer be used — either too many wrong codes were entered, or someone else has already claimed this server. Restart Covalent on your server to get a new code, and finish setup straight away.</string>
+    <string name="node_error_claim_rate_limited">Setup codes are being entered too quickly. Wait a moment, then try again.</string>
+    <string name="node_error_claim_certificate_unavailable">This server is still preparing its security certificate. Wait a few seconds, then try again.</string>
+    <string name="node_error_pairing_peer_unreachable">Covalent couldn’t reach that device. Check that it’s switched on and on the same network, then pair again.</string>
+    <string name="node_error_pairing_rejected">That device turned down the pairing request. Nothing was trusted.</string>
+    <string name="node_error_provider_binding_mismatch">That device didn’t match the identity it signed when you paired. Pair with it again.</string>
+    <string name="node_error_invalid_provider_address">Covalent couldn’t reach that device at the address given. Check the address, then try again.</string>
+    <string name="node_error_invalid_contract">This console and your backup server don’t agree on how to talk to each other. Update both to the same version.</string>
+    <string name="node_error_invalid_json">This console and your backup server don’t agree on how to talk to each other. Update both to the same version.</string>
+    <string name="node_error_invalid_content_type">This console and your backup server don’t agree on how to talk to each other. Update both to the same version.</string>
+    <string name="node_error_method_not_allowed">This console asked for something your backup server doesn’t offer. Update both to the same version.</string>
+    <string name="node_error_route_not_found">This console asked for something your backup server doesn’t offer. Update both to the same version.</string>
+    <string name="node_error_invalid_page_cursor">Covalent lost its place while loading this list. Try again.</string>
+    <string name="node_error_invalid_page_limit">Covalent lost its place while loading this list. Try again.</string>
+    <string name="node_error_internal_error">Something went wrong on your backup server. Try again; if it keeps happening, check its logs.</string>
     <string name="error_node_action_failed">Your backup server could not complete that action.</string>
     <string name="error_server_unreachable">Covalent could not reach your backup server. Check that it is switched on and that this phone is on the same network.</string>
     <string name="error_server_certificate">Your backup server presented a certificate that does not match the one you added. Nothing was sent.</string>

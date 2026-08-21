@@ -8,18 +8,11 @@ import android.content.pm.PackageManager
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.storage.StorageManager
-import android.security.keystore.KeyGenParameterSpec
-import android.security.keystore.KeyProperties
 import android.util.Base64
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import java.io.File
 import java.security.SecureRandom
-import java.security.KeyStore
-import javax.crypto.Cipher
-import javax.crypto.KeyGenerator
-import javax.crypto.SecretKey
-import javax.crypto.spec.GCMParameterSpec
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -29,6 +22,7 @@ import life.michaelwong.covalent.model.NodeConnection
 data class EmbeddedProviderState(
     val supported: Boolean,
     val keyProtectionAvailable: Boolean,
+    val keyProtectionLevel: KeyProtectionLevel,
     val enabled: Boolean,
     val running: Boolean,
     val statusMessage: String,
@@ -52,7 +46,8 @@ class EmbeddedNodeManager(context: Context) {
         PREFERENCES_NAME,
         Context.MODE_PRIVATE,
     )
-    private val localStore = LocalEmbeddedNodeStore(applicationContext)
+    private val protector = IdentityKeyProtector()
+    private val localStore = LocalEmbeddedNodeStore(applicationContext, protector)
     private var multicastLock: WifiManager.MulticastLock? = null
 
     val state: StateFlow<EmbeddedProviderState> = sharedState.asStateFlow()
@@ -66,7 +61,7 @@ class EmbeddedNodeManager(context: Context) {
             publish(
                 enabled = false,
                 running = false,
-                message = "This phone cannot protect its Covalent identity yet, so it cannot store backups.",
+                message = "This phone cannot protect its Covalent identity, so it cannot store backups.",
                 reservedBytes = 0L,
                 availableBytes = availableBytes(),
             )
@@ -194,7 +189,12 @@ class EmbeddedNodeManager(context: Context) {
         if (!hasPeerNetworkPermission()) {
             return unavailable("Allow local network access before this phone can start storing backups.")
         }
+        val protection = keyProtectionLevel()
+        if (protection == KeyProtectionLevel.UNAVAILABLE) {
+            return unavailable("This phone cannot protect its Covalent identity, so it cannot store backups.")
+        }
         val token = protectedTokenBytes()
+            ?: return unavailable("Covalent could not protect this phone's server credential, so it did not start.")
         return try {
             val lanEnabled = acquireLanDiscoveryPermission()
             CovalentNative.start(
@@ -204,6 +204,7 @@ class EmbeddedNodeManager(context: Context) {
                 apiToken = token,
                 maximumTotalBytes = maxBytes,
                 freeSpaceReserveBytes = keepFreeBytes,
+                keyProtectionLevel = protection,
             ).also { response ->
                 if (response.ok && response.apiBaseUrl != null) {
                     localStore.baseUrl = response.apiBaseUrl
@@ -247,17 +248,30 @@ class EmbeddedNodeManager(context: Context) {
         ContextCompat.startForegroundService(applicationContext, intent)
     }
 
-    private fun protectedTokenBytes(): ByteArray {
-        val current = localStore.token.ifBlank {
-            ByteArray(32).also(SecureRandom()::nextBytes).let { generated ->
-                try {
-                    Base64.encodeToString(generated, Base64.NO_WRAP or Base64.URL_SAFE)
-                } finally {
-                    generated.fill(0)
-                }
-            }.also { localStore.token = it }
+    /**
+     * The local API bearer token, sealed at rest under the Android Keystore key.
+     *
+     * A blank read means the stored envelope could not be opened — a replaced or wiped
+     * Keystore key — so a fresh token is minted and sealed.  Rotating it is safe: it is a
+     * loopback-only credential handed to the node explicitly at every start.  The node's
+     * TLS identity is deliberately left alone, because rotating that would break every
+     * pairing this phone has completed.
+     *
+     * Returns null when the freshly minted token could not be sealed either, so the node
+     * is never started with a credential the app cannot read back.
+     */
+    private fun protectedTokenBytes(): ByteArray? {
+        localStore.token.takeIf(String::isNotBlank)?.let { return it.encodeToByteArray() }
+        val minted = ByteArray(32).let { generated ->
+            try {
+                SecureRandom().nextBytes(generated)
+                Base64.encodeToString(generated, Base64.NO_WRAP or Base64.URL_SAFE)
+            } finally {
+                generated.fill(0)
+            }
         }
-        return current.encodeToByteArray()
+        localStore.token = minted
+        return localStore.token.takeIf(String::isNotBlank)?.encodeToByteArray()
     }
 
     private fun acquireLanDiscoveryPermission(): Boolean {
@@ -341,6 +355,7 @@ class EmbeddedNodeManager(context: Context) {
         return EmbeddedProviderState(
             supported = secureProviderSupported(),
             keyProtectionAvailable = keyProtectionAvailable(),
+            keyProtectionLevel = keyProtectionLevel(),
             enabled = enabled,
             running = preferences.getBoolean(KEY_RUNNING, false),
             statusMessage = preferences.getString(KEY_STATUS, null)
@@ -368,6 +383,7 @@ class EmbeddedNodeManager(context: Context) {
         sharedState.value = EmbeddedProviderState(
             supported = secureProviderSupported(),
             keyProtectionAvailable = keyProtectionAvailable(),
+            keyProtectionLevel = keyProtectionLevel(),
             enabled = enabled,
             running = running,
             statusMessage = message,
@@ -393,12 +409,40 @@ class EmbeddedNodeManager(context: Context) {
         const val DEFAULT_MAX_BYTES = 2L * 1024L * 1024L * 1024L
         const val DEFAULT_KEEP_FREE_BYTES = 512L * 1024L * 1024L
         val sharedState = MutableStateFlow(
-            EmbeddedProviderState(false, false, false, false, "Storing backups on this phone is off.", 0L, 0L, 0L, 0L, 0L, false),
+            EmbeddedProviderState(
+                supported = false,
+                keyProtectionAvailable = false,
+                keyProtectionLevel = KeyProtectionLevel.UNAVAILABLE,
+                enabled = false,
+                running = false,
+                statusMessage = "Storing backups on this phone is off.",
+                usedBytes = 0L,
+                reservedBytes = 0L,
+                availableBytes = 0L,
+                maxBytes = 0L,
+                keepFreeBytes = 0L,
+                lanDiscoveryRequested = false,
+            ),
         )
     }
 
     /** True only after Rust accepts a non-exportable Android Keystore identity protector. */
-    fun keyProtectionAvailable(): Boolean = false
+    /**
+     * The measured Android Keystore protection level behind this device's Covalent
+     * identity.  This is a probe, not an assumption: [IdentityKeyProtector] creates the
+     * key, seals and opens a canary through it, and reports the level the platform
+     * records for the key that actually worked.
+     */
+    fun keyProtectionLevel(): KeyProtectionLevel = protector.protection()
+
+    /**
+     * Fail-closed admission for the on-phone node.  False only when this device cannot
+     * hold a Keystore key at all, in which case the local API credential would sit in
+     * app-private storage with nothing but filesystem permissions behind it.  A device
+     * that can protect the credential only in software is admitted and says so, rather
+     * than being silently blocked or silently promoted to "hardware-backed".
+     */
+    fun keyProtectionAvailable(): Boolean = keyProtectionLevel() != KeyProtectionLevel.UNAVAILABLE
 
     private fun secureProviderSupported(): Boolean = CovalentNative.isAvailable && keyProtectionAvailable()
 
@@ -416,8 +460,18 @@ enum class NodeMode(val wireValue: String) {
     }
 }
 
-/** Separate Android Keystore alias and encrypted storage for local-node-only credentials. */
-private class LocalEmbeddedNodeStore(context: Context) {
+/**
+ * Storage for local-node-only credentials, kept in its own `SharedPreferences` file so
+ * nothing here can read, write, or substitute a separately configured external node's
+ * credentials.
+ *
+ * The token is never stored in the clear: it is sealed by [IdentityKeyProtector] under a
+ * non-exportable Android Keystore key.  An envelope that cannot be opened — because the
+ * Keystore key was replaced, wiped, or invalidated — reads as an empty token, which makes
+ * the caller mint and seal a fresh one.  See [IdentityKeyProtector] for the full key
+ * lifecycle, including what happens on device loss, uninstall, and factory reset.
+ */
+private class LocalEmbeddedNodeStore(context: Context, private val protector: IdentityKeyProtector) {
     private val preferences = context.getSharedPreferences("covalent_embedded_node_credentials", Context.MODE_PRIVATE)
 
     var baseUrl: String
@@ -425,41 +479,10 @@ private class LocalEmbeddedNodeStore(context: Context) {
         set(value) = preferences.edit { putString("base_url", value.trim()) }
 
     var token: String
-        get() = preferences.getString("token", null)?.let(::decrypt).orEmpty()
+        get() = preferences.getString("token", null)?.let(protector::open).orEmpty()
         set(value) {
-            if (value.isBlank()) preferences.edit { remove("token") }
-            else preferences.edit { putString("token", encrypt(value)) }
+            val sealed = value.takeIf(String::isNotBlank)?.let(protector::seal)
+            if (sealed == null) preferences.edit { remove("token") }
+            else preferences.edit { putString("token", sealed) }
         }
-
-    private fun key(): SecretKey {
-        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        (store.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
-        return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
-            init(
-                KeyGenParameterSpec.Builder(KEY_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
-                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                    .build(),
-            )
-        }.generateKey()
-    }
-
-    private fun encrypt(value: String): String {
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }
-        return Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" +
-            Base64.encodeToString(cipher.doFinal(value.encodeToByteArray()), Base64.NO_WRAP)
-    }
-
-    private fun decrypt(value: String): String {
-        val parts = value.split(":", limit = 2)
-        require(parts.size == 2) { "Embedded node credentials are invalid." }
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
-            init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, Base64.decode(parts[0], Base64.NO_WRAP)))
-        }
-        return cipher.doFinal(Base64.decode(parts[1], Base64.NO_WRAP)).decodeToString()
-    }
-
-    private companion object {
-        const val KEY_ALIAS = "covalent.embedded.node.token.v1"
-    }
 }

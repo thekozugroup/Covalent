@@ -141,7 +141,13 @@ class CovalentAppTest {
         val state = readyState(store, Screen.SETTINGS)
         compose.setContent { CovalentTheme { CovalentApp(store, state) } }
 
-        compose.onNodeWithText("Nearby discovery").assertIsDisplayed().assertIsToggleable()
+        // Scrolled into view first, matching eachPartyReplicaRoleRowExposesOneToggleTarget
+        // below: the settings form is longer than the viewport, so where a row happens to
+        // land is a layout detail, while "one labelled, toggleable control" is the contract.
+        compose.onNodeWithText("Nearby discovery")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .assertIsToggleable()
     }
 
     @Test

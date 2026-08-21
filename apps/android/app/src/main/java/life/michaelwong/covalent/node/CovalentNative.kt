@@ -18,6 +18,7 @@ internal object CovalentNative {
         apiToken: ByteArray,
         maximumTotalBytes: Long,
         freeSpaceReserveBytes: Long,
+        keyProtectionLevel: Int,
     ): String
 
     @JvmStatic
@@ -26,6 +27,15 @@ internal object CovalentNative {
     @JvmStatic
     private external fun nativeState(handle: Long): String
 
+    /**
+     * Starts the process-local node.
+     *
+     * [keyProtectionLevel] carries the measured Android Keystore capability across the
+     * boundary; the Rust side decodes it with `IdentityProtection::from_wire` and refuses
+     * to start on [KeyProtectionLevel.UNAVAILABLE] or on any value it does not recognise.
+     * The policy therefore lives on one side and the measurement on the other, so neither
+     * can quietly assume the answer.
+     */
     fun start(
         dataDirectory: String,
         deviceName: String,
@@ -33,6 +43,7 @@ internal object CovalentNative {
         apiToken: ByteArray,
         maximumTotalBytes: Long,
         freeSpaceReserveBytes: Long,
+        keyProtectionLevel: KeyProtectionLevel,
     ): NativeNodeResponse {
         if (!libraryLoaded) return NativeNodeResponse.unavailable()
         return parse(runCatching {
@@ -43,6 +54,7 @@ internal object CovalentNative {
                 apiToken,
                 maximumTotalBytes,
                 freeSpaceReserveBytes,
+                keyProtectionLevel.wireValue,
             )
         }.getOrElse { NativeNodeResponse.unavailable().toJson() })
     }

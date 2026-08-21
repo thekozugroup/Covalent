@@ -18,7 +18,7 @@ use covalent_protocol::PlatformTier;
 use jni::EnvUnowned;
 use jni::objects::{JByteArray, JClass, JString};
 use jni::strings::JNIString;
-use jni::sys::{JNI_ERR, JNI_VERSION_1_6, jboolean, jlong, jstring};
+use jni::sys::{JNI_ERR, JNI_VERSION_1_6, jboolean, jint, jlong, jstring};
 use jni::{JavaVM, NativeMethod};
 use serde::Serialize;
 use zeroize::{Zeroize, Zeroizing};
@@ -27,10 +27,58 @@ const NATIVE_CLASS: &str = "life/michaelwong/covalent/node/CovalentNative";
 const MAX_LIVE_NODES: usize = 2;
 const MIN_PROVIDER_BYTES: u64 = 256 * 1_024 * 1_024;
 const MAX_PROVIDER_BYTES: u64 = 8 * 1_024 * 1_024 * 1_024 * 1_024;
-// Engine/NodeRuntime has not yet accepted the Android Keystore-backed identity
-// protector. Starting before that exists would persist long-lived material with
-// filesystem permissions only, so Android local-node mode stays fail-closed.
-const SECURE_IDENTITY_PROTECTOR_AVAILABLE: bool = false;
+// Android Keystore protection levels, mirroring
+// `life.michaelwong.covalent.node.KeyProtectionLevel`.  Kotlin owns the probe
+// because only the platform can answer it: it generates the AES-GCM protector
+// key inside `AndroidKeyStore`, performs a real seal/open round trip, and reads
+// the resulting `KeyInfo` security level.  Rust owns the policy, so the decision
+// to run at all is made once, here, from a measured value rather than an
+// assumption.  These wire values are a fixed part of the JNI contract.
+const PROTECTION_UNAVAILABLE: i32 = 0;
+const PROTECTION_SOFTWARE: i32 = 1;
+const PROTECTION_TRUSTED_ENVIRONMENT: i32 = 2;
+const PROTECTION_STRONGBOX: i32 = 3;
+
+/// The measured Keystore protection level behind this device's identity.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum IdentityProtection {
+    /// No Keystore key could be created or exercised.
+    Unavailable,
+    /// A Keystore key exists but the platform keeps it in software.
+    Software,
+    /// The key lives in the device's trusted execution environment.
+    TrustedEnvironment,
+    /// The key lives in a discrete StrongBox security chip.
+    StrongBox,
+}
+
+impl IdentityProtection {
+    /// Decodes the wire value.  Anything the current Kotlin enum does not
+    /// define — a garbled, truncated, or future value — decodes to
+    /// `Unavailable`, so a Kotlin-side addition can never silently widen what
+    /// Rust admits.
+    fn from_wire(level: i32) -> Self {
+        match level {
+            PROTECTION_UNAVAILABLE => Self::Unavailable,
+            PROTECTION_SOFTWARE => Self::Software,
+            PROTECTION_TRUSTED_ENVIRONMENT => Self::TrustedEnvironment,
+            PROTECTION_STRONGBOX => Self::StrongBox,
+            _ => Self::Unavailable,
+        }
+    }
+
+    /// Fail-closed admission for the embedded node.  `Unavailable` means the
+    /// platform could not keep the local API credential under a Keystore key at
+    /// all, so the node must not start and persist long-lived state next to an
+    /// unprotected credential.
+    fn admits_embedded_node(self) -> bool {
+        self != Self::Unavailable
+    }
+}
+
+fn identity_protection_accepted(level: i32) -> bool {
+    IdentityProtection::from_wire(level).admits_embedded_node()
+}
 
 struct NativeRegistry {
     runtime: Arc<tokio::runtime::Runtime>,
@@ -110,7 +158,7 @@ impl<'a> NativeResponse<'a> {
         Self {
             ok: true,
             code: "ok",
-            message: "Embedded node is running.",
+            message: "This phone is storing backups.",
             handle: Some(handle),
             api_base_url: Some(api_base_url),
             peer_address: Some(peer_address),
@@ -122,7 +170,7 @@ impl<'a> NativeResponse<'a> {
         Self {
             ok: true,
             code: "ok",
-            message: "Embedded node is stopped.",
+            message: "Storing backups on this phone is stopped.",
             handle: None,
             api_base_url: None,
             peer_address: None,
@@ -133,7 +181,7 @@ impl<'a> NativeResponse<'a> {
 
 fn response_json(response: NativeResponse<'_>) -> String {
     serde_json::to_string(&response).unwrap_or_else(|_| {
-        "{\"ok\":false,\"code\":\"serialization_failed\",\"message\":\"Native response is unavailable.\",\"state\":\"stopped\"}".to_owned()
+        "{\"ok\":false,\"code\":\"serialization_failed\",\"message\":\"Storing backups on this phone is unavailable right now.\",\"state\":\"stopped\"}".to_owned()
     })
 }
 
@@ -173,9 +221,10 @@ fn start_node(
     mut token: Vec<u8>,
     maximum_total_bytes: u64,
     free_space_reserve_bytes: u64,
+    key_protection_level: i32,
 ) -> NativeResponse<'static> {
     let result = (|| {
-        if !SECURE_IDENTITY_PROTECTOR_AVAILABLE {
+        if !identity_protection_accepted(key_protection_level) {
             return Err("secure_key_protector_required");
         }
         if data_directory.is_empty()
@@ -240,29 +289,32 @@ fn start_node(
         Ok(response) => response,
         Err("invalid_start_request") => NativeResponse::error(
             "invalid_start_request",
-            "Embedded node settings are invalid.",
+            "The storage settings for this phone are not valid.",
         ),
         Err("invalid_provider_quota") => NativeResponse::error(
             "invalid_provider_quota",
-            "Provider capacity must leave the requested protected free space.",
+            "The size limit must leave the free space you asked to keep.",
         ),
         Err("invalid_api_token") => NativeResponse::error(
             "invalid_api_token",
-            "The protected local API token is invalid.",
+            "This phone's protected server credential is not valid.",
         ),
         Err("secure_key_protector_required") => NativeResponse::error(
             "secure_key_protector_required",
-            "Embedded provider needs Android Keystore protection before it can start.",
+            "This phone cannot protect its Covalent identity, so it cannot store backups.",
         ),
         Err("node_capacity_reached") => NativeResponse::error(
             "node_capacity_reached",
-            "Too many embedded nodes are already running.",
+            "This phone is already storing backups.",
         ),
         Err("runtime_unavailable") => NativeResponse::error(
             "runtime_unavailable",
-            "The embedded runtime is unavailable.",
+            "Storing backups on this phone is unavailable right now.",
         ),
-        Err(_) => NativeResponse::error("node_start_failed", "The embedded node could not start."),
+        Err(_) => NativeResponse::error(
+            "node_start_failed",
+            "This phone could not start storing backups.",
+        ),
     }
 }
 
@@ -287,14 +339,18 @@ fn stop_node(handle: u64) -> NativeResponse<'static> {
     })();
     match result {
         Ok(response) => response,
-        Err("invalid_handle") => {
-            NativeResponse::error("invalid_handle", "Embedded node handle is invalid.")
-        }
+        Err("invalid_handle") => NativeResponse::error(
+            "invalid_handle",
+            "Storing backups on this phone is not running.",
+        ),
         Err("runtime_unavailable") => NativeResponse::error(
             "runtime_unavailable",
-            "The embedded runtime is unavailable.",
+            "Storing backups on this phone is unavailable right now.",
         ),
-        Err(_) => NativeResponse::error("node_stop_failed", "The embedded node could not stop."),
+        Err(_) => NativeResponse::error(
+            "node_stop_failed",
+            "This phone could not stop storing backups.",
+        ),
     }
 }
 
@@ -317,12 +373,13 @@ fn node_state(handle: u64) -> NativeResponse<'static> {
     })();
     match result {
         Ok(response) => response,
-        Err("invalid_handle") => {
-            NativeResponse::error("invalid_handle", "Embedded node handle is invalid.")
-        }
+        Err("invalid_handle") => NativeResponse::error(
+            "invalid_handle",
+            "Storing backups on this phone is not running.",
+        ),
         Err(_) => NativeResponse::error(
             "runtime_unavailable",
-            "The embedded runtime is unavailable.",
+            "Storing backups on this phone is unavailable right now.",
         ),
     }
 }
@@ -354,6 +411,7 @@ extern "system" fn native_start<'local>(
     api_token: JByteArray<'local>,
     maximum_total_bytes: jlong,
     free_space_reserve_bytes: jlong,
+    key_protection_level: jint,
 ) -> jstring {
     with_java_response(unowned, |environment| {
         let data_directory = data_directory.to_string();
@@ -367,10 +425,11 @@ extern "system" fn native_start<'local>(
                 token,
                 maximum_total_bytes as u64,
                 free_space_reserve_bytes as u64,
+                key_protection_level,
             ),
             _ => NativeResponse::error(
                 "invalid_start_request",
-                "Embedded node settings are invalid.",
+                "The storage settings for this phone are not valid.",
             ),
         }
     })
@@ -383,7 +442,10 @@ extern "system" fn native_stop<'local>(
 ) -> jstring {
     with_java_response(unowned, |_environment| {
         if handle < 0 {
-            NativeResponse::error("invalid_handle", "Embedded node handle is invalid.")
+            NativeResponse::error(
+                "invalid_handle",
+                "Storing backups on this phone is not running.",
+            )
         } else {
             stop_node(handle as u64)
         }
@@ -397,7 +459,10 @@ extern "system" fn native_state<'local>(
 ) -> jstring {
     with_java_response(unowned, |_environment| {
         if handle < 0 {
-            NativeResponse::error("invalid_handle", "Embedded node handle is invalid.")
+            NativeResponse::error(
+                "invalid_handle",
+                "Storing backups on this phone is not running.",
+            )
         } else {
             node_state(handle as u64)
         }
@@ -422,7 +487,7 @@ pub unsafe extern "system" fn JNI_OnLoad(
             let class = environment.find_class(JNIString::from(NATIVE_CLASS))?;
             let native_start_name = JNIString::from("nativeStart");
             let native_start_signature =
-                JNIString::from("(Ljava/lang/String;Ljava/lang/String;Z[BJJ)Ljava/lang/String;");
+                JNIString::from("(Ljava/lang/String;Ljava/lang/String;Z[BJJI)Ljava/lang/String;");
             let native_stop_name = JNIString::from("nativeStop");
             let native_stop_signature = JNIString::from("(J)Ljava/lang/String;");
             let native_state_name = JNIString::from("nativeState");
@@ -465,7 +530,69 @@ pub unsafe extern "system" fn JNI_OnLoad(
 
 #[cfg(test)]
 mod tests {
-    use super::{NativeRegistry, provider_quota};
+    use super::{
+        IdentityProtection, NativeRegistry, PROTECTION_SOFTWARE, PROTECTION_STRONGBOX,
+        PROTECTION_TRUSTED_ENVIRONMENT, PROTECTION_UNAVAILABLE, identity_protection_accepted,
+        provider_quota,
+    };
+
+    #[test]
+    fn identity_protection_decodes_every_contract_level() {
+        assert_eq!(
+            IdentityProtection::from_wire(PROTECTION_UNAVAILABLE),
+            IdentityProtection::Unavailable
+        );
+        assert_eq!(
+            IdentityProtection::from_wire(PROTECTION_SOFTWARE),
+            IdentityProtection::Software
+        );
+        assert_eq!(
+            IdentityProtection::from_wire(PROTECTION_TRUSTED_ENVIRONMENT),
+            IdentityProtection::TrustedEnvironment
+        );
+        assert_eq!(
+            IdentityProtection::from_wire(PROTECTION_STRONGBOX),
+            IdentityProtection::StrongBox
+        );
+    }
+
+    #[test]
+    fn identity_protection_admits_only_keystore_backed_levels() {
+        assert!(!identity_protection_accepted(PROTECTION_UNAVAILABLE));
+        assert!(identity_protection_accepted(PROTECTION_SOFTWARE));
+        assert!(identity_protection_accepted(PROTECTION_TRUSTED_ENVIRONMENT));
+        assert!(identity_protection_accepted(PROTECTION_STRONGBOX));
+    }
+
+    #[test]
+    fn identity_protection_rejects_levels_outside_the_contract() {
+        // A garbled, truncated, or future Kotlin value must fail closed rather
+        // than being read as "at least as good as software protection".
+        for level in [-1, 4, i32::MIN, i32::MAX] {
+            assert_eq!(
+                IdentityProtection::from_wire(level),
+                IdentityProtection::Unavailable
+            );
+            assert!(!identity_protection_accepted(level));
+        }
+    }
+
+    #[test]
+    fn embedded_node_start_refuses_unprotected_identity() {
+        // The end-to-end guard: a start request that is valid in every other
+        // respect must still be refused when the identity is unprotected.
+        let response = super::start_node(
+            "/data/user/0/life.michaelwong.covalent/no_backup/covalent-node".to_owned(),
+            "Pixel Android".to_owned(),
+            false,
+            vec![b'a'; 43],
+            2 * 1_024 * 1_024 * 1_024,
+            512 * 1_024 * 1_024,
+            PROTECTION_UNAVAILABLE,
+        );
+        assert!(!response.ok);
+        assert_eq!(response.code, "secure_key_protector_required");
+    }
 
     #[test]
     fn provider_quota_rejects_unsafe_bounds() {

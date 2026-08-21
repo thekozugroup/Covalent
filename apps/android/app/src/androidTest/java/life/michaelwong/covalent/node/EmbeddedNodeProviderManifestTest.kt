@@ -155,22 +155,52 @@ class EmbeddedNodeProviderManifestTest {
         }
     }
 
+    /**
+     * This test previously asserted `!manager.keyProtectionAvailable()` outright, which
+     * only held because the method returned a hardcoded `false` — it pinned the defect
+     * that stopped Android backing anything up rather than the contract underneath it.
+     * The contract is that the gate is *fail-closed and measured*: it refuses exactly
+     * when this device cannot hold a Keystore key, and it agrees with the level the
+     * protector actually measured.
+     */
     @Test
-    fun localSelectionRequiresReadyLocalCredentialsAndKeyProtectionGatePreventsEnable() {
+    fun localSelectionRequiresReadyLocalCredentialsAndTheKeyProtectionGateIsMeasured() {
         val preferences = context.getSharedPreferences("covalent_embedded_provider", Context.MODE_PRIVATE)
         val originalEnabled = preferences.getBoolean("enabled", false)
         val originalRunning = preferences.getBoolean("running", false)
         preferences.edit().putBoolean("enabled", true).putBoolean("running", true).apply()
         val manager = EmbeddedNodeManager(context)
         try {
+            // No local base URL or token yet, so local mode cannot be selected whatever
+            // the key protection says.
             assertTrue(!manager.selectLocalMode())
-            assertTrue(!manager.keyProtectionAvailable())
 
-            manager.enable(
-                maxBytes = 2L * 1024L * 1024L * 1024L,
-                keepFreeBytes = 512L * 1024L * 1024L,
+            val level = manager.keyProtectionLevel()
+            assertEquals(
+                "keyProtectionAvailable must follow the measured level, never a constant",
+                level != KeyProtectionLevel.UNAVAILABLE,
+                manager.keyProtectionAvailable(),
             )
-            assertTrue(!manager.state.value.enabled)
+            assertEquals(
+                "The published state must carry the same measurement",
+                level,
+                manager.state.value.keyProtectionLevel,
+            )
+
+            if (level == KeyProtectionLevel.UNAVAILABLE) {
+                // Fail closed: a device that cannot protect its identity must not enable.
+                manager.enable(
+                    maxBytes = 2L * 1024L * 1024L * 1024L,
+                    keepFreeBytes = 512L * 1024L * 1024L,
+                )
+                assertTrue(!manager.state.value.enabled)
+                assertTrue(!manager.state.value.running)
+            }
+
+            // The capacity gate is independent of key protection and must refuse on any
+            // device, so enable() still has a deterministic refusal path here.
+            manager.enable(maxBytes = 1L, keepFreeBytes = 0L)
+            assertTrue("An impossible capacity must not enable storage", !manager.state.value.enabled)
             assertTrue(!manager.state.value.running)
         } finally {
             preferences.edit().putBoolean("enabled", originalEnabled).putBoolean("running", originalRunning).apply()
