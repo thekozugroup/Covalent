@@ -19,6 +19,7 @@ wrong_tls_data_volume="$wrong_tls_container-data"
 wrong_tls_config_volume="$wrong_tls_container-config"
 tls_directory=""
 instrumentation_log=""
+expected_suite=""
 device_gate_lock="${TMPDIR:-/tmp}/covalent-api37-device-gate.lock"
 lock_acquired=false
 
@@ -35,11 +36,28 @@ cleanup() {
   if [ -n "$instrumentation_log" ] && [ -f "$instrumentation_log" ]; then
     rm -f "$instrumentation_log"
   fi
+  if [ -n "$expected_suite" ] && [ -f "$expected_suite" ]; then
+    rm -f "$expected_suite"
+  fi
   if [ "$lock_acquired" = true ]; then
     rmdir "$device_gate_lock" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT INT TERM
+
+# Derive what this device run has to prove before spending forty minutes on an
+# emulator. The expectation is the set of @Test methods in src/androidTest, so
+# it tracks the tree instead of a constant that goes stale on the next commit,
+# and an unparseable suite fails here with a file and line rather than at the
+# end of the run.
+expected_suite=$(mktemp "${TMPDIR:-/tmp}/covalent-api37-suite.XXXXXX")
+if ! derive_android_instrumentation_suite \
+  "$repo_root/apps/android/app/src/androidTest" > "$expected_suite"; then
+  echo "Could not determine which instrumentation tests this gate must prove." >&2
+  exit 1
+fi
+echo "API 37 device gate must prove $(grep -c '^' "$expected_suite") named tests:"
+sed 's/^/  /' "$expected_suite"
 
 if [ -z "$android_sdk" ] && [ -d "${HOME}/Library/Android/sdk" ]; then
   android_sdk="${HOME}/Library/Android/sdk"
@@ -270,7 +288,7 @@ if ! "$adb" -s "$serial" shell am instrument -w -r \
   exit 1
 fi
 cat "$instrumentation_log"
-if ! validate_android_api37_result "$instrumentation_log"; then
+if ! validate_android_api37_result "$instrumentation_log" "$expected_suite"; then
   echo "Android instrumentation result is invalid on $serial." >&2
   exit 1
 fi
