@@ -31,8 +31,48 @@ const MAX_CONSUMED_REQUEST_NONCES: usize = 4_096;
 /// source that does exceed this recycles its own oldest slot instead of being
 /// refused. See [`admit_request_nonce`] for why that recycling is safe.
 const MAX_CONSUMED_NONCES_PER_SOURCE: usize = 512;
+/// Floor under which a bucket is never an eviction candidate, whatever the fair
+/// share works out to. A real pairing consumes a handful of nonces, so a bucket
+/// this small is a peer doing nothing wrong and its replay protection stays
+/// untouchable no matter how many sources appear. See [`source_nonce_budget`].
+const MIN_FAIR_NONCE_SHARE_PER_SOURCE: usize = 16;
 /// Bucket label for a request with no attributable network source.
 pub(crate) const LOCAL_RATE_LIMIT_BUCKET: &str = "local";
+
+/// Reads the durable replay floor back as the value admission is checked against.
+///
+/// The durable floor and the effective floor are deliberately two numbers. The
+/// durable one only ever increases, so a clock stepping backwards can never
+/// erase the high-water mark a previous run established. The effective one may
+/// be clamped downwards *for this process only*, and the clamped value is never
+/// written back, because a floor that has run away into the future refuses every
+/// request the skew check would otherwise accept and bricks pairing permanently.
+///
+/// The clamp fires only when the stored floor is more than one skew window ahead
+/// of now, and that condition is what makes it free rather than a concession:
+///
+/// * If the stored floor is at most `now + SKEW`, no clamp happens at all and
+///   admission is checked against the full durable high-water mark. This covers
+///   every backwards step smaller than one skew window — precisely the range in
+///   which a request captured before the restart could still be inside the skew
+///   window and therefore still replayable. The bar is not lowered by a
+///   microsecond there.
+/// * If the stored floor is further ahead than `now + SKEW`, then every request
+///   is already refused by the skew check alone (`issued_at <= now + SKEW` and
+///   `issued_at > floor >= now + SKEW` cannot both hold), so *nothing* was being
+///   admitted and nothing can be lost by reading the floor back as `now`.
+///
+/// So the clamp never admits a request the unclamped durable floor would have
+/// refused. It only converts "refuses everything forever" into "refuses
+/// everything issued before this process started", which is the same guarantee
+/// every healthy start already provides.
+const fn effective_request_floor(durable_floor_unix_ms: u64, now_unix_ms: u64) -> u64 {
+    if durable_floor_unix_ms > now_unix_ms.saturating_add(NETWORK_PAIRING_REQUEST_SKEW_MS) {
+        now_unix_ms
+    } else {
+        durable_floor_unix_ms
+    }
+}
 
 /// Resolves one explicit host:port candidate with bounded DNS and safe-route defaults.
 pub async fn resolve_pairing_candidate(
@@ -313,16 +353,21 @@ impl NetworkPairingManager {
     /// remembered requests this node had actually seen, while the floor also
     /// covers ones captured from another peer's traffic.
     ///
-    /// Two details keep it honest:
+    /// Two details keep it honest, and they are two *separate* numbers on
+    /// purpose — folding them into one expression is what previously let a
+    /// backwards clock lower the durable bar by a whole skew window and write
+    /// the lowered value straight back to disk:
     ///
     /// * The stored value only ever moves forward (`max` against the previous
     ///   floor), so a clock stepping backwards — NTP correction, a device with
-    ///   no battery-backed clock — cannot lower the bar.
-    /// * It is read back clamped to one skew window ahead of now. A floor
-    ///   further ahead than that already refuses every request through the skew
-    ///   check alone, so the clamp forfeits nothing, and it stops a single
-    ///   forward clock glitch from bricking pairing permanently once the clock
-    ///   is corrected.
+    ///   no battery-backed clock — cannot lower the bar. Nothing writes a
+    ///   smaller number than the one already on disk, and `floor_advanced` is a
+    ///   strict increase, so a backwards clock performs no write at all.
+    /// * The value admission is checked against is derived from the stored one
+    ///   by [`effective_request_floor`], which clamps only in the region where
+    ///   the stored floor already refuses everything anyway. That clamp is never
+    ///   persisted, and it never admits a request the unclamped floor would have
+    ///   refused; see that function for the argument.
     ///
     /// The cost is stated rather than hidden: for the first moments after a
     /// restart, a peer whose clock trails this node's is refused until its own
@@ -379,12 +424,12 @@ impl NetworkPairingManager {
         state.consumed_request_nonce_sources = BTreeMap::new();
         validate_state(&state, engine.device_id())?;
 
-        let request_floor_unix_ms = state
-            .request_floor_unix_ms
-            .max(now_unix_ms)
-            .min(now_unix_ms.saturating_add(NETWORK_PAIRING_REQUEST_SKEW_MS));
-        let floor_advanced = request_floor_unix_ms != state.request_floor_unix_ms;
-        state.request_floor_unix_ms = request_floor_unix_ms;
+        // The durable value moves in exactly one direction. Nothing below is
+        // allowed to write a smaller number than the one already on disk.
+        let durable_floor_unix_ms = state.request_floor_unix_ms.max(now_unix_ms);
+        let floor_advanced = durable_floor_unix_ms > state.request_floor_unix_ms;
+        state.request_floor_unix_ms = durable_floor_unix_ms;
+        let request_floor_unix_ms = effective_request_floor(durable_floor_unix_ms, now_unix_ms);
 
         let manager = Self {
             engine,
@@ -934,25 +979,32 @@ fn system_now_unix_ms() -> u64 {
 ///
 /// Only *eviction* is partitioned, under a single invariant: **an entry is
 /// evicted only from a bucket that is at or above its own per-source budget, and
-/// the soonest-expiring entry in that bucket goes first.** Two consequences make
-/// that safe:
+/// the soonest-expiring entry in that bucket goes first.** That budget is a fair
+/// share of the table rather than a fixed ceiling — see [`source_nonce_budget`]
+/// for why a fixed one denied service at nine sources — but it is floored at
+/// [`MIN_FAIR_NONCE_SHARE_PER_SOURCE`], and the invariant is stated against the
+/// floor: a bucket at or below the minimum share is never an eviction candidate,
+/// however many other sources appear. Two consequences make that safe:
 ///
 /// * A source evicting its own entry gains nothing. It holds the signing key for
 ///   those requests and can mint a fresh nonce whenever it likes, so recovering
 ///   the ability to replay a request it already consumed is not a new
 ///   capability — it is a slower way to do what it could already do.
 /// * A bucket below its budget is untouchable by anyone. A peer behaving
-///   normally — a handful of nonces per pairing — can never have an entry
-///   dropped by another source, so its replay protection is byte-for-byte what
-///   it was before this change.
+///   normally — a handful of nonces per pairing, far under the sixteen-entry
+///   minimum share — can never have an entry dropped by another source, so its
+///   replay protection is byte-for-byte what it was before this change.
 ///
-/// The residual cost is stated plainly rather than hidden: when the table is
-/// full and *every* bucket sits below budget, admission is refused instead of
-/// evicting from a well-behaved peer. Reaching that state needs distinct,
-/// address-validated sources in the hundreds — not the single flooding source
-/// this guards against — and the alternative would trade a throughput problem
-/// for a replay hole in a peer that did nothing wrong. Denial is the safer
-/// failure, so denial is what happens.
+/// The residual cost is stated plainly rather than hidden, with the real number
+/// rather than a flattering one: when the table is full and *every* bucket sits
+/// below its fair share, admission is refused instead of evicting from a
+/// well-behaved peer. With a 4096-entry table and a 16-entry minimum share that
+/// takes **274 distinct address-validated sources**, each holding fewer than
+/// sixteen unexpired nonces, and
+/// `a_bucket_within_the_minimum_fair_share_is_never_evicted_even_under_global_pressure`
+/// pins that threshold so the claim cannot rot again. The alternative would
+/// trade a throughput problem for a replay hole in a peer that did nothing
+/// wrong. Denial is the safer failure, so denial is what happens.
 ///
 /// The table is process-local, so it starts empty rather than restored: a
 /// restart during a flood now begins with nothing to evict at all, and the
@@ -976,11 +1028,12 @@ fn admit_request_nonce(
         return Err(CoreError::AuthenticationFailed);
     }
 
-    if bucket_len(buckets, source) >= MAX_CONSUMED_NONCES_PER_SOURCE {
+    let budget = source_nonce_budget(buckets);
+    if bucket_len(buckets, source) >= budget {
         evict_soonest_expiring(nonces, buckets, source);
     }
     if nonces.len() >= MAX_CONSUMED_REQUEST_NONCES {
-        let crowder = noisiest_bucket_at_budget(buckets)
+        let crowder = noisiest_bucket_at_budget(buckets, budget)
             .ok_or(CoreError::ResourceLimit("pairing request nonces"))?;
         evict_soonest_expiring(nonces, buckets, &crowder);
     }
@@ -990,6 +1043,39 @@ fn admit_request_nonce(
     nonces.insert(nonce_key.clone(), expires_at_unix_ms);
     buckets.insert(nonce_key, source.to_owned());
     Ok(())
+}
+
+/// The share of the table one source may hold before its own entries become
+/// eviction candidates.
+///
+/// A fixed ceiling is what made this budget misbehave. At 512 entries against a
+/// 4096-entry table, nine buckets of roughly 455 could fill the table without a
+/// single one reaching the ceiling, leaving no legal eviction candidate and
+/// refusing admission to everyone — the nine incumbents included. Nine ordinary
+/// LAN peers is not a flood, and denying them was not a considered tradeoff.
+///
+/// The share therefore narrows as sources appear: every bucket may hold up to
+/// `MAX_CONSUMED_REQUEST_NONCES / bucket_count`, capped at the original ceiling
+/// so one source can never take more of the table than it could before, and
+/// floored at [`MIN_FAIR_NONCE_SHARE_PER_SOURCE`] so a peer holding a real
+/// pairing's worth of nonces is never an eviction candidate at all.
+///
+/// The eviction invariant is unchanged in substance — an entry is only ever
+/// evicted from a bucket at or above its own budget — and the floor is what
+/// keeps it meaningful: a bucket at or below the minimum share is untouchable
+/// no matter how many other sources appear. The residual denial is still real
+/// but now needs the number the rationale above claims: with a 4096-entry table
+/// and a 16-entry floor it takes 274 distinct address-validated sources, each
+/// holding fewer than 16 unexpired nonces, to leave no candidate and refuse.
+fn source_nonce_budget(buckets: &BTreeMap<String, String>) -> usize {
+    let sources: BTreeSet<&str> = buckets.values().map(String::as_str).collect();
+    let fair_share = MAX_CONSUMED_REQUEST_NONCES
+        .checked_div(sources.len())
+        .unwrap_or(MAX_CONSUMED_NONCES_PER_SOURCE);
+    fair_share.clamp(
+        MIN_FAIR_NONCE_SHARE_PER_SOURCE,
+        MAX_CONSUMED_NONCES_PER_SOURCE,
+    )
 }
 
 fn bucket_len(buckets: &BTreeMap<String, String>, source: &str) -> usize {
@@ -1019,15 +1105,16 @@ fn evict_soonest_expiring(
 
 /// The widest bucket, considered only once it has spent its own budget. Buckets
 /// under budget are never eviction candidates, which is what keeps a quiet
-/// peer's replay protection intact under someone else's flood.
-fn noisiest_bucket_at_budget(buckets: &BTreeMap<String, String>) -> Option<String> {
+/// peer's replay protection intact under someone else's flood. `budget` is the
+/// fair share computed by [`source_nonce_budget`] for the table as it stands.
+fn noisiest_bucket_at_budget(buckets: &BTreeMap<String, String>, budget: usize) -> Option<String> {
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
     for bucket in buckets.values() {
         *counts.entry(bucket.as_str()).or_default() += 1;
     }
     counts
         .into_iter()
-        .filter(|&(_, count)| count >= MAX_CONSUMED_NONCES_PER_SOURCE)
+        .filter(|&(_, count)| count >= budget)
         .max_by_key(|&(source, count)| (count, source))
         .map(|(source, _)| source.to_owned())
 }
@@ -1321,6 +1408,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use base64::Engine as _;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use covalent_core::EngineOptions;
@@ -1739,13 +1828,87 @@ mod tests {
         let glitch = now + 400 * 24 * 60 * 60 * 1_000;
         NetworkPairingManager::open_at(Arc::clone(&engine), path.clone(), glitch)
             .expect("reopen with a glitched clock");
-        let corrected = NetworkPairingManager::open_at(engine, path, now + 1_000)
-            .expect("reopen with a corrected clock");
+        let corrected =
+            NetworkPairingManager::open_at(Arc::clone(&engine), path.clone(), now + 1_000)
+                .expect("reopen with a corrected clock");
         assert_eq!(
             corrected.request_floor_unix_ms,
-            now + 1_000 + NETWORK_PAIRING_REQUEST_SKEW_MS,
-            "a glitched floor is clamped back to the horizon the skew check already enforces"
+            now + 1_000,
+            "a glitched floor is clamped back to the present so pairing is not bricked"
         );
+        assert_eq!(
+            durable_request_floor(&path),
+            glitch,
+            "the clamp is an admission-time reading only; the durable high-water mark is untouched"
+        );
+    }
+
+    /// Reads the floor as it exists on disk, which is the only value a later
+    /// process start can inherit. Asserting the in-memory effective floor alone
+    /// cannot see a durable regression, which is how the original guard passed
+    /// while the durable value was being lowered underneath it.
+    fn durable_request_floor(path: &Path) -> u64 {
+        let bytes = std::fs::read(path).expect("read persisted pairing state");
+        serde_json::from_slice::<PersistedNetworkPairingState>(&bytes)
+            .expect("parse persisted pairing state")
+            .request_floor_unix_ms
+    }
+
+    #[test]
+    fn a_clock_stepped_back_beyond_the_skew_window_cannot_lower_the_durable_floor() {
+        let dir = tempdir().expect("dir");
+        let engine = Arc::new(Engine::open(EngineOptions::new(dir.path())).expect("engine"));
+        let path = dir.path().join("network-pairing.json");
+        let now = 1_700_000_000_000_u64;
+
+        NetworkPairingManager::open_at(Arc::clone(&engine), path.clone(), now).expect("first");
+        assert_eq!(durable_request_floor(&path), now);
+
+        // Sixty seconds back sits inside the skew window, which is the one
+        // region where a read-back clamp against `now + SKEW` cannot bite. Ten
+        // minutes back is outside it, and that is where the clamp used to
+        // overrule the monotonic `max` and write the lowered value to disk.
+        let stepped_back = now - 10 * 60 * 1_000;
+        drop(
+            NetworkPairingManager::open_at(Arc::clone(&engine), path.clone(), stepped_back)
+                .expect("reopen with a backwards clock"),
+        );
+        assert_eq!(
+            durable_request_floor(&path),
+            now,
+            "a backwards clock must never write a lowered floor to disk"
+        );
+
+        // The consequence that matters, not just the stored number: after the
+        // clock partially corrects, a request stamped below the preserved
+        // high-water mark is still refused. With the lowered floor on disk this
+        // request is comfortably inside the admissible window.
+        let partially_corrected = now - 200_000;
+        let restored =
+            NetworkPairingManager::open_at(Arc::clone(&engine), path.clone(), partially_corrected)
+                .expect("reopen with a partially corrected clock");
+        assert_eq!(
+            restored.request_floor_unix_ms, now,
+            "the preserved high-water mark is what admission is checked against"
+        );
+        let stale = restored
+            .sign_wire_request(NetworkPairingWireOperation::Probe, now - 100_000)
+            .expect("sign stale");
+        assert!(
+            restored
+                .verify_and_consume_wire_request(&stale, partially_corrected, None)
+                .is_err(),
+            "a request stamped below the preserved floor must stay refused"
+        );
+
+        // Refusing everything is not the goal: a request stamped above the
+        // preserved floor and inside the skew window is still served.
+        let fresh = restored
+            .sign_wire_request(NetworkPairingWireOperation::Probe, now + 1)
+            .expect("sign fresh");
+        restored
+            .verify_and_consume_wire_request(&fresh, partially_corrected, None)
+            .expect("a request above the preserved floor must still be admitted");
     }
 
     fn fresh_nonce_state() -> (VolatileNonceTable, u64, u64) {
@@ -1862,12 +2025,18 @@ mod tests {
     }
 
     #[test]
-    fn a_bucket_below_its_budget_is_never_evicted_even_under_global_pressure() {
+    fn nine_moderately_busy_sources_cannot_deny_everyone_including_themselves() {
         let (mut state, now, expiry) = fresh_nonce_state();
 
-        // Spread a full table across enough sources that every bucket stays
-        // under budget — the distributed case, not the single-source flood.
+        // Nine buckets of roughly 455 entries fill the whole 4096-entry table
+        // while every one of them stays under the fixed 512-entry ceiling. That
+        // is not a flood; it is nine ordinary LAN peers. Under a fixed
+        // per-source budget no bucket was ever an eviction candidate, so the
+        // table locked solid and refused *every* source — the nine incumbents
+        // included. The fair share makes each of them evictable from its own
+        // over-share, which is the only reason admission survives here.
         let sources = MAX_CONSUMED_REQUEST_NONCES / MAX_CONSUMED_NONCES_PER_SOURCE + 1;
+        assert_eq!(sources, 9, "the arithmetic this test pins has not moved");
         for index in 0..MAX_CONSUMED_REQUEST_NONCES {
             admit_request_nonce(
                 &mut state,
@@ -1876,30 +2045,111 @@ mod tests {
                 &format!("10.1.0.{}", index % sources),
                 now,
             )
-            .expect("filling the table below every budget");
+            .expect("filling the table below every fixed ceiling");
         }
-        assert_eq!(state.nonces.len(), MAX_CONSUMED_REQUEST_NONCES);
+        // Each bucket self-caps at its fair share of 455, so nine of them hold
+        // 4095 and the table never reaches the wedged state at all. Under the
+        // fixed 512-entry ceiling the same nine filled all 4096 slots with no
+        // bucket at budget, and that is the configuration that refused
+        // everyone.
+        let fair_share = MAX_CONSUMED_REQUEST_NONCES / sources;
+        assert_eq!(fair_share, 455);
+        assert_eq!(state.nonces.len(), fair_share * sources);
         for bucket in 0..sources {
-            assert!(
-                bucket_len(&state.sources, &format!("10.1.0.{bucket}"))
-                    < MAX_CONSUMED_NONCES_PER_SOURCE
+            assert_eq!(
+                bucket_len(&state.sources, &format!("10.1.0.{bucket}")),
+                fair_share,
+                "every busy source is held to its share instead of racing to the ceiling"
             );
         }
 
+        admit_request_nonce(&mut state, "newcomer:0".to_owned(), expiry, "10.2.0.1", now)
+            .expect("a tenth source must not be refused by nine merely busy ones");
+        assert_eq!(
+            state.sources.get("newcomer:0"),
+            Some(&"10.2.0.1".to_owned()),
+            "the admitted entry is attributed to the source that earned it"
+        );
+
+        // And the nine incumbents are still served too — under the fixed budget
+        // they had locked themselves out along with everybody else.
+        for bucket in 0..sources {
+            admit_request_nonce(
+                &mut state,
+                format!("incumbent-again:{bucket}"),
+                expiry,
+                &format!("10.1.0.{bucket}"),
+                now,
+            )
+            .expect("an incumbent must not be denied by the table it helped fill");
+        }
+        assert!(
+            state.nonces.len() <= MAX_CONSUMED_REQUEST_NONCES,
+            "the global cap is never exceeded"
+        );
+    }
+
+    #[test]
+    fn a_bucket_within_the_minimum_fair_share_is_never_evicted_even_under_global_pressure() {
+        let (mut state, now, expiry) = fresh_nonce_state();
+
+        // A quiet peer holding a real pairing's worth of nonces, sized just
+        // under the floor below which no bucket is ever an eviction candidate.
+        let quiet = MIN_FAIR_NONCE_SHARE_PER_SOURCE - 1;
+        for index in 0..quiet {
+            admit_request_nonce(
+                &mut state,
+                format!("quiet:{index}"),
+                expiry,
+                "10.0.0.5",
+                now,
+            )
+            .expect("a quiet peer is admitted");
+        }
+
+        // Now spread the rest of the table across enough distinct sources that
+        // every bucket lands under the minimum share. This is the widest flood
+        // the fair share still refuses rather than serving by evicting a
+        // well-behaved peer, and it takes hundreds of address-validated sources
+        // to reach — the number the rationale comment now states outright.
+        let remaining = MAX_CONSUMED_REQUEST_NONCES - quiet;
+        let sources = remaining.div_ceil(quiet);
+        assert_eq!(
+            sources + 1,
+            274,
+            "the refusal threshold the rationale comment states, pinned"
+        );
+        for index in 0..remaining {
+            admit_request_nonce(
+                &mut state,
+                format!("spread:{index}"),
+                expiry,
+                &format!("10.1.{}.{}", index % sources / 256, index % sources % 256),
+                now,
+            )
+            .expect("filling the table under every fair share");
+        }
+        assert_eq!(state.nonces.len(), MAX_CONSUMED_REQUEST_NONCES);
+
         // This is the tradeoff, asserted rather than assumed: with no bucket
-        // over budget there is no safe eviction candidate, so admission is
-        // refused instead of dropping a well-behaved peer's unexpired nonce.
+        // over its fair share there is no safe eviction candidate, so admission
+        // is refused instead of dropping a well-behaved peer's unexpired nonce.
         assert!(
             matches!(
                 admit_request_nonce(&mut state, "newcomer:0".to_owned(), expiry, "10.2.0.1", now),
                 Err(CoreError::ResourceLimit(_))
             ),
-            "a full table of below-budget buckets must refuse, never evict"
+            "a full table of within-share buckets must refuse, never evict"
         );
         assert_eq!(
             state.nonces.len(),
             MAX_CONSUMED_REQUEST_NONCES,
             "a refused admission must not have evicted anything"
+        );
+        assert_eq!(
+            bucket_len(&state.sources, "10.0.0.5"),
+            quiet,
+            "the quiet peer's replay protection is byte-for-byte intact"
         );
 
         // Once the window passes, the table drains and pairing recovers.
