@@ -28,8 +28,8 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use covalent_core::{
     BackupOptions, ChunkProvider, CoreError, Engine, JobControl, JobState, PairingConfirmation,
-    PairingSession, PreviewAction, RestoreOptions, RestorePlan, RestorePreviewEntry, RosterCursor,
-    canonical_target_inventory_digest,
+    PairingSession, PairingSide, PreviewAction, RestoreOptions, RestorePlan, RestorePreviewEntry,
+    RosterCursor, canonical_target_inventory_digest,
 };
 use covalent_protocol::{
     ApiErrorBody, BackupId, BackupSummary, ConflictPolicy, DeviceId, EntryKind, NodeStatus,
@@ -2228,24 +2228,46 @@ struct PairFinalizeResponse {
     peer_transport: Option<TransportBinding>,
 }
 
+/// Renders a completed pairing from the point of view of the side that asked.
+///
+/// `peer_transport` is the whole reason a client calls a finalize route: it is
+/// the mutually signed endpoint of the device it just paired, and the only way
+/// it can reach that device. It is offered only when the *peer* holds the
+/// storage role, since that is the only role a client dials.
+///
+/// The role gate therefore has to read the *peer's* grant, and the two grants
+/// are named for the side that holds them rather than the side they describe.
+/// Picking a side by hand here read the local device's own roles instead: an
+/// inviter holding only `backup_writer` was told the storage server it had just
+/// paired had no endpoint at all, and a responder was handed one for a peer that
+/// was never granted the storage role. Both selections now go through
+/// [`PairingConfirmation::peer_grant`] and
+/// [`PairingConfirmation::peer_transport`], the single place either side is
+/// chosen.
 fn finalization_response(
     confirmation: PairingConfirmation,
-    local_is_inviter: bool,
+    local: PairingSide,
 ) -> PairFinalizeResponse {
-    let peer_grant = if local_is_inviter {
-        &confirmation.responder_grant
-    } else {
-        &confirmation.inviter_grant
-    };
-    let peer_transport = if peer_grant.roles.contains(&PeerRole::StorageProvider) {
-        if local_is_inviter {
-            confirmation.responder_transport.clone()
-        } else {
-            confirmation.inviter_transport.clone()
-        }
+    let peer_transport = if confirmation
+        .peer_grant(local)
+        .roles
+        .contains(&PeerRole::StorageProvider)
+    {
+        confirmation.peer_transport(local).cloned()
     } else {
         None
     };
+    // The grant and the binding are independent products of the same signed
+    // transcript, so they must name the same device. The network pairing path
+    // catches a mismatched side because it re-checks the finalized binding
+    // against the peer it actually dialed; nothing dials here, so this is the
+    // equivalent tripwire for a side chosen inconsistently above.
+    debug_assert!(
+        peer_transport
+            .as_ref()
+            .is_none_or(|binding| binding.peer_id == confirmation.peer_grant(local).peer_device_id),
+        "finalizing as {local:?} produced a transport for a device the peer grant does not describe"
+    );
     PairFinalizeResponse {
         inviter_grant: confirmation.inviter_grant,
         responder_grant: confirmation.responder_grant,
@@ -2263,7 +2285,10 @@ async fn pair_finalize_responder(
         .engine
         .finalize_pairing_as_responder(&request.session, now_unix_ms())
         .map_err(ApiError::from_core)?;
-    Ok(axum::Json(finalization_response(confirmation, false)))
+    Ok(axum::Json(finalization_response(
+        confirmation,
+        PairingSide::Responder,
+    )))
 }
 
 async fn pair_finalize_inviter(
@@ -2276,7 +2301,10 @@ async fn pair_finalize_inviter(
         .engine
         .finalize_pairing_as_inviter(&request.session, now_unix_ms())
         .map_err(ApiError::from_core)?;
-    Ok(axum::Json(finalization_response(confirmation, true)))
+    Ok(axum::Json(finalization_response(
+        confirmation,
+        PairingSide::Inviter,
+    )))
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

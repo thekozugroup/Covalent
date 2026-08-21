@@ -118,16 +118,14 @@ def pair(inviter, responder, responder_name):
     if "storage_provider" not in finalized["inviterGrant"]["roles"]:
         raise SystemExit(f"{responder_name} was not granted the storage_provider role")
     # The mutually signed binding the inviter durably trusted when it finalized,
-    # carried in the pairing session this harness relays between the two nodes.
-    # Connecting a provider confirms that exact record - the node compares every
-    # field against the one it stored and answers `provider_binding_mismatch` on
-    # any difference - so it is taken verbatim rather than reassembled from parts
-    # that merely look equivalent.
-    #
-    # A real client reads this from the `peerTransport` of its own finalize
-    # response instead. That field is null on the inviter side today, so it
-    # cannot be the source here; the session carries the identical record.
-    transport = session["responderTransport"]
+    # read from the same place a real client reads it: the `peerTransport` of
+    # its own finalize response. Connecting a provider confirms that exact
+    # record - the node compares every field against the one it stored and
+    # answers `provider_binding_mismatch` on any difference - so it is taken
+    # verbatim rather than reassembled from parts that merely look equivalent.
+    transport = finalized["peerTransport"]
+    if transport is None:
+        raise SystemExit(f"the inviter was handed no signed transport for {responder_name}")
     # Cross-check the signed record against what the responder itself reports
     # live. These come from different places - one from the pairing transcript,
     # one from the running node - and a disagreement means the transcript does

@@ -6,6 +6,11 @@
 //! real loopback HTTP API of two live [`NodeRuntime`] instances whose QUIC
 //! endpoints talk to each other, so a missing route, a broken wire exchange, or
 //! a short authentication string that does not agree across devices fails here.
+//!
+//! The same two live nodes also drive the relayed pairing surface at the end of
+//! this file - the `/api/v1/pair/{invitations,accept,confirm,finalize}` routes a
+//! human walks between two devices - because that surface shipped answering
+//! `peerTransport: null` to the very side that needed it and no test noticed.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
@@ -874,4 +879,262 @@ async fn a_node_started_the_production_way_resolves_or_refuses_coherently() {
     }
 
     node.stop().await.expect("stop node");
+}
+
+/// Device identity exactly as the running node reports it about itself.
+///
+/// This is the independent yardstick the finalize assertions below measure
+/// against. It never touches a pairing response, so a finalize route cannot
+/// make itself look correct by agreeing with its own output.
+async fn reported_identity(node: &NodeRuntime) -> (String, String) {
+    let response = call(node, "GET", "/api/v1/transport/identity", None).await;
+    assert_eq!(response.status, 200, "{}", response.body);
+    let identity = response.json();
+    (
+        field(&identity, "deviceId").to_owned(),
+        field(&identity, "certificateFingerprint").to_owned(),
+    )
+}
+
+fn object<'a>(value: &'a Value, key: &str) -> &'a Value {
+    value
+        .get(key)
+        .unwrap_or_else(|| panic!("missing object field {key} in {value:?}"))
+}
+
+/// Relays one complete manual pairing between two live nodes, exactly as a
+/// human carrying a QR code between two devices would, and returns the finalize
+/// response each side received.
+///
+/// The session JSON is the only thing that crosses between the nodes here, so
+/// each finalize response is produced independently by the node that answers
+/// it.
+async fn relay_manual_pairing(
+    inviter: &NodeRuntime,
+    responder: &NodeRuntime,
+    responder_name: &str,
+    responder_roles: &str,
+    inviter_roles: &str,
+) -> (Value, Value) {
+    let endpoint = inviter.ready_info().peer_address().to_string();
+    let invitation = call(
+        inviter,
+        "POST",
+        "/api/v1/pair/invitations",
+        Some(&format!(
+            r#"{{"lifetimeMs":600000,"endpoints":["{endpoint}"]}}"#
+        )),
+    )
+    .await;
+    assert_eq!(invitation.status, 200, "{}", invitation.body);
+
+    let accepted = call(
+        responder,
+        "POST",
+        "/api/v1/pair/accept",
+        Some(&format!(
+            r#"{{"invitation":{},"responderName":"{responder_name}","responderRoles":{responder_roles},"inviterRoles":{inviter_roles}}}"#,
+            invitation.body
+        )),
+    )
+    .await;
+    assert_eq!(accepted.status, 200, "{}", accepted.body);
+    let session_value = accepted.json();
+    let code = field(&session_value, "authenticationString").to_owned();
+    let mut session = accepted.body;
+
+    // Both humans compare the same short authentication string and approve on
+    // their own device. Nothing is trusted until both signatures are present.
+    for (node, path) in [
+        (responder, "/api/v1/pair/confirm/responder"),
+        (inviter, "/api/v1/pair/confirm/inviter"),
+    ] {
+        let confirmed = call(
+            node,
+            "POST",
+            path,
+            Some(&format!(
+                r#"{{"session":{session},"displayedCode":"{code}"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(confirmed.status, 200, "{}", confirmed.body);
+        session = confirmed.body;
+    }
+
+    let inviter_view = call(
+        inviter,
+        "POST",
+        "/api/v1/pair/finalize/inviter",
+        Some(&format!(r#"{{"session":{session}}}"#)),
+    )
+    .await;
+    assert_eq!(inviter_view.status, 200, "{}", inviter_view.body);
+    let responder_view = call(
+        responder,
+        "POST",
+        "/api/v1/pair/finalize/responder",
+        Some(&format!(r#"{{"session":{session}}}"#)),
+    )
+    .await;
+    assert_eq!(responder_view.status, 200, "{}", responder_view.body);
+    (inviter_view.json(), responder_view.json())
+}
+
+/// The signed binding a finalize response handed its caller.
+///
+/// An omitted binding and an explicit `null` mean the same thing to a client
+/// and must fail the same way here.
+fn signed_peer_transport<'a>(view: &'a Value, side: &str) -> &'a Value {
+    match view.get("peerTransport") {
+        Some(transport) if !transport.is_null() => transport,
+        _ => panic!(
+            "the {side} paired a storage provider and was handed no signed transport, \
+             so it can never connect the device it just paired: {view:?}"
+        ),
+    }
+}
+
+/// Asserts the signed binding names the device the caller must now dial.
+fn assert_transport_describes(
+    transport: &Value,
+    expected_device_id: &str,
+    expected_fingerprint: &str,
+    expected_address: &str,
+) {
+    assert_eq!(
+        field(transport, "peerId"),
+        expected_device_id,
+        "the signed transport names the wrong device: {transport:?}"
+    );
+    assert_eq!(
+        field(transport, "certificateFingerprint"),
+        expected_fingerprint,
+        "the signed transport pins the wrong certificate: {transport:?}"
+    );
+    assert_eq!(
+        field(transport, "address"),
+        expected_address,
+        "the signed transport advertises the wrong address: {transport:?}"
+    );
+}
+
+/// Each finalize route must describe the *other* device to its caller.
+///
+/// `inviterGrant` is the grant the inviter stores, so its subject is the
+/// responder; `responderGrant` is stored by the responder and describes the
+/// inviter. Reading either as "the grant describing the party it is named
+/// after" inverts every side-dependent decision downstream while still
+/// producing two well-formed grants and a body that passes any non-null check.
+///
+/// So this test names no expectation that the finalize response itself
+/// supplied. Every identity below comes from `/api/v1/transport/identity` on
+/// the node it describes, and every address from that node's own listener.
+#[tokio::test(flavor = "multi_thread")]
+async fn manual_finalize_describes_the_other_device_to_each_side() {
+    let inviter_data = TempDir::new().expect("inviter data");
+    let responder_data = TempDir::new().expect("responder data");
+    let inviter = start_node(&inviter_data, "Writer laptop").await;
+    let responder = start_node(&responder_data, "Storage server").await;
+
+    let (inviter_device_id, _inviter_fingerprint) = reported_identity(&inviter).await;
+    let (responder_device_id, responder_fingerprint) = reported_identity(&responder).await;
+    assert_ne!(
+        inviter_device_id, responder_device_id,
+        "the two runtimes must be distinct devices for this test to mean anything"
+    );
+    let responder_address = responder.ready_info().peer_address().to_string();
+
+    // The realistic asymmetric shape: a laptop pairs with a storage server.
+    let (inviter_view, responder_view) = relay_manual_pairing(
+        &inviter,
+        &responder,
+        "Storage server",
+        r#"["storage_provider","backup_reader"]"#,
+        r#"["backup_writer","backup_reader"]"#,
+    )
+    .await;
+
+    for view in [&inviter_view, &responder_view] {
+        assert_eq!(
+            field(object(view, "inviterGrant"), "peerDeviceId"),
+            responder_device_id,
+            "the grant the inviter stores must describe the responder: {view:?}"
+        );
+        assert_eq!(
+            field(object(view, "responderGrant"), "peerDeviceId"),
+            inviter_device_id,
+            "the grant the responder stores must describe the inviter: {view:?}"
+        );
+    }
+
+    // The inviter just granted the responder the storage role, so the inviter
+    // is the side that now has somewhere to connect. Without this binding it
+    // can never reach the device it just paired.
+    let peer = signed_peer_transport(&inviter_view, "inviter");
+    assert_transport_describes(
+        peer,
+        &responder_device_id,
+        &responder_fingerprint,
+        &responder_address,
+    );
+
+    // The responder's peer holds no storage role, so there is no provider for
+    // it to dial and it must be told exactly that. Handing it a binding here
+    // would mean the role gate consulted the wrong party's grant.
+    assert!(
+        responder_view
+            .get("peerTransport")
+            .is_none_or(Value::is_null),
+        "the responder's peer is not a storage provider, yet a transport was returned: {responder_view:?}"
+    );
+
+    inviter.stop().await.expect("stop inviter");
+    responder.stop().await.expect("stop responder");
+}
+
+/// With both devices granted the storage role, no role gate can suppress
+/// either transport, which isolates the remaining freedom: which of the two
+/// mutually signed bindings each side is handed. A side handed its own binding
+/// would dial itself.
+#[tokio::test(flavor = "multi_thread")]
+async fn manual_finalize_never_hands_a_side_its_own_transport() {
+    let inviter_data = TempDir::new().expect("inviter data");
+    let responder_data = TempDir::new().expect("responder data");
+    let inviter = start_node(&inviter_data, "Left vault").await;
+    let responder = start_node(&responder_data, "Right vault").await;
+
+    let (inviter_device_id, inviter_fingerprint) = reported_identity(&inviter).await;
+    let (responder_device_id, responder_fingerprint) = reported_identity(&responder).await;
+    assert_ne!(inviter_device_id, responder_device_id);
+    let inviter_address = inviter.ready_info().peer_address().to_string();
+    let responder_address = responder.ready_info().peer_address().to_string();
+
+    let (inviter_view, responder_view) = relay_manual_pairing(
+        &inviter,
+        &responder,
+        "Right vault",
+        r#"["storage_provider"]"#,
+        r#"["storage_provider"]"#,
+    )
+    .await;
+
+    let inviters_peer = signed_peer_transport(&inviter_view, "inviter");
+    assert_transport_describes(
+        inviters_peer,
+        &responder_device_id,
+        &responder_fingerprint,
+        &responder_address,
+    );
+
+    let responders_peer = signed_peer_transport(&responder_view, "responder");
+    assert_transport_describes(
+        responders_peer,
+        &inviter_device_id,
+        &inviter_fingerprint,
+        &inviter_address,
+    );
+
+    inviter.stop().await.expect("stop inviter");
+    responder.stop().await.expect("stop responder");
 }

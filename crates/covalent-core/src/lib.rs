@@ -31,7 +31,9 @@ pub use engine::{
 pub use identity::{DeviceIdentity, PublicIdentity};
 pub use key_envelope::{KeyEncryptionKey, SecretBinding, WrappedSecret};
 pub use manifest::{SignedRosterBuilder, decrypt_manifest, encrypt_manifest, verify_roster};
-pub use pairing::{PairingConfirmation, PairingManager, PairingSession, ShortAuthenticationString};
+pub use pairing::{
+    PairingConfirmation, PairingManager, PairingSession, PairingSide, ShortAuthenticationString,
+};
 pub use recovery::{
     RecoveryCapsule, RecoveryKit, RecoveryProviderDirectoryEntry, RecoveryUnlockKey,
 };

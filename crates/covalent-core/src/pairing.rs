@@ -439,18 +439,64 @@ impl fmt::Debug for PairingSession {
     }
 }
 
+/// Which of the two roles a device played in a pairing.
+///
+/// Side-dependent selections take this rather than a bare `bool`, because the
+/// two grant fields below are named for the side that *stores* them while the
+/// two transport fields are named for the side they *describe*. A boolean
+/// parameter carries none of that to a call site, and reading the fields as if
+/// both naming schemes matched is what shipped
+/// `POST /api/v1/pair/finalize/inviter` answering `peerTransport: null` for a
+/// storage provider the inviter had just paired.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PairingSide {
+    /// Created and signed the invitation.
+    Inviter,
+    /// Accepted the invitation.
+    Responder,
+}
+
 /// Pair of exact role-scoped grants created after mutual confirmation.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PairingConfirmation {
-    /// Grant stored by the inviter for the responder.
+    /// Grant stored by the inviter, describing the responder it just paired.
     pub inviter_grant: PeerGrant,
-    /// Grant stored by the responder for the inviter.
+    /// Grant stored by the responder, describing the inviter it just paired.
     pub responder_grant: PeerGrant,
     /// Inviter TLS endpoint authenticated by the complete pairing transcript.
     pub inviter_transport: Option<TransportBinding>,
     /// Responder TLS endpoint authenticated by the complete pairing transcript.
     pub responder_transport: Option<TransportBinding>,
+}
+
+impl PairingConfirmation {
+    /// Grant describing the far side, as seen by the device that played `local`.
+    ///
+    /// The grants are named for their holder, so the grant a device needs in
+    /// order to answer "who did I just pair with?" is the one named after its
+    /// own side. Note this runs in the opposite direction to
+    /// [`Self::peer_transport`]; every caller should use these two accessors
+    /// rather than reach for the fields and pick a side by hand.
+    #[must_use]
+    pub fn peer_grant(&self, local: PairingSide) -> &PeerGrant {
+        match local {
+            PairingSide::Inviter => &self.inviter_grant,
+            PairingSide::Responder => &self.responder_grant,
+        }
+    }
+
+    /// Signed transport binding of the far side, as seen by `local`.
+    ///
+    /// The bindings are named for the device they describe, so here the device
+    /// takes the one named after the *other* side.
+    #[must_use]
+    pub fn peer_transport(&self, local: PairingSide) -> Option<&TransportBinding> {
+        match local {
+            PairingSide::Inviter => self.responder_transport.as_ref(),
+            PairingSide::Responder => self.inviter_transport.as_ref(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

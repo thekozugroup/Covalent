@@ -1590,9 +1590,22 @@ components:
       required: [inviterGrant, responderGrant]
       properties:
         inviterGrant:
+          description: >-
+            Grant the inviter stores. Its subject is the responder, so this is
+            the grant describing the peer for a caller of finalize/inviter.
           $ref: "#/components/schemas/PeerGrant"
         responderGrant:
+          description: >-
+            Grant the responder stores. Its subject is the inviter, so this is
+            the grant describing the peer for a caller of finalize/responder.
           $ref: "#/components/schemas/PeerGrant"
+        peerTransport:
+          description: >-
+            Mutually signed endpoint of the other device, from the point of
+            view of the side that called this route. Null unless that peer was
+            granted the storage_provider role, since a client only ever dials a
+            storage provider.
+          $ref: "#/components/schemas/TransportBinding"
     ProviderConnection:
       type: object
       additionalProperties: false
