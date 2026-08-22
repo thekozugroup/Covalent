@@ -515,6 +515,21 @@ install_or_dump "$test_apk"
 # Four adb calls on a guest that is about to be handed a 56-test suite; the cost
 # is not measurable against what follows, and unlike the post-mortem this cannot
 # be too late.
+# surfaceflinger's and system_server's pids, read as one pair so they can be
+# compared as one pair. This gate's long-standing fault was an abort loop -
+# RegionSamplingThread trips `!hasReadColorBufferDma`, surfaceflinger dies,
+# system_server follows, the framework restarts every ~29s - and the loop leaves
+# gaps wide enough for a whole readiness window, so it has been possible for this
+# gate to look healthy at every instant it was asked. Reading these before and
+# after instrumentation is what makes "the suite passed" mean "the suite passed
+# on one stable guest" instead of "the suite passed between two restarts".
+framework_pids() {
+  "$adb" -s "$serial" shell ps -A -o PID,NAME 2>/dev/null | tr -d '\r' |
+    awk '$2 == "surfaceflinger" { sf = $1 }
+         $2 == "system_server" { ss = $1 }
+         END { printf "surfaceflinger=%s system_server=%s", (sf ? sf : "unreadable"), (ss ? ss : "unreadable") }'
+}
+
 echo "--- API-37-gate: guest state at instrumentation start ---"
 printf 'CE key set        : '
 "$adb" -s "$serial" shell dumpsys mount 2>/dev/null \
@@ -527,6 +542,9 @@ printf 'ComponentActivity : '
 printf 'app package state : '
 "$adb" -s "$serial" shell dumpsys package life.michaelwong.covalent 2>/dev/null \
   | grep -m1 -o 'installed=true[^,]*enabled=[0-9]*' || echo "(unreported)"
+printf 'framework pids    : '
+framework_pids_before=$(framework_pids)
+echo "$framework_pids_before"
 echo "--- end guest state ---"
 
 instrumentation_log=$(mktemp "${TMPDIR:-/tmp}/covalent-api37-instrumentation.XXXXXX")
@@ -548,6 +566,36 @@ if ! validate_android_api37_result "$instrumentation_log" "$expected_suite"; the
   dump_guest_failure_evidence
   exit 1
 fi
+
+# The suite passed. Now say whether it passed on the guest it started on.
+#
+# scripts/disable-android-guest-launcher.sh removes the CompositionSamplingListener
+# registrant before this run, and scripts/wait-for-android-guest.sh proves the
+# framework held across its stability window; this closes the remaining gap, which
+# is the tens of minutes in between. A framework restart here is the abort loop
+# still running, and a run that reports success while it is running would send
+# exactly the wrong lane green. Reported as a failure with both readings named,
+# not as a warning, because it means the result above was taken on two guests.
+#
+# Only compared when both readings are readable: a `ps` that did not come back is
+# not evidence of a restart, and this check is not allowed to invent one.
+framework_pids_after=$(framework_pids)
+case "$framework_pids_before$framework_pids_after" in
+  *unreadable*)
+    echo "Framework pids were not readable on both sides of instrumentation (before: $framework_pids_before, after: $framework_pids_after); not compared." >&2
+    ;;
+  *)
+    if [ "$framework_pids_after" != "$framework_pids_before" ]; then
+      echo "The framework restarted during instrumentation on $serial." >&2
+      echo "  before: $framework_pids_before" >&2
+      echo "  after : $framework_pids_after" >&2
+      echo "surfaceflinger aborting in RegionSamplingThread is what does this; the suite result above was taken across a restart." >&2
+      dump_guest_failure_evidence
+      exit 1
+    fi
+    echo "API-37-gate: framework held across instrumentation: $framework_pids_after"
+    ;;
+esac
 "$adb" -s "$serial" shell pm clear life.michaelwong.covalent >/dev/null
 if [ "$headless_ci" = true ]; then
   "$adb" -s "$serial" shell am start -W -n life.michaelwong.covalent/.MainActivity >/dev/null

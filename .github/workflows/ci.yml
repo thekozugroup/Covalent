@@ -367,8 +367,11 @@ jobs:
             "$ANDROID_HOME/platform-tools/adb" start-server
             ./scripts/check-android.sh
             docker build --file packaging/docker/Dockerfile --build-arg VCS_REF=$(git rev-parse HEAD) --tag covalent:android-api37-e2e .
-          # `-feature -GLDirectMem` is the fix for the fault that has kept this lane
-          # red. It is a graphics-transport fault, not a memory or CPU one.
+          # The fault that has kept this lane red is a graphics-transport abort
+          # loop, and it is fixed by removing what triggers it, in
+          # scripts/disable-android-guest-launcher.sh. No option on this line is
+          # load-bearing for it. Two that were tried are recorded below precisely
+          # so that they are not tried again.
           #
           # Run 32539492995 recorded the guest's event and crash buffers across the
           # whole readiness window for the first time. system_server's pid climbed
@@ -401,39 +404,46 @@ jobs:
           # untouched. The "173 MB free" that suggested an OOM loop was free-versus-
           # available: 2.1 GB of it was reclaimable page cache.
           #
-          # Why this flag, and why the renderer was not the answer. The first attempt
-          # blamed the renderer, because the same `-gpu swiftshader_indirect` resolves
-          # differently per host: on this runner to the legacy GLES translator, and
-          # locally - identical emulator build 37.1.11.0, build_id 15917651 - to ANGLE
-          # over SwiftShader Vulkan, where all 56 tests pass twice over. Run
-          # 32541499131 tested that directly. `swangle_indirect` did select ANGLE
-          # (`emuglConfig_init: ... gles_mode_selected:swangle`) and surfaceflinger
-          # aborted in RegionSampling exactly as before. The renderer is not the gate.
+          # Both attempts to reach that loop from this line were measured, and both
+          # failed. They are reverted rather than left behind looking like fixes:
           #
-          # What the gate actually is, read out of the host binary rather than guessed.
-          # In lib64/libgfxstream_backend, the code that builds the extension string
-          # advertises ANDROID_EMU_read_color_buffer_dma behind an AND of two feature
-          # flags - it loads a pair of them (`ldp w9, w8, [sp, #0x54]`, `and`, `cbz`)
-          # where every neighbouring extension is gated on a single flag. Mapping the
-          # stack slots against the extensions that use them alone identifies the pair:
-          # 0x54 is HasSharedSlotsHostMemoryAllocator (ANDROID_EMU_has_shared_slots_
-          # host_memory_allocator) and 0x58 is GLDirectMem (ANDROID_EMU_direct_mem).
-          # So the host offers the extension if and only if both are enabled.
+          #   -gpu swangle_indirect   Run 32541499131. It did select ANGLE
+          #                           (`emuglConfig_init: ... gles_mode_selected:
+          #                           swangle`) and surfaceflinger aborted in
+          #                           RegionSampling exactly as before. The renderer
+          #                           is not what decides this, so the pin goes back
+          #                           to the `swiftshader_indirect` every other
+          #                           Android lane here asks for.
+          #   -feature -GLDirectMem   Run 32543425657. Confirmed applied, and the
+          #                           guest aborted 72 times on the same assertion.
+          #                           In lib64/libgfxstream_backend the extension is
+          #                           advertised behind an AND of two feature flags
+          #                           (`ldp w9, w8, [sp, #0x54]`, `and`, `cbz`) where
+          #                           every neighbouring extension is gated on one:
+          #                           0x54 is HasSharedSlotsHostMemoryAllocator and
+          #                           0x58 is GLDirectMem. Only the second was ever
+          #                           disabled. The first is the untested operand and
+          #                           is the next lever here if the fix below stops
+          #                           holding - `-feature -HasSharedSlotsHostMemory
+          #                           Allocator`, one line, one cycle.
           #
-          # emulator/lib/advancedFeatures.ini ships `GLDirectMem = off`. The guest
-          # asserted that the extension WAS present on this runner, so something turns
-          # it on here and not on the machine where this suite passes - GLDirectMem is
-          # host direct memory mapping into the guest, which is a KVM capability the
-          # macOS hypervisor does not offer. Disabling it forces the AND false, the
-          # host stops advertising the extension, `hasReadColorBufferDma` is false in
-          # the guest, and `GoldfishMapper::readFromHost`'s assertion - which is
-          # literally `!hasReadColorBufferDma` - holds instead of aborting. This is not
-          # a workaround chosen by elimination; it is the one input the assertion reads.
+          # The fix is upstream of every one of those: nothing registers a
+          # CompositionSamplingListener if no launcher is running, and this suite
+          # never needs one - every test drives the app's own activities through
+          # ActivityScenario. scripts/disable-android-guest-launcher.sh therefore
+          # disables the guest's home package for user 0 before anything waits on
+          # the guest, and proves the disable took with `pm list packages -d`
+          # rather than assuming the command landed.
           #
-          # `-gpu swangle_indirect` is kept from the previous commit. It is not the
-          # fix, but it is measured harmless and it makes CI's renderer match the one
-          # this suite is known green on, so it stays rather than being churned back.
-          emulator-options: -no-snapshot -no-window -gpu swangle_indirect -feature -GLDirectMem -noaudio -no-boot-anim -no-metrics -accel on
+          # What that bought is then asserted rather than assumed:
+          # scripts/wait-for-android-guest.sh requires surfaceflinger's and
+          # system_server's pids to be unchanged across its stability window, and
+          # scripts/android-api37-device-test.sh requires the same pair to be
+          # unchanged across instrumentation. The abort loop leaves gaps wide
+          # enough for a whole readiness window, so a passing suite was never
+          # evidence that it had stopped; two pids holding is. That is the
+          # difference between this lane being fixed and this lane getting lucky.
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-metrics -accel on
           # Wait for the unlock, not just for the boot.
           #
           # This action's only readiness check is `getprop sys.boot_completed`, and
@@ -603,6 +613,17 @@ jobs:
           # tail attached, which is the evidence none of the four failures above
           # left behind.
           script: |
+            # The launcher goes first, ahead of the readiness wait, because it is what
+            # makes the guest unreadyable: NexusLauncher registers a
+            # CompositionSamplingListener, SurfaceFlinger's RegionSamplingThread
+            # CPU-locks the composited buffer to sample it, and this image's Gralloc5
+            # mapper aborts on `!hasReadColorBufferDma`. Run 32543425657 recorded 61 of
+            # those aborts interleaved with the launcher's own
+            # `Couldn't removeRegionSamplingListener` crashes. Repairing the guest
+            # inside the script that judges the guest would mean the judgement could
+            # never be made on an unrepaired one; see the header of
+            # scripts/disable-android-guest-launcher.sh.
+            ./scripts/disable-android-guest-launcher.sh emulator-5570
             ./scripts/wait-for-android-guest.sh emulator-5570 apps/android/app/build/outputs/apk/debug/app-debug.apk
             $ANDROID_HOME/platform-tools/adb -s emulator-5570 shell wm dismiss-keyguard || true
             COVALENT_ANDROID_PREBUILT=true COVALENT_ANDROID_EVIDENCE_DIR="${{ runner.temp }}/covalent-android-api37" COVALENT_ANDROID_HEADLESS_CI=true ANDROID_SERIAL=emulator-5570 ./scripts/android-api37-device-test.sh

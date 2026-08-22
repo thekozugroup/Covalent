@@ -383,6 +383,39 @@ guest_framework_pulse() {
          END { if (!found) printf "system_server absent" }'
 }
 
+# surfaceflinger's and system_server's pids, read together, as the direct
+# measurement of the fault this gate spent nine rounds unable to name.
+#
+# That fault is an abort loop. The guest's RegionSamplingThread trips
+# `Assertion failed: !rcEnc->featureInfo()->hasReadColorBufferDma` inside
+# GoldfishMapper::readFromHost, surfaceflinger takes SIGABRT, system_server
+# follows it down and the framework restarts - about every 29 seconds, forever.
+# Every readiness condition in this file is satisfiable in the gaps between those
+# restarts, which is exactly how this gate could declare a guest ready and hand
+# instrumentation a guest that then failed: a sample can say the guest is
+# answering now, and no number of samples can say it is the same guest it was
+# thirty seconds ago. Two pids can say that.
+#
+# Retried up to three times before reporting "absent", because one `ps` that
+# missed its deadline is not evidence of a dead process, and this reading is
+# allowed to fail the gate.
+framework_pids() {
+  attempt=1
+  reading=""
+  while [ "$attempt" -le 3 ]; do
+    reading=$(bounded_shell ps -A -o PID,NAME |
+      awk '$2 == "surfaceflinger" { sf = $1 }
+           $2 == "system_server" { ss = $1 }
+           END { printf "surfaceflinger=%s system_server=%s", (sf ? sf : "absent"), (ss ? ss : "absent") }')
+    case "$reading" in
+      *absent*) ;;
+      *) printf '%s' "$reading"; return 0 ;;
+    esac
+    attempt=$((attempt + 1))
+  done
+  printf '%s' "$reading"
+}
+
 # Multiplier over the core count. Two means "the runqueue may be one task deep
 # per core beyond the one running" - room for a guest that is working without
 # being a guest that is drowning. Overridable, because the right number is a
@@ -753,6 +786,19 @@ echo "API-37-gate: probe install accepted after $(elapsed)s"
 # resolve, which it could not have asked before the install.
 require_launchable=1
 
+# The framework that is about to be handed over has to be one framework for the
+# whole window that proves it ready. Read once here and once at handover rather
+# than asserted per sample: one comparison across the window makes the same
+# statement, costs one round trip instead of six, and cannot itself become a
+# source of resets.
+framework_at_window_start=$(framework_pids)
+case "$framework_at_window_start" in
+  *absent*)
+    report_and_fail "surfaceflinger or system_server is not running as the stability window opens ($framework_at_window_start)"
+    ;;
+esac
+echo "API-37-gate: framework entering the stability window: $framework_at_window_start"
+
 settled=0
 last_reason="nothing was sampled"
 while [ "$settled" -lt "$stable_samples" ]; do
@@ -798,7 +844,28 @@ if [ "$(user0_state)" != unlocked ]; then
   report_and_fail "user 0 was not provably unlocked at handover"
 fi
 
+# Whether the guest that passed those samples was one guest.
+#
+# scripts/disable-android-guest-launcher.sh has already taken the
+# CompositionSamplingListener registrant off this image before this script
+# started; this is what proves that it worked, and it is the only thing that can.
+# A green run with the abort loop still alive is luck - the loop leaves gaps wide
+# enough for six five-second samples - so "the tests passed" was never evidence
+# and is not accepted as evidence here. If either pid has changed since the
+# window opened, the framework restarted inside it, and this gate says so by name
+# instead of passing the guest on to instrumentation to fail there.
+framework_at_handover=$(framework_pids)
+case "$framework_at_handover" in
+  *absent*)
+    report_and_fail "surfaceflinger or system_server is not running at handover ($framework_at_handover)"
+    ;;
+esac
+if [ "$framework_at_handover" != "$framework_at_window_start" ]; then
+  report_and_fail "the framework restarted during the stability window: entered as '$framework_at_window_start', left as '$framework_at_handover'"
+fi
+
 echo "API-37-gate: guest ready and stable across $stable_samples samples after $(elapsed)s"
+echo "API-37-gate: framework held across the window: $framework_at_handover"
 echo "API-37-gate: handover with $(guest_runnable) runnable on $(guest_core_count || echo '?') cores, loadavg $(guest_loadavg)"
 # Report the ActivityManager lifecycle beside the CE key set, because run
 # 32535337631 showed them disagreeing: `CE unlocked users: [0]` while
