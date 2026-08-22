@@ -135,6 +135,40 @@ stable_samples=${COVALENT_ANDROID_GUEST_STABLE_SAMPLES:-6}
 sample_interval=${COVALENT_ANDROID_GUEST_SAMPLE_INTERVAL:-5}
 started=$(date +%s)
 
+# A continuous recording of the guest's own event log, started before the first
+# probe and read only if this script exits 1.
+#
+# The failure dump this replaces asked the guest for `logcat -d -b crash -b
+# system -t 400` after the fact. On this image 400 lines of the system buffer is
+# about four seconds of history, which is why nine rounds of post-mortems could
+# describe the guest's *state* at give-up and never its *trajectory*. Run
+# 32536862682 gave up with `dumpsys user` reporting user 0 started 16 seconds
+# earlier on a guest that had been up for fifteen minutes, and with zygote64,
+# surfaceflinger and system_server holding adjacent late pids (12334/12340/12410)
+# while vold, ueventd and tombstoned still held their original boot pids - the
+# init signature of system_server dying and taking the framework with it. None of
+# the four seconds of log that survived contained the death.
+#
+# `-b events -b crash` is the buffer pair that names the cause: am_proc_died,
+# am_kill, am_crash, am_anr, am_wtf and boot_progress_* are all binary event-log
+# records, and a native death lands in the crash buffer. Both are low volume -
+# the chatty per-frame logging lives in `main` and `system`, which are
+# deliberately not recorded here - so this is one adb pipe writing a few hundred
+# kilobytes over fifteen minutes. It costs the guest nothing and it costs the
+# stability window nothing: no probe waits on it, and it is spawned once, here,
+# rather than sampled. logd and adbd both survive a framework restart, so the
+# recording spans the very event it exists to capture.
+guest_timeline=$(mktemp "${TMPDIR:-/tmp}/covalent-api37-timeline.XXXXXX")
+"$adb" -s "$serial" logcat -b events -b crash -v threadtime >"$guest_timeline" 2>&1 &
+guest_timeline_pid=$!
+# Killed on every exit path, including the success path, so a passing run leaves
+# no stray adb client attached to the device the instrumentation is about to use.
+cleanup_timeline() {
+  kill "$guest_timeline_pid" 2>/dev/null || true
+  rm -f "$guest_timeline"
+}
+trap cleanup_timeline EXIT HUP INT TERM
+
 elapsed() {
   echo $(($(date +%s) - started))
 }
@@ -327,6 +361,26 @@ guest_runnable() {
 # let fall.
 guest_loadavg() {
   bounded_shell cat /proc/loadavg | tr -d '\n' || true
+}
+
+# system_server's pid and its elapsed running time, as one round trip.
+#
+# This is the measurement that turns "the guest is unhealthy" into "the framework
+# restarted at t=N", and it is deliberately one `ps` rather than a `pidof` plus a
+# `/proc/uptime`: the readiness loop already makes eight round trips per sample
+# and this is the ninth, so it has to be worth its place. `ps -o ETIME` answers
+# both halves at once - a pid that changes between two samples proves a restart,
+# and an elapsed time that resets proves it even when the pid is not visible in
+# the same log line.
+#
+# Printed on the sample lines because that is where it is decisive. The cadence
+# of the failures is the thing under investigation, and a pid recorded only in
+# the post-mortem describes one instant; a pid recorded beside every sample
+# describes the period.
+guest_framework_pulse() {
+  bounded_shell ps -A -o PID,ETIME,NAME |
+    awk '$3 == "system_server" { printf "system_server pid %s up %s", $1, $2; found = 1 }
+         END { if (!found) printf "system_server absent" }'
 }
 
 # Multiplier over the core count. Two means "the runqueue may be one task deep
@@ -544,9 +598,73 @@ report_and_fail() {
   printf 'am get-started-user-state 0: ' >&2
   "$adb" -s "$serial" shell am get-started-user-state 0 >&2 2>&1 || true
   "$adb" -s "$serial" shell dumpsys user >&2 2>&1 || true
-  # The one thing no previous failure captured. If system_server is dying under
-  # this gate, its death is in here and every future diagnosis starts from it
-  # instead of from inference.
+  # How old the framework is, which is the whole question when user 0 reports a
+  # start time younger than the guest's uptime. vold, ueventd and tombstoned are
+  # printed alongside on purpose: they are init services that a framework restart
+  # does *not* touch, so if their elapsed times still match the guest's uptime
+  # while zygote64, surfaceflinger and system_server do not, the kernel is fine
+  # and only the Android runtime went round again. That distinction is not
+  # recoverable from a pid alone.
+  echo "--- framework age vs guest uptime ---" >&2
+  printf '/proc/uptime: ' >&2
+  "$adb" -s "$serial" shell cat /proc/uptime >&2 2>&1 || true
+  # Filtered rather than dumped whole: this guest runs ~300 processes and the
+  # eight names below are the ones that answer the question. The redirection is
+  # on the grep, not on the adb call, because sending adb's stdout to stderr
+  # ahead of the pipe leaves grep reading an empty stdin and prints the entire
+  # table plus a spurious "did not answer".
+  "$adb" -s "$serial" shell ps -A -o PID,PPID,ETIME,NAME 2>/dev/null |
+    grep -E 'ELAPSED|zygote64|surfaceflinger|system_server|vold|ueventd|tombstoned|logd|lmkd' >&2 ||
+    echo "(ps did not answer)" >&2
+  # Pressure Stall Information separates the three ways a guest can be starved,
+  # which the previous dumps could only guess at from free memory and a load
+  # average. Measured on the local API 37 guest, `/proc/pressure/cpu` and
+  # `/proc/pressure/memory` are root-only on this image and answer "Permission
+  # denied" to the shell user, while `/proc/pressure/io` reads fine; they are
+  # asked for anyway, separately, because the refusal is one line each, the CI
+  # image may differ, and a denial recorded in the dump is better than a reader
+  # wondering why the measurement is missing.
+  echo "--- pressure stall information ---" >&2
+  for psi in cpu memory io; do
+    printf '%s: ' "$psi" >&2
+    "$adb" -s "$serial" shell cat "/proc/pressure/$psi" >&2 2>&1 || true
+  done
+  # MemAvailable is the line that settles the memory question, and it is the one
+  # the previous dumps did not have. Round 9's post-mortem read "173296K free"
+  # from `top` and the RAM hypothesis was built on it, but the same output showed
+  # 2.1 GB of page cache and 3.6 MB of swap used out of 3 GB - i.e. free was low
+  # and available was enormous. MemAvailable states the reclaimable total
+  # directly, so nobody has to reconstruct it.
+  echo "--- meminfo ---" >&2
+  "$adb" -s "$serial" shell cat /proc/meminfo 2>/dev/null |
+    grep -E '^(MemTotal|MemFree|MemAvailable|Cached|SwapTotal|SwapFree|Dirty|Writeback)' >&2 || true
+  # A native death in system_server leaves a tombstone; a Java-level kill does
+  # not. An empty tombstone directory rules out half the candidate causes in one
+  # line, and a populated one names the other half.
+  echo "--- tombstones and ANR traces ---" >&2
+  "$adb" -s "$serial" shell ls -l /data/tombstones >&2 2>&1 || true
+  "$adb" -s "$serial" shell ls -l /data/anr >&2 2>&1 || true
+  echo "--- kernel ring buffer tail ---" >&2
+  "$adb" -s "$serial" shell dmesg 2>/dev/null | tail -n 80 >&2 ||
+    echo "(dmesg is not readable by the shell user on this image)" >&2
+  # The recording, not a snapshot. Everything above describes the guest at the
+  # instant it gave up; this is the only part of the dump that can say when the
+  # framework went down and what went with it. The filtered pass first, because a
+  # single grep hit here ends nine rounds of inference: am_proc_died / am_kill
+  # name a kill and its reason code, am_crash and the crash buffer name a
+  # process death, am_anr names a blocked main thread, boot_progress_* mark a
+  # framework coming back up, and lowmemorykiller / lmkd would name the memory
+  # cause this round set out to test.
+  echo "--- recorded event timeline: restart, kill and crash signatures ---" >&2
+  if [ -s "$guest_timeline" ]; then
+    grep -aiE 'am_proc_died|am_kill|am_crash|am_anr|am_wtf|boot_progress|am_restart|watchdog|lowmemorykiller|lmkd|Fatal signal|system_server' \
+      "$guest_timeline" >&2 ||
+      echo "(nothing matched in $(wc -l <"$guest_timeline") recorded event lines)" >&2
+    echo "--- recorded event timeline: last 200 lines verbatim ---" >&2
+    tail -n 200 "$guest_timeline" >&2 2>&1 || true
+  else
+    echo "(the event recording is empty; logcat -b events -b crash produced nothing)" >&2
+  fi
   echo "--- crash and system log tail ---" >&2
   "$adb" -s "$serial" logcat -d -b crash -b system -t 400 >&2 2>&1 || true
   exit 1
@@ -650,14 +768,14 @@ while [ "$settled" -lt "$stable_samples" ]; do
     # keeps succeeding at runqueue 40, that is the evidence the ceiling was
     # wrong, and if instrumentation starts dying after a high-runqueue
     # handover, that is the evidence it was not.
-    echo "API-37-gate: ready sample $settled/$stable_samples at $(elapsed)s (runqueue $(guest_runnable))"
+    echo "API-37-gate: ready sample $settled/$stable_samples at $(elapsed)s (runqueue $(guest_runnable), $(guest_framework_pulse))"
   else
     # A regression here is the run-32506293772 shape: ready, installed, then a
     # service disappears. Start the count over rather than averaging over it,
     # and say which condition went, so a window that keeps resetting accuses
     # something specific instead of leaving the next run to guess.
     if [ "$settled" -ne 0 ]; then
-      echo "API-37-gate: $reason at $(elapsed)s (runqueue $(guest_runnable)); restarting the stability window"
+      echo "API-37-gate: $reason at $(elapsed)s (runqueue $(guest_runnable), $(guest_framework_pulse)); restarting the stability window"
     fi
     last_reason=$reason
     settled=0
