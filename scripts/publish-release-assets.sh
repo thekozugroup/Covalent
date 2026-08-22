@@ -8,6 +8,24 @@
 # only ever created for a tag that already exists (`--verify-tag`), and assets
 # are uploaded with `--clobber` so a re-run of a workflow replaces rather than
 # duplicates its own artifacts.
+#
+# The release is created as a DRAFT and nothing here ever publishes it. Assembly
+# is incremental by design, but visibility should not be: no lane knows whether
+# it is the last one to finish, so any lane that published on its own way out
+# would expose a half-assembled release page. A draft is invisible to anyone
+# without push access, so the page only becomes public when a human has looked
+# at it, confirmed every expected asset is present with the right size and
+# checksum, and run:
+#
+#   gh release edit vX.Y.Z --draft=false
+#
+# Two consequences worth knowing before relying on this:
+#   - A draft is not bound to its tag in the web UI; it lives at an
+#     `untagged-<hash>` URL until it is published.
+#   - `gh release view` with no tag argument means "latest published release"
+#     and does NOT see drafts. android-release.yml resolves the prior signed
+#     package that way, so a release left in draft reads as absent and that
+#     upgrade gate will correctly refuse to run without `first_release`.
 set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -43,7 +61,7 @@ ensure_release() {
     if gh release view "$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
       return 0
     fi
-    set -- --repo "$GITHUB_REPOSITORY" --verify-tag --title "Covalent $version"
+    set -- --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "Covalent $version"
     notes="$repo_root/docs/release/notes/$version.md"
     if [ -f "$notes" ]; then
       set -- "$@" --notes-file "$notes"

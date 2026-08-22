@@ -15,6 +15,12 @@ for an already-existing tag (`--verify-tag`) if it is not there yet and then
 uploads with `--clobber`. Lanes are therefore order-independent and re-runnable,
 and the release page is assembled incrementally as each platform passes.
 
+The release is created as a **draft**, and no lane ever publishes it. Assembly is
+incremental, but visibility is not: no lane knows whether it is the last to
+finish, so a lane that published on its own way out would expose a
+half-assembled page. Publishing is a deliberate human step once every expected
+asset is present — see step 8 below.
+
 Release notes come from `docs/release/notes/<tag>.md` when that file exists.
 
 ## The version of record
@@ -54,7 +60,20 @@ before building anything.
    only for the very first release, when no prior signed APK exists to upgrade
    from.
 7. Run `apple-release.yml` once Apple credentials exist.
-8. `gh release view vX.Y.Z` and confirm the assets are attached.
+8. `gh release view vX.Y.Z` and confirm every expected asset is attached, with
+   the sizes and checksums you expect. While the release is a draft it is
+   invisible to anyone without push access and lives at an `untagged-<hash>`
+   URL rather than at its tag.
+9. Publish it, and only then:
+
+   ```sh
+   gh release edit vX.Y.Z --draft=false
+   ```
+
+   Do not skip this. `gh release view` with no tag argument means "latest
+   published release" and does not see drafts, so a release left in draft is
+   invisible to the `android-release.yml` upgrade gate, which will then
+   correctly refuse to run without `first_release`.
 
 ## One-time setup the maintainer must perform
 
