@@ -368,12 +368,11 @@ jobs:
             ./scripts/check-android.sh
             docker build --file packaging/docker/Dockerfile --build-arg VCS_REF=$(git rev-parse HEAD) --tag covalent:android-api37-e2e .
           # This lane dies of one graphics-transport fault reached by several
-          # different callers. The trigger that made the guest unbootable is
-          # removed in scripts/disable-android-guest-launcher.sh; the feature
-          # tokens on this line are aimed at the fault itself, for the callers a
-          # launcher disable cannot reach. The section just above emulator-options
-          # records which flags were tried, what each one measured, and when to
-          # stop trying flags.
+          # different callers. The caller that made the guest unbootable is removed
+          # in scripts/disable-android-guest-launcher.sh, and that part is fixed.
+          # The rest is not reachable from this line: the section just above
+          # emulator-options records every flag that was tried, what each one
+          # measured, and why no further flag is worth a run.
           #
           # Run 32539492995 recorded the guest's event and crash buffers across the
           # whole readiness window for the first time. system_server's pid climbed
@@ -406,85 +405,75 @@ jobs:
           # untouched. The "173 MB free" that suggested an OOM loop was free-versus-
           # available: 2.1 GB of it was reclaimable page cache.
           #
-          # Disabling the launcher was necessary and is kept, but it was not
-          # sufficient, and run 32546005843 is what says so. Read that run before
-          # changing anything on this line.
+          # Disabling the launcher was necessary and is kept. It is not sufficient,
+          # and no option on this line can make it sufficient. Runs 32546005843 and
+          # 32547433043 are the evidence; read them before changing anything here.
           #
-          # What the launcher disable bought, measured:
+          # What the launcher disable bought, measured in 32546005843:
           #
           #   surfaceflinger RegionSampling aborts   61  ->  0
           #   guest reaches readiness                never -> 80s
-          #   surfaceflinger / system_server pids    churning -> 1724 / 1797 held
+          #   surfaceflinger / system_server pids    churning -> held across the window
           #
-          # The RegionSampling path is gone. Then instrumentation started, and
-          # eight seconds and three tests later system_server took SIGABRT on the
-          # *same assertion*, reached from somewhere else entirely:
+          # That is the first time this guest ever became ready. Then instrumentation
+          # started and, eight seconds and three tests later, system_server took
+          # SIGABRT on the same assertion with no listener involved at all:
           #
-          #   pid: 1797, tid: 2033, name: TaskSnapshotPer >>> system_server <<<
-          #     #08 liblog.so       __android_log_assert
-          #     #09 mapper.ranchu.so GoldfishMapper::readFromHost
-          #     #11 libui.so        Gralloc5Mapper::lock
-          #     #13 libui.so        GraphicBuffer::lockAsync
+          #   pid: 1764, tid: 1992, name: TaskSnapshotPer >>> system_server <<<
+          #     #08 liblog.so             __android_log_assert
+          #     #09 mapper.ranchu.so      GoldfishMapper::readFromHost
+          #     #11 libui.so              Gralloc5Mapper::lock
           #     #15 libandroid_runtime.so android::lockImageFromBuffer
           #     at android.media.ImageReader$SurfaceImage.nativeCreatePlanes
           #     at com.android.server.wm.TaskSnapshotConvertUtil.copyToSwBitmapDirect
           #     at com.android.server.wm.SnapshotPersistQueue$StoreWriteQueueItem.writeBuffer
           #
-          # That is WindowManager persisting a task snapshot - the recents
-          # thumbnail - which it does every time an activity is finished, which is
-          # what every test in this suite does. It is not SystemUI, and it is not a
-          # second registrant to go and disable. It is the same fault with no
-          # listener involved at all: on this guest ANY CPU lock of a host-backed
-          # graphics buffer aborts, because mapper.ranchu.so asserts
-          # `!rcEnc->featureInfo()->hasReadColorBufferDma` and the host advertises
-          # ANDROID_EMU_read_color_buffer_dma. Removing callers one at a time is
-          # unbounded work; the host has to stop advertising it.
+          # WindowManager persisting a recents thumbnail, which it does every time an
+          # activity finishes, which is what every test in this suite does. So this
+          # was never one bad registrant. On this guest ANY CPU lock of a host-backed
+          # graphics buffer aborts: mapper.ranchu.so asserts
+          # `!rcEnc->featureInfo()->hasReadColorBufferDma` and the linux-x86_64
+          # gfxstream host advertises ANDROID_EMU_read_color_buffer_dma.
           #
-          # Which is what these three tokens are for, and why these three.
+          # Every emulator feature that could plausibly gate that extension has now
+          # been tried, and the question is closed:
           #
-          # GLDirectMem is not among them and must not be re-tried: it ships
-          # `GLDirectMem = off` in emulator/lib/advancedFeatures.ini, so run
-          # 32543425657 disabled something already disabled - a null experiment,
-          # not a negative one, and the extension was advertised anyway. That also
-          # rules it out as an operand of whatever gates the extension.
+          #   -gpu swangle_indirect   32541499131. Selected ANGLE
+          #                           (`gles_mode_selected:swangle`); aborted
+          #                           identically. The renderer does not decide it.
+          #   -feature -GLDirectMem   32543425657. A null experiment:
+          #                           advancedFeatures.ini ships `GLDirectMem = off`,
+          #                           so it was already off during the original
+          #                           failures while the extension was advertised
+          #                           anyway - which also rules it out as an operand.
+          #   -feature -GLDMA         32547433043. All three overrides confirmed
+          #   -feature -GLDMA2        applied in the emulator log (ids 51, 52, 24),
+          #   -feature -HasShared...  and the guest aborted in
+          #     SlotsHostMemoryAllocator  GoldfishMapper::readFromHost regardless.
           #
-          # The three that remain are the default-on features in the same DMA and
-          # host-memory block, each of which advertises its own neighbouring
-          # extension string in libgfxstream_backend:
+          # Those three were the entire remaining candidate set: the default-on
+          # features in the DMA and host-memory block, each advertising its own
+          # neighbouring extension string in libgfxstream_backend. Disabling any
+          # operand of an AND is enough, so their failure together is not a failure
+          # of one permutation - it says no emulator feature controls this extension
+          # on this host build.
           #
-          #   GLDMA (id 51)                        ANDROID_EMU_dma_v1
-          #   GLDMA2 (id 52)                       ANDROID_EMU_dma_v2
-          #   HasSharedSlotsHostMemoryAllocator    ANDROID_EMU_has_shared_slots_
-          #     (id 24)                              host_memory_allocator
+          # THEREFORE, and this is the standing instruction for whoever reads this
+          # next: do not spend another CI run on an emulator flag. The fault is in
+          # the API 37 google_apis x86_64 system image's mapper.ranchu.so, which
+          # refuses to run against a host capability this host always offers, and it
+          # is not reachable from inside this workflow. The options that remain are
+          # all outside it - a different system image, a different host, or exempting
+          # the lane - and that is an owner decision, not a flag.
           #
-          # The host code that builds that extension string gates
-          # read_color_buffer_dma on an AND of two adjacent 4-byte feature slots
-          # (`ldp w9, w8, [sp, #0x54]`, `and`, `cbz`) where every neighbouring
-          # extension is gated on one. The emulator's feature ids are contiguous
-          # (GLAsyncSwap 50, GLDMA 51, GLDMA2 52, GLDirectMem 53), and the operand
-          # pair cannot include GLDirectMem because it was already off while the
-          # extension was still advertised. An adjacent default-on pair is the
-          # reading the evidence supports.
-          #
-          # All three go in one run on purpose. This lane's budget does not allow
-          # one feature per CI cycle, and they are not independent hypotheses -
-          # they are the whole remaining candidate set for "which host feature
-          # makes this extension appear". Disabling any operand of an AND is
-          # enough, so testing them together tests the question rather than the
-          # permutations.
-          #
-          # The stopping rule that comes with them: if the guest still aborts on
-          # `!hasReadColorBufferDma` with all three disabled, then no emulator
-          # feature controls this extension on the linux-x86_64 gfxstream build,
-          # and this lane cannot be fixed from inside this workflow. Do not guess
-          # at a fourth flag; that result is the answer.
-          #
-          # Readout costs nothing. scripts/wait-for-android-guest.sh records the
-          # guest's event and crash buffers across the readiness window, and both
-          # it and scripts/android-api37-device-test.sh fail if surfaceflinger's or
-          # system_server's pid moves, so `grep -E 'Abort message|RegionSampling|
-          # GoldfishMapper'` over the job log is the whole verdict.
-          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -feature -GLDMA -feature -GLDMA2 -feature -HasSharedSlotsHostMemoryAllocator -noaudio -no-boot-anim -no-metrics -accel on
+          # emulator-options is therefore back to the plain baseline that
+          # android-release.yml also uses, carrying no disproven token. Everything
+          # this lane did learn is kept: the launcher disable, which is what makes
+          # the guest reach readiness at all, and the pid-stability gates in
+          # scripts/wait-for-android-guest.sh and scripts/android-api37-device-test.sh,
+          # which are why a guest that is quietly restarting can no longer be read as
+          # a green 56/56.
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-metrics -accel on
           # Wait for the unlock, not just for the boot.
           #
           # This action's only readiness check is `getprop sys.boot_completed`, and
