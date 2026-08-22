@@ -61,9 +61,23 @@ before building anything.
    from.
 7. Run `apple-release.yml` once Apple credentials exist.
 8. `gh release view vX.Y.Z` and confirm every expected asset is attached, with
-   the sizes and checksums you expect. While the release is a draft it is
-   invisible to anyone without push access and lives at an `untagged-<hash>`
-   URL rather than at its tag.
+   the sizes and checksums you expect.
+
+   **Expect the tag URL to 404 at this point.** A draft is not bound to its tag,
+   so until step 9 runs:
+
+   ```console
+   $ gh api repos/OWNER/REPO/releases/tags/vX.Y.Z
+   gh: Not Found (HTTP 404)
+   ```
+
+   and `https://github.com/OWNER/REPO/releases/tag/vX.Y.Z` 404s in a browser,
+   even though the draft plainly exists. That is normal and does **not** mean a
+   lane failed to publish. The draft lives at a `releases/tag/untagged-<hash>`
+   URL; find it with `gh release list` or `gh api repos/OWNER/REPO/releases`,
+   both of which do show drafts. It is also invisible to anyone without push
+   access. Both the tag URL and the by-tag API lookup start working the moment
+   you run step 9.
 9. Publish it, and only then:
 
    ```sh
