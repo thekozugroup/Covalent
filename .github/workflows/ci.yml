@@ -367,7 +367,60 @@ jobs:
             "$ANDROID_HOME/platform-tools/adb" start-server
             ./scripts/check-android.sh
             docker build --file packaging/docker/Dockerfile --build-arg VCS_REF=$(git rev-parse HEAD) --tag covalent:android-api37-e2e .
-          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-metrics -accel on
+          # `swangle_indirect`, not `swiftshader_indirect`. This is the fix for the
+          # fault that has kept this lane red, and it is a renderer fault, not a
+          # memory or CPU one.
+          #
+          # Run 32539492995 recorded the guest's event and crash buffers across the
+          # whole readiness window for the first time. system_server's pid climbed
+          # 3835 -> 5958 -> 8124 -> 10214 -> 12313 -> 14504 and never once survived
+          # past 26 seconds of uptime, and the tombstone directory filled at one
+          # file every ~29 seconds. The tombstone names the cause exactly:
+          #
+          #   Executable: /system/bin/surfaceflinger   Process uptime: 30s
+          #   name: RegionSampling  >>> /system/bin/surfaceflinger <<<
+          #   signal 6 (SIGABRT), code -1 (SI_QUEUE)
+          #   Abort message: 'Assertion failed: !rcEnc->featureInfo()->hasReadColorBufferDma'
+          #     #03 mapper.ranchu.so  GoldfishMapper::readFromHost(cb_handle_t const&)
+          #     #05 libui.so          Gralloc5Mapper::lock(...)
+          #     #09 surfaceflinger    RegionSamplingThread::threadMain()
+          #
+          # NexusLauncher registers a CompositionSamplingListener to pick status bar
+          # icon contrast; SurfaceFlinger's RegionSamplingThread CPU-locks the
+          # composited buffer to read it; the API 37 guest's Gralloc5 mapper asserts
+          # that the host has NOT advertised ANDROID_EMU_read_color_buffer_dma, and
+          # the host has. surfaceflinger aborts, system_server follows it down, the
+          # framework restarts, the launcher comes back and registers the listener
+          # again. That loop is every symptom this gate has ever reported: a runqueue
+          # that never drains because each cycle is a fresh boot storm, binder probes
+          # timing out at random, and ComponentActivity failing to resolve at LOW
+          # runqueue - user 0 is briefly re-locked after each restart, and Direct Boot
+          # matches only direct-boot-aware components while it is.
+          #
+          # It is emphatically not memory. The same dump read MemAvailable 3356216 kB
+          # of 4008944 kB with SwapFree 3006116 of 3006704 - swap essentially
+          # untouched. The "173 MB free" that suggested an OOM loop was free-versus-
+          # available: 2.1 GB of it was reclaimable page cache.
+          #
+          # Why this flag. `-gpu swiftshader_indirect` does not name one renderer, it
+          # names a preference that resolves per host. On this runner it resolves to
+          # the legacy path - the CI log reads `emuglConfig_init:
+          # vulkan_mode_selected:swiftshader gles_mode_selected:swiftshader` and then
+          # `Graphics Adapter Android Emulator OpenGL ES Translator (Google
+          # SwiftShader)` - which is the translator that advertises
+          # ANDROID_EMU_read_color_buffer_dma. Locally, the identical emulator build
+          # (37.1.11.0, build_id 15917651) with the identical flag resolves instead to
+          # `ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device), SwiftShader driver)`,
+          # never advertises that extension, never aborts, and runs all 56
+          # instrumentation tests green twice over. `swangle_indirect` - "use ANGLE
+          # with the SwiftShader backend for GLES and Vulkan" - asks for that second
+          # renderer by name instead of leaving the choice to the host, so CI gets the
+          # configuration that is known to work rather than the one that is known to
+          # abort. It is also the emulator team's documented recommendation for
+          # headless CI.
+          #
+          # This is the only variable changed in this commit.
+          emulator-options: -no-snapshot -no-window -gpu swangle_indirect -noaudio -no-boot-anim -no-metrics -accel on
           # Wait for the unlock, not just for the boot.
           #
           # This action's only readiness check is `getprop sys.boot_completed`, and
