@@ -16,7 +16,7 @@ require_text() {
 }
 
 require_text "FROM rust:1.97.1-alpine3.23@sha256:" "$dockerfile"
-require_text "FROM caddy:2.10.2-alpine@sha256:" "$dockerfile"
+require_text "FROM caddy:2.11.4-alpine@sha256:" "$dockerfile"
 require_text "FROM alpine:3.23@$runtime_digest" "$dockerfile"
 require_text "org.opencontainers.image.base.name=\"docker.io/library/alpine:3.23\"" "$dockerfile"
 require_text "org.opencontainers.image.base.digest=\"$runtime_digest\"" "$dockerfile"
