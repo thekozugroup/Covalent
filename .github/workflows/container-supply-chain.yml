@@ -153,16 +153,37 @@ jobs:
           echo "staging=${staging}" >> "${GITHUB_OUTPUT}"
           echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
           docker buildx imagetools inspect "${IMAGE}@${digest}"
-      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
-        with:
-          image: ${{ env.IMAGE }}@${{ steps.manifest.outputs.digest }}
-          format: spdx-json
-          output-file: covalent-container.spdx.json
+      # The vulnerability gate runs BEFORE the SBOM is produced, and nothing
+      # that describes this image may leave the runner until it has passed.
+      #
+      # These two steps used to be in the opposite order, and sbom-action
+      # defaults `upload-release-assets` to true. On a tag push that default
+      # attached the SBOM to the GitHub Release as its own asset the moment it
+      # was generated - which is to say, before the scan had rendered any
+      # verdict at all. When v0.1.0 failed this gate with 60 high/critical
+      # findings, sign, attest and promote were all correctly skipped and
+      # nothing reached GHCR, yet an SBOM for that rejected image was already
+      # sitting on the release page describing an artifact that does not exist
+      # and was never fit to. Evidence that outruns the check it is evidence
+      # for is worse than no evidence: it says an image was inspected without
+      # saying it was rejected.
+      #
+      # Scanning first makes that ordering impossible. Both of the action's
+      # own upload paths are also turned off, so the only way this SBOM
+      # reaches the release is the explicit publish step below, which runs
+      # after the gate, the signature, and the attestation.
       - uses: anchore/scan-action@1638637db639e0ade3258b51db49a9a137574c3e # v6
         with:
           image: ${{ env.IMAGE }}@${{ steps.manifest.outputs.digest }}
           fail-build: true
           severity-cutoff: high
+      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.manifest.outputs.digest }}
+          format: spdx-json
+          output-file: covalent-container.spdx.json
+          upload-release-assets: false
+          upload-artifact: false
       - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
       - name: Sign and attest the scanned immutable digest
         run: |
