@@ -654,6 +654,19 @@ jobs:
             # never be made on an unrepaired one; see the header of
             # scripts/disable-android-guest-launcher.sh.
             ./scripts/disable-android-guest-launcher.sh emulator-5570
+            # The launcher was one CPU-lock of a host-backed buffer; WindowManager's
+            # task snapshots are the other one this suite reaches. It records a
+            # recents thumbnail every time an activity finishes - once per test, 56
+            # times - and the persist step CPU-locks the captured buffer, which is
+            # the `TaskSnapshotPer >>> system_server <<<` abort inside
+            # SnapshotPersistQueue$StoreWriteQueueItem.writeBuffer. Nothing settable
+            # reaches shouldDisableSnapshots(); the one lever is
+            # IWindowManager.setTaskSnapshotEnabled, called by transaction code read
+            # off this guest's own framework.jar. Same reason as the launcher for
+            # running it here rather than inside the gate: the gate must be able to
+            # judge an unrepaired guest. See scripts/disable-android-guest-snapshots.sh,
+            # including the scope limit - this fixes the suite, not the platform.
+            ./scripts/disable-android-guest-snapshots.sh emulator-5570
             ./scripts/wait-for-android-guest.sh emulator-5570 apps/android/app/build/outputs/apk/debug/app-debug.apk
             $ANDROID_HOME/platform-tools/adb -s emulator-5570 shell wm dismiss-keyguard || true
             COVALENT_ANDROID_PREBUILT=true COVALENT_ANDROID_EVIDENCE_DIR="${{ runner.temp }}/covalent-android-api37" COVALENT_ANDROID_HEADLESS_CI=true ANDROID_SERIAL=emulator-5570 ./scripts/android-api37-device-test.sh

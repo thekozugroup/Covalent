@@ -542,6 +542,22 @@ printf 'ComponentActivity : '
 printf 'app package state : '
 "$adb" -s "$serial" shell dumpsys package life.michaelwong.covalent 2>/dev/null \
   | grep -m1 -o 'installed=true[^,]*enabled=[0-9]*' || echo "(unreported)"
+# Read at the instant it governs, for the same reason as everything else in this
+# block. scripts/disable-android-guest-snapshots.sh turns this off before the
+# readiness wait, but the setting lives in system_server's memory: a framework
+# restart in the window between that call and here silently restores it, and the
+# `TaskSnapshotPer >>> system_server <<<` abort comes back with it. The pid pair
+# below only spans instrumentation, so it cannot see that window. Reported rather
+# than asserted, so this gate still runs against an unrepaired guest - judging one
+# is the whole point of it - but a recurrence can never again be diagnosed without
+# knowing which way this read.
+printf 'task snapshots    : '
+"$adb" -s "$serial" shell dumpsys window 2>/dev/null | tr -d '\r' |
+  awk '/^[[:space:]]*mSnapshotEnabled=/ { pending = $0; next }
+       /^[[:space:]]*SnapshotCache[[:space:]]+Task[[:space:]]*$/ && pending != "" {
+         sub(/^[[:space:]]*/, "", pending); print "task controller " pending; found = 1; exit
+       }
+       END { if (!found) print "(unreported)" }'
 printf 'framework pids    : '
 framework_pids_before=$(framework_pids)
 echo "$framework_pids_before"
