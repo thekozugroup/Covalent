@@ -32,6 +32,33 @@ So the gate is satisfiable without any paid credential. It is **not** satisfiabl
 without a one-time human action: either registering a signing key, or making the
 release commit through GitHub rather than through `git push`.
 
+## What v0.1.0 actually used, and why it is the weaker of the two
+
+`v0.1.0` was cut on a commit created through case 2 — GitHub's GraphQL
+`createCommitOnBranch` mutation, which writes the commit server-side and signs it
+with GitHub's web-flow key:
+
+```sh
+gh api graphql --input commit.json   # mutation createCommitOnBranch(...)
+gh api repos/thekozugroup/Covalent/commits/<sha> --jq '.commit.verification'
+# {"verified": true, "reason": "valid", ...}   committer: GitHub <noreply@github.com>
+```
+
+Note that the REST Contents API (`PUT /repos/{owner}/{repo}/contents/{path}`)
+does **not** produce a signed commit for this account — it was tried first and
+returned `verified: false, reason: "unsigned"`. Only the GraphQL mutation signs.
+
+This satisfies the gate legitimately and without weakening it, but be clear about
+what it attests. A GitHub web-flow signature proves the commit was created
+through an authenticated API call on the maintainer's GitHub account. It does not
+prove that a key the maintainer holds signed the commit content. An attacker with
+a stolen `gh` token can produce a `verified: true` commit; an attacker without the
+maintainer's private signing key cannot produce case 1.
+
+Case 1 is therefore the intended steady state and this route is a bootstrap for
+the first release only. Register the SSH signing key below and all later releases
+carry the stronger attestation.
+
 ## The fix: register an SSH signing key
 
 This is the steady state the repository's
