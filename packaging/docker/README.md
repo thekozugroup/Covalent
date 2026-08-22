@@ -31,7 +31,9 @@ LAN discovery defaults to `false`. Bridge mode publishes TLS management on TCP 8
 
 ## Multi-architecture, reproducibility, and supply chain
 
-The image supports exactly `linux/amd64` and `linux/arm64`. It uses a pinned Rust Alpine builder, a throwaway pinned Caddy Alpine stage, and a pinned Alpine 3.23 runtime base. The OCI labels record the runtime base name and digest so CI can reject documentation or image-metadata drift.
+The image supports exactly `linux/amd64` and `linux/arm64`. It uses a pinned Rust Alpine builder, a throwaway pinned Go Alpine stage that compiles Caddy from source, and a pinned Alpine 3.23 runtime base. The OCI labels record the runtime base name and digest so CI can reject documentation or image-metadata drift.
+
+Caddy is compiled rather than copied out of `caddy:2.11.4-alpine`, because that published binary is linked against `go1.26.3` and no newer Caddy tag exists to fix it. `packaging/docker/caddy` is the same three-line consumer module `xcaddy` generates — it imports Caddy's standard module set and adds nothing — so the result is stock Caddy 2.11.4 with a current toolchain. It is verified against the upstream binary as an identical 132-module set that adapts this repository's unchanged `Caddyfile` to a byte-identical JSON config. The Caddy source version, the whole module graph (`go.mod` + `go.sum`, built `-mod=readonly`) and the toolchain image digest are all pinned, and `GOTOOLCHAIN=local` keeps the build from reaching the network for a different compiler.
 
 Create a local two-architecture OCI archive with Buildx:
 
