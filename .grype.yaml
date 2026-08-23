@@ -1,0 +1,63 @@
+# Grype configuration for the container supply-chain gate.
+#
+# The gate itself is unchanged and must stay that way:
+#
+#   severity-cutoff: high      (set in .github/workflows/container-supply-chain.yml)
+#   fail-build:      true      (set in .github/workflows/container-supply-chain.yml)
+#
+# This file does not lower the cutoff, does not disable failure, and contains no
+# wildcards. It carries exactly one suppression, named by CVE, for the two Alpine
+# base packages that ship the affected library. Everything else still fails the
+# build.
+#
+# ---------------------------------------------------------------------------
+# CVE-2026-14456 — libssl3 / libcrypto3 3.5.7-r0 (Alpine base)
+# ---------------------------------------------------------------------------
+#
+# Full standing analysis, including the measurements this summary is drawn from:
+#   docs/security/container-image-vulnerabilities.md  ("Blocker 2")
+#
+# Why this is not reachable in this image:
+#
+# 1. Covalent's own binaries cannot load the library at all. `covalent-node`,
+#    `covalent` and `caddy` are all fully static ELF objects: no interpreter, no
+#    dynamic section, and an empty DT_NEEDED. There is no mechanism by which any
+#    of them can load `libssl.so.3` or `libcrypto.so.3` at runtime. Verified by
+#    parsing the ELF headers of every binary in the built image.
+#
+# 2. The only dynamic consumer in the entire image is `/usr/bin/ssl_client`, the
+#    67 KB busybox helper that performs TLS *client* handshakes for
+#    `busybox wget https://…`. Being a client, it never constructs a listener,
+#    and nothing in this image invokes it.
+#
+# 3. The flaw is availability-only — CWE-770, unbounded resource allocation,
+#    CVSS 7.5 AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H — in OpenSSL's QUIC *server*
+#    listener path, reached only when an OpenSSL `Listener` SSL object queues
+#    channels for `SSL_accept(3ossl)`. Covalent's QUIC is Rust: `quinn` over
+#    `rustls` with `ring`. No OpenSSL QUIC server exists anywhere in this image.
+#
+# Why there is nothing to upgrade to: no Alpine branch ships a fix. v3.22, v3.23
+# (current base), v3.24 and edge all carry openssl 3.5.7-r0 with no fixed
+# version recorded, and Grype reports fix state = unknown. Moving the base image
+# forward does not clear this finding; moving to edge makes the image strictly
+# worse (three unfixed busybox highs). Removing openssl is not possible either —
+# `libcrypto3` is required by apk-tools for package signature verification.
+#
+# REVIEW CONDITIONS — remove or re-verify this entry when either holds:
+#
+#   * Alpine publishes a fixed openssl for the base branch. Then delete this
+#     entry outright and take the fix; there is no reason to keep suppressing a
+#     finding that has a remedy.
+#   * The base image changes, the build changes how any binary is linked, or a
+#     new binary is added to the runtime image. The suppression rests entirely
+#     on the static-linking premise in (1) and (2), so that premise must be
+#     re-verified — re-run the ELF/DT_NEEDED check over every binary in the
+#     image — before this entry is allowed to stand.
+
+ignore:
+  - vulnerability: CVE-2026-14456
+    package:
+      name: libssl3
+  - vulnerability: CVE-2026-14456
+    package:
+      name: libcrypto3
