@@ -127,7 +127,13 @@ paths:
         replaces the manual certificate comparison this flow used to require.
         The window is single-use, expires 30 minutes after mint, refuses
         presentations closer together than 500 ms, and closes permanently after
-        16 incorrect codes; restarting the container mints a new one.
+        16 incorrect codes. Before its first request, a client must durably save
+        its random nonce and derived proof. The server durably binds the exact
+        request to the exact sealed response before it records the claimed
+        lifecycle. Retrying that same nonce and proof therefore returns the
+        byte-identical JSON response after a lost connection or restart; every
+        different request is refused. Restarting an unclaimed container mints a
+        new code.
       operationId: claimOwnership
       security: []
       requestBody:
@@ -141,7 +147,10 @@ paths:
               properties:
                 clientNonce:
                   type: string
-                  description: 32 random bytes, base64url without padding.
+                  description: >-
+                    32 random bytes, base64url without padding. Generate once,
+                    save durably before the request, and reuse exactly for every
+                    retry until the returned credentials are durable.
                   minLength: 43
                   maxLength: 43
                 clientProof:
@@ -155,7 +164,10 @@ paths:
                   maxLength: 43
       responses:
         "200":
-          description: Ownership claimed. The window is now closed permanently.
+          description: >-
+            Ownership claimed, or the byte-identical durable response for the
+            exact nonce-and-proof request that originally claimed ownership.
+            The window is closed permanently to every different request.
           content:
             application/json:
               schema:
@@ -169,7 +181,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiError"
         "409":
-          description: This node already has an owner (code claim_unavailable).
+          description: >-
+            This node already has an owner and the presented nonce and proof do
+            not exactly match its original claim request (code
+            claim_unavailable).
           content:
             application/json:
               schema:
@@ -192,8 +207,13 @@ paths:
         "503":
           description: >-
             The CA certificate is not readable yet (code
-            claim_certificate_unavailable). Checked before the code is spent, so
-            the code is not consumed.
+            claim_certificate_unavailable), or ownership could not be recorded
+            durably and no token was released (code claim_state_unavailable).
+            Certificate failures do not consume the code. After a state failure,
+            preserve and retry the exact request: if its private replay receipt
+            was committed, the same response is recovered. Restart only if the
+            exact retry remains unavailable; an unclaimed restart mints a fresh
+            code.
           content:
             application/json:
               schema:
@@ -560,22 +580,10 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: false
-              required: [peerId, address, certificateDer]
-              properties:
-                peerId:
-                  $ref: "#/components/schemas/DeviceId"
-                address:
-                  type: string
-                  description: Numeric socket address, including port.
-                certificateDer:
-                  type: string
-                  maxLength: 131072
-                  description: Base64url DER certificate transferred through the confirmed pairing channel.
+              $ref: "#/components/schemas/ConnectProviderRequest"
       responses:
         "200":
-          description: Provider connection persisted after role and certificate validation.
+          description: Provider connection persisted after role and certificate validation, with a new identity-bound capacity probe.
           content:
             application/json:
               schema:
@@ -697,13 +705,13 @@ paths:
           $ref: "#/components/responses/Conflict"
   /api/v1/jobs/acknowledge:
     post:
-      summary: Acknowledge a fully received archive result
+      summary: Acknowledge a fully received terminal job result
       operationId: acknowledgeJob
       requestBody:
         $ref: "#/components/requestBodies/JobReference"
       responses:
         "204":
-          description: Retained byte-identical archive result and private staging removed.
+          description: Idempotent acknowledgement. Any retained terminal backup result and private staging for this job are removed only after the authenticated client accepted its response.
         "401":
           $ref: "#/components/responses/Unauthorized"
         "409":
@@ -735,7 +743,14 @@ paths:
               $ref: "#/components/schemas/BackupRequest"
       responses:
         "200":
-          description: Locally committed encrypted backup and exact explicit replication outcome.
+          description: Locally committed encrypted backup and exact explicit replication outcome, retained until the authenticated client accepts and acknowledges this terminal result.
+          headers:
+            X-Covalent-Job-Ack-Required:
+              required: true
+              description: The client must decode and accept the JSON response, then POST this request jobId to /api/v1/jobs/acknowledge. Do not acknowledge before accepting the result; retry acknowledgement idempotently after an interrupted response.
+              schema:
+                type: string
+                const: "true"
           content:
             application/json:
               schema:
@@ -1609,7 +1624,7 @@ components:
     ProviderConnection:
       type: object
       additionalProperties: false
-      required: [peerId, address, certificateFingerprint]
+      required: [peerId, address, certificateFingerprint, reachability, observedAtUnixMs, validUntilUnixMs, usableBytes, allocatedBytes, quotaBytes]
       properties:
         peerId:
           $ref: "#/components/schemas/DeviceId"
@@ -1617,6 +1632,35 @@ components:
           type: string
         certificateFingerprint:
           $ref: "#/components/schemas/HexDigest"
+        reachability:
+          description: Fresh probe result from this list request. Any value other than reachable must not be selected for a new backup. The service never returns a cached stale capacity measurement.
+          enum: [reachable, unreachable, unknown]
+        observedAtUnixMs:
+          type: [integer, "null"]
+          minimum: 0
+        validUntilUnixMs:
+          type: [integer, "null"]
+          minimum: 0
+        usableBytes:
+          type: [integer, "null"]
+          minimum: 0
+          description: Bytes this exact provider identity can admit now after quota, durable reservations, and disk reserve.
+        allocatedBytes:
+          type: [integer, "null"]
+          minimum: 0
+          description: Bytes durably consumed by provider data.
+        quotaBytes:
+          type: [integer, "null"]
+          minimum: 0
+          description: Effective pool for this provider identity. Usable, allocated, and durable reservations reconcile to this pool.
+    ConnectProviderRequest:
+      type: object
+      additionalProperties: false
+      required: [peerTransport]
+      properties:
+        peerTransport:
+          description: Exact transport binding from the mutually signed pairing transcript. Clients must not synthesize this object from an address or certificate.
+          $ref: "#/components/schemas/TransportBinding"
     SignedRoster:
       type: object
       additionalProperties: false

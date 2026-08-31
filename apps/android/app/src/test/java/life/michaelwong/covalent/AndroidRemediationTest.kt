@@ -48,6 +48,31 @@ import okhttp3.tls.HeldCertificate
 
 class AndroidRemediationTest {
     @Test
+    fun providerClientReadsFreshIdentityBoundCapacity() {
+        val server = MockWebServer().apply {
+            enqueue(MockResponse().setBody("{\"grants\":[]}"))
+            enqueue(MockResponse().setBody("""
+                [{"peerId":"provider-1","address":"100.100.100.20:8788",
+                "certificateFingerprint":"${"a".repeat(64)}","reachability":"reachable",
+                "observedAtUnixMs":1,"validUntilUnixMs":2,
+                "usableBytes":1024,"allocatedBytes":2048,"quotaBytes":4096}]
+            """.trimIndent()))
+            start()
+        }
+        try {
+            val provider = CovalentNodeClient().providers(
+                server.url("/").toString().removeSuffix("/"),
+                "token",
+            ).single()
+            assertEquals(1_024L, provider.capacityBytes)
+            assertEquals(2_048L, provider.allocatedBytes)
+            assertEquals(4_096L, provider.quotaBytes)
+            assertEquals("/api/v1/rosters/current", server.takeRequest().path)
+            assertEquals("/api/v1/providers", server.takeRequest().path)
+        } finally { server.shutdown() }
+    }
+
+    @Test
     fun archiveUploadResumesOnlyAtBoundedRetryableServerOffsets() {
         val resumable = NodeApiException(409, 1, "upload_incomplete", true, "resume", 42)
         assertEquals(42L, archiveUploadRetryOffset(resumable, 100))

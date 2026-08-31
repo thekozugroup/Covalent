@@ -4,6 +4,7 @@ set -eu
 repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 . "$repo_root/scripts/android-instrumentation-result.sh"
 android_sdk=${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}
+adb=""
 avd_name=Covalent_API_37
 required_serial=emulator-5570
 serial=${ANDROID_SERIAL:-}
@@ -22,12 +23,23 @@ tls_config_volume="$tls_container-config"
 wrong_tls_data_volume="$wrong_tls_container-data"
 wrong_tls_config_volume="$wrong_tls_container-config"
 tls_directory=""
+tls_kek_directory=""
+tls_token_directory=""
+tls_client_token_directory=""
+tls_client_token_file=""
+tls_token_file_name=covalent-api37-tls-token
 instrumentation_log=""
 expected_suite=""
+docker_source_before=""
+docker_source_after=""
 device_gate_lock="${TMPDIR:-/tmp}/covalent-api37-device-gate.lock"
 lock_acquired=false
 
 cleanup() {
+  if [ -n "$adb" ] && [ -n "$serial" ]; then
+    "$adb" -s "$serial" shell -T run-as life.michaelwong.covalent \
+      rm -f files/covalent-api37-tls-token >/dev/null 2>&1 || true
+  fi
   docker rm -f "$tls_container" "$wrong_tls_container" >/dev/null 2>&1 || true
   docker volume rm \
     "$tls_data_volume" \
@@ -37,11 +49,26 @@ cleanup() {
   if [ -n "$tls_directory" ] && [ -d "$tls_directory" ]; then
     rm -rf "$tls_directory"
   fi
+  if [ -n "$tls_kek_directory" ] && [ -d "$tls_kek_directory" ]; then
+    rm -rf "$tls_kek_directory"
+  fi
+  if [ -n "$tls_token_directory" ] && [ -d "$tls_token_directory" ]; then
+    rm -rf "$tls_token_directory"
+  fi
+  if [ -n "$tls_client_token_directory" ] && [ -d "$tls_client_token_directory" ]; then
+    rm -rf "$tls_client_token_directory"
+  fi
   if [ -n "$instrumentation_log" ] && [ -f "$instrumentation_log" ]; then
     rm -f "$instrumentation_log"
   fi
   if [ -n "$expected_suite" ] && [ -f "$expected_suite" ]; then
     rm -f "$expected_suite"
+  fi
+  if [ -n "$docker_source_before" ] && [ -f "$docker_source_before" ]; then
+    rm -f "$docker_source_before"
+  fi
+  if [ -n "$docker_source_after" ] && [ -f "$docker_source_after" ]; then
+    rm -f "$docker_source_after"
   fi
   if [ "$lock_acquired" = true ]; then
     rmdir "$device_gate_lock" 2>/dev/null || true
@@ -133,6 +160,52 @@ fi
 if [ "$headless_ci" != true ]; then
   mobilecli device info --device "$avd_name"
 fi
+
+fingerprint_digest() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+capture_docker_source_fingerprint() {
+  target=$1
+  if ! "$repo_root/scripts/docker-source-fingerprint.sh" "$repo_root" > "$target"; then
+    rm -f "$target"
+    echo "could not read a stable Docker source fingerprint" >&2
+    exit 1
+  fi
+}
+
+verify_docker_image_freshness() {
+  expected_source_fingerprint=$1
+  if ! image_revision=$(docker image inspect \
+    --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
+    "$tls_image" 2>/dev/null); then
+    echo "COVALENT Android device gate requires image $tls_image." >&2
+    exit 1
+  fi
+  if ! image_source_fingerprint=$(docker image inspect \
+    --format '{{index .Config.Labels "io.covalent.source.fingerprint"}}' \
+    "$tls_image" 2>/dev/null); then
+    echo "could not inspect source fingerprint on $tls_image." >&2
+    exit 1
+  fi
+  head_revision=$(git -C "$repo_root" rev-parse HEAD)
+  if [ "$image_revision" != "$head_revision" ]; then
+    echo "$tls_image records revision '$image_revision' but this checkout is $head_revision." >&2
+    echo "the image does not match this source; rebuild it from this checkout" >&2
+    exit 1
+  fi
+  if [ "$image_source_fingerprint" != "$expected_source_fingerprint" ]; then
+    echo "$tls_image records source fingerprint '$image_source_fingerprint', but this checkout is $expected_source_fingerprint." >&2
+    echo "the image does not match this dirty-tree source; rebuild it from this checkout" >&2
+    exit 1
+  fi
+  echo "  current: $tls_image (revision $image_revision, source $image_source_fingerprint)"
+}
+
 # Rebuilding here is what kills the guest.
 #
 # check-android.sh and the docker build below are cold Rust compiles. Even with
@@ -154,35 +227,104 @@ fi
 if [ "$prebuilt" = true ]; then
   "$repo_root/scripts/check-android.sh" --verify-prebuilt
 
-  # The image has to prove it came from this source too, and it already carries
-  # the means: packaging/docker/Dockerfile stamps ARG VCS_REF into
-  # org.opencontainers.image.revision, which is the same label
-  # scripts/check-container-contract.sh verifies in the container jobs. Read it
-  # back and require the commit this checkout is on. An image built without
-  # --build-arg VCS_REF is labelled "unknown" and is rejected here by name,
-  # which is the correct answer: an unlabelled image cannot be shown to match.
-  if ! image_revision=$(docker image inspect \
-    --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
-    "$tls_image" 2>/dev/null); then
-    echo "COVALENT_ANDROID_PREBUILT=true but $tls_image does not exist." >&2
-    echo "build it first: docker build --file packaging/docker/Dockerfile --build-arg VCS_REF=\$(git rev-parse HEAD) --tag $tls_image ." >&2
-    exit 1
-  fi
-  head_revision=$(git -C "$repo_root" rev-parse HEAD)
-  if [ "$image_revision" != "$head_revision" ]; then
-    echo "$tls_image records revision '$image_revision' but this checkout is $head_revision." >&2
-    echo "the prebuilt image does not match this source; rebuild it with --build-arg VCS_REF=$head_revision" >&2
-    exit 1
-  fi
-  echo "  current: $tls_image (revision $image_revision)"
+  # A commit label is not enough in an intentionally dirty checkout: a second
+  # edit to an already-dirty Rust or container input leaves HEAD and porcelain
+  # unchanged. Require the stable, content-hashed Docker input manifest too.
+  docker_source_before=$(mktemp "${TMPDIR:-/tmp}/covalent-docker-source-before.XXXXXX")
+  capture_docker_source_fingerprint "$docker_source_before"
+  docker_source_fingerprint=$(fingerprint_digest "$docker_source_before")
+  verify_docker_image_freshness "$docker_source_fingerprint"
+  rm -f "$docker_source_before"
+  docker_source_before=""
 else
   "$repo_root/scripts/check-android.sh"
 
+  # Bind the image to a stable content snapshot, not only to HEAD. Passing the
+  # digest as a build argument carries it into the OCI label; comparing again
+  # after Docker exits rejects an image built while any input was changing.
+  docker_source_before=$(mktemp "${TMPDIR:-/tmp}/covalent-docker-source-before.XXXXXX")
+  capture_docker_source_fingerprint "$docker_source_before"
+  docker_source_fingerprint=$(fingerprint_digest "$docker_source_before")
+  head_revision=$(git -C "$repo_root" rev-parse HEAD)
   docker build \
     --file "$repo_root/packaging/docker/Dockerfile" \
+    --build-arg "VCS_REF=$head_revision" \
+    --build-arg "COVALENT_SOURCE_FINGERPRINT=$docker_source_fingerprint" \
     --tag "$tls_image" \
     "$repo_root"
+  docker_source_after=$(mktemp "${TMPDIR:-/tmp}/covalent-docker-source-after.XXXXXX")
+  capture_docker_source_fingerprint "$docker_source_after"
+  if ! cmp -s "$docker_source_before" "$docker_source_after"; then
+    echo "Docker source changed while $tls_image was being built" >&2
+    echo "pre-build fingerprint : $(fingerprint_digest "$docker_source_before")" >&2
+    echo "post-build fingerprint: $(fingerprint_digest "$docker_source_after")" >&2
+    rm -f "$docker_source_before" "$docker_source_after"
+    docker_source_before=""
+    docker_source_after=""
+    exit 1
+  fi
+  verify_docker_image_freshness "$docker_source_fingerprint"
+  rm -f "$docker_source_before" "$docker_source_after"
+  docker_source_before=""
+  docker_source_after=""
 fi
+
+tls_kek_directory=$(mktemp -d "${TMPDIR:-/tmp}/covalent-android-tls-kek.XXXXXX")
+tls_token_directory=$(mktemp -d "${TMPDIR:-/tmp}/covalent-android-tls-token.XXXXXX")
+tls_client_token_directory=$(mktemp -d "${TMPDIR:-/tmp}/covalent-android-tls-client-token.XXXXXX")
+chmod 700 "$tls_kek_directory" "$tls_token_directory" "$tls_client_token_directory"
+
+# Keep the private directories owned by the invoking user. Only the individual
+# bind-mounted files are assigned to the immutable runtime UID, so no
+# world-writable handoff directory or broad secret permission is needed.
+runtime_secret_digest() {
+  secret_path=$1
+  docker run --rm --user 0:0 --entrypoint sha256sum \
+    --mount "type=bind,source=$secret_path,target=/secret,readonly" \
+    "$tls_image" /secret | awk '{print $1}'
+}
+
+make_runtime_secret_readable() {
+  secret_path=$1
+  docker run --rm --user 0:0 --entrypoint sh \
+    --mount "type=bind,source=$secret_path,target=/secret" \
+    "$tls_image" -c 'chown 65532:65532 /secret && chmod 600 /secret'
+  before_digest=$(runtime_secret_digest "$secret_path")
+  docker run --rm --user 65532:65532 --entrypoint sh \
+    --mount "type=bind,source=$secret_path,target=/secret,readonly" \
+    "$tls_image" -c '
+      test -f /secret && test -r /secret
+      if { printf x >> /secret; } 2>/dev/null; then
+        echo "readonly Android fixture secret accepted an append" >&2
+        exit 1
+      fi
+    '
+  after_digest=$(runtime_secret_digest "$secret_path")
+  if [ "$before_digest" != "$after_digest" ]; then
+    echo "readonly Android fixture secret content changed" >&2
+    exit 1
+  fi
+}
+
+for key_name in tls wrong-tls; do
+  docker run --rm --user "$(id -u):$(id -g)" \
+    --mount "type=bind,source=$tls_kek_directory,target=/secrets" \
+    "$tls_image" provision-key --key-file "/secrets/$key_name.kek" >/dev/null
+  mode=$(stat -f '%Lp' "$tls_kek_directory/$key_name.kek" 2>/dev/null || stat -c '%a' "$tls_kek_directory/$key_name.kek")
+  test "$mode" = 600
+  make_runtime_secret_readable "$tls_kek_directory/$key_name.kek"
+done
+for token_name in tls wrong-tls; do
+  server_token_file="$tls_token_directory/$token_name.token"
+  openssl rand -hex 32 > "$server_token_file"
+  chmod 600 "$server_token_file"
+  if [ "$token_name" = tls ]; then
+    tls_client_token_file="$tls_client_token_directory/$token_name.token"
+    cp "$server_token_file" "$tls_client_token_file"
+    chmod 600 "$tls_client_token_file"
+  fi
+  make_runtime_secret_readable "$server_token_file"
+done
 
 for volume in \
   "$tls_data_volume" \
@@ -201,6 +343,8 @@ docker run --detach \
   --tmpfs /tmp:size=64m,mode=1777 \
   --mount "type=volume,source=$tls_data_volume,target=/data" \
   --mount "type=volume,source=$tls_config_volume,target=/config" \
+  --mount "type=bind,source=$tls_kek_directory/tls.kek,target=/run/secrets/covalent-kek,readonly" \
+  --mount "type=bind,source=$tls_token_directory/tls.token,target=/run/secrets/covalent-api-token,readonly" \
   --security-opt no-new-privileges:true \
   --cap-drop ALL \
   --env COVALENT_LISTEN=127.0.0.1:8787 \
@@ -208,10 +352,12 @@ docker run --detach \
   --env COVALENT_HTTPS_HOST="$tls_hostname" \
   --env COVALENT_DATA_DIR=/data \
   --env COVALENT_CONFIG_DIR=/config \
+  --env COVALENT_KEY_ENCRYPTION_KEY_FILE=/run/secrets/covalent-kek \
+  --env COVALENT_KEY_ENCRYPTION_KEY_VERSION=1 \
   --env 'COVALENT_DEVICE_NAME=Android TLS node' \
   --env COVALENT_LAN_DISCOVERY=false \
   --publish 127.0.0.1::8443/tcp \
-  "$tls_image" >/dev/null
+  "$tls_image" serve --api-token-file /run/secrets/covalent-api-token >/dev/null
 
 docker run --detach \
   --name "$wrong_tls_container" \
@@ -221,6 +367,8 @@ docker run --detach \
   --tmpfs /tmp:size=64m,mode=1777 \
   --mount "type=volume,source=$wrong_tls_data_volume,target=/data" \
   --mount "type=volume,source=$wrong_tls_config_volume,target=/config" \
+  --mount "type=bind,source=$tls_kek_directory/wrong-tls.kek,target=/run/secrets/covalent-kek,readonly" \
+  --mount "type=bind,source=$tls_token_directory/wrong-tls.token,target=/run/secrets/covalent-api-token,readonly" \
   --security-opt no-new-privileges:true \
   --cap-drop ALL \
   --env COVALENT_LISTEN=127.0.0.1:8787 \
@@ -228,9 +376,11 @@ docker run --detach \
   --env COVALENT_HTTPS_HOST="$tls_hostname" \
   --env COVALENT_DATA_DIR=/data \
   --env COVALENT_CONFIG_DIR=/config \
+  --env COVALENT_KEY_ENCRYPTION_KEY_FILE=/run/secrets/covalent-kek \
+  --env COVALENT_KEY_ENCRYPTION_KEY_VERSION=1 \
   --env 'COVALENT_DEVICE_NAME=Wrong TLS node' \
   --env COVALENT_LAN_DISCOVERY=false \
-  "$tls_image" >/dev/null
+  "$tls_image" serve --api-token-file /run/secrets/covalent-api-token >/dev/null
 
 tls_directory=$(mktemp -d "${TMPDIR:-/tmp}/covalent-android-tls.XXXXXX")
 for container in "$tls_container" "$wrong_tls_container"; do
@@ -277,7 +427,6 @@ do
   sleep 1
 done
 
-tls_token=$(docker exec "$tls_container" sh -c 'cat /data/local-api-token')
 tls_ca=$(openssl base64 -A -in "$tls_directory/root.crt")
 wrong_tls_ca=$(openssl base64 -A -in "$tls_directory/wrong-root.crt")
 tls_pin=$(
@@ -289,10 +438,6 @@ tls_pin=$(
     openssl dgst -sha256 -r |
     awk '{print $1}'
 )
-if [ -z "$tls_token" ]; then
-  echo "Packaged node did not create a local API token." >&2
-  exit 1
-fi
 case "$tls_pin" in
   *[!0-9a-f]*|'') tls_pin_valid=false ;;
   *) tls_pin_valid=true ;;
@@ -505,6 +650,37 @@ install_or_dump "$test_apk"
 # package before launch so the device gate cannot silently report zero tests.
 "$adb" -s "$serial" shell pm enable life.michaelwong.covalent.test >/dev/null
 
+# Stream the deterministic token into the target app's private files directory
+# through adb stdin. Every filesystem operation is a direct run-as child: adb
+# reconstructs `shell ... sh -c` arguments into a remote command line, which can
+# make semicolon-delimited commands after the first run as the shell user from
+# `/` instead of as the app from its data directory. The direct commands below
+# cannot cross that boundary. Token bytes enter only dd stdin; they never enter
+# argv, environment, log output, external/shared storage, or the wrapped
+# node-side token record. The private 0700 parent protects the short interval
+# before the newly created regular file is reduced from Android's default mode
+# to 0600.
+if ! "$adb" -s "$serial" shell -T run-as life.michaelwong.covalent \
+  mkdir -p files >/dev/null \
+  || ! "$adb" -s "$serial" shell -T run-as life.michaelwong.covalent \
+  chmod 700 files >/dev/null \
+  || ! "$adb" -s "$serial" shell -T run-as life.michaelwong.covalent \
+  rm -f files/covalent-api37-tls-token >/dev/null \
+  || ! "$adb" -s "$serial" shell -T run-as life.michaelwong.covalent \
+  dd of=files/covalent-api37-tls-token < "$tls_client_token_file" >/dev/null 2>&1 \
+  || ! "$adb" -s "$serial" shell -T run-as life.michaelwong.covalent \
+  chmod 600 files/covalent-api37-tls-token >/dev/null \
+  || ! "$adb" -s "$serial" shell -T run-as life.michaelwong.covalent \
+  test -f files/covalent-api37-tls-token >/dev/null; then
+  echo "Could not write the private Android TLS test credential." >&2
+  exit 1
+fi
+if "$adb" -s "$serial" shell -T run-as life.michaelwong.covalent \
+  test -L files/covalent-api37-tls-token >/dev/null 2>&1; then
+  echo "Private Android TLS test credential resolved to a symlink." >&2
+  exit 1
+fi
+
 # The post-mortem above is a post-mortem: it runs after `am instrument` returns,
 # which on a 56-test suite is tens of minutes after the first test failed. A
 # guest that was credential-encrypted-locked at t=0 and recovered by the time
@@ -566,7 +742,7 @@ echo "--- end guest state ---"
 instrumentation_log=$(mktemp "${TMPDIR:-/tmp}/covalent-api37-instrumentation.XXXXXX")
 if ! "$adb" -s "$serial" shell am instrument -w -r \
   -e covalentTlsBaseUrl "https://$tls_hostname:$tls_port" \
-  -e covalentTlsToken "$tls_token" \
+  -e covalentTlsTokenFile "$tls_token_file_name" \
   -e covalentTlsCa "$tls_ca" \
   -e covalentTlsWrongCa "$wrong_tls_ca" \
   -e covalentTlsPin "$tls_pin" \
@@ -577,6 +753,11 @@ if ! "$adb" -s "$serial" shell am instrument -w -r \
   exit 1
 fi
 cat "$instrumentation_log"
+if "$adb" -s "$serial" shell -T run-as life.michaelwong.covalent \
+  test -e files/covalent-api37-tls-token >/dev/null 2>&1; then
+  echo "Android TLS test did not delete its private credential." >&2
+  exit 1
+fi
 if ! validate_android_api37_result "$instrumentation_log" "$expected_suite"; then
   echo "Android instrumentation result is invalid on $serial." >&2
   dump_guest_failure_evidence

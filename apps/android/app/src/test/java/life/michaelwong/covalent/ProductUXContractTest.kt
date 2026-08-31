@@ -98,6 +98,10 @@ class ProductUXContractTest {
 
     @Test
     fun replicaSelectionFailsClosedWithoutFreshReachableCapacity() {
+        assertEquals(
+            listOf(ProviderReachability.REACHABLE, ProviderReachability.UNREACHABLE, ProviderReachability.UNKNOWN),
+            ProviderReachability.entries,
+        )
         val base = Provider(
             peerId = "peer-capacity",
             address = "100.100.100.20:8788",
@@ -105,13 +109,18 @@ class ProductUXContractTest {
         )
         assertTrue(!isProviderEligibleForBackup(base))
         assertTrue(!isProviderEligibleForBackup(base.copy(
-            reachability = ProviderReachability.OFFLINE,
+            reachability = ProviderReachability.UNREACHABLE,
             capacityBytes = 1_024,
         )))
         assertTrue(isProviderEligibleForBackup(base.copy(
-            reachability = ProviderReachability.CONNECTED,
+            reachability = ProviderReachability.REACHABLE,
             capacityBytes = 1_024,
+            allocatedBytes = 1_024,
+            quotaBytes = 2_048,
+            observedAtUnixMs = System.currentTimeMillis(),
+            validUntilUnixMs = System.currentTimeMillis() + 5_000,
         )))
+        assertTrue(!isProviderEligibleForBackup(base.copy(reachability = ProviderReachability.UNKNOWN)))
     }
 
     @Test

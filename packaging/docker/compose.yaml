@@ -5,7 +5,10 @@ services:
       context: ../..
       dockerfile: packaging/docker/Dockerfile
     image: covalent:local
-    user: "${PUID:-65532}:${PGID:-65532}"
+    # Docker Compose file secrets are bind-mounted by the local implementation,
+    # so their host ownership cannot safely follow an arbitrary PUID/PGID.
+    # Keep the runtime identity fixed to the same UID that owns the 0400 secret.
+    user: "65532:65532"
     read_only: true
     init: true
     restart: unless-stopped
@@ -16,16 +19,25 @@ services:
       COVALENT_LISTEN: "127.0.0.1:8787"
       COVALENT_PEER_LISTEN: "0.0.0.0:8787"
       COVALENT_HTTPS_HOST: "${COVALENT_HTTPS_HOST:-localhost}"
+      COVALENT_ADVERTISED_PEER_ADDRESS: "${COVALENT_ADVERTISED_PEER_ADDRESS:-}"
       COVALENT_DATA_DIR: /data
       COVALENT_CONFIG_DIR: /config
+      COVALENT_KEY_ENCRYPTION_KEY_FILE: /run/secrets/covalent-kek
+      COVALENT_KEY_ENCRYPTION_KEY_VERSION: "${COVALENT_KEY_ENCRYPTION_KEY_VERSION:-1}"
     ports:
-      - "127.0.0.1:${COVALENT_HTTPS_PORT:-8443}:8443/tcp"
-      - "${COVALENT_PEER_PORT:-8787}:8787/udp"
+      - "${COVALENT_HTTPS_BIND_IP:-127.0.0.1}:${COVALENT_HTTPS_PORT:-8443}:8443/tcp"
+      - "${COVALENT_PEER_BIND_IP:-0.0.0.0}:${COVALENT_PEER_PORT:-8787}:8787/udp"
     tmpfs:
       - /tmp:size=64m,mode=1777
     volumes:
-      - node-config:/config
-      - node-data:/data
+      # Keep the two durable paths explicit so operators know exactly what to
+      # back up and can migrate them without hunting through Docker volumes.
+      - type: bind
+        source: "${COVALENT_CONFIG_HOST_DIR:-/srv/covalent/config}"
+        target: /config
+      - type: bind
+        source: "${COVALENT_DATA_HOST_DIR:-/srv/covalent/data}"
+        target: /data
       - type: bind
         source: "${COVALENT_BACKUP_SOURCE:-./example/source}"
         target: /source
@@ -38,7 +50,13 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    secrets:
+      - source: covalent-kek
+        target: covalent-kek
+        uid: "65532"
+        gid: "65532"
+        mode: 0400
 
-volumes:
-  node-config:
-  node-data:
+secrets:
+  covalent-kek:
+    file: "${COVALENT_KEK_FILE:?Set COVALENT_KEK_FILE to a separate owner-only KEK file}"

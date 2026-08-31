@@ -63,8 +63,14 @@ class NodeErrorCodeCopyTest {
             checkNotNull(copy["node_error_$code"]) { "strings.xml is missing node_error_$code" }
 
         assertTrue(
-            "A mistyped code must invite a retry: ${sentence("claim_code_incorrect")}",
-            sentence("claim_code_incorrect").contains("try again"),
+            "An incorrect claim must direct the owner to the trusted CLI: " +
+                sentence("claim_code_incorrect"),
+            sentence("claim_code_incorrect").contains("covalent claim"),
+        )
+        assertTrue(
+            "Android must say that it never accepts setup codes: " +
+                sentence("claim_code_incorrect"),
+            sentence("claim_code_incorrect").contains("this phone never accepts setup codes"),
         )
         assertTrue(
             "An expired code must say a new one can be minted: ${sentence("claim_window_expired")}",
@@ -79,6 +85,14 @@ class NodeErrorCodeCopyTest {
             "A missing peer address must point at the setting: " +
                 sentence("peer_endpoint_unavailable"),
             sentence("peer_endpoint_unavailable").contains("settings"),
+        )
+        assertFalse(
+            "Android setup must not direct people to protected server state",
+            checkNotNull(copy["caddy_ca_guidance"]).contains("/config/"),
+        )
+        assertTrue(
+            "Android setup must use the trusted CLI claim output",
+            checkNotNull(copy["caddy_ca_guidance"]).contains("covalent claim"),
         )
         // Everything a person can act on says what happened and then what to do, so it
         // carries at least two sentences. claim_unavailable is deliberately excluded:

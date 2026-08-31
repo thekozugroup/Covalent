@@ -8,6 +8,8 @@ import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.system.Os
+import android.system.OsConstants
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.width
@@ -316,7 +318,20 @@ class CovalentAppTest {
     @Test
     fun retainedJobAcknowledgementSurvivesProcessStateReload() {
         val store = isolatedStore("retained_ack")
-        store.savePendingAcknowledgement("restore-retained", "Restore complete")
+        store.saveQueuedTransfer(
+            TransferRecord(
+                jobId = "restore-retained",
+                label = "Restore",
+                kind = TransferKind.BACKUP,
+                state = TransferState.QUEUED,
+                detail = "Queued",
+            ),
+            "/api/v1/backups/archive",
+            JSONObject().put("jobId", "restore-retained"),
+            "saf_backup",
+            "content://covalent/retained",
+        )
+        store.consumeTerminalResult("restore-retained", "Cleanup pending", "Restore complete")
         store.savePendingDiscard("backup-cancelled", "Cancellation confirmed")
 
         assertEquals(listOf("restore-retained"), store.pendingAcknowledgementJobIds())
@@ -336,12 +351,15 @@ class CovalentAppTest {
     fun packagedCaddyRequiresEnrolledTrustAndAuthenticatedAccess() {
         val arguments = InstrumentationRegistry.getArguments()
         val baseUrl = arguments.getString("covalentTlsBaseUrl") ?: return
-        val token = checkNotNull(arguments.getString("covalentTlsToken"))
         val ca = checkNotNull(arguments.getString("covalentTlsCa"))
         val wrongCa = checkNotNull(arguments.getString("covalentTlsWrongCa"))
         val pin = checkNotNull(arguments.getString("covalentTlsPin"))
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
+        val token = readAndDeletePrivateTlsToken(
+            context,
+            checkNotNull(arguments.getString("covalentTlsTokenFile")),
+        )
         if (Build.VERSION.SDK_INT >= 37) {
             ParcelFileDescriptor.AutoCloseInputStream(
                 instrumentation.uiAutomation.executeShellCommand(
@@ -435,4 +453,50 @@ class CovalentAppTest {
             status = NodeStatus("Test node", 1u, false, PlatformTier.TIER_1, "ready")
             connectionHealth = ConnectionHealth.READY
         }
+
+    /**
+     * The device gate writes this one deterministic credential through `adb run-as` stdin into
+     * the target app's private files directory. The instrumentation argument is only its fixed
+     * filename, never the credential. Validate the complete private-file contract before the
+     * small bounded read, then delete it even when an assertion below fails.
+     */
+    private fun readAndDeletePrivateTlsToken(context: Context, fileName: String): String {
+        check(fileName == PRIVATE_TLS_TOKEN_FILE) {
+            "TLS test credential must use the fixed private filename"
+        }
+        val filesDirectory = context.filesDir.canonicalFile
+        val tokenFile = context.getFileStreamPath(fileName).canonicalFile
+        check(tokenFile.parentFile == filesDirectory) {
+            "TLS test credential must stay in the target app private files directory"
+        }
+        try {
+            val stat = Os.lstat(tokenFile.absolutePath)
+            check((stat.st_mode and OsConstants.S_IFMT) == OsConstants.S_IFREG) {
+                "TLS test credential must be a regular file"
+            }
+            check(stat.st_uid == context.applicationInfo.uid) {
+                "TLS test credential must be owned by the target app"
+            }
+            check((stat.st_mode and 0x1ff) == 0x180) {
+                "TLS test credential must be mode 0600"
+            }
+            check(stat.st_size in 32L..513L) {
+                "TLS test credential has an invalid size"
+            }
+            val raw = tokenFile.inputStream().bufferedReader(Charsets.US_ASCII).use { it.readText() }
+            val token = raw.removeSuffix("\n")
+            check(token.length in 32..512 && token.all { it.code in 0x20..0x7e }) {
+                "TLS test credential has an invalid format"
+            }
+            return token
+        } finally {
+            check(!tokenFile.exists() || tokenFile.delete()) {
+                "TLS test credential could not be deleted"
+            }
+        }
+    }
+
+    private companion object {
+        const val PRIVATE_TLS_TOKEN_FILE = "covalent-api37-tls-token"
+    }
 }

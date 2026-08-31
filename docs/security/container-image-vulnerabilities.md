@@ -13,10 +13,11 @@ the *set* of distinct findings is the same.
 | --- | --- |
 | Caddy 2.10.2-alpine | **49** — 47 in the vendored Caddy binary, 2 in the Alpine base |
 | Caddy 2.11.4-alpine | **12** — 10 in the vendored Caddy binary, 2 in the Alpine base |
-| Caddy 2.11.4 built from source (current) | **2** — both in the Alpine base |
+| Caddy upstream snapshot `v2.11.5-0.20260711231708-b2693fb63a30` built from source, with exact Alpine security revisions (current) | **0** |
 
-Measured with Grype 0.117.0 against locally built images. Identical counts on
-`linux/arm64` and `linux/amd64`.
+Measured with Grype 0.117.0 against locally built images. The final current-row
+measurement is the local `linux/arm64` candidate; the release workflow repeats
+the same strict scan independently on both architectures before promotion.
 
 The bump cleared 39 findings and introduced 2 (both Go stdlib, superseded by the
 same toolchain gap described below). Notably cleared: both step-ca criticals,
@@ -26,9 +27,10 @@ because the docs instruct operators to enrol the local CA from Caddy's PKI.
 Also cleared: all 9 Caddy auth/path-bypass CVEs, all 6 `x/crypto`, both `grpc`
 criticals, `quic-go`, both `go-jose`, `otel`, `nebula`, `x/net`, and 16 stdlib.
 
-Blocker 1 below is now **cleared** — all ten of its findings are gone. Blocker 2,
-the two unreachable OpenSSL findings, is the only thing between the image and a
-green gate, and it is a decision rather than a fix.
+Both blockers below are now **cleared**. Later database refreshes also exposed
+GO-2026-5158 in OpenTelemetry v1.43.0 and GO-2026-6094 in cel-go v0.29.2;
+the consumer module pins patched v1.44.0 and v0.30.0 respectively, and the
+Dockerfile verifies both selections from the built Caddy binary.
 
 ## Blocker 1 — Caddy's Go toolchain (10 findings) — CLEARED
 
@@ -51,21 +53,105 @@ enters the runtime image any more.
 
 `packaging/docker/caddy` is the three-line consumer module `xcaddy` generates and
 the official Caddy image builds: it imports `caddy/v2/cmd` and
-`caddy/v2/modules/standard`, and nothing else. **It is not a fork and applies no
-patch to Caddy.** Because it is a consumer of `caddy/v2` rather than a copy of
-it, raising `grpc` and `x/text` there raises them for the whole build by ordinary
-minimal version selection — no `replace` directive, no override of Caddy's
-`go.mod`. Both are same-major upgrades covered by the Go compatibility promise,
-which is why this did not turn out to be the "real drift" the earlier analysis
-feared. Caddy itself stays at exactly v2.11.4.
+`caddy/v2/modules/standard`, and nothing else. No official Caddy patch release
+newer than v2.11.4 is published yet. To compile against patched cel-go, the
+module pins upstream snapshot `v2.11.5-0.20260711231708-b2693fb63a30`, commit
+`b2693fb63a30e6d7be0972c3645e9a2c0a500e93`, whose direct purpose is the cel-go
+`v0.29.2` upgrade and two `InterpretableV2` argument updates. The consumer
+module now selects compatible cel-go `v0.30.0` because GO-2026-6094 affects
+v0.22.0 through v0.29.x. This is an upstream snapshot, not a fork, but it is 33
+commits after v2.11.4 and therefore is not claimed to be v2.11.4. The complete
+intervening commit range is listed below so the runtime delta is explicit.
 
-Verified equivalent to the binary upstream ships:
+### Upstream snapshot delta reviewed
+
+The pinned commit is the 33rd commit after the v2.11.4 tag. The 32 predecessor
+commits are listed below, followed by the pinned `b2693fb6` CEL compatibility
+commit itself. Their upstream subjects are retained here for release review:
+
+```text
+fcc7860d reverseproxy: replace placeholders specified for sni while using http3
+915793f6 caddyhttp: add {http.request.proto_name} placeholder for spec-compliant protocol names
+3b7bde8f httpcaddyfile: error on duplicate named_routes
+d730df2a cmd: colored error message in WrapCommandFuncForCobra
+d3986f82 Add missing "is"
+55b3397a reverseproxy: validate on weighted_round_robin loadbalancing policy
+4fd8c87f caddyhttp: Default max_header_bytes to 16 KiB
+0f7f8e9c forwardauth: error on duplicate uri subdirective
+997d3f6b encode: add standard benchmark and conformance harness
+fcba554d caddyhttp: New expected_underscore_headers server option
+25b3eab6 Merge commit from fork
+52dc6709 rewrite: fix wrong index check in trimPathPrefix
+16235cce intercept: fix replace_status being silently dropped
+39c9a85f fileserver: append repeated hide subdirectives instead of overwriting
+ae9bc028 rewrite: scope keyed query replace to its named key
+4dbe0a93 readme: Update logo
+ab56721a Remove -v from tests
+d2e0ad1e reverseproxy: log status 499 instead of 0 when client disconnects
+69d6ace3 tracing: fix BatchSpanProcessor goroutine leak on config reload
+6ab855d3 browse: Update Caddy logo
+30f0ddd9 caddyhttp: Document dropping underscore headers
+57603822 caddyhttp: Clean up variable scope in vars matcher
+51a4bde1 Update human and agent contributing guidelines
+f4500684 http: normalize method names to uppercase in MatchMethod.Provision
+13a4c3f4 caddyhttp: add URL pattern request matcher
+08ad0641 caddyhttp: fix escaped path matcher over-matching longer paths
+4e620952 core: preserve metrics registry in Context.WithValue
+75c988d1 reverseproxy: compare sticky-session cookie hash in constant time
+945d1997 reverseproxy: fix misleading handle_response error for extra matcher args
+1830809a reverseproxy: save dial info in a context key instead of a variable key
+c6180a08 caddyhttp: fix path_regexp (MatchPathRE) Windows backslash bypass
+c1907df2 intercept: fix misleading handle_response error for extra matcher args
+b2693fb6 build(deps): bump cel-go from v0.28.1 to v0.29.2
+```
+
+This tradeoff is deliberate and bounded: the source is fetched by its canonical
+Go pseudo-version, verified by `go.sum`, and the build rejects any other Caddy
+snapshot. The local gates run `go test ./...`, `go vet ./...`, custom binary
+build metadata checks, `caddy validate` against the shipped Caddyfile, and the
+container contract check. A future official patch release should replace this
+snapshot after repeating the same gates and delta review.
+
+### Post-snapshot dependency refresh
+
+A refreshed Go vulnerability database on 2026-08-28 added five fixable
+dependency findings after the initial CEL compatibility work. The consumer
+module now raises them through ordinary minimal version selection, without a
+`replace`, fork, or source patch:
+
+| module | prior | selected | finding |
+| --- | --- | --- | --- |
+| `github.com/google/cel-go` | `v0.29.2` | `v0.30.0` | GO-2026-6094 |
+| `github.com/go-chi/chi/v5` | `v5.2.5` | `v5.3.0` | GO-2026-5774, GO-2026-5775, GO-2026-5777 |
+| `github.com/klauspost/compress` | `v1.18.6` | `v1.18.7` | GO-2026-5841 |
+
+Pinned Go 1.26.7 `go mod verify`, `go test ./...`, `go vet ./...`, the custom
+build, and `caddy validate` all pass with that graph. Official
+`govulncheck v1.7.0` source analysis reports zero called vulnerable symbols.
+It reports GO-2026-5932 only at module level because `golang.org/x/crypto` is in
+the graph: the affected `openpgp` packages are not imported or called, and the
+Go report has no module version that can fix an unused package. A stripped
+binary scan cannot recover call information and may conservatively report
+unreachable code; the Go tool's documented limitation says binary mode can
+produce that false positive. The release decision therefore uses the exact
+source call graph plus an unstripped verification build, not a suppression or
+an ignored advisory.
+
+The full upstream integration package was compared under the same local
+environment. `TestH2ToH1ChunkedResponse` fails against both the exact v2.11.4
+module and this pinned snapshot with the same fixture-side 404, so it is a
+pre-existing test-environment/fixture failure rather than a snapshot regression.
+The CEL, HTTP Caddyfile, fileserver, reverse-proxy, encoding, tracing, PKI, TLS,
+and related targeted packages pass for the pinned snapshot.
+
+Verified against the binary upstream ships, with the one intentional upstream
+snapshot delta called out explicitly:
 
 | check | result |
 | --- | --- |
-| `caddy version` | `v2.11.4 h1:XKxkMTgNSizEvKG6QHue6cAsFOteU2qA61w2tKkCWi0=` — same module hash as upstream |
-| `caddy list-modules` | **identical 132-module set**, diffed against `caddy:2.11.4-alpine` |
-| `caddy adapt` on this repo's unchanged `Caddyfile` | **byte-identical JSON**, diffed against upstream's output |
+| `caddy version` | `v2.11.5-0.20260711231708-b2693fb63a30 h1:GLKxfFw6+vJgw57aRSkZwXiogAFn4JMb6wqIop4KJtY=` — exact pinned upstream snapshot |
+| `caddy list-modules` | **133 standard modules**; the snapshot adds the upstream `http.matchers.url_pattern` module compared with the 132-module v2.11.4 image |
+| `caddy adapt` on this repo's unchanged `Caddyfile` | **valid configuration**, checked against the pinned snapshot |
 | `caddy validate` | `Valid configuration` |
 
 The `Caddyfile` did not need to change, and did not change.
@@ -81,11 +167,12 @@ Pinned in three independent places, so the stage cannot float:
   directive is the load-bearing floor: a toolchain older than the one that fixed
   the eight stdlib advisories cannot build this module at all.
 
-The Dockerfile additionally asserts the toolchain, the Caddy version and both
-advisory bumps out of the built binary's own build info, and validates the
+The Dockerfile additionally asserts the toolchain, the Caddy version and all
+dependency advisory bumps out of the built binary's own build info, and validates the
 shipped `Caddyfile` against the shipped binary, so a regression fails the build
 rather than reaching a scanner. `scripts/check-container-contract.sh` asserts the
-same pins in the source tree and that the packaged binary reports v2.11.4.
+same pins in the source tree and that the packaged binary reports the exact
+upstream snapshot pseudo-version.
 
 ### Cost
 
@@ -100,12 +187,23 @@ Go build stage is discarded and never reaches the runtime image. The binary is
 linked `-trimpath -ldflags "-s -w"`; without stripping it would be 72.3 MB rather
 than 50.6 MB and the amd64 image would sit far closer to the ceiling.
 
-## Blocker 2 — CVE-2026-14456 in libssl3/libcrypto3 (2 findings)
+## Blocker 2 — resolved: Alpine OpenSSL security revision
 
-`libssl3` and `libcrypto3` 3.5.7-r0, from the Alpine base. Grype reports
-**fix state = unknown**: no fixed version at any Alpine release.
+The pinned Alpine 3.23.5 base contains `libssl3` and `libcrypto3` `3.5.7-r0`.
+On 2026-08-25 Alpine published `3.5.8-r0` to the stable v3.23 repository, after
+that base image was assembled. A fresh Grype 0.117.0 scan on 2026-08-28 found
+six fixed high-severity advisories in each of those two installed packages:
+CVE-2026-14457, CVE-2026-18798, CVE-2026-54874, CVE-2026-63072,
+CVE-2026-63075, and CVE-2026-63076.
 
-### What the vulnerable code path actually is
+The runtime stage now retains the reviewed base digest and upgrades only those
+two libraries to the exact signed Alpine version `3.5.8-r0`. The package
+version is also an OCI label and a static/runtime contract assertion. This is
+fail closed: if Alpine's signed repository cannot supply that exact revision,
+the build stops rather than floating to another package. No scanner exception
+or severity change is used.
+
+### Historical reachability evidence for CVE-2026-14456
 
 Per NVD and the OpenSSL advisory of 2026-08-13, this is CWE-770,
 CVSS 7.5 `AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H` — availability only, no
@@ -124,7 +222,7 @@ Reaching it requires a process that (a) links OpenSSL and (b) runs OpenSSL's
 QUIC *server* listener. A TLS client cannot reach it; neither can a TLS server
 that is not using OpenSSL QUIC.
 
-### Is it reachable in this image? No.
+### Was that historical OpenSSL QUIC path reachable in this image? No.
 
 Verified by parsing the ELF headers of every binary in the built image:
 
@@ -158,20 +256,15 @@ that no process in the image loads, and the specific vulnerable path within them
 is a server role that nothing here performs. The image also runs non-root,
 read-only-rootfs, `--cap-drop=ALL`, `--security-opt=no-new-privileges`.
 
-### Is a newer Alpine base fixed? No.
+### Is the pinned base itself fixed? Not yet; its stable repository is.
 
-Queried the Alpine security database directly for every live branch:
-
-| branch | openssl | CVE-2026-14456 fixed in |
-| --- | --- | --- |
-| v3.22 | 3.5.7-r0 | none |
-| v3.23 (current) | 3.5.7-r0 | none |
-| v3.24 | 3.5.7-r0 | none |
-| edge | 3.5.7-r0 | none |
-
-Confirmed by scanning each image: 3.23 and 3.24 both report exactly these two
-findings and nothing else; `edge` reports these two **plus three unfixed busybox
-highs**, so edge is strictly worse. Moving the base forward does not help.
+The official `alpine:3.23` tag still resolves to 3.23.5 and the reviewed digest
+`sha256:fd791d74...daf40`, assembled with OpenSSL `3.5.7-r0`. Alpine's v3.23
+package repository now supplies signed `3.5.8-r0` packages for every supported
+image architecture. Pinning those two security revisions preserves the known
+base filesystem while taking the available fixes immediately; the next Alpine
+point-release digest can replace this narrow package layer after independent
+multi-architecture scanning.
 
 ### Can OpenSSL be removed from the image entirely?
 
@@ -192,44 +285,19 @@ highs**, so edge is strictly worse. Moving the base forward does not help.
   itself — a change in `crates/`, not `packaging/`. It is the only option that
   truly removes OpenSSL, and it is a real project, not a base-image swap.
 
-### Recommendation — owner's decision, not taken here
+### Resolution
 
-No `.grype.yaml` entry has been added; that judgment is reserved.
-
-On the evidence, CVE-2026-14456 is not exploitable in this image: an
-availability-only bug in a code path that requires an OpenSSL QUIC server, in a
-library that no process in the image loads, in a product whose QUIC is Rust.
-There is no fix to take, and no reachable base image that carries one. The
-proportionate response is a **narrowly scoped, documented ignore for
-CVE-2026-14456 specifically** — not a cutoff change, not a blanket
-`fail-build: false` — carrying this analysis, and a re-review trigger for when
-Alpine publishes a fixed openssl or the base image changes. The alternative,
-distroless, is defensible but should be chosen for its own merits rather than to
-clear a finding that is already unreachable.
-
-**This decision now does unblock the gate.** When this analysis was first
-written, Blocker 1 stood behind it — ten findings no decision here could waive.
-Those are gone. These two are all that is left between the image and a green
-`severity-cutoff: high` gate, so the scoped-ignore judgment is no longer
-academic: taking it turns the lane green, and declining it keeps the lane red on
-two findings that have no fix to take and no reachable base image that carries
-one.
-
-That is precisely why it is still **not taken here**. Being the last thing in the
-way is not an argument for waiving it, and a gate should never be quietly
-loosened by whoever happens to be standing next to it. No `.grype.yaml` entry has
-been added, `severity-cutoff` is unchanged at `high`, and `fail-build` is
-unchanged at `true`.
+Take the signed fix, retain the prior reachability analysis only as historical
+evidence, and keep the high-severity gate strict. No `.grype.yaml` exists,
+`severity-cutoff: high` and `fail-build: true` remain unchanged, and the exact
+package contract prevents the remediation from silently regressing.
 
 ## Process gaps
 
-**Grype ran only in the release lane.** `ci.yml`'s `container-foundation` never
-scanned, which is why 60 findings were invisible for this project's entire life
-and surfaced for the first time at tag time. The step below is written and ready
-but **still not landed**: Blocker 1 has cleared, so it would now red every merge
-to `main` on exactly the two OpenSSL findings and nothing else. It should go in
-as soon as Blocker 2 is decided — appended to `container-foundation`, after the
-existing `docker-compose-e2e.sh` step:
+**Grype ran only in the release lane.** `ci.yml`'s `container-foundation` did not
+scan, which let dependency findings wait until tag time. With both image
+blockers resolved, the same pinned high-severity scan belongs in ordinary CI
+after `docker-compose-e2e.sh`:
 
 ```yaml
       - uses: anchore/scan-action@1638637db639e0ade3258b51db49a9a137574c3e # v6

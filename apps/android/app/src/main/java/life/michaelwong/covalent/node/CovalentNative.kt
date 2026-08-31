@@ -16,6 +16,8 @@ internal object CovalentNative {
         deviceName: String,
         lanDiscoveryEnabled: Boolean,
         apiToken: ByteArray,
+        keyEncryptionKey: ByteArray,
+        keyVersion: Int,
         maximumTotalBytes: Long,
         freeSpaceReserveBytes: Long,
         keyProtectionLevel: Int,
@@ -33,14 +35,17 @@ internal object CovalentNative {
      * [keyProtectionLevel] carries the measured Android Keystore capability across the
      * boundary; the Rust side decodes it with `IdentityProtection::from_wire` and refuses
      * to start on [KeyProtectionLevel.UNAVAILABLE] or on any value it does not recognise.
-     * The policy therefore lives on one side and the measurement on the other, so neither
-     * can quietly assume the answer.
+     * [keyEncryptionKey] is exactly 32 transient bytes for [keyVersion]. Native code clears
+     * both JVM secret arrays immediately, installs a zeroizing `StaticKeyProtector` in
+     * `NodeRuntimeConfig`, and rejects missing, malformed, or unversioned material.
      */
     fun start(
         dataDirectory: String,
         deviceName: String,
         lanDiscoveryEnabled: Boolean,
         apiToken: ByteArray,
+        keyEncryptionKey: ByteArray,
+        keyVersion: Int,
         maximumTotalBytes: Long,
         freeSpaceReserveBytes: Long,
         keyProtectionLevel: KeyProtectionLevel,
@@ -52,6 +57,8 @@ internal object CovalentNative {
                 deviceName,
                 lanDiscoveryEnabled,
                 apiToken,
+                keyEncryptionKey,
+                keyVersion,
                 maximumTotalBytes,
                 freeSpaceReserveBytes,
                 keyProtectionLevel.wireValue,

@@ -121,15 +121,17 @@
     <string name="setup_subtitle">Use a server you control. Covalent verifies it before any backup, restore, or pairing is allowed.</string>
     <string name="setup_nearby_title">Server on your network</string>
     <string name="setup_nearby_detail">Enter the secure web address your Covalent server shows. Android asks for local network access before the first check.</string>
-    <string name="setup_handoff_title">Setup link</string>
-    <string name="setup_handoff_detail">If your server gave you a covalent:// setup link, open it on this phone or paste it above and Covalent fills in the address. The access token is always typed into the protected field below.</string>
+    <string name="setup_handoff_title">Trusted claim output</string>
+    <string name="setup_handoff_detail">On a trusted computer, run covalent claim. Enter its exact HTTPS address, choose the local-api-token file, and add root.crt below. This phone never accepts a setup code.</string>
     <string name="setup_link_applied">Setup link opened. Check the address, then enter your access token.</string>
     <string name="setup_link_ignored">That setup link was ignored because this app is already connected. To use a different backup server, open Settings and choose Change server connection.</string>
     <string name="setup_link_rejected">That setup link did not contain a usable server address, so nothing was changed.</string>
     <string name="field_device_name">This device name</string>
-    <string name="field_node_address">Server address or setup link</string>
+    <string name="field_node_address">Server HTTPS address</string>
     <string name="node_address_example">https://covalent.local:8443</string>
     <string name="field_node_token">Server access token</string>
+    <string name="action_choose_token_file">Choose token file</string>
+    <string name="token_file_detail">Choose local-api-token created by covalent claim, or paste its exact contents above.</string>
     <string name="setup_transport_policy">Your access token is only ever sent over an encrypted connection. An unencrypted address is accepted only when the server runs on this phone.</string>
     <string name="tls_enrollment_title">HTTPS trust</string>
     <string name="tls_enrollment_detail">A publicly trusted address needs no extra setup. For a private Covalent certificate, add exactly one certificate file or one certificate fingerprint. Android still checks that the address matches.</string>
@@ -138,7 +140,7 @@
     <string name="certificate_pin_example">64 hexadecimal characters or sha256/base64</string>
     <string name="certificate_pin_detail">The fingerprint must match a certificate the server presents. Covalent never skips this check.</string>
     <string name="ca_certificate_enrolled">Certificate added</string>
-    <string name="caddy_ca_guidance">If you run the packaged Covalent container, copy its certificate file at /config/caddy/data/caddy/pki/authorities/local/root.crt over a channel you trust, and use the exact web address the container was set up with.</string>
+    <string name="caddy_ca_guidance">For a packaged Covalent server, use the root.crt and access token created by covalent claim on your trusted computer. Transfer root.crt to this phone over a trusted direct channel, and use the exact web address you claimed.</string>
     <string name="setup_lan_permission_rationale">Android needs local network permission before Covalent can reach an address on your own network.</string>
     <string name="lan_permission_denied">Local network access was not granted, so Covalent did not contact that address.</string>
     <string name="source_access_saved">Folder access saved. Covalent will tell you if Android later takes it away.</string>
@@ -147,6 +149,7 @@
     <string name="error_node_address_invalid">Use a complete web address without a username or password in it.</string>
     <string name="error_node_address_insecure">A server on another machine must use an encrypted https address. An unencrypted address works only when the server runs on this phone.</string>
     <string name="error_node_token_required">Enter your backup server’s access token.</string>
+    <string name="error_token_file_invalid">That token file is not a valid local-api-token claim output.</string>
     <string name="error_certificate_pin_invalid">Enter a 64-character hexadecimal fingerprint, or one in sha256/base64 form.</string>
     <string name="error_connection_failed">That backup server could not be verified.</string>
     <string name="error_ca_certificate_invalid">That certificate file is invalid or expired.</string>
@@ -163,7 +166,7 @@
     <string name="discovery_candidate">%1$s · %2$s</string>
     <string name="tailscale_candidate_title">Tailscale name or IP address</string>
     <string name="tailscale_candidate_field">Tailscale name or IP address</string>
-    <string name="tailscale_candidate_example">nas.tailnet-name.ts.net:8788</string>
+    <string name="tailscale_candidate_example">nas.tailnet-name.ts.net:8787</string>
     <string name="tailscale_candidate_detail">Tailscale cannot list your devices for Covalent. Enter the other device’s Tailscale name or IP address once.</string>
     <string name="tailscale_candidate_lan_off_detail">Automatic discovery on your network is off. Enter the address the other device shows. Both devices still confirm the same code.</string>
     <string name="advanced_pairing_detail">Recovery only: exchange signed setup files by hand when direct pairing over the network cannot be used. Addresses and certificates stay inside this section.</string>
@@ -228,7 +231,7 @@
     <string name="provider_capacity_offline">Offline — reconnect this device before selecting it.</string>
     <string name="provider_reachability_unverified">This device has not answered recently — it cannot be selected.</string>
     <string name="provider_capacity_insufficient">Not enough free space — this device cannot keep another copy.</string>
-    <string name="provider_capacity_available">Free space it can reserve: %1$s</string>
+    <string name="provider_capacity_available">Usable now: %1$s · using %2$s of %3$s</string>
     <string name="provider_capacity_required">Every device you select must answer right now and have enough free space before Covalent opens your folder.</string>
     <string name="backup_queued">Backup queued. Progress and any recoverable error stay on Home.</string>
     <string name="error_source_access_revoked">Folder access was revoked. Choose the source folder again.</string>
@@ -264,7 +267,6 @@
     <string name="restore_queued">Restore queued. Progress and any recoverable error stay on Home.</string>
     <string name="error_target_access_revoked">Folder write access was revoked. Choose the restore folder again.</string>
     <string name="error_target_unavailable">The selected restore folder is unavailable.</string>
-    <string name="error_target_not_empty">Choose an empty restore folder so the preview of what will be written stays exact.</string>
 
     <string name="settings_title">Settings</string>
     <string name="settings_subtitle">Control discovery, connection, and safe settings. Identity keys and device credentials are never exported.</string>
@@ -369,10 +371,10 @@
     <string name="node_error_pairing_endpoint_mismatch">That device answered from a different address than the one you paired with. Pair with it again.</string>
     <string name="node_error_peer_endpoint_unavailable">This server doesn’t know which address other devices should dial yet. Set the address other devices dial in its settings, then try again.</string>
     <string name="node_error_claim_unavailable">This server already has an owner, so it can’t be set up again.</string>
-    <string name="node_error_claim_code_incorrect">That setup code isn’t correct. Check the code shown in your server’s log and try again.</string>
-    <string name="node_error_claim_window_expired">That setup code has expired. Restart Covalent on your server to get a new one.</string>
-    <string name="node_error_claim_window_exhausted">That setup code can no longer be used — either too many wrong codes were entered, or someone else has already claimed this server. Restart Covalent on your server to get a new code, and finish setup straight away.</string>
-    <string name="node_error_claim_rate_limited">Setup codes are being entered too quickly. Wait a moment, then try again.</string>
+    <string name="node_error_claim_code_incorrect">The owner claim was not accepted. On your trusted computer, check the setup-code file and run covalent claim again; this phone never accepts setup codes.</string>
+    <string name="node_error_claim_window_expired">The owner-claim window has expired. Restart Covalent on the server, then run covalent claim again on your trusted computer.</string>
+    <string name="node_error_claim_window_exhausted">The owner-claim window can no longer be used — either too many attempts were made, or someone else already claimed this server. Check the server, then restart it and run covalent claim on your trusted computer only if it still needs an owner.</string>
+    <string name="node_error_claim_rate_limited">Owner claims are being attempted too quickly. Wait a moment, then run covalent claim again on your trusted computer.</string>
     <string name="node_error_claim_certificate_unavailable">This server is still preparing its security certificate. Wait a few seconds, then try again.</string>
     <string name="node_error_pairing_peer_unreachable">Covalent couldn’t reach that device. Check that it’s switched on and on the same network, then pair again.</string>
     <string name="node_error_pairing_rejected">That device turned down the pairing request. Nothing was trusted.</string>

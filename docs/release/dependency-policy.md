@@ -13,4 +13,4 @@ cargo deny check advisories bans licenses sources
 ./scripts/apple-dependency-inventory.sh
 ```
 
-Credentialed package publication, signing, notarization, image promotion, and live Unraid drills remain separate release gates. CI must report an unavailable gate as blocked, never silently skip it.
+Credentialed package publication, image promotion, and live Unraid drills remain separate release gates. The personal macOS artifact is ad-hoc signed; Apple Developer ID/notarization is excluded. Android production signing is deferred. CI must report an unavailable in-scope gate as blocked, never silently skip it.

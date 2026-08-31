@@ -10,17 +10,22 @@ use hkdf::Hkdf;
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::atomic::{read_json_bounded, write_json_atomic};
-use crate::{BackupKey, CoreError, DeviceIdentity, PublicIdentity, StoredSnapshot};
+use crate::{
+    BackupKey, CoreError, DeviceIdentity, KeyProtector, PublicIdentity, StoredSnapshot,
+    WrappedSecret, state_secret_context,
+};
 
 const RECOVERY_KIT_SCHEMA_VERSION: u16 = 1;
 const RECOVERY_CAPSULE_SCHEMA_VERSION: u16 = 1;
-const RECOVERY_MASTER_SCHEMA_VERSION: u16 = 1;
+const LEGACY_RECOVERY_MASTER_SCHEMA_VERSION: u16 = 1;
+const PROTECTED_RECOVERY_MASTER_SCHEMA_VERSION: u16 = 2;
 const RECOVERY_CIPHER_SUITE: &str = "XCHACHA20-POLY1305-HKDF-SHA256";
 const RECOVERY_KIT_SIGNATURE_DOMAIN: &[u8] = b"covalent/recovery-kit/v1";
 const RECOVERY_CAPSULE_SIGNATURE_DOMAIN: &[u8] = b"covalent/recovery-capsule/v1";
+const RECOVERY_MASTER_SECRET_PURPOSE: &str = "recovery-master";
 pub(crate) const MAX_RECOVERY_KIT_BYTES: usize = 16 * 1_024 * 1_024;
 pub(crate) const MAX_RECOVERY_CAPSULE_BYTES: usize = 320 * 1_024 * 1_024;
 
@@ -38,8 +43,10 @@ impl RecoveryUnlockKey {
 
     /// Imports an exact 256-bit secret from protected user input.
     #[must_use]
-    pub fn from_bytes(bytes: [u8; 32]) -> Self {
-        Self(Zeroizing::new(bytes))
+    pub fn from_bytes(mut bytes: [u8; 32]) -> Self {
+        let key = Self(Zeroizing::new(bytes));
+        bytes.zeroize();
+        key
     }
 
     /// Returns base64url text suitable for a password manager or printed recovery record.
@@ -72,8 +79,10 @@ impl RecoveryMasterKey {
         Self(Zeroizing::new(bytes))
     }
 
-    fn from_bytes(bytes: [u8; 32]) -> Self {
-        Self(Zeroizing::new(bytes))
+    fn from_bytes(mut bytes: [u8; 32]) -> Self {
+        let key = Self(Zeroizing::new(bytes));
+        bytes.zeroize();
+        key
     }
 
     fn bytes(&self) -> Zeroizing<[u8; 32]> {
@@ -245,13 +254,14 @@ impl RecoveryKit {
         validate_provider_directory(&payload.provider_directory)?;
         let identity_secret = decode_secret(&payload.device_secret)?;
         let master = decode_secret(&payload.recovery_master)?;
-        let identity = DeviceIdentity::from_recovery_secret(self.owner_device_id, identity_secret)?;
+        let identity =
+            DeviceIdentity::from_recovery_secret(self.owner_device_id, *identity_secret)?;
         if identity.public_identity() != owner {
             return Err(CoreError::IdentityMismatch);
         }
         Ok(OpenedRecoveryKit {
             identity,
-            master: RecoveryMasterKey::from_bytes(master),
+            master: RecoveryMasterKey::from_bytes(*master),
             display_name: self.owner_display_name.clone(),
             provider_directory: payload.provider_directory,
         })
@@ -384,7 +394,8 @@ impl RecoveryCapsule {
         {
             return Err(CoreError::AuthenticationFailed);
         }
-        let backup_key = BackupKey::from_bytes(decode_secret(&payload.backup_key)?);
+        let backup_secret = decode_secret(&payload.backup_key)?;
+        let backup_key = BackupKey::from_bytes(*backup_secret);
         validate_backup_display_name(&payload.backup_display_name)?;
         Ok(OpenedRecoveryCapsule {
             snapshot: payload.snapshot,
@@ -406,10 +417,21 @@ impl RecoveryCapsule {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PersistedRecoveryMaster {
     schema_version: u16,
+    protected_key: WrappedSecret,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LegacyRecoveryMaster {
+    schema_version: u16,
     key: Zeroizing<String>,
 }
 
-pub(crate) fn load_or_create_recovery_master(path: &Path) -> Result<RecoveryMasterKey, CoreError> {
+pub(crate) fn load_or_create_recovery_master(
+    path: &Path,
+    state_root: &Path,
+    protector: &dyn KeyProtector,
+) -> Result<RecoveryMasterKey, CoreError> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) => {
             if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -426,19 +448,48 @@ pub(crate) fn load_or_create_recovery_master(path: &Path) -> Result<RecoveryMast
                     ));
                 }
             }
-            let persisted: PersistedRecoveryMaster = read_json_bounded(path, 16 * 1_024)?;
-            if persisted.schema_version != RECOVERY_MASTER_SCHEMA_VERSION {
-                return Err(CoreError::InvalidState(
-                    "unsupported recovery master schema".to_owned(),
-                ));
+            let value: serde_json::Value = read_json_bounded(path, 16 * 1_024)?;
+            let schema_version = value
+                .get("schemaVersion")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or_else(|| {
+                    CoreError::InvalidState("recovery master schema is missing".to_owned())
+                })?;
+            if schema_version == u64::from(PROTECTED_RECOVERY_MASTER_SCHEMA_VERSION) {
+                let persisted: PersistedRecoveryMaster = serde_json::from_value(value)?;
+                let context = state_secret_context(state_root, "recovery-master.json");
+                let plaintext = persisted.protected_key.open(
+                    protector,
+                    RECOVERY_MASTER_SECRET_PURPOSE,
+                    &context,
+                )?;
+                let mut bytes: [u8; 32] = plaintext
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| CoreError::InvalidKeyMaterial)?;
+                let master = RecoveryMasterKey::from_bytes(bytes);
+                bytes.zeroize();
+                return Ok(master);
             }
-            Ok(RecoveryMasterKey::from_bytes(decode_secret(
-                &persisted.key,
-            )?))
+            if schema_version == u64::from(LEGACY_RECOVERY_MASTER_SCHEMA_VERSION) {
+                let persisted: LegacyRecoveryMaster = serde_json::from_value(value)?;
+                if persisted.schema_version != LEGACY_RECOVERY_MASTER_SCHEMA_VERSION {
+                    return Err(CoreError::InvalidState(
+                        "unsupported recovery master schema".to_owned(),
+                    ));
+                }
+                let secret = decode_secret(&persisted.key)?;
+                let master = RecoveryMasterKey::from_bytes(*secret);
+                persist_recovery_master(path, state_root, &master, protector)?;
+                return Ok(master);
+            }
+            Err(CoreError::InvalidState(
+                "unsupported recovery master schema".to_owned(),
+            ))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             let master = RecoveryMasterKey::generate();
-            persist_recovery_master(path, &master)?;
+            persist_recovery_master(path, state_root, &master, protector)?;
             Ok(master)
         }
         Err(source) => Err(CoreError::Io {
@@ -451,14 +502,22 @@ pub(crate) fn load_or_create_recovery_master(path: &Path) -> Result<RecoveryMast
 
 pub(crate) fn persist_recovery_master(
     path: &Path,
+    state_root: &Path,
     master: &RecoveryMasterKey,
+    protector: &dyn KeyProtector,
 ) -> Result<(), CoreError> {
     let bytes = master.bytes();
+    let context = state_secret_context(state_root, "recovery-master.json");
     write_json_atomic(
         path,
         &PersistedRecoveryMaster {
-            schema_version: RECOVERY_MASTER_SCHEMA_VERSION,
-            key: Zeroizing::new(URL_SAFE_NO_PAD.encode(bytes.as_ref())),
+            schema_version: PROTECTED_RECOVERY_MASTER_SCHEMA_VERSION,
+            protected_key: WrappedSecret::protect(
+                protector,
+                RECOVERY_MASTER_SECRET_PURPOSE,
+                &context,
+                Zeroizing::new(bytes.as_ref().to_vec()),
+            )?,
         },
         true,
     )
@@ -482,7 +541,7 @@ fn derive_key(
     Ok(output)
 }
 
-fn decode_secret(value: &str) -> Result<[u8; 32], CoreError> {
+fn decode_secret(value: &str) -> Result<Zeroizing<[u8; 32]>, CoreError> {
     let decoded = Zeroizing::new(
         URL_SAFE_NO_PAD
             .decode(value)
@@ -491,6 +550,7 @@ fn decode_secret(value: &str) -> Result<[u8; 32], CoreError> {
     decoded
         .as_slice()
         .try_into()
+        .map(Zeroizing::new)
         .map_err(|_| CoreError::InvalidKeyMaterial)
 }
 

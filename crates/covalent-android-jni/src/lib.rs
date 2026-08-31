@@ -1,8 +1,8 @@
 //! Android JNI lifecycle bridge for a process-local Covalent node.
 //!
-//! Kotlin owns the Android Keystore token and app-private no-backup directory.
-//! Rust owns only bounded live node handles; it neither persists nor logs the
-//! token.  Every Java-facing result is a small structured JSON object so a
+//! Kotlin owns the Android Keystore wrapper and app-private no-backup directory.
+//! Rust receives an exact versioned KEK into a zeroizing runtime protector; it
+//! neither persists nor logs either secret. Every Java-facing result is a small structured JSON object so a
 //! failure never crosses the FFI boundary as a panic.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -12,7 +12,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use covalent_core::ProviderQuotaPolicy;
+use covalent_core::{ProviderQuotaPolicy, StaticKeyProtector};
 use covalent_node::runtime::{LocalApiTokenSource, NodeRuntime, NodeRuntimeConfig};
 use covalent_protocol::PlatformTier;
 use jni::EnvUnowned;
@@ -214,15 +214,30 @@ fn provider_quota(
     })
 }
 
-fn start_node(
+struct StartNodeRequest {
     data_directory: String,
     device_name: String,
     lan_discovery_enabled: bool,
-    mut token: Vec<u8>,
+    token: Zeroizing<Vec<u8>>,
+    key_encryption_key: Zeroizing<Vec<u8>>,
+    key_version: i32,
     maximum_total_bytes: u64,
     free_space_reserve_bytes: u64,
     key_protection_level: i32,
-) -> NativeResponse<'static> {
+}
+
+fn start_node(request: StartNodeRequest) -> NativeResponse<'static> {
+    let StartNodeRequest {
+        data_directory,
+        device_name,
+        lan_discovery_enabled,
+        mut token,
+        key_encryption_key,
+        key_version,
+        maximum_total_bytes,
+        free_space_reserve_bytes,
+        key_protection_level,
+    } = request;
     let result = (|| {
         if !identity_protection_accepted(key_protection_level) {
             return Err("secure_key_protector_required");
@@ -237,11 +252,20 @@ fn start_node(
         let quota = provider_quota(maximum_total_bytes, free_space_reserve_bytes)
             .map_err(|_| "invalid_provider_quota")?;
         let token = Zeroizing::new(
-            String::from_utf8(std::mem::take(&mut token)).map_err(|_| "invalid_api_token")?,
+            String::from_utf8(std::mem::take(token.as_mut())).map_err(|_| "invalid_api_token")?,
         );
         if !(32..=512).contains(&token.len()) {
             return Err("invalid_api_token");
         }
+        if key_version <= 0 || key_encryption_key.len() != 32 {
+            return Err("invalid_key_encryption_key");
+        }
+        let mut kek = [0_u8; 32];
+        kek.copy_from_slice(key_encryption_key.as_ref());
+        let protector = StaticKeyProtector::new(key_version as u32, kek)
+            .map_err(|_| "invalid_key_encryption_key");
+        kek.zeroize();
+        let protector = protector?;
         let registry = registry().map_err(|_| "runtime_unavailable")?;
         let (handle, runtime) = {
             let mut registry = registry.lock().map_err(|_| "runtime_unavailable")?;
@@ -260,6 +284,7 @@ fn start_node(
         configuration.platform_tier = PlatformTier::Tier1;
         configuration.provider_quota_policy = quota;
         configuration.api_token = LocalApiTokenSource::Provided(token);
+        configuration.key_protector = Some(Arc::new(protector));
         let node = match runtime.block_on(NodeRuntime::start(configuration)) {
             Ok(node) => node,
             Err(_) => {
@@ -284,7 +309,6 @@ fn start_node(
         registry.nodes.insert(handle, node);
         Ok(response)
     })();
-    token.zeroize();
     match result {
         Ok(response) => response,
         Err("invalid_start_request") => NativeResponse::error(
@@ -298,6 +322,10 @@ fn start_node(
         Err("invalid_api_token") => NativeResponse::error(
             "invalid_api_token",
             "This phone's protected server credential is not valid.",
+        ),
+        Err("invalid_key_encryption_key") => NativeResponse::error(
+            "invalid_key_encryption_key",
+            "This phone's protected storage key is not valid.",
         ),
         Err("secure_key_protector_required") => NativeResponse::error(
             "secure_key_protector_required",
@@ -402,6 +430,29 @@ fn with_java_response<'local>(
     }
 }
 
+/// Copies a JVM secret into zeroizing Rust memory and immediately clears the JVM array.
+/// A wipe failure is a locked result: startup must not proceed with an extra live copy.
+fn take_java_secret(
+    environment: &jni::Env<'_>,
+    array: &JByteArray<'_>,
+) -> Result<Zeroizing<Vec<u8>>, ()> {
+    let secret = environment
+        .convert_byte_array(array)
+        .map(Zeroizing::new)
+        .map_err(|_| ());
+    let length = array.len(environment).map_err(|_| ())?;
+    let zeros = [0_i8; 64];
+    let mut offset = 0_usize;
+    while offset < length {
+        let count = (length - offset).min(zeros.len());
+        array
+            .set_region(environment, offset as i32, &zeros[..count])
+            .map_err(|_| ())?;
+        offset += count;
+    }
+    secret
+}
+
 extern "system" fn native_start<'local>(
     unowned: EnvUnowned<'local>,
     _class: JClass<'local>,
@@ -409,6 +460,8 @@ extern "system" fn native_start<'local>(
     device_name: JString<'local>,
     lan_discovery_enabled: jboolean,
     api_token: JByteArray<'local>,
+    key_encryption_key: JByteArray<'local>,
+    key_version: jint,
     maximum_total_bytes: jlong,
     free_space_reserve_bytes: jlong,
     key_protection_level: jint,
@@ -416,17 +469,22 @@ extern "system" fn native_start<'local>(
     with_java_response(unowned, |environment| {
         let data_directory = data_directory.to_string();
         let device_name = device_name.to_string();
-        let token = environment.convert_byte_array(&api_token);
-        match token {
-            Ok(token) if maximum_total_bytes > 0 && free_space_reserve_bytes >= 0 => start_node(
-                data_directory,
-                device_name,
-                lan_discovery_enabled,
-                token,
-                maximum_total_bytes as u64,
-                free_space_reserve_bytes as u64,
-                key_protection_level,
-            ),
+        let token = take_java_secret(environment, &api_token);
+        let key = take_java_secret(environment, &key_encryption_key);
+        match (token, key) {
+            (Ok(token), Ok(key)) if maximum_total_bytes > 0 && free_space_reserve_bytes >= 0 => {
+                start_node(StartNodeRequest {
+                    data_directory,
+                    device_name,
+                    lan_discovery_enabled,
+                    token,
+                    key_encryption_key: key,
+                    key_version,
+                    maximum_total_bytes: maximum_total_bytes as u64,
+                    free_space_reserve_bytes: free_space_reserve_bytes as u64,
+                    key_protection_level,
+                })
+            }
             _ => NativeResponse::error(
                 "invalid_start_request",
                 "The storage settings for this phone are not valid.",
@@ -486,8 +544,9 @@ pub unsafe extern "system" fn JNI_OnLoad(
         vm.with_top_local_frame(|environment| {
             let class = environment.find_class(JNIString::from(NATIVE_CLASS))?;
             let native_start_name = JNIString::from("nativeStart");
-            let native_start_signature =
-                JNIString::from("(Ljava/lang/String;Ljava/lang/String;Z[BJJI)Ljava/lang/String;");
+            let native_start_signature = JNIString::from(
+                "(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJI)Ljava/lang/String;",
+            );
             let native_stop_name = JNIString::from("nativeStop");
             let native_stop_signature = JNIString::from("(J)Ljava/lang/String;");
             let native_state_name = JNIString::from("nativeState");
@@ -530,6 +589,8 @@ pub unsafe extern "system" fn JNI_OnLoad(
 
 #[cfg(test)]
 mod tests {
+    use zeroize::Zeroizing;
+
     use super::{
         IdentityProtection, NativeRegistry, PROTECTION_SOFTWARE, PROTECTION_STRONGBOX,
         PROTECTION_TRUSTED_ENVIRONMENT, PROTECTION_UNAVAILABLE, identity_protection_accepted,
@@ -581,17 +642,44 @@ mod tests {
     fn embedded_node_start_refuses_unprotected_identity() {
         // The end-to-end guard: a start request that is valid in every other
         // respect must still be refused when the identity is unprotected.
-        let response = super::start_node(
-            "/data/user/0/life.michaelwong.covalent/no_backup/covalent-node".to_owned(),
-            "Pixel Android".to_owned(),
-            false,
-            vec![b'a'; 43],
-            2 * 1_024 * 1_024 * 1_024,
-            512 * 1_024 * 1_024,
-            PROTECTION_UNAVAILABLE,
-        );
+        let response = super::start_node(super::StartNodeRequest {
+            data_directory: "/data/user/0/life.michaelwong.covalent/no_backup/covalent-node"
+                .to_owned(),
+            device_name: "Pixel Android".to_owned(),
+            lan_discovery_enabled: false,
+            token: Zeroizing::new(vec![b'a'; 43]),
+            key_encryption_key: Zeroizing::new(vec![0x5a; 32]),
+            key_version: 1,
+            maximum_total_bytes: 2 * 1_024 * 1_024 * 1_024,
+            free_space_reserve_bytes: 512 * 1_024 * 1_024,
+            key_protection_level: PROTECTION_UNAVAILABLE,
+        });
         assert!(!response.ok);
         assert_eq!(response.code, "secure_key_protector_required");
+    }
+
+    #[test]
+    fn embedded_node_start_requires_an_exact_versioned_256_bit_kek() {
+        for (key, version) in [
+            (vec![0x5a; 31], 1),
+            (vec![0x5a; 33], 1),
+            (vec![0x5a; 32], 0),
+        ] {
+            let response = super::start_node(super::StartNodeRequest {
+                data_directory: "/data/user/0/life.michaelwong.covalent/no_backup/covalent-node"
+                    .to_owned(),
+                device_name: "Pixel Android".to_owned(),
+                lan_discovery_enabled: false,
+                token: Zeroizing::new(vec![b'a'; 43]),
+                key_encryption_key: Zeroizing::new(key),
+                key_version: version,
+                maximum_total_bytes: 2 * 1_024 * 1_024 * 1_024,
+                free_space_reserve_bytes: 512 * 1_024 * 1_024,
+                key_protection_level: PROTECTION_SOFTWARE,
+            });
+            assert!(!response.ok);
+            assert_eq!(response.code, "invalid_key_encryption_key");
+        }
     }
 
     #[test]

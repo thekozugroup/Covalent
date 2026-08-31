@@ -60,6 +60,15 @@ enum MacLabelColor {
             : NSColor(white: 0.200, alpha: 1)
     })
 
+    /// Opaque unselected sidebar content. Sidebar vibrancy can lower the
+    /// rendered coverage of semantic `.primary`, especially on thin SF
+    /// Symbol strokes; keep the selected row explicit in the view instead.
+    static let sidebarUnselected = dynamic(
+        named: "CovalentSidebarUnselected",
+        light: NSColor(white: 0.120, alpha: 1),
+        dark: NSColor(white: 0.920, alpha: 1)
+    )
+
     /// A blue for decorative glyphs that sit *inside* a combined accessibility
     /// element.
     ///

@@ -53,7 +53,7 @@ struct MacConnectionView: View {
                     }
                     .accessibilityIdentifier("connection.token")
                     HStack {
-                        Text("Your backup server shows this token when you set it up. Copy it from there.")
+                Text("Choose the access-token file created by the Covalent claim command on your trusted computer, or paste its exact contents.")
                             .font(.caption)
                             .secondaryLabelStyle()
                         Spacer()
@@ -221,7 +221,7 @@ struct MacNewBackupView: View {
                             .font(.caption)
                             .secondaryLabelStyle()
                     } else {
-                        ForEach(model.providers) { provider in
+                        ForEach(model.providers, id: \.peerId) { (provider: ProviderConnection) in
                             Toggle(isOn: providerSelection(provider.peerId)) {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(provider.address)
@@ -229,12 +229,12 @@ struct MacNewBackupView: View {
                                         .font(.caption.monospaced())
                                         .secondaryLabelStyle()
                                         .lineLimit(1)
-                                    Text("Fresh reachable capacity unavailable — cannot select")
+                                    Text(provider.selectionStatus)
                                         .font(.caption)
-                                        .foregroundStyle(.red)
+                                        .foregroundStyle(provider.isEligibleForBackup ? Color.secondary : Color.red)
                                 }
                             }
-                            .disabled(true)
+                            .disabled(!provider.isEligibleForBackup)
                         }
                         Text("Covalent sends copies to exactly the devices you selected. It never substitutes another device.")
                             .font(.caption)
@@ -293,7 +293,6 @@ struct MacNewBackupView: View {
                 .disabled(
                     displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         || sourceGrantId == nil
-                        || !selectedProviderIds.isEmpty
                         || isCreating
                 )
                 .accessibilityIdentifier("backup.create")
@@ -369,8 +368,10 @@ struct MacNewBackupView: View {
         if let remembered = model.rememberedBackups.first(where: { $0.backupId == backupId }) {
             displayName = remembered.name
         }
-        // Fail closed until the node returns fresh signed reachability and reservable capacity.
-        selectedProviderIds = []
+        let eligible = Set(model.providers.filter(\.isEligibleForBackup).map(\.peerId))
+        selectedProviderIds = Set(
+            model.backups.first(where: { $0.backupId == backupId })?.selectedProviderIds ?? []
+        ).intersection(eligible)
     }
 
     private func chooseFolder() {

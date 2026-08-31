@@ -55,7 +55,7 @@ struct IOSDevicesView: View {
             }
 
             Section {
-                TextField("nas.tailnet-name.ts.net:8788", text: $tailscaleAddress)
+                TextField("nas.tailnet-name.ts.net:8787", text: $tailscaleAddress)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)

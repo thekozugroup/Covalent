@@ -1,63 +1,139 @@
 # Unraid operation
 
-Unraid is Tier 1. Install `packaging/unraid/covalent.xml` through Community Applications or Docker templates. It is intentionally unprivileged (`99:100`), read-only, capability-free, and uses `no-new-privileges` with a temporary filesystem. Do not enable privileged mode to solve mount permissions; make the selected host paths writable by the container identity instead.
+Start with [Back up your first folder](../getting-started.md), then return here
+for Unraid-specific paths and recovery rules.
+
+Unraid is Tier 1. The template is intentionally unprivileged (`99:100`),
+read-only, capability-free, and uses `no-new-privileges` with a temporary
+filesystem. It is not listed in Community Applications yet. Until a new
+immutable `v0.2.0` image is published, do not import or start the historical
+template. Do not enable privileged mode to solve mount permissions; correct the
+selected host paths instead.
+
+The v0.1.0 template uses the released immutable GHCR digest, not a mutable tag. Docker accepts `image@sha256:…` references and the repository validator rejects any other image form. This prevents a later tag rewrite from changing an existing Unraid install. That digest predates the mandatory KEK and trusted claim client, so **do not install it**: deployment is blocked until a newly signed immutable digest includes those features and updates the template atomically.
 
 ## Setting up
 
-**Nine steps, none of them in a terminal.** Setup used to take twenty steps, four of which required a container console: reading a bearer token out of `/data/local-api-token`, copying a root certificate out of `/config/caddy/...`, and verifying that certificate by hand. None of that remains.
+These steps are ready for the future `v0.2.0` immutable digest. Today they stop
+before template installation because the only public digest is the blocked
+historical `v0.1.0` image.
 
-1. Install the Covalent template from Community Applications.
-2. Set **HTTPS hostname** to the name you will type in your browser to reach this server, such as `tower.local`. Covalent's certificate is issued for that name, so it has to match.
-3. Map **Configuration** to `/mnt/user/appdata/covalent/config`.
-4. Map **Encrypted storage** to `/mnt/user/appdata/covalent/data`.
-5. Map **Selected backup source** to one share you want backed up, read-only. Add a separate mapping for each further share.
-6. Start the container.
-7. Open the container's **Log** from the Unraid Docker page. Covalent prints a setup code in a box near the end:
+1. **Provision and escrow the KEK before installing or applying a template.**
+   The reserved path is `/mnt/user/system/covalent-secrets`. It is never a
+   Covalent source. Do not use `/boot`, appdata, `/mnt/user/system`, or any
+   enclosing directory as a source.
 
+   For a source-checkout evaluation, build the current image first, then create
+   the required key on the Unraid terminal:
+
+   ```sh
+   cd /mnt/user/Source/Covalent
+   docker build -f packaging/docker/Dockerfile -t covalent:local .
+   KEK_DIR=/mnt/user/system/covalent-secrets
+   install -d -o 99 -g 100 -m 700 "$KEK_DIR"
+   docker run --rm --user 99:100 \
+     -v "$KEK_DIR:/secrets:rw" \
+     covalent:local \
+     provision-key --key-file /secrets/key-encryption-key
    ```
-     ┌──────────────────────────────────────────────┐
-     │  Covalent setup code                         │
-     │                                              │
-     │      9T96Y-GM7ZJ                             │
-     │                                              │
-     │  Enter this in the Covalent app or web page  │
-     │  to finish setting up this server.           │
-     │                                              │
-     │  Valid for 30 minutes, and usable once.      │
-     │  Restart this container for a new code.      │
-     └──────────────────────────────────────────────┘
+
+   The owner-only file is mode `0600`. Keep it and version `1` unchanged. Make
+   and verify one byte-for-byte offline escrow copy on encrypted removable media
+   that is never mounted into Covalent. Exclude the live KEK from every host and
+   Covalent backup.
+2. After `v0.2.0` publishes, confirm this page and
+   `packaging/unraid/covalent.xml` name that exact signed immutable digest. Only
+   then import the template manually. Community Applications availability is
+   future work and must not be assumed.
+3. Set **HTTPS hostname** to the exact name clients use, such as `tower.local`.
+4. Map **Configuration** to `/mnt/user/appdata/covalent/config` and **Encrypted
+   storage** to `/mnt/user/appdata/covalent/data`. Create the writable paths
+   before applying the template:
+
+   ```sh
+   install -d -o 99 -g 100 -m 700 \
+     /mnt/user/appdata/covalent/config \
+     /mnt/user/appdata/covalent/data \
+     /mnt/user/Restore/Covalent
+   ```
+5. Map the KEK file read-only as **KEK secret (reserved system share)**.
+6. Map **Selected backup source** to one explicit share, read-only, and add a
+   distinct writable restore share such as `/mnt/user/Restore/Covalent`.
+   Never select `/mnt/user/system`, its parent, or any path enclosing the KEK.
+7. From the same exact source checkout, validate the host paths before startup:
+
+   ```sh
+   ./scripts/validate-setup-paths.sh \
+     --config /mnt/user/appdata/covalent/config \
+     --data /mnt/user/appdata/covalent/data \
+     --source /mnt/user/Photos \
+     --restore /mnt/user/Restore/Covalent \
+     --kek /mnt/user/system/covalent-secrets/key-encryption-key
    ```
 
-8. Open the WebUI.
-9. Enter the setup code.
+   This read-only check rejects broad roots and every equal, parent, or child
+   overlap. Run it again for the exact paths shown by `docker inspect` after the
+   container is created.
+8. Start the container and read its one-time setup code from the Docker log.
+9. On a trusted release-channel Mac or Linux computer, save that code in an
+   owner-only file and run:
 
-That is the whole flow. There is no token to copy, no certificate file to move, and nothing to verify by hand — entering the code is what establishes trust, and the section below explains why that is safe rather than merely convenient.
+   ```sh
+   https_host=tower.local
+   claim_parent="$HOME/.config/covalent"
+   setup_code_file="$claim_parent/unraid-setup-code"
+   claim_output="$claim_parent/unraid-claim"
+   install -d -m 700 "$claim_parent"
+   install -m 600 /dev/null "$setup_code_file"
+   # Paste the setup code into setup_code_file with a local editor. Keep its final newline.
+   test ! -e "$claim_output" # covalent claim must create this new 0700 directory
+   covalent claim \
+     --https-url "https://${https_host}:8443" \
+     --setup-code-file "$setup_code_file" \
+     --output-dir "$claim_output"
+   ```
 
-If the code expires before you use it, restart the container and read the new one. A code is single-use: once a device has been set up, the container prints no further codes and the setup route refuses every request.
+   The CLI saves an owner-only pending request beside the output path before it
+   connects, proves the code, checks the CA fingerprint, then verifies the exact
+   HTTPS hostname and token before creating `root.crt` and `local-api-token`
+   mode `0600`. If the command is interrupted, rerun the same command with the
+   same three paths. It reuses the exact request and removes its pending record
+   only after the credentials are durable and authenticated.
+10. Enroll that exact `root.crt`, open the same `https_host` on TCP `8443`, and
+    enter only `local-api-token`. The WebUI never accepts a setup code. Never
+    use trust-all or bypass hostname verification. Follow the exact
+    [macOS or Debian/Ubuntu CA enrollment and removal commands](../../packaging/docker/README.md#enroll-or-remove-the-claimed-ca),
+    changing only the claim-output path for this Unraid server.
 
-## What the setup code actually does
+To connect an Android phone, follow the
+[verified APK and onboarding guide](android.md). The phone receives only
+`root.crt` and `local-api-token` from the completed CLI claim; never copy or
+enter the server setup code into the app.
 
-The code is a credential, and it is worth being precise about what it protects and what it does not.
+The Unraid template's WebUI shortcut is necessarily rendered with the host IP.
+That shortcut is only a convenience link; it may fail strict certificate
+hostname verification. Open the configured HTTPS hostname shown in the template
+instead. Do not work around this with a hostname bypass.
 
-**The code is never sent over the network.** Your browser or app proves it knows the code by sending a message authentication code computed over a random nonce under a key derived from it. Someone watching the network learns nothing they can reuse.
+## First backup and restore check
 
-**The reply is sealed to the code.** Covalent returns the local API token encrypted under a key derived from the same code, with the SHA-256 of the certificate authority bound in as associated data. An attacker sitting between you and the server — the classic risk on a first connection, because your browser does not trust the server's certificate yet — can relay the exchange but ends up holding ciphertext it cannot open. It also cannot substitute its own certificate authority, because changing the certificate breaks the seal. Successfully decrypting the reply is simultaneously proof that the responder held the code and proof that the certificate came from that same responder. That is exactly the check the old instructions asked you to perform by hand with a file comparison.
-
-**Guessing is impractical.** The code carries 50 bits of entropy, and the key derived from it is stretched through 2^18 sequential BLAKE3 compressions. Covalent pays that cost once, at startup, because it knows the code. An attacker pays it for every guess, which puts even an offline search far beyond the thirty minutes the code is alive. Online guessing is separately limited: presentations closer together than 500 ms are refused, and the window closes permanently after 16 incorrect codes.
-
-**Who can read the code.** Anyone who can read this container's log — through the Unraid web interface, the Docker socket, or the host filesystem. All three already require administrative access to the server, and all three could already read `/data/local-api-token` directly, which is precisely what the previous instructions told you to do. The code therefore grants nothing that observing it did not already imply. It is not a new exposure; it removes one.
-
-**If nobody claims it.** The window expires and the server keeps running, unclaimed. The code exists only in memory and is never written to disk, so restarting genuinely mints a new secret rather than redisplaying the old one.
+In the unlocked console, back up `/source` with no backup device selected and
+wait for receipt confirmation. Then restore that snapshot to `/restore` with
+**Stop on conflicts**, review the signed preview, and compare the restored test
+file. This proves setup only. Pair and explicitly select another device before
+relying on Covalent for source-loss protection. See the full
+[success checklist](../getting-started.md#you-are-protected-when).
 
 ## Required and optional mappings
 
 | Container path | Unraid host path | Mode | Purpose |
 | --- | --- | --- | --- |
-| `/config` | `/mnt/user/appdata/covalent/config` | read/write | Operator-owned exported safe settings and the TLS certificate authority. |
-| `/data` | `/mnt/user/appdata/covalent/data` | read/write | Encrypted chunks, metadata, identity, keys, and the local API token. |
+| `/config` | `/mnt/user/appdata/covalent/config` | read/write | Sensitive Caddy state, including the local CA certificate and signing key. Back it up with appdata; it is not a settings export. |
+| `/data` | `/mnt/user/appdata/covalent/data` | read/write | Encrypted chunks, metadata, identity, keys, and the wrapped local API-token record. |
+| `/run/secrets/covalent-kek` | `/mnt/user/system/covalent-secrets/key-encryption-key` | read-only | Required KEK in the reserved system-share path. `/mnt/user/system` and any enclosing path are forbidden as sources. Keep independent offline escrow. |
 | `/source` | One selected `/mnt/user/<share>` | read-only | A chosen share to back up. Add distinct mappings for more shares; never map all of `/mnt/user`. |
 | `/boot-source` | `/boot` | read-only | Optional boot-drive backup only. |
-| `/restore` | A chosen empty destination | read/write | Add only while restoring. |
+| `/restore` | A chosen writable destination | read/write | Add only while restoring; Covalent inventories existing files and applies the selected conflict policy. |
 
 Restores write only beneath the exact selected target and chosen conflict policy; traversal, absolute paths, and symlink escapes are rejected by the core before writes.
 
@@ -73,9 +149,11 @@ When that cannot be resolved from inside the container, Covalent refuses to adve
 
 ## Upgrade and recovery
 
-Stop the container before backing up or migrating `/data`; keep `/config` and `/data` together because `/config` contains the TLS CA and `/data` contains node identity, encrypted state, and the record that this server has an owner. On upgrade, retain both mappings and the same UID/GID.
+Stop the container before backing up or migrating `/data`; keep `/config` and `/data` together because `/config` contains Caddy's local CA and signing key while `/data` contains node identity, encrypted state, and the record that this server has an owner. Retain the separate KEK file and the same version too: appdata alone is intentionally locked. Recovery also requires the independently escrowed KEK; do not recover it from a Covalent backup of the same host. On upgrade, retain all three mappings and the same UID/GID.
 
-Upgrading a deployment that was set up before setup codes existed is a no-op: the node sees an existing local API token, records that it already has an owner, and never offers a code. An installation that already works cannot acquire a new way to be claimed.
+Upgrading a deployment that already has a local API token preserves its owner and
+does not require setup-code claiming. An installation that already works cannot
+acquire a new way to be claimed.
 
 To test recovery, restore the two appdata directories to a separate host location, start a new container with those mounts, and verify the HTTPS CA, node identity, and a backup before using it. Do not overwrite an existing production `/data` directory during a restore drill.
 
@@ -85,17 +163,21 @@ Stated plainly, because the previous wording described itself as "a validated ca
 
 **Verified by direct execution** against an image built from this repository, running under bridge networking with the template's own security flags (`--user=99:100 --read-only --cap-drop=ALL --security-opt=no-new-privileges`):
 
-- The container starts from empty `/config` and `/data` and prints a setup code to stdout.
-- The setup code is accepted once and returns a working API token and the CA certificate.
+- Source-built package coverage exercises the server-side setup-code claim protocol from empty `/config` and `/data` with an explicit separate KEK. The current v0.1.0 released image cannot exercise this flow because it predates the required KEK support.
 - The delivered certificate is byte-identical to the one inside the container, and a later connection validating strictly against it succeeds.
 - Substituting a different certificate authority makes the sealed reply fail to open.
-- A wrong code is refused with `claim_code_incorrect`; a replayed code is refused with `claim_unavailable`.
-- Restarting a claimed container prints no new code and the route stays closed.
+- A wrong code is refused with `claim_code_incorrect`. The exact original
+  nonce-and-proof request replays the same sealed response after a lost response
+  or restart; a new request, even from the same code, is refused with
+  `claim_unavailable`.
+- Restarting a claimed container prints no new code. Only its exact original
+  request remains recoverable; every different claim stays closed.
 - With an advertised address configured, `transport/identity`, `discovery`, and `pair/invitations` all succeed.
 - A backup of a mounted read-only share completes and verifies intact.
 
-**Not yet verified**, and required before this is called release evidence:
+**Not yet verified**, and required before this is called production deployment evidence:
 
 - The template has not been installed through Community Applications on a real Unraid host; it was exercised as a plain Docker container with the template's arguments.
-- `<Repository>` still names a semantic tag rather than a published digest. The release owner must replace it with the digest after the scan/sign/attest workflow succeeds, so the template cannot silently drift to a different image.
 - The upgrade, boot-drive, and restore drills have not been run on a provisioned Unraid host.
+
+For a private-network or Tailnet deployment, use the explicit-address and CA steps in the [Atlas/Tailscale runbook](atlas-tailscale.md). Automatic LAN discovery and Tailscale routing are separate features.

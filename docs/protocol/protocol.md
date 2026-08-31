@@ -1,6 +1,6 @@
 # Covalent protocol 1
 
-Status: implemented persisted/local API v1 contract and independently negotiated QUIC transport v2. Additive local-client fields require defaults; incompatible peer framing changes require a new QUIC transport ALPN, version range, and signature domain.
+Status: implemented persisted/local API v1 contract and independently negotiated QUIC transport v3. Additive local-client fields require defaults; incompatible peer framing changes require a new QUIC transport ALPN, version range, and signature domain.
 
 ## Principles
 
@@ -12,7 +12,7 @@ Every object carries `protocolVersion`, canonical encoding rules, bounded sizes,
 2. The responder signs a role-bound acceptance. Both devices derive and display the same secret-bound short authentication string.
 3. Each user explicitly confirms that string on their own device. The invitation is consumed durably only after both signed confirmations verify.
 4. Each device stores the exact confirmed peer roles and a signed roster epoch. Revocation creates a persistent tombstone and immediately removes active provider access.
-5. Subsequent QUIC requests pin the transferred TLS certificate and bind request/response digests, negotiated transport version, freshness timestamp, nonce, certificate fingerprint, and peer identity signatures. Transport v2 uses ALPN `covalent-quic/2` and signature domain `covalent/authenticated-quic/v2`; v1/v2 mismatches fail as `protocol_incompatible` before application framing.
+5. Subsequent QUIC requests pin the transferred TLS certificate and bind request/response digests, negotiated transport version, freshness timestamp, nonce, certificate fingerprint, and peer identity signatures. Transport v3 uses ALPN `covalent-quic/3` and signature domain `covalent/authenticated-quic/v3`. The current implementation advertises only version 3; v0.1.0 transport-v2 peers and future incompatible versions fail closed as `protocol_incompatible` before application framing.
 
 Discovery advertisements contain only protocol range, ephemeral service identifier, port, and capability bits. Backup names, paths, device identity keys, and user data are not advertised. LAN advertisements stop when LAN discovery is disabled. Tailnet reachability is only a candidate transport path.
 

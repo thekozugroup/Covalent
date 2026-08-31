@@ -12,6 +12,7 @@ apps/apple/.build/
 apps/apple/DerivedData/
 apps/apple/*.xcodeproj/
 apps/apple/Config/*-Info.plist
+/swift-generated-sources/
 
 # Android
 apps/android/.gradle/
@@ -29,6 +30,8 @@ coverage/
 /TemporaryDirectory.*/
 /_Users_*.lock
 /.tmp*/
+/_private_tmp_claude-*.lock
+/_tmp_claude-*.lock
 
 # Node compile cache emitted by repo scripts (NODE_COMPILE_CACHE); never repository content
 /node-compile-cache/

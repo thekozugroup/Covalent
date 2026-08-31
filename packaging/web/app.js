@@ -222,6 +222,10 @@
       "This server is still preparing its security certificate. Wait a few seconds, then try again.",
       RECOVERY.retry,
     ],
+    claim_state_unavailable: [
+      "This server couldn't finish setting up safely. Retry the exact saved claim request; restart only if that remains unavailable.",
+      RECOVERY.retry,
+    ],
     pairing_peer_unreachable: [
       "Covalent couldn't reach that device. Check that it's switched on and on the same network, then pair again.",
       RECOVERY.chooseAnotherDevice,
@@ -455,10 +459,20 @@ let restoreCursor = null;
 let restoreCursorHistory = [];
 let networkPairing = null;
 let networkPoll = null;
+let providerConnections = [];
+let manualProviderConfirmation = null;
+let backupSubmissionInFlight = false;
+let failedBackupAttempt = null;
 const pairing = globalThis.CovalentPairingFlow;
 const restore = globalThis.CovalentRestorePlanFlow;
+const backupTerminal = globalThis.CovalentBackupTerminalFlow;
+const tabFlow = globalThis.CovalentTabFlow;
 const errorCopy = globalThis.CovalentNodeErrorCopy;
 const pairingStorageKey = "covalent.pairing-session.v1";
+const backupServerContext = backupTerminal.requireContext({
+  origin: globalThis.location.origin,
+  protocolVersion: PROTOCOL_VERSION,
+});
 
 class NodeApiError extends Error {
   constructor(status, payload) {
@@ -500,7 +514,7 @@ function fail(error) {
   message.dataset.recovery = failure.recovery;
 }
 
-async function api(path, options = {}) {
+async function apiResponse(path, options = {}) {
   const headers = new Headers(options.headers || {});
   headers.set("Accept", "application/json");
   if (token) headers.set("Authorization", `Bearer ${token}`);
@@ -514,8 +528,15 @@ async function api(path, options = {}) {
     }
     throw new NodeApiError(response.status, body);
   }
-  if (response.status === 204) return null;
-  return response.json();
+  return {
+    status: response.status,
+    body: response.status === 204 ? null : await response.json(),
+    headers: response.headers,
+  };
+}
+
+async function api(path, options = {}) {
+  return (await apiResponse(path, options)).body;
 }
 
 async function loadStatus() {
@@ -547,6 +568,62 @@ async function loadBackups() {
   });
   $("[data-backups-empty]").hidden = backups.length > 0;
   if (backups.length === 0) $("[data-backups-empty]").textContent = "No remembered backups on this node.";
+}
+
+function formatBytes(bytes) {
+  const units = ["bytes", "KiB", "MiB", "GiB", "TiB", "PiB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return unit === 0 ? `${value} ${units[unit]}` : `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unit]}`;
+}
+
+function renderProviders(providers) {
+  const form = $("[data-backup-form]");
+  const previouslySelected = new Set(selected(form, "providers"));
+  const list = $("[data-providers-list]");
+  const empty = $("[data-providers-empty]");
+  list.replaceChildren();
+  for (const provider of providers) {
+    const availability = pairing.providers.availability(provider);
+    const item = document.createElement("li");
+    const label = document.createElement("label");
+    const choice = document.createElement("input");
+    choice.type = "checkbox";
+    choice.name = "providers";
+    choice.value = provider.peerId;
+    choice.disabled = !availability.eligible;
+    choice.checked = availability.eligible && previouslySelected.has(provider.peerId);
+    const details = document.createElement("span");
+    const name = document.createElement("strong");
+    name.textContent = provider.displayName;
+    const identity = document.createElement("code");
+    identity.textContent = provider.peerId;
+    const status = document.createElement("span");
+    if (availability.eligible) {
+      status.textContent = `Ready — ${formatBytes(provider.usableBytes)} usable; ${formatBytes(provider.allocatedBytes)} allocated of ${formatBytes(provider.quotaBytes)}.`;
+    } else {
+      status.textContent = availability.status;
+    }
+    details.append(name, document.createElement("br"), identity, document.createElement("br"), status);
+    label.append(choice, details);
+    item.append(label);
+    list.append(item);
+  }
+  empty.hidden = providers.length > 0;
+  if (providers.length === 0) {
+    empty.textContent = "No connected backup devices yet. Pair one first, or make a local-only copy.";
+  }
+}
+
+async function loadProviders() {
+  if (!token) return [];
+  providerConnections = await pairing.providers.listNamed(api);
+  renderProviders(providerConnections);
+  return providerConnections;
 }
 
 function formData(form) { return new FormData(form); }
@@ -666,14 +743,19 @@ async function refreshNetworkPairings() {
   if (!token) return;
   const pending = await pairing.network.pending(api);
   if (networkPairing !== null) {
+    const priorState = networkPairing.state;
     const updated = pending.find((item) => item.pairingId === networkPairing.pairingId);
     renderNetworkPairing(updated ?? null);
+    if (updated?.state === "complete" && priorState !== "complete") await loadProviders();
     return;
   }
   // An incoming request is the other device asking to pair with this one; it is
   // the only thing worth surfacing unprompted.
   const incoming = pending.find((item) => item.direction === "incoming" && item.state !== "failed");
-  if (incoming !== undefined) renderNetworkPairing(incoming);
+  if (incoming !== undefined) {
+    renderNetworkPairing(incoming);
+    if (incoming.state === "complete") await loadProviders();
+  }
 }
 
 async function startNetworkPairing(candidateAddress) {
@@ -690,21 +772,30 @@ $("[data-token-form]").addEventListener("submit", async (event) => {
   try {
     await api("/api/v1/config/export", { method: "POST" });
     await loadBackups();
+    await loadProviders();
     await refreshNetworkPairings();
-    say("Console unlocked for this tab only.");
+    const resumedBackup = await resumeBackupTerminalReceipt();
+    if (!resumedBackup) say("Console unlocked for this tab only.");
   }
   catch (error) { token = ""; fail(error); }
 });
 
-$("[data-refresh]").addEventListener("click", async () => { await loadStatus(); if (token) await loadBackups(); });
+$("[data-refresh]").addEventListener("click", async () => {
+  await loadStatus();
+  if (!token) return;
+  try { await Promise.all([loadBackups(), loadProviders()]); }
+  catch (error) { fail(error); }
+});
 $("[data-backups-refresh]").addEventListener("click", async () => {
   try { await loadBackups(); say("Backup list refreshed from the node."); }
   catch (error) { fail(error); }
 });
-document.querySelectorAll("[data-tab]").forEach((tab) => tab.addEventListener("click", () => {
-  document.querySelectorAll("[data-tab]").forEach((button) => button.setAttribute("aria-selected", String(button === tab)));
-  document.querySelectorAll("[data-panel]").forEach((panel) => { panel.hidden = panel.dataset.panel !== tab.dataset.tab; });
-}));
+$("[data-providers-refresh]").addEventListener("click", async () => {
+  if (!requireUnlocked()) return;
+  try { await loadProviders(); say("Connected backup devices and capacity refreshed from the node."); }
+  catch (error) { fail(error); }
+});
+tabFlow.install(document);
 
 $("[data-network-discover]").addEventListener("click", async () => {
   if (!requireUnlocked()) return;
@@ -728,8 +819,9 @@ $("[data-network-confirm]").addEventListener("click", async () => {
   try {
     const confirmed = await pairing.network.confirm(api, networkPairing);
     renderNetworkPairing(confirmed);
+    if (confirmed.state === "complete") await loadProviders();
     say(confirmed.state === "complete"
-      ? "Backup device added, with its signed certificate fingerprint."
+      ? "Backup device added. Its signed identity and current capacity are now available in the Backup tab."
       : "Confirmed here. Waiting for the other device.");
   } catch (error) { fail(error); }
 });
@@ -738,9 +830,11 @@ $("[data-network-cancel]").addEventListener("click", async () => {
   if (networkPairing === null) return;
   const pairingId = networkPairing.pairingId;
   const settled = networkPairing.state === "complete" || networkPairing.state === "failed";
-  renderNetworkPairing(null);
-  if (settled) return;
-  try { await pairing.network.cancel(api, pairingId); say("Pairing request cancelled. Nothing was trusted."); }
+  try {
+    await pairing.network.dismiss(api, pairingId);
+    renderNetworkPairing(null);
+    say(settled ? "Pairing record dismissed." : "Pairing request cancelled. Nothing was trusted.");
+  }
   catch (error) { fail(error); }
 });
 
@@ -774,7 +868,12 @@ $("[data-pair-confirm]").addEventListener("submit", async (event) => {
       return;
     }
     const confirmation = await pairing.finalize(api, session, side);
-    say(`Pairing finalized on this device. The other device must finalize the same mutually signed session:\n${display(confirmation)}`);
+    clearPairingSession();
+    if (showManualProviderActivation(confirmation)) {
+      say("Pairing finalized on this device. Review the signed backup-device connection below before adding it.");
+    } else {
+      say("Pairing finalized on this device. The other device must finalize the same mutually signed session. This pairing did not grant a backup-device role here.");
+    }
   } catch (error) { fail(error); }
 });
 $("[data-pair-confirm] [name=session]").addEventListener("input", (event) => {
@@ -785,14 +884,253 @@ $("[data-pair-confirm] [name=session]").addEventListener("input", (event) => {
 });
 $("[data-pair-clear]").addEventListener("click", () => { clearPairingSession(); say("Pairing exchange cleared from this browser tab."); });
 
-$("[data-backup-form]").addEventListener("submit", async (event) => {
-  event.preventDefault(); const data = formData(event.currentTarget);
+function clearManualProviderActivation() {
+  manualProviderConfirmation = null;
+  $("[data-manual-provider-card]").hidden = true;
+}
+
+function showManualProviderActivation(confirmation) {
+  if (!confirmation || confirmation.peerTransport === null || confirmation.peerTransport === undefined) {
+    clearManualProviderActivation();
+    return false;
+  }
+  const transport = pairing.providers.finalizedTransport(confirmation);
+  manualProviderConfirmation = confirmation;
+  $("[data-manual-provider-summary]").textContent = `${transport.displayName} · immutable ID ${transport.peerId}`;
+  $("[data-manual-provider-connect]").disabled = false;
+  $("[data-manual-provider-card]").hidden = false;
+  return true;
+}
+
+$("[data-manual-provider-connect]").addEventListener("click", async () => {
+  if (!requireUnlocked() || manualProviderConfirmation === null) return;
+  const button = $("[data-manual-provider-connect]");
+  button.disabled = true;
   try {
-    const providers = data.get("providers").split(/\s+/).filter(Boolean);
-    const result = await api("/api/v1/backups", { method: "POST", body: JSON.stringify({ sourceRoot: data.get("sourceRoot"), displayName: data.get("displayName"), snapshotId: data.get("snapshotId"), jobId: randomId("backup"), selectedProviderIds: providers }) });
-    await loadBackups();
-    say(`Backup complete: ${result.backupId}, ${result.entries} entries, ${result.selectedProviders} explicitly selected providers.`);
-  } catch (error) { fail(error); }
+    const activation = await pairing.providers.activate(api, manualProviderConfirmation);
+    providerConnections = activation.providers;
+    renderProviders(providerConnections);
+    const availability = pairing.providers.availability(activation.provider);
+    say(availability.eligible
+      ? "Backup device connected and ready to select in the Backup tab."
+      : `Backup device was connected, but ${availability.status}`);
+  } catch (error) {
+    button.disabled = false;
+    fail(error);
+  }
+});
+
+function setBackupSubmissionState(state, detail = "") {
+  const form = $("[data-backup-form]");
+  const submit = $("[data-backup-submit]");
+  const retry = $("[data-backup-retry]");
+  const status = $("[data-backup-status]");
+  const inFlight = state === "starting" || state === "acknowledging";
+  const confirmationPending = state === "ack_failed" || state === "receipt_blocked" || state === "lock_busy";
+  backupSubmissionInFlight = inFlight;
+  form.setAttribute("aria-busy", String(inFlight));
+  form.querySelectorAll("input, textarea, button").forEach((control) => {
+    if (control !== retry) control.disabled = inFlight || confirmationPending;
+  });
+  submit.textContent = state === "starting" ? "Starting backup…"
+    : state === "acknowledging" ? "Confirming receipt…"
+      : "Start backup";
+  retry.hidden = state !== "failed" && state !== "ack_failed" && state !== "lock_busy";
+  retry.textContent = state === "ack_failed" ? "Confirm receipt"
+    : state === "lock_busy" ? "Check again"
+      : "Try again";
+  retry.disabled = inFlight;
+  status.textContent = detail;
+  status.classList.toggle(
+    "error",
+    state === "failed" || state === "ack_failed" || state === "receipt_blocked" || state === "lock_busy",
+  );
+}
+
+function withBackupTerminalLock(callback) {
+  return backupTerminal.withExclusiveLock(callback, globalThis.navigator?.locks);
+}
+
+function newBackupAttempt(form) {
+  const data = formData(form);
+  return backupTerminal.requireAttempt({
+    sourceRoot: data.get("sourceRoot"),
+    displayName: data.get("displayName"),
+    snapshotId: data.get("snapshotId"),
+    selectedProviderIds: pairing.providers.selectedIds(providerConnections, selected(form, "providers")),
+    // Retry reuses this ID if a response was interrupted after acceptance.
+    jobId: randomId("backup"),
+  });
+}
+
+function backupCompletionCopy(result) {
+  return `Backup complete: ${result.backupId}, ${result.entries} entries, ${result.selectedProviders} explicitly selected providers.`;
+}
+
+async function requestBackupTerminalResult(attempt) {
+  const response = await apiResponse("/api/v1/backups", {
+    method: "POST",
+    body: JSON.stringify(attempt),
+  });
+  const acknowledgement = response.headers.get("x-covalent-job-ack-required");
+  if (acknowledgement !== "true") {
+    throw backupTerminal.guidance("This backup response had an invalid receipt-confirmation instruction, so it was not accepted.");
+  }
+  return {
+    result: response.body,
+    acknowledgementRequired: true,
+  };
+}
+
+async function refreshBackupsAfterTerminalResult(complete) {
+  try { await loadBackups(); }
+  catch (error) {
+    setBackupSubmissionState("complete", `${complete} The list could not refresh: ${errorCopy.describe(error).summary}`);
+  }
+}
+
+async function acknowledgeBackupTerminalReceipt(receipt = null) {
+  if (receipt === null) {
+    receipt = await backupTerminal.load(globalThis.localStorage, backupServerContext);
+  }
+  if (receipt === null || receipt.phase !== "receipt") return false;
+  const complete = backupCompletionCopy(receipt.result);
+  // The decoded result is already rendered below before this function is
+  // called. Only now may the terminal server result be acknowledged.
+  setBackupSubmissionState("acknowledging", `${complete} Confirming this receipt with the backup server…`);
+  try {
+    await backupTerminal.acknowledge(
+      globalThis.localStorage,
+      backupServerContext,
+      apiResponse,
+    );
+    setBackupSubmissionState("complete", `${complete} Receipt confirmed.`);
+    await refreshBackupsAfterTerminalResult(complete);
+    return true;
+  } catch (error) {
+    setBackupSubmissionState(
+      "ack_failed",
+      `${complete} Covalent could not confirm receipt yet. Use Confirm receipt to retry the same completed backup.`,
+    );
+    const failure = errorCopy.describe(error);
+    say(`Backup completed, but its receipt still needs confirmation. ${failure.summary}`, true, failure.detail);
+    return false;
+  }
+}
+
+async function resumeBackupTerminalReceipt() {
+  try {
+    return await withBackupTerminalLock(async () => {
+      const pending = await backupTerminal.load(globalThis.localStorage, backupServerContext);
+      if (pending === null) return false;
+      if (pending.phase === "request") {
+        failedBackupAttempt = pending.attempt;
+        setBackupSubmissionState(
+          "failed",
+          "A previous backup request may have reached the server. Use Try again to resume the same backup job safely.",
+        );
+        return true;
+      }
+      failedBackupAttempt = null;
+      const complete = backupCompletionCopy(pending.result);
+      setBackupSubmissionState("complete", `${complete} Resuming receipt confirmation…`);
+      say(`${complete} Resuming receipt confirmation.`);
+      await acknowledgeBackupTerminalReceipt(pending);
+      return true;
+    });
+  } catch (error) {
+    setBackupSubmissionState(
+      error?.covalentBackupLockFailure === "busy" ? "lock_busy" : "receipt_blocked",
+      error?.covalentBackupLockFailure === "busy"
+        ? "Another tab is handling the durable backup receipt. Use Check again after that tab closes."
+        : "A durable backup receipt cannot be verified or locked. Covalent kept it and blocked new backups to protect the server result.",
+    );
+    fail(error);
+    return true;
+  }
+}
+
+async function submitBackupLocked(attempt) {
+  failedBackupAttempt = null;
+  setBackupSubmissionState("starting", "Starting backup. Covalent is asking the backup server to read the selected folder.");
+  const receipt = await backupTerminal.submit(
+    globalThis.localStorage,
+    backupServerContext,
+    attempt,
+    requestBackupTerminalResult,
+  );
+  const complete = backupCompletionCopy(receipt.result);
+  setBackupSubmissionState("complete", complete);
+  say(complete);
+  // The exclusive same-origin lock remains held while the checked result is
+  // rendered and until the exact receipt is acknowledged or safely retained.
+  if (receipt.phase === "receipt") {
+    await acknowledgeBackupTerminalReceipt(receipt);
+  } else {
+    await refreshBackupsAfterTerminalResult(complete);
+  }
+}
+
+async function handleBackupTerminalFailure(error, attempt) {
+  if (error?.covalentBackupLockFailure) {
+    failedBackupAttempt = null;
+    const busy = error.covalentBackupLockFailure === "busy";
+    setBackupSubmissionState(
+      busy ? "lock_busy" : "receipt_blocked",
+      busy
+        ? "Another tab is handling a backup. Use Check again after that tab closes."
+        : "This browser cannot lock durable backup work across tabs, so no backup was sent.",
+    );
+    fail(error);
+    return;
+  }
+  let durableReceiptBlocked = false;
+  try {
+    await withBackupTerminalLock(() => backupTerminal.load(globalThis.localStorage, backupServerContext));
+  } catch (_) { durableReceiptBlocked = true; }
+  failedBackupAttempt = durableReceiptBlocked ? null : attempt;
+  setBackupSubmissionState(
+    durableReceiptBlocked ? "receipt_blocked" : "failed",
+    durableReceiptBlocked
+      ? "A durable backup receipt cannot be verified. Covalent kept it and blocked new backups to protect the server result."
+      : `Backup needs attention. ${errorCopy.describe(error).summary} Try again when ready.`,
+  );
+  fail(error);
+}
+
+async function submitBackup(attempt) {
+  if (backupSubmissionInFlight) return;
+  try {
+    await withBackupTerminalLock(() => submitBackupLocked(attempt));
+  } catch (error) {
+    await handleBackupTerminalFailure(error, attempt);
+  }
+}
+
+$("[data-backup-form]").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (backupSubmissionInFlight) return;
+  try { await submitBackup(newBackupAttempt(event.currentTarget)); }
+  catch (error) { fail(error); }
+});
+$("[data-backup-retry]").addEventListener("click", async () => {
+  if (backupSubmissionInFlight) return;
+  try {
+    await withBackupTerminalLock(async () => {
+      const pending = await backupTerminal.load(globalThis.localStorage, backupServerContext);
+      if (pending?.phase === "receipt") {
+        await acknowledgeBackupTerminalReceipt(pending);
+        return;
+      }
+      const retryAttempt = pending?.phase === "request" ? pending.attempt : failedBackupAttempt;
+      if (retryAttempt !== null && retryAttempt !== undefined) {
+        await submitBackupLocked(retryAttempt);
+      } else {
+        setBackupSubmissionState("complete", "No pending backup receipt remains in this browser.");
+        await loadBackups();
+      }
+    });
+  } catch (error) { await handleBackupTerminalFailure(error, failedBackupAttempt); }
 });
 
 $("[data-restore-preview]").addEventListener("submit", async (event) => {
@@ -845,9 +1183,12 @@ $("[data-settings-import]").addEventListener("submit", async (event) => {
 // reads back. The JSON exchange is the fallback path now, so nothing on the
 // network-pairing flow depends on it.
 function persistPairingSession(session) {
+  try { pairing.storage.saveTabSession(globalThis.sessionStorage, pairingStorageKey, session); } catch (_) {}
 }
 
 function clearPairingSession() {
+  try { pairing.storage.clearTabSession(globalThis.sessionStorage, pairingStorageKey); } catch (_) {}
+  clearManualProviderActivation();
   const form = $("[data-pair-confirm]");
   form.reset();
   $("[data-pair-consent]").hidden = true;
@@ -869,8 +1210,8 @@ function showPairingSession(session) {
 }
 
 try {
-  const savedPairingSession = sessionStorage.getItem(pairingStorageKey);
-  if (savedPairingSession) showPairingSession(JSON.parse(savedPairingSession));
+  const savedPairingSession = pairing.storage.loadTabSession(globalThis.sessionStorage, pairingStorageKey);
+  if (savedPairingSession) showPairingSession(savedPairingSession);
 } catch (_) { /* invalid or unavailable tab storage starts a fresh exchange */ }
 loadStatus();
 }

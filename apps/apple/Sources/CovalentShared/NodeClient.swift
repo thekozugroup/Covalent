@@ -40,18 +40,33 @@ public struct NodeConnectionConfiguration: Equatable, Sendable {
     }
 }
 
+/// Test-only interruption seams for the durable streamed-restore protocol.
+/// Production clients leave this unset; each checkpoint is positioned after a
+/// synced local transition and before the next irreversible step.
+public enum RestoreDurabilityCheckpoint: String, Sendable {
+    case request
+    case download
+    case extraction
+    case resultPersistence
+    case acknowledgement
+}
+
 public actor NodeClient {
+    private static let maximumRestoreDirectoryEntries = 4_096
+    private static let maximumPendingArchiveRestores = 1_024
     private let configuration: NodeConnectionConfiguration
     private let session: URLSession
     private let trustDelegate: PinnedServerTrustDelegate?
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
     private let transferDirectory: URL
+    private let restoreDurabilityFailpoint: (@Sendable (RestoreDurabilityCheckpoint) throws -> Void)?
 
     public init(
         configuration: NodeConnectionConfiguration = .localDefault,
         session: URLSession? = nil,
-        transferDirectory: URL? = nil
+        transferDirectory: URL? = nil,
+        restoreDurabilityFailpoint: (@Sendable (RestoreDurabilityCheckpoint) throws -> Void)? = nil
     ) {
         self.configuration = configuration
         if let session {
@@ -75,6 +90,7 @@ public actor NodeClient {
         encoder.dateEncodingStrategy = .iso8601
         self.encoder = encoder
         self.transferDirectory = transferDirectory ?? Self.defaultTransferDirectory()
+        self.restoreDurabilityFailpoint = restoreDurabilityFailpoint
     }
 
     public func status() async throws -> NodeStatus {
@@ -219,17 +235,37 @@ public actor NodeClient {
     }
 
     public func createBackup(_ request: BackupRequest) async throws -> BackupResponse {
-        try await send(path: "api/v1/backups", method: "POST", body: request, timeout: 86_400)
+        let body = try encoder.encode(request)
+        let (data, response) = try await execute(
+            path: "api/v1/backups",
+            queryItems: [],
+            method: "POST",
+            bodyData: body,
+            authenticated: true,
+            timeout: 86_400,
+            expectedStatusCodes: [200]
+        )
+        try requireJobAcknowledgement(response)
+        let result = try decode(BackupResponse.self, from: data)
+        try validateBackupResponse(
+            result,
+            backupId: request.backupId,
+            snapshotId: request.snapshotId,
+            selectedProviderCount: request.selectedProviderIds.count
+        )
+        return result
     }
 
     public func createBackupArchive(
         sourceURL: URL,
         metadata: ArchiveBackupMetadata,
+        sourceGrantId: UUID? = nil,
         onProgress: (@Sendable (TransferProgressSnapshot) -> Void)? = nil
     ) async throws -> BackupResponse {
         guard metadata.protocolVersion == covalentProtocolVersion else {
             throw NodeClientError.unsupportedProtocol(metadata.protocolVersion)
         }
+        guard configuration.apiToken != nil else { throw NodeClientError.missingToken }
         let metadataData = try encoder.encode(metadata)
         guard metadataData.count <= 32 * 1_024 else {
             throw NodeClientError.invalidPayload(NodeClientFailure(summary: "This backup's details are too large to send. Try a shorter backup name."))
@@ -241,8 +277,92 @@ public actor NodeClient {
         var upload = try await prepareArchiveUpload(
             sourceURL: sourceURL,
             metadata: metadata,
-            metadataData: metadataData
+            metadataData: metadataData,
+            sourceGrantId: sourceGrantId
         )
+        return try await uploadArchive(&upload, metadataData: metadataData, onProgress: onProgress)
+    }
+
+    /// Returns every trusted staged transfer, including results which were
+    /// accepted locally but could not yet be acknowledged to the server.
+    public func pendingArchiveBackups() async throws -> [PendingArchiveBackup] {
+        try Self.prepareTransferDirectory(transferDirectory)
+        try pruneOrphanedArchiveFiles()
+        let urls = try FileManager.default.contentsOfDirectory(
+            at: transferDirectory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )
+        let records = urls
+            .filter { $0.lastPathComponent.hasPrefix("upload-") && $0.pathExtension == "json" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        var pending: [PendingArchiveBackup] = []
+        pending.reserveCapacity(records.count)
+        for recordURL in records {
+            let record = try loadArchiveUploadRecord(at: recordURL)
+            try validateDurableArchiveUpload(
+                record,
+                at: recordURL,
+                expectedMetadata: record.metadata
+            )
+            try Self.validateStagedArchiveFile(record)
+            pending.append(record.pending)
+        }
+        return pending.sorted {
+            if $0.createdAt == $1.createdAt {
+                return $0.metadata.jobId < $1.metadata.jobId
+            }
+            return $0.createdAt < $1.createdAt
+        }
+    }
+
+    /// Continues an already-staged transfer. It never re-reads the original
+    /// source and therefore reuses the exact job ID, metadata, archive digest,
+    /// and authoritative suffix after an app relaunch.
+    public func resumePendingArchiveBackup(
+        jobId: String,
+        onProgress: (@Sendable (TransferProgressSnapshot) -> Void)? = nil
+    ) async throws -> BackupResponse {
+        let recordURL = archiveUploadRecordURL(jobId: jobId)
+        var upload = try loadArchiveUploadRecord(at: recordURL)
+        try validateDurableArchiveUpload(
+            upload,
+            at: recordURL,
+            expectedMetadata: upload.metadata
+        )
+        let metadataData = try encoder.encode(upload.metadata)
+        guard Self.sha256Hex(metadataData) == upload.metadataDigest else {
+            throw untrustedArchiveProgressError()
+        }
+        if upload.acceptedResponse != nil {
+            return try await uploadArchive(&upload, metadataData: metadataData, onProgress: onProgress)
+        }
+        let archivePath = upload.archivePath
+        let expectedLength = upload.length
+        let expectedDigest = upload.digest
+        let identity = try await Task.detached(priority: .userInitiated) {
+            try AppleArchiveTransfer.uploadIdentity(for: URL(fileURLWithPath: archivePath))
+        }.value
+        guard identity.length == expectedLength, identity.digest == expectedDigest else {
+            throw untrustedArchiveProgressError()
+        }
+        return try await uploadArchive(&upload, metadataData: metadataData, onProgress: onProgress)
+    }
+
+    private func uploadArchive(
+        _ upload: inout DurableArchiveUpload,
+        metadataData: Data,
+        onProgress: (@Sendable (TransferProgressSnapshot) -> Void)?
+    ) async throws -> BackupResponse {
+        if let accepted = upload.acceptedResponse {
+            try validateBackupResponse(
+                accepted,
+                backupId: upload.metadata.backupId,
+                snapshotId: upload.metadata.snapshotId,
+                selectedProviderCount: upload.metadata.selectedProviderIds.count
+            )
+            return accepted
+        }
         onProgress?(
             TransferProgressSnapshot(
                 phase: .transferring,
@@ -305,10 +425,16 @@ public actor NodeClient {
                 }
             }
             try validateHTTPResponse(data: data, response: http, expectedStatusCodes: [200])
-            guard http.value(forHTTPHeaderField: AppleArchiveTransfer.jobAcknowledgementRequiredHeader) == "true" else {
-                throw NodeClientError.invalidResponse
-            }
+            try requireJobAcknowledgement(http)
+            let accepted = try decode(BackupResponse.self, from: data)
+            try validateBackupResponse(
+                accepted,
+                backupId: upload.metadata.backupId,
+                snapshotId: upload.metadata.snapshotId,
+                selectedProviderCount: upload.metadata.selectedProviderIds.count
+            )
             upload.offset = upload.length
+            upload.acceptedResponse = accepted
             try persistArchiveUpload(upload)
             onProgress?(
                 TransferProgressSnapshot(
@@ -317,7 +443,7 @@ public actor NodeClient {
                     totalBytes: upload.length
                 )
             )
-            return try decode(BackupResponse.self, from: data)
+            return accepted
         }
         throw NodeClientError.transport(NodeClientFailure(summary: "This upload kept losing its place. Start the backup again.", recovery: .retry))
     }
@@ -373,24 +499,258 @@ public actor NodeClient {
     public func executeArchiveRestore(
         _ plan: RestorePlan,
         targetURL: URL,
+        destinationGrantId: UUID? = nil,
         onProgress: (@Sendable (TransferProgressSnapshot) -> Void)? = nil
     ) async throws -> RestoreResponse {
+        guard configuration.apiToken != nil else { throw NodeClientError.missingToken }
         onProgress?(TransferProgressSnapshot(phase: .preparing))
-        let freshInventory = try await uploadTargetInventory(targetURL: targetURL, jobId: plan.jobId)
-        let reboundReference = try await previewRestoreReference(
-            path: "api/v1/restores/archive/preview",
-            body: RestoreArchivePreviewRequest(
-                backupId: plan.backupId,
-                snapshotId: plan.snapshotId,
-                conflictPolicy: plan.conflictPolicy,
-                jobId: plan.jobId,
-                targetInventoryId: freshInventory.reference.inventoryId
+        var restore = try await prepareArchiveRestore(
+            plan: plan,
+            targetURL: targetURL,
+            destinationGrantId: destinationGrantId
+        )
+        return try await continueArchiveRestore(
+            &restore,
+            targetURL: targetURL,
+            onProgress: onProgress
+        )
+    }
+
+    /// Discovers a bounded batch of trusted restore journals. A terminal
+    /// result stays here until the caller has recorded it in its own history
+    /// and received a 204 acknowledgement from the server.
+    public func pendingArchiveRestores() async throws -> [PendingArchiveRestore] {
+        try Self.prepareTransferDirectory(transferDirectory)
+        try pruneOrphanedRestoreFiles()
+        let urls = try Self.boundedDirectoryContents(
+            at: transferDirectory,
+            maximumEntries: Self.maximumRestoreDirectoryEntries
+        )
+        let records = urls
+            .filter { $0.lastPathComponent.hasPrefix("restore-") && $0.pathExtension == "json" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            .prefix(Self.maximumPendingArchiveRestores)
+        var pending: [PendingArchiveRestore] = []
+        pending.reserveCapacity(records.count)
+        for recordURL in records {
+            do {
+                let restore = try loadArchiveRestoreRecord(at: recordURL)
+                try validateDurableArchiveRestore(restore, at: recordURL)
+                if restore.executionState != .prepared {
+                    try Self.validateStagedRestoreArchiveFile(restore)
+                }
+                pending.append(restore.pending)
+            } catch {
+                // One malformed or substituted journal must not prevent other
+                // authenticated receipts from being acknowledged. Preserve
+                // owner-private evidence under a name that discovery and
+                // orphan pruning will never treat as resumable state.
+                try? quarantineUntrustedArchiveRestore(at: recordURL)
+            }
+        }
+        return pending.sorted {
+            if $0.createdAt == $1.createdAt { return $0.plan.jobId < $1.plan.jobId }
+            return $0.createdAt < $1.createdAt
+        }
+    }
+
+    /// Continues a journaled restore after process recreation.  Applied
+    /// terminal results return directly, so acknowledgement retries never
+    /// download or extract the archive a second time.
+    public func resumePendingArchiveRestore(
+        jobId: String,
+        targetURL: URL,
+        destinationGrantId: UUID? = nil,
+        onProgress: (@Sendable (TransferProgressSnapshot) -> Void)? = nil
+    ) async throws -> RestoreResponse {
+        let recordURL = archiveRestoreRecordURL(jobId: jobId)
+        var restore = try loadArchiveRestoreRecord(at: recordURL)
+        try validateDurableArchiveRestore(
+            restore,
+            at: recordURL,
+            expectedPlan: restore.plan,
+            expectedDestinationGrantId: destinationGrantId
+        )
+        return try await continueArchiveRestore(
+            &restore,
+            targetURL: targetURL,
+            onProgress: onProgress
+        )
+    }
+
+    private func prepareArchiveRestore(
+        plan: RestorePlan,
+        targetURL: URL,
+        destinationGrantId: UUID?
+    ) async throws -> DurableArchiveRestore {
+        try Self.prepareTransferDirectory(transferDirectory)
+        let recordURL = archiveRestoreRecordURL(jobId: plan.jobId)
+        if try Self.transferEntryExistsNoFollow(at: recordURL, in: transferDirectory) {
+            let existing = try loadArchiveRestoreRecord(at: recordURL)
+            try validateDurableArchiveRestore(
+                existing,
+                at: recordURL,
+                expectedPlan: plan,
+                expectedDestinationGrantId: destinationGrantId
+            )
+            return existing
+        }
+        let draft = try await Task.detached(priority: .userInitiated) {
+            try AppleArchiveTransfer.makeTargetInventory(targetURL: targetURL)
+        }.value
+        try validateRestoreJournalPlan(plan, expectedInventory: draft)
+        var restore = DurableArchiveRestore(
+            schemaVersion: DurableArchiveRestore.currentSchemaVersion,
+            plan: plan,
+            destinationGrantId: destinationGrantId,
+            destinationInventory: draft,
+            connectionBinding: transferConnectionBinding(),
+            createdAt: Date(),
+            executionState: .prepared,
+            archivePath: nil,
+            archiveLength: nil,
+            archiveDigest: nil,
+            acceptedResponse: nil,
+            authenticationCode: ""
+        )
+        try persistArchiveRestore(&restore)
+        try restoreCheckpoint(.request)
+        return restore
+    }
+
+    private func continueArchiveRestore(
+        _ restore: inout DurableArchiveRestore,
+        targetURL: URL,
+        onProgress: (@Sendable (TransferProgressSnapshot) -> Void)?
+    ) async throws -> RestoreResponse {
+        let recordURL = archiveRestoreRecordURL(jobId: restore.plan.jobId)
+        try validateDurableArchiveRestore(restore, at: recordURL)
+        switch restore.executionState {
+        case .applied:
+            guard let result = restore.acceptedResponse else { throw untrustedArchiveRestoreError() }
+            return result
+        case .applying:
+            // There is no truthful way to distinguish an exit before a write
+            // from an exit after it. Reapplying could overwrite a destination,
+            // so require a fresh preview rather than guessing.
+            throw NodeClientError.invalidPayload(
+                NodeClientFailure(
+                    summary: "Covalent was interrupted while writing this restore. Its final folder state can't be proven, so it was not replayed.",
+                    recovery: .previewRestoreAgain
+                )
+            )
+        case .prepared, .downloaded:
+            break
+        }
+
+        try await validateRestoreDestination(restore, targetURL: targetURL)
+        if restore.executionState == .prepared {
+            try await rebindArchiveRestore(restore, targetURL: targetURL)
+            try await downloadArchiveRestore(&restore, onProgress: onProgress)
+        }
+
+        guard restore.executionState == .downloaded,
+              let archivePath = restore.archivePath,
+              let archiveLength = restore.archiveLength,
+              let archiveDigest = restore.archiveDigest,
+              let result = restore.acceptedResponse
+        else { throw untrustedArchiveRestoreError() }
+        let archiveURL = URL(fileURLWithPath: archivePath)
+        let archiveIdentity = try await Task.detached(priority: .userInitiated) {
+            try AppleArchiveTransfer.uploadIdentity(for: archiveURL)
+        }.value
+        guard archiveIdentity.length == archiveLength,
+              archiveIdentity.digest == archiveDigest
+        else { throw untrustedArchiveRestoreError() }
+        restore.executionState = .applying
+        try persistArchiveRestore(&restore)
+        try restoreCheckpoint(.extraction)
+        let extractionPlan = restore.plan
+        let destinationInventory = restore.destinationInventory
+        try await Task.detached(priority: .userInitiated) {
+            try AppleArchiveTransfer.extractRestoreArchive(
+                archiveURL,
+                to: targetURL,
+                plan: extractionPlan,
+                expectedInventory: destinationInventory
+            )
+        }.value
+        // This is the durability boundary after successful extraction. The
+        // terminal response was already verified before any write; recording
+        // `applied` before returning lets a relaunched app ACK without ever
+        // touching the destination again.
+        restore.executionState = .applied
+        try persistArchiveRestore(&restore)
+        try restoreCheckpoint(.resultPersistence)
+        onProgress?(
+            TransferProgressSnapshot(
+                phase: .finishing,
+                completedBytes: result.bytesWritten,
+                totalBytes: result.bytesWritten
             )
         )
-        guard reboundReference == plan.reference else {
-            throw NodeClientError.invalidPayload(NodeClientFailure(summary: "The folder you're restoring into changed since you previewed it. Preview the restore again.", recovery: .previewRestoreAgain))
+        return result
+    }
+
+    private func validateRestoreDestination(
+        _ restore: DurableArchiveRestore,
+        targetURL: URL
+    ) async throws {
+        let current = try await Task.detached(priority: .userInitiated) {
+            try AppleArchiveTransfer.makeTargetInventory(targetURL: targetURL)
+        }.value
+        guard current == restore.destinationInventory else {
+            throw NodeClientError.invalidPayload(
+                NodeClientFailure(
+                    summary: "The folder you're restoring into changed since you previewed it. Preview the restore again.",
+                    recovery: .previewRestoreAgain
+                )
+            )
         }
-        let body = try encoder.encode(RestoreExecuteRequest(planId: plan.planId))
+    }
+
+    /// The second inventory/preview request binds execution to the saved
+    /// immutable plan after the journal exists. A substituted inventory,
+    /// action list, destination, or plan never reaches the stream endpoint.
+    private func rebindArchiveRestore(
+        _ restore: DurableArchiveRestore,
+        targetURL: URL
+    ) async throws {
+        let inventory = try await uploadTargetInventory(targetURL: targetURL, jobId: restore.plan.jobId)
+        guard inventory.draft == restore.destinationInventory else {
+            throw untrustedArchiveRestoreError()
+        }
+        let rebound = try await previewRestoreReference(
+            path: "api/v1/restores/archive/preview",
+            body: RestoreArchivePreviewRequest(
+                backupId: restore.plan.backupId,
+                snapshotId: restore.plan.snapshotId,
+                conflictPolicy: restore.plan.conflictPolicy,
+                jobId: restore.plan.jobId,
+                targetInventoryId: inventory.reference.inventoryId
+            )
+        )
+        guard rebound == restore.plan.reference else {
+            throw NodeClientError.invalidPayload(
+                NodeClientFailure(
+                    summary: "The folder you're restoring into changed since you previewed it. Preview the restore again.",
+                    recovery: .previewRestoreAgain
+                )
+            )
+        }
+    }
+
+    private func downloadArchiveRestore(
+        _ restore: inout DurableArchiveRestore,
+        onProgress: (@Sendable (TransferProgressSnapshot) -> Void)?
+    ) async throws {
+        guard restore.executionState == .prepared,
+              restore.archivePath == nil,
+              restore.acceptedResponse == nil
+        else { throw untrustedArchiveRestoreError() }
+        let archiveURL = archiveRestoreFileURL(jobId: restore.plan.jobId)
+        try removeUnrecordedRestoreArchiveIfPresent(at: archiveURL)
+        let body = try encoder.encode(RestoreExecuteRequest(planId: restore.plan.planId))
         var request = try authenticatedRequest(
             path: "api/v1/restores/archive/execute",
             method: "POST",
@@ -401,12 +761,9 @@ public actor NodeClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let downloadedURL: URL
         let response: URLResponse
+        var journaled = false
         do {
             if let onProgress {
-                // The signed plan states an entry count, not a byte count, so
-                // the denominator comes from the response's content length.
-                // When the server sends none, the total stays nil and the UI
-                // falls back to an indeterminate bar rather than guessing.
                 let progress = TransferProgressDelegate(observesTaskProgress: true, report: onProgress)
                 (downloadedURL, response) = try await session.download(for: request, delegate: progress)
             } else {
@@ -428,35 +785,36 @@ public actor NodeClient {
         guard contentType == AppleArchiveTransfer.restoreContentType,
               let encodedResult = http.value(forHTTPHeaderField: AppleArchiveTransfer.restoreResultHeader),
               let resultData = Data(base64URLEncoded: encodedResult),
-              http.value(forHTTPHeaderField: AppleArchiveTransfer.restorePlanIdHeader) == plan.planId,
-              http.value(forHTTPHeaderField: AppleArchiveTransfer.restorePlanDigestHeader) == plan.planDigest,
+              http.value(forHTTPHeaderField: AppleArchiveTransfer.restorePlanIdHeader) == restore.plan.planId,
+              http.value(forHTTPHeaderField: AppleArchiveTransfer.restorePlanDigestHeader) == restore.plan.planDigest,
               http.value(forHTTPHeaderField: AppleArchiveTransfer.jobAcknowledgementRequiredHeader) == "true"
-        else {
-            throw NodeClientError.invalidResponse
-        }
+        else { throw NodeClientError.invalidResponse }
         let result = try decode(RestoreResponse.self, from: resultData)
-        // The signed result carries the authoritative byte count, so the bar
-        // lands on a true 100% before local extraction begins.
-        onProgress?(
-            TransferProgressSnapshot(
-                phase: .finishing,
-                completedBytes: result.bytesWritten,
-                totalBytes: result.bytesWritten
-            )
-        )
-        let archiveURL = try await Task.detached(priority: .userInitiated) {
-            try AppleArchiveTransfer.copyDownloadedArchive(downloadedURL)
+        let adopted = try await Task.detached(priority: .userInitiated) {
+            try AppleArchiveTransfer.copyDownloadedArchive(downloadedURL, to: archiveURL)
         }.value
-        defer { try? FileManager.default.removeItem(at: archiveURL) }
-        try await Task.detached(priority: .userInitiated) {
-            try AppleArchiveTransfer.extractRestoreArchive(
-                archiveURL,
-                to: targetURL,
-                plan: plan,
-                expectedInventory: freshInventory.draft
-            )
-        }.value
-        return result
+        do {
+            try Self.syncRegularFile(adopted)
+            try Self.syncDirectory(transferDirectory)
+            let identity = try await Task.detached(priority: .userInitiated) {
+                try AppleArchiveTransfer.uploadIdentity(for: adopted)
+            }.value
+            restore.archivePath = adopted.path
+            restore.archiveLength = identity.length
+            restore.archiveDigest = identity.digest
+            restore.acceptedResponse = result
+            restore.executionState = .downloaded
+            try persistArchiveRestore(&restore)
+            journaled = true
+            try restoreCheckpoint(.download)
+        } catch {
+            // The record remains `prepared`; remove only the exact private
+            // orphan, then let a later retry download the server-retained ZIP.
+            if !journaled {
+                try? removeUnrecordedRestoreArchiveIfPresent(at: adopted)
+            }
+            throw error
+        }
     }
 
     private func uploadTargetInventory(
@@ -547,13 +905,42 @@ public actor NodeClient {
     }
 
     public func acknowledgeJob(jobId: String) async throws {
+        // Validate a restore journal before contacting the server. A changed
+        // token/server context must not be allowed to acknowledge and release
+        // a receipt that belongs to a different connection.
+        let restoreURL = archiveRestoreRecordURL(jobId: jobId)
+        if try Self.transferEntryExistsNoFollow(at: restoreURL, in: transferDirectory) {
+            let restore = try loadArchiveRestoreRecord(at: restoreURL)
+            try validateDurableArchiveRestore(restore, at: restoreURL)
+            guard restore.executionState == .applied,
+                  restore.acceptedResponse != nil
+            else { throw untrustedArchiveRestoreError() }
+        }
+        try restoreCheckpoint(.acknowledgement)
         try await sendNoContent(path: "api/v1/jobs/acknowledge", body: JobReferenceRequest(jobId: jobId))
         try removeArchiveUpload(jobId: jobId)
+        try removeArchiveRestore(jobId: jobId)
     }
 
     public func discardJob(jobId: String) async throws {
         try await sendNoContent(path: "api/v1/jobs/discard", body: JobReferenceRequest(jobId: jobId))
         try removeArchiveUpload(jobId: jobId)
+    }
+
+    /// Retires an authenticated restore whose last local state is `applying`.
+    /// The destination is never opened: the server must first confirm an
+    /// idempotent discard, then the exact journal and staged ZIP are removed.
+    public func discardUncertainArchiveRestore(jobId: String) async throws {
+        let recordURL = archiveRestoreRecordURL(jobId: jobId)
+        if try Self.transferEntryExistsNoFollow(at: recordURL, in: transferDirectory) {
+            let restore = try loadArchiveRestoreRecord(at: recordURL)
+            try validateDurableArchiveRestore(restore, at: recordURL)
+            guard restore.plan.jobId == jobId,
+                  restore.executionState == .applying
+            else { throw untrustedArchiveRestoreError() }
+        }
+        try await sendNoContent(path: "api/v1/jobs/discard", body: JobReferenceRequest(jobId: jobId))
+        try removeUncertainArchiveRestore(jobId: jobId)
     }
 
     public func controlJob(jobId: String, action: JobAction) async throws -> JobControlResponse {
@@ -673,28 +1060,35 @@ public actor NodeClient {
     private func prepareArchiveUpload(
         sourceURL: URL,
         metadata: ArchiveBackupMetadata,
-        metadataData: Data
+        metadataData: Data,
+        sourceGrantId: UUID?
     ) async throws -> DurableArchiveUpload {
         try Self.prepareTransferDirectory(transferDirectory)
         let recordURL = archiveUploadRecordURL(jobId: metadata.jobId)
         let metadataDigest = Self.sha256Hex(metadataData)
         if FileManager.default.fileExists(atPath: recordURL.path) {
-            let record = try decoder.decode(
-                DurableArchiveUpload.self,
-                from: Data(contentsOf: recordURL, options: [.mappedIfSafe])
-            )
-            guard record.schemaVersion == 1,
-                  record.jobId == metadata.jobId,
-                  record.metadataDigest == metadataDigest,
-                  record.offset <= record.length
-            else {
-                throw NodeClientError.invalidPayload(NodeClientFailure(summary: "The saved progress for this backup can't be trusted. Start the backup again.", recovery: .retry))
+            var record = try loadArchiveUploadRecord(at: recordURL, legacyMetadata: metadata)
+            try validateDurableArchiveUpload(record, at: recordURL, expectedMetadata: metadata)
+            guard record.metadataDigest == metadataDigest,
+                  record.sourceGrantId == sourceGrantId || record.schemaVersion == 1
+            else { throw untrustedArchiveProgressError() }
+            try Self.validateStagedArchiveFile(record)
+            if record.acceptedResponse == nil {
+                let archivePath = record.archivePath
+                let expectedLength = record.length
+                let expectedDigest = record.digest
+                let identity = try await Task.detached(priority: .userInitiated) {
+                    try AppleArchiveTransfer.uploadIdentity(for: URL(fileURLWithPath: archivePath))
+                }.value
+                guard identity.length == expectedLength, identity.digest == expectedDigest else {
+                    throw untrustedArchiveProgressError()
+                }
             }
-            let identity = try await Task.detached(priority: .userInitiated) {
-                try AppleArchiveTransfer.uploadIdentity(for: URL(fileURLWithPath: record.archivePath))
-            }.value
-            guard identity.length == record.length, identity.digest == record.digest else {
-                throw NodeClientError.invalidPayload(NodeClientFailure(summary: "The files changed while this backup was interrupted. Start the backup again.", recovery: .retry))
+            if record.schemaVersion != DurableArchiveUpload.currentSchemaVersion {
+                record.schemaVersion = DurableArchiveUpload.currentSchemaVersion
+                record.sourceGrantId = sourceGrantId
+                record.createdAt = Date()
+                try persistArchiveUpload(record)
             }
             return record
         }
@@ -711,18 +1105,25 @@ public actor NodeClient {
         do {
             try FileManager.default.moveItem(at: temporary, to: archiveURL)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: archiveURL.path)
+            try Self.syncRegularFile(archiveURL)
+            try Self.syncDirectory(transferDirectory)
         } catch {
             try? FileManager.default.removeItem(at: temporary)
             throw error
         }
         let record = DurableArchiveUpload(
-            schemaVersion: 1,
+            schemaVersion: DurableArchiveUpload.currentSchemaVersion,
             jobId: metadata.jobId,
+            metadata: metadata,
             metadataDigest: metadataDigest,
+            connectionBinding: transferConnectionBinding(),
             archivePath: archiveURL.path,
             length: identity.length,
             digest: identity.digest,
-            offset: 0
+            offset: 0,
+            sourceGrantId: sourceGrantId,
+            createdAt: Date(),
+            acceptedResponse: nil
         )
         try persistArchiveUpload(record)
         return record
@@ -739,26 +1140,443 @@ public actor NodeClient {
         #endif
         try data.write(to: recordURL, options: writeOptions)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: recordURL.path)
+        try Self.syncRegularFile(recordURL)
+        try Self.syncDirectory(transferDirectory)
+    }
+
+    private func persistArchiveRestore(_ restore: inout DurableArchiveRestore) throws {
+        try Self.prepareTransferDirectory(transferDirectory)
+        restore.authenticationCode = try archiveRestoreAuthenticationCode(for: restore)
+        let data = try encoder.encode(restore)
+        let recordURL = archiveRestoreRecordURL(jobId: restore.plan.jobId)
+        try Self.writePrivateJournal(data, to: recordURL, in: transferDirectory)
     }
 
     private func removeArchiveUpload(jobId: String) throws {
         let recordURL = archiveUploadRecordURL(jobId: jobId)
-        guard FileManager.default.fileExists(atPath: recordURL.path) else { return }
-        let data = try Data(contentsOf: recordURL, options: [.mappedIfSafe])
-        let upload = try decoder.decode(DurableArchiveUpload.self, from: data)
+        guard try Self.transferEntryExistsNoFollow(at: recordURL, in: transferDirectory) else { return }
+        let upload = try loadArchiveUploadRecord(at: recordURL)
         guard upload.jobId == jobId,
               URL(fileURLWithPath: upload.archivePath).deletingLastPathComponent().standardizedFileURL
                 == transferDirectory.standardizedFileURL
         else {
             throw NodeClientError.invalidPayload(NodeClientFailure(summary: "The saved progress for this backup can't be trusted. Start the backup again.", recovery: .retry))
         }
-        try? FileManager.default.removeItem(atPath: upload.archivePath)
         try FileManager.default.removeItem(at: recordURL)
+        try Self.syncDirectory(transferDirectory)
+        do {
+            try FileManager.default.removeItem(atPath: upload.archivePath)
+        } catch let error as CocoaError where error.code == .fileNoSuchFile {
+            // A previous acknowledged cleanup already retired the archive.
+        }
+        try Self.syncDirectory(transferDirectory)
+    }
+
+    private func removeArchiveRestore(jobId: String) throws {
+        let recordURL = archiveRestoreRecordURL(jobId: jobId)
+        guard try Self.transferEntryExistsNoFollow(at: recordURL, in: transferDirectory) else { return }
+        let restore = try loadArchiveRestoreRecord(at: recordURL)
+        try validateDurableArchiveRestore(restore, at: recordURL)
+        guard restore.executionState == .applied,
+              let archivePath = restore.archivePath
+        else { throw untrustedArchiveRestoreError() }
+        try Self.unlinkTransferEntry(at: recordURL, in: transferDirectory)
+        try Self.syncDirectory(transferDirectory)
+        try Self.unlinkTransferEntry(
+            at: URL(fileURLWithPath: archivePath),
+            in: transferDirectory,
+            allowMissing: true
+        )
+        try Self.syncDirectory(transferDirectory)
+    }
+
+    private func removeUncertainArchiveRestore(jobId: String) throws {
+        let recordURL = archiveRestoreRecordURL(jobId: jobId)
+        guard try Self.transferEntryExistsNoFollow(at: recordURL, in: transferDirectory) else { return }
+        let restore = try loadArchiveRestoreRecord(at: recordURL)
+        try validateDurableArchiveRestore(restore, at: recordURL)
+        guard restore.executionState == .applying,
+              let archivePath = restore.archivePath
+        else { throw untrustedArchiveRestoreError() }
+        try Self.unlinkTransferEntry(at: recordURL, in: transferDirectory)
+        try Self.syncDirectory(transferDirectory)
+        try Self.unlinkTransferEntry(
+            at: URL(fileURLWithPath: archivePath),
+            in: transferDirectory,
+            allowMissing: true
+        )
+        try Self.syncDirectory(transferDirectory)
+    }
+
+    /// If the app exits after retiring an acknowledged record but before
+    /// unlinking its archive, the next discovery pass removes only that exact
+    /// owner-private, hash-named orphan. A record is always the source of
+    /// truth; this never touches an archive which can still be resumed.
+    private func pruneOrphanedArchiveFiles() throws {
+        let urls = try Self.boundedDirectoryContents(
+            at: transferDirectory,
+            maximumEntries: Self.maximumRestoreDirectoryEntries
+        )
+        var removed = false
+        for url in urls where url.pathExtension == "zip" {
+            let stem = url.deletingPathExtension().lastPathComponent
+            guard stem.hasPrefix("upload-") else { continue }
+            let digest = String(stem.dropFirst("upload-".count))
+            guard digest.isLowercaseHexDigest else { continue }
+            let recordURL = transferDirectory.appending(path: "\(stem).json")
+            guard try !Self.transferEntryExistsNoFollow(at: recordURL, in: transferDirectory) else { continue }
+            var metadata = stat()
+            guard lstat(url.path, &metadata) == 0,
+                  metadata.st_mode & S_IFMT == S_IFREG,
+                  metadata.st_uid == getuid(),
+                  metadata.st_mode & 0o077 == 0
+            else { throw NodeClientError.invalidResponse }
+            try FileManager.default.removeItem(at: url)
+            removed = true
+        }
+        if removed { try Self.syncDirectory(transferDirectory) }
+    }
+
+    private func pruneOrphanedRestoreFiles() throws {
+        let urls = try Self.boundedDirectoryContents(
+            at: transferDirectory,
+            maximumEntries: Self.maximumRestoreDirectoryEntries
+        )
+        var removed = false
+        for url in urls where url.pathExtension == "zip" {
+            let stem = url.deletingPathExtension().lastPathComponent
+            guard stem.hasPrefix("restore-") else { continue }
+            let digest = String(stem.dropFirst("restore-".count))
+            guard digest.isLowercaseHexDigest else { continue }
+            let recordURL = transferDirectory.appending(path: "\(stem).json")
+            guard try !Self.transferEntryExistsNoFollow(at: recordURL, in: transferDirectory) else { continue }
+            do {
+                try removeUnrecordedRestoreArchiveIfPresent(at: url)
+                removed = true
+            } catch {
+                // Preserve an unsafe inode (including a symlink) as evidence,
+                // but do not let it block authenticated restore journals.
+                continue
+            }
+        }
+        if removed { try Self.syncDirectory(transferDirectory) }
+    }
+
+    private func quarantineUntrustedArchiveRestore(at recordURL: URL) throws {
+        let stem = recordURL.deletingPathExtension().lastPathComponent
+        guard recordURL.deletingLastPathComponent().standardizedFileURL
+                == transferDirectory.standardizedFileURL,
+              stem.hasPrefix("restore-"),
+              String(stem.dropFirst("restore-".count)).isLowercaseHexDigest,
+              recordURL.pathExtension == "json"
+        else { throw untrustedArchiveRestoreError() }
+
+        // Validate the source inode without following links before renaming
+        // anything supplied by durable storage.
+        _ = try Self.readPrivateRegularFile(recordURL, maximumBytes: 32 * 1_024 * 1_024)
+        let nonce = UUID().uuidString.lowercased()
+        let quarantineDirectory = transferDirectory.appending(
+            path: "restore-quarantine",
+            directoryHint: .isDirectory
+        )
+        try Self.prepareTransferDirectory(quarantineDirectory)
+        let quarantinedRecord = quarantineDirectory.appending(
+            path: "\(stem)-\(nonce).json",
+            directoryHint: .notDirectory
+        )
+        let archiveURL = transferDirectory.appending(path: "\(stem).zip", directoryHint: .notDirectory)
+        let quarantinedArchive = quarantineDirectory.appending(
+            path: "\(stem)-\(nonce).zip",
+            directoryHint: .notDirectory
+        )
+        var movedArchive = false
+        if FileManager.default.fileExists(atPath: archiveURL.path) {
+            var metadata = stat()
+            guard lstat(archiveURL.path, &metadata) == 0,
+                  metadata.st_mode & S_IFMT == S_IFREG,
+                  metadata.st_uid == getuid(),
+                  metadata.st_mode & 0o077 == 0,
+                  Darwin.rename(archiveURL.path, quarantinedArchive.path) == 0
+            else { throw untrustedArchiveRestoreError() }
+            movedArchive = true
+        }
+        guard Darwin.rename(recordURL.path, quarantinedRecord.path) == 0 else {
+            if movedArchive {
+                _ = Darwin.rename(quarantinedArchive.path, archiveURL.path)
+            }
+            throw untrustedArchiveRestoreError()
+        }
+        try Self.syncDirectory(quarantineDirectory)
+        try Self.syncDirectory(transferDirectory)
+    }
+
+    private func removeUnrecordedRestoreArchiveIfPresent(at url: URL) throws {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        var metadata = stat()
+        guard lstat(url.path, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFREG,
+              metadata.st_uid == getuid(),
+              metadata.st_mode & 0o077 == 0
+        else { throw untrustedArchiveRestoreError() }
+        try Self.unlinkTransferEntry(at: url, in: transferDirectory)
+        try Self.syncDirectory(transferDirectory)
+    }
+
+    private func loadArchiveUploadRecord(
+        at recordURL: URL,
+        legacyMetadata: ArchiveBackupMetadata? = nil
+    ) throws -> DurableArchiveUpload {
+        guard recordURL.deletingLastPathComponent().standardizedFileURL
+                == transferDirectory.standardizedFileURL,
+              recordURL.lastPathComponent.hasPrefix("upload-"),
+              recordURL.pathExtension == "json"
+        else { throw untrustedArchiveProgressError() }
+        let data = try Self.readPrivateRegularFile(recordURL, maximumBytes: 128 * 1_024)
+        do {
+            return try decoder.decode(DurableArchiveUpload.self, from: data)
+        } catch {
+            guard let legacyMetadata,
+                  let legacy = try? decoder.decode(LegacyDurableArchiveUpload.self, from: data),
+                  legacy.schemaVersion == 1,
+                  legacy.jobId == legacyMetadata.jobId
+            else { throw untrustedArchiveProgressError() }
+            return DurableArchiveUpload(
+                schemaVersion: 1,
+                jobId: legacy.jobId,
+                metadata: legacyMetadata,
+                metadataDigest: legacy.metadataDigest,
+                connectionBinding: transferConnectionBinding(),
+                archivePath: legacy.archivePath,
+                length: legacy.length,
+                digest: legacy.digest,
+                offset: legacy.offset,
+                sourceGrantId: nil,
+                createdAt: Date.distantPast,
+                acceptedResponse: nil
+            )
+        }
+    }
+
+    private func loadArchiveRestoreRecord(at recordURL: URL) throws -> DurableArchiveRestore {
+        guard recordURL.deletingLastPathComponent().standardizedFileURL
+                == transferDirectory.standardizedFileURL,
+              recordURL.lastPathComponent.hasPrefix("restore-"),
+              recordURL.pathExtension == "json"
+        else { throw untrustedArchiveRestoreError() }
+        let data = try Self.readPrivateRegularFile(recordURL, maximumBytes: 32 * 1_024 * 1_024)
+        do {
+            return try decoder.decode(DurableArchiveRestore.self, from: data)
+        } catch {
+            throw untrustedArchiveRestoreError()
+        }
+    }
+
+    private func validateDurableArchiveUpload(
+        _ record: DurableArchiveUpload,
+        at recordURL: URL,
+        expectedMetadata: ArchiveBackupMetadata
+    ) throws {
+        let expectedRecordURL = archiveUploadRecordURL(jobId: record.jobId)
+        let archiveURL = URL(fileURLWithPath: record.archivePath)
+        let expectedArchiveURL = transferDirectory.appending(
+            path: "upload-\(Self.jobToken(record.jobId)).zip",
+            directoryHint: .notDirectory
+        )
+        guard (1...DurableArchiveUpload.currentSchemaVersion).contains(record.schemaVersion),
+              record.jobId == expectedMetadata.jobId,
+              record.metadata == expectedMetadata,
+              record.metadata.protocolVersion == covalentProtocolVersion,
+              record.metadataDigest == Self.sha256Hex(try encoder.encode(record.metadata)),
+              record.connectionBinding == transferConnectionBinding(),
+              record.offset <= record.length,
+              record.length > 0,
+              record.digest.isLowercaseHexDigest,
+              recordURL.standardizedFileURL == expectedRecordURL.standardizedFileURL,
+              archiveURL.standardizedFileURL == expectedArchiveURL.standardizedFileURL,
+              record.createdAt.timeIntervalSince1970.isFinite
+        else { throw untrustedArchiveProgressError() }
+        if let accepted = record.acceptedResponse {
+            guard record.offset == record.length else { throw untrustedArchiveProgressError() }
+            try validateBackupResponse(
+                accepted,
+                backupId: record.metadata.backupId,
+                snapshotId: record.metadata.snapshotId,
+                selectedProviderCount: record.metadata.selectedProviderIds.count
+            )
+        }
+    }
+
+    private func validateDurableArchiveRestore(
+        _ record: DurableArchiveRestore,
+        at recordURL: URL,
+        expectedPlan: RestorePlan? = nil,
+        expectedDestinationGrantId: UUID? = nil
+    ) throws {
+        try validateArchiveRestoreAuthentication(record)
+        let expectedRecordURL = archiveRestoreRecordURL(jobId: record.plan.jobId)
+        let expectedArchiveURL = archiveRestoreFileURL(jobId: record.plan.jobId)
+        guard record.schemaVersion == DurableArchiveRestore.currentSchemaVersion,
+              recordURL.standardizedFileURL == expectedRecordURL.standardizedFileURL,
+              record.connectionBinding == transferConnectionBinding(),
+              record.createdAt.timeIntervalSince1970.isFinite,
+              record.destinationInventory.rootIdentity == record.destinationRootIdentity,
+              expectedPlan == nil || record.plan == expectedPlan,
+              expectedDestinationGrantId == nil || record.destinationGrantId == expectedDestinationGrantId
+        else { throw untrustedArchiveRestoreError() }
+        try validateRestoreJournalPlan(record.plan, expectedInventory: record.destinationInventory)
+
+        switch record.executionState {
+        case .prepared:
+            guard record.archivePath == nil,
+                  record.archiveLength == nil,
+                  record.archiveDigest == nil,
+                  record.acceptedResponse == nil
+            else { throw untrustedArchiveRestoreError() }
+        case .downloaded, .applying, .applied:
+            guard record.archivePath == expectedArchiveURL.path,
+                  let length = record.archiveLength,
+                  length > 0,
+                  record.archiveDigest?.isLowercaseHexDigest == true,
+                  record.acceptedResponse != nil
+            else { throw untrustedArchiveRestoreError() }
+        }
+    }
+
+    private func archiveRestoreAuthenticationCode(for record: DurableArchiveRestore) throws -> String {
+        let payload = try encoder.encode(record.authenticatedFields)
+        let code = HMAC<SHA256>.authenticationCode(
+            for: payload,
+            using: try archiveRestoreAuthenticationKey()
+        )
+        return Data(code).base64URLEncodedString
+    }
+
+    private func validateArchiveRestoreAuthentication(_ record: DurableArchiveRestore) throws {
+        guard record.schemaVersion == DurableArchiveRestore.currentSchemaVersion,
+              let code = Data(base64URLEncoded: record.authenticationCode),
+              code.count == SHA256.byteCount
+        else { throw untrustedArchiveRestoreError() }
+        let payload = try encoder.encode(record.authenticatedFields)
+        guard HMAC<SHA256>.isValidAuthenticationCode(
+            code,
+            authenticating: payload,
+            using: try archiveRestoreAuthenticationKey()
+        ) else { throw untrustedArchiveRestoreError() }
+    }
+
+    private func archiveRestoreAuthenticationKey() throws -> SymmetricKey {
+        guard let token = configuration.apiToken else { throw untrustedArchiveRestoreError() }
+        var derivation = SHA256()
+        derivation.update(data: Data("covalent/apple-restore-journal-auth/v1\0".utf8))
+        derivation.update(data: Data(token.utf8))
+        return SymmetricKey(data: Data(derivation.finalize()))
+    }
+
+    private func validateRestoreJournalPlan(
+        _ plan: RestorePlan,
+        expectedInventory: AppleArchiveTransfer.TargetInventoryDraft
+    ) throws {
+        guard plan.planId.isLowercaseHexDigest,
+              plan.planDigest.isLowercaseHexDigest,
+              plan.manifestDigest.isLowercaseHexDigest,
+              plan.reference.signature.isEmpty == false,
+              plan.entries.count == plan.totalEntries,
+              plan.entries.count <= AppleArchiveTransfer.maximumEntries,
+              let binding = plan.targetInventory,
+              binding.schemaVersion == 1,
+              binding.rootIdentity == expectedInventory.rootIdentity,
+              binding.entryCount == UInt64(expectedInventory.entries.count),
+              binding.totalBytes == expectedInventory.totalBytes,
+              binding.inventoryDigest.isLowercaseHexDigest,
+              binding.actionsDigest.isLowercaseHexDigest
+        else { throw untrustedArchiveRestoreError() }
+        var destinations = Set<String>()
+        for entry in plan.entries {
+            guard !entry.sourcePath.isEmpty,
+                  !entry.destinationPath.isEmpty,
+                  destinations.insert("\(entry.destinationPath):\(entry.action.rawValue)").inserted
+            else { throw untrustedArchiveRestoreError() }
+        }
+    }
+
+    private func untrustedArchiveProgressError() -> NodeClientError {
+        .invalidPayload(
+            NodeClientFailure(
+                summary: "The saved progress for this backup can't be trusted. Start the backup again.",
+                recovery: .retry
+            )
+        )
+    }
+
+    private func untrustedArchiveRestoreError() -> NodeClientError {
+        .invalidPayload(
+            NodeClientFailure(
+                summary: "The saved restore progress can't be trusted. Preview the restore again.",
+                recovery: .previewRestoreAgain
+            )
+        )
+    }
+
+    private func restoreCheckpoint(_ checkpoint: RestoreDurabilityCheckpoint) throws {
+        try restoreDurabilityFailpoint?(checkpoint)
+    }
+
+    /// Binds staged plaintext archives to the authenticated server context
+    /// without persisting the bearer token itself. The API token is generated
+    /// with high entropy by that server; hashing it with the host and enrolled
+    /// certificate prevents a later connection from adopting another node's
+    /// staged data.
+    private func transferConnectionBinding() -> String {
+        var digest = SHA256()
+        digest.update(data: Data("covalent/apple-transfer-scope/v1\0".utf8))
+        digest.update(data: Data((configuration.baseURL.scheme?.lowercased() ?? "").utf8))
+        digest.update(data: Data([0]))
+        digest.update(data: Data((configuration.baseURL.host?.lowercased() ?? "").utf8))
+        digest.update(data: Data([0]))
+        digest.update(data: Data((configuration.apiToken ?? "").utf8))
+        digest.update(data: Data([0]))
+        if let certificate = configuration.trustedCertificateDER {
+            digest.update(data: certificate)
+        }
+        return digest.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func validateBackupResponse(
+        _ response: BackupResponse,
+        backupId: UUID?,
+        snapshotId: String,
+        selectedProviderCount: Int
+    ) throws {
+        guard response.snapshotId == snapshotId,
+              backupId == nil || response.backupId == backupId,
+              response.selectedProviders == selectedProviderCount,
+              response.degradedFailures <= response.selectedProviders
+        else { throw NodeClientError.invalidResponse }
+    }
+
+    private func requireJobAcknowledgement(_ response: HTTPURLResponse) throws {
+        guard response.value(
+            forHTTPHeaderField: AppleArchiveTransfer.jobAcknowledgementRequiredHeader
+        ) == "true" else { throw NodeClientError.invalidResponse }
     }
 
     private func archiveUploadRecordURL(jobId: String) -> URL {
         transferDirectory.appending(
             path: "upload-\(Self.jobToken(jobId)).json",
+            directoryHint: .notDirectory
+        )
+    }
+
+    private func archiveRestoreRecordURL(jobId: String) -> URL {
+        transferDirectory.appending(
+            path: "restore-\(Self.jobToken(jobId)).json",
+            directoryHint: .notDirectory
+        )
+    }
+
+    private func archiveRestoreFileURL(jobId: String) -> URL {
+        transferDirectory.appending(
+            path: "restore-\(Self.jobToken(jobId)).zip",
             directoryHint: .notDirectory
         )
     }
@@ -770,12 +1588,181 @@ public actor NodeClient {
     }
 
     private static func prepareTransferDirectory(_ directory: URL) throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let fileManager = FileManager.default
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        var metadata = stat()
+        guard lstat(directory.path, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFDIR,
+              metadata.st_uid == getuid()
+        else { throw NodeClientError.invalidResponse }
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
         var mutable = directory
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
         try? mutable.setResourceValues(values)
+    }
+
+    private static func boundedDirectoryContents(
+        at directory: URL,
+        maximumEntries: Int
+    ) throws -> [URL] {
+        guard maximumEntries > 0,
+              let enumerator = FileManager.default.enumerator(
+                  at: directory,
+                  includingPropertiesForKeys: nil,
+                  options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
+              )
+        else { throw NodeClientError.invalidResponse }
+        var urls: [URL] = []
+        urls.reserveCapacity(min(maximumEntries, 64))
+        while urls.count < maximumEntries,
+              let url = enumerator.nextObject() as? URL {
+            guard url.deletingLastPathComponent().standardizedFileURL
+                    == directory.standardizedFileURL
+            else { continue }
+            urls.append(url)
+        }
+        return urls
+    }
+
+    /// Removes only one exact directory entry. POSIX `unlink` never follows a
+    /// symlink and refuses directories, avoiding recursive deletion if a path
+    /// is swapped after its authenticated journal was read.
+    private static func unlinkTransferEntry(
+        at url: URL,
+        in directory: URL,
+        allowMissing: Bool = false
+    ) throws {
+        guard url.deletingLastPathComponent().standardizedFileURL
+                == directory.standardizedFileURL
+        else { throw NodeClientError.invalidResponse }
+        if Darwin.unlink(url.path) == 0 { return }
+        if allowMissing && errno == ENOENT { return }
+        throw NodeClientError.invalidResponse
+    }
+
+    private static func transferEntryExistsNoFollow(at url: URL, in directory: URL) throws -> Bool {
+        guard url.deletingLastPathComponent().standardizedFileURL
+                == directory.standardizedFileURL
+        else { throw NodeClientError.invalidResponse }
+        var metadata = stat()
+        if lstat(url.path, &metadata) == 0 { return true }
+        if errno == ENOENT { return false }
+        throw NodeClientError.invalidResponse
+    }
+
+    private static func readPrivateRegularFile(_ url: URL, maximumBytes: Int) throws -> Data {
+        let descriptor = Darwin.open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { throw NodeClientError.invalidResponse }
+        defer { Darwin.close(descriptor) }
+        var metadata = stat()
+        guard Darwin.fstat(descriptor, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFREG,
+              metadata.st_uid == getuid(),
+              metadata.st_mode & 0o077 == 0,
+              metadata.st_size >= 0,
+              metadata.st_size <= maximumBytes
+        else { throw NodeClientError.invalidResponse }
+        var data = Data(count: Int(metadata.st_size))
+        var completed = 0
+        try data.withUnsafeMutableBytes { bytes in
+            guard let base = bytes.baseAddress else { return }
+            while completed < bytes.count {
+                let count = Darwin.read(descriptor, base.advanced(by: completed), bytes.count - completed)
+                if count < 0, errno == EINTR { continue }
+                guard count > 0 else { throw NodeClientError.invalidResponse }
+                completed += count
+            }
+        }
+        var trailing = UInt8.zero
+        guard Darwin.read(descriptor, &trailing, 1) == 0 else {
+            throw NodeClientError.invalidResponse
+        }
+        return data
+    }
+
+    /// Writes journal bytes through a fresh 0600 descriptor, syncs that
+    /// descriptor, then atomically renames it into place and syncs the parent.
+    /// Unlike `Data.write(.atomic)`, no journal content is ever first created
+    /// with the process umask's potentially group-readable default mode.
+    private static func writePrivateJournal(_ data: Data, to url: URL, in directory: URL) throws {
+        guard url.deletingLastPathComponent().standardizedFileURL == directory.standardizedFileURL else {
+            throw NodeClientError.invalidResponse
+        }
+        let temporary = directory.appending(
+            path: ".\(url.lastPathComponent).\(UUID().uuidString.lowercased()).tmp",
+            directoryHint: .notDirectory
+        )
+        let descriptor = Darwin.open(
+            temporary.path,
+            O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+            mode_t(0o600)
+        )
+        guard descriptor >= 0 else { throw NodeClientError.invalidResponse }
+        var renamed = false
+        defer {
+            Darwin.close(descriptor)
+            if !renamed { _ = Darwin.unlink(temporary.path) }
+        }
+        try data.withUnsafeBytes { bytes in
+            guard var address = bytes.baseAddress else { return }
+            var remaining = bytes.count
+            while remaining > 0 {
+                let count = Darwin.write(descriptor, address, remaining)
+                if count < 0, errno == EINTR { continue }
+                guard count > 0 else { throw NodeClientError.invalidResponse }
+                address = address.advanced(by: count)
+                remaining -= count
+            }
+        }
+        guard Darwin.fsync(descriptor) == 0,
+              Darwin.rename(temporary.path, url.path) == 0
+        else { throw NodeClientError.invalidResponse }
+        renamed = true
+        try syncDirectory(directory)
+    }
+
+    private static func validateStagedArchiveFile(_ upload: DurableArchiveUpload) throws {
+        var metadata = stat()
+        guard lstat(upload.archivePath, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFREG,
+              metadata.st_uid == getuid(),
+              metadata.st_mode & 0o077 == 0,
+              metadata.st_size >= 0,
+              UInt64(metadata.st_size) == upload.length
+        else { throw NodeClientError.invalidResponse }
+    }
+
+    private static func validateStagedRestoreArchiveFile(_ restore: DurableArchiveRestore) throws {
+        guard let path = restore.archivePath,
+              let length = restore.archiveLength
+        else { throw NodeClientError.invalidResponse }
+        var metadata = stat()
+        guard lstat(path, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFREG,
+              metadata.st_uid == getuid(),
+              metadata.st_mode & 0o077 == 0,
+              metadata.st_size >= 0,
+              UInt64(metadata.st_size) == length
+        else { throw NodeClientError.invalidResponse }
+    }
+
+    private static func syncRegularFile(_ url: URL) throws {
+        let descriptor = Darwin.open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { throw NodeClientError.invalidResponse }
+        defer { Darwin.close(descriptor) }
+        var metadata = stat()
+        guard Darwin.fstat(descriptor, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFREG,
+              Darwin.fsync(descriptor) == 0
+        else { throw NodeClientError.invalidResponse }
+    }
+
+    private static func syncDirectory(_ url: URL) throws {
+        let descriptor = Darwin.open(url.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { throw NodeClientError.invalidResponse }
+        defer { Darwin.close(descriptor) }
+        guard Darwin.fsync(descriptor) == 0 else { throw NodeClientError.invalidResponse }
     }
 
     private static func jobToken(_ jobId: String) -> String {
@@ -1035,13 +2022,108 @@ private struct PairAcceptRequest: Codable, Sendable {
 }
 
 private struct DurableArchiveUpload: Codable, Sendable {
+    static let currentSchemaVersion: UInt16 = 2
+
+    var schemaVersion: UInt16
+    let jobId: String
+    let metadata: ArchiveBackupMetadata
+    let metadataDigest: String
+    let connectionBinding: String
+    let archivePath: String
+    let length: UInt64
+    let digest: String
+    var offset: UInt64
+    var sourceGrantId: UUID?
+    var createdAt: Date
+    var acceptedResponse: BackupResponse?
+
+    var pending: PendingArchiveBackup {
+        PendingArchiveBackup(
+            metadata: metadata,
+            sourceGrantId: sourceGrantId,
+            createdAt: createdAt,
+            completedBytes: offset,
+            totalBytes: length,
+            acceptedResponse: acceptedResponse
+        )
+    }
+}
+
+/// Owner-private restore journal. It contains no bearer token. Every field
+/// that can affect replay, destination writes, or terminal acknowledgement is
+/// authenticated with a token-derived key before it is trusted.
+private struct DurableArchiveRestore: Codable, Sendable {
+    static let currentSchemaVersion: UInt16 = 2
+
+    let schemaVersion: UInt16
+    let plan: RestorePlan
+    let destinationGrantId: UUID?
+    let destinationInventory: AppleArchiveTransfer.TargetInventoryDraft
+    let connectionBinding: String
+    let createdAt: Date
+    var executionState: ArchiveRestoreExecutionState
+    var archivePath: String?
+    var archiveLength: UInt64?
+    var archiveDigest: String?
+    var acceptedResponse: RestoreResponse?
+    var authenticationCode: String
+
+    var destinationRootIdentity: String { destinationInventory.rootIdentity }
+
+    var authenticatedFields: DurableArchiveRestoreAuthenticatedFields {
+        DurableArchiveRestoreAuthenticatedFields(
+            schemaVersion: schemaVersion,
+            plan: plan,
+            destinationGrantId: destinationGrantId,
+            destinationInventory: destinationInventory,
+            connectionBinding: connectionBinding,
+            createdAt: createdAt,
+            executionState: executionState,
+            archivePath: archivePath,
+            archiveLength: archiveLength,
+            archiveDigest: archiveDigest,
+            acceptedResponse: acceptedResponse
+        )
+    }
+
+    var pending: PendingArchiveRestore {
+        PendingArchiveRestore(
+            plan: plan,
+            destinationGrantId: destinationGrantId,
+            destinationRootIdentity: destinationRootIdentity,
+            createdAt: createdAt,
+            executionState: executionState,
+            acceptedResponse: acceptedResponse
+        )
+    }
+}
+
+private struct DurableArchiveRestoreAuthenticatedFields: Codable, Sendable {
+    let schemaVersion: UInt16
+    let plan: RestorePlan
+    let destinationGrantId: UUID?
+    let destinationInventory: AppleArchiveTransfer.TargetInventoryDraft
+    let connectionBinding: String
+    let createdAt: Date
+    let executionState: ArchiveRestoreExecutionState
+    let archivePath: String?
+    let archiveLength: UInt64?
+    let archiveDigest: String?
+    let acceptedResponse: RestoreResponse?
+}
+
+/// Schema 1 shipped only in development builds. It remains readable during an
+/// explicit retry, where the caller supplies the exact metadata whose digest
+/// is already bound into this record. It is intentionally not discoverable at
+/// launch because reconstructing missing metadata would be unsafe.
+private struct LegacyDurableArchiveUpload: Codable, Sendable {
     let schemaVersion: UInt16
     let jobId: String
     let metadataDigest: String
     let archivePath: String
     let length: UInt64
     let digest: String
-    var offset: UInt64
+    let offset: UInt64
 }
 
 /// Builds the request body for a resumable archive upload.

@@ -1,4 +1,5 @@
 import Combine
+import Darwin
 import Foundation
 
 @MainActor
@@ -185,6 +186,9 @@ public final class CovalentAppModel: ObservableObject {
     /// The operation "Try Again" re-runs. Held outside ``AppAlert`` so the
     /// alert itself stays `Equatable` and `Sendable`.
     private var alertRetry: (@MainActor () async -> Void)?
+    /// Authenticated journal selected for the fail-closed "Preview Again"
+    /// recovery after a process exit during destination writes.
+    private var uncertainRestoreJobId: String?
 
     private let connectionStore: SecureNodeConnectionStore
     private let persistence: AppleAppPersistence
@@ -210,9 +214,13 @@ public final class CovalentAppModel: ObservableObject {
             #if DEBUG
             let environment = ProcessInfo.processInfo.environment
             if let address = environment["COVALENT_UI_TEST_BASE_URL"],
-               let url = URL(string: address),
-               let token = environment["COVALENT_UI_TEST_TOKEN"],
-               let testingConfiguration = try? NodeConnectionConfiguration(baseURL: url, apiToken: token) {
+               let url = URL(string: address) {
+                guard let tokenFile = environment["COVALENT_UI_TEST_TOKEN_FILE"],
+                      let token = readPrivateUITestToken(relativePath: tokenFile),
+                      let testingConfiguration = try? NodeConnectionConfiguration(baseURL: url, apiToken: token)
+                else {
+                    preconditionFailure("Covalent UI test credential file is invalid")
+                }
                 loadedConfiguration = testingConfiguration
             } else {
                 loadedConfiguration = (try? connectionStore.load()) ?? .localDefault
@@ -405,6 +413,10 @@ public final class CovalentAppModel: ObservableObject {
             report(error, title: "Saved access could not be loaded")
         }
         await refresh()
+        if phase == .ready {
+            await reconcilePendingBackups(reportFailures: true)
+            await reconcilePendingRestores(reportFailures: true)
+        }
     }
 
     public func refresh() async {
@@ -488,6 +500,10 @@ public final class CovalentAppModel: ObservableObject {
             client = candidateClient
             presentation = nil
             await refresh()
+            if phase == .ready {
+                await reconcilePendingBackups(reportFailures: true)
+                await reconcilePendingRestores(reportFailures: true)
+            }
             return phase == .ready
         } catch {
             report(error, title: "Connection failed")
@@ -546,57 +562,75 @@ public final class CovalentAppModel: ObservableObject {
         sourceGrantId: UUID,
         selectedProviderIds: Set<UUID>
     ) async -> SnapshotRecord? {
+        let jobId = "backup-\(UUID().uuidString.lowercased())"
+        let metadata = ArchiveBackupMetadata(
+            backupId: existingBackupId,
+            displayName: displayName.trimmingCharacters(in: .whitespacesAndNewlines),
+            snapshotId: Self.snapshotIdentifier(),
+            jobId: jobId,
+            selectedProviderIds: selectedProviderIds.sorted { $0.uuidString < $1.uuidString }
+        )
+        return await performBackup(metadata: metadata, sourceGrantId: sourceGrantId)
+    }
+
+    private func performBackup(
+        metadata: ArchiveBackupMetadata,
+        sourceGrantId: UUID
+    ) async -> SnapshotRecord? {
         do {
             guard activeTask == nil else { throw AppModelError.operationInProgress }
             guard let grant = directoryGrants.first(where: { $0.id == sourceGrantId && $0.purpose == .backupSource }) else {
                 throw AppModelError.folderPermissionMissing
             }
-            let name = try validatedBackupName(displayName)
+            let name = try validatedBackupName(metadata.displayName)
+            guard name == metadata.displayName else { throw AppModelError.invalidBackupName }
             let connectedIds = Set(providers.map(\.peerId))
+            let selectedProviderIds = Set(metadata.selectedProviderIds)
             guard selectedProviderIds.isSubset(of: connectedIds) else {
                 throw AppModelError.providerNotConnected
             }
-            guard selectedProviderIds.isEmpty else {
+            let eligibleProviderIds = Set(providers.filter(\.isEligibleForBackup).map(\.peerId))
+            guard selectedProviderIds.isSubset(of: eligibleProviderIds) else {
                 throw AppModelError.providerCapacityUnverified
             }
-            let jobId = "backup-\(UUID().uuidString.lowercased())"
-            let snapshotId = Self.snapshotIdentifier()
-            activeTask = ActiveTask(kind: .backup, jobId: jobId, title: name)
+            activeTask = ActiveTask(kind: .backup, jobId: metadata.jobId, title: name)
             defer { activeTask = nil }
-            let resolved = try grant.resolve()
             let client = self.client
             let onProgress = progressSink()
-            let response = try await resolved.withCoordinatedRead { sourceURL in
-                try await client.createBackupArchive(
-                    sourceURL: sourceURL,
-                    metadata: ArchiveBackupMetadata(
-                        backupId: existingBackupId,
-                        displayName: name,
-                        snapshotId: snapshotId,
-                        jobId: jobId,
-                        selectedProviderIds: selectedProviderIds.sorted { $0.uuidString < $1.uuidString }
-                    ),
+            let pending = try await client.pendingArchiveBackups().first {
+                $0.metadata.jobId == metadata.jobId
+            }
+            let response: BackupResponse
+            if let pending {
+                guard pending.metadata == metadata,
+                      pending.sourceGrantId == sourceGrantId
+                else { throw AppModelError.pendingBackupMismatch }
+                response = try await client.resumePendingArchiveBackup(
+                    jobId: metadata.jobId,
                     onProgress: onProgress
                 )
+            } else {
+                let resolved = try grant.resolve()
+                response = try await resolved.withCoordinatedRead { sourceURL in
+                    try await client.createBackupArchive(
+                        sourceURL: sourceURL,
+                        metadata: metadata,
+                        sourceGrantId: sourceGrantId,
+                        onProgress: onProgress
+                    )
+                }
             }
-            let record = SnapshotRecord(
-                backupId: response.backupId,
-                displayName: name,
-                snapshotId: response.snapshotId,
-                sourceGrantId: grant.id,
-                selectedProviderIds: selectedProviderIds.sorted { $0.uuidString < $1.uuidString },
-                response: response,
-                integrity: response.degradedFailures == 0 ? .unknown : .degraded
-            )
-            snapshots.insert(record, at: 0)
-            try await persistence.saveSnapshots(snapshots)
+            let accepted = try await client.pendingArchiveBackups().first {
+                $0.metadata.jobId == metadata.jobId
+            }
+            guard let accepted,
+                  accepted.acceptedResponse == response,
+                  accepted.sourceGrantId == sourceGrantId
+            else { throw AppModelError.pendingBackupMismatch }
+            let record = try await persistAcceptedBackup(accepted)
             selectedSection = .backups
             presentation = nil
-            do {
-                try await client.acknowledgeJob(jobId: jobId)
-            } catch {
-                report(error, title: "Backup finished; staged retry cleanup is pending")
-            }
+            await acknowledgeAcceptedBackup(jobId: metadata.jobId)
             do {
                 settings = try await client.exportSettings()
                 backups = try await client.backups()
@@ -606,14 +640,191 @@ public final class CovalentAppModel: ObservableObject {
             return record
         } catch {
             report(error, title: "Backup didn't finish") { [weak self] in
-                _ = await self?.createBackup(
-                    displayName: displayName,
-                    existingBackupId: existingBackupId,
-                    sourceGrantId: sourceGrantId,
-                    selectedProviderIds: selectedProviderIds
-                )
+                _ = await self?.performBackup(metadata: metadata, sourceGrantId: sourceGrantId)
             }
             return nil
+        }
+    }
+
+    /// Reconciles staged jobs serially so every accepted result is saved in
+    /// local history before its server receipt is acknowledged and released.
+    private func reconcilePendingBackups(reportFailures: Bool) async {
+        let pending: [PendingArchiveBackup]
+        do {
+            pending = try await client.pendingArchiveBackups()
+        } catch {
+            if reportFailures { report(error, title: "Saved backup progress could not be checked") }
+            return
+        }
+        for item in pending {
+            guard activeTask == nil else { return }
+            do {
+                guard let sourceGrantId = item.sourceGrantId else {
+                    throw AppModelError.pendingBackupMismatch
+                }
+                activeTask = ActiveTask(
+                    kind: .backup,
+                    jobId: item.metadata.jobId,
+                    title: item.metadata.displayName
+                )
+                let response = try await client.resumePendingArchiveBackup(
+                    jobId: item.metadata.jobId,
+                    onProgress: progressSink()
+                )
+                let refreshed = try await client.pendingArchiveBackups().first {
+                    $0.metadata.jobId == item.metadata.jobId
+                }
+                guard let refreshed,
+                      refreshed.sourceGrantId == sourceGrantId,
+                      refreshed.acceptedResponse == response
+                else { throw AppModelError.pendingBackupMismatch }
+                _ = try await persistAcceptedBackup(refreshed)
+                await acknowledgeAcceptedBackup(jobId: item.metadata.jobId)
+            } catch {
+                if reportFailures {
+                    report(error, title: "An interrupted backup is still waiting to resume") { [weak self] in
+                        await self?.reconcilePendingBackups(reportFailures: true)
+                    }
+                }
+            }
+            activeTask = nil
+        }
+    }
+
+    private func persistAcceptedBackup(_ pending: PendingArchiveBackup) async throws -> SnapshotRecord {
+        guard let response = pending.acceptedResponse,
+              let sourceGrantId = pending.sourceGrantId,
+              response.snapshotId == pending.metadata.snapshotId,
+              pending.metadata.backupId == nil || response.backupId == pending.metadata.backupId,
+              response.selectedProviders == pending.metadata.selectedProviderIds.count
+        else { throw AppModelError.pendingBackupMismatch }
+        if let existing = snapshots.first(where: {
+            $0.backupId == response.backupId && $0.snapshotId == response.snapshotId
+        }) {
+            guard existing.displayName == pending.metadata.displayName,
+                  existing.sourceGrantId == sourceGrantId,
+                  existing.selectedProviderIds == pending.metadata.selectedProviderIds,
+                  existing.entries == response.entries,
+                  existing.bytesRead == response.bytesRead,
+                  existing.chunksStored == response.chunksStored,
+                  existing.chunksDeduplicated == response.chunksDeduplicated,
+                  existing.degradedFailures == response.degradedFailures
+            else { throw AppModelError.pendingBackupMismatch }
+            return existing
+        }
+        let record = SnapshotRecord(
+            backupId: response.backupId,
+            displayName: pending.metadata.displayName,
+            snapshotId: response.snapshotId,
+            createdAt: pending.createdAt,
+            sourceGrantId: sourceGrantId,
+            selectedProviderIds: pending.metadata.selectedProviderIds,
+            response: response,
+            integrity: response.degradedFailures == 0 ? .unknown : .degraded
+        )
+        var candidate = snapshots
+        candidate.insert(record, at: 0)
+        try await persistence.saveSnapshots(candidate)
+        snapshots = candidate
+        return record
+    }
+
+    private func acknowledgeAcceptedBackup(jobId: String) async {
+        do {
+            try await client.acknowledgeJob(jobId: jobId)
+        } catch {
+            report(error, title: "Backup finished; staged retry cleanup is pending") { [weak self] in
+                await self?.reconcilePendingBackups(reportFailures: true)
+            }
+        }
+    }
+
+    /// Reopens only trusted restore journals.  A journal that has already
+    /// reached `applied` contains the accepted server result, so startup ACKs
+    /// it directly without reopening the archive or writing the destination.
+    private func reconcilePendingRestores(reportFailures: Bool) async {
+        let pending: [PendingArchiveRestore]
+        do {
+            pending = try await client.pendingArchiveRestores()
+        } catch {
+            if reportFailures { report(error, title: "Saved restore progress could not be checked") }
+            return
+        }
+        for item in pending {
+            guard activeTask == nil else { return }
+            do {
+                activeTask = ActiveTask(
+                    kind: .restore,
+                    jobId: item.plan.jobId,
+                    title: snapshots.first(where: { $0.snapshotId == item.plan.snapshotId })?.displayName ?? "Backup"
+                )
+                if item.executionState == .applying {
+                    uncertainRestoreJobId = item.plan.jobId
+                    throw NodeClientError.invalidPayload(
+                        NodeClientFailure(
+                            summary: "Covalent was interrupted while writing this restore. Its final folder state can't be proven, so it was not replayed.",
+                            recovery: .previewRestoreAgain
+                        )
+                    )
+                }
+                let response: RestoreResponse
+                if item.executionState == .applied {
+                    guard let accepted = item.acceptedResponse else {
+                        throw AppModelError.pendingRestoreMismatch
+                    }
+                    response = accepted
+                } else {
+                    guard let destinationGrantId = item.destinationGrantId,
+                          let grant = directoryGrants.first(where: {
+                              $0.id == destinationGrantId && $0.purpose == .restoreDestination
+                          })
+                    else { throw AppModelError.pendingRestoreMismatch }
+                    let resolved = try grant.resolve()
+                    let client = self.client
+                    let onProgress = progressSink()
+                    response = try await resolved.withCoordinatedWrite { targetURL in
+                        try await client.resumePendingArchiveRestore(
+                            jobId: item.plan.jobId,
+                            targetURL: targetURL,
+                            destinationGrantId: destinationGrantId,
+                            onProgress: onProgress
+                        )
+                    }
+                }
+                lastRestoreResult = response
+                restorePreview = nil
+                await acknowledgeAcceptedRestore(jobId: item.plan.jobId)
+            } catch {
+                if reportFailures {
+                    report(error, title: "An interrupted restore is still waiting to resume") { [weak self] in
+                        await self?.reconcilePendingRestores(reportFailures: true)
+                    }
+                }
+            }
+            activeTask = nil
+        }
+    }
+
+    private func acknowledgeAcceptedRestore(jobId: String) async {
+        do {
+            try await client.acknowledgeJob(jobId: jobId)
+        } catch {
+            report(error, title: "Restore finished; staged retry cleanup is pending") { [weak self] in
+                await self?.reconcilePendingRestores(reportFailures: true)
+            }
+        }
+    }
+
+    private func discardUncertainRestoreAndReturnToBackups(jobId: String) async {
+        do {
+            try await client.discardUncertainArchiveRestore(jobId: jobId)
+            if uncertainRestoreJobId == jobId { uncertainRestoreJobId = nil }
+            restorePreview = nil
+            selectedSection = .backups
+        } catch {
+            report(error, title: "Interrupted restore could not be discarded") { [weak self] in
+                await self?.discardUncertainRestoreAndReturnToBackups(jobId: jobId)
+            }
         }
     }
 
@@ -762,16 +973,13 @@ public final class CovalentAppModel: ObservableObject {
                 try await client.executeArchiveRestore(
                     context.plan,
                     targetURL: targetURL,
+                    destinationGrantId: grant.id,
                     onProgress: onProgress
                 )
             }
             lastRestoreResult = response
             restorePreview = nil
-            do {
-                try await client.acknowledgeJob(jobId: context.plan.jobId)
-            } catch {
-                report(error, title: "Restore finished; staged retry cleanup is pending")
-            }
+            await acknowledgeAcceptedRestore(jobId: context.plan.jobId)
             return response
         } catch {
             report(error, title: "Restore didn't finish") { [weak self] in
@@ -1102,6 +1310,7 @@ public final class CovalentAppModel: ObservableObject {
         guard let alert else { return nil }
         let recovery = alert.recovery
         let retry = alertRetry
+        let uncertainRestoreJobId = uncertainRestoreJobId
         clearAlert()
         switch recovery {
         case .checkNetworkSettings, .freeUpSpace, .none:
@@ -1131,8 +1340,13 @@ public final class CovalentAppModel: ObservableObject {
             }
         case .previewRestoreAgain:
             return { [weak self] in
-                self?.dismissRestorePreview()
-                self?.selectedSection = .backups
+                guard let self else { return }
+                if let uncertainRestoreJobId {
+                    await self.discardUncertainRestoreAndReturnToBackups(jobId: uncertainRestoreJobId)
+                } else {
+                    self.dismissRestorePreview()
+                    self.selectedSection = .backups
+                }
             }
         }
     }
@@ -1142,6 +1356,67 @@ public final class CovalentAppModel: ObservableObject {
         return "s\(milliseconds)-\(UUID().uuidString.lowercased())"
     }
 }
+
+#if DEBUG
+/// UI-test launch metadata contains only this relative, non-secret basename. The
+/// harness pre-provisions the file in the target app's Application Support
+/// container; production launches never enter this code path.
+private func readPrivateUITestToken(relativePath: String) -> String? {
+    guard relativePath.hasPrefix("ui-token-"),
+          relativePath.utf8.count > "ui-token-".utf8.count,
+          (1...96).contains(relativePath.utf8.count),
+          relativePath.utf8.allSatisfy({ byte in
+              (0x30...0x39).contains(byte) ||
+                  (0x41...0x5A).contains(byte) ||
+                  (0x61...0x7A).contains(byte) ||
+                  byte == 0x2D
+          }),
+          let applicationSupport = FileManager.default.urls(
+              for: .applicationSupportDirectory,
+              in: .userDomainMask
+          ).first
+    else {
+        return nil
+    }
+
+    let tokenDirectory = applicationSupport
+        .appendingPathComponent("CovalentUITests", isDirectory: true)
+    let tokenURL = tokenDirectory.appendingPathComponent(relativePath, isDirectory: false)
+    guard tokenURL.deletingLastPathComponent().resolvingSymlinksInPath()
+        == tokenDirectory.resolvingSymlinksInPath()
+    else {
+        return nil
+    }
+
+    let descriptor = Darwin.open(tokenURL.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+    guard descriptor >= 0 else { return nil }
+    defer { Darwin.close(descriptor) }
+
+    var metadata = stat()
+    guard Darwin.fstat(descriptor, &metadata) == 0,
+          (metadata.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG),
+          metadata.st_uid == getuid(),
+          (metadata.st_mode & mode_t(0o777)) == mode_t(0o600),
+          (32...513).contains(Int(metadata.st_size))
+    else {
+        return nil
+    }
+
+    let byteCount = Int(metadata.st_size)
+    var bytes = [UInt8](repeating: 0, count: byteCount)
+    let readCount = bytes.withUnsafeMutableBytes { buffer in
+        Darwin.read(descriptor, buffer.baseAddress, byteCount)
+    }
+    guard readCount == byteCount else { return nil }
+    let payload = bytes.last == 0x0A ? Array(bytes.dropLast()) : bytes
+    guard (32...512).contains(payload.count),
+          payload.allSatisfy({ (0x20...0x7E).contains($0) })
+    else {
+        return nil
+    }
+    return try? SecureNodeConnectionStore.parseTokenFile(Data(payload))
+}
+#endif
 
 /// Holds the newest progress snapshot and admits one main-actor hop at a time.
 ///
@@ -1182,6 +1457,8 @@ public enum AppModelError: Error, Equatable, Sendable {
     case restorePreviewMissing
     case invalidDeviceName
     case invalidBackupName
+    case pendingBackupMismatch
+    case pendingRestoreMismatch
     case invalidEndpoint
     case unsupportedSettings
     case settingsFileTooLarge
@@ -1203,6 +1480,8 @@ extension AppModelError: LocalizedError {
         case .restorePreviewMissing: "Create a fresh restore preview before restoring files."
         case .invalidDeviceName: "Use a device name from 1 to 80 characters."
         case .invalidBackupName: "Use a backup name from 1 to 120 characters."
+        case .pendingBackupMismatch: "The saved backup progress does not match this backup. Start it again only after discarding the staged job."
+        case .pendingRestoreMismatch: "The saved restore progress does not match its selected folder. Preview the restore again."
         case .invalidEndpoint: "Enter a reachable host and port for this device."
         case .unsupportedSettings: "This settings file uses an unsupported schema version."
         case .settingsFileTooLarge: "The settings file is larger than the 2 MiB limit."

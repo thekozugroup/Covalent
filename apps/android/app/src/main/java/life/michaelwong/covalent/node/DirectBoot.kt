@@ -129,6 +129,12 @@ internal class CredentialProtectedPreferences(context: Context, private val name
         delegate()?.edit(action = block)
     }
 
+    /** Synchronous atomic preference replacement for credential-envelope migrations. */
+    fun commit(block: SharedPreferences.Editor.() -> Unit): Boolean {
+        val preferences = delegate() ?: return false
+        return preferences.edit().apply(block).commit()
+    }
+
     private fun delegate(): SharedPreferences? {
         opened?.let { return it }
         if (!DirectBoot.isUserUnlocked(applicationContext)) return null

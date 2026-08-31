@@ -45,4 +45,4 @@ One process owns a node state directory through an exclusive lock. Identity, bac
 
 ## Readiness isolation
 
-Shared engine and contract failures block every affected supported platform, and any supported-platform failure blocks release. iOS is not a supported platform, so iOS-specific UI, signing, simulator, or background gaps never affect release readiness; the `iOS Tier 2` CI lane runs but is deliberately absent from every release workflow's required-check list.
+Shared engine and contract failures block every affected supported platform, and any supported-platform failure blocks release. iOS is not a supported platform, so iOS-specific UI, signing, simulator, or background gaps never affect release readiness; its informational CI lane runs but is deliberately absent from every release workflow's required-check list.

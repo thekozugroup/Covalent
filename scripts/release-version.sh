@@ -16,7 +16,7 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cargo_manifest="$repo_root/Cargo.toml"
 android_gradle="$repo_root/apps/android/app/build.gradle.kts"
 apple_project="$repo_root/apps/apple/Project.yml"
-unraid_template="$repo_root/packaging/unraid/covalent.xml"
+workspace_manifests="$repo_root"/crates/*/Cargo.toml
 
 fail() {
   echo "$1" >&2
@@ -25,7 +25,7 @@ fail() {
 
 # Case-sensitive filesystems are unforgiving here: these paths must match the
 # tracked names exactly, or every version reads as empty and looks like drift.
-for required_file in "$cargo_manifest" "$android_gradle" "$apple_project" "$unraid_template"; do
+for required_file in "$cargo_manifest" "$android_gradle" "$apple_project"; do
   [ -f "$required_file" ] || fail "version file is missing: $required_file"
 done
 
@@ -64,8 +64,31 @@ read_apple_project_version() {
   awk -F'"' '/^ *CURRENT_PROJECT_VERSION: / { print $2; exit }' "$apple_project"
 }
 
-read_unraid_version() {
-  awk -F'[:<]' '/<Repository>/ { print $3; exit }' "$unraid_template"
+check_workspace_dependency_versions() {
+  expected=$1
+  status=0
+  for manifest in $workspace_manifests; do
+    while IFS= read -r line; do
+      actual=$(printf '%s\n' "$line" | sed -n 's/.*version = "\([0-9][0-9.]*\)".*path = "\.\.\/covalent-[^"]*".*/\1/p')
+      [ -n "$actual" ] || continue
+      if [ "$actual" != "$expected" ]; then
+        echo "version drift: $manifest has internal Covalent dependency $actual, expected $expected" >&2
+        status=1
+      fi
+    done < "$manifest"
+  done
+  return "$status"
+}
+
+rewrite_workspace_dependency_versions() {
+  version=$1
+  for manifest in $workspace_manifests; do
+    tmp="$manifest.release-version.tmp"
+    sed \
+      "/path = \"\.\.\/covalent-/ s/version = \"[0-9][0-9.]*\"/version = \"$version\"/" \
+      "$manifest" > "$tmp"
+    mv "$tmp" "$manifest"
+  done
 }
 
 rewrite() {
@@ -97,8 +120,9 @@ do_check() {
   assert "apps/android/app/build.gradle.kts versionCode" "$(read_android_version_code)" "$expected_build"
   assert "apps/apple/Project.yml MARKETING_VERSION" "$(read_apple_marketing_version)" "$version"
   assert "apps/apple/Project.yml CURRENT_PROJECT_VERSION" "$(read_apple_project_version)" "$expected_build"
-  assert "packaging/unraid/covalent.xml Repository tag" "$(read_unraid_version)" "v$version"
-
+  if ! check_workspace_dependency_versions "$version"; then
+    status=1
+  fi
   if [ "$status" -ne 0 ]; then
     echo "run: scripts/release-version.sh set $version" >&2
     exit 1
@@ -114,8 +138,7 @@ do_set() {
   rewrite "$cargo_manifest" "1,/^version = \"/ s/^version = \".*\"/version = \"$version\"/"
   rewrite "$android_gradle" "s/versionName = \".*\"/versionName = \"$version\"/; s/versionCode = .*/versionCode = $build/"
   rewrite "$apple_project" "s/^\\( *MARKETING_VERSION: \\).*/\\1\"$version\"/; s/^\\( *CURRENT_PROJECT_VERSION: \\).*/\\1\"$build\"/"
-  rewrite "$unraid_template" "s|<Repository>\(.*\):v[0-9][0-9.]*</Repository>|<Repository>\1:v$version</Repository>|"
-
+  rewrite_workspace_dependency_versions "$version"
   do_check
   echo "remember to run 'cargo update --workspace' so Cargo.lock records $version"
 }

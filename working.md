@@ -1,64 +1,59 @@
 # Working state
 
-Updated: 2026-08-16
+Updated: 2026-08-31
 
 ## Status
 
-The active remediation is an uncommitted, unpushed worktree based on `e241381211ff2be5030255cc359892a9be1e445f`. It is not a release candidate and no older ignored artifact is exact-current evidence. Tier 1 remains macOS, Android, Docker, and Unraid; iOS remains a separately reported Tier 2 track.
+The exact-current local `v0.2.0` release candidate from
+`dafca8efebaf904ed886d48ba8371b0fde53af56` is validated and ready for its
+milestone commit. Tier 1 is Android, Apple Silicon macOS, Docker, and Unraid.
+iOS is informational only and unsupported. This is not a deployment: no
+`v0.2.0` tag, replacement immutable image digest, published personal-use native
+artifact, or live Atlas installation exists.
 
-## Completed in this iteration
+## Current release changes
 
-- Replaced quadratic full-checkpoint rewrites with append-only recovery journals and bounded compaction; added authenticated snapshot binding, retention-safe garbage collection, two-phase restore recovery, immutable provider writes, roster/config recovery, cancellation, and bounded multi-provider scheduling.
-- Reworked daemon job admission, TTL/LRU cleanup, disconnect cancellation, byte-aware peer limits, bounded QUIC work, durable archive results, explicit acknowledgement/discard, and restore previews as durable IDs with 1–1,000-entry pages and execute-by-ID.
-- Refused non-loopback cleartext management. Docker and Unraid now terminate HTTPS in a pinned same-container Caddy process while the daemon listens on loopback. Runtime and three-node checks enroll the generated CA and keep hostname verification enabled.
-- Completed two-sided web pairing exchange and role consent. Web restore review is paginated and executes only the persisted plan ID.
-- Rebuilt the Android onboarding, pairing, connection truth, backup/restore selection, persistent transfer lifecycle, bounded work queues, SAF safety, API 37 targeting, strict CA/certificate pinning, dependency inventory, and release artifact gates.
-- Added Apple exact-CA Keychain enrollment, descriptor-relative no-follow archive extraction with root/child swap-race tests, bounded disk admission, durable restore-plan pagination/IDs, archive result acknowledgement, exact role consent, and iOS expiration-driven pause/cancel plus BGProcessing refresh scheduling.
-- Repaired the Xcode 26 macOS UI runner assembly hang by building first, re-sealing the completed runner, then running with process-group timeouts and uploaded diagnostics. The harness still fails immediately with exit 75 if the headed login session is locked; the current unlocked session completed the UI tests without an authentication bypass.
-- Added hardened runtime/nested secure timestamp rules and a fail-closed Developer ID/notarization/stapling workflow. Added source, Apple, Android, and container inventory/SBOM/checksum policy and third-party notices.
-- Restricted macOS to Apple Silicon: the Xcode project, Rust helper build, CI, release workflow, validation scripts, and release evidence require exact arm64 app/helper binaries and explicitly reject x86_64 or multi-architecture requests.
-- Pinned CI actions and container bases, added required platform gates, safe scan-before-tag container promotion, CodeQL, Dependabot, repository templates/CODEOWNERS, and protected-main direct delivery. Production releases additionally require a verified signed commit and zero open CodeQL alerts; remote ruleset separation is documented in `docs/release/signed-history-policy.md` and awaits maintainer signing-key setup.
-- The container now uses a pinned Alpine 3.23 runtime for both `linux/amd64` and `linux/arm64`; CI asserts the documented base, OCI base labels, exact revision label, and the 96 MiB budget on both architectures.
+- Versioned authenticated envelopes protect long-lived Rust node secrets.
+  Docker/Unraid use a separate owner-only KEK, macOS uses Keychain, and Android
+  uses Android Keystore. Missing or wrong protection fails closed.
+- First-run ownership is a durable CLI-only HTTPS claim. Existing local-token
+  deployments migrate as already claimed; native and web clients accept tokens,
+  never setup codes.
+- Backup/archive terminal results persist until clients acknowledge them.
+  Clients preserve retry identity and receipts across reload, restart, and
+  interruption; retained results apply bounded backpressure.
+- Provider work uses durable bounded leases and streaming transfers. New
+  snapshots use a 512 KiB average CDC chunk size; old recorded boundaries remain
+  readable. Two consecutive exact 1 GiB source-loss gates completed at 26.127
+  MiB/s and 25.860 MiB/s with exact provider-only restore and enforced RSS/disk
+  ceilings.
+- The macOS product and helper are arm64-only. Android targets API 37. Docker
+  and Unraid remain Tier 1 with an immutable-digest-only template. Tailscale
+  use is explicit-address routing, not container-side Tailnet discovery.
+- Beginner setup now starts at one guide and ends with a verified restore.
+  One-command personal builders produce a checked ad-hoc Apple Silicon app and
+  a checked debug-signed Android APK. Docker setup uses separated, validated
+  host paths; blocked Unraid and Atlas deployment paths are labeled honestly.
 
-## Current executable evidence
+## Required remaining evidence
 
-- Exact-current Rust workspace: format and Clippy with warnings denied passed; 89 unit, integration, contract, production-scenario, and QUIC tests passed. Release `covalent-node` and CLI builds passed at 8,297,648 and 3,346,768 bytes.
-- Exact-current tree scale: durable pause/resume plus restore passed at 10,000 entries in 7.73 seconds, 100,000 in 76.69 seconds, and 1,000,000 in 722.55 seconds. The final million-entry provider tail used all sources at 179.85/179.26/182.24 MiB/s for 1/2/4 providers. A separate default run measured 76,070,912-byte maximum RSS.
-- Apple shared tests: 21 passed on arm64, including exact CA parsing, durable restore-plan pagination/ID execution, descriptor confinement, and root/child swap races. The real-daemon archive integration passed. The Apple Silicon-only macOS Debug build and Release archive passed; both the app and embedded helper are thin arm64 binaries with no x86_64 slice, valid hardened-runtime ad-hoc signatures, and exact helper sandbox inheritance entitlements. The headed primary-workflow UI test passed. Focused native checks honestly retain two failures: the system accessibility audit flags one unlabeled disabled outer group generated by `NavigationSplitView`, and this machine's crowded menu bar places the minimum icon-only 42.5-point status item at x=-1 so a real click is not hittable. The earlier exact-source iOS simulator Debug build also passed.
-- Android: 21 debug unit tests and 15/15 API 37 instrumentation tests passed on headed `Covalent_API_37` / `emulator-5570`. The packaged direct-IP TLS gate proved default-trust and wrong-CA rejection, enrolled exact-CA authentication, wrong-token rejection, and exact leaf-pin authentication. The deterministic Android SBOM and license inventory each contain 85 reviewed components; all 13 release-evidence checksums passed.
-- Web contract tests: 4 passed. A separate headed Playwright run used two packaged HTTPS nodes to exchange the invitation/session, compare the exact identities, roles, and code, add both signatures, finalize both sides, and verify reciprocal epoch-1 rosters.
-- The final 63,089,026-byte package passed rootless/read-only/no-capability TLS runtime checks and the native Apple trust test. The three-node drill passed explicit two-provider replication, source loss, corruption rejection and repair, safe settings import, paginated signed plan-ID restore, and root confinement.
-- OpenAPI 3.1 lint and exact Axum coverage passed for 30 operations. GitHub workflow lint, shell syntax, repository diff checks, Rust advisory audit, Rust dependency/license/source policy, Apple inventory checksums, and Unraid template validation passed.
-- The active public-main ruleset remains enforced with signed linear history, deletion/non-fast-forward protection, strict required software checks, and the repository-owner direct-main bypass. Dependabot security updates, secret scanning and push protection, and private vulnerability reporting remain enabled.
+1. Commit and push the signed release candidate; wait for exact-commit hosted CI,
+   CodeQL, and supply-chain results.
+2. Create and verify the `v0.2.0` signed tag and published artifacts. Record the
+   newly produced immutable container digest, then update the Unraid template
+   atomically. Do not substitute a mutable tag or invent a digest.
+3. Run the documented read-only Atlas preflight. A real Atlas/Unraid install,
+   Tailnet pairing, upgrade, backup, and restore drill need explicit deployment
+   authority and remain unperformed.
+4. Publish the personal-use native scope honestly: ad-hoc Apple Silicon macOS
+   and debug-signed Android APK. Apple Developer ID/notarization is excluded;
+   Android production signing is deferred. Do not relabel either personal
+   artifact as store-signed or notarized.
 
-## Open technical evidence and remediation
+## Install and migration references
 
-1. The byte-aware QUIC pacing and bounded transport remove the fixed 512-operation ceiling, but the executable real transfer covers 900,000 bytes. The 10 GiB check is a mathematical pacing model, not a real 1/10 GiB QUIC transfer gate.
-2. Archive admission, quotas, deadlines, retained-result acknowledgement, and cleanup are bounded, but backup still stages the uploaded ZIP plus extracted tree and restore still stages the materialized tree plus result ZIP. Direct streaming that eliminates full-size disk amplification remains open.
-3. Garbage collection now authenticates roots and uses generation-safe bounded batches, but there is no million-chunk concurrent-write GC performance gate or in-benchmark RSS assertion. The million-entry evidence covers tree backup/restore, not million-chunk GC.
-4. Schema readers migrate legacy config, backup keys, snapshot metadata, and backup/restore checkpoints in place. There is no checked-in prior-package state bundle or end-to-end prior-release package upgrade drill.
-5. Cross-chunk restore scheduling is bounded, cancellation stops new work, and transport deadlines bound stalled calls. The provider trait still has no batch API, delayed hedge, or cancellation of an already in-flight provider call.
-
-## Release blockers
-
-1. The headed macOS primary workflow passes, but release UI evidence is not fully green: XCTest reports one unlabeled disabled outer `NavigationSplitView` group, and the current crowded menu bar pushes the minimum icon-only Covalent status item offscreen so its real click path fails. These failures are retained rather than suppressed or replaced with descendant-existence checks.
-2. Developer ID, App Store/Android signing, and Apple notarization credentials are unavailable. Credentialed workflows fail closed rather than producing ad-hoc release artifacts.
-3. No physical Unraid host or Tailnet topology was supplied. Clean install, upgrade, selected-share, optional read-only boot-share, remembered-peer, and signed-preview restore drills remain external hardware/network gates.
-4. The versioned GHCR image does not exist until the exact release commit passes CI, scan, SBOM, keyless signature/attestation, and promotion. The Unraid template remains a candidate until that digest and the live host drill exist.
-5. iOS background expiration now pauses the node job and schedules `BGProcessingTask`, but process-termination rehydration of the original security-scoped archive request and physical-device acceptance remain open Tier 2 work.
-6. No commit or push is authorized for this remediation effect. Exact-current remote CI and publication evidence cannot exist before the owner chooses to version these changes.
-
-## Next steps
-
-1. Decide whether release scope requires closing the real 1/10 GiB QUIC, streaming archive, million-chunk concurrent-GC, and prior-package fixture gates before versioning.
-2. With the owner present, unlock the headed macOS session and run `apps/apple/Scripts/macos-ui-test.sh`.
-3. Register the maintainer signing key, split the remote rulesets as documented, and make a verified signed commit before a credentialed release.
-4. Supply signing/notary secrets to the guarded workflows, promote immutable artifacts, then perform the documented physical Unraid and Tailnet drills.
-
-## Release-prep iteration 2 (2026-08-16)
-
-- `./scripts/check-artifact-budgets.sh --image-only covalent:ci` passed. Image size was 33,632,384 bytes; the explicit image-only mode intentionally did not require host release binaries.
-- `mobilecli device info --device Covalent_API_37` and `adb -s emulator-5570` confirmed the only operated Android device was headed `Covalent_API_37` / API 37. No Bloop device was targeted.
-- The API 37 gate now serializes the AVD, rejects active instrumentation, enables the exact test package, and invokes instrumentation directly with the packaged TLS inputs. The fresh headed run completed 15 tests in 674.742 seconds: 14 passed and `largeTextToolbarUsesStableIconFirstAccessibleActions` failed because its full-app fixture had no Compose hierarchy. The test now isolates the compact toolbar under large text, and the harness fails closed on any nonzero `INSTRUMENTATION_CODE`. The one-test rerun exited and released its lock, but its terminal result was not retained by the local wrapper; it is not recorded as passed. Hosted/full device validation remains required.
-- The arm64 macOS UI harness built and re-sealed successfully, but its fresh `xcresult` creation aborted before any verdict. The harness now fails closed unless its result bundle parses and proves all three named UI tests passed with no failures or skips. The last complete unfiltered audit remains red for the host-offscreen status item and one unlabeled `NavigationSplitView` wrapper.
-- Local CI checks passed: actionlint, OpenAPI route coverage (30 operations), Redocly lint, Git diff check, and the image-only budget. Hosted CI and CodeQL for the published commit remain pending.
+- [v0.2.0 release candidate notes](docs/release/notes/v0.2.0.md)
+- [Docker](packaging/docker/README.md)
+- [Unraid](docs/platform/unraid.md)
+- [Atlas/Tailscale](docs/platform/atlas-tailscale.md)
+- [UI tour](docs/product/ui-tour.md)

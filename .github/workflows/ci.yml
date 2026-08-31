@@ -366,7 +366,7 @@ jobs:
           pre-emulator-launch-script: |
             "$ANDROID_HOME/platform-tools/adb" start-server
             ./scripts/check-android.sh
-            docker build --file packaging/docker/Dockerfile --build-arg VCS_REF=$(git rev-parse HEAD) --tag covalent:android-api37-e2e .
+            docker build --file packaging/docker/Dockerfile --build-arg VCS_REF=$(git rev-parse HEAD) --build-arg COVALENT_SOURCE_FINGERPRINT=$(./scripts/docker-source-fingerprint.sh . | shasum -a 256 | awk '{print $1}') --tag covalent:android-api37-e2e .
           # This lane dies of one graphics-transport fault reached by several
           # different callers. The caller that made the guest unbootable is removed
           # in scripts/disable-android-guest-launcher.sh, and that part is fixed.
@@ -689,8 +689,15 @@ jobs:
       # workflow, so across 27 runs on main it consumed the job and none of these
       # ever concluded. They test the native image and do not need the arm64 one,
       # so the arm64 build now lives in its own job and cannot shadow them.
-      - run: docker buildx build --platform linux/amd64 --load --build-arg VCS_REF=${{ github.sha }} -f packaging/docker/Dockerfile -t covalent:ci .
-      - run: ./scripts/check-container-contract.sh covalent:ci "${GITHUB_SHA}"
+      - name: Compute the exact Docker source fingerprint
+        id: docker-source
+        run: |
+          set -euo pipefail
+          fingerprint=$(./scripts/docker-source-fingerprint.sh . | sha256sum | awk '{print $1}')
+          [[ "${fingerprint}" =~ ^[0-9a-f]{64}$ ]]
+          echo "fingerprint=${fingerprint}" >> "${GITHUB_OUTPUT}"
+      - run: docker buildx build --platform linux/amd64 --load --build-arg VCS_REF=${{ github.sha }} --build-arg COVALENT_SOURCE_FINGERPRINT=${{ steps.docker-source.outputs.fingerprint }} -f packaging/docker/Dockerfile -t covalent:ci .
+      - run: ./scripts/check-container-contract.sh covalent:ci "${GITHUB_SHA}" development "${{ steps.docker-source.outputs.fingerprint }}"
       - run: docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp --entrypoint covalent covalent:ci doctor
       - run: ./scripts/check-container-runtime.sh covalent:ci
       - run: ./scripts/check-artifact-budgets.sh --image-only covalent:ci --platform linux/amd64
@@ -712,7 +719,15 @@ jobs:
       # No setup-qemu-action: the runner is already arm64, so linux/arm64 is
       # this machine's native platform and there is nothing left to emulate.
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - run: docker buildx build --platform linux/arm64 --load --build-arg VCS_REF=${{ github.sha }} -f packaging/docker/Dockerfile -t covalent:ci-arm64 .
+      - name: Compute the exact Docker source fingerprint
+        id: docker-source
+        run: |
+          set -euo pipefail
+          fingerprint=$(./scripts/docker-source-fingerprint.sh . | sha256sum | awk '{print $1}')
+          [[ "${fingerprint}" =~ ^[0-9a-f]{64}$ ]]
+          echo "fingerprint=${fingerprint}" >> "${GITHUB_OUTPUT}"
+      - run: docker buildx build --platform linux/arm64 --load --build-arg VCS_REF=${{ github.sha }} --build-arg COVALENT_SOURCE_FINGERPRINT=${{ steps.docker-source.outputs.fingerprint }} -f packaging/docker/Dockerfile -t covalent:ci-arm64 .
+      - run: ./scripts/check-container-contract.sh covalent:ci-arm64 "${GITHUB_SHA}" development "${{ steps.docker-source.outputs.fingerprint }}"
       - run: ./scripts/check-artifact-budgets.sh --image-only covalent:ci-arm64 --platform linux/arm64
 
   ios-tier2:
@@ -800,4 +815,4 @@ jobs:
             echo "Release candidate rejected: not every software gate concluded success." >&2
             exit 1
           fi
-          echo "Software gates passed. Signing, notarization, published image, and live Unraid evidence remain separate release blockers."
+          echo "Software gates passed. The published image and live Unraid evidence remain separate release blockers; Apple Developer ID is excluded and Android production signing is deferred."

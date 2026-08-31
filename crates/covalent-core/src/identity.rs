@@ -12,10 +12,13 @@ use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::CoreError;
-use crate::atomic::{read_json_bounded, sync_directory};
+use crate::atomic::{read_json_bounded, sync_directory, write_atomic_noclobber, write_json_atomic};
+use crate::{KeyProtector, WrappedSecret, state_secret_context};
 
-const IDENTITY_SCHEMA_VERSION: u16 = 1;
+const LEGACY_IDENTITY_SCHEMA_VERSION: u16 = 1;
+const PROTECTED_IDENTITY_SCHEMA_VERSION: u16 = 2;
 const MAX_IDENTITY_FILE_BYTES: usize = 16 * 1_024;
+const IDENTITY_SECRET_PURPOSE: &str = "device-identity";
 
 /// Public device identity safe to share during pairing.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -94,9 +97,10 @@ impl DeviceIdentity {
 
     pub(crate) fn from_recovery_secret(
         device_id: DeviceId,
-        secret: [u8; 32],
+        mut secret: [u8; 32],
     ) -> Result<Self, CoreError> {
         let signing_key = SigningKey::from_bytes(&secret);
+        secret.zeroize();
         let identity = Self {
             device_id,
             signing_key,
@@ -109,8 +113,40 @@ impl DeviceIdentity {
         Zeroizing::new(self.signing_key.to_bytes())
     }
 
-    pub(crate) fn persist_recovered(&self, path: &Path) -> Result<(), CoreError> {
-        self.persist_new(path)
+    pub(crate) fn persist_recovered_protected(
+        &self,
+        path: &Path,
+        state_root: &Path,
+        protector: &dyn KeyProtector,
+    ) -> Result<(), CoreError> {
+        self.persist_protected(path, state_root, protector)
+    }
+
+    /// Loads or creates an identity whose private material is KEK-wrapped.
+    pub(crate) fn load_or_create_protected(
+        path: &Path,
+        state_root: &Path,
+        protector: &dyn KeyProtector,
+    ) -> Result<Self, CoreError> {
+        match fs::symlink_metadata(path) {
+            Ok(metadata) => {
+                validate_identity_metadata(&metadata)?;
+                Self::load_protected_or_migrate(path, state_root, protector)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let identity = Self::generate();
+                if identity.persist_protected_new(path, state_root, protector)? {
+                    Ok(identity)
+                } else {
+                    Self::load_protected_or_migrate(path, state_root, protector)
+                }
+            }
+            Err(source) => Err(CoreError::Io {
+                operation: "inspect protected device identity",
+                path: path.to_path_buf(),
+                source,
+            }),
+        }
     }
 
     /// Loads an existing identity or creates one with crash-safe, private persistence.
@@ -168,7 +204,7 @@ impl DeviceIdentity {
             }
         }
         let persisted: PersistedIdentity = read_json_bounded(path, MAX_IDENTITY_FILE_BYTES)?;
-        if persisted.schema_version != IDENTITY_SCHEMA_VERSION {
+        if persisted.schema_version != LEGACY_IDENTITY_SCHEMA_VERSION {
             return Err(CoreError::InvalidState(
                 "unsupported identity schema".to_owned(),
             ));
@@ -253,7 +289,7 @@ impl DeviceIdentity {
         }
         let private_bytes = Zeroizing::new(self.signing_key.to_bytes());
         let persisted = PersistedIdentity {
-            schema_version: IDENTITY_SCHEMA_VERSION,
+            schema_version: LEGACY_IDENTITY_SCHEMA_VERSION,
             device_id: self.device_id,
             public_key: self.public_identity().public_key,
             private_key: Zeroizing::new(URL_SAFE_NO_PAD.encode(private_bytes.as_ref())),
@@ -294,6 +330,129 @@ impl DeviceIdentity {
             })?;
         sync_directory(parent)
     }
+
+    fn load_protected_or_migrate(
+        path: &Path,
+        state_root: &Path,
+        protector: &dyn KeyProtector,
+    ) -> Result<Self, CoreError> {
+        let value: serde_json::Value = read_json_bounded(path, MAX_IDENTITY_FILE_BYTES)?;
+        let schema_version = value
+            .get("schemaVersion")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| CoreError::InvalidState("identity schema is missing".to_owned()))?;
+        match schema_version {
+            _ if schema_version == u64::from(PROTECTED_IDENTITY_SCHEMA_VERSION) => {
+                let persisted: ProtectedIdentity = serde_json::from_value(value)?;
+                let context = state_secret_context(state_root, "identity.json");
+                let plaintext = persisted.protected_private_key.open(
+                    protector,
+                    IDENTITY_SECRET_PURPOSE,
+                    &context,
+                )?;
+                let payload: ProtectedIdentityPayload = serde_json::from_slice(&plaintext)?;
+                if payload.device_id != persisted.device_id {
+                    return Err(CoreError::AuthenticationFailed);
+                }
+                let identity =
+                    identity_from_encoded_secret(payload.device_id, &payload.private_key)?;
+                if identity.public_identity().public_key != persisted.public_key {
+                    return Err(CoreError::IdentityMismatch);
+                }
+                Ok(identity)
+            }
+            _ if schema_version == u64::from(LEGACY_IDENTITY_SCHEMA_VERSION) => {
+                let identity = Self::load(path)?;
+                identity.persist_protected(path, state_root, protector)?;
+                Ok(identity)
+            }
+            _ => Err(CoreError::InvalidState(
+                "unsupported identity schema".to_owned(),
+            )),
+        }
+    }
+
+    fn protected_record(
+        &self,
+        state_root: &Path,
+        protector: &dyn KeyProtector,
+    ) -> Result<ProtectedIdentity, CoreError> {
+        let secret = Zeroizing::new(self.signing_key.to_bytes());
+        let payload = ProtectedIdentityPayload {
+            device_id: self.device_id,
+            private_key: Zeroizing::new(URL_SAFE_NO_PAD.encode(secret.as_ref())),
+        };
+        let plaintext = Zeroizing::new(serde_json::to_vec(&payload)?);
+        let context = state_secret_context(state_root, "identity.json");
+        Ok(ProtectedIdentity {
+            schema_version: PROTECTED_IDENTITY_SCHEMA_VERSION,
+            device_id: self.device_id,
+            public_key: self.public_identity().public_key,
+            protected_private_key: WrappedSecret::protect(
+                protector,
+                IDENTITY_SECRET_PURPOSE,
+                &context,
+                plaintext,
+            )?,
+        })
+    }
+
+    fn persist_protected(
+        &self,
+        path: &Path,
+        state_root: &Path,
+        protector: &dyn KeyProtector,
+    ) -> Result<(), CoreError> {
+        write_json_atomic(path, &self.protected_record(state_root, protector)?, true)
+    }
+
+    fn persist_protected_new(
+        &self,
+        path: &Path,
+        state_root: &Path,
+        protector: &dyn KeyProtector,
+    ) -> Result<bool, CoreError> {
+        let bytes = Zeroizing::new(serde_json::to_vec_pretty(
+            &self.protected_record(state_root, protector)?,
+        )?);
+        write_atomic_noclobber(path, &bytes, true)
+    }
+}
+
+fn identity_from_encoded_secret(
+    device_id: DeviceId,
+    encoded: &str,
+) -> Result<DeviceIdentity, CoreError> {
+    let decoded = Zeroizing::new(
+        URL_SAFE_NO_PAD
+            .decode(encoded)
+            .map_err(|_| CoreError::InvalidKeyMaterial)?,
+    );
+    let mut bytes: [u8; 32] = decoded
+        .as_slice()
+        .try_into()
+        .map_err(|_| CoreError::InvalidKeyMaterial)?;
+    let identity = DeviceIdentity::from_recovery_secret(device_id, bytes)?;
+    bytes.zeroize();
+    Ok(identity)
+}
+
+fn validate_identity_metadata(metadata: &fs::Metadata) -> Result<(), CoreError> {
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(CoreError::InvalidState(
+            "identity path must be a regular file".to_owned(),
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(CoreError::InvalidState(
+                "private identity permissions are too broad".to_owned(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 impl fmt::Debug for DeviceIdentity {
@@ -312,6 +471,22 @@ struct PersistedIdentity {
     schema_version: u16,
     device_id: DeviceId,
     public_key: String,
+    private_key: Zeroizing<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProtectedIdentity {
+    schema_version: u16,
+    device_id: DeviceId,
+    public_key: String,
+    protected_private_key: WrappedSecret,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProtectedIdentityPayload {
+    device_id: DeviceId,
     private_key: Zeroizing<String>,
 }
 

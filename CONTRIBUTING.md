@@ -5,8 +5,17 @@ Covalent develops directly on `main` during the foundation phase. Keep changes a
 ## Local checks
 
 ```sh
-./scripts/bootstrap.sh
-./scripts/check.sh
+./scripts/bootstrap.sh core
+./scripts/check.sh core
+```
+
+Those commands need only the Rust toolchain. Before a platform-specific check,
+run the matching read-only prerequisite report:
+
+```sh
+./scripts/setup-doctor.sh docker
+./scripts/setup-doctor.sh macos
+./scripts/setup-doctor.sh android
 ```
 
 Run targeted checks while iterating:
@@ -28,4 +37,4 @@ git config user.email thekozugroup@gmail.com
 
 Do not add generated attribution or co-author trailers. Never commit secrets, identity material, `.a5c` run state, build output, or local signing configuration.
 
-Tier 1 regressions on macOS, Android, Docker, or Unraid block release. iOS remains supported as Tier 2 and is tracked separately so it does not delay a valid Tier 1 release.
+Tier 1 regressions on macOS, Android, Docker, or Unraid block release. The iOS target is unsupported and tracked only as informational CI; it does not delay a valid Tier 1 release.

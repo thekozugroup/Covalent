@@ -66,28 +66,31 @@ fi
 # `:app:buildAndroidJni`, which cross-compiles the Rust crates through the NDK,
 # so the crates and the Cargo lockfile are build inputs of the Android artifacts
 # exactly as much as apps/android is.
-android_build_inputs="apps/android crates Cargo.toml Cargo.lock scripts/build-android-jni.sh"
+android_build_inputs="apps/android crates Cargo.toml Cargo.lock rust-toolchain.toml scripts/build-android-jni.sh"
 android_prebuild_stamp="$repo_root/apps/android/app/build/covalent-prebuild-stamp"
 
-# Fingerprint the source these artifacts are built from: the commit, plus the
-# uncommitted state of the input paths. Deliberately *not* an mtime comparison.
-# Gradle decides staleness by content, so a file rewritten with identical bytes
-# - by a rebase, a checkout, or another tool - is not a rebuild trigger for
-# Gradle and must not be one here either, or this mode would reject artifacts
-# that are genuinely correct. `git status --porcelain` honours .gitignore, so
-# the generated build tree is excluded without having to be pruned by hand, and
-# it is index-cached, so this costs milliseconds rather than hashing the tree.
+# Fingerprint every tracked and untracked nonignored build input by content,
+# path and mode, alongside HEAD and the exact NUL-delimited status stream. HEAD
+# plus porcelain alone is insufficient: once `M path` is recorded, changing
+# that already-dirty file again leaves porcelain unchanged and used to make a
+# stale APK look current. The helper reads the complete manifest twice and
+# refuses a moving source tree; no mtime is trusted.
 android_checkout_is_git() {
   command -v git >/dev/null 2>&1 && git -C "$repo_root" rev-parse --git-dir >/dev/null 2>&1
 }
 
-# Callers must gate this on android_checkout_is_git first: it is used inside a
-# pipeline below, where an `exit` would only leave the subshell.
 android_checkout_fingerprint() {
-  git -C "$repo_root" rev-parse HEAD
   # Word splitting is the point - $android_build_inputs is a list of pathspecs.
   # shellcheck disable=SC2086
-  git -C "$repo_root" status --porcelain -- $android_build_inputs
+  "$repo_root/scripts/android-source-fingerprint.sh" "$repo_root" $android_build_inputs
+}
+
+fingerprint_digest() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
 }
 
 require_prebuilt_artifact() {
@@ -100,6 +103,31 @@ require_prebuilt_artifact() {
   fi
   echo "  present: $require_label"
 }
+
+# The regression reproduces the exact stale-acceptance shape in a disposable
+# checkout: mutate an already-dirty tracked input and an already-untracked input
+# without changing porcelain, and require both fingerprints to change.
+"$repo_root/scripts/test-android-source-fingerprint.sh"
+"$repo_root/scripts/test-android-prebuilt-freshness.sh"
+
+# Bind a full build to one stable source snapshot. A post-build manifest by
+# itself can only describe the tree after Gradle exits; it cannot prove that
+# Gradle did not consume older bytes before a concurrent writer changed them.
+prebuild_source_before=""
+cleanup_prebuild_source() {
+  if [ -n "$prebuild_source_before" ]; then
+    rm -f "$prebuild_source_before"
+  fi
+}
+trap cleanup_prebuild_source EXIT INT TERM
+if [ "$mode" = full ] && android_checkout_is_git; then
+  prebuild_source_before=$(mktemp "${TMPDIR:-/tmp}/covalent-android-prebuild-source.XXXXXX")
+  if ! android_checkout_fingerprint > "$prebuild_source_before"; then
+    rm -f "$prebuild_source_before"
+    echo "could not read a stable Android source fingerprint before the build" >&2
+    exit 1
+  fi
+fi
 
 if [ "$mode" = verify-prebuilt ]; then
   echo "check-android: verifying prebuilt Android artifacts instead of rebuilding them"
@@ -116,16 +144,25 @@ if [ "$mode" = verify-prebuilt ]; then
     echo "--verify-prebuilt requires a prior full ./scripts/check-android.sh in this checkout" >&2
     exit 1
   fi
-  if ! android_checkout_fingerprint | cmp -s - "$android_prebuild_stamp"; then
+  current_fingerprint=$(mktemp "${TMPDIR:-/tmp}/covalent-android-current-fingerprint.XXXXXX")
+  if ! android_checkout_fingerprint > "$current_fingerprint"; then
+    rm -f "$current_fingerprint"
+    echo "could not read a stable fingerprint for the current Android source" >&2
+    exit 1
+  fi
+  if ! cmp -s "$current_fingerprint" "$android_prebuild_stamp"; then
     echo "the prebuilt Android artifacts were built from different source than this checkout" >&2
-    echo "recorded at prebuild time:" >&2
-    sed 's/^/  /' "$android_prebuild_stamp" >&2
-    echo "this checkout now:" >&2
-    android_checkout_fingerprint | sed 's/^/  /' >&2
+    echo "recorded fingerprint: $(fingerprint_digest "$android_prebuild_stamp")" >&2
+    echo "current fingerprint : $(fingerprint_digest "$current_fingerprint")" >&2
+    echo "first manifest differences:" >&2
+    diff -u "$android_prebuild_stamp" "$current_fingerprint" | sed -n '1,160p' >&2 || true
+    rm -f "$current_fingerprint"
     echo "rerun the full ./scripts/check-android.sh" >&2
     exit 1
   fi
-  echo "  current: artifacts match this checkout ($(sed -n '1p' "$android_prebuild_stamp"))"
+  rm -f "$current_fingerprint"
+  stamped_head=$(sed -n 's/^head[[:space:]]*//p' "$android_prebuild_stamp" | head -n 1)
+  echo "  current: artifacts match content-hashed Android source ($stamped_head)"
 
   require_prebuilt_artifact "debug APK" \
     "$repo_root/apps/android/app/build/outputs/apk/debug/app-debug.apk"
@@ -172,10 +209,46 @@ fi
 # find a stale one and trust it.
 if [ "$mode" = full ]; then
   if android_checkout_is_git; then
-    android_checkout_fingerprint > "$android_prebuild_stamp"
+    fingerprint_tmp="${android_prebuild_stamp}.tmp.$$"
+    if ! android_checkout_fingerprint > "$fingerprint_tmp"; then
+      rm -f "$fingerprint_tmp" "$prebuild_source_before" "$android_prebuild_stamp"
+      echo "Android build passed, but its source changed before it could be fingerprinted" >&2
+      exit 1
+    fi
+    if ! cmp -s "$prebuild_source_before" "$fingerprint_tmp"; then
+      echo "Android source changed while Gradle/JNI artifacts were being built" >&2
+      echo "pre-build fingerprint : $(fingerprint_digest "$prebuild_source_before")" >&2
+      echo "post-build fingerprint: $(fingerprint_digest "$fingerprint_tmp")" >&2
+      echo "first manifest differences:" >&2
+      diff -u "$prebuild_source_before" "$fingerprint_tmp" | sed -n '1,160p' >&2 || true
+      rm -f "$fingerprint_tmp" "$prebuild_source_before" "$android_prebuild_stamp"
+      exit 1
+    fi
+    mv -f "$fingerprint_tmp" "$android_prebuild_stamp"
+    rm -f "$prebuild_source_before"
   else
     rm -f "$android_prebuild_stamp"
   fi
 fi
 
 "$repo_root/scripts/test-android-instrumentation-result.sh"
+
+# Docker Desktop's access(2)-style mode predicate reports an owner-readable
+# file as writable even when its bind mount is read-only. The headed device
+# gate must prove the property with a real failed write and verify the host
+# secret stayed byte-for-byte unchanged, rather than trusting `test ! -w`.
+android_device_gate="$repo_root/scripts/android-api37-device-test.sh"
+grep -Fq 'if { printf x >> /secret; } 2>/dev/null; then' "$android_device_gate"
+grep -Fq 'before_digest=$(runtime_secret_digest "$secret_path")' "$android_device_gate"
+grep -Fq 'after_digest=$(runtime_secret_digest "$secret_path")' "$android_device_gate"
+grep -Fq 'dd of=files/covalent-api37-tls-token < "$tls_client_token_file"' "$android_device_gate"
+grep -Fq 'chmod 700 files' "$android_device_gate"
+if grep -Fq 'run-as life.michaelwong.covalent sh -c' "$android_device_gate"; then
+  echo "Android device gate must not compose private-file operations through remote sh -c" >&2
+  exit 1
+fi
+if grep -Fq 'test ! -w /secret' "$android_device_gate"; then
+  echo "Android device gate must prove read-only secrets with a real write attempt, not a mode predicate" >&2
+  exit 1
+fi
+echo "Android device-gate read-only secret contract: ok"

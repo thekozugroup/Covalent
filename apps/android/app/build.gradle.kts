@@ -67,8 +67,8 @@ android {
         applicationId = "life.michaelwong.covalent"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1000
-        versionName = "0.1.0"
+        versionCode = 2000
+        versionName = "0.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -175,8 +175,20 @@ val buildAndroidJni = tasks.register<Exec>("buildAndroidJni") {
     description = "Builds pinned Android arm64 and x86_64 JNI libraries with 16 KiB ELF alignment."
     workingDir = covalentRepoRoot
     commandLine("./scripts/build-android-jni.sh", layout.buildDirectory.dir("generated/jniLibs").get().asFile.absolutePath)
-    inputs.dir(covalentRepoRoot.resolve("crates/covalent-android-jni"))
-    inputs.file(covalentRepoRoot.resolve("Cargo.lock"))
+    // The JNI archive links the node, core, and protocol crates too. Tracking
+    // only the bridge crate made Gradle eligible to reuse native output after a
+    // transitive Rust or linker-script edit, despite the release gate promising
+    // source-current binaries. Declare every source and link-policy input.
+    inputs.files(
+        covalentRepoRoot.resolve("Cargo.toml"),
+        covalentRepoRoot.resolve("Cargo.lock"),
+        covalentRepoRoot.resolve("rust-toolchain.toml"),
+        covalentRepoRoot.resolve("scripts/build-android-jni.sh"),
+        covalentRepoRoot.resolve("crates/covalent-android-jni"),
+        covalentRepoRoot.resolve("crates/covalent-core"),
+        covalentRepoRoot.resolve("crates/covalent-node"),
+        covalentRepoRoot.resolve("crates/covalent-protocol"),
+    )
     outputs.dir(layout.buildDirectory.dir("generated/jniLibs"))
 }
 

@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 
 @MainActor
@@ -254,10 +255,40 @@ final class CovalentMacUITests: XCTestCase {
         continueAfterFailure = false
         XCTAssertTrue(app.staticTexts["Apple UI Test Node is protected here"].waitForExistence(timeout: 10))
 
-        let statusItem = app.statusItems["Covalent"].firstMatch
+        // macOS maps a menu-bar status item's accessible title into an exact
+        // statusItems[title] query, while XCUIElement.label remains empty for
+        // that role. The named lookup proves the product AX title; enumeration
+        // below proves it is the only visible target we then click.
+        let namedStatusItem = app.statusItems["Covalent"]
+        XCTAssertTrue(
+            namedStatusItem.waitForExistence(timeout: 10),
+            "Covalent menu-bar target must expose the exact accessible title. \(namedStatusItem.debugDescription)"
+        )
+        let statusItems = app.statusItems.allElementsBoundByIndex
+        XCTAssertEqual(statusItems.count, 1, "Covalent must vend exactly one menu-bar status item.")
+        guard statusItems.count == 1 else { return }
+        let statusItem = statusItems[0]
         XCTAssertTrue(statusItem.waitForExistence(timeout: 10))
-        XCTAssertTrue(statusItem.isHittable)
-        statusItem.click()
+        let statusFrame = statusItem.frame
+        let screenFrames = NSScreen.screens.map(\.frame)
+        let statusValue = String(describing: statusItem.value ?? "")
+        let isVisibleStatusTarget = !statusFrame.isEmpty
+            && screenFrames.contains { $0.intersects(statusFrame) }
+        let statusTargetEvidence = XCTAttachment(
+            string: "Covalent status item label: \(statusItem.label); value: \(statusValue); frame: \(statusFrame); screens: \(screenFrames); AX: \(statusItem.debugDescription)"
+        )
+        statusTargetEvidence.name = "Covalent status item target"
+        statusTargetEvidence.lifetime = .keepAlways
+        add(statusTargetEvidence)
+        XCTAssertTrue(
+            isVisibleStatusTarget,
+            "Covalent menu-bar target must have a nonempty frame on a visible screen. frame=\(statusFrame)"
+        )
+        // XCTest reports a SwiftUI MenuBarExtra as non-hittable while its
+        // target has a visible frame. Its `isHittable` predicate is therefore
+        // not a useful proxy for this workflow: use the exact center and let
+        // the assertions below prove every quick action is exposed.
+        statusItem.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
 
         XCTAssertTrue(app.menuItems["Open Covalent"].waitForExistence(timeout: uiTransitionTimeout))
         XCTAssertTrue(app.menuItems["New Backup…"].exists)
@@ -323,10 +354,10 @@ final class CovalentMacUITests: XCTestCase {
         let testBundle = Bundle(for: CovalentMacUITests.self)
         let port = environment["COVALENT_UI_TEST_PORT"]
             ?? testBundle.object(forInfoDictionaryKey: "CovalentUITestPort") as? String
-        let token = environment["COVALENT_UI_TEST_TOKEN"]
-            ?? testBundle.object(forInfoDictionaryKey: "CovalentUITestToken") as? String
+        let tokenFile = environment["COVALENT_UI_TEST_TOKEN_FILE"]
+            ?? testBundle.object(forInfoDictionaryKey: "CovalentUITestTokenFile") as? String
         app.launchEnvironment["COVALENT_UI_TEST_BASE_URL"] = "http://127.0.0.1:\(try XCTUnwrap(port))"
-        app.launchEnvironment["COVALENT_UI_TEST_TOKEN"] = try XCTUnwrap(token)
+        app.launchEnvironment["COVALENT_UI_TEST_TOKEN_FILE"] = try XCTUnwrap(tokenFile)
         app.launch()
         return app
     }

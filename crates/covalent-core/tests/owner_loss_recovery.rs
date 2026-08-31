@@ -4,10 +4,16 @@ use std::sync::Arc;
 
 use covalent_core::{
     BackupOptions, ChunkProvider, Engine, EngineOptions, JobControl, RecoveryUnlockKey,
-    RestoreOptions, StoreProvider,
+    RestoreOptions, StaticKeyProtector, StoreProvider,
 };
 use covalent_protocol::{BackupId, PeerGrant, PeerRole, ReplicaIntent};
 use tempfile::tempdir;
+
+fn engine_options(path: impl Into<std::path::PathBuf>) -> EngineOptions {
+    EngineOptions::new(path).with_key_protector(Arc::new(
+        StaticKeyProtector::new(1, [0x71; 32]).expect("test protector"),
+    ))
+}
 
 fn storage_grant(engine: &Engine, name: &str) -> PeerGrant {
     PeerGrant {
@@ -30,8 +36,8 @@ fn stale_stable_kit_restores_latest_snapshot_after_complete_owner_loss() {
     fs::create_dir_all(&source).expect("source");
     fs::create_dir_all(&target).expect("target");
 
-    let provider = Engine::open(EngineOptions::new(&provider_path)).expect("provider");
-    let owner = Engine::open(EngineOptions::new(&owner_path)).expect("owner");
+    let provider = Engine::open(engine_options(&provider_path)).expect("provider");
+    let owner = Engine::open(engine_options(&owner_path)).expect("owner");
     let original_owner_id = owner.device_id();
     owner
         .trust_peer(storage_grant(&provider, "Provider NAS"))
@@ -76,7 +82,7 @@ fn stale_stable_kit_restores_latest_snapshot_after_complete_owner_loss() {
 
     drop(owner);
     fs::remove_dir_all(&owner_path).expect("destroy complete owner state");
-    let recovered = Engine::recover_from_kit(EngineOptions::new(&owner_path), &stale_kit, &unlock)
+    let recovered = Engine::recover_from_kit(engine_options(&owner_path), &stale_kit, &unlock)
         .expect("recover stable owner identity");
     assert_eq!(recovered.device_id(), original_owner_id);
     recovered

@@ -7,6 +7,7 @@ import java.io.InterruptedIOException
 import life.michaelwong.covalent.R
 import life.michaelwong.covalent.data.CovalentNodeClient
 import life.michaelwong.covalent.data.ArchiveTransferResult
+import life.michaelwong.covalent.data.DurableTransferPersistenceException
 import life.michaelwong.covalent.data.NodeApiException
 import life.michaelwong.covalent.data.SafTransferBridge
 import life.michaelwong.covalent.data.SecureNodeStore
@@ -29,9 +30,35 @@ internal object TransferExecution {
 
     fun run(context: Context, jobId: String): TransferOutcome {
         val store = openStoreOrDefer(context, jobId) ?: return TransferOutcome.RETRY
-        val pending = store.pending(jobId) ?: return TransferOutcome.FAILURE
+        val pending = try {
+            // The exact request is synchronously re-committed on this worker thread before
+            // any request can leave the device. A failed disk commit blocks the network call.
+            store.preparePendingForExecution(jobId)
+        } catch (error: DurableTransferPersistenceException) {
+            Log.w(LOG_TAG, "Transfer $jobId deferred because its request is not durable", error)
+            return TransferOutcome.RETRY
+        }
+        val pendingAcknowledgement = if (pending == null) {
+            try {
+                store.prepareAcknowledgement(jobId) ?: return TransferOutcome.FAILURE
+            } catch (error: DurableTransferPersistenceException) {
+                Log.w(LOG_TAG, "Transfer $jobId deferred because its acknowledgement is not durable", error)
+                return TransferOutcome.RETRY
+            } catch (error: IllegalArgumentException) {
+                Log.w(LOG_TAG, "Transfer $jobId has mismatched acknowledgement metadata", error)
+                return TransferOutcome.FAILURE
+            } catch (error: IllegalStateException) {
+                Log.w(LOG_TAG, "Transfer $jobId has invalid acknowledgement state", error)
+                return TransferOutcome.FAILURE
+            }
+        } else {
+            null
+        }
         val connection = ActiveNodeConnectionResolver(context).activeConnection(store)
         if (connection == null) {
+            // A consumed terminal result must remain completed and ACK-pending. Rewriting it
+            // as failed would violate the journal binding and permanently block reconciliation.
+            if (pendingAcknowledgement != null) return TransferOutcome.RETRY
             store.updateTransfer(jobId) {
                 it.copy(
                     state = TransferState.FAILED,
@@ -40,6 +67,15 @@ internal object TransferExecution {
                 )
             }
             return TransferOutcome.FAILURE
+        }
+        if (pending == null) {
+            return resumePendingAcknowledgement(
+                store,
+                CovalentNodeClient(store::enrolledTrust),
+                connection,
+                jobId,
+                checkNotNull(pendingAcknowledgement),
+            )
         }
         when (store.transfer(jobId)?.state) {
             TransferState.PAUSED, TransferState.CANCELLED, TransferState.COMPLETED -> {
@@ -86,29 +122,30 @@ internal object TransferExecution {
                 store.replaceBackups(client.backups(connection.baseUrl, connection.token))
             }
             val completion = completionDetail(context, mode, completed.body)
-            if (completed.acknowledgementRequired) {
-                store.savePendingAcknowledgement(jobId, completion)
-            }
             progress.flush()
-            store.updateTransfer(jobId) {
-                it.copy(
-                    state = TransferState.COMPLETED,
-                    detail = if (completed.acknowledgementRequired) {
-                        context.getString(R.string.transfer_cleanup_pending_detail, completion)
-                    } else {
-                        completion
-                    },
-                    retryable = false,
-                )
-            }
-            store.removePending(jobId)
             if (completed.acknowledgementRequired) {
-                runCatching { client.acknowledgeJob(connection.baseUrl, connection.token, jobId) }.onSuccess {
-                    store.removePendingAcknowledgement(jobId)
-                    store.updateTransfer(jobId) { it.copy(detail = completion) }
-                }
+                store.consumeTerminalResult(
+                    jobId,
+                    context.getString(R.string.transfer_cleanup_pending_detail, completion),
+                    completion,
+                )
+            } else {
+                store.consumeTerminalResultWithoutAcknowledgement(jobId, completion)
+            }
+            if (completed.acknowledgementRequired) {
+                val acknowledged = runCatching {
+                    check(store.prepareAcknowledgement(jobId) == completion) {
+                        "The durable acknowledgement completion does not match the terminal result."
+                    }
+                    client.acknowledgeJob(connection.baseUrl, connection.token, jobId)
+                    store.confirmAcknowledged(jobId, completion)
+                }.isSuccess
+                if (!acknowledged) return TransferOutcome.RETRY
             }
             TransferOutcome.SUCCESS
+        } catch (error: DurableTransferPersistenceException) {
+            Log.w(LOG_TAG, "Transfer $jobId deferred because its terminal state is not durable", error)
+            TransferOutcome.RETRY
         } catch (error: NodeApiException) {
             failUnlessStopped(store, jobId, nodeFailureMessage(context, error, GENERIC_FAILURE), error.retryable)
             if (error.retryable) TransferOutcome.RETRY else TransferOutcome.FAILURE
@@ -223,13 +260,13 @@ internal object TransferExecution {
     ): Int {
         var reconciled = 0
         store.pendingAcknowledgementJobIds().forEach { jobId ->
-            runCatching { client.acknowledgeJob(connection.baseUrl, connection.token, jobId) }.onSuccess {
-                val completion = store.acknowledgementCompletionDetail(jobId)
-                store.removePendingAcknowledgement(jobId)
-                store.removePending(jobId)
-                if (completion != null) {
-                    store.updateTransfer(jobId) { it.copy(detail = completion) }
-                }
+            // Validate the durable ACK and its completed transfer binding before the network call.
+            val completion = runCatching { store.prepareAcknowledgement(jobId) }
+                .getOrNull() ?: return@forEach
+            runCatching {
+                client.acknowledgeJob(connection.baseUrl, connection.token, jobId)
+                store.confirmAcknowledged(jobId, completion)
+            }.onSuccess {
                 reconciled += 1
             }
         }
@@ -245,6 +282,22 @@ internal object TransferExecution {
             }
         }
         return reconciled
+    }
+
+    private fun resumePendingAcknowledgement(
+        store: SecureNodeStore,
+        client: CovalentNodeClient,
+        connection: NodeConnection,
+        jobId: String,
+        completion: String,
+    ): TransferOutcome {
+        return runCatching {
+            client.acknowledgeJob(connection.baseUrl, connection.token, jobId)
+            store.confirmAcknowledged(jobId, completion)
+        }.fold(
+            onSuccess = { TransferOutcome.SUCCESS },
+            onFailure = { TransferOutcome.RETRY },
+        )
     }
 
     private class ProgressRecorder(

@@ -1,14 +1,14 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>Covalent</Name>
-  <Repository>ghcr.io/thekozugroup/covalent:v0.1.0</Repository>
+  <Repository>ghcr.io/thekozugroup/covalent@sha256:8b8b96bdea7437fecf6d9c3297c248fd9de7eeb25fe7d701aa6f0a5b633cf8a6</Repository>
   <Registry>https://github.com/thekozugroup/Covalent/pkgs/container/covalent</Registry>
   <TemplateURL>https://raw.githubusercontent.com/thekozugroup/Covalent/main/packaging/unraid/covalent.xml</TemplateURL>
   <Network>bridge</Network>
   <Privileged>false</Privileged>
   <Support>https://github.com/thekozugroup/Covalent/issues</Support>
   <Project>https://github.com/thekozugroup/Covalent</Project>
-  <Overview>Private distributed backup with explicit replicas and signed, authorized-root restore preview. Read-only source and optional boot mappings prevent container writes to backup inputs.</Overview>
+  <Overview>Private distributed backup with explicit replicas and signed, authorized-root restore preview. Read-only source and optional boot mappings prevent container writes to backup inputs. The WebUI shortcut uses the host IP; open the configured HTTPS hostname instead when strict certificate hostname verification rejects that shortcut.</Overview>
   <Category>Backup: Tools:</Category>
   <WebUI>https://[IP]:[PORT:8443]/</WebUI>
   <Icon>https://raw.githubusercontent.com/thekozugroup/Covalent/main/packaging/unraid/icon.svg</Icon>
@@ -18,23 +18,36 @@
   <DateInstalled>0</DateInstalled>
   <DonateText/>
   <DonateLink/>
-  <Requires>Set the HTTPS hostname to the name you will use to reach this server. Map each share you want backed up separately, read-only; never map all of /mnt/user. A /boot mapping must also be read-only. Add a writable restore target only when you are restoring.</Requires>
-  <Description>Covalent keeps encrypted backups on devices you own, with no cloud account and no third party holding your data.
+  <Requires>Set the HTTPS hostname to the name you will use to reach this server. Map each share you want backed up separately, read-only; never map all of /mnt/user or any part of /mnt/user/system. A /boot mapping must also be read-only. The KEK stays in the reserved system-share path below; never mount /mnt/user/system, its parent, or a child containing this key as a source, and verify an independent offline escrow before first start. Add a writable restore target only when you are restoring.</Requires>
+  <Description>RELEASE BLOCKER: the pinned v0.1.0 digest predates the required KEK and trusted claim client. Do not install this template yet. It retains the current immutable digest truth; a release owner must publish a newly signed digest containing this workflow and replace this Repository value atomically.
 
-Setting up, once the container is running:
+For that replacement release, first start needs one terminal action: create a KEK in the reserved Unraid system-share path, then map that one file read-only here. This is a standard persistent Unraid path, not a backup source: categorically never map /mnt/user/system, its parent, or any path containing this key as /source or /boot-source. Never put this key under /boot or /mnt/user/appdata. Before first start, make and verify a byte-for-byte offline escrow copy on encrypted removable media that is never mounted into Covalent. Any external backup of the system share must explicitly exclude this key path. On the Unraid terminal, run:
 
-1. Open this container's Log from the Unraid Docker page. Covalent prints a setup code there when it first starts.
-2. Open the WebUI and enter that code.
+KEK_DIR=/mnt/user/system/covalent-secrets
+install -d -o 99 -g 100 -m 700 "$KEK_DIR"
+docker run --rm --user 99:100 -v "$KEK_DIR:/secrets:rw" ghcr.io/thekozugroup/covalent@&lt;replacement-signed-digest&gt; provision-key --key-file /secrets/key-encryption-key
 
-The code is single-use, expires after 30 minutes, and proves to your browser that it is talking to this server and not to something impersonating it. Your browser is given this server's certificate as part of entering the code, so there is no certificate file to copy and nothing to verify by hand. If the code expires before you use it, restart the container and Covalent prints a new one.
+Do not put this KEK in /data or /config. The command creates the key as the same fixed non-root UID/GID (`99:100`) used by this template, so its `0600` mode remains readable without broadening permissions. Keep its file mode 0600 and KEK version 1. Copying appdata without the separate KEK remains locked, and a backup must never contain both the encrypted state and its only KEK. Covalent never silently creates or replaces it.
 
-You never need a terminal or a container console.</Description>
+After the replacement-release container starts, use a trusted release-channel computer, not the WebUI, to claim it. Read the one-time setup code from this container's Log, save it in an owner-only file, then run:
+
+claim_parent="$HOME/.config/covalent"
+setup_code_file="$claim_parent/unraid-setup-code"
+claim_output="$claim_parent/unraid-claim"
+install -d -m 700 "$claim_parent"
+install -m 600 /dev/null "$setup_code_file"
+# Paste the setup code into setup_code_file with a local editor. Keep its final newline.
+test ! -e "$claim_output"
+covalent claim --https-url https://&lt;HTTPS hostname&gt;:8443 --setup-code-file "$setup_code_file" --output-dir "$claim_output"
+
+The CLI creates the new claim output directory mode 0700, proves the code, verifies the returned CA fingerprint, verifies the exact HTTPS hostname and token, then saves root.crt and local-api-token mode 0600. Enroll that exact root.crt before opening this WebUI and enter only local-api-token. The WebUI and Android app never accept a setup code. Do not use trust-all or bypass hostname verification.</Description>
   <Config Name="HTTPS console" Target="8443" Default="8443" Mode="tcp" Description="TLS-only console and API port. Cleartext management is loopback-only inside the container." Type="Port" Display="always" Required="true" Mask="false"/>
   <Config Name="Peer transport" Target="8787" Default="8787" Mode="udp" Description="Authenticated QUIC peer port." Type="Port" Display="always" Required="true" Mask="false"/>
-  <Config Name="Configuration" Target="/config" Default="/mnt/user/appdata/covalent/config" Mode="rw" Description="Durable operator-managed safe settings and deployment files. Keep separate from selected shares." Type="Path" Display="always" Required="true" Mask="false"/>
+  <Config Name="Configuration (sensitive)" Target="/config" Default="/mnt/user/appdata/covalent/config" Mode="rw" Description="Sensitive Caddy state, including the local CA certificate and signing key. Back up with appdata, but do not treat this directory as a settings export." Type="Path" Display="always" Required="true" Mask="false"/>
   <Config Name="Encrypted storage" Target="/data" Default="/mnt/user/appdata/covalent/data" Mode="rw" Description="Durable encrypted chunk, manifest, identity, and key state. Back up this appdata path separately." Type="Path" Display="always" Required="true" Mask="false"/>
-  <Config Name="Selected backup source" Target="/source" Default="" Mode="ro" Description="One explicitly selected /mnt/user share. Add more read-only paths as needed." Type="Path" Display="always" Required="false" Mask="false"/>
-  <Config Name="Optional boot backup" Target="/boot-source" Default="" Mode="ro" Description="Optional read-only /boot mapping for boot-drive backup." Type="Path" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="KEK secret (reserved system share)" Target="/run/secrets/covalent-kek" Default="/mnt/user/system/covalent-secrets/key-encryption-key" Mode="ro" Description="Required owner-only 0600 key in the reserved system-share path. Never map /mnt/user/system, appdata, /boot, or any enclosing path as a source; keep independent offline escrow." Type="Path" Display="always" Required="true" Mask="false"/>
+  <Config Name="Selected backup source" Target="/source" Default="" Mode="ro" Description="One explicitly selected /mnt/user share, never /mnt/user/system or a path enclosing the KEK. Add more read-only paths as needed." Type="Path" Display="always" Required="false" Mask="false"/>
+  <Config Name="Optional boot backup" Target="/boot-source" Default="" Mode="ro" Description="Optional read-only /boot mapping for boot-drive backup. The KEK must never live under /boot." Type="Path" Display="advanced" Required="false" Mask="false"/>
   <Config Name="Restore target" Target="/restore" Default="" Mode="rw" Description="Explicit writable target used only after restore preview and confirmation." Type="Path" Display="always" Required="false" Mask="false"/>
   <Config Name="Device name" Target="COVALENT_DEVICE_NAME" Default="Covalent Unraid" Mode="" Description="The name your other devices will show for this server." Type="Variable" Display="always" Required="false" Mask="false"/>
   <Config Name="HTTPS hostname" Target="COVALENT_HTTPS_HOST" Default="tower.local" Mode="" Description="The exact name you will type in your browser and apps to reach this server, such as tower.local. Covalent's certificate is issued for this name." Type="Variable" Display="always" Required="true" Mask="false"/>
@@ -42,4 +55,5 @@ You never need a terminal or a container console.</Description>
   <Config Name="Peer listen address" Target="COVALENT_PEER_LISTEN" Default="0.0.0.0:8787" Mode="" Description="Encrypted device-to-device port inside the container. The default is correct unless you changed the peer port mapping above." Type="Variable" Display="advanced" Required="false" Mask="false"/>
   <Config Name="Find devices on your network" Target="COVALENT_LAN_DISCOVERY" Default="false" Mode="" Description="Off by default. Turn it on to let your phone and laptop find this server by name instead of you typing an address. Only the device name, address, and certificate fingerprint are announced, and pairing still has to be confirmed on both devices." Type="Variable" Display="always" Required="false" Mask="false"/>
   <Config Name="File creation umask" Target="UMASK" Default="027" Mode="" Description="Three-digit octal umask for runtime-created files." Type="Variable" Display="advanced" Required="true" Mask="false"/>
+  <Config Name="KEK version" Target="COVALENT_KEY_ENCRYPTION_KEY_VERSION" Default="1" Mode="" Description="Keep version 1 for this state directory. This release has no automatic KEK rotation." Type="Variable" Display="advanced" Required="true" Mask="false"/>
 </Container>

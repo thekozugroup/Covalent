@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use covalent_core::{
-    AuthorizedRoot, BackupOptions, Engine, EngineOptions, JobControl, PairingConfirmation,
-    PairingSession, RestoreOptions, RestorePlan,
+    AuthorizedRoot, BackupOptions, Engine, EngineOptions, JobControl, KeyProtector,
+    PairingConfirmation, PairingSession, RestoreOptions, RestorePlan,
 };
 use covalent_protocol::{
     BackupId, ConflictPolicy, DeviceId, PROTOCOL_VERSION, PairingInvitation, PeerRole,
@@ -33,13 +33,34 @@ impl CovalentService {
         }
     }
 
-    /// Opens the real shared engine for an app-owned durable directory.
+    /// Legacy open entrypoint retained for source compatibility.
+    ///
+    /// Durable state now requires an injected platform key protector, so this
+    /// entrypoint fails with `key_protection_locked`. Native hosts must use
+    /// [`Self::open_with_key_protector`].
     pub fn open(
         data_directory: impl Into<PathBuf>,
         initial_device_name: impl Into<String>,
         initial_lan_discovery_enabled: bool,
     ) -> Result<Self, ServiceError> {
         let mut options = EngineOptions::new(data_directory);
+        options.initial_device_name = initial_device_name.into();
+        options.initial_lan_discovery_enabled = initial_lan_discovery_enabled;
+        let engine = Engine::open(options).map_err(|error| ServiceError::from_engine(&error))?;
+        Ok(Self {
+            engine: Some(Arc::new(engine)),
+            jobs: Some(Arc::new(Mutex::new(BTreeMap::new()))),
+        })
+    }
+
+    /// Opens with a KEK source supplied by the native platform keystore bridge.
+    pub fn open_with_key_protector(
+        data_directory: impl Into<PathBuf>,
+        initial_device_name: impl Into<String>,
+        initial_lan_discovery_enabled: bool,
+        key_protector: Arc<dyn KeyProtector>,
+    ) -> Result<Self, ServiceError> {
+        let mut options = EngineOptions::new(data_directory).with_key_protector(key_protector);
         options.initial_device_name = initial_device_name.into();
         options.initial_lan_discovery_enabled = initial_lan_discovery_enabled;
         let engine = Engine::open(options).map_err(|error| ServiceError::from_engine(&error))?;
@@ -125,13 +146,24 @@ impl CovalentService {
     }
 
     /// Runs a resumable encrypted local backup from a binding-safe JSON request.
+    /// The returned result remains durably retained until the host calls
+    /// [`Self::acknowledge_backup_result`] after accepting the serialized JSON.
     pub fn backup_json(&self, request_json: &str) -> Result<String, ServiceError> {
         let request: BackupRequest = deserialize(request_json)?;
-        let backup_id = match request.backup_id {
-            Some(value) => BackupId::from_str(&value)
-                .map_err(|_| ServiceError::new("invalid_backup_id", "backup ID is invalid"))?,
-            None => BackupId::new(),
-        };
+        let engine = self.engine()?;
+        let requested_backup_id = request
+            .backup_id
+            .as_deref()
+            .map(|value| {
+                BackupId::from_str(value)
+                    .map_err(|_| ServiceError::new("invalid_backup_id", "backup ID is invalid"))
+            })
+            .transpose()?;
+        let backup_id = requested_backup_id
+            .or(engine
+                .unacknowledged_backup_id(&request.job_id)
+                .map_err(|error| ServiceError::from_engine(&error))?)
+            .unwrap_or_default();
         let providers: Result<Vec<_>, _> = request
             .selected_provider_ids
             .iter()
@@ -145,9 +177,7 @@ impl CovalentService {
         options.created_at_unix_ms = now_unix_ms();
         options.replica_intent = ReplicaIntent::explicit(providers?);
         let control = self.job_control(&options.job_id)?;
-        let result = self
-            .engine()?
-            .backup(request.source_root, &options, &control, |_| {});
+        let result = engine.backup(request.source_root, &options, &control, |_| {});
         self.finish_job_after(&options.job_id, &result)?;
         let result = result.map_err(|error| ServiceError::from_engine(&error))?;
         serialize(&BackupResponse {
@@ -158,7 +188,16 @@ impl CovalentService {
             chunks_stored: result.progress.chunks_stored,
             chunks_deduplicated: result.progress.chunks_deduplicated,
             degraded_failures: result.replication.failures.len(),
+            acknowledgement_required: true,
         })
+    }
+
+    /// Durably releases one signed terminal backup result after the host has
+    /// accepted it. Repeating an acknowledgement is a safe no-op.
+    pub fn acknowledge_backup_result(&self, job_id: &str) -> Result<(), ServiceError> {
+        self.engine()?
+            .acknowledge_backup_result(job_id)
+            .map_err(|error| ServiceError::from_engine(&error))
     }
 
     /// Authenticates every local object referenced by a committed snapshot.
@@ -466,6 +505,10 @@ impl ServiceError {
                 "job_paused",
                 "The job is paused and can be resumed with the same job ID.",
             ),
+            CoreError::JobConflict => Self::new(
+                "job_conflict",
+                "The job ID is already bound to a different completed request.",
+            ),
             CoreError::Cancelled => Self::new(
                 "job_cancelled",
                 "The job was cancelled and its checkpoint was discarded.",
@@ -527,6 +570,10 @@ impl ServiceError {
                 "node_state_locked",
                 "Another Covalent process currently owns this node state.",
             ),
+            CoreError::KeyProtectionLocked | CoreError::KeyVersionUnavailable(_) => Self::new(
+                "key_protection_locked",
+                "Unlock this app's protected key storage before opening Covalent data.",
+            ),
             CoreError::Synchronization | CoreError::Io { .. } => Self::retryable(
                 "engine_failed",
                 "The local engine could not complete the request.",
@@ -568,6 +615,7 @@ struct BackupResponse {
     chunks_stored: usize,
     chunks_deduplicated: usize,
     degraded_failures: usize,
+    acknowledgement_required: bool,
 }
 
 #[derive(Deserialize)]
@@ -689,7 +737,15 @@ mod tests {
         let source = tempdir().expect("source");
         let restore = tempdir().expect("restore");
         fs::write(source.path().join("file.txt"), b"ffi content").expect("source");
-        let service = CovalentService::open(data.path(), "Native app", false).expect("service");
+        let service = CovalentService::open_with_key_protector(
+            data.path(),
+            "Native app",
+            false,
+            Arc::new(
+                covalent_core::StaticKeyProtector::new(1, [0x21; 32]).expect("test protector"),
+            ),
+        )
+        .expect("service");
         let request = serde_json::json!({
             "sourceRoot": source.path(),
             "displayName": "Files",
@@ -697,10 +753,23 @@ mod tests {
             "jobId": "backup-job",
             "selectedProviderIds": []
         });
+        let backup_json = service.backup_json(&request.to_string()).expect("backup");
+        assert_eq!(
+            service
+                .backup_json(&request.to_string())
+                .expect("response-loss retry"),
+            backup_json
+        );
         let backup: serde_json::Value =
-            serde_json::from_str(&service.backup_json(&request.to_string()).expect("backup"))
-                .expect("backup response");
+            serde_json::from_str(&backup_json).expect("backup response");
+        assert_eq!(backup["acknowledgementRequired"], true);
         let backup_id = backup["backupId"].as_str().expect("backup ID");
+        service
+            .acknowledge_backup_result("backup-job")
+            .expect("acknowledge consumed response");
+        service
+            .acknowledge_backup_result("backup-job")
+            .expect("idempotent acknowledgement");
         let backups: serde_json::Value =
             serde_json::from_str(&service.backups_json().expect("backup list"))
                 .expect("backup list response");

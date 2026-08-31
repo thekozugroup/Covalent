@@ -1,5 +1,6 @@
 package life.michaelwong.covalent
 
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.IOException
 import java.net.ConnectException
@@ -14,6 +15,8 @@ import life.michaelwong.covalent.ui.SetupLinkOutcome
 import life.michaelwong.covalent.ui.classifyNodeFailure
 import life.michaelwong.covalent.ui.destructiveConfirmation
 import life.michaelwong.covalent.ui.nodeFailureMessageRes
+import life.michaelwong.covalent.ui.parseClaimTokenFile
+import life.michaelwong.covalent.ui.readClaimTokenFile
 import life.michaelwong.covalent.ui.setupLinkEndpoint
 import life.michaelwong.covalent.ui.setupLinkOutcome
 import life.michaelwong.covalent.ui.validateNodeAddress
@@ -108,15 +111,74 @@ class AndroidCopyAndConfirmationTest {
     // ---- The QR promise ------------------------------------------------------------------
 
     @Test
-    fun setupCopyPromisesNoScannerAndTheAppAcceptsTheLinkItDoesDescribe() {
+    fun setupCopyUsesTrustedClaimOutputAndDoesNotAdvertiseAnUnproducedLink() {
         val handoff = requireString("setup_handoff_title") + " " + requireString("setup_handoff_detail")
-        listOf("QR", "scan", "camera", "barcode").forEach { claim ->
+        listOf("QR", "scan", "camera", "barcode", "covalent://").forEach { claim ->
             assertFalse(
-                "Setup copy promises \"$claim\", which no Android code implements",
+                "Setup copy advertises \"$claim\", which no current claim tool produces",
                 handoff.contains(claim, ignoreCase = true),
             )
         }
-        assertTrue("Setup copy must describe the link the app really accepts", handoff.contains("covalent://"))
+        assertTrue(handoff.contains("covalent claim", ignoreCase = true))
+        assertTrue(handoff.contains("local-api-token"))
+        assertTrue(handoff.contains("root.crt"))
+        assertTrue(handoff.contains("never accepts a setup code", ignoreCase = true))
+    }
+
+    @Test
+    fun claimTokenFileIsBoundedAndUsesTheServerTokenShape() {
+        val token = "t".repeat(32)
+        assertEquals(token, parseClaimTokenFile("  $token\n".encodeToByteArray()))
+        assertEquals(token, readClaimTokenFile(ByteArrayInputStream(token.encodeToByteArray())))
+        listOf(
+            ByteArray(0),
+            "short".encodeToByteArray(),
+            ("t".repeat(31) + " ").encodeToByteArray(),
+            ("t".repeat(31) + "\\").encodeToByteArray(),
+            "t".repeat(513).encodeToByteArray(),
+            ByteArray(1_025) { 't'.code.toByte() },
+            byteArrayOf(0xc3.toByte(), 0x28),
+        ).forEach { rejected ->
+            assertTrue(runCatching { parseClaimTokenFile(rejected) }.isFailure)
+        }
+        assertTrue(
+            runCatching {
+                readClaimTokenFile(ByteArrayInputStream(ByteArray(1_025) { 't'.code.toByte() }))
+            }.isFailure,
+        )
+    }
+
+    @Test
+    fun setupGuidanceDoesNotPretendToBeAnActionCard() {
+        val source = moduleFile("src/main/java/life/michaelwong/covalent/ui/CovalentApp.kt").readText()
+        val choice = source.substringAfter("private fun OnboardingChoice").substringBefore("@Composable")
+        assertTrue("Setup guidance must use a plain row", choice.contains("Row("))
+        assertFalse("Setup guidance must not use an inert card", choice.contains("OutlinedCard"))
+        assertFalse("Setup guidance must not advertise a click action", choice.contains("onClick"))
+    }
+
+    @Test
+    fun signedConflictPoliciesCanPreviewAndRestoreIntoExistingContent() {
+        val ui = moduleFile("src/main/java/life/michaelwong/covalent/ui/CovalentApp.kt").readText()
+        val targetCheck = ui
+            .substringAfter("private fun ensureWritableTarget")
+            .substringBefore("private fun queueTransfer")
+        assertFalse(
+            "The UI must not reject a non-empty target before signed inventory conflict planning",
+            targetCheck.contains("listFiles().isEmpty()"),
+        )
+
+        val bridge = moduleFile("src/main/java/life/michaelwong/covalent/data/SafTransferBridge.kt").readText()
+        assertTrue("Current restores must re-inventory the real target before execution", bridge.contains(
+            "freshInventory = targetInventory(context, targetTree)",
+        ))
+        assertTrue("Current restores must require the same signed rebound plan", bridge.contains(
+            "sameSignedRestorePlan(reference, rebound.reference)",
+        ))
+        assertTrue(
+            "Only legacy unbound restores may retain the empty-folder compatibility gate",
+            bridge.contains("This older restore preview requires an empty folder"),
+        )
     }
 
     @Test

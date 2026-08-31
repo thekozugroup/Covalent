@@ -36,8 +36,8 @@ data class EmbeddedProviderState(
 /**
  * Explicit opt-in local-node owner. It never replaces a configured external node.
  *
- * The service is only started after [enable]. Until Rust can consume a Keystore-backed
- * identity protector, start remains fail-closed and external-node mode stays available.
+ * The service is only started after [enable]. The non-exportable Keystore wrapper is
+ * unwrapped only for the synchronous JNI start; external-node mode stays independent.
  *
  * ## Constructing this before the user's first unlock
  *
@@ -52,7 +52,7 @@ data class EmbeddedProviderState(
 class EmbeddedNodeManager(context: Context) {
     private val applicationContext = context.applicationContext
     private val preferences = CredentialProtectedPreferences(applicationContext, PREFERENCES_NAME)
-    private val protector = IdentityKeyProtector()
+    private val protector = IdentityKeyProtector(applicationContext)
     private val localStore = LocalEmbeddedNodeStore(applicationContext, protector)
     private var multicastLock: WifiManager.MulticastLock? = null
 
@@ -235,7 +235,12 @@ class EmbeddedNodeManager(context: Context) {
             return unavailable("This phone cannot protect its Covalent identity, so it cannot store backups.")
         }
         val token = protectedTokenBytes()
-            ?: return unavailable("Covalent could not protect this phone's server credential, so it did not start.")
+            ?: return unavailable("Covalent could not open this phone's protected server credential, so it stayed locked.")
+        val keyEncryptionKey = protector.loadOrCreateKeyEncryptionKey()
+            ?: run {
+                token.fill(0)
+                return unavailable("Covalent could not open this phone's protected storage key, so it stayed locked.")
+            }
         return try {
             val lanEnabled = acquireLanDiscoveryPermission()
             CovalentNative.start(
@@ -243,6 +248,8 @@ class EmbeddedNodeManager(context: Context) {
                 deviceName = "${Build.MODEL.take(64)} Android",
                 lanDiscoveryEnabled = lanEnabled,
                 apiToken = token,
+                keyEncryptionKey = keyEncryptionKey.bytes,
+                keyVersion = keyEncryptionKey.version,
                 maximumTotalBytes = maxBytes,
                 freeSpaceReserveBytes = keepFreeBytes,
                 keyProtectionLevel = protection,
@@ -256,6 +263,7 @@ class EmbeddedNodeManager(context: Context) {
             }
         } finally {
             token.fill(0)
+            keyEncryptionKey.close()
         }
     }
 
@@ -292,28 +300,11 @@ class EmbeddedNodeManager(context: Context) {
     /**
      * The local API bearer token, sealed at rest under the Android Keystore key.
      *
-     * A blank read means the stored envelope could not be opened — a replaced or wiped
-     * Keystore key — so a fresh token is minted and sealed.  Rotating it is safe: it is a
-     * loopback-only credential handed to the node explicitly at every start.  The node's
-     * TLS identity is deliberately left alone, because rotating that would break every
-     * pairing this phone has completed.
-     *
-     * Returns null when the freshly minted token could not be sealed either, so the node
-     * is never started with a credential the app cannot read back.
+     * A token is minted only when no envelope exists. Existing ciphertext that cannot be
+     * authenticated is never replaced, because silent rotation can strand durable local
+     * state. The provider stays locked until the original Keystore material is available.
      */
-    private fun protectedTokenBytes(): ByteArray? {
-        localStore.token.takeIf(String::isNotBlank)?.let { return it.encodeToByteArray() }
-        val minted = ByteArray(32).let { generated ->
-            try {
-                csprng.nextBytes(generated)
-                Base64.encodeToString(generated, Base64.NO_WRAP or Base64.URL_SAFE)
-            } finally {
-                generated.fill(0)
-            }
-        }
-        localStore.token = minted
-        return localStore.token.takeIf(String::isNotBlank)?.encodeToByteArray()
-    }
+    private fun protectedTokenBytes(): ByteArray? = localStore.loadOrCreateTokenBytes(csprng)
 
     private fun acquireLanDiscoveryPermission(): Boolean {
         val requested = preferences.getBoolean(KEY_LAN_REQUESTED, false)
@@ -500,7 +491,6 @@ class EmbeddedNodeManager(context: Context) {
         )
     }
 
-    /** True only after Rust accepts a non-exportable Android Keystore identity protector. */
     /**
      * The measured Android Keystore protection level behind this device's Covalent
      * identity.  This is a probe, not an assumption: [IdentityKeyProtector] creates the
@@ -550,11 +540,10 @@ enum class NodeMode(val wireValue: String) {
  * nothing here can read, write, or substitute a separately configured external node's
  * credentials.
  *
- * The token is never stored in the clear: it is sealed by [IdentityKeyProtector] under a
- * non-exportable Android Keystore key.  An envelope that cannot be opened — because the
- * Keystore key was replaced, wiped, or invalidated — reads as an empty token, which makes
- * the caller mint and seal a fresh one.  See [IdentityKeyProtector] for the full key
- * lifecycle, including what happens on device loss, uninstall, and factory reset.
+ * The token is never stored in the clear. Existing ciphertext is authoritative: an
+ * invalidated key or authentication failure locks the local node and is never "recovered"
+ * by rotating credentials. The pre-v2 local-only envelope is opened and atomically replaced
+ * after a successful authentication, without touching the separate external-node store.
  *
  * The file stays credential-encrypted, and reads through [CredentialProtectedPreferences]
  * report an empty credential — never a crash — while the volume is sealed.  The sealed
@@ -568,11 +557,50 @@ private class LocalEmbeddedNodeStore(context: Context, private val protector: Id
         get() = preferences.getString("base_url", "") ?: ""
         set(value) = preferences.edit { putString("base_url", value.trim()) }
 
-    var token: String
-        get() = preferences.getString("token", null)?.let(protector::open).orEmpty()
-        set(value) {
-            val sealed = value.takeIf(String::isNotBlank)?.let(protector::seal)
-            if (sealed == null) preferences.edit { remove("token") }
-            else preferences.edit { putString("token", sealed) }
+    val token: String
+        get() = loadTokenBytes()?.let { tokenBytes ->
+            try {
+                tokenBytes.decodeToString()
+            } finally {
+                tokenBytes.fill(0)
+            }
+        }.orEmpty()
+
+    /** Creates a token only when no ciphertext exists; corrupt ciphertext stays locked. */
+    fun loadOrCreateTokenBytes(csprng: SecureRandom): ByteArray? {
+        val envelope = preferences.getString("token", null)
+        if (envelope != null) return loadTokenBytes(envelope)
+
+        val raw = ByteArray(TOKEN_RANDOM_BYTES)
+        var encoded: ByteArray? = null
+        return try {
+            csprng.nextBytes(raw)
+            encoded = Base64.encode(raw, Base64.NO_WRAP or Base64.URL_SAFE)
+            val sealed = protector.sealToken(encoded!!) ?: return null
+            if (!preferences.commit { putString("token", sealed) }) return null
+            protector.openToken(sealed)
+        } finally {
+            raw.fill(0)
+            encoded?.fill(0)
         }
+    }
+
+    private fun loadTokenBytes(envelope: String? = preferences.getString("token", null)): ByteArray? {
+        envelope ?: return null
+        protector.openToken(envelope)?.let { return it }
+
+        // Never treat failed current authentication as an invitation to rotate.
+        if (envelope.startsWith("v2:")) return null
+        val legacy = protector.openLegacyToken(envelope) ?: return null
+        val sealed = protector.sealToken(legacy)
+        if (sealed == null || !preferences.commit { putString("token", sealed) }) {
+            legacy.fill(0)
+            return null
+        }
+        return legacy
+    }
+
+    private companion object {
+        const val TOKEN_RANDOM_BYTES = 32
+    }
 }

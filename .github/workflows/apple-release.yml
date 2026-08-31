@@ -9,26 +9,23 @@ on:
         type: string
 
 permissions:
-  contents: write
-  checks: read
-  security-events: read
+  contents: read
 
 concurrency:
   group: notarized-macos-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
-  notarize:
-    name: Developer ID sign, notarize, and staple
+  build-unsigned:
+    name: Build credential-free Apple Silicon signing input
     runs-on: macos-26
     timeout-minutes: 60
-    env:
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
-      DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
-      APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
-      APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
-      APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+    permissions:
+      contents: read
+      checks: read
+      security-events: read
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -39,7 +36,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Require an Apple Silicon runner
         run: test "$(uname -m)" = arm64
-      - name: Verify immutable version and exact-commit software gates
+      - id: release
+        name: Verify immutable version and exact-commit software gates
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
@@ -47,6 +45,10 @@ jobs:
           set -euo pipefail
           if [[ ! "${RELEASE_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "release version must be an explicit v-prefixed semantic version" >&2
+            exit 1
+          fi
+          if [[ "${GITHUB_REF}" != "refs/tags/${RELEASE_VERSION}" || "${GITHUB_REF_TYPE}" != "tag" ]]; then
+            echo "run this workflow from refs/tags/${RELEASE_VERSION}; release publication must use the exact signed tag ref" >&2
             exit 1
           fi
           workspace_version=$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)
@@ -60,46 +62,37 @@ jobs:
             fi
           done
           ./scripts/release-version.sh check
-          ./scripts/verify-release-commit-signature.sh
-      - name: Require signing and notarization credentials
+          RELEASE_VERSION="${RELEASE_VERSION}" ./scripts/verify-release-commit-signature.sh
+          echo "version=${RELEASE_VERSION}" >> "${GITHUB_OUTPUT}"
+      - name: Install checksum-pinned XcodeGen
+        run: ./scripts/install-xcodegen.sh "${RUNNER_TEMP}/covalent-xcodegen" >> "${GITHUB_PATH}"
+      - name: Generate the project from pinned source inputs
         run: |
           set -euo pipefail
-          for variable in \
-            APPLE_TEAM_ID \
-            DEVELOPER_ID_P12_BASE64 \
-            DEVELOPER_ID_P12_PASSWORD \
-            APPLE_NOTARY_KEY_BASE64 \
-            APPLE_NOTARY_KEY_ID \
-            APPLE_NOTARY_ISSUER_ID; do
-            if [[ -z "${!variable:-}" ]]; then
-              echo "required release credential is unavailable: ${variable}" >&2
-              exit 1
-            fi
-          done
-      - run: brew install xcodegen
-      - name: Install ephemeral Developer ID identity
-        env:
-          KEYCHAIN_PASSWORD: ${{ github.run_id }}-${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-          keychain="${RUNNER_TEMP}/covalent-signing.keychain-db"
-          certificate="${RUNNER_TEMP}/developer-id.p12"
-          printf '%s' "${DEVELOPER_ID_P12_BASE64}" | base64 --decode > "${certificate}"
-          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${keychain}"
-          security set-keychain-settings -lut 21600 "${keychain}"
-          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${keychain}"
-          security import "${certificate}" -k "${keychain}" -P "${DEVELOPER_ID_P12_PASSWORD}" -T /usr/bin/codesign -T /usr/bin/security
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" "${keychain}"
-          security list-keychains -d user -s "${keychain}"
-          identity=$(security find-identity -v -p codesigning "${keychain}" | awk '/Developer ID Application/ { print $2; exit }')
-          test -n "${identity}"
-          echo "COVALENT_SIGNING_KEYCHAIN=${keychain}" >> "${GITHUB_ENV}"
-          echo "COVALENT_SIGNING_IDENTITY=${identity}" >> "${GITHUB_ENV}"
-      - name: Build hardened Apple Silicon archive
+          test -s apps/apple/Package.resolved
+          cd apps/apple
+          xcodegen generate --quiet
+      # Dependency fetching and every build script run before any private
+      # signing identity exists. The later signing job only handles this
+      # checksummed app bundle and never invokes a build tool.
+      - name: Resolve locked Swift packages without signing material
         run: |
           set -euo pipefail
           cd apps/apple
-          xcodegen generate --quiet
+          xcodebuild \
+            -resolvePackageDependencies \
+            -project Covalent.xcodeproj \
+            -scheme CovalentMac \
+            -clonedSourcePackagesDirPath "${RUNNER_TEMP}/covalent-swiftpm" \
+            -disableAutomaticPackageResolution \
+            -onlyUsePackageVersionsFromResolvedFile \
+            -skipPackageUpdates \
+            -packageFingerprintPolicy strict \
+            -packageSigningEntityPolicy strict
+      - name: Build credential-free Apple Silicon signing input
+        run: |
+          set -euo pipefail
+          cd apps/apple
           archive_path="${RUNNER_TEMP}/CovalentMac.xcarchive"
           xcodebuild \
             -project Covalent.xcodeproj \
@@ -107,67 +100,400 @@ jobs:
             -configuration Release \
             -destination 'generic/platform=macOS' \
             -archivePath "${archive_path}" \
+            -clonedSourcePackagesDirPath "${RUNNER_TEMP}/covalent-swiftpm" \
+            -disableAutomaticPackageResolution \
+            -onlyUsePackageVersionsFromResolvedFile \
+            -skipPackageUpdates \
+            -packageFingerprintPolicy strict \
+            -packageSigningEntityPolicy strict \
             ARCHS=arm64 \
             EXCLUDED_ARCHS=x86_64 \
             CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="${COVALENT_SIGNING_IDENTITY}" \
-            DEVELOPMENT_TEAM="${APPLE_TEAM_ID}" \
-            OTHER_CODE_SIGN_FLAGS="--keychain ${COVALENT_SIGNING_KEYCHAIN} --timestamp" \
+            CODE_SIGN_IDENTITY=- \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            OTHER_CODE_SIGN_FLAGS="" \
             archive
           app="${archive_path}/Products/Applications/Covalent.app"
+          COVALENT_REQUIRE_HARDENED_RUNTIME=false \
+            COVALENT_REQUIRE_DEVELOPER_ID=false \
+            "${GITHUB_WORKSPACE}/scripts/verify-apple-silicon-bundle.sh" "${app}"
+          echo "COVALENT_UNSIGNED_INPUT_APP=${app}" >> "${GITHUB_ENV}"
+      - name: Package immutable unsigned signing input and inventory
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          handoff="${RUNNER_TEMP}/unsigned-signing-input"
+          input="${handoff}/Covalent-${RELEASE_VERSION}-macOS-signing-input.zip"
+          input_checksum="${input}.sha256"
+          inventory="${handoff}/Covalent-${RELEASE_VERSION}-macOS-dependency-inventory.tar.gz"
+          manifest="${handoff}/Covalent-${RELEASE_VERSION}-macOS-signing-input-SHA256SUMS.txt"
+          test -d "${COVALENT_UNSIGNED_INPUT_APP}"
+          mkdir -p "${handoff}"
+          ditto -c -k --sequesterRsrc --keepParent "${COVALENT_UNSIGNED_INPUT_APP}" "${input}"
+          (cd "$(dirname "${input}")" && shasum -a 256 "$(basename "${input}")") > "${input_checksum}"
+          SOURCE_DATE_EPOCH=0 ./scripts/apple-dependency-inventory.sh "${RUNNER_TEMP}/covalent-apple-inventory"
+          cp Cargo.lock "${RUNNER_TEMP}/covalent-apple-inventory/Cargo.lock"
+          (cd "${RUNNER_TEMP}/covalent-apple-inventory" && shasum -a 256 Cargo.lock >> SHA256SUMS)
+          tar -czf "${inventory}" -C "${RUNNER_TEMP}" covalent-apple-inventory
+          (
+            cd "${handoff}"
+            shasum -a 256 \
+              "$(basename "${input}")" \
+              "$(basename "${input_checksum}")" \
+              "$(basename "${inventory}")" > "$(basename "${manifest}")"
+            shasum -a 256 -c "$(basename "${input_checksum}")"
+          )
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-unsigned-covalent-macos-signing-input-${{ steps.release.outputs.version }}-${{ github.sha }}
+          path: ${{ runner.temp }}/unsigned-signing-input
+          if-no-files-found: error
+          retention-days: 7
+
+  sign-verify:
+    name: Sign only the verified app and helper
+    needs: build-unsigned
+    runs-on: macos-26
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: verified-unsigned-covalent-macos-signing-input-${{ needs.build-unsigned.outputs.version }}-${{ github.sha }}
+          path: ${{ runner.temp }}/unsigned-signing-input
+      - name: Verify immutable unsigned handoff before signing
+        env:
+          RELEASE_VERSION: ${{ needs.build-unsigned.outputs.version }}
+        run: |
+          set -euo pipefail
+          handoff="${RUNNER_TEMP}/unsigned-signing-input"
+          input="Covalent-${RELEASE_VERSION}-macOS-signing-input.zip"
+          input_checksum="${input}.sha256"
+          inventory="Covalent-${RELEASE_VERSION}-macOS-dependency-inventory.tar.gz"
+          manifest="Covalent-${RELEASE_VERSION}-macOS-signing-input-SHA256SUMS.txt"
+          cd "${handoff}"
+          test -f "${input}"
+          test -f "${input_checksum}"
+          test -f "${inventory}"
+          test -f "${manifest}"
+          shasum -a 256 -c "${manifest}"
+          shasum -a 256 -c "${input_checksum}"
+          tar -tzf "${inventory}" | grep -q '^covalent-apple-inventory/SHA256SUMS$'
+          unpacked="${RUNNER_TEMP}/covalent-signing-input-app"
+          test ! -e "${unpacked}"
+          mkdir -p "${unpacked}"
+          ditto -x -k "${input}" "${unpacked}"
+          app="${unpacked}/Covalent.app"
+          test -d "${app}" && test ! -L "${app}"
+          COVALENT_REQUIRE_HARDENED_RUNTIME=false \
+            COVALENT_REQUIRE_DEVELOPER_ID=false \
+            "${GITHUB_WORKSPACE}/scripts/verify-apple-silicon-bundle.sh" "${app}"
+          echo "COVALENT_SIGNING_INPUT_APP=${app}" >> "${GITHUB_ENV}"
+      # No checkout, download, build, package resolution, Cargo, SwiftPM, or
+      # Xcode command follows this import. Only the fixed app and bundled
+      # helper are re-signed, verified, packaged, and then the keychain is
+      # deleted before any action upload or notarization handoff.
+      - name: Install non-exportable Developer ID identity for the configured team
+        env:
+          KEYCHAIN_PASSWORD: ${{ github.run_id }}-${{ github.run_attempt }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for variable in APPLE_TEAM_ID DEVELOPER_ID_P12_BASE64 DEVELOPER_ID_P12_PASSWORD; do
+            if [[ -z "${!variable:-}" ]]; then
+              echo "required signing credential is unavailable: ${variable}" >&2
+              exit 1
+            fi
+          done
+          keychain="${RUNNER_TEMP}/covalent-signing.keychain-db"
+          certificate="${RUNNER_TEMP}/developer-id.p12"
+          leaf_certificate="${RUNNER_TEMP}/developer-id-leaf.pem"
+          echo "COVALENT_SIGNING_KEYCHAIN=${keychain}" >> "${GITHUB_ENV}"
+          echo "COVALENT_SIGNING_P12=${certificate}" >> "${GITHUB_ENV}"
+          printf '%s' "${DEVELOPER_ID_P12_BASE64}" | base64 --decode > "${certificate}"
+          chmod 600 "${certificate}"
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${keychain}"
+          security set-keychain-settings -lut 21600 "${keychain}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${keychain}"
+          security import "${certificate}" -k "${keychain}" -P "${DEVELOPER_ID_P12_PASSWORD}" -x -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" "${keychain}"
+          identities=$(security find-identity -v -p codesigning "${keychain}" | awk -v team_id="${APPLE_TEAM_ID}" '
+            /Developer ID Application:/ && index($0, "(" team_id ")") { print $2 }
+          ')
+          identity_count=$(printf '%s\n' "${identities}" | awk 'NF { count += 1 } END { print count + 0 }')
+          if [[ "${identity_count}" != 1 ]]; then
+            echo "expected exactly one Developer ID Application identity for APPLE_TEAM_ID=${APPLE_TEAM_ID}; found ${identity_count}" >&2
+            exit 1
+          fi
+          identity=$(printf '%s\n' "${identities}" | awk 'NF { print; exit }')
+          security find-certificate -c "Developer ID Application" -p "${keychain}" > "${leaf_certificate}"
+          leaf_count=$(grep -c '^-----BEGIN CERTIFICATE-----$' "${leaf_certificate}" || true)
+          if [[ "${leaf_count}" != 1 ]]; then
+            echo "expected exactly one imported Developer ID Application leaf certificate; found ${leaf_count}" >&2
+            exit 1
+          fi
+          leaf_subject=$(openssl x509 -in "${leaf_certificate}" -noout -subject -nameopt RFC2253)
+          if [[ "${leaf_subject}" != *"CN=Developer ID Application"* || "${leaf_subject}" != *"OU=${APPLE_TEAM_ID}"* ]]; then
+            echo "Developer ID leaf certificate does not bind to APPLE_TEAM_ID" >&2
+            exit 1
+          fi
+          echo "COVALENT_SIGNING_IDENTITY=${identity}" >> "${GITHUB_ENV}"
+      - name: Sign fixed app and helper, then verify team and designated requirements
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          app="${COVALENT_SIGNING_INPUT_APP}"
+          info_plist="${app}/Contents/Info.plist"
+          app_executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "${info_plist}")
+          app_binary="${app}/Contents/MacOS/${app_executable}"
+          helper="${app}/Contents/MacOS/covalent-node"
+          for target in "${app}" "${app_binary}" "${helper}"; do
+            test -e "${target}" && test ! -L "${target}"
+          done
+          codesign \
+            --force \
+            --sign "${COVALENT_SIGNING_IDENTITY}" \
+            --identifier "life.michaelwong.covalent.node" \
+            --options runtime \
+            --timestamp \
+            --keychain "${COVALENT_SIGNING_KEYCHAIN}" \
+            --entitlements "${GITHUB_WORKSPACE}/apps/apple/Config/CovalentNode.entitlements" \
+            "${helper}"
+          codesign \
+            --force \
+            --sign "${COVALENT_SIGNING_IDENTITY}" \
+            --identifier "life.michaelwong.covalent.macos" \
+            --options runtime \
+            --timestamp \
+            --keychain "${COVALENT_SIGNING_KEYCHAIN}" \
+            --entitlements "${GITHUB_WORKSPACE}/apps/apple/Config/CovalentMac.entitlements" \
+            "${app}"
           COVALENT_REQUIRE_HARDENED_RUNTIME=true \
             COVALENT_REQUIRE_DEVELOPER_ID=true \
             "${GITHUB_WORKSPACE}/scripts/verify-apple-silicon-bundle.sh" "${app}"
-          echo "COVALENT_ARCHIVE_APP=${app}" >> "${GITHUB_ENV}"
-      - name: Notarize, staple, and assess
+          for target in "${app}" "${helper}"; do
+            signature=$(codesign -d --verbose=4 "${target}" 2>&1)
+            printf '%s\n' "${signature}" | grep -Fqx "TeamIdentifier=${APPLE_TEAM_ID}"
+            printf '%s\n' "${signature}" | grep -Fq 'Authority=Developer ID Application:'
+          done
+          app_requirements=$(codesign -d -r- "${app}" 2>&1)
+          printf '%s\n' "${app_requirements}" | grep -Fq 'designated => identifier "life.michaelwong.covalent.macos"'
+          helper_requirements=$(codesign -d -r- "${helper}" 2>&1)
+          printf '%s\n' "${helper_requirements}" | grep -Fq 'designated => identifier "life.michaelwong.covalent.node"'
+      - name: Package verified signed handoff
         env:
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ needs.build-unsigned.outputs.version }}
         run: |
           set -euo pipefail
+          signed_handoff="${RUNNER_TEMP}/signed-notarization-input"
+          signing_input="${RUNNER_TEMP}/unsigned-signing-input"
+          artifact="${signed_handoff}/Covalent-${RELEASE_VERSION}-macOS-signed-input.zip"
+          artifact_checksum="${artifact}.sha256"
+          inventory="Covalent-${RELEASE_VERSION}-macOS-dependency-inventory.tar.gz"
+          manifest="${signed_handoff}/Covalent-${RELEASE_VERSION}-macOS-signed-input-SHA256SUMS.txt"
+          mkdir -p "${signed_handoff}"
+          ditto -c -k --sequesterRsrc --keepParent "${COVALENT_SIGNING_INPUT_APP}" "${artifact}"
+          (cd "$(dirname "${artifact}")" && shasum -a 256 "$(basename "${artifact}")") > "${artifact_checksum}"
+          cp "${signing_input}/${inventory}" "${signed_handoff}/${inventory}"
+          (
+            cd "${signed_handoff}"
+            shasum -a 256 \
+              "$(basename "${artifact}")" \
+              "$(basename "${artifact_checksum}")" \
+              "${inventory}" > "$(basename "${manifest}")"
+            shasum -a 256 -c "$(basename "${artifact_checksum}")"
+          )
+      - name: Remove imported signing material before signed handoff
+        run: |
+          set -euo pipefail
+          secure_remove() {
+            local target="$1"
+            [[ -e "${target}" || -L "${target}" ]] || return 0
+            rm -P -f "${target}" 2>/dev/null || rm -f "${target}"
+            [[ ! -e "${target}" && ! -L "${target}" ]]
+          }
+          if [[ -n "${COVALENT_SIGNING_KEYCHAIN:-}" ]]; then
+            security delete-keychain "${COVALENT_SIGNING_KEYCHAIN}" 2>/dev/null || true
+            secure_remove "${COVALENT_SIGNING_KEYCHAIN}"
+          fi
+          secure_remove "${COVALENT_SIGNING_P12:-${RUNNER_TEMP}/developer-id.p12}"
+          secure_remove "${RUNNER_TEMP}/developer-id-leaf.pem"
+          {
+            echo "COVALENT_SIGNING_KEYCHAIN="
+            echo "COVALENT_SIGNING_IDENTITY="
+            echo "COVALENT_SIGNING_P12="
+          } >> "${GITHUB_ENV}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-signed-covalent-macos-notarization-input-${{ needs.build-unsigned.outputs.version }}-${{ github.sha }}
+          path: ${{ runner.temp }}/signed-notarization-input
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove ephemeral Developer ID material
+        if: always()
+        run: |
+          set +e
+          secure_remove() {
+            [[ -f "$1" || -L "$1" ]] || return 0
+            rm -P -f "$1" 2>/dev/null || rm -f "$1"
+          }
+          security delete-keychain "${COVALENT_SIGNING_KEYCHAIN:-${RUNNER_TEMP}/covalent-signing.keychain-db}" 2>/dev/null || true
+          secure_remove "${COVALENT_SIGNING_KEYCHAIN:-${RUNNER_TEMP}/covalent-signing.keychain-db}"
+          secure_remove "${COVALENT_SIGNING_P12:-${RUNNER_TEMP}/developer-id.p12}"
+          secure_remove "${RUNNER_TEMP}/developer-id-leaf.pem"
+
+  notarize-verify:
+    name: Notarize the verified signed handoff
+    needs: [build-unsigned, sign-verify]
+    runs-on: macos-26
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: verified-signed-covalent-macos-notarization-input-${{ needs.build-unsigned.outputs.version }}-${{ github.sha }}
+          path: ${{ runner.temp }}/signed-notarization-input
+      - name: Verify signed handoff before notarization
+        env:
+          RELEASE_VERSION: ${{ needs.build-unsigned.outputs.version }}
+        run: |
+          set -euo pipefail
+          handoff="${RUNNER_TEMP}/signed-notarization-input"
+          artifact="Covalent-${RELEASE_VERSION}-macOS-signed-input.zip"
+          artifact_checksum="${artifact}.sha256"
+          inventory="Covalent-${RELEASE_VERSION}-macOS-dependency-inventory.tar.gz"
+          manifest="Covalent-${RELEASE_VERSION}-macOS-signed-input-SHA256SUMS.txt"
+          cd "${handoff}"
+          test -f "${artifact}"
+          test -f "${artifact_checksum}"
+          test -f "${inventory}"
+          test -f "${manifest}"
+          shasum -a 256 -c "${manifest}"
+          shasum -a 256 -c "${artifact_checksum}"
+          tar -tzf "${inventory}" | grep -q '^covalent-apple-inventory/SHA256SUMS$'
+          unpacked="${RUNNER_TEMP}/covalent-notarization-input"
+          test ! -e "${unpacked}"
+          mkdir -p "${unpacked}"
+          ditto -x -k "${artifact}" "${unpacked}"
+          app="${unpacked}/Covalent.app"
+          test -d "${app}" && test ! -L "${app}"
+          COVALENT_REQUIRE_HARDENED_RUNTIME=true \
+            COVALENT_REQUIRE_DEVELOPER_ID=true \
+            "${GITHUB_WORKSPACE}/scripts/verify-apple-silicon-bundle.sh" "${app}"
+          echo "COVALENT_NOTARIZATION_APP=${app}" >> "${GITHUB_ENV}"
+      - name: Notarize, staple, assess, and package
+        env:
+          RELEASE_VERSION: ${{ needs.build-unsigned.outputs.version }}
+          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          for variable in APPLE_NOTARY_KEY_BASE64 APPLE_NOTARY_KEY_ID APPLE_NOTARY_ISSUER_ID; do
+            if [[ -z "${!variable:-}" ]]; then
+              echo "required notarization credential is unavailable: ${variable}" >&2
+              exit 1
+            fi
+          done
           notary_key="${RUNNER_TEMP}/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
+          secure_remove() {
+            [[ -f "$1" || -L "$1" ]] || return 0
+            rm -P -f "$1" 2>/dev/null || rm -f "$1"
+          }
+          trap 'secure_remove "${notary_key}"' EXIT
           printf '%s' "${APPLE_NOTARY_KEY_BASE64}" | base64 --decode > "${notary_key}"
           chmod 600 "${notary_key}"
           submission="${RUNNER_TEMP}/Covalent-notarization.zip"
-          ditto -c -k --sequesterRsrc --keepParent "${COVALENT_ARCHIVE_APP}" "${submission}"
+          ditto -c -k --sequesterRsrc --keepParent "${COVALENT_NOTARIZATION_APP}" "${submission}"
           xcrun notarytool submit "${submission}" \
             --key "${notary_key}" \
             --key-id "${APPLE_NOTARY_KEY_ID}" \
             --issuer "${APPLE_NOTARY_ISSUER_ID}" \
             --wait \
             --timeout 30m
-          xcrun stapler staple "${COVALENT_ARCHIVE_APP}"
-          xcrun stapler validate "${COVALENT_ARCHIVE_APP}"
-          spctl --assess --type execute --verbose=4 "${COVALENT_ARCHIVE_APP}"
-          output="${RUNNER_TEMP}/Covalent-${RELEASE_VERSION}-macOS.zip"
-          ditto -c -k --sequesterRsrc --keepParent "${COVALENT_ARCHIVE_APP}" "${output}"
-          shasum -a 256 "${output}" > "${output}.sha256"
-          SOURCE_DATE_EPOCH=0 ./scripts/apple-dependency-inventory.sh "${RUNNER_TEMP}/covalent-apple-inventory"
-          cp Cargo.lock "${RUNNER_TEMP}/covalent-apple-inventory/Cargo.lock"
-          (cd "${RUNNER_TEMP}/covalent-apple-inventory" && shasum -a 256 Cargo.lock >> SHA256SUMS)
-          echo "COVALENT_RELEASE_ARTIFACT=${output}" >> "${GITHUB_ENV}"
+          xcrun stapler staple "${COVALENT_NOTARIZATION_APP}"
+          xcrun stapler validate "${COVALENT_NOTARIZATION_APP}"
+          spctl --assess --type execute --verbose=4 "${COVALENT_NOTARIZATION_APP}"
+          handoff="${RUNNER_TEMP}/notarized-release-handoff"
+          artifact="${handoff}/Covalent-${RELEASE_VERSION}-macOS.zip"
+          artifact_checksum="${artifact}.sha256"
+          inventory="Covalent-${RELEASE_VERSION}-macOS-dependency-inventory.tar.gz"
+          manifest="${handoff}/Covalent-${RELEASE_VERSION}-macOS-SHA256SUMS.txt"
+          mkdir -p "${handoff}"
+          ditto -c -k --sequesterRsrc --keepParent "${COVALENT_NOTARIZATION_APP}" "${artifact}"
+          (cd "$(dirname "${artifact}")" && shasum -a 256 "$(basename "${artifact}")") > "${artifact_checksum}"
+          cp "${RUNNER_TEMP}/signed-notarization-input/${inventory}" "${handoff}/${inventory}"
+          (
+            cd "${handoff}"
+            shasum -a 256 \
+              "$(basename "${artifact}")" \
+              "$(basename "${artifact_checksum}")" \
+              "${inventory}" > "$(basename "${manifest}")"
+            shasum -a 256 -c "$(basename "${artifact_checksum}")"
+          )
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-notarized-covalent-macos-${{ needs.build-unsigned.outputs.version }}-${{ github.sha }}
+          path: ${{ runner.temp }}/notarized-release-handoff
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove ephemeral notarization key
+        if: always()
+        run: |
+          set +e
+          for notary_key in "${RUNNER_TEMP}"/AuthKey_*.p8; do
+            [[ -f "${notary_key}" || -L "${notary_key}" ]] || continue
+            rm -P -f "${notary_key}" 2>/dev/null || rm -f "${notary_key}"
+          done
+
+  publish:
+    name: Re-verify and publish notarized macOS artifacts
+    needs: [build-unsigned, notarize-verify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: verified-notarized-covalent-macos-${{ needs.build-unsigned.outputs.version }}-${{ github.sha }}
+          path: ${{ runner.temp }}/notarized-release-handoff
+      - name: Verify notarized handoff before publication
+        env:
+          RELEASE_VERSION: ${{ needs.build-unsigned.outputs.version }}
+        run: |
+          set -euo pipefail
+          handoff="${RUNNER_TEMP}/notarized-release-handoff"
+          artifact="Covalent-${RELEASE_VERSION}-macOS.zip"
+          artifact_checksum="${artifact}.sha256"
+          inventory="Covalent-${RELEASE_VERSION}-macOS-dependency-inventory.tar.gz"
+          manifest="Covalent-${RELEASE_VERSION}-macOS-SHA256SUMS.txt"
+          cd "${handoff}"
+          test -f "${artifact}"
+          test -f "${artifact_checksum}"
+          test -f "${inventory}"
+          test -f "${manifest}"
+          shasum -a 256 -c "${manifest}"
+          shasum -a 256 -c "${artifact_checksum}"
+          tar -tzf "${inventory}" | grep -q '^covalent-apple-inventory/SHA256SUMS$'
       - name: Publish the notarized macOS build to the release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ needs.build-unsigned.outputs.version }}
         run: |
           set -euo pipefail
-          inventory="${RUNNER_TEMP}/Covalent-${RELEASE_VERSION}-macOS-dependency-inventory.tar.gz"
-          tar -czf "${inventory}" -C "${RUNNER_TEMP}" covalent-apple-inventory
+          handoff="${RUNNER_TEMP}/notarized-release-handoff"
           ./scripts/publish-release-assets.sh "${RELEASE_VERSION}" \
-            "${COVALENT_RELEASE_ARTIFACT}" \
-            "${COVALENT_RELEASE_ARTIFACT}.sha256" \
-            "${inventory}"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: notarized-covalent-macos-${{ inputs.version }}-${{ github.sha }}
-          path: |
-            ${{ env.COVALENT_RELEASE_ARTIFACT }}
-            ${{ env.COVALENT_RELEASE_ARTIFACT }}.sha256
-            ${{ runner.temp }}/covalent-apple-inventory
-          if-no-files-found: error
-      - name: Remove ephemeral signing material
-        if: always()
-        run: |
-          if [[ -n "${COVALENT_SIGNING_KEYCHAIN:-}" ]] && [[ -f "${COVALENT_SIGNING_KEYCHAIN}" ]]; then
-            security delete-keychain "${COVALENT_SIGNING_KEYCHAIN}" || true
-          fi
+            "${handoff}/Covalent-${RELEASE_VERSION}-macOS.zip" \
+            "${handoff}/Covalent-${RELEASE_VERSION}-macOS.zip.sha256" \
+            "${handoff}/Covalent-${RELEASE_VERSION}-macOS-dependency-inventory.tar.gz"

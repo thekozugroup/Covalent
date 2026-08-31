@@ -24,7 +24,7 @@ enum AppleArchiveTransfer {
     private static let maximumUncompressedBytes: UInt64 = 64 << 30
     private static let minimumFreeSpaceReserve: UInt64 = 256 << 20
 
-    struct TargetInventoryDraft: Equatable, Sendable {
+    struct TargetInventoryDraft: Codable, Equatable, Sendable {
         let rootIdentity: String
         let totalBytes: UInt64
         let entries: [TargetInventoryEntry]
@@ -281,8 +281,11 @@ enum AppleArchiveTransfer {
         NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
     }
 
-    static func copyDownloadedArchive(_ sourceURL: URL) throws -> URL {
+    static func copyDownloadedArchive(_ sourceURL: URL, to destinationURL: URL? = nil) throws -> URL {
         try Task.checkCancellation()
+        if let destinationURL {
+            return try copyDownloadedArchiveNoFollow(sourceURL, to: destinationURL)
+        }
         let size = try fileSize(sourceURL)
         guard size <= maximumCompressedBytes else {
             throw AppleArchiveTransferError.compressedSizeExceeded
@@ -303,19 +306,78 @@ enum AppleArchiveTransfer {
         }
     }
 
+    /// `URLSession` owns its download temporary file.  When that file becomes
+    /// part of a durable restore journal, copy it through no-follow file
+    /// descriptors into the owner-private transfer directory and sync it
+    /// before the journal can name it.
+    private static func copyDownloadedArchiveNoFollow(_ sourceURL: URL, to destinationURL: URL) throws -> URL {
+        let source = open(sourceURL.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard source >= 0 else { throw posixSourceError() }
+        defer { close(source) }
+        var sourceMetadata = stat()
+        guard fstat(source, &sourceMetadata) == 0,
+              sourceMetadata.st_mode & S_IFMT == S_IFREG,
+              sourceMetadata.st_size >= 0,
+              UInt64(sourceMetadata.st_size) <= maximumCompressedBytes
+        else { throw AppleArchiveTransferError.compressedSizeExceeded }
+
+        let destination = open(
+            destinationURL.path,
+            O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+            mode_t(0o600)
+        )
+        guard destination >= 0 else { throw posixSourceError() }
+        var succeeded = false
+        defer {
+            close(destination)
+            if !succeeded { _ = unlink(destinationURL.path) }
+        }
+        var buffer = [UInt8](repeating: 0, count: bufferSize)
+        while true {
+            try Task.checkCancellation()
+            let count = Darwin.read(source, &buffer, buffer.count)
+            if count < 0, errno == EINTR { continue }
+            guard count >= 0 else { throw posixSourceError() }
+            guard count > 0 else { break }
+            var written = 0
+            while written < count {
+                let result = buffer.withUnsafeBytes { bytes in
+                    Darwin.write(destination, bytes.baseAddress!.advanced(by: written), count - written)
+                }
+                if result < 0, errno == EINTR { continue }
+                guard result > 0 else { throw posixSourceError() }
+                written += result
+            }
+        }
+        guard fsync(destination) == 0 else { throw posixSourceError() }
+        succeeded = true
+        return destinationURL
+    }
+
     static func uploadIdentity(for archiveURL: URL) throws -> (length: UInt64, digest: String) {
         try Task.checkCancellation()
         let length = try fileSize(archiveURL)
         guard length > 0, length <= maximumCompressedBytes else {
             throw AppleArchiveTransferError.compressedSizeExceeded
         }
-        let handle = try FileHandle(forReadingFrom: archiveURL)
-        defer { try? handle.close() }
+        let descriptor = Darwin.open(archiveURL.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { throw posixSourceError() }
+        defer { close(descriptor) }
+        var metadata = stat()
+        guard fstat(descriptor, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFREG,
+              metadata.st_size >= 0,
+              UInt64(metadata.st_size) == length
+        else { throw AppleArchiveTransferError.compressedSizeExceeded }
         var digest = SHA256()
+        var buffer = [UInt8](repeating: 0, count: bufferSize)
         while true {
             try Task.checkCancellation()
-            guard let data = try handle.read(upToCount: bufferSize), !data.isEmpty else { break }
-            digest.update(data: data)
+            let count = Darwin.read(descriptor, &buffer, buffer.count)
+            if count < 0, errno == EINTR { continue }
+            guard count >= 0 else { throw posixSourceError() }
+            guard count > 0 else { break }
+            digest.update(data: Data(buffer.prefix(count)))
         }
         return (length, digest.finalize().map { String(format: "%02x", $0) }.joined())
     }
@@ -1046,11 +1108,11 @@ extension AppleArchiveTransferError: LocalizedError {
         case .uncompressedSizeExceeded: "The transfer archive exceeds the 64 GiB expanded limit."
         case .insufficientFreeSpace: "The selected volume does not have enough free space plus Covalent's 256 MiB safety reserve."
         case .restoreDestinationMustBeEmpty:
-            "Choose an empty restore folder so the signed no-write preview remains exact."
+            "Choose a writable restore folder so Covalent can inventory it before the signed preview."
         case .nonEmptyRestorePlan:
             "Your backup server sent a restore plan that could change files already in that folder."
         case let .restorePlanMismatch(path): "The restore archive did not match its signed plan at \(path)."
-        case .destinationChanged: "The restore folder changed after preview. Choose an empty folder and preview again."
+        case .destinationChanged: "The restore folder changed after preview. Recheck the target and preview again."
         case let .sourceChanged(path): "The backup source changed while reading \(path). Retry after writes stop."
         }
     }

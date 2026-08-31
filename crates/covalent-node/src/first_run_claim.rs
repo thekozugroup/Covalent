@@ -2,12 +2,11 @@
 //!
 //! # Why this exists
 //!
-//! A container has no keyboard and no window. Before this module, taking
-//! ownership of an Unraid deployment meant opening a shell inside a running
-//! container, `cat`-ing a bearer token out of `/data/local-api-token`, copying a
-//! root certificate out of `/config/caddy/...`, and verifying that certificate
-//! against the host by hand. Four terminal steps, on the platform this product
-//! calls Tier 1, for a person whose only tool is a web browser.
+//! A container has no keyboard and no window. Earlier deployments exposed a
+//! plaintext bearer-token file and required several manual shell and
+//! certificate-verification steps. The token is now stored only as a
+//! path-bound wrapped secret, so ownership must be handed to a verified client
+//! rather than recovered from node storage.
 //!
 //! The node already knows both secrets. It only lacked a way to hand them over.
 //! This module is that handoff: at first start the node mints a short code,
@@ -21,13 +20,10 @@
 //! here rather than assumed.
 //!
 //! **Who can read the log.** On Unraid, the container log is reachable through
-//! the Unraid web interface, the Docker socket, or the host filesystem. Every
-//! one of those is already root-equivalent on that machine, and every one of
-//! them can read `/data/local-api-token` directly — which is exactly what the
-//! old instructions told the operator to do. So the code discloses nothing to a
-//! log reader that a log reader did not already have. It is strictly weaker
-//! than the access required to observe it, which is the property that makes
-//! this safe to print at all.
+//! the Unraid web interface, the Docker socket, or the host filesystem. Those
+//! are security-sensitive, root-equivalent surfaces. Anyone who sees a live
+//! code can attempt the one-time claim, so operators must protect log access
+//! and restart the container if the code may have been exposed.
 //!
 //! **What a LAN attacker can do with an observed code.** They cannot observe
 //! it: the code is never transmitted. The client proves knowledge of it with a
@@ -71,19 +67,23 @@
 //! or exhausted window has a recovery path that does not require a shell.
 //!
 //! **After a successful claim** the window is closed for good: a durable marker
-//! records that this node has an owner, and later starts mint nothing. A second
-//! presentation of the same code is refused whether or not the process
-//! restarted.
+//! records that this node has an owner, and later starts mint nothing. The exact
+//! nonce-and-proof request is durably bound to its sealed response, so a client
+//! that lost the response can retrieve the same bytes after a restart. Every
+//! different presentation is refused, including a new nonce made from the same
+//! code.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use blake3::Hasher;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 use covalent_core::CoreError;
 use rand_core::{OsRng, RngCore};
+use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, Zeroizing};
 
 /// Transcription alphabet, in Crockford Base32 order.
@@ -135,6 +135,36 @@ const STRETCH_STEP_DOMAIN: &[u8] = b"covalent/first-run-claim/stretch-step/v1";
 const CLIENT_PROOF_DOMAIN: &[u8] = b"covalent/first-run-claim/client-proof/v1";
 const SEAL_CONTEXT: &str = "covalent/first-run-claim/seal/v1";
 const SEAL_AAD_DOMAIN: &[u8] = b"covalent/first-run-claim/seal-aad/v1";
+const CLAIM_LIFECYCLE_SCHEMA_VERSION: u16 = 1;
+const CLAIM_REPLAY_SCHEMA_VERSION: u16 = 1;
+const MAX_CLAIM_LIFECYCLE_BYTES: u64 = 4 * 1_024;
+const MAX_CLAIM_REPLAY_BYTES: u64 = 128 * 1_024;
+const CLAIM_LIFECYCLE_FILE_NAME: &str = "owner-claim-state.json";
+const CLAIM_REPLAY_FILE_NAME: &str = "owner-claim-replay.json";
+const CLAIM_REPLAY_AUTH_CONTEXT: &str = "covalent/first-run-claim/replay-auth/v1";
+
+#[cfg(test)]
+thread_local! {
+    static CLAIM_COMMIT_FAILPOINT: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn claim_commit_failpoint(boundary: u8) -> Result<(), CoreError> {
+    CLAIM_COMMIT_FAILPOINT.with(|failpoint| {
+        if failpoint.get() == boundary {
+            Err(CoreError::InvalidState(format!(
+                "forced first-run claim commit failure at boundary {boundary}"
+            )))
+        } else {
+            Ok(())
+        }
+    })
+}
+
+#[cfg(not(test))]
+const fn claim_commit_failpoint(_boundary: u8) -> Result<(), CoreError> {
+    Ok(())
+}
 
 /// Why a presentation of a claim code was refused.
 ///
@@ -155,6 +185,11 @@ pub enum ClaimRefusal {
     /// The node could not read the certificate it must hand over. Checked
     /// before the code is spent, so this never costs the operator their code.
     CertificateUnavailable,
+    /// Ownership could not be committed durably. No token is returned. The
+    /// caller preserves its exact request: when a replay receipt was committed,
+    /// retrying that request recovers the sealed response; otherwise a restart
+    /// reopens the still-unclaimed lifecycle with a fresh code.
+    OwnershipStateUnavailable,
 }
 
 /// The reason an open window stopped accepting presentations.
@@ -178,6 +213,7 @@ impl fmt::Display for ClaimRefusal {
             Self::IncorrectCode => "the setup code was incorrect",
             Self::Malformed => "the setup request was malformed",
             Self::CertificateUnavailable => "the node's certificate is not available yet",
+            Self::OwnershipStateUnavailable => "ownership could not be recorded durably",
         };
         formatter.write_str(text)
     }
@@ -238,9 +274,10 @@ impl fmt::Debug for ClaimCode {
 
 /// Folds a typed code back to the exact characters that were minted.
 ///
-/// Case is lifted, separators and whitespace are dropped, and the three
-/// Crockford confusions are resolved the way a reader would resolve them. A
-/// string that still contains anything outside the alphabet is rejected rather
+/// Case is lifted, grouping plus bounded editor-style ASCII whitespace is
+/// dropped, and the three Crockford confusions are resolved the way a reader
+/// would resolve them. Only space, tab, CR, and LF are presentation whitespace;
+/// a string containing any other byte or Unicode character is rejected rather
 /// than coerced, so a wrong code fails as a wrong code rather than as a
 /// silently different one.
 #[must_use]
@@ -252,7 +289,7 @@ pub fn normalise_claim_code(supplied: &str) -> Option<Zeroizing<String>> {
     let mut normalised = Zeroizing::new(String::with_capacity(CLAIM_CODE_LENGTH));
     for character in supplied.chars() {
         let folded = match character.to_ascii_uppercase() {
-            '-' | ' ' | '\t' => continue,
+            '-' | ' ' | '\t' | '\r' | '\n' => continue,
             'O' => '0',
             'I' | 'L' => '1',
             other => other,
@@ -366,10 +403,11 @@ pub fn open_sealed_token(
 }
 
 /// Constant-time comparison over two equal-length digests.
-fn digests_equal(left: &[u8], right: &[u8; 32]) -> bool {
+fn digests_equal(left: &[u8], right: &[u8]) -> bool {
     let mut difference = u8::from(left.len() != right.len());
-    for (index, expected) in right.iter().enumerate() {
-        difference |= left.get(index).copied().unwrap_or(0) ^ expected;
+    for index in 0..left.len().max(right.len()) {
+        difference |=
+            left.get(index).copied().unwrap_or(0) ^ right.get(index).copied().unwrap_or(0);
     }
     difference == 0
 }
@@ -475,16 +513,280 @@ impl ClaimWindow {
     }
 }
 
-/// Everything one claim exchange hands the client.
+/// Everything one claim exchange hands the client and durably replays after an
+/// interrupted response.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClaimGrant {
-    /// The one-shot sealing nonce for [`Self::sealed_token`].
-    pub seal_nonce: Vec<u8>,
-    /// The API token, sealed so an on-path relay cannot read it.
-    pub sealed_token: Vec<u8>,
+    /// Device name captured before ownership is committed.
+    pub device_name: String,
     /// The CA to pin, in PEM, when this deployment terminates TLS in a proxy.
     pub ca_certificate: Option<String>,
     /// Hex SHA-256 of the CA's DER, for display and for out-of-band checking.
-    pub ca_fingerprint: Option<String>,
+    pub ca_fingerprint_sha256: Option<String>,
+    /// The one-shot sealing nonce for [`Self::sealed_token`], base64url encoded.
+    pub seal_nonce: String,
+    /// The API token, sealed so an on-path relay cannot read it, base64url encoded.
+    pub sealed_token: String,
+}
+
+impl ClaimGrant {
+    fn validate(&self) -> Result<(), CoreError> {
+        if self.device_name.is_empty()
+            || self.device_name.len() > 80
+            || self.device_name.chars().any(char::is_control)
+            || self.seal_nonce.len() != 32
+            || self.sealed_token.len() > 1_024
+        {
+            return Err(CoreError::InvalidState(
+                "invalid first-run claim replay response".to_owned(),
+            ));
+        }
+        let seal_nonce = URL_SAFE_NO_PAD
+            .decode(&self.seal_nonce)
+            .map_err(|_| CoreError::AuthenticationFailed)?;
+        let sealed_token = URL_SAFE_NO_PAD
+            .decode(&self.sealed_token)
+            .map_err(|_| CoreError::AuthenticationFailed)?;
+        if seal_nonce.len() != 24 || !(48..=528).contains(&sealed_token.len()) {
+            return Err(CoreError::AuthenticationFailed);
+        }
+        match (&self.ca_certificate, &self.ca_fingerprint_sha256) {
+            (None, None) => Ok(()),
+            (Some(pem), Some(fingerprint)) => {
+                if pem.len() > 64 * 1_024
+                    || fingerprint.len() != 64
+                    || fingerprint
+                        .bytes()
+                        .any(|byte| !byte.is_ascii_hexdigit() || byte.is_ascii_uppercase())
+                {
+                    return Err(CoreError::AuthenticationFailed);
+                }
+                let der = validate_exact_ca_certificate_pem(pem)?;
+                let actual: [u8; 32] = <sha2::Sha256 as sha2::Digest>::digest(&der).into();
+                let actual = actual
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>();
+                if !digests_equal(actual.as_bytes(), fingerprint.as_bytes()) {
+                    return Err(CoreError::AuthenticationFailed);
+                }
+                Ok(())
+            }
+            _ => Err(CoreError::AuthenticationFailed),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ClaimRequestBinding {
+    client_nonce: String,
+    client_proof: String,
+}
+
+impl ClaimRequestBinding {
+    fn new(client_nonce: &[u8], client_proof: &[u8]) -> Result<Self, CoreError> {
+        if client_nonce.len() != CLAIM_NONCE_BYTES || client_proof.len() != 32 {
+            return Err(CoreError::AuthenticationFailed);
+        }
+        Ok(Self {
+            client_nonce: URL_SAFE_NO_PAD.encode(client_nonce),
+            client_proof: URL_SAFE_NO_PAD.encode(client_proof),
+        })
+    }
+
+    fn validate(&self) -> Result<(), CoreError> {
+        let nonce = URL_SAFE_NO_PAD
+            .decode(&self.client_nonce)
+            .map_err(|_| CoreError::AuthenticationFailed)?;
+        let proof = URL_SAFE_NO_PAD
+            .decode(&self.client_proof)
+            .map_err(|_| CoreError::AuthenticationFailed)?;
+        if nonce.len() != CLAIM_NONCE_BYTES || proof.len() != 32 {
+            return Err(CoreError::AuthenticationFailed);
+        }
+        Ok(())
+    }
+
+    fn matches(&self, client_nonce: &[u8], client_proof: &[u8]) -> bool {
+        let nonce = URL_SAFE_NO_PAD.encode(client_nonce);
+        let proof = URL_SAFE_NO_PAD.encode(client_proof);
+        digests_equal(self.client_nonce.as_bytes(), nonce.as_bytes())
+            && digests_equal(self.client_proof.as_bytes(), proof.as_bytes())
+    }
+}
+
+impl Drop for ClaimRequestBinding {
+    fn drop(&mut self) {
+        self.client_nonce.zeroize();
+        self.client_proof.zeroize();
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ClaimReplayReceipt {
+    schema_version: u16,
+    request: ClaimRequestBinding,
+    response: ClaimGrant,
+    claimed_at_unix_ms: u64,
+    authenticator: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaimReplayAuthenticated<'a> {
+    schema_version: u16,
+    request: &'a ClaimRequestBinding,
+    response: &'a ClaimGrant,
+    claimed_at_unix_ms: u64,
+}
+
+impl ClaimReplayReceipt {
+    fn new(
+        request: ClaimRequestBinding,
+        response: ClaimGrant,
+        claimed_at_unix_ms: u64,
+        api_token: &str,
+    ) -> Result<Self, CoreError> {
+        let mut receipt = Self {
+            schema_version: CLAIM_REPLAY_SCHEMA_VERSION,
+            request,
+            response,
+            claimed_at_unix_ms,
+            authenticator: String::new(),
+        };
+        receipt.authenticator = URL_SAFE_NO_PAD.encode(receipt.authenticator(api_token)?);
+        receipt.validate(api_token)?;
+        Ok(receipt)
+    }
+
+    fn authenticated_bytes(&self) -> Result<Vec<u8>, CoreError> {
+        Ok(serde_json::to_vec(&ClaimReplayAuthenticated {
+            schema_version: self.schema_version,
+            request: &self.request,
+            response: &self.response,
+            claimed_at_unix_ms: self.claimed_at_unix_ms,
+        })?)
+    }
+
+    fn authenticator(&self, api_token: &str) -> Result<[u8; 32], CoreError> {
+        let key = Zeroizing::new(blake3::derive_key(
+            CLAIM_REPLAY_AUTH_CONTEXT,
+            api_token.as_bytes(),
+        ));
+        Ok(*blake3::keyed_hash(&key, &self.authenticated_bytes()?).as_bytes())
+    }
+
+    fn validate(&self, api_token: &str) -> Result<(), CoreError> {
+        if self.schema_version != CLAIM_REPLAY_SCHEMA_VERSION || self.claimed_at_unix_ms == 0 {
+            return Err(CoreError::AuthenticationFailed);
+        }
+        self.request.validate()?;
+        self.response.validate()?;
+        let stored = URL_SAFE_NO_PAD
+            .decode(&self.authenticator)
+            .map_err(|_| CoreError::AuthenticationFailed)?;
+        let expected = self.authenticator(api_token)?;
+        if stored.len() != expected.len() || !digests_equal(&stored, &expected) {
+            return Err(CoreError::AuthenticationFailed);
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ClaimReplayReceipt {
+    fn drop(&mut self) {
+        self.authenticator.zeroize();
+    }
+}
+
+/// Durable ownership phase consulted before a setup code is minted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ClaimLifecyclePhase {
+    Unclaimed,
+    Claimed,
+}
+
+/// Versioned lifecycle record that distinguishes a new unclaimed node from a
+/// legacy node whose token predates first-run claiming.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ClaimLifecycleRecord {
+    schema_version: u16,
+    phase: ClaimLifecyclePhase,
+    initialized_at_unix_ms: u64,
+    claimed_at_unix_ms: Option<u64>,
+}
+
+impl ClaimLifecycleRecord {
+    fn unclaimed(now_unix_ms: u64) -> Self {
+        Self {
+            schema_version: CLAIM_LIFECYCLE_SCHEMA_VERSION,
+            phase: ClaimLifecyclePhase::Unclaimed,
+            initialized_at_unix_ms: now_unix_ms,
+            claimed_at_unix_ms: None,
+        }
+    }
+
+    fn claimed(initialized_at_unix_ms: u64, claimed_at_unix_ms: u64) -> Self {
+        Self {
+            schema_version: CLAIM_LIFECYCLE_SCHEMA_VERSION,
+            phase: ClaimLifecyclePhase::Claimed,
+            initialized_at_unix_ms,
+            claimed_at_unix_ms: Some(claimed_at_unix_ms),
+        }
+    }
+
+    fn validate(&self) -> Result<(), CoreError> {
+        if self.schema_version != CLAIM_LIFECYCLE_SCHEMA_VERSION
+            || self.initialized_at_unix_ms == 0
+            || matches!(self.phase, ClaimLifecyclePhase::Unclaimed)
+                && self.claimed_at_unix_ms.is_some()
+            || matches!(self.phase, ClaimLifecyclePhase::Claimed)
+                && self
+                    .claimed_at_unix_ms
+                    .is_none_or(|claimed_at| claimed_at == 0)
+        {
+            return Err(CoreError::InvalidState(
+                "invalid first-run claim lifecycle".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Startup decision made from the explicit lifecycle record.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClaimStartupState {
+    /// A fresh code may be minted for this process.
+    Unclaimed,
+    /// A sealed replay receipt committed before the claimed lifecycle and must
+    /// be authenticated with the persisted API token before startup continues.
+    RecoveringReplay,
+    /// The node already has an owner and must never mint another code.
+    Claimed,
+}
+
+/// Path to the explicit first-run lifecycle record.
+#[must_use]
+pub fn claim_lifecycle_path(data_directory: &Path) -> PathBuf {
+    data_directory.join(CLAIM_LIFECYCLE_FILE_NAME)
+}
+
+/// Path to the one bounded sealed-grant replay receipt.
+#[must_use]
+pub fn claim_replay_path(data_directory: &Path) -> PathBuf {
+    data_directory.join(CLAIM_REPLAY_FILE_NAME)
+}
+
+fn replay_receipt_is_present(data_directory: &Path) -> bool {
+    !matches!(
+        std::fs::symlink_metadata(claim_replay_path(data_directory)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    )
 }
 
 /// Durable record that this node has an owner.
@@ -512,52 +814,194 @@ pub fn mark_claimed(marker_path: &Path, now_unix_ms: u64) -> Result<(), CoreErro
     crate::persist_private_file(marker_path, record.as_bytes())
 }
 
+fn read_claim_lifecycle(path: &Path) -> Result<Option<ClaimLifecycleRecord>, CoreError> {
+    let Some(bytes) =
+        crate::read_bounded_regular_file_optional(path, MAX_CLAIM_LIFECYCLE_BYTES, true)?
+    else {
+        return Ok(None);
+    };
+    let record: ClaimLifecycleRecord = serde_json::from_slice(bytes.as_ref())?;
+    record.validate()?;
+    Ok(Some(record))
+}
+
+fn persist_claim_lifecycle(path: &Path, record: &ClaimLifecycleRecord) -> Result<(), CoreError> {
+    record.validate()?;
+    crate::persist_private_file(path, &serde_json::to_vec_pretty(record)?)
+}
+
+/// Initializes or migrates the claim lifecycle before token loading can create
+/// a token. This ordering is the durable distinction between a new unclaimed
+/// node and a legacy deployment whose operator already owns its token.
+pub fn prepare_claim_lifecycle(
+    data_directory: &Path,
+    token_already_exists: bool,
+    now_unix_ms: u64,
+) -> Result<ClaimStartupState, CoreError> {
+    let lifecycle_path = claim_lifecycle_path(data_directory);
+    let marker_path = owner_marker_path(data_directory);
+    if let Some(record) = read_claim_lifecycle(&lifecycle_path)? {
+        if record.phase == ClaimLifecyclePhase::Claimed || is_claimed(&marker_path) {
+            if record.phase != ClaimLifecyclePhase::Claimed {
+                persist_claim_lifecycle(
+                    &lifecycle_path,
+                    &ClaimLifecycleRecord::claimed(record.initialized_at_unix_ms, now_unix_ms),
+                )?;
+            }
+            return Ok(ClaimStartupState::Claimed);
+        }
+        if replay_receipt_is_present(data_directory) {
+            return Ok(ClaimStartupState::RecoveringReplay);
+        }
+        return Ok(ClaimStartupState::Unclaimed);
+    }
+
+    if token_already_exists || is_claimed(&marker_path) {
+        persist_claim_lifecycle(
+            &lifecycle_path,
+            &ClaimLifecycleRecord::claimed(now_unix_ms, now_unix_ms),
+        )?;
+        if !is_claimed(&marker_path) {
+            mark_claimed(&marker_path, now_unix_ms)?;
+        }
+        return Ok(ClaimStartupState::Claimed);
+    }
+
+    // This commit must precede token creation. If the process stops after this
+    // write, the next start still knows that the on-disk token belongs to an
+    // unclaimed first-run lifecycle rather than to a legacy owner.
+    persist_claim_lifecycle(
+        &lifecycle_path,
+        &ClaimLifecycleRecord::unclaimed(now_unix_ms),
+    )?;
+    Ok(ClaimStartupState::Unclaimed)
+}
+
+fn complete_claim_lifecycle(
+    lifecycle_path: &Path,
+    marker_path: &Path,
+    now_unix_ms: u64,
+) -> Result<(), CoreError> {
+    let record = read_claim_lifecycle(lifecycle_path)?.ok_or_else(|| {
+        CoreError::InvalidState("first-run claim lifecycle is missing".to_owned())
+    })?;
+    if record.phase != ClaimLifecyclePhase::Claimed {
+        persist_claim_lifecycle(
+            lifecycle_path,
+            &ClaimLifecycleRecord::claimed(record.initialized_at_unix_ms, now_unix_ms),
+        )?;
+    }
+    // Retain the original marker as a rollback-safe compatibility signal. The
+    // lifecycle record is authoritative, so failure here cannot reopen a claim.
+    if let Err(error) = mark_claimed(marker_path, now_unix_ms) {
+        tracing::error!(%error, "claimed lifecycle is durable but legacy owner marker could not be written");
+    }
+    Ok(())
+}
+
+fn read_claim_replay(
+    path: &Path,
+    api_token: &str,
+) -> Result<Option<ClaimReplayReceipt>, CoreError> {
+    let Some(bytes) =
+        crate::read_bounded_regular_file_optional(path, MAX_CLAIM_REPLAY_BYTES, true)?
+    else {
+        return Ok(None);
+    };
+    let receipt: ClaimReplayReceipt = serde_json::from_slice(bytes.as_ref())?;
+    receipt.validate(api_token)?;
+    Ok(Some(receipt))
+}
+
+fn persist_claim_replay(path: &Path, receipt: &ClaimReplayReceipt) -> Result<(), CoreError> {
+    let bytes = serde_json::to_vec_pretty(receipt)?;
+    if bytes.len() as u64 > MAX_CLAIM_REPLAY_BYTES {
+        return Err(CoreError::ResourceLimit("first-run claim replay receipt"));
+    }
+    crate::persist_private_file(path, &bytes)
+}
+
 /// Reads the CA certificate this deployment wants clients to pin.
 ///
 /// Bounded, symlink-refusing, and validated as a real certificate rather than
 /// echoed back as bytes: handing a client a malformed CA would leave it unable
 /// to pin and, depending on the client, tempted to proceed without pinning.
 fn read_ca_certificate(path: &Path) -> Result<(String, [u8; 32]), CoreError> {
-    let metadata = std::fs::symlink_metadata(path).map_err(|source| CoreError::Io {
-        operation: "inspect TLS CA certificate",
-        path: path.to_path_buf(),
-        source,
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 64 * 1_024 {
-        return Err(CoreError::InvalidState(
-            "invalid TLS CA certificate file".to_owned(),
-        ));
-    }
-    let pem = std::fs::read_to_string(path).map_err(|source| CoreError::Io {
-        operation: "read TLS CA certificate",
-        path: path.to_path_buf(),
-        source,
-    })?;
-    let der = decode_certificate_pem(&pem)
-        .ok_or_else(|| CoreError::InvalidState("malformed TLS CA certificate".to_owned()))?;
+    let bytes =
+        crate::read_bounded_regular_file_optional(path, 64 * 1_024, false)?.ok_or_else(|| {
+            CoreError::Io {
+                operation: "open TLS CA certificate without following links",
+                path: path.to_path_buf(),
+                source: std::io::Error::from(std::io::ErrorKind::NotFound),
+            }
+        })?;
+    let pem = std::str::from_utf8(bytes.as_ref())
+        .map_err(|_| CoreError::InvalidState("TLS CA certificate is not UTF-8 PEM".to_owned()))?
+        .to_owned();
+    let der = validate_exact_ca_certificate_pem(&pem)?;
     let digest: [u8; 32] = <sha2::Sha256 as sha2::Digest>::digest(&der).into();
     Ok((pem, digest))
 }
 
-/// Extracts the DER of the first certificate in a PEM document.
-fn decode_certificate_pem(pem: &str) -> Option<Vec<u8>> {
+/// Validates one exact PEM-encoded X.509 CA certificate and returns its DER.
+///
+/// Only whitespace may surround the PEM block. Bundles, appended blocks,
+/// arbitrary decoded bytes, and leaf certificates all fail closed.
+pub fn validate_exact_ca_certificate_pem(pem: &str) -> Result<Vec<u8>, CoreError> {
     const BEGIN: &str = "-----BEGIN CERTIFICATE-----";
     const END: &str = "-----END CERTIFICATE-----";
-    let start = pem.find(BEGIN)? + BEGIN.len();
-    let end = pem[start..].find(END)? + start;
+    let begin = pem
+        .find(BEGIN)
+        .ok_or_else(|| CoreError::InvalidState("TLS CA PEM begin marker is missing".to_owned()))?;
+    if !pem[..begin].chars().all(char::is_whitespace) {
+        return Err(CoreError::InvalidState(
+            "TLS CA PEM has non-whitespace prefix data".to_owned(),
+        ));
+    }
+    let start = begin + BEGIN.len();
+    let end = pem[start..]
+        .find(END)
+        .map(|offset| start + offset)
+        .ok_or_else(|| CoreError::InvalidState("TLS CA PEM end marker is missing".to_owned()))?;
+    let after_end = end + END.len();
+    if !pem[after_end..].chars().all(char::is_whitespace) {
+        return Err(CoreError::InvalidState(
+            "TLS CA PEM has appended data or certificates".to_owned(),
+        ));
+    }
     let body: String = pem[start..end]
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect();
-    let der = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, body).ok()?;
-    (!der.is_empty()).then_some(der)
+    let der = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, body)
+        .map_err(|_| CoreError::InvalidState("TLS CA PEM body is invalid base64".to_owned()))?;
+
+    let (remaining, certificate) = x509_parser::parse_x509_certificate(&der).map_err(|_| {
+        CoreError::InvalidState("TLS CA is not a valid X.509 certificate".to_owned())
+    })?;
+    if !remaining.is_empty() || !certificate.is_ca() {
+        return Err(CoreError::InvalidState(
+            "TLS CA must contain exactly one X.509 CA certificate".to_owned(),
+        ));
+    }
+    Ok(der)
 }
 
 /// The node-side owner of one first-run window, with its durable marker.
 pub struct FirstRunClaim {
-    window: Mutex<ClaimWindow>,
+    state: Mutex<FirstRunClaimState>,
+    lifecycle_path: PathBuf,
+    replay_path: PathBuf,
     marker_path: PathBuf,
     ca_certificate_path: Option<PathBuf>,
+}
+
+enum FirstRunClaimState {
+    Window(ClaimWindow),
+    Replay {
+        receipt: ClaimReplayReceipt,
+        needs_commit: bool,
+    },
 }
 
 impl FirstRunClaim {
@@ -565,15 +1009,50 @@ impl FirstRunClaim {
     #[must_use]
     pub fn new(
         code: &ClaimCode,
+        lifecycle_path: PathBuf,
         marker_path: PathBuf,
         ca_certificate_path: Option<PathBuf>,
         now_unix_ms: u64,
     ) -> Self {
+        let replay_path = lifecycle_path
+            .parent()
+            .map_or_else(|| PathBuf::from(CLAIM_REPLAY_FILE_NAME), claim_replay_path);
         Self {
-            window: Mutex::new(ClaimWindow::open(code, now_unix_ms)),
+            state: Mutex::new(FirstRunClaimState::Window(ClaimWindow::open(
+                code,
+                now_unix_ms,
+            ))),
+            lifecycle_path,
+            replay_path,
             marker_path,
             ca_certificate_path,
         }
+    }
+
+    /// Loads the sole authenticated sealed-grant replay receipt for a claimed or
+    /// crash-interrupted node. Absence means a legacy/already-delivered owner.
+    pub fn load_replay(
+        data_directory: &Path,
+        api_token: &str,
+        now_unix_ms: u64,
+    ) -> Result<Option<Self>, CoreError> {
+        let replay_path = claim_replay_path(data_directory);
+        let Some(receipt) = read_claim_replay(&replay_path, api_token)? else {
+            return Ok(None);
+        };
+        let lifecycle_path = claim_lifecycle_path(data_directory);
+        let marker_path = owner_marker_path(data_directory);
+        complete_claim_lifecycle(&lifecycle_path, &marker_path, now_unix_ms)?;
+        Ok(Some(Self {
+            state: Mutex::new(FirstRunClaimState::Replay {
+                receipt,
+                needs_commit: false,
+            }),
+            lifecycle_path,
+            replay_path,
+            marker_path,
+            ca_certificate_path: None,
+        }))
     }
 
     /// Verifies one presentation and, on success, hands over the sealed token.
@@ -586,9 +1065,32 @@ impl FirstRunClaim {
         &self,
         client_nonce: &[u8],
         proof: &[u8],
+        device_name: &str,
         api_token: &str,
         now_unix_ms: u64,
     ) -> Result<ClaimGrant, ClaimRefusal> {
+        if now_unix_ms == 0
+            || device_name.is_empty()
+            || device_name.len() > 80
+            || device_name.chars().any(char::is_control)
+        {
+            return Err(ClaimRefusal::OwnershipStateUnavailable);
+        }
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ClaimRefusal::CertificateUnavailable)?;
+        if let FirstRunClaimState::Replay { receipt, .. } = &*state {
+            if !receipt.request.matches(client_nonce, proof) {
+                return Err(ClaimRefusal::AlreadyClaimed);
+            }
+            self.commit_pending_replay(&mut state, now_unix_ms)?;
+            let FirstRunClaimState::Replay { receipt, .. } = &*state else {
+                unreachable!("pending replay commit cannot reopen a claim window")
+            };
+            return Ok(receipt.response.clone());
+        }
+
         let certificate = match self.ca_certificate_path.as_deref() {
             Some(path) => match read_ca_certificate(path) {
                 Ok(certificate) => Some(certificate),
@@ -603,38 +1105,76 @@ impl FirstRunClaim {
             None => (None, [0_u8; 32]),
         };
 
-        let claim_key = {
-            let mut window = self
-                .window
-                .lock()
-                .map_err(|_| ClaimRefusal::CertificateUnavailable)?;
-            window.present(client_nonce, proof, now_unix_ms)?
+        let claim_key = match &mut *state {
+            FirstRunClaimState::Window(window) => {
+                window.present(client_nonce, proof, now_unix_ms)?
+            }
+            FirstRunClaimState::Replay { .. } => {
+                unreachable!("replay state returned before reading the certificate")
+            }
         };
 
         let (seal_nonce, sealed_token) =
             seal_token(&claim_key, client_nonce, &ca_digest, api_token)
                 .map_err(|_| ClaimRefusal::CertificateUnavailable)?;
 
-        // The window is already spent in memory, so a failure here must not
-        // deny the caller the token it just earned. A missing marker means the
-        // next start offers a fresh code, which is the recovery an operator
-        // wants if this response never reached them.
-        if let Err(error) = mark_claimed(&self.marker_path, now_unix_ms) {
-            tracing::error!(
-                %error,
-                "claim succeeded but the durable owner marker could not be written; \
-                 restarting this container will offer a new setup code"
-            );
-        }
-
-        Ok(ClaimGrant {
-            seal_nonce,
-            sealed_token,
-            ca_fingerprint: ca_certificate
+        let response = ClaimGrant {
+            device_name: device_name.to_owned(),
+            ca_fingerprint_sha256: ca_certificate
                 .as_ref()
                 .map(|_| ca_digest.iter().map(|byte| format!("{byte:02x}")).collect()),
             ca_certificate,
-        })
+            seal_nonce: URL_SAFE_NO_PAD.encode(seal_nonce),
+            sealed_token: URL_SAFE_NO_PAD.encode(sealed_token),
+        };
+        let receipt = ClaimReplayReceipt::new(
+            ClaimRequestBinding::new(client_nonce, proof).map_err(|_| ClaimRefusal::Malformed)?,
+            response.clone(),
+            now_unix_ms,
+            api_token,
+        )
+        .map_err(|_| ClaimRefusal::OwnershipStateUnavailable)?;
+        // Retain the exact request and sealed response before attempting any
+        // fallible commit. A transient write failure therefore cannot turn the
+        // same request into a 409 inside this process; its next retry resumes
+        // only this commit, while every different request remains refused.
+        *state = FirstRunClaimState::Replay {
+            receipt,
+            needs_commit: true,
+        };
+        self.commit_pending_replay(&mut state, now_unix_ms)?;
+
+        Ok(response)
+    }
+
+    fn commit_pending_replay(
+        &self,
+        state: &mut FirstRunClaimState,
+        now_unix_ms: u64,
+    ) -> Result<(), ClaimRefusal> {
+        let FirstRunClaimState::Replay {
+            receipt,
+            needs_commit,
+        } = state
+        else {
+            unreachable!("only a replay response can enter the claim commit path")
+        };
+        if !*needs_commit {
+            return Ok(());
+        }
+        claim_commit_failpoint(3).map_err(|_| ClaimRefusal::OwnershipStateUnavailable)?;
+        persist_claim_replay(&self.replay_path, receipt)
+            .map_err(|_| ClaimRefusal::OwnershipStateUnavailable)?;
+        claim_commit_failpoint(1).map_err(|_| ClaimRefusal::OwnershipStateUnavailable)?;
+
+        // The replay receipt is already durable. A crash or persistence failure
+        // from here can never mint a second owner: startup authenticates that
+        // exact receipt, finishes the lifecycle, and serves only the same request.
+        complete_claim_lifecycle(&self.lifecycle_path, &self.marker_path, now_unix_ms)
+            .map_err(|_| ClaimRefusal::OwnershipStateUnavailable)?;
+        claim_commit_failpoint(2).map_err(|_| ClaimRefusal::OwnershipStateUnavailable)?;
+        *needs_commit = false;
+        Ok(())
     }
 }
 
@@ -650,6 +1190,54 @@ mod tests {
         let key = stretch_claim_code(code.as_str());
         let proof = client_proof(&key, &nonce);
         (nonce, proof)
+    }
+
+    fn test_ca_pem() -> String {
+        let mut parameters =
+            rcgen::CertificateParams::new(Vec::<String>::new()).expect("CA parameters");
+        parameters.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let key = rcgen::KeyPair::generate().expect("CA key");
+        parameters.self_signed(&key).expect("CA certificate").pem()
+    }
+
+    fn test_claim(
+        directory: &tempfile::TempDir,
+        code: &ClaimCode,
+        now_unix_ms: u64,
+    ) -> FirstRunClaim {
+        prepare_claim_lifecycle(directory.path(), false, now_unix_ms)
+            .expect("prepare unclaimed lifecycle");
+        let ca_path = directory.path().join("root.crt");
+        std::fs::write(&ca_path, test_ca_pem()).expect("write CA");
+        FirstRunClaim::new(
+            code,
+            claim_lifecycle_path(directory.path()),
+            owner_marker_path(directory.path()),
+            Some(ca_path),
+            now_unix_ms,
+        )
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn first_run_ca_reader_uses_one_nofollow_handle_and_requires_one_real_ca() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::TempDir::new().expect("directory");
+        let path = directory.path().join("root.crt");
+        let link = directory.path().join("linked-root.crt");
+        let pem = test_ca_pem();
+        std::fs::write(&path, &pem).expect("CA PEM");
+        let (loaded, digest) = read_ca_certificate(&path).expect("valid CA file");
+        assert_eq!(loaded, pem);
+        assert_ne!(digest, [0_u8; 32]);
+
+        symlink(&path, &link).expect("CA symlink");
+        assert!(read_ca_certificate(&link).is_err());
+        assert_eq!(std::fs::read_to_string(&path).expect("CA unchanged"), pem);
+
+        std::fs::write(&path, format!("{pem}{pem}")).expect("appended CA");
+        assert!(read_ca_certificate(&path).is_err());
     }
 
     #[test]
@@ -718,6 +1306,20 @@ mod tests {
             Some(code.as_str()),
             "grouping and stray whitespace are presentation only"
         );
+        assert_eq!(
+            normalise_claim_code(" \t\r\n01234-\r\n56789 \t\r\n")
+                .as_deref()
+                .map(String::as_str),
+            Some(code.as_str()),
+            "common editor line endings and ASCII spacing are presentation only"
+        );
+        for foreign_whitespace in ['\u{000b}', '\u{000c}', '\u{0085}', '\u{00a0}'] {
+            assert_eq!(
+                normalise_claim_code(&format!("01234{foreign_whitespace}56789")).as_deref(),
+                None,
+                "only space, tab, CR, and LF are accepted as presentation whitespace"
+            );
+        }
         assert_eq!(normalise_claim_code("0123456789A").as_deref(), None);
         assert_eq!(normalise_claim_code("012345678").as_deref(), None);
         assert_eq!(
@@ -755,6 +1357,147 @@ mod tests {
 
         // The key handed back is the one the token is sealed under.
         assert_eq!(*key, *stretch_claim_code(code.as_str()));
+    }
+
+    #[test]
+    fn an_exact_claim_request_replays_byte_identically_and_a_different_one_never_does() {
+        const TOKEN: &str = "test-local-api-token-with-at-least-thirty-two-bytes";
+        let directory = tempfile::TempDir::new().expect("directory");
+        let code = ClaimCode::mint();
+        let claim = test_claim(&directory, &code, NOW);
+        let (nonce, proof) = presentation(&code);
+
+        let first = claim
+            .present(&nonce, &proof, "Covalent test", TOKEN, NOW + 1)
+            .expect("first presentation");
+        let replayed = claim
+            .present(&nonce, &proof, "Covalent test", TOKEN, NOW + 2)
+            .expect("same-process replay");
+        assert_eq!(replayed, first);
+
+        let (other_nonce, other_proof) = presentation(&code);
+        assert_eq!(
+            claim.present(&other_nonce, &other_proof, "Covalent test", TOKEN, NOW + 3,),
+            Err(ClaimRefusal::AlreadyClaimed)
+        );
+        drop(claim);
+
+        assert_eq!(
+            prepare_claim_lifecycle(directory.path(), true, NOW + 4).expect("claimed startup"),
+            ClaimStartupState::Claimed
+        );
+        let restarted = FirstRunClaim::load_replay(directory.path(), TOKEN, NOW + 4)
+            .expect("load authenticated replay")
+            .expect("replay receipt");
+        assert_eq!(
+            restarted
+                .present(&nonce, &proof, "Covalent test", TOKEN, NOW + 5)
+                .expect("restart replay"),
+            first
+        );
+        assert_eq!(
+            restarted.present(&other_nonce, &other_proof, "Covalent test", TOKEN, NOW + 6,),
+            Err(ClaimRefusal::AlreadyClaimed)
+        );
+    }
+
+    #[test]
+    fn every_receipt_to_lifecycle_crash_boundary_recovers_only_the_exact_request() {
+        const TOKEN: &str = "test-local-api-token-with-at-least-thirty-two-bytes";
+        for boundary in [1_u8, 2] {
+            let directory = tempfile::TempDir::new().expect("directory");
+            let code = ClaimCode::mint();
+            let claim = test_claim(&directory, &code, NOW);
+            let (nonce, proof) = presentation(&code);
+            CLAIM_COMMIT_FAILPOINT.with(|failpoint| failpoint.set(boundary));
+            assert_eq!(
+                claim.present(&nonce, &proof, "Covalent test", TOKEN, NOW + 1),
+                Err(ClaimRefusal::OwnershipStateUnavailable)
+            );
+            CLAIM_COMMIT_FAILPOINT.with(|failpoint| failpoint.set(0));
+            drop(claim);
+
+            let startup = prepare_claim_lifecycle(directory.path(), true, NOW + 2)
+                .expect("recover startup state");
+            assert_eq!(
+                startup,
+                if boundary == 1 {
+                    ClaimStartupState::RecoveringReplay
+                } else {
+                    ClaimStartupState::Claimed
+                }
+            );
+            let restarted = FirstRunClaim::load_replay(directory.path(), TOKEN, NOW + 2)
+                .expect("authenticate crash receipt")
+                .expect("crash receipt");
+            let response = restarted
+                .present(&nonce, &proof, "Covalent test", TOKEN, NOW + 3)
+                .expect("exact crash-boundary replay");
+            response.validate().expect("valid replayed response");
+
+            let (other_nonce, other_proof) = presentation(&code);
+            assert_eq!(
+                restarted.present(&other_nonce, &other_proof, "Covalent test", TOKEN, NOW + 4,),
+                Err(ClaimRefusal::AlreadyClaimed)
+            );
+        }
+    }
+
+    #[test]
+    fn a_transient_pre_receipt_commit_failure_keeps_only_the_exact_request_retryable() {
+        const TOKEN: &str = "test-local-api-token-with-at-least-thirty-two-bytes";
+        let directory = tempfile::TempDir::new().expect("directory");
+        let code = ClaimCode::mint();
+        let claim = test_claim(&directory, &code, NOW);
+        let (nonce, proof) = presentation(&code);
+
+        CLAIM_COMMIT_FAILPOINT.with(|failpoint| failpoint.set(3));
+        assert_eq!(
+            claim.present(&nonce, &proof, "Covalent test", TOKEN, NOW + 1),
+            Err(ClaimRefusal::OwnershipStateUnavailable)
+        );
+        let (other_nonce, other_proof) = presentation(&code);
+        assert_eq!(
+            claim.present(&other_nonce, &other_proof, "Covalent test", TOKEN, NOW + 2,),
+            Err(ClaimRefusal::AlreadyClaimed),
+            "a commit retry cannot be replaced by a different presentation"
+        );
+
+        CLAIM_COMMIT_FAILPOINT.with(|failpoint| failpoint.set(0));
+        claim
+            .present(&nonce, &proof, "Covalent test", TOKEN, NOW + 3)
+            .expect("exact request resumes its pending durable commit")
+            .validate()
+            .expect("committed replay response");
+        assert_eq!(
+            prepare_claim_lifecycle(directory.path(), true, NOW + 4).expect("claimed lifecycle"),
+            ClaimStartupState::Claimed
+        );
+    }
+
+    #[test]
+    fn a_tampered_or_oversized_replay_receipt_fails_closed() {
+        const TOKEN: &str = "test-local-api-token-with-at-least-thirty-two-bytes";
+        let directory = tempfile::TempDir::new().expect("directory");
+        let code = ClaimCode::mint();
+        let claim = test_claim(&directory, &code, NOW);
+        let (nonce, proof) = presentation(&code);
+        claim
+            .present(&nonce, &proof, "Covalent test", TOKEN, NOW + 1)
+            .expect("claim");
+        drop(claim);
+
+        let path = claim_replay_path(directory.path());
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).expect("receipt")).expect("JSON");
+        value["response"]["deviceName"] = serde_json::json!("tampered");
+        crate::persist_private_file(&path, &serde_json::to_vec_pretty(&value).expect("JSON"))
+            .expect("tamper receipt");
+        assert!(FirstRunClaim::load_replay(directory.path(), TOKEN, NOW + 2).is_err());
+
+        crate::persist_private_file(&path, &vec![b' '; MAX_CLAIM_REPLAY_BYTES as usize + 1])
+            .expect("oversized receipt");
+        assert!(FirstRunClaim::load_replay(directory.path(), TOKEN, NOW + 3).is_err());
     }
 
     #[test]

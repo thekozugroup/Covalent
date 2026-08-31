@@ -2,7 +2,7 @@
 
 ## Assets
 
-Plaintext file contents and paths, backup/content keys, long-lived device identity keys, signed rosters, manifests, settings, restore destinations, and availability metadata.
+Plaintext file contents and paths, backup/content keys, long-lived device identity keys, signed rosters, manifests, settings, Caddy local-CA signing state, restore destinations, and availability metadata.
 
 ## Trust boundaries
 
@@ -21,7 +21,8 @@ Plaintext file contents and paths, backup/content keys, long-lived device identi
 | Curious provider | Client-side authenticated encryption for chunks and manifests; opaque chunk locators; no private keys on provider. Traffic size/timing leakage is documented. |
 | Malicious provider | Verify framing, authenticated ciphertext, expected length, keyed locator, and BLAKE3 plaintext digest before use. Attribute rejected copies and repair only from an intact acknowledged copy. |
 | Roster injection or rollback | Monotonic signed roster epochs, signer authorization, remembered high-water mark, explicit conflict state. |
-| Device compromise | Owner-only key files, least-privilege grants, persistent revocation, and re-replication. A stolen backup master key remains valid for every epoch of that backup; recovery requires a new backup ID/master key and fresh replicas. |
+| Device compromise | All long-lived engine secrets are envelope-protected. Docker/Unraid requires an explicit owner-only KEK mounted separately from appdata; macOS uses the data-protection Keychain; Android uses Android Keystore. Missing, locked, invalidated, or wrong-version protection fails closed. A stolen backup master key remains valid for every epoch of that backup; recovery requires a new backup ID/master key and fresh replicas. |
+| Package-proxy compromise | `/config` is sensitive Caddy state containing the local CA certificate and signing key. It is backed up with the durable state, never represented by a settings export, and never offered as a source share. |
 | Path traversal | Canonical authorized root, protocol-level relative path type, rejection of absolute/empty/`.`/`..` paths, component-by-component no-follow resolution. |
 | Symlink or TOCTOU escape | Do not follow source symlinks by default. Rust and Apple restore paths use root descriptors, descriptor-relative no-follow traversal, and device/inode identity checks; root or child swaps fail closed before writes. |
 | Partial or torn writes | Same-filesystem staging, file sync, metadata transaction, parent-directory sync where supported, atomic rename, startup recovery journal. |
@@ -32,7 +33,7 @@ Plaintext file contents and paths, backup/content keys, long-lived device identi
 
 ## Cryptographic design contract
 
-- Device identity: Ed25519 signing key generated locally and stored in an owner-only atomic state file. Native platform key-store wrapping is a future hardening layer, not a current claim.
+- Device identity and every other long-lived engine secret are stored in versioned authenticated envelopes. Docker/Unraid obtains the KEK only from a separately mounted owner-only secret file; macOS obtains its KEK hierarchy from the data-protection Keychain; Android unwraps it with Android Keystore. The Rust runtime receives only explicit key material and refuses to open state when that protector is unavailable. These adapter contracts have focused platform tests, but real-host deployment evidence remains separate from unit and simulator coverage.
 - Session establishment: QUIC TLS 1.3 with the peer certificate/transcript bound to the confirmed Covalent identity.
 - Data: independently authenticated XChaCha20-Poly1305 records. Domain-separated HKDF derives a content-specific key and 192-bit nonce from backup ID, epoch, digest, and length; identical content within an epoch is intentionally deterministic for deduplication.
 - Integrity: BLAKE3 plaintext digests inside the authenticated encrypted manifest; Ed25519 signature over the versioned encrypted manifest envelope.

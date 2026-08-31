@@ -104,6 +104,7 @@ test("first-run setup and endpoint codes read as instructions, never as diagnost
     ["claim_window_exhausted", 410, "Too many incorrect setup codes were entered. Restart Covalent on your server to get a new code.", "none"],
     ["claim_rate_limited", 429, "Setup codes are being entered too quickly. Wait a moment, then try again.", "retry"],
     ["claim_certificate_unavailable", 503, "This server is still preparing its security certificate. Wait a few seconds, then try again.", "retry"],
+    ["claim_state_unavailable", 503, "This server couldn't finish setting up safely. Retry the exact saved claim request; restart only if that remains unavailable.", "retry"],
   ];
   for (const [code, status, summary, recovery] of cases) {
     const failure = copy.describeApi(status, code, "engine text nobody should read", false);

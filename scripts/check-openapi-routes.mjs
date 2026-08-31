@@ -113,16 +113,17 @@ const clientTrees = [
     interpolation: /\$\{[^}]*\}/g,
     calls: {
       api: { path: { index: 0 }, method: { kind: "options", index: 1, default: "webDefault" } },
+      apiResponse: { path: { index: 0 }, method: { kind: "options", index: 1, default: "webDefault" } },
     },
     derivations: {
-      // The console's helper forwards the caller's options to fetch untouched and
-      // sets no method of its own, so an omitted method is a GET. Pinning the
-      // exact forwarding line makes that inference break loudly if it stops
-      // holding.
+      // apiResponse() forwards caller options to fetch untouched and sets no
+      // method of its own, so an omitted method is a GET. Pinning the exact
+      // forwarding line makes that inference break loudly if it stops holding.
       webDefault: { file: webConsoleFile, pattern: /await fetch\(path, \{ \.\.\.options, headers, cache: "no-store" \}\)/g, constant: "GET" },
     },
     wiring: [
-      { description: "the console api() helper takes its method from the caller's options", file: webConsoleFile, pattern: /async function api\(path, options = \{\}\)/g },
+      { description: "the console apiResponse() helper takes its method from the caller's options", file: webConsoleFile, pattern: /async function apiResponse\(path, options = \{\}\)/g },
+      { description: "the console api() helper forwards its path and options to apiResponse()", file: webConsoleFile, pattern: /return \(await apiResponse\(path, options\)\)\.body;/g },
     ],
   },
   // Mock-server assertions are not requests, so they carry no verb; their path

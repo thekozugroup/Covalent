@@ -32,6 +32,11 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 cd "$repo_root"
+cargo run --quiet -p covalent-node -- provision-key \
+  --key-file "$temporary_root/key-encryption-key" >/dev/null
+export COVALENT_KEY_ENCRYPTION_KEY_FILE="$temporary_root/key-encryption-key"
+export COVALENT_KEY_ENCRYPTION_KEY_VERSION=1
+
 cargo run --quiet -p covalent-node -- serve \
   --listen "127.0.0.1:$api_port" \
   --peer-listen "127.0.0.1:$peer_port" \

@@ -170,7 +170,7 @@ private struct IOSBackupDetailView: View {
 
                     Section("Technical details") {
                         LabeledContent("Backup ID", value: snapshot.backupId.uuidString)
-                        LabeledContent("Backup ID", value: snapshot.snapshotId)
+                        LabeledContent("Backup version ID", value: snapshot.snapshotId)
                     }
                     .font(.caption)
                 }

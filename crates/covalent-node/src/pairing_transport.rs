@@ -23,11 +23,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use covalent_core::{CoreError, Engine, PairingSession};
-use covalent_protocol::TransportBinding;
+use covalent_protocol::{DeviceId, PairingInvitation, TransportBinding};
 use quinn::{ClientConfig, Endpoint};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, SignatureScheme};
+use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 
 use crate::network_pairing::{
@@ -71,6 +72,18 @@ const PROBE_FAILURE_CACHE_MS: u64 = 10 * 1_000;
 /// a burst from many sources growing them without bound in the meantime.
 const MAX_PROBE_BUCKETS: usize = 256;
 const MAX_PROBE_FAILURE_ENTRIES: usize = 256;
+/// Start admission is persisted because restarting must not refill an
+/// unauthenticated caller's invitation budget.
+const START_ADMISSION_SCHEMA_VERSION: u16 = 1;
+const MAX_START_ADMISSION_STATE_BYTES: u64 = 128 * 1_024;
+const MAX_START_BUCKETS: usize = 256;
+const MAX_STARTS_PER_SOURCE: usize = 4;
+const MAX_GLOBAL_STARTS: usize = 16;
+const SOURCE_START_BURST: u32 = 4;
+const GLOBAL_START_BURST: u32 = 16;
+const SOURCE_START_REFILL_MS: u64 = 60 * 1_000;
+const GLOBAL_START_REFILL_MS: u64 = 5 * 1_000;
+const START_RESERVATION_LIFETIME_MS: u64 = 5 * 60 * 1_000;
 /// Bounds one connection so a single source cannot pin pairing capacity open.
 const MAX_PAIRING_STREAMS_PER_CONNECTION: usize = 8;
 /// Certificate ceiling shared with every other transport-binding validation.
@@ -186,12 +199,311 @@ impl ProbeGuard {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PersistedTokenBucket {
+    tokens: u32,
+    last_refill_at_unix_ms: u64,
+}
+
+impl PersistedTokenBucket {
+    const fn full(capacity: u32, now_unix_ms: u64) -> Self {
+        Self {
+            tokens: capacity,
+            last_refill_at_unix_ms: now_unix_ms,
+        }
+    }
+
+    fn refill(&mut self, capacity: u32, refill_interval_ms: u64, now_unix_ms: u64) {
+        if self.tokens >= capacity {
+            self.tokens = capacity;
+            self.last_refill_at_unix_ms = self.last_refill_at_unix_ms.max(now_unix_ms);
+            return;
+        }
+        let elapsed = now_unix_ms.saturating_sub(self.last_refill_at_unix_ms);
+        let minted = elapsed / refill_interval_ms;
+        if minted == 0 {
+            return;
+        }
+        let minted = u32::try_from(minted).unwrap_or(u32::MAX);
+        self.tokens = self.tokens.saturating_add(minted).min(capacity);
+        self.last_refill_at_unix_ms = if self.tokens == capacity {
+            now_unix_ms
+        } else {
+            self.last_refill_at_unix_ms
+                .saturating_add(u64::from(minted).saturating_mul(refill_interval_ms))
+        };
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PersistedStartAdmission {
+    requester_device_id: DeviceId,
+    source_bucket: String,
+    expires_at_unix_ms: u64,
+    invitation_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PersistedStartAdmissionState {
+    schema_version: u16,
+    global: PersistedTokenBucket,
+    sources: BTreeMap<String, PersistedTokenBucket>,
+    admissions: BTreeMap<String, PersistedStartAdmission>,
+}
+
+impl PersistedStartAdmissionState {
+    fn new(now_unix_ms: u64) -> Self {
+        Self {
+            schema_version: START_ADMISSION_SCHEMA_VERSION,
+            global: PersistedTokenBucket::full(GLOBAL_START_BURST, now_unix_ms),
+            sources: BTreeMap::new(),
+            admissions: BTreeMap::new(),
+        }
+    }
+
+    fn validate(&self) -> Result<(), CoreError> {
+        let invalid_admission = self.admissions.iter().any(|(request_id, admission)| {
+            request_id.is_empty()
+                || request_id.len() > 128
+                || admission.source_bucket.is_empty()
+                || admission.source_bucket.len() > 128
+                || admission.expires_at_unix_ms == 0
+                || admission
+                    .invitation_id
+                    .as_ref()
+                    .is_some_and(|invitation_id| {
+                        invitation_id.is_empty()
+                            || invitation_id.len() > 128
+                            || !invitation_id.bytes().all(|byte| {
+                                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
+                            })
+                    })
+                || !self.sources.contains_key(&admission.source_bucket)
+        });
+        let excessive_source = self
+            .sources
+            .keys()
+            .any(|source| source.is_empty() || source.len() > 128)
+            || self
+                .sources
+                .values()
+                .any(|bucket| bucket.tokens > SOURCE_START_BURST)
+            || self.sources.keys().any(|source| {
+                self.admissions
+                    .values()
+                    .filter(|admission| admission.source_bucket == *source)
+                    .count()
+                    > MAX_STARTS_PER_SOURCE
+            });
+        if self.schema_version != START_ADMISSION_SCHEMA_VERSION
+            || self.global.tokens > GLOBAL_START_BURST
+            || self.global.last_refill_at_unix_ms == 0
+            || self.sources.len() > MAX_START_BUCKETS
+            || self
+                .sources
+                .values()
+                .any(|bucket| bucket.last_refill_at_unix_ms == 0)
+            || self.admissions.len() > MAX_GLOBAL_STARTS
+            || invalid_admission
+            || excessive_source
+        {
+            return Err(CoreError::InvalidState(
+                "invalid pairing Start admission state".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn normalize(&mut self, now_unix_ms: u64) -> bool {
+        let before_admissions = self.admissions.len();
+        self.admissions
+            .retain(|_, admission| admission.expires_at_unix_ms > now_unix_ms);
+        self.global
+            .refill(GLOBAL_START_BURST, GLOBAL_START_REFILL_MS, now_unix_ms);
+        for bucket in self.sources.values_mut() {
+            bucket.refill(SOURCE_START_BURST, SOURCE_START_REFILL_MS, now_unix_ms);
+        }
+        let active_sources: std::collections::BTreeSet<_> = self
+            .admissions
+            .values()
+            .map(|admission| admission.source_bucket.clone())
+            .collect();
+        self.sources.retain(|source, bucket| {
+            bucket.tokens < SOURCE_START_BURST || active_sources.contains(source)
+        });
+        before_admissions != self.admissions.len()
+    }
+}
+
+/// Pre-persist admission boundary for unauthenticated `Start` requests.
+///
+/// Both rate tokens and outstanding invitation ownership survive restart.
+/// Identity rotation cannot bypass either boundary because attribution comes
+/// from the QUIC-validated source address, not the self-signed requester key.
+#[derive(Debug)]
+struct StartAdmissionGuard {
+    state_path: Option<PathBuf>,
+    state: Mutex<PersistedStartAdmissionState>,
+}
+
+impl StartAdmissionGuard {
+    fn in_memory(now_unix_ms: u64) -> Self {
+        Self {
+            state_path: None,
+            state: Mutex::new(PersistedStartAdmissionState::new(now_unix_ms)),
+        }
+    }
+
+    fn open(state_path: PathBuf, now_unix_ms: u64) -> Result<Self, CoreError> {
+        let (mut state, existed) = match crate::read_bounded_regular_file_optional(
+            &state_path,
+            MAX_START_ADMISSION_STATE_BYTES,
+            true,
+        )? {
+            Some(bytes) => (serde_json::from_slice(bytes.as_ref())?, true),
+            None => (PersistedStartAdmissionState::new(now_unix_ms), false),
+        };
+        state.validate()?;
+        let pruned = state.normalize(now_unix_ms);
+        let guard = Self {
+            state_path: Some(state_path),
+            state: Mutex::new(state),
+        };
+        if existed && pruned {
+            let state = guard.state.lock().map_err(|_| CoreError::Synchronization)?;
+            guard.persist_locked(&state)?;
+        }
+        Ok(guard)
+    }
+
+    fn create_invitation(
+        &self,
+        request_id: &str,
+        requester_device_id: DeviceId,
+        source_bucket: &str,
+        now_unix_ms: u64,
+        create: impl FnOnce() -> Result<PairingInvitation, CoreError>,
+    ) -> Result<PairingInvitation, CoreError> {
+        let mut state = self.state.lock().map_err(|_| CoreError::Synchronization)?;
+        state.normalize(now_unix_ms);
+        if state.admissions.contains_key(request_id) {
+            return Err(CoreError::AuthenticationFailed);
+        }
+        let source_outstanding = state
+            .admissions
+            .values()
+            .filter(|admission| admission.source_bucket == source_bucket)
+            .count();
+        if state.admissions.len() >= MAX_GLOBAL_STARTS
+            || source_outstanding >= MAX_STARTS_PER_SOURCE
+            || state.global.tokens == 0
+        {
+            return Err(CoreError::ResourceLimit("pairing Start admission"));
+        }
+        if !state.sources.contains_key(source_bucket) {
+            if state.sources.len() >= MAX_START_BUCKETS {
+                return Err(CoreError::ResourceLimit("pairing Start sources"));
+            }
+            state.sources.insert(
+                source_bucket.to_owned(),
+                PersistedTokenBucket::full(SOURCE_START_BURST, now_unix_ms),
+            );
+        }
+        if state
+            .sources
+            .get(source_bucket)
+            .is_none_or(|source| source.tokens == 0)
+        {
+            return Err(CoreError::ResourceLimit("pairing Start source rate"));
+        }
+
+        state.global.tokens -= 1;
+        state
+            .sources
+            .get_mut(source_bucket)
+            .ok_or(CoreError::Synchronization)?
+            .tokens -= 1;
+        state.admissions.insert(
+            request_id.to_owned(),
+            PersistedStartAdmission {
+                requester_device_id,
+                source_bucket: source_bucket.to_owned(),
+                expires_at_unix_ms: now_unix_ms.saturating_add(START_RESERVATION_LIFETIME_MS),
+                invitation_id: None,
+            },
+        );
+        self.persist_locked(&state)?;
+
+        let invitation = match create() {
+            Ok(invitation) => invitation,
+            Err(error) => {
+                state.admissions.remove(request_id);
+                // Rate tokens remain spent: repeatedly forcing a downstream
+                // failure must not restore an unauthenticated write budget.
+                self.persist_locked(&state)?;
+                return Err(error);
+            }
+        };
+        let admission = state
+            .admissions
+            .get_mut(request_id)
+            .ok_or(CoreError::Synchronization)?;
+        admission.expires_at_unix_ms = invitation.expires_at_unix_ms;
+        admission.invitation_id = Some(invitation.invitation_id.clone());
+        self.persist_locked(&state)?;
+        Ok(invitation)
+    }
+
+    fn owns_invitation(
+        &self,
+        invitation_id: &str,
+        requester_device_id: DeviceId,
+        now_unix_ms: u64,
+    ) -> Result<bool, CoreError> {
+        let mut state = self.state.lock().map_err(|_| CoreError::Synchronization)?;
+        state.normalize(now_unix_ms);
+        Ok(state.admissions.values().any(|admission| {
+            admission.requester_device_id == requester_device_id
+                && admission.invitation_id.as_deref() == Some(invitation_id)
+        }))
+    }
+
+    fn release(&self, invitation_id: &str, now_unix_ms: u64) -> Result<(), CoreError> {
+        let mut state = self.state.lock().map_err(|_| CoreError::Synchronization)?;
+        state.normalize(now_unix_ms);
+        let request_id = state.admissions.iter().find_map(|(request_id, admission)| {
+            (admission.invitation_id.as_deref() == Some(invitation_id)).then(|| request_id.clone())
+        });
+        if let Some(request_id) = request_id {
+            state.admissions.remove(&request_id);
+            self.persist_locked(&state)?;
+        }
+        Ok(())
+    }
+
+    fn persist_locked(&self, state: &PersistedStartAdmissionState) -> Result<(), CoreError> {
+        state.validate()?;
+        if let Some(path) = self.state_path.as_deref() {
+            let bytes = serde_json::to_vec_pretty(state)?;
+            if bytes.len() as u64 > MAX_START_ADMISSION_STATE_BYTES {
+                return Err(CoreError::ResourceLimit("pairing Start admission state"));
+            }
+            crate::persist_private_file(path, &bytes)?;
+        }
+        Ok(())
+    }
+}
+
 /// Handles pairing-only requests arriving on the node's advertised QUIC endpoint.
 pub struct NetworkPairingService {
     engine: Arc<Engine>,
     manager: Arc<NetworkPairingManager>,
     local_transport: Option<TransportBinding>,
     probes: ProbeGuard,
+    starts: StartAdmissionGuard,
 }
 
 impl NetworkPairingService {
@@ -209,7 +521,25 @@ impl NetworkPairingService {
             manager,
             local_transport,
             probes: ProbeGuard::new(),
+            starts: StartAdmissionGuard::in_memory(system_now_unix_ms()),
         }
+    }
+
+    /// Builds the production responder with restart-safe `Start` admission.
+    pub fn open(
+        engine: Arc<Engine>,
+        manager: Arc<NetworkPairingManager>,
+        local_transport: Option<TransportBinding>,
+        admission_state_path: PathBuf,
+    ) -> Result<Self, CoreError> {
+        let now_unix_ms = system_now_unix_ms();
+        Ok(Self {
+            engine,
+            manager,
+            local_transport,
+            probes: ProbeGuard::new(),
+            starts: StartAdmissionGuard::open(admission_state_path, now_unix_ms)?,
+        })
     }
 
     fn now_unix_ms(&self) -> u64 {
@@ -259,9 +589,17 @@ impl NetworkPairingService {
                     .local_transport
                     .clone()
                     .ok_or_else(|| CoreError::InvalidState("pairing endpoint".to_owned()))?;
-                let invitation = self
-                    .manager
-                    .create_network_invitation(local_transport, now_unix_ms)?;
+                let source_bucket = rate_limit_bucket_key(Some(source));
+                let invitation = self.starts.create_invitation(
+                    &request.request_id,
+                    request.requester.device_id,
+                    &source_bucket,
+                    now_unix_ms,
+                    || {
+                        self.manager
+                            .create_network_invitation(local_transport, now_unix_ms)
+                    },
+                )?;
                 Ok(NetworkPairingWireResponse::Invitation {
                     invitation: Box::new(invitation),
                 })
@@ -273,6 +611,9 @@ impl NetworkPairingService {
                 let merged = self
                     .submit(pairing_id, session, request, source, now_unix_ms)
                     .await?;
+                if merged.is_mutually_confirmed(now_unix_ms) {
+                    self.starts.release(pairing_id, now_unix_ms)?;
+                }
                 Ok(NetworkPairingWireResponse::Session {
                     session: Box::new(merged),
                 })
@@ -286,11 +627,26 @@ impl NetworkPairingService {
                 })
             }
             NetworkPairingWireOperation::Cancel { pairing_id } => {
-                self.manager.remove_for_peer(
+                match self.manager.remove_for_peer(
                     pairing_id,
                     request.requester.device_id,
                     now_unix_ms,
-                )?;
+                ) {
+                    Ok(()) => {}
+                    Err(CoreError::AuthenticationFailed)
+                        if self.starts.owns_invitation(
+                            pairing_id,
+                            request.requester.device_id,
+                            now_unix_ms,
+                        )? =>
+                    {
+                        self.engine
+                            .pairing_manager()
+                            .cancel_invitation(pairing_id, now_unix_ms)?;
+                    }
+                    Err(error) => return Err(error),
+                }
+                self.starts.release(pairing_id, now_unix_ms)?;
                 Ok(NetworkPairingWireResponse::Acknowledged)
             }
         }
@@ -393,6 +749,14 @@ impl NetworkPairingService {
             }
         }
     }
+}
+
+fn system_now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok())
+        .unwrap_or(0)
 }
 
 /// Serves pairing streams until the peer closes the connection or the task ends.
@@ -634,5 +998,130 @@ fn failure_for(error: &CoreError) -> NetworkPairingWireResponse {
             "pairing_unavailable_state",
             "The peer cannot accept a pairing exchange right now.",
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn invitation(id: &str, owner: DeviceId, expires_at_unix_ms: u64) -> PairingInvitation {
+        PairingInvitation {
+            protocol_version: 1,
+            minimum_protocol_version: 1,
+            inviter_device_id: owner,
+            inviter_public_key: "test-public-key".to_owned(),
+            inviter_device_name: "Test node".to_owned(),
+            invitation_id: id.to_owned(),
+            invitation_secret: "test-secret".to_owned(),
+            invitation_secret_commitment: "00".repeat(32),
+            expires_at_unix_ms,
+            endpoints: Vec::new(),
+            transport_binding: None,
+            signature: "test-signature".to_owned(),
+        }
+    }
+
+    #[test]
+    fn start_admission_is_restart_safe_source_fair_and_releases_terminal_slots() {
+        let directory = tempfile::TempDir::new().expect("directory");
+        let path = directory.path().join("pairing-start-admissions.json");
+        let now = 1_700_000_000_000_u64;
+        let noisy = DeviceId::new();
+        let quiet = DeviceId::new();
+        let guard = StartAdmissionGuard::open(path.clone(), now).expect("open admission");
+
+        let mut noisy_invitations = Vec::new();
+        for index in 0..MAX_STARTS_PER_SOURCE {
+            let invitation_id = format!("noisy-{index}");
+            let issued = guard
+                .create_invitation(
+                    &format!("noisy-request-{index}"),
+                    noisy,
+                    "192.0.2.10",
+                    now,
+                    || {
+                        Ok(invitation(
+                            &invitation_id,
+                            noisy,
+                            now + START_RESERVATION_LIFETIME_MS,
+                        ))
+                    },
+                )
+                .expect("noisy source inside its bound");
+            noisy_invitations.push(issued.invitation_id);
+        }
+        assert!(matches!(
+            guard.create_invitation("noisy-overflow", noisy, "192.0.2.10", now, || {
+                Ok(invitation(
+                    "must-not-persist",
+                    noisy,
+                    now + START_RESERVATION_LIFETIME_MS,
+                ))
+            }),
+            Err(CoreError::ResourceLimit(_))
+        ));
+
+        guard
+            .create_invitation("quiet-request", quiet, "192.0.2.11", now, || {
+                Ok(invitation(
+                    "quiet-invitation",
+                    quiet,
+                    now + START_RESERVATION_LIFETIME_MS,
+                ))
+            })
+            .expect("a quiet source keeps independent capacity");
+        drop(guard);
+
+        let restarted = StartAdmissionGuard::open(path, now + 1).expect("restart admission");
+        assert!(matches!(
+            restarted.create_invitation(
+                "noisy-after-restart",
+                DeviceId::new(),
+                "192.0.2.10",
+                now + 1,
+                || Ok(invitation(
+                    "restart-bypass",
+                    noisy,
+                    now + START_RESERVATION_LIFETIME_MS
+                )),
+            ),
+            Err(CoreError::ResourceLimit(_))
+        ));
+
+        restarted
+            .release(&noisy_invitations[0], now + 2)
+            .expect("cancel releases outstanding slot");
+        restarted
+            .create_invitation(
+                "noisy-after-refill",
+                noisy,
+                "192.0.2.10",
+                now + SOURCE_START_REFILL_MS + 2,
+                || {
+                    Ok(invitation(
+                        "replacement",
+                        noisy,
+                        now + SOURCE_START_REFILL_MS + START_RESERVATION_LIFETIME_MS,
+                    ))
+                },
+            )
+            .expect("a released slot is reusable only after rate refill");
+
+        restarted
+            .create_invitation(
+                "after-expiry",
+                noisy,
+                "192.0.2.10",
+                now + START_RESERVATION_LIFETIME_MS + SOURCE_START_REFILL_MS,
+                || {
+                    Ok(invitation(
+                        "after-expiry-invitation",
+                        noisy,
+                        now + 2 * START_RESERVATION_LIFETIME_MS,
+                    ))
+                },
+            )
+            .expect("expired admissions are pruned and their slots reused");
     }
 }

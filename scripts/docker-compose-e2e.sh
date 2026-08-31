@@ -10,11 +10,19 @@ restore_a="packaging/docker/example/restore-a"
 restore_b="packaging/docker/example/restore-b"
 restore_c="packaging/docker/example/restore-c"
 tls_directory=$(mktemp -d)
+kek_directory=$(mktemp -d)
+token_directory=$(mktemp -d)
+client_token_directory=$(mktemp -d)
+
+chmod 700 "$kek_directory" "$token_directory" "$client_token_directory"
 
 cleanup() {
   $compose down --volumes --remove-orphans >/dev/null 2>&1 || true
   rm -rf "$source_dir/nested" "$restore_a/nested" "$restore_b/nested" "$restore_c/nested"
   rm -rf "$tls_directory"
+  rm -rf "$kek_directory"
+  rm -rf "$token_directory"
+  rm -rf "$client_token_directory"
 }
 trap cleanup EXIT INT TERM
 
@@ -22,7 +30,64 @@ mkdir -p "$source_dir/nested" "$restore_a" "$restore_b" "$restore_c"
 printf 'container-disaster-recovery\n' > "$source_dir/nested/payload.txt"
 printf 'empty fixture\n' > "$source_dir/nested/empty.txt"
 
-COVALENT_IMAGE="$image" $compose up -d --wait
+# Each runtime state has distinct KEK and API-token files. Provision keys
+# through the release binary rather than fabricating base64; deterministic
+# bearer tokens stay in owner-only files and never appear in an argv or env.
+make_runtime_secret_readable() {
+  secret_path=$1
+  docker run --rm --user 0:0 --entrypoint sh \
+    --mount "type=bind,source=$secret_path,target=/secret" \
+    "$image" -c 'chown 65532:65532 /secret && chmod 600 /secret'
+  before_digest=$(docker run --rm --user 0:0 --entrypoint sha256sum \
+    --mount "type=bind,source=$secret_path,target=/secret,readonly" \
+    "$image" /secret | awk '{print $1}')
+  docker run --rm --user 65532:65532 --entrypoint sh \
+    --mount "type=bind,source=$secret_path,target=/secret,readonly" \
+    "$image" -c '
+      test -f /secret && test -r /secret
+      if { printf x >> /secret; } 2>/dev/null; then
+        echo "readonly runtime secret accepted an append" >&2
+        exit 1
+      fi
+    '
+  after_digest=$(docker run --rm --user 0:0 --entrypoint sha256sum \
+    --mount "type=bind,source=$secret_path,target=/secret,readonly" \
+    "$image" /secret | awk '{print $1}')
+  if [ "$before_digest" != "$after_digest" ]; then
+    echo "readonly runtime secret content changed" >&2
+    exit 1
+  fi
+}
+
+for node in a b c; do
+  docker run --rm --user "$(id -u):$(id -g)" \
+    --mount "type=bind,source=$kek_directory,target=/secrets" \
+    "$image" provision-key --key-file "/secrets/$node.kek" >/dev/null
+done
+for node in a b c; do
+  test -f "$kek_directory/$node.kek"
+  mode=$(stat -f '%Lp' "$kek_directory/$node.kek" 2>/dev/null || stat -c '%a' "$kek_directory/$node.kek")
+  test "$mode" = 600
+  make_runtime_secret_readable "$kek_directory/$node.kek"
+  server_token_path="$token_directory/$node.token"
+  client_token_path="$client_token_directory/$node.token"
+  openssl rand -hex 32 > "$server_token_path"
+  chmod 600 "$server_token_path"
+  # Keep a separate owner-only client credential before assigning the server
+  # copy to UID 65532. This models a claimed client without reading node data.
+  cp "$server_token_path" "$client_token_path"
+  chmod 600 "$client_token_path"
+  make_runtime_secret_readable "$server_token_path"
+done
+
+export COVALENT_IMAGE="$image"
+export COVALENT_E2E_KEK_A="$kek_directory/a.kek"
+export COVALENT_E2E_KEK_B="$kek_directory/b.kek"
+export COVALENT_E2E_KEK_C="$kek_directory/c.kek"
+export COVALENT_E2E_TOKEN_A="$token_directory/a.token"
+export COVALENT_E2E_TOKEN_B="$token_directory/b.token"
+export COVALENT_E2E_TOKEN_C="$token_directory/c.token"
+$compose up -d --wait
 
 for service in node-a node-b node-c; do
   attempt=0
@@ -39,10 +104,9 @@ $compose cp node-a:/config/caddy/data/caddy/pki/authorities/local/root.crt "$tls
 $compose cp node-b:/config/caddy/data/caddy/pki/authorities/local/root.crt "$tls_directory/b.crt" >/dev/null
 $compose cp node-c:/config/caddy/data/caddy/pki/authorities/local/root.crt "$tls_directory/c.crt" >/dev/null
 
-token() { $compose exec -T "$1" sh -c 'cat /data/local-api-token'; }
-token_a=$(token node-a)
-token_b=$(token node-b)
-token_c=$(token node-c)
+token_a="$client_token_directory/a.token"
+token_b="$client_token_directory/b.token"
+token_c="$client_token_directory/c.token"
 # Read back rather than restate the addresses the compose file pinned. If the
 # static assignment ever silently stopped taking effect, the node would still be
 # advertising the pinned address while these read the real one, and the
@@ -61,16 +125,23 @@ if [ "${COVALENT_RUN_APPLE_TLS_E2E:-false}" = "true" ]; then
     "$tls_directory/b.crt"
 fi
 
-TOKEN_A="$token_a" TOKEN_B="$token_b" TOKEN_C="$token_c" NODE_A_IP="$node_a_ip" NODE_B_IP="$node_b_ip" NODE_C_IP="$node_c_ip" CA_A="$tls_directory/a.crt" CA_B="$tls_directory/b.crt" CA_C="$tls_directory/c.crt" python3 - <<'PY'
+TOKEN_A_FILE="$token_a" TOKEN_B_FILE="$token_b" TOKEN_C_FILE="$token_c" NODE_A_IP="$node_a_ip" NODE_B_IP="$node_b_ip" NODE_C_IP="$node_c_ip" CA_A="$tls_directory/a.crt" CA_B="$tls_directory/b.crt" CA_C="$tls_directory/c.crt" python3 - <<'PY'
 import json
 import os
 import ssl
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 ports = {"a": 18781, "b": 18782, "c": 18783}
-tokens = {"a": os.environ["TOKEN_A"], "b": os.environ["TOKEN_B"], "c": os.environ["TOKEN_C"]}
+def token_from_file(name):
+    token = Path(os.environ[name]).read_text(encoding="ascii").rstrip("\n")
+    if not 32 <= len(token) <= 512 or any(ord(character) < 0x20 or ord(character) > 0x7e for character in token):
+        raise SystemExit(f"invalid deterministic token file: {name}")
+    return token
+
+tokens = {"a": token_from_file("TOKEN_A_FILE"), "b": token_from_file("TOKEN_B_FILE"), "c": token_from_file("TOKEN_C_FILE")}
 contexts = {node: ssl.create_default_context(cafile=os.environ[f"CA_{node.upper()}"]) for node in ports}
 
 def request(node, path, payload=None):
@@ -170,16 +241,19 @@ $compose exec -T node-a sh -c 'chunk=$(find /data/store/chunks -type f | head -n
 
 # Resolve the immutable backup through the same authenticated listing contract
 # used by native and web clients.
-backup_id=$(TOKEN_A="$token_a" CA_A="$tls_directory/a.crt" python3 - <<'PY'
+backup_id=$(TOKEN_A_FILE="$token_a" CA_A="$tls_directory/a.crt" python3 - <<'PY'
 import json
 import os
 import ssl
 import urllib.request
 import urllib.parse
+from pathlib import Path
+
+token = Path(os.environ["TOKEN_A_FILE"]).read_text(encoding="ascii").rstrip("\n")
 
 request = urllib.request.Request(
     "https://127.0.0.1:18781/api/v1/backups",
-    headers={"Accept": "application/json", "Authorization": "Bearer " + os.environ["TOKEN_A"]},
+    headers={"Accept": "application/json", "Authorization": "Bearer " + token},
 )
 with urllib.request.urlopen(request, timeout=15, context=ssl.create_default_context(cafile=os.environ["CA_A"])) as response:
     backups = json.load(response)
@@ -189,13 +263,15 @@ if len(matches) != 1:
 print(matches[0]["backupId"])
 PY
 )
-TOKEN_A="$token_a" BACKUP_ID="$backup_id" CA_A="$tls_directory/a.crt" python3 - <<'PY'
+TOKEN_A_FILE="$token_a" BACKUP_ID="$backup_id" CA_A="$tls_directory/a.crt" python3 - <<'PY'
 import json
 import os
 import ssl
 import urllib.request
+from pathlib import Path
 
-headers = {"Accept": "application/json", "Authorization": "Bearer " + os.environ["TOKEN_A"], "Content-Type": "application/json"}
+token = Path(os.environ["TOKEN_A_FILE"]).read_text(encoding="ascii").rstrip("\n")
+headers = {"Accept": "application/json", "Authorization": "Bearer " + token, "Content-Type": "application/json"}
 context = ssl.create_default_context(cafile=os.environ["CA_A"])
 def exchange(path, payload=None):
     data = None if payload is None else json.dumps(payload).encode()

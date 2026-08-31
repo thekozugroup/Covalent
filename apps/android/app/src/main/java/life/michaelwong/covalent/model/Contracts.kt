@@ -32,10 +32,15 @@ data class Provider(
     val displayName: String? = null,
     val roles: Set<String> = emptySet(),
     val reachability: ProviderReachability = ProviderReachability.UNKNOWN,
+    /** Usable capacity from a fresh, signed probe for this exact provider identity. */
     val capacityBytes: Long? = null,
+    val allocatedBytes: Long? = null,
+    val quotaBytes: Long? = null,
+    val observedAtUnixMs: Long? = null,
+    val validUntilUnixMs: Long? = null,
 )
 
-enum class ProviderReachability { CONNECTED, OFFLINE, UNKNOWN }
+enum class ProviderReachability { REACHABLE, UNREACHABLE, UNKNOWN }
 
 data class TransportIdentity(
     val deviceId: String,

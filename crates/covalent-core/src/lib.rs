@@ -25,11 +25,14 @@ pub use backup::{BackupOptions, BackupProgress, BackupResult, ExclusionRules, Sy
 pub use chunker::{ChunkingConfig, ContentDefinedChunker, DEFAULT_AVERAGE_CHUNK_SIZE};
 pub use crypto::{BackupKey, EncryptedChunk};
 pub use engine::{
-    Engine, EngineOptions, JobControl, JobState, NodeConfig, RecoveredBackup,
-    RememberedBackupState, RosterCursor, SnapshotAvailabilityReport,
+    Engine, EngineOptions, JobControl, JobState, MAX_UNACKNOWLEDGED_BACKUP_RESULTS, NodeConfig,
+    RecoveredBackup, RememberedBackupState, RosterCursor, SnapshotAvailabilityReport,
 };
 pub use identity::{DeviceIdentity, PublicIdentity};
-pub use key_envelope::{KeyEncryptionKey, SecretBinding, WrappedSecret};
+pub use key_envelope::{
+    KeyEncryptionKey, KeyProtector, SecretBinding, StaticKeyProtector, WrappedSecret,
+    state_secret_context,
+};
 pub use manifest::{SignedRosterBuilder, decrypt_manifest, encrypt_manifest, verify_roster};
 pub use pairing::{
     PairingConfirmation, PairingManager, PairingSession, PairingSide, ShortAuthenticationString,
@@ -47,7 +50,8 @@ pub use restore::{
 };
 pub use storage::{
     ChunkStore, GarbageCollectionReport, IntegrityReport, ProviderCapacity, ProviderQuotaPolicy,
-    RecoveryCapsuleDescriptor, StoredSnapshot,
+    ProviderWriteLeaseIntent, RecoveryCapsuleDescriptor, RecoveryCapsuleLeaseIntent,
+    RecoveryCapsuleUploadAttempt, RecoveryCapsuleUploadAttemptPhase, StoredSnapshot,
 };
 
 /// A canonical directory explicitly authorized as one restore boundary.
@@ -240,6 +244,9 @@ pub enum CoreError {
     /// A resumable job is currently paused.
     #[error("job paused")]
     Paused,
+    /// A retained terminal result is bound to different immutable request metadata.
+    #[error("job id is already bound to a different completed request")]
+    JobConflict,
     /// A job was explicitly cancelled.
     #[error("job cancelled")]
     Cancelled,
@@ -258,6 +265,12 @@ pub enum CoreError {
     /// Another process already owns this durable engine state directory.
     #[error("engine state is already open by another process")]
     StateLocked,
+    /// The platform key protector is absent, locked, or requires user action.
+    #[error("key protection is locked or unavailable")]
+    KeyProtectionLocked,
+    /// A persisted envelope requires a KEK version the provider cannot supply.
+    #[error("key protection version {0} is unavailable")]
+    KeyVersionUnavailable(u32),
     /// A filesystem operation failed.
     #[error("could not {operation} at {path}: {source}")]
     Io {

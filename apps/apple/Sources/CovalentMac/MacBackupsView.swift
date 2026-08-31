@@ -269,7 +269,7 @@ private struct MacSnapshotDetail: View {
         DisclosureGroup("Technical details") {
             Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 8) {
                 detailRow("Backup ID", snapshot.backupId.uuidString)
-                detailRow("Backup ID", snapshot.snapshotId)
+                detailRow("Backup version ID", snapshot.snapshotId)
                 detailRow("Selected devices", snapshot.selectedProviderIds.count.formatted())
             }
             .font(.caption)
@@ -405,14 +405,19 @@ struct MacRestorePreviewView: View {
     @ObservedObject var model: CovalentAppModel
     let context: RestorePreviewContext
     @Environment(\.dismiss) private var dismiss
+    @State private var isRestoring = false
+    @State private var showReplaceExecutionConfirmation = false
 
-    private var hasUnavailableConflictActions: Bool {
-        context.plan.entries.contains { entry in
-            switch entry.action {
-            case .createFile, .createDirectory, .keepDirectory: false
-            case .skipFile, .replaceFile, .renameFile: true
-            }
-        }
+    private var hasReplaceActions: Bool {
+        context.plan.entries.contains { $0.action == .replaceFile }
+    }
+
+    private var hasSignedTargetInventory: Bool {
+        context.plan.targetInventory != nil
+    }
+
+    private var canRestore: Bool {
+        hasSignedTargetInventory && !isRestoring && model.activeTask == nil
     }
 
     var body: some View {
@@ -447,12 +452,12 @@ struct MacRestorePreviewView: View {
             .frame(minHeight: 340)
             Divider()
             HStack {
-                if hasUnavailableConflictActions {
-                    Label("Destination changed. Choose an empty folder and refresh the preview.", systemImage: "exclamationmark.triangle.fill")
+                if !hasSignedTargetInventory {
+                    Label("This preview has no signed destination inventory. Create a new preview before restoring.", systemImage: "exclamationmark.triangle.fill")
                         .font(.subheadline)
                         .foregroundStyle(.orange)
                 } else {
-                    Label("Restore is confined to \(context.destinationDisplayName)", systemImage: "checkmark.shield")
+                    Label("Restore is confined to \(context.destinationDisplayName). Any folder change stops it.", systemImage: "checkmark.shield")
                         .font(.subheadline)
                         .secondaryLabelStyle()
                         .lineLimit(1)
@@ -463,18 +468,38 @@ struct MacRestorePreviewView: View {
                     model.dismissRestorePreview()
                     dismiss()
                 }
-                Button("Restore") { runRestore() }
+                Button("Restore") { requestRestore() }
                 .buttonStyle(.borderedProminent)
-                .disabled(model.activeTask != nil || hasUnavailableConflictActions)
+                .disabled(!canRestore)
                 .accessibilityIdentifier("restore.execute")
             }
             .padding(18)
         }
         .frame(minWidth: 780, idealWidth: 900, minHeight: 520, idealHeight: 620)
+        .confirmationDialog(
+            "Replace existing files?",
+            isPresented: $showReplaceExecutionConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Replace and Restore", role: .destructive) { runRestore() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Only files marked Replace in this signed plan can be overwritten. Covalent checks the signed destination inventory again and stops if it changed.")
+        }
+    }
+
+    private func requestRestore() {
+        if hasReplaceActions {
+            showReplaceExecutionConfirmation = true
+        } else {
+            runRestore()
+        }
     }
 
     private func runRestore() {
+        isRestoring = true
         Task {
+            defer { isRestoring = false }
             if await model.executeRestore() != nil {
                 dismiss()
             }
@@ -486,7 +511,9 @@ struct MacRestorePreviewView: View {
         case .createFile: "Create file"
         case .createDirectory: "Create folder"
         case .keepDirectory: "Keep folder"
-        case .skipFile, .replaceFile, .renameFile: "Blocked conflict"
+        case .skipFile: "Skip existing file"
+        case .replaceFile: "Replace existing file"
+        case .renameFile: "Create renamed copy"
         }
     }
 }

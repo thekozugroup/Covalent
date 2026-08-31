@@ -246,12 +246,92 @@ public struct NetworkPairing: Codable, Equatable, Identifiable, Sendable {
     public var id: String { pairingId }
 }
 
+public enum ProviderReachability: String, Codable, Equatable, Sendable {
+    case reachable
+    case unreachable
+    case unknown
+}
+
+public struct ProviderCapacity: Codable, Equatable, Sendable {
+    public let usableBytes: UInt64
+    public let allocatedBytes: UInt64
+    public let quotaBytes: UInt64
+
+    public var canStoreAnotherCopy: Bool {
+        usableBytes > 0 && quotaBytes > 0
+    }
+}
+
 public struct ProviderConnection: Codable, Equatable, Identifiable, Sendable {
     public let peerId: UUID
     public let address: String
     public let certificateFingerprint: String
+    /// A fresh, signed probe result for this exact paired identity. Missing fields are unsafe.
+    public let reachability: ProviderReachability?
+    public let observedAtUnixMs: UInt64?
+    public let validUntilUnixMs: UInt64?
+    public let usableBytes: UInt64?
+    public let allocatedBytes: UInt64?
+    public let quotaBytes: UInt64?
+
+    public var capacity: ProviderCapacity? {
+        guard let usableBytes, let allocatedBytes, let quotaBytes else { return nil }
+        return ProviderCapacity(
+            usableBytes: usableBytes,
+            allocatedBytes: allocatedBytes,
+            quotaBytes: quotaBytes
+        )
+    }
+
+    public init(
+        peerId: UUID,
+        address: String,
+        certificateFingerprint: String,
+        reachability: ProviderReachability? = nil,
+        observedAtUnixMs: UInt64? = nil,
+        validUntilUnixMs: UInt64? = nil,
+        capacity: ProviderCapacity? = nil
+    ) {
+        self.peerId = peerId
+        self.address = address
+        self.certificateFingerprint = certificateFingerprint
+        self.reachability = reachability
+        self.observedAtUnixMs = observedAtUnixMs
+        self.validUntilUnixMs = validUntilUnixMs
+        usableBytes = capacity?.usableBytes
+        allocatedBytes = capacity?.allocatedBytes
+        quotaBytes = capacity?.quotaBytes
+    }
 
     public var id: UUID { peerId }
+
+    public var isEligibleForBackup: Bool {
+        guard reachability == .reachable,
+              let capacity,
+              let observedAtUnixMs,
+              let validUntilUnixMs,
+              validUntilUnixMs >= observedAtUnixMs,
+              validUntilUnixMs >= UInt64(Date().timeIntervalSince1970 * 1_000)
+        else { return false }
+        return capacity.canStoreAnotherCopy
+    }
+
+    public var selectionStatus: String {
+        switch reachability {
+        case .reachable:
+            guard let capacity else { return "Capacity could not be checked — cannot select" }
+            guard capacity.quotaBytes > 0, capacity.usableBytes > 0 else {
+                return "No usable space — cannot select"
+            }
+            return "Usable now: \(ByteCountFormatter.string(fromByteCount: Int64(clamping: capacity.usableBytes), countStyle: .file)); "
+                + "using \(ByteCountFormatter.string(fromByteCount: Int64(clamping: capacity.allocatedBytes), countStyle: .file)) "
+                + "of \(ByteCountFormatter.string(fromByteCount: Int64(clamping: capacity.quotaBytes), countStyle: .file))"
+        case .unreachable:
+            return "This device did not answer — cannot select"
+        case .unknown, .none:
+            return "Capacity is unknown — cannot select"
+        }
+    }
 }
 
 public struct BackupRequest: Codable, Equatable, Sendable {
@@ -313,6 +393,35 @@ public struct BackupResponse: Codable, Equatable, Sendable {
     public let chunksDeduplicated: Int
     public let selectedProviders: Int
     public let degradedFailures: Int
+}
+
+/// A locally staged archive backup that can survive an app or transport
+/// restart without changing the server-visible job identity.
+public struct PendingArchiveBackup: Equatable, Sendable {
+    public let metadata: ArchiveBackupMetadata
+    public let sourceGrantId: UUID?
+    public let createdAt: Date
+    public let completedBytes: UInt64
+    public let totalBytes: UInt64
+    /// Non-`nil` only after the app durably saved a server response carrying
+    /// `X-Covalent-Job-Ack-Required: true`.
+    public let acceptedResponse: BackupResponse?
+
+    public init(
+        metadata: ArchiveBackupMetadata,
+        sourceGrantId: UUID?,
+        createdAt: Date,
+        completedBytes: UInt64,
+        totalBytes: UInt64,
+        acceptedResponse: BackupResponse?
+    ) {
+        self.metadata = metadata
+        self.sourceGrantId = sourceGrantId
+        self.createdAt = createdAt
+        self.completedBytes = completedBytes
+        self.totalBytes = totalBytes
+        self.acceptedResponse = acceptedResponse
+    }
 }
 
 public struct SnapshotRequest: Codable, Equatable, Sendable {
@@ -455,7 +564,7 @@ public struct RestorePlanPage: Codable, Equatable, Sendable {
     public let targetInventory: TargetInventoryBinding?
 }
 
-public struct RestorePlan: Equatable, Sendable {
+public struct RestorePlan: Codable, Equatable, Sendable {
     public let reference: RestorePlanReference
     public let entries: [RestorePreviewEntry]
 
@@ -484,6 +593,45 @@ public struct RestoreResponse: Codable, Equatable, Sendable {
     public let filesSkipped: Int
     public let bytesWritten: UInt64
     public let rejectedProviderCopies: Int
+}
+
+/// The locally durable point reached by a streamed Apple restore.  A restore
+/// is never replayed after it has entered `applying`: a process exit there
+/// leaves the effects unknowable, so the client deliberately fails closed.
+public enum ArchiveRestoreExecutionState: String, Codable, Equatable, Sendable {
+    case prepared
+    case downloaded
+    case applying
+    case applied
+}
+
+/// A server-issued archive restore retained on this device until its accepted
+/// terminal result has been acknowledged with a confirmed 204 response.
+public struct PendingArchiveRestore: Equatable, Sendable {
+    public let plan: RestorePlan
+    public let destinationGrantId: UUID?
+    public let destinationRootIdentity: String
+    public let createdAt: Date
+    public let executionState: ArchiveRestoreExecutionState
+    /// Non-`nil` once the verified streamed terminal result has been written
+    /// to the owner-private restore journal.
+    public let acceptedResponse: RestoreResponse?
+
+    public init(
+        plan: RestorePlan,
+        destinationGrantId: UUID?,
+        destinationRootIdentity: String,
+        createdAt: Date,
+        executionState: ArchiveRestoreExecutionState,
+        acceptedResponse: RestoreResponse?
+    ) {
+        self.plan = plan
+        self.destinationGrantId = destinationGrantId
+        self.destinationRootIdentity = destinationRootIdentity
+        self.createdAt = createdAt
+        self.executionState = executionState
+        self.acceptedResponse = acceptedResponse
+    }
 }
 
 public enum JobAction: String, Codable, Sendable {

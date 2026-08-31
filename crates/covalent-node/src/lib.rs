@@ -27,9 +27,10 @@ use axum::routing::{delete, get, post};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use covalent_core::{
-    BackupOptions, ChunkProvider, CoreError, Engine, JobControl, JobState, PairingConfirmation,
-    PairingSession, PairingSide, PreviewAction, RestoreOptions, RestorePlan, RestorePreviewEntry,
-    RosterCursor, canonical_target_inventory_digest,
+    BackupOptions, ChunkProvider, CoreError, Engine, JobControl, JobState, KeyProtector,
+    PairingConfirmation, PairingSession, PairingSide, PreviewAction, RestoreOptions, RestorePlan,
+    RestorePreviewEntry, RosterCursor, WrappedSecret, canonical_target_inventory_digest,
+    state_secret_context,
 };
 use covalent_protocol::{
     ApiErrorBody, BackupId, BackupSummary, ConflictPolicy, DeviceId, EntryKind, NodeStatus,
@@ -60,7 +61,12 @@ const APP_CSS: &str = include_str!("../../../packaging/web/app.css");
 const APP_JS: &str = include_str!("../../../packaging/web/app.js");
 const PAIRING_FLOW_JS: &str = include_str!("../../../packaging/web/pairing-flow.js");
 const RESTORE_PLAN_FLOW_JS: &str = include_str!("../../../packaging/web/restore-plan-flow.js");
+const BACKUP_TERMINAL_FLOW_JS: &str =
+    include_str!("../../../packaging/web/backup-terminal-flow.js");
+const TAB_FLOW_JS: &str = include_str!("../../../packaging/web/tab-flow.js");
 const MAX_LOCAL_API_BODY_BYTES: usize = 2 * 1_024 * 1_024;
+const MAX_LOCAL_API_TOKEN_FILE_BYTES: u64 = 16 * 1_024;
+const LOCAL_API_TOKEN_SECRET_PURPOSE: &str = "local-api-token";
 /// Bounds the peer round trips one pending-list poll may perform.
 const MAX_NETWORK_PAIRING_POLLS_PER_REQUEST: usize = 4;
 /// Caps the latency an unreachable peer can add to a routine list or cancel.
@@ -1230,6 +1236,11 @@ pub fn router(state: AppState) -> Router {
             "/assets/restore-plan-flow.js",
             get(restore_plan_flow_javascript),
         )
+        .route(
+            "/assets/backup-terminal-flow.js",
+            get(backup_terminal_flow_javascript),
+        )
+        .route("/assets/tab-flow.js", get(tab_flow_javascript))
         .route("/healthz", get(health))
         .route("/api/v1/status", get(status))
         .route("/api/v1/transport/identity", get(transport_identity))
@@ -1302,36 +1313,42 @@ pub fn router(state: AppState) -> Router {
 }
 
 /// Loads or creates the bearer token used by local mutation APIs.
-pub fn load_or_create_local_api_token(path: impl AsRef<Path>) -> Result<String, CoreError> {
+///
+/// Headless runtimes persist only a versioned [`WrappedSecret`] bound to the
+/// canonical state root. An existing private plaintext token is migrated with
+/// one atomic replacement only after it has been validated and wrapped.
+pub fn load_or_create_local_api_token(
+    path: impl AsRef<Path>,
+    state_root: &Path,
+    protector: &dyn KeyProtector,
+) -> Result<Zeroizing<String>, CoreError> {
     let path = path.as_ref();
-    match fs::symlink_metadata(path) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 1_024 {
-                return Err(CoreError::InvalidState(
-                    "invalid local API token file".to_owned(),
-                ));
+    let context = state_secret_context(state_root, "local-api-token");
+    match read_bounded_regular_file_optional(path, MAX_LOCAL_API_TOKEN_FILE_BYTES, true)? {
+        Some(mut persisted) => {
+            let first = persisted
+                .iter()
+                .copied()
+                .find(|byte| !byte.is_ascii_whitespace());
+            if first == Some(b'{') {
+                let wrapped: WrappedSecret = serde_json::from_slice(persisted.as_ref())?;
+                let plaintext =
+                    wrapped.open(protector, LOCAL_API_TOKEN_SECRET_PURPOSE, &context)?;
+                return validated_local_api_token(plaintext.as_ref());
             }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                if metadata.permissions().mode() & 0o077 != 0 {
-                    return Err(CoreError::InvalidState(
-                        "local API token permissions are too broad".to_owned(),
-                    ));
-                }
-            }
-            let token = fs::read_to_string(path).map_err(|source| CoreError::Io {
-                operation: "read local API token",
-                path: path.to_path_buf(),
-                source,
-            })?;
-            let token = token.trim().to_owned();
-            if token.len() < 32 || token.len() > 512 {
-                return Err(CoreError::InvalidKeyMaterial);
-            }
+
+            let token = validated_local_api_token(persisted.as_ref())?;
+            persisted.fill(0);
+            let wrapped = WrappedSecret::protect(
+                protector,
+                LOCAL_API_TOKEN_SECRET_PURPOSE,
+                &context,
+                Zeroizing::new(token.as_bytes().to_vec()),
+            )?;
+            persist_private_file(path, &serde_json::to_vec_pretty(&wrapped)?)?;
             Ok(token)
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        None => {
             let parent = path.parent().ok_or_else(|| {
                 CoreError::InvalidState("local API token path has no parent".to_owned())
             })?;
@@ -1353,56 +1370,115 @@ pub fn load_or_create_local_api_token(path: impl AsRef<Path>) -> Result<String, 
             }
             let mut random = [0_u8; 32];
             OsRng.fill_bytes(&mut random);
-            let token = URL_SAFE_NO_PAD.encode(random);
-            let mut temporary =
-                tempfile::NamedTempFile::new_in(parent).map_err(|source| CoreError::Io {
-                    operation: "stage local API token",
-                    path: path.to_path_buf(),
-                    source,
-                })?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                temporary
-                    .as_file()
-                    .set_permissions(fs::Permissions::from_mode(0o600))
-                    .map_err(|source| CoreError::Io {
-                        operation: "protect local API token",
-                        path: path.to_path_buf(),
-                        source,
-                    })?;
-            }
-            use std::io::Write as _;
-            temporary
-                .write_all(token.as_bytes())
-                .and_then(|()| temporary.as_file().sync_all())
-                .map_err(|source| CoreError::Io {
-                    operation: "sync local API token",
-                    path: path.to_path_buf(),
-                    source,
-                })?;
-            temporary
-                .persist_noclobber(path)
-                .map_err(|error| CoreError::Io {
-                    operation: "commit local API token",
-                    path: path.to_path_buf(),
-                    source: error.error,
-                })?;
-            fs::File::open(parent)
-                .and_then(|directory| directory.sync_all())
-                .map_err(|source| CoreError::Io {
-                    operation: "sync local API token directory",
-                    path: parent.to_path_buf(),
-                    source,
-                })?;
+            let token = Zeroizing::new(URL_SAFE_NO_PAD.encode(random));
+            random.fill(0);
+            let wrapped = WrappedSecret::protect(
+                protector,
+                LOCAL_API_TOKEN_SECRET_PURPOSE,
+                &context,
+                Zeroizing::new(token.as_bytes().to_vec()),
+            )?;
+            persist_private_file(path, &serde_json::to_vec_pretty(&wrapped)?)?;
             Ok(token)
         }
-        Err(source) => Err(CoreError::Io {
-            operation: "inspect local API token",
+    }
+}
+
+fn validated_local_api_token(bytes: &[u8]) -> Result<Zeroizing<String>, CoreError> {
+    let text = std::str::from_utf8(bytes).map_err(|_| CoreError::InvalidKeyMaterial)?;
+    let token = text.trim();
+    if token.len() < 32
+        || token.len() > 512
+        || !token
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() && byte != b'"' && byte != b'\\')
+    {
+        return Err(CoreError::InvalidKeyMaterial);
+    }
+    Ok(Zeroizing::new(token.to_owned()))
+}
+
+pub(crate) fn read_bounded_regular_file_optional(
+    path: &Path,
+    maximum: u64,
+    owner_only: bool,
+) -> Result<Option<Zeroizing<Vec<u8>>>, CoreError> {
+    use std::io::Read as _;
+
+    #[cfg(unix)]
+    let (descriptor, length) = {
+        use rustix::fs::{FileType, Mode, OFlags, fstat, open};
+
+        let descriptor = match open(
+            path,
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::empty(),
+        ) {
+            Ok(descriptor) => descriptor,
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(error) => {
+                return Err(CoreError::Io {
+                    operation: "open private file without following links",
+                    path: path.to_path_buf(),
+                    source: std::io::Error::from_raw_os_error(error.raw_os_error()),
+                });
+            }
+        };
+        let stat = fstat(&descriptor).map_err(|error| CoreError::Io {
+            operation: "inspect private file handle",
+            path: path.to_path_buf(),
+            source: std::io::Error::from_raw_os_error(error.raw_os_error()),
+        })?;
+        if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
+            || (owner_only && stat.st_mode & 0o077 != 0)
+            || stat.st_size < 0
+            || stat.st_size as u64 > maximum
+        {
+            return Err(CoreError::InvalidState(
+                "input is not a bounded regular file with the required permissions".to_owned(),
+            ));
+        }
+        (descriptor, stat.st_size as u64)
+    };
+    #[cfg(not(unix))]
+    let (descriptor, length) = {
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => {
+                return Err(CoreError::Io {
+                    operation: "inspect private file",
+                    path: path.to_path_buf(),
+                    source,
+                });
+            }
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > maximum {
+            return Err(CoreError::InvalidState(
+                "private input is not a bounded regular file".to_owned(),
+            ));
+        }
+        let descriptor = File::open(path).map_err(|source| CoreError::Io {
+            operation: "open private file",
             path: path.to_path_buf(),
             source,
-        }),
+        })?;
+        (descriptor.into(), metadata.len())
+    };
+
+    let mut bytes = Zeroizing::new(Vec::with_capacity(length as usize));
+    File::from(descriptor)
+        .take(maximum.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|source| CoreError::Io {
+            operation: "read private file",
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if bytes.len() as u64 > maximum {
+        return Err(CoreError::ResourceLimit("private file size"));
     }
+    Ok(Some(bytes))
 }
 
 /// Private readiness record used by an app that owns this node process.
@@ -1719,6 +1795,26 @@ async fn restore_plan_flow_javascript() -> impl IntoResponse {
     )
 }
 
+async fn backup_terminal_flow_javascript() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        BACKUP_TERMINAL_FLOW_JS,
+    )
+}
+
+async fn tab_flow_javascript() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        TAB_FLOW_JS,
+    )
+}
+
 async fn not_found(uri: Uri) -> Response {
     if uri.path().starts_with("/api/") {
         ApiError {
@@ -1915,20 +2011,10 @@ async fn config_import(
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ClaimOwnershipRequest {
-    /// Base64url, unpadded. Fresh per exchange.
+    /// Base64url, unpadded. Random once, then reused byte-for-byte for retries.
     client_nonce: String,
     /// Base64url, unpadded. `blake3::keyed_hash` under the stretched code.
     client_proof: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ClaimOwnershipResponse {
-    device_name: String,
-    ca_certificate: Option<String>,
-    ca_fingerprint_sha256: Option<String>,
-    seal_nonce: String,
-    sealed_token: String,
 }
 
 /// Trades proof of the first-run code for the API token and the CA to pin.
@@ -1942,7 +2028,7 @@ struct ClaimOwnershipResponse {
 async fn claim_ownership(
     State(state): State<AppState>,
     ContractJson(request): ContractJson<ClaimOwnershipRequest>,
-) -> Result<axum::Json<ClaimOwnershipResponse>, ApiError> {
+) -> Result<axum::Json<first_run_claim::ClaimGrant>, ApiError> {
     let claim = state.first_run_claim.as_deref().ok_or_else(|| {
         ApiError::conflict(
             "claim_unavailable",
@@ -1956,26 +2042,25 @@ async fn claim_ownership(
         .decode(&request.client_proof)
         .map_err(|_| ApiError::from_json_contract())?;
 
+    // Read every fallible response field before the presentation can commit.
+    // Once `present` returns, replaying these exact request bytes is guaranteed
+    // to return the same durable response even after process or transport loss.
+    let device_name = state
+        .engine
+        .config()
+        .map_err(ApiError::from_core)?
+        .device_name;
     let grant = claim
         .present(
             &client_nonce,
             &client_proof,
+            &device_name,
             state.api_token.as_str(),
             now_unix_ms(),
         )
         .map_err(ApiError::from_claim_refusal)?;
 
-    Ok(axum::Json(ClaimOwnershipResponse {
-        device_name: state
-            .engine
-            .config()
-            .map_err(ApiError::from_core)?
-            .device_name,
-        ca_certificate: grant.ca_certificate,
-        ca_fingerprint_sha256: grant.ca_fingerprint,
-        seal_nonce: URL_SAFE_NO_PAD.encode(&grant.seal_nonce),
-        sealed_token: URL_SAFE_NO_PAD.encode(&grant.sealed_token),
-    }))
+    Ok(axum::Json(grant))
 }
 
 #[derive(Deserialize)]
@@ -2466,21 +2551,26 @@ async fn acknowledge_job(
             "An active job cannot be acknowledged.",
         ));
     }
-    let backup_completed = state
-        .archive_backup_root
-        .join(&request.job_id)
-        .join("result.json")
-        .is_file();
+    let archive_backup_completed =
+        retained_archive_backup_result_is_valid(&state, &request.job_id)?;
+    let normal_backup_completed = state
+        .engine
+        .unacknowledged_backup_id(&request.job_id)
+        .map_err(ApiError::from_core)?
+        .is_some();
     let restore_completed = state
         .archive_restore_root
         .join(&request.job_id)
         .join("result.json")
         .is_file();
-    if !backup_completed && !restore_completed {
-        return Err(ApiError::conflict(
-            "job_not_complete",
-            "Only a retained completed archive job can be acknowledged.",
-        ));
+    if !archive_backup_completed && !normal_backup_completed && !restore_completed {
+        return Ok(StatusCode::NO_CONTENT);
+    }
+    if archive_backup_completed || normal_backup_completed {
+        state
+            .engine
+            .acknowledge_backup_result(&request.job_id)
+            .map_err(ApiError::from_core)?;
     }
     state
         .jobs
@@ -2490,6 +2580,58 @@ async fn acknowledge_job(
         .remove(&request.job_id);
     discard_job_artifacts(&state, &request.job_id)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+fn retained_archive_backup_result_is_valid(
+    state: &AppState,
+    job_id: &str,
+) -> Result<bool, ApiError> {
+    let directory = state.archive_backup_root.join(job_id);
+    let result_path = directory.join("result.json");
+    match fs::symlink_metadata(&result_path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(_) => {
+            return Err(ApiError::internal(
+                "retained backup result could not be inspected",
+            ));
+        }
+        Ok(metadata)
+            if metadata.is_file()
+                && !metadata.file_type().is_symlink()
+                && metadata.len() > 0
+                && metadata.len() <= MAX_ARCHIVE_METADATA_BYTES as u64 => {}
+        Ok(_) => return Err(ApiError::internal("retained backup result is invalid")),
+    };
+    let response: BackupResponse = serde_json::from_slice(
+        &fs::read(&result_path)
+            .map_err(|_| ApiError::internal("retained backup result could not be read"))?,
+    )
+    .map_err(ApiError::from_json)?;
+    let metadata_path = directory.join("metadata.json");
+    match fs::symlink_metadata(&metadata_path) {
+        Ok(metadata)
+            if metadata.is_file()
+                && !metadata.file_type().is_symlink()
+                && metadata.len() > 0
+                && metadata.len() <= MAX_ARCHIVE_METADATA_BYTES as u64 => {}
+        _ => return Err(ApiError::internal("retained backup metadata is invalid")),
+    }
+    let metadata_bytes = fs::read(&metadata_path)
+        .map_err(|_| ApiError::internal("retained backup metadata could not be read"))?;
+    let request: ArchiveBackupMetadata =
+        serde_json::from_slice(&metadata_bytes).map_err(ApiError::from_json)?;
+    if request.job_id != job_id
+        || request.snapshot_id != response.snapshot_id
+        || request
+            .backup_id
+            .is_some_and(|backup_id| backup_id != response.backup_id)
+    {
+        return Err(ApiError::conflict(
+            "job_conflict",
+            "Retained backup completion is bound to different job metadata.",
+        ));
+    }
+    Ok(true)
 }
 
 fn job_state_name(state: JobState) -> &'static str {
@@ -2528,12 +2670,26 @@ struct ConnectProviderRequest {
     peer_transport: TransportBinding,
 }
 
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ProviderReachabilityResponse {
+    Reachable,
+    Unreachable,
+    Unknown,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProviderConnectionResponse {
     peer_id: DeviceId,
     address: SocketAddr,
     certificate_fingerprint: String,
+    reachability: ProviderReachabilityResponse,
+    observed_at_unix_ms: Option<u64>,
+    valid_until_unix_ms: Option<u64>,
+    usable_bytes: Option<u64>,
+    allocated_bytes: Option<u64>,
+    quota_bytes: Option<u64>,
 }
 
 async fn connect_provider(
@@ -2578,19 +2734,17 @@ async fn connect_provider(
             "Signed provider address is not a valid socket address.",
         )
     })?;
-    let response = ProviderConnectionResponse {
+    let connection = ProviderConnection {
         peer_id: trusted.peer_id,
         address,
-        certificate_fingerprint: fingerprint,
+        certificate_der: trusted.certificate_der,
     };
     state
-        .connect_provider(ProviderConnection {
-            peer_id: trusted.peer_id,
-            address,
-            certificate_der: trusted.certificate_der,
-        })
+        .connect_provider(connection.clone())
         .map_err(ApiError::from_core)?;
-    Ok(axum::Json(response))
+    Ok(axum::Json(
+        probe_provider_connection(state, connection).await?,
+    ))
 }
 
 #[derive(Deserialize)]
@@ -2616,22 +2770,109 @@ async fn list_providers(
     headers: HeaderMap,
 ) -> Result<axum::Json<Vec<ProviderConnectionResponse>>, ApiError> {
     authorize(&state, &headers)?;
-    let configs = state
+    let configs: Vec<_> = state
         .provider_connections
         .lock()
-        .map_err(|_| ApiError::from_core(CoreError::Synchronization))?;
+        .map_err(|_| ApiError::from_core(CoreError::Synchronization))?
+        .values()
+        .cloned()
+        .collect();
     let mut providers = Vec::with_capacity(configs.len());
-    for config in configs.values() {
-        let certificate = URL_SAFE_NO_PAD
-            .decode(&config.certificate_der)
-            .map_err(|_| ApiError::internal("stored provider certificate is invalid"))?;
-        providers.push(ProviderConnectionResponse {
-            peer_id: config.peer_id,
-            address: config.address,
-            certificate_fingerprint: sha256_hex(&certificate),
-        });
+    // A remembered endpoint is not capacity evidence. Probe every provider on this
+    // request, but retain a bounded concurrency level so an offline roster cannot
+    // consume the blocking worker pool.
+    for batch in configs.chunks(16) {
+        let mut probes = tokio::task::JoinSet::new();
+        for config in batch.iter().cloned() {
+            let probe_state = state.clone();
+            probes.spawn_blocking(move || probe_provider_connection_blocking(&probe_state, config));
+        }
+        while let Some(result) = probes.join_next().await {
+            let response = result
+                .map_err(|_| ApiError::internal("provider capacity probe did not complete"))??;
+            providers.push(response);
+        }
     }
+    providers.sort_by_key(|provider| provider.peer_id);
     Ok(axum::Json(providers))
+}
+
+async fn probe_provider_connection(
+    state: AppState,
+    config: ProviderConnection,
+) -> Result<ProviderConnectionResponse, ApiError> {
+    tokio::task::spawn_blocking(move || probe_provider_connection_blocking(&state, config))
+        .await
+        .map_err(|_| ApiError::internal("provider capacity probe did not complete"))?
+}
+
+fn probe_provider_connection_blocking(
+    state: &AppState,
+    config: ProviderConnection,
+) -> Result<ProviderConnectionResponse, ApiError> {
+    let certificate = URL_SAFE_NO_PAD
+        .decode(&config.certificate_der)
+        .map_err(|_| ApiError::internal("stored provider certificate is invalid"))?;
+    let base = ProviderConnectionResponse {
+        peer_id: config.peer_id,
+        address: config.address,
+        certificate_fingerprint: sha256_hex(&certificate),
+        reachability: ProviderReachabilityResponse::Unknown,
+        observed_at_unix_ms: None,
+        valid_until_unix_ms: None,
+        usable_bytes: None,
+        allocated_bytes: None,
+        quota_bytes: None,
+    };
+    let Ok(binding) = state
+        .engine
+        .trusted_peer_transport(config.peer_id, PeerRole::StorageProvider)
+    else {
+        return Ok(base);
+    };
+    if binding.address != config.address.to_string()
+        || binding.certificate_der != config.certificate_der
+        || binding.certificate_fingerprint != base.certificate_fingerprint
+    {
+        return Ok(base);
+    }
+    let Ok(identity) = state
+        .engine
+        .authorized_peer(config.peer_id, PeerRole::StorageProvider)
+    else {
+        return Ok(base);
+    };
+    let Ok(provider) = transport::QuicProvider::new(
+        config.address,
+        identity,
+        certificate,
+        Arc::clone(&state.engine),
+    ) else {
+        return Ok(base);
+    };
+    let Ok(capability) = provider.probe_capability() else {
+        return Ok(ProviderConnectionResponse {
+            reachability: ProviderReachabilityResponse::Unreachable,
+            ..base
+        });
+    };
+    let reconciles = capability
+        .allocated_bytes
+        .checked_add(capability.reserved_bytes)
+        .and_then(|bytes| bytes.checked_add(capability.usable_bytes))
+        .is_some_and(|bytes| bytes == capability.quota_bytes);
+    if !reconciles {
+        return Ok(base);
+    }
+    Ok(ProviderConnectionResponse {
+        reachability: ProviderReachabilityResponse::Reachable,
+        observed_at_unix_ms: Some(capability.observed_at_unix_ms),
+        valid_until_unix_ms: Some(capability.valid_until_unix_ms),
+        usable_bytes: Some(capability.usable_bytes),
+        allocated_bytes: Some(capability.allocated_bytes),
+        quota_bytes: Some(capability.quota_bytes),
+        ..base
+    })
 }
 
 async fn current_roster(
@@ -2722,8 +2963,18 @@ async fn backup(
     State(state): State<AppState>,
     headers: HeaderMap,
     ContractJson(request): ContractJson<BackupRequest>,
-) -> Result<axum::Json<BackupResponse>, ApiError> {
+) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
+    if !valid_job_identifier(&request.job_id) {
+        return Err(ApiError::bad_request(
+            "invalid_job_id",
+            "The job ID is invalid.",
+        ));
+    }
+    let retained_backup_id = state
+        .engine
+        .unacknowledged_backup_id(&request.job_id)
+        .map_err(ApiError::from_core)?;
     let admission = state.admit_engine_job()?;
     let engine = Arc::clone(&state.engine);
     let job_id = request.job_id.clone();
@@ -2731,7 +2982,7 @@ async fn backup(
     let control = lease.control();
     let result = tokio::task::spawn_blocking(move || {
         let _admission = admission;
-        let backup_id = request.backup_id.unwrap_or_default();
+        let backup_id = request.backup_id.or(retained_backup_id).unwrap_or_default();
         let mut options = BackupOptions::new(backup_id, request.snapshot_id, request.job_id);
         options.display_name = request.display_name;
         options.created_at_unix_ms = now_unix_ms();
@@ -2761,7 +3012,7 @@ async fn backup(
         }
     }
     let result = result.map_err(ApiError::from_core)?;
-    Ok(axum::Json(BackupResponse {
+    Ok(acknowledgement_required_json(BackupResponse {
         backup_id: result.0,
         snapshot_id: result.1.manifest.snapshot_id.clone(),
         entries: result.1.manifest.entries.len(),
@@ -5705,6 +5956,10 @@ impl ApiError {
                 retryable: false,
                 upload_offset: None,
             },
+            CoreError::JobConflict => Self::conflict(
+                "job_conflict",
+                "The job ID is already bound to a different completed request.",
+            ),
             CoreError::Cancelled => Self {
                 status: StatusCode::CONFLICT,
                 code: "job_cancelled",
@@ -5872,7 +6127,7 @@ impl ApiError {
         match refusal {
             ClaimRefusal::AlreadyClaimed => Self::conflict(
                 "claim_unavailable",
-                "This backup server already has an owner, so it cannot be set up again.",
+                "This backup server already has an owner, and this is not its original claim request.",
             ),
             ClaimRefusal::WindowClosed(ClaimClosure::Expired) => Self {
                 status: StatusCode::GONE,
@@ -5912,6 +6167,15 @@ impl ApiError {
                 code: "claim_certificate_unavailable",
                 message: "This backup server is still preparing its security certificate. \
                           Wait a few seconds and try again.",
+                retryable: true,
+                upload_offset: None,
+            },
+            ClaimRefusal::OwnershipStateUnavailable => Self {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                code: "claim_state_unavailable",
+                message: "This backup server could not finish recording ownership. No token was \
+                          released. Preserve and retry the exact saved claim request; restart \
+                          Covalent only if that retry remains unavailable.",
                 retryable: true,
                 upload_offset: None,
             },
@@ -6070,7 +6334,7 @@ mod tests {
 
     use axum::body::Body;
     use axum::http::Request;
-    use covalent_core::EngineOptions;
+    use covalent_core::{EngineOptions, StaticKeyProtector};
     use http_body_util::BodyExt;
     use tempfile::TempDir;
     use tower::ServiceExt;
@@ -6080,9 +6344,60 @@ mod tests {
     const TEST_TOKEN: &str = "test-local-api-token-with-at-least-32-bytes";
 
     fn test_state(directory: &TempDir) -> AppState {
-        let engine =
-            Arc::new(Engine::open(EngineOptions::new(directory.path())).expect("test engine"));
+        let options = EngineOptions::new(directory.path()).with_key_protector(Arc::new(
+            StaticKeyProtector::new(1, [0x27; 32]).expect("test protector"),
+        ));
+        let engine = Arc::new(Engine::open(options).expect("test engine"));
         AppState::new(engine, PlatformTier::Tier1, TEST_TOKEN.to_owned()).expect("state")
+    }
+
+    #[tokio::test]
+    async fn provider_list_marks_an_unverifiable_remembered_endpoint_unknown_without_capacity() {
+        let directory = TempDir::new().expect("directory");
+        let state = test_state(&directory);
+        let peer_id = DeviceId::new();
+        state
+            .provider_connections
+            .lock()
+            .expect("connections")
+            .insert(
+                peer_id,
+                ProviderConnection {
+                    peer_id,
+                    address: "127.0.0.1:8788".parse().expect("address"),
+                    certificate_der: URL_SAFE_NO_PAD.encode([7_u8; 32]),
+                },
+            );
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/providers")
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let providers: serde_json::Value = serde_json::from_slice(&body).expect("provider list");
+        let provider = providers[0].as_object().expect("provider object");
+        assert_eq!(provider["peerId"], peer_id.to_string());
+        assert_eq!(provider["reachability"], "unknown");
+        for key in [
+            "observedAtUnixMs",
+            "validUntilUnixMs",
+            "usableBytes",
+            "allocatedBytes",
+            "quotaBytes",
+        ] {
+            assert!(provider[key].is_null(), "{key} must fail closed");
+        }
     }
 
     fn upload_sha256(bytes: &[u8]) -> String {
@@ -6137,6 +6452,96 @@ mod tests {
         assert!(path.exists());
         remove_node_ready_file(&path, 42).expect("remove matching owner");
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn persisted_local_api_token_is_wrapped_path_bound_and_wrong_key_safe() {
+        let first = TempDir::new().expect("first state root");
+        let second = TempDir::new().expect("second state root");
+        let path = first.path().join("local-api-token");
+        let protector = StaticKeyProtector::new(1, [0x41; 32]).expect("local API token protector");
+        let token = load_or_create_local_api_token(&path, first.path(), &protector)
+            .expect("create protected token");
+        let protected_bytes = fs::read(&path).expect("protected token record");
+        assert!(
+            !protected_bytes
+                .windows(token.len())
+                .any(|window| window == token.as_bytes()),
+            "the persisted record must not contain the bearer token"
+        );
+        let reopened = load_or_create_local_api_token(&path, first.path(), &protector)
+            .expect("reopen protected token");
+        assert_eq!(*reopened, *token);
+
+        let wrong = StaticKeyProtector::new(1, [0x42; 32]).expect("wrong protector");
+        assert!(load_or_create_local_api_token(&path, first.path(), &wrong).is_err());
+        assert_eq!(
+            fs::read(&path).expect("wrong key left record intact"),
+            protected_bytes
+        );
+
+        let copied = second.path().join("local-api-token");
+        fs::write(&copied, &protected_bytes).expect("copy protected token record");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&copied, fs::Permissions::from_mode(0o600))
+                .expect("protect copied token record");
+        }
+        assert!(load_or_create_local_api_token(&copied, second.path(), &protector).is_err());
+        assert_eq!(
+            fs::read(&copied).expect("path mismatch left record intact"),
+            protected_bytes
+        );
+    }
+
+    #[test]
+    fn private_plaintext_local_api_token_migrates_atomically() {
+        let directory = TempDir::new().expect("state root");
+        let path = directory.path().join("local-api-token");
+        let plaintext = "legacy-local-api-token-with-at-least-thirty-two-bytes";
+        fs::write(&path, format!("{plaintext}\n")).expect("legacy token");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+                .expect("protect legacy token");
+        }
+        let protector = StaticKeyProtector::new(3, [0x43; 32]).expect("migration protector");
+        let loaded = load_or_create_local_api_token(&path, directory.path(), &protector)
+            .expect("migrate plaintext token");
+        assert_eq!(*loaded, plaintext);
+        let persisted = fs::read(&path).expect("migrated record");
+        assert!(
+            !persisted
+                .windows(plaintext.len())
+                .any(|window| window == plaintext.as_bytes())
+        );
+        let reopened = load_or_create_local_api_token(&path, directory.path(), &protector)
+            .expect("reopen migrated token");
+        assert_eq!(*reopened, plaintext);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_api_token_read_refuses_a_symlink_without_changing_its_target() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        let directory = TempDir::new().expect("state root");
+        let target = directory.path().join("outside-token");
+        let path = directory.path().join("local-api-token");
+        let plaintext = b"outside-local-api-token-with-at-least-thirty-two-bytes\n";
+        fs::write(&target, plaintext).expect("outside token");
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600))
+            .expect("protect outside token");
+        symlink(&target, &path).expect("token symlink");
+        let protector = StaticKeyProtector::new(1, [0x44; 32]).expect("protector");
+
+        assert!(load_or_create_local_api_token(&path, directory.path(), &protector).is_err());
+        assert_eq!(
+            fs::read(target).expect("outside target unchanged"),
+            plaintext
+        );
     }
 
     #[tokio::test]
@@ -6290,6 +6695,8 @@ mod tests {
             "/assets/app.js",
             "/assets/pairing-flow.js",
             "/assets/restore-plan-flow.js",
+            "/assets/backup-terminal-flow.js",
+            "/assets/tab-flow.js",
         ] {
             let response = app
                 .clone()
@@ -6597,6 +7004,176 @@ mod tests {
             .await
             .expect("valid response");
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn normal_backup_results_require_ack_and_retry_exactly_across_restart() {
+        let directory = TempDir::new().expect("directory");
+        let source = TempDir::new().expect("source");
+        fs::write(source.path().join("content.txt"), b"normal terminal result")
+            .expect("source content");
+        let request_body = serde_json::json!({
+            "sourceRoot": source.path(),
+            "displayName": "Normal backup",
+            "snapshotId": "normal-snapshot-1",
+            "jobId": "normal-terminal-job",
+            "selectedProviderIds": []
+        })
+        .to_string();
+
+        let app = router(test_state(&directory));
+        let first = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/backups")
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(request_body.clone()))
+                    .expect("request"),
+            )
+            .await
+            .expect("first response");
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(first.headers()[JOB_ACK_REQUIRED_HEADER], "true");
+        let first_body = first
+            .into_body()
+            .collect()
+            .await
+            .expect("first body")
+            .to_bytes();
+        let first_json: serde_json::Value =
+            serde_json::from_slice(&first_body).expect("first JSON");
+        assert!(first_json["backupId"].as_str().is_some());
+        let receipt = directory
+            .path()
+            .join("backup-results/normal-terminal-job.json");
+        assert!(receipt.is_file());
+
+        let app = router(test_state(&directory));
+        let retry = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/backups")
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(request_body))
+                    .expect("retry request"),
+            )
+            .await
+            .expect("retry response");
+        assert_eq!(retry.status(), StatusCode::OK);
+        assert_eq!(retry.headers()[JOB_ACK_REQUIRED_HEADER], "true");
+        assert_eq!(
+            retry
+                .into_body()
+                .collect()
+                .await
+                .expect("retry body")
+                .to_bytes(),
+            first_body
+        );
+
+        let conflict = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/backups")
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "sourceRoot": source.path(),
+                            "displayName": "Changed request",
+                            "snapshotId": "normal-snapshot-1",
+                            "jobId": "normal-terminal-job",
+                            "selectedProviderIds": []
+                        })
+                        .to_string(),
+                    ))
+                    .expect("conflict request"),
+            )
+            .await
+            .expect("conflict response");
+        assert_contract_error(conflict, StatusCode::CONFLICT, "job_conflict", false).await;
+        assert!(receipt.is_file());
+
+        for job_id in ["normal-terminal-job", "normal-terminal-job"] {
+            let acknowledged = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/v1/jobs/acknowledge")
+                        .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::json!({ "jobId": job_id }).to_string(),
+                        ))
+                        .expect("acknowledge request"),
+                )
+                .await
+                .expect("acknowledge response");
+            assert_eq!(acknowledged.status(), StatusCode::NO_CONTENT);
+        }
+        assert!(!receipt.exists());
+
+        for index in 0..=covalent_core::MAX_UNACKNOWLEDGED_BACKUP_RESULTS {
+            let job_id = format!("normal-ack-window-{index}");
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/v1/backups")
+                        .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "sourceRoot": source.path(),
+                                "displayName": format!("Acknowledged {index}"),
+                                "snapshotId": format!("normal-ack-snapshot-{index}"),
+                                "jobId": job_id,
+                                "selectedProviderIds": []
+                            })
+                            .to_string(),
+                        ))
+                        .expect("backup request"),
+                )
+                .await
+                .expect("backup response");
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()[JOB_ACK_REQUIRED_HEADER], "true");
+            let _: BackupResponse = serde_json::from_slice(
+                &response
+                    .into_body()
+                    .collect()
+                    .await
+                    .expect("backup body")
+                    .to_bytes(),
+            )
+            .expect("accepted backup response");
+
+            let acknowledged = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/v1/jobs/acknowledge")
+                        .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::json!({ "jobId": job_id }).to_string(),
+                        ))
+                        .expect("acknowledge request"),
+                )
+                .await
+                .expect("acknowledge response");
+            assert_eq!(acknowledged.status(), StatusCode::NO_CONTENT);
+        }
     }
 
     #[tokio::test]
@@ -7062,6 +7639,7 @@ mod tests {
     async fn streamed_archive_bridge_never_requires_a_daemon_visible_android_path() {
         let directory = TempDir::new().expect("directory");
         let state = test_state(&directory);
+        let engine = Arc::clone(&state.engine);
         let archive_root = state.archive_restore_root.clone();
         let archive_backup_root = state.archive_backup_root.clone();
         let app = router(state);
@@ -7307,6 +7885,30 @@ mod tests {
                 .is_file()
         );
 
+        let unrelated_source = TempDir::new().expect("unrelated source");
+        fs::write(
+            unrelated_source.path().join("file"),
+            b"unrelated terminal result",
+        )
+        .expect("unrelated source file");
+        let unrelated_job_id = "unrelated-terminal-result";
+        engine
+            .backup(
+                unrelated_source.path(),
+                &BackupOptions::new(BackupId::new(), "0001", unrelated_job_id),
+                &JobControl::new(),
+                |_| {},
+            )
+            .expect("unrelated backup result");
+        let backup_receipt = directory
+            .path()
+            .join("backup-results/android-saf-backup-job.json");
+        let unrelated_receipt = directory
+            .path()
+            .join(format!("backup-results/{unrelated_job_id}.json"));
+        assert!(backup_receipt.is_file());
+        assert!(unrelated_receipt.is_file());
+
         for job_id in ["android-saf-restore-job", "android-saf-backup-job"] {
             let acknowledge = app
                 .clone()
@@ -7323,8 +7925,26 @@ mod tests {
                 )
                 .await
                 .expect("acknowledge response");
-            assert_eq!(acknowledge.status(), StatusCode::NO_CONTENT);
+            let acknowledge_status = acknowledge.status();
+            let acknowledge_body = acknowledge
+                .into_body()
+                .collect()
+                .await
+                .expect("acknowledge body")
+                .to_bytes();
+            assert_eq!(
+                acknowledge_status,
+                StatusCode::NO_CONTENT,
+                "{}",
+                String::from_utf8_lossy(&acknowledge_body)
+            );
+            if job_id == "android-saf-restore-job" {
+                assert!(backup_receipt.is_file());
+                assert!(unrelated_receipt.is_file());
+            }
         }
+        assert!(!backup_receipt.exists());
+        assert!(unrelated_receipt.is_file());
         assert!(!archive_root.join("android-saf-restore-job").exists());
         assert!(!archive_backup_root.join("android-saf-backup-job").exists());
     }

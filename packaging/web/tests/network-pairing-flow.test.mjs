@@ -89,6 +89,33 @@ test("cancelling deletes exactly the named request", async () => {
   assert.deepEqual(calls, [{ path: "/api/v1/pair/network/pair-42", method: "DELETE", body: null }]);
 });
 
+test("dismissing settled cards deletes retained requests, including already-removed records", async () => {
+  const retained = new Set();
+  for (let index = 0; index < 65; index += 1) retained.add(`pair-${index}`);
+  const calls = [];
+  const api = async (path, options = {}) => {
+    calls.push({ path, method: options.method ?? "GET" });
+    const pairingId = decodeURIComponent(path.split("/").at(-1));
+    if (!retained.delete(pairingId)) {
+      const error = new Error("not retained");
+      error.status = 404;
+      throw error;
+    }
+    return null;
+  };
+
+  // Each settled card invokes DELETE. After a simulated page restart, pending
+  // is empty rather than reintroducing completed/failed cards into the bounded
+  // retained pairing queue.
+  for (let index = 0; index < 65; index += 1) await network.dismiss(api, `pair-${index}`);
+  await network.dismiss(api, "pair-0");
+  assert.equal(retained.size, 0);
+  assert.equal(calls.filter((call) => call.method === "DELETE").length, 66);
+
+  const restarted = await network.pending(async () => [...retained].map((pairingId) => pendingItem({ pairingId })));
+  assert.deepEqual(restarted, []);
+});
+
 test("a pairing identifier can never widen the path it is spliced into", async () => {
   const hostile = ["../../status", "pair/42", "pair 42", "", "x".repeat(129), "a?b", null, 42];
   for (const pairingId of hostile) {

@@ -22,6 +22,43 @@ function acceptedSession() {
   };
 }
 
+function persistableSession() {
+  return {
+    invitation: {
+      protocolVersion: 1,
+      minimumProtocolVersion: 1,
+      inviterDeviceId: "11111111-1111-1111-1111-111111111111",
+      inviterPublicKey: "inviter-public-key",
+      inviterDeviceName: "Home Mac",
+      invitationId: "invitation-id",
+      invitationSecret: "pending-invitation-secret",
+      invitationSecretCommitment: "secret-commitment",
+      expiresAtUnixMs: 2_000_000_000_000,
+      endpoints: ["node-a.tailnet.ts.net:8787"],
+      signature: "invitation-signature",
+    },
+    responderDeviceId: "22222222-2222-2222-2222-222222222222",
+    responderPublicKey: "responder-public-key",
+    responderName: "Unraid",
+    responderRoles: ["storage_provider", "backup_reader"],
+    inviterRoles: ["backup_writer"],
+    authenticationString: "amber maple river",
+    responderAcceptanceSignature: "acceptance-signature",
+    responderConfirmationSignature: "responder-confirmation",
+    inviterConfirmationSignature: "inviter-confirmation",
+  };
+}
+
+function memoryStorage() {
+  const values = new Map();
+  return {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+    removeItem: (key) => values.delete(key),
+    has: (key) => values.has(key),
+  };
+}
+
 test("two browser roles exchange both signed confirmations before finalizing", async () => {
   const calls = [];
   const api = async (path, options) => {
@@ -87,4 +124,65 @@ test("role and identity summary exposes exact consent on both sides", () => {
     roles: "storage_provider, backup_reader",
     confirmed: false,
   });
+});
+
+test("tab storage retains only the bounded signed pairing exchange", () => {
+  const storage = memoryStorage();
+  const key = "covalent.pairing-session.v1";
+  const session = persistableSession();
+  assert.equal(pairing.storage.saveTabSession(storage, key, session), true);
+  assert.deepEqual(pairing.storage.loadTabSession(storage, key), session);
+
+  const leaked = { ...session, bearerToken: "must-not-persist" };
+  assert.equal(pairing.storage.saveTabSession(storage, key, leaked), false);
+  assert.equal(storage.has(key), false);
+});
+
+test("expired, malformed, and tampered tab data is cleared before it can resume", () => {
+  const storage = memoryStorage();
+  const key = "covalent.pairing-session.v1";
+  const expired = persistableSession();
+  expired.invitation.expiresAtUnixMs = 1;
+  storage.setItem(key, JSON.stringify(expired));
+  assert.equal(pairing.storage.loadTabSession(storage, key), null);
+  assert.equal(storage.has(key), false);
+
+  storage.setItem(key, "{not json");
+  assert.equal(pairing.storage.loadTabSession(storage, key), null);
+  assert.equal(storage.has(key), false);
+
+  const tampered = persistableSession();
+  tampered.invitation.transportBinding = { peerId: "peer", bearerToken: "extra field" };
+  storage.setItem(key, JSON.stringify(tampered));
+  assert.equal(pairing.storage.loadTabSession(storage, key), null);
+  assert.equal(storage.has(key), false);
+});
+
+test("pending exchanges, terminal exchanges, and oversized values never remain in tab storage", () => {
+  const storage = memoryStorage();
+  const key = "covalent.pairing-session.v1";
+  const pending = persistableSession();
+  pending.responderConfirmationSignature = null;
+  pending.inviterConfirmationSignature = null;
+  assert.equal(pairing.storage.saveTabSession(storage, key, pending), false);
+  assert.equal(storage.has(key), false);
+
+  const confirmed = persistableSession();
+  assert.equal(pairing.storage.saveTabSession(storage, key, confirmed), true);
+  pairing.storage.clearTabSession(storage, key);
+  assert.equal(pairing.storage.loadTabSession(storage, key), null);
+
+  storage.setItem(key, "x".repeat(64 * 1024 + 1));
+  assert.equal(pairing.storage.loadTabSession(storage, key), null);
+  assert.equal(storage.has(key), false);
+});
+
+test("tab storage rejects bearer, setup-code, and private-material fields", () => {
+  const storage = memoryStorage();
+  const key = "covalent.pairing-session.v1";
+  for (const forbidden of ["bearerToken", "setupCode", "certificatePrivateKey"]) {
+    const session = { ...persistableSession(), [forbidden]: "must-not-persist" };
+    assert.equal(pairing.storage.saveTabSession(storage, key, session), false, forbidden);
+    assert.equal(storage.has(key), false, forbidden);
+  }
 });

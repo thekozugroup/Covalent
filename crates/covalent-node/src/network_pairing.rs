@@ -364,7 +364,7 @@ impl NetworkPairingManager {
     ///   smaller number than the one already on disk, and `floor_advanced` is a
     ///   strict increase, so a backwards clock performs no write at all.
     /// * The value admission is checked against is derived from the stored one
-    ///   by [`effective_request_floor`], which clamps only in the region where
+    ///   by `effective_request_floor`, which clamps only in the region where
     ///   the stored floor already refuses everything anyway. That clamp is never
     ///   persisted, and it never admits a request the unclamped floor would have
     ///   refused; see that function for the argument.
@@ -1412,11 +1412,24 @@ mod tests {
 
     use base64::Engine as _;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use covalent_core::EngineOptions;
+    use covalent_core::{EngineOptions, KeyProtector, StaticKeyProtector};
     use tempfile::tempdir;
 
     use super::*;
     use crate::transport::TlsIdentity;
+
+    fn test_protector() -> Arc<dyn KeyProtector> {
+        Arc::new(StaticKeyProtector::new(1, [0xb1; 32]).expect("test protector"))
+    }
+
+    fn test_options(path: &Path) -> EngineOptions {
+        EngineOptions::new(path).with_key_protector(test_protector())
+    }
+
+    fn test_tls(root: &Path) -> TlsIdentity {
+        let protector = test_protector();
+        TlsIdentity::load_or_create(root.join("tls"), root, protector.as_ref()).expect("TLS")
+    }
 
     #[test]
     fn candidate_route_policy_accepts_lan_tailnet_and_ipv6_but_gates_public() {
@@ -1446,7 +1459,7 @@ mod tests {
         Arc::new(
             Engine::open(EngineOptions {
                 initial_device_name: name.to_owned(),
-                ..EngineOptions::new(directory)
+                ..test_options(directory)
             })
             .expect("engine"),
         )
@@ -1473,8 +1486,8 @@ mod tests {
         let second_dir = tempdir().expect("second");
         let first = named_engine(first_dir.path(), "First");
         let second = named_engine(second_dir.path(), "Second");
-        let first_tls = TlsIdentity::load_or_create(first_dir.path().join("tls")).expect("TLS");
-        let second_tls = TlsIdentity::load_or_create(second_dir.path().join("tls")).expect("TLS");
+        let first_tls = test_tls(first_dir.path());
+        let second_tls = test_tls(second_dir.path());
         let first_address: SocketAddr = "127.0.0.1:41001".parse().expect("address");
         let second_address: SocketAddr = "127.0.0.1:41002".parse().expect("address");
         let first_binding = binding(&first, &first_tls, first_address, "First");
@@ -1552,8 +1565,8 @@ mod tests {
         let second_dir = tempdir().expect("second");
         let first = named_engine(first_dir.path(), "First");
         let second = named_engine(second_dir.path(), "Second");
-        let first_tls = TlsIdentity::load_or_create(first_dir.path().join("tls")).expect("TLS");
-        let second_tls = TlsIdentity::load_or_create(second_dir.path().join("tls")).expect("TLS");
+        let first_tls = test_tls(first_dir.path());
+        let second_tls = test_tls(second_dir.path());
         let first_address: SocketAddr = "127.0.0.1:42001".parse().expect("address");
         let second_address: SocketAddr = "127.0.0.1:42002".parse().expect("address");
         let invitation = second
@@ -1597,7 +1610,7 @@ mod tests {
     #[test]
     fn signed_wire_request_verifies_once_and_rejects_replay_skew_and_tampering() {
         let dir = tempdir().expect("dir");
-        let engine = Arc::new(Engine::open(EngineOptions::new(dir.path())).expect("engine"));
+        let engine = Arc::new(Engine::open(test_options(dir.path())).expect("engine"));
         let now = 1_700_000_000_000_u64;
         // Opened one millisecond before the requests below are issued, which is
         // what a node serving them looks like: the replay floor is behind them.
@@ -1717,7 +1730,7 @@ mod tests {
     #[test]
     fn a_flood_of_wire_requests_no_longer_rewrites_the_state_file() {
         let dir = tempdir().expect("dir");
-        let engine = Arc::new(Engine::open(EngineOptions::new(dir.path())).expect("engine"));
+        let engine = Arc::new(Engine::open(test_options(dir.path())).expect("engine"));
         let path = dir.path().join("network-pairing.json");
         let now = 1_700_000_000_000_u64;
         let manager = NetworkPairingManager::open_at(Arc::clone(&engine), path.clone(), now - 1)
@@ -1754,7 +1767,7 @@ mod tests {
     #[test]
     fn a_restart_keeps_consent_durable_and_closes_the_replay_window_it_opens() {
         let dir = tempdir().expect("dir");
-        let engine = Arc::new(Engine::open(EngineOptions::new(dir.path())).expect("engine"));
+        let engine = Arc::new(Engine::open(test_options(dir.path())).expect("engine"));
         let path = dir.path().join("network-pairing.json");
         let now = 1_700_000_000_000_u64;
         let manager = NetworkPairingManager::open_at(Arc::clone(&engine), path.clone(), now - 1)
@@ -1806,7 +1819,7 @@ mod tests {
     #[test]
     fn the_replay_floor_never_moves_backwards_but_recovers_from_a_forward_glitch() {
         let dir = tempdir().expect("dir");
-        let engine = Arc::new(Engine::open(EngineOptions::new(dir.path())).expect("engine"));
+        let engine = Arc::new(Engine::open(test_options(dir.path())).expect("engine"));
         let path = dir.path().join("network-pairing.json");
         let now = 1_700_000_000_000_u64;
 
@@ -1857,7 +1870,7 @@ mod tests {
     #[test]
     fn a_clock_stepped_back_beyond_the_skew_window_cannot_lower_the_durable_floor() {
         let dir = tempdir().expect("dir");
-        let engine = Arc::new(Engine::open(EngineOptions::new(dir.path())).expect("engine"));
+        let engine = Arc::new(Engine::open(test_options(dir.path())).expect("engine"));
         let path = dir.path().join("network-pairing.json");
         let now = 1_700_000_000_000_u64;
 

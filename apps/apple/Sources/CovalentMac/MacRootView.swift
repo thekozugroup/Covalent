@@ -13,7 +13,13 @@ struct MacRootView: View {
                 List(AppSection.allCases, selection: $selectedSection) { section in
                     Label(section.label, systemImage: section.systemImage)
                         .tag(section)
-                        .foregroundStyle(.primary)
+                        // Sidebar rows are rendered through AppKit vibrancy.
+                        // Use opaque appearance-aware ink for unselected rows;
+                        // the selected row keeps the required white-on-blue
+                        // treatment explicitly instead of relying on semantic
+                        // `.primary` blending.
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(section == selectedSection ? Color.white : MacLabelColor.sidebarUnselected)
                         .accessibilityIdentifier("sidebar.\(section.rawValue)")
                 }
                 .listStyle(.sidebar)

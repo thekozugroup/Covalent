@@ -1,0 +1,317 @@
+name: Covalent CLI release
+
+# A standalone, source-free install lane for the trusted claim client. It
+# never publishes a release asset until all three native artifacts, their
+# architecture/size checks, inventories, SBOMs, keyless signatures, and
+# attestations have succeeded and been re-verified together.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing v-prefixed version for this exact signed tag commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  checks: read
+  security-events: read
+
+concurrency:
+  group: covalent-cli-release-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Verify signed source and exact-commit release gates
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            version="${INPUT_VERSION}"
+          fi
+          if [[ ! "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "release version must be an explicit v-prefixed semantic version" >&2
+            exit 1
+          fi
+          if [[ "${GITHUB_REF}" != "refs/tags/${version}" || "${GITHUB_REF_TYPE}" != "tag" ]]; then
+            echo "run this workflow from refs/tags/${version}; publication and Cosign identity require the exact signed tag ref" >&2
+            exit 1
+          fi
+          workspace_version=$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)
+          test "${version#v}" = "${workspace_version}"
+          test "$(git rev-list -n 1 "${version}")" = "${GITHUB_SHA}"
+          checks=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100")
+          for required in "Shared Rust and contracts" "macOS integration and UI" "macOS app bundle" "Android foundation" "Android API 37 device" "Container foundation" "Container arm64 image" "CodeQL java-kotlin" "CodeQL swift" "CodeQL policy" "Release candidate software gates"; do
+            if ! jq -e --arg name "${required}" '[.check_runs[] | select(.name == $name)] | sort_by(.started_at // .created_at) | last | select(.status == "completed" and .conclusion == "success")' <<<"${checks}" >/dev/null; then
+              echo "latest required exact-commit check is not green: ${required}" >&2
+              exit 1
+            fi
+          done
+          ./scripts/release-version.sh check
+          RELEASE_VERSION="${version}" ./scripts/verify-release-commit-signature.sh
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+  build-linux:
+    name: Build and validate CLI ${{ matrix.platform }}
+    needs: validate
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux-amd64
+            rust_target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            runner_arch: x86_64
+          - platform: linux-arm64
+            rust_target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            runner_arch: aarch64
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+        with:
+          targets: ${{ matrix.rust_target }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Require the native release architecture
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "${{ matrix.runner_arch }}"
+      - name: Build the locked CLI
+        run: cargo build --locked --release -p covalent-cli --target "${{ matrix.rust_target }}"
+      - name: Package architecture-checked CLI and license inventory
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+          RUST_TARGET: ${{ matrix.rust_target }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          binary="target/${RUST_TARGET}/release/covalent"
+          ./scripts/package-cli-release.sh \
+            --binary "${binary}" --platform "${PLATFORM}" --version "${RELEASE_VERSION}" \
+            --output-dir release-assets
+          ./scripts/generate-cli-release-inventory.sh \
+            --binary "${binary}" --platform "${PLATFORM}" --version "${RELEASE_VERSION}" \
+            --output "release-assets/Covalent-${RELEASE_VERSION}-${PLATFORM}-inventory.json"
+      - name: Generate the CLI SBOM after artifact validation
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: release-assets
+          format: spdx-json
+          output-file: release-assets/Covalent-${{ needs.validate.outputs.version }}-${{ matrix.platform }}-sbom.spdx.json
+          upload-release-assets: false
+          upload-artifact: false
+      - name: Checksum the unsigned build handoff
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          archive="Covalent-${RELEASE_VERSION}-${PLATFORM}.tar.gz"
+          inventory="Covalent-${RELEASE_VERSION}-${PLATFORM}-inventory.json"
+          sbom="Covalent-${RELEASE_VERSION}-${PLATFORM}-sbom.spdx.json"
+          sums="Covalent-${RELEASE_VERSION}-${PLATFORM}-UNSIGNED-SHA256SUMS.txt"
+          (cd release-assets && shasum -a 256 "${archive}" "${inventory}" "${sbom}" > "${sums}")
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unsigned-covalent-cli-${{ matrix.platform }}-${{ github.sha }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 1
+
+  build-macos:
+    name: Build and validate CLI macOS arm64
+    needs: validate
+    runs-on: macos-26
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Require Apple Silicon
+        run: test "$(uname -m)" = arm64
+      - name: Build the locked Apple Silicon CLI
+        run: cargo build --locked --release -p covalent-cli --target aarch64-apple-darwin
+      - name: Package arm64-only CLI and license inventory
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          binary="target/aarch64-apple-darwin/release/covalent"
+          ./scripts/package-cli-release.sh \
+            --binary "${binary}" --platform macos-arm64 --version "${RELEASE_VERSION}" \
+            --output-dir release-assets
+          ./scripts/generate-cli-release-inventory.sh \
+            --binary "${binary}" --platform macos-arm64 --version "${RELEASE_VERSION}" \
+            --output "release-assets/Covalent-${RELEASE_VERSION}-macos-arm64-inventory.json"
+      - name: Generate the CLI SBOM after artifact validation
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: release-assets
+          format: spdx-json
+          output-file: release-assets/Covalent-${{ needs.validate.outputs.version }}-macos-arm64-sbom.spdx.json
+          upload-release-assets: false
+          upload-artifact: false
+      - name: Checksum the unsigned build handoff
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          platform=macos-arm64
+          archive="Covalent-${RELEASE_VERSION}-${platform}.tar.gz"
+          inventory="Covalent-${RELEASE_VERSION}-${platform}-inventory.json"
+          sbom="Covalent-${RELEASE_VERSION}-${platform}-sbom.spdx.json"
+          sums="Covalent-${RELEASE_VERSION}-${platform}-UNSIGNED-SHA256SUMS.txt"
+          (cd release-assets && shasum -a 256 "${archive}" "${inventory}" "${sbom}" > "${sums}")
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unsigned-covalent-cli-macos-arm64-${{ github.sha }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 1
+
+  sign-cli:
+    name: Verify handoff, then sign CLI ${{ matrix.platform }}
+    needs: [validate, build-linux, build-macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: true
+      matrix:
+        platform: [linux-amd64, linux-arm64, macos-arm64]
+    steps:
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: unsigned-covalent-cli-${{ matrix.platform }}-${{ github.sha }}
+          path: release-assets
+      - name: Verify the exact checksummed unsigned handoff
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          archive="Covalent-${RELEASE_VERSION}-${PLATFORM}.tar.gz"
+          inventory="Covalent-${RELEASE_VERSION}-${PLATFORM}-inventory.json"
+          sbom="Covalent-${RELEASE_VERSION}-${PLATFORM}-sbom.spdx.json"
+          unsigned_sums="Covalent-${RELEASE_VERSION}-${PLATFORM}-UNSIGNED-SHA256SUMS.txt"
+          expected_files=$(printf '%s\n' "${archive}" "${inventory}" "${sbom}" "${unsigned_sums}" | LC_ALL=C sort)
+          actual_files=$(find release-assets -mindepth 1 -maxdepth 1 -type f -exec basename {} \; | LC_ALL=C sort)
+          test "${actual_files}" = "${expected_files}"
+          test "$(find release-assets -mindepth 1 -maxdepth 1 ! -type f | wc -l | tr -d ' ')" = 0
+          (cd release-assets && shasum -a 256 -c "${unsigned_sums}")
+          jq -e --arg platform "${PLATFORM}" --arg version "${RELEASE_VERSION}" --arg commit "${GITHUB_SHA}" \
+            '.platform == $platform and .version == $version and .commit == $commit and (.packages | length > 0)' \
+            "release-assets/${inventory}" >/dev/null
+          jq -e 'type == "object"' "release-assets/${sbom}" >/dev/null
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+      - name: Sign only the verified handoff and attest its exact SBOM
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          archive="Covalent-${RELEASE_VERSION}-${PLATFORM}.tar.gz"
+          inventory="Covalent-${RELEASE_VERSION}-${PLATFORM}-inventory.json"
+          sbom="Covalent-${RELEASE_VERSION}-${PLATFORM}-sbom.spdx.json"
+          unsigned_sums="Covalent-${RELEASE_VERSION}-${PLATFORM}-UNSIGNED-SHA256SUMS.txt"
+          sums="Covalent-${RELEASE_VERSION}-${PLATFORM}-SHA256SUMS.txt"
+          rm -- "release-assets/${unsigned_sums}"
+          cosign sign-blob --yes --bundle "release-assets/${archive}.sigstore.json" \
+            "release-assets/${archive}"
+          cosign attest-blob --yes --type spdxjson --predicate "release-assets/${sbom}" \
+            --bundle "release-assets/${archive}.attestation.sigstore.json" \
+            "release-assets/${archive}"
+          (cd release-assets && shasum -a 256 \
+            "${archive}" "${inventory}" "${sbom}" \
+            "${archive}.sigstore.json" "${archive}.attestation.sigstore.json" > "${sums}")
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: signed-covalent-cli-${{ matrix.platform }}-${{ github.sha }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Re-verify and publish complete CLI release assets
+    needs: [validate, sign-cli]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: signed-covalent-cli-*
+          path: release-assets
+          merge-multiple: true
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+      - name: Verify complete asset set, checksums, signatures, and attestations
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd release-assets
+          test "$(find . -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 18
+          test "$(find . -mindepth 1 -maxdepth 1 ! -type f | wc -l | tr -d ' ')" = 0
+          certificate_identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/cli-release.yml@refs/tags/${RELEASE_VERSION}"
+          certificate_issuer=https://token.actions.githubusercontent.com
+          for platform in linux-amd64 linux-arm64 macos-arm64; do
+            archive="Covalent-${RELEASE_VERSION}-${platform}.tar.gz"
+            inventory="Covalent-${RELEASE_VERSION}-${platform}-inventory.json"
+            sbom="Covalent-${RELEASE_VERSION}-${platform}-sbom.spdx.json"
+            sums="Covalent-${RELEASE_VERSION}-${platform}-SHA256SUMS.txt"
+            test -f "${archive}"
+            test -f "${inventory}"
+            test -f "${sbom}"
+            test -f "${archive}.sigstore.json"
+            test -f "${archive}.attestation.sigstore.json"
+            test -f "${sums}"
+            shasum -a 256 -c "${sums}"
+            jq -e --arg platform "${platform}" --arg version "${RELEASE_VERSION}" --arg commit "${GITHUB_SHA}" \
+              '.platform == $platform and .version == $version and .commit == $commit and (.packages | length > 0)' \
+              "${inventory}" >/dev/null
+            cosign verify-blob --bundle "${archive}.sigstore.json" \
+              --certificate-identity "${certificate_identity}" \
+              --certificate-oidc-issuer "${certificate_issuer}" "${archive}"
+            ../scripts/verify-cli-release-attestation.sh \
+              "${archive}.attestation.sigstore.json" "${archive}" "${sbom}" \
+              "${certificate_identity}" "${certificate_issuer}"
+          done
+      - name: Publish only the complete verified set to the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          ./scripts/publish-release-assets.sh "${RELEASE_VERSION}" release-assets/*

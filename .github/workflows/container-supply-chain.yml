@@ -11,11 +11,13 @@ on:
         type: string
 
 permissions:
-  contents: write
-  checks: read
-  security-events: read
-  packages: write
-  id-token: write
+  contents: read
+
+concurrency:
+  # Every release ref shares one non-cancelling promotion boundary. Per-ref
+  # locking lets an older rerun race a newer release and roll latest backward.
+  group: container-release-${{ github.repository_id }}
+  cancel-in-progress: false
 
 env:
   IMAGE: ghcr.io/thekozugroup/covalent
@@ -24,13 +26,25 @@ jobs:
   validate:
     name: Validate source and release gates
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: read
     outputs:
       version: ${{ steps.release.outputs.version }}
+      image_version: ${{ steps.release.outputs.image_version }}
       publish_latest: ${{ steps.release.outputs.publish_latest }}
+      source_fingerprint: ${{ steps.docker-source.outputs.fingerprint }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
+      - name: Compute the exact Docker source fingerprint
+        id: docker-source
+        run: |
+          set -euo pipefail
+          fingerprint=$(./scripts/docker-source-fingerprint.sh . | sha256sum | awk '{print $1}')
+          [[ "${fingerprint}" =~ ^[0-9a-f]{64}$ ]]
+          echo "fingerprint=${fingerprint}" >> "${GITHUB_OUTPUT}"
       - id: release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -54,6 +68,10 @@ jobs:
             echo "tag does not resolve to the workflow commit" >&2
             exit 1
           fi
+          if [[ "${GITHUB_REF}" != "refs/tags/${version}" ]]; then
+            echo "run this workflow from refs/tags/${version}; the Cosign identity is pinned to the exact signed tag ref" >&2
+            exit 1
+          fi
           checks=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100")
           for required in "Shared Rust and contracts" "macOS integration and UI" "macOS app bundle" "Android foundation" "Android API 37 device" "Container foundation" "Container arm64 image" "CodeQL java-kotlin" "CodeQL swift" "CodeQL policy" "Release candidate software gates"; do
             if ! jq -e --arg name "${required}" '[.check_runs[] | select(.name == $name)] | sort_by(.started_at // .created_at) | last | select(.status == "completed" and .conclusion == "success")' <<<"${checks}" >/dev/null; then
@@ -62,8 +80,9 @@ jobs:
             fi
           done
           ./scripts/release-version.sh check
-          ./scripts/verify-release-commit-signature.sh
+          RELEASE_VERSION="${version}" ./scripts/verify-release-commit-signature.sh
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "image_version=${version#v}" >> "${GITHUB_OUTPUT}"
           if [[ "${version}" == *-* ]]; then
             echo "publish_latest=false" >> "${GITHUB_OUTPUT}"
           else
@@ -71,18 +90,19 @@ jobs:
           fi
 
   build-digests:
-    name: Build immutable ${{ matrix.platform }} digest
+    name: Build private ${{ matrix.platform }} Docker archive
     needs: validate
     # Each platform builds on a runner of that architecture. Both legs used to
     # share ubuntu-latest, so the arm64 leg was QEMU-emulated - the same
     # emulated Rust build that never once finished inside CI's arm64 job. A
     # release that has to survive that is a release waiting to time out.
     #
-    # Nothing about the evidence changes: each leg still pushes by digest with
-    # sbom and max provenance, and the digests are still merged, scanned,
-    # signed, and attested downstream. Only the machine each build runs on
-    # differs, and each now matches the image it produces.
+    # Each leg exports a single-platform Docker archive to Actions artifacts.
+    # Nothing reaches GHCR before both architectures have been scanned on the
+    # verifier runner. A failed scan therefore leaves no pullable digest or tag.
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: true
       matrix:
@@ -95,125 +115,504 @@ jobs:
             runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Verify the release Docker source before building
+        run: |
+          set -euo pipefail
+          fingerprint=$(./scripts/docker-source-fingerprint.sh . | sha256sum | awk '{print $1}')
+          [[ "${fingerprint}" =~ ^[0-9a-f]{64}$ ]]
+          test "${fingerprint}" = "${{ needs.validate.outputs.source_fingerprint }}"
       # No setup-qemu-action: every leg now builds its own native platform.
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - id: build
+      - name: Build a non-registry archive for the private scan
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: packaging/docker/Dockerfile
           platforms: ${{ matrix.platform }}
-          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
-          build-args: VCS_REF=${{ github.sha }}
-          sbom: true
-          provenance: mode=max
-      - run: |
-          mkdir -p "${RUNNER_TEMP}/digests"
-          digest="${{ steps.build.outputs.digest }}"
-          touch "${RUNNER_TEMP}/digests/${digest#sha256:}"
+          tags: covalent-private:${{ matrix.artifact }}
+          # This archive is local workflow evidence, not a registry image.
+          # Docker's native archive format is deliberately used because it is
+          # unambiguously consumable by `docker load` on the scan runner.
+          outputs: type=docker,dest=${{ runner.temp }}/covalent-${{ matrix.artifact }}.tar
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            RELEASE_VERSION=${{ needs.validate.outputs.image_version }}
+            COVALENT_SOURCE_FINGERPRINT=${{ needs.validate.outputs.source_fingerprint }}
+      - name: Verify the release Docker source after building
+        run: |
+          set -euo pipefail
+          fingerprint=$(./scripts/docker-source-fingerprint.sh . | sha256sum | awk '{print $1}')
+          test "${fingerprint}" = "${{ needs.validate.outputs.source_fingerprint }}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: digest-${{ matrix.artifact }}
-          path: ${{ runner.temp }}/digests/*
+          name: container-${{ matrix.artifact }}-archive
+          path: ${{ runner.temp }}/covalent-${{ matrix.artifact }}.tar
           if-no-files-found: error
           retention-days: 1
 
-  verify-and-promote:
-    name: Scan, attest, then promote release tags
+  scan-private:
+    name: Scan private images and seal verified handoff
     needs: [validate, build-digests]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: container-*-archive
+          path: ${{ runner.temp }}/container-archives
+          merge-multiple: true
+      - name: Load private architecture archives
+        run: |
+          set -euo pipefail
+          docker load --input "${RUNNER_TEMP}/container-archives/covalent-amd64.tar"
+          docker load --input "${RUNNER_TEMP}/container-archives/covalent-arm64.tar"
+          docker image inspect covalent-private:amd64 >/dev/null
+          docker image inspect covalent-private:arm64 >/dev/null
+          test "$(docker image inspect covalent-private:amd64 --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = "${{ needs.validate.outputs.image_version }}"
+          test "$(docker image inspect covalent-private:arm64 --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = "${{ needs.validate.outputs.image_version }}"
+          expected_fingerprint="${{ needs.validate.outputs.source_fingerprint }}"
+          [[ "${expected_fingerprint}" =~ ^[0-9a-f]{64}$ ]]
+          amd64_fingerprint=$(docker image inspect covalent-private:amd64 --format '{{index .Config.Labels "io.covalent.source.fingerprint"}}')
+          arm64_fingerprint=$(docker image inspect covalent-private:arm64 --format '{{index .Config.Labels "io.covalent.source.fingerprint"}}')
+          test "${amd64_fingerprint}" != unknown
+          test "${arm64_fingerprint}" != unknown
+          test "${amd64_fingerprint}" = "${expected_fingerprint}"
+          test "${arm64_fingerprint}" = "${expected_fingerprint}"
+          test "${amd64_fingerprint}" = "${arm64_fingerprint}"
+      # These gates have no package-write or OIDC credential. A rejected image
+      # is therefore neither pullable from GHCR nor reachable by a release tag.
+      - name: Scan private linux/amd64 image
+        uses: anchore/scan-action@1638637db639e0ade3258b51db49a9a137574c3e # v6
+        with:
+          image: covalent-private:amd64
+          fail-build: true
+          severity-cutoff: high
+      - name: Scan private linux/arm64 image
+        uses: anchore/scan-action@1638637db639e0ade3258b51db49a9a137574c3e # v6
+        with:
+          image: covalent-private:arm64
+          fail-build: true
+          severity-cutoff: high
+      # A multi-architecture reference resolves to the verifier runner's native
+      # platform unless a platform is selected. Generate evidence from each
+      # already-scanned single-platform image instead, so arm64 cannot disappear
+      # behind an amd64-only SBOM attached to the index.
+      - name: Generate private linux/amd64 SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: covalent-private:amd64
+          format: spdx-json
+          output-file: covalent-container-linux-amd64.spdx.json
+          upload-release-assets: false
+          upload-artifact: false
+      - name: Generate private linux/arm64 SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: covalent-private:arm64
+          format: spdx-json
+          output-file: covalent-container-linux-arm64.spdx.json
+          upload-release-assets: false
+          upload-artifact: false
+      - name: Assemble scanned private multi-architecture index
+        id: manifest
+        run: |
+          set -euo pipefail
+          registry=localhost:5000
+          staging="${registry}/covalent:staging-${GITHUB_SHA}-${GITHUB_RUN_ATTEMPT}"
+          docker run --detach --rm --name covalent-private-registry \
+            --publish 127.0.0.1:5000:5000 \
+            --env REGISTRY_STORAGE_DELETE_ENABLED=true \
+            registry:3.0.0@sha256:6c5666b861f3505b116bb9aa9b25175e71210414bd010d92035ff64018f9457e >/dev/null
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error "http://${registry}/v2/" >/dev/null; then
+              break
+            fi
+            if [[ "${attempt}" -eq 30 ]]; then
+              echo "private staging registry did not become ready" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          docker tag covalent-private:amd64 "${registry}/covalent:amd64"
+          docker tag covalent-private:arm64 "${registry}/covalent:arm64"
+          docker push "${registry}/covalent:amd64"
+          docker push "${registry}/covalent:arm64"
+          docker buildx imagetools create \
+            --annotation "index:org.opencontainers.image.version=${{ needs.validate.outputs.image_version }}" \
+            --annotation "index:io.covalent.source.fingerprint=${{ needs.validate.outputs.source_fingerprint }}" \
+            --tag "${staging}" \
+            "${registry}/covalent:amd64" "${registry}/covalent:arm64"
+          docker buildx imagetools inspect "${staging}" --format '{{json .Manifest}}' > private-index.json
+          jq -e \
+            --arg version "${{ needs.validate.outputs.image_version }}" \
+            --arg fingerprint "${{ needs.validate.outputs.source_fingerprint }}" '
+            .mediaType == "application/vnd.oci.image.index.v1+json" and
+            .annotations["org.opencontainers.image.version"] == $version and
+            .annotations["io.covalent.source.fingerprint"] == $fingerprint and
+            ([.manifests[] | select(.platform.os == "linux" and (.platform.architecture == "amd64" or .platform.architecture == "arm64")) | .platform.architecture] | sort) == ["amd64", "arm64"]
+          ' private-index.json >/dev/null
+          digest=$(jq -r '.digest' private-index.json)
+          test -n "${digest}"
+          printf '%s\n' "${digest}" > "${RUNNER_TEMP}/covalent-private-staging-digest"
+          echo "staging=${staging}" >> "${GITHUB_OUTPUT}"
+      - name: Seal scanned archives, index digest, and per-architecture SBOMs for promotion
+        run: |
+          set -euo pipefail
+          handoff="${RUNNER_TEMP}/verified-container"
+          mkdir -p "${handoff}"
+          docker save --output "${handoff}/covalent-amd64.tar" covalent-private:amd64
+          docker save --output "${handoff}/covalent-arm64.tar" covalent-private:arm64
+          cp covalent-container-linux-amd64.spdx.json "${handoff}/covalent-container-linux-amd64.spdx.json"
+          cp covalent-container-linux-arm64.spdx.json "${handoff}/covalent-container-linux-arm64.spdx.json"
+          cp "${RUNNER_TEMP}/covalent-private-staging-digest" "${handoff}/private-index-digest.txt"
+          printf '%s\n' '${{ needs.validate.outputs.source_fingerprint }}' > "${handoff}/source-fingerprint.txt"
+          (cd "${handoff}" && sha256sum \
+            covalent-amd64.tar \
+            covalent-arm64.tar \
+            covalent-container-linux-amd64.spdx.json \
+            covalent-container-linux-arm64.spdx.json \
+            source-fingerprint.txt \
+            private-index-digest.txt > SHA256SUMS)
+      - name: Remove private staging on every exit
+        if: always()
+        run: |
+          set +e
+          if [[ -f "${RUNNER_TEMP}/covalent-private-staging-digest" ]]; then
+            digest=$(cat "${RUNNER_TEMP}/covalent-private-staging-digest")
+            curl --fail --silent --show-error --request DELETE \
+              "http://localhost:5000/v2/covalent/manifests/${digest}" || true
+          fi
+          docker rm --force covalent-private-registry >/dev/null 2>&1 || true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-container-${{ github.sha }}
+          path: ${{ runner.temp }}/verified-container
+          if-no-files-found: error
+          retention-days: 1
+
+  promote-sign:
+    name: Promote, sign, and publish verified image
+    needs: [validate, scan-private]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
-          pattern: digest-*
-          path: ${{ runner.temp }}/digests
-          merge-multiple: true
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+          name: verified-container-${{ github.sha }}
+          path: ${{ runner.temp }}/verified-container
+      - name: Verify and load the scanned handoff
+        run: |
+          set -euo pipefail
+          handoff="${RUNNER_TEMP}/verified-container"
+          (cd "${handoff}" && sha256sum -c SHA256SUMS)
+          expected_digest=$(cat "${handoff}/private-index-digest.txt")
+          [[ "${expected_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker load --input "${handoff}/covalent-amd64.tar"
+          docker load --input "${handoff}/covalent-arm64.tar"
+          docker image inspect covalent-private:amd64 >/dev/null
+          docker image inspect covalent-private:arm64 >/dev/null
+          test "$(docker image inspect covalent-private:amd64 --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = "${{ needs.validate.outputs.image_version }}"
+          test "$(docker image inspect covalent-private:arm64 --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = "${{ needs.validate.outputs.image_version }}"
+          expected_fingerprint="${{ needs.validate.outputs.source_fingerprint }}"
+          test "$(cat "${handoff}/source-fingerprint.txt")" = "${expected_fingerprint}"
+          amd64_fingerprint=$(docker image inspect covalent-private:amd64 --format '{{index .Config.Labels "io.covalent.source.fingerprint"}}')
+          arm64_fingerprint=$(docker image inspect covalent-private:arm64 --format '{{index .Config.Labels "io.covalent.source.fingerprint"}}')
+          [[ "${expected_fingerprint}" =~ ^[0-9a-f]{64}$ ]]
+          test "${amd64_fingerprint}" = "${expected_fingerprint}"
+          test "${arm64_fingerprint}" = "${expected_fingerprint}"
+          test "${amd64_fingerprint}" = "${arm64_fingerprint}"
+          cp "${handoff}/covalent-container-linux-amd64.spdx.json" covalent-container-linux-amd64.spdx.json
+          cp "${handoff}/covalent-container-linux-arm64.spdx.json" covalent-container-linux-arm64.spdx.json
+      - name: Reassemble and verify the scanned private index
+        id: manifest
+        run: |
+          set -euo pipefail
+          registry=localhost:5000
+          staging="${registry}/covalent:staging-${GITHUB_SHA}-${GITHUB_RUN_ATTEMPT}"
+          docker run --detach --rm --name covalent-private-registry \
+            --publish 127.0.0.1:5000:5000 \
+            --env REGISTRY_STORAGE_DELETE_ENABLED=true \
+            registry:3.0.0@sha256:6c5666b861f3505b116bb9aa9b25175e71210414bd010d92035ff64018f9457e >/dev/null
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error "http://${registry}/v2/" >/dev/null; then
+              break
+            fi
+            if [[ "${attempt}" -eq 30 ]]; then
+              echo "private staging registry did not become ready" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          docker tag covalent-private:amd64 "${registry}/covalent:amd64"
+          docker tag covalent-private:arm64 "${registry}/covalent:arm64"
+          docker push "${registry}/covalent:amd64"
+          docker push "${registry}/covalent:arm64"
+          docker buildx imagetools create \
+            --annotation "index:org.opencontainers.image.version=${{ needs.validate.outputs.image_version }}" \
+            --annotation "index:io.covalent.source.fingerprint=${{ needs.validate.outputs.source_fingerprint }}" \
+            --tag "${staging}" \
+            "${registry}/covalent:amd64" "${registry}/covalent:arm64"
+          docker buildx imagetools inspect "${staging}" --format '{{json .Manifest}}' > private-index.json
+          jq -e \
+            --arg version "${{ needs.validate.outputs.image_version }}" \
+            --arg fingerprint "${{ needs.validate.outputs.source_fingerprint }}" '
+            .mediaType == "application/vnd.oci.image.index.v1+json" and
+            .annotations["org.opencontainers.image.version"] == $version and
+            .annotations["io.covalent.source.fingerprint"] == $fingerprint and
+            ([.manifests[] | select(.platform.os == "linux" and (.platform.architecture == "amd64" or .platform.architecture == "arm64")) | .platform.architecture] | sort) == ["amd64", "arm64"]
+          ' private-index.json >/dev/null
+          digest=$(jq -r '.digest' private-index.json)
+          test -n "${digest}"
+          expected_digest=$(cat "${RUNNER_TEMP}/verified-container/private-index-digest.txt")
+          test "${digest}" = "${expected_digest}"
+          printf '%s\n' "${digest}" > "${RUNNER_TEMP}/covalent-private-staging-digest"
+          echo "staging=${staging}" >> "${GITHUB_OUTPUT}"
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - id: manifest
+      # This unique tag is registry-visible but is deliberately outside the
+      # public version/latest namespace. It gives Cosign an immutable GHCR
+      # digest to sign without moving a consumer tag first.
+      - name: Stage the verified index under a non-consumer candidate tag
+        id: candidate
         run: |
           set -euo pipefail
-          staging="${IMAGE}:staging-${GITHUB_SHA}-${GITHUB_RUN_ATTEMPT}"
-          sources=()
-          for digest_file in "${RUNNER_TEMP}"/digests/*; do
-            sources+=("${IMAGE}@sha256:$(basename "${digest_file}")")
-          done
-          docker buildx imagetools create --tag "${staging}" "${sources[@]}"
-          digest=$(docker buildx imagetools inspect "${staging}" --format '{{json .Manifest.Digest}}' | tr -d '"')
-          echo "staging=${staging}" >> "${GITHUB_OUTPUT}"
-          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
-          docker buildx imagetools inspect "${IMAGE}@${digest}"
-      # The vulnerability gate runs BEFORE the SBOM is produced, and nothing
-      # that describes this image may leave the runner until it has passed.
-      #
-      # These two steps used to be in the opposite order, and sbom-action
-      # defaults `upload-release-assets` to true. On a tag push that default
-      # attached the SBOM to the GitHub Release as its own asset the moment it
-      # was generated - which is to say, before the scan had rendered any
-      # verdict at all. When v0.1.0 failed this gate with 60 high/critical
-      # findings, sign, attest and promote were all correctly skipped and
-      # nothing reached GHCR, yet an SBOM for that rejected image was already
-      # sitting on the release page describing an artifact that does not exist
-      # and was never fit to. Evidence that outruns the check it is evidence
-      # for is worse than no evidence: it says an image was inspected without
-      # saying it was rejected.
-      #
-      # Scanning first makes that ordering impossible. Both of the action's
-      # own upload paths are also turned off, so the only way this SBOM
-      # reaches the release is the explicit publish step below, which runs
-      # after the gate, the signature, and the attestation.
-      - uses: anchore/scan-action@1638637db639e0ade3258b51db49a9a137574c3e # v6
-        with:
-          image: ${{ env.IMAGE }}@${{ steps.manifest.outputs.digest }}
-          fail-build: true
-          severity-cutoff: high
-      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
-        with:
-          image: ${{ env.IMAGE }}@${{ steps.manifest.outputs.digest }}
-          format: spdx-json
-          output-file: covalent-container.spdx.json
-          upload-release-assets: false
-          upload-artifact: false
+          source="${{ steps.manifest.outputs.staging }}"
+          candidate="${IMAGE}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker buildx imagetools create --tag "${candidate}" "${source}"
+          docker buildx imagetools inspect "${candidate}" --format '{{json .Manifest}}' > candidate-index.json
+          jq -e \
+            --arg version "${{ needs.validate.outputs.image_version }}" \
+            --arg fingerprint "${{ needs.validate.outputs.source_fingerprint }}" '
+            .mediaType == "application/vnd.oci.image.index.v1+json" and
+            .annotations["org.opencontainers.image.version"] == $version and
+            .annotations["io.covalent.source.fingerprint"] == $fingerprint and
+            ([.manifests[] | [.platform.os, .platform.architecture]] | sort) == [["linux", "amd64"], ["linux", "arm64"]]
+          ' candidate-index.json >/dev/null
+          digest=$(jq -r '.digest' candidate-index.json)
+          test "${digest}" = "${{ steps.manifest.outputs.digest }}"
+          amd64_digest=$(jq -r '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest' candidate-index.json)
+          arm64_digest=$(jq -r '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64") | .digest' candidate-index.json)
+          [[ "${amd64_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "${arm64_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "${amd64_digest}" != "${arm64_digest}"
+          {
+            echo "tag=${candidate}"
+            echo "digest=${digest}"
+            echo "amd64_digest=${amd64_digest}"
+            echo "arm64_digest=${arm64_digest}"
+          } >> "${GITHUB_OUTPUT}"
       - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
-      - name: Sign and attest the scanned immutable digest
+      - name: Sign and verify the index plus exact per-architecture SBOM attestations
         run: |
           set -euo pipefail
-          subject="${IMAGE}@${{ steps.manifest.outputs.digest }}"
-          cosign sign --yes "${subject}"
-          cosign attest --yes --type spdxjson --predicate covalent-container.spdx.json "${subject}"
-      - name: Promote verified digest to release tags
+          index_subject="${IMAGE}@${{ steps.candidate.outputs.digest }}"
+          amd64_subject="${IMAGE}@${{ steps.candidate.outputs.amd64_digest }}"
+          arm64_subject="${IMAGE}@${{ steps.candidate.outputs.arm64_digest }}"
+          certificate_identity="https://github.com/${GITHUB_WORKFLOW_REF}"
+          certificate_issuer="https://token.actions.githubusercontent.com"
+          for subject in "${index_subject}" "${amd64_subject}" "${arm64_subject}"; do
+            cosign sign --yes "${subject}"
+            cosign verify \
+              --certificate-identity "${certificate_identity}" \
+              --certificate-oidc-issuer "${certificate_issuer}" \
+              --output json \
+              "${subject}" >/dev/null
+          done
+
+          cosign attest --yes --type spdxjson \
+            --predicate covalent-container-linux-amd64.spdx.json "${amd64_subject}"
+          cosign attest --yes --type spdxjson \
+            --predicate covalent-container-linux-arm64.spdx.json "${arm64_subject}"
+
+          verify_exact_sbom_attestation() {
+            platform=$1
+            subject=$2
+            digest=$3
+            sbom=$4
+            verification="cosign-${platform}-attestation-verification.json"
+            payloads="verified-${platform}-attestation-payloads.txt"
+            decoded="verified-${platform}-attestation.json"
+            expected="expected-${platform}-sbom.canonical.json"
+            verified="verified-${platform}-sbom.canonical.json"
+
+            cosign verify-attestation \
+              --type spdxjson \
+              --certificate-identity "${certificate_identity}" \
+              --certificate-oidc-issuer "${certificate_issuer}" \
+              --output json \
+              "${subject}" > "${verification}"
+            jq -S -c . "${sbom}" > "${expected}"
+            jq -e 'type == "array" and length > 0' "${verification}" >/dev/null
+            jq -r '.[].payload' "${verification}" > "${payloads}"
+            matched=false
+            while IFS= read -r payload; do
+              printf '%s' "${payload}" | base64 --decode > "${decoded}"
+              jq -e --arg digest "${digest}" '
+                .predicateType == "https://spdx.dev/Document" and
+                any(.subject[]?; .digest.sha256 == ($digest | sub("^sha256:"; "")))
+              ' "${decoded}" >/dev/null || continue
+              jq -S -c .predicate "${decoded}" > "${verified}"
+              if cmp -s "${expected}" "${verified}"; then
+                matched=true
+                break
+              fi
+            done < "${payloads}"
+            test "${matched}" = true
+          }
+
+          verify_exact_sbom_attestation linux-amd64 "${amd64_subject}" \
+            '${{ steps.candidate.outputs.amd64_digest }}' covalent-container-linux-amd64.spdx.json
+          verify_exact_sbom_attestation linux-arm64 "${arm64_subject}" \
+            '${{ steps.candidate.outputs.arm64_digest }}' covalent-container-linux-arm64.spdx.json
+      # Version and latest remain untouched until every signature and exact
+      # SBOM-attestation verification above has succeeded.
+      - name: Promote the verified signed digest to public release tags
+        id: promote
         run: |
           set -euo pipefail
-          subject="${IMAGE}@${{ steps.manifest.outputs.digest }}"
-          args=(--tag "${IMAGE}:${{ needs.validate.outputs.version }}")
-          if [[ "${{ needs.validate.outputs.publish_latest }}" == "true" ]]; then
-            args+=(--tag "${IMAGE}:latest")
+          subject="${IMAGE}@${{ steps.candidate.outputs.digest }}"
+          version_ref="${IMAGE}:${{ needs.validate.outputs.version }}"
+          inspect_error=$(mktemp)
+          if existing_digest=$(docker buildx imagetools inspect "${version_ref}" --format '{{json .Manifest.Digest}}' 2>"${inspect_error}" | tr -d '"'); then
+            if [[ "${existing_digest}" != "${{ steps.candidate.outputs.digest }}" ]]; then
+              echo "immutable release tag ${version_ref} already points to a different digest" >&2
+              exit 1
+            fi
+            version_exists=true
+          elif grep -Eiq 'manifest unknown|not found|does not exist' "${inspect_error}"; then
+            version_exists=false
+          else
+            echo "could not prove whether immutable release tag ${version_ref} already exists" >&2
+            cat "${inspect_error}" >&2
+            exit 1
           fi
-          docker buildx imagetools create "${args[@]}" "${subject}"
+
+          latest_action=skip-prerelease
+          if [[ "${{ needs.validate.outputs.publish_latest }}" == "true" ]]; then
+            latest_manifest=$(mktemp)
+            latest_error=$(mktemp)
+            if docker buildx imagetools inspect "${IMAGE}:latest" --format '{{json .Manifest}}' >"${latest_manifest}" 2>"${latest_error}"; then
+              jq -e '
+                .mediaType == "application/vnd.oci.image.index.v1+json" and
+                (.digest | test("^sha256:[0-9a-f]{64}$"))
+              ' "${latest_manifest}" >/dev/null
+              current_latest_digest=$(jq -r '.digest' "${latest_manifest}")
+              current_latest_version=$(jq -r '.annotations["org.opencontainers.image.version"] // "unannotated"' "${latest_manifest}")
+            elif grep -Eiq 'manifest unknown|not found|does not exist' "${latest_error}"; then
+              current_latest_digest=absent
+              current_latest_version=absent
+            else
+              echo "could not prove the current latest version and digest" >&2
+              cat "${latest_error}" >&2
+              exit 1
+            fi
+
+            latest_decision=$(node scripts/container-latest-version.mjs \
+              "${{ needs.validate.outputs.image_version }}" \
+              "${{ steps.candidate.outputs.digest }}" \
+              "${current_latest_version}" \
+              "${current_latest_digest}")
+            latest_action=$(jq -r '.action' <<<"${latest_decision}")
+            current_latest_tag=$(jq -r '.currentTag // empty' <<<"${latest_decision}")
+            [[ "${latest_action}" == "promote" || "${latest_action}" == "keep" ]]
+
+            # The annotation alone is not provenance. Require the immutable
+            # stable version tag named by it to resolve to the same digest.
+            if [[ -n "${current_latest_tag}" ]]; then
+              provenance_ref="${IMAGE}:${current_latest_tag}"
+              if ! provenance_digest=$(docker buildx imagetools inspect "${provenance_ref}" --format '{{json .Manifest.Digest}}' | tr -d '"'); then
+                echo "latest version provenance tag is unavailable: ${provenance_ref}" >&2
+                exit 1
+              fi
+              if [[ "${provenance_digest}" != "${current_latest_digest}" ]]; then
+                echo "latest digest does not match immutable version provenance ${provenance_ref}" >&2
+                exit 1
+              fi
+            fi
+          fi
+
+          # All version/latest reads and downgrade checks finish before either
+          # public tag can move. The workflow-wide concurrency group serializes
+          # this preflight and promotion across every release ref.
+          if [[ "${version_exists}" == false ]]; then
+            docker buildx imagetools create --tag "${version_ref}" "${subject}"
+          fi
+          # A prior run can have published vX and then failed while moving
+          # latest. Repair that partial state from the already verified digest.
+          if [[ "${latest_action}" == "promote" ]]; then
+            docker buildx imagetools create --tag "${IMAGE}:latest" "${subject}"
+          fi
+          docker buildx imagetools inspect "${version_ref}" --format '{{json .Manifest}}' > published-version-index.json
+          jq -e \
+            --arg digest "${{ steps.candidate.outputs.digest }}" \
+            --arg version "${{ needs.validate.outputs.image_version }}" \
+            --arg fingerprint "${{ needs.validate.outputs.source_fingerprint }}" '
+              .digest == $digest and
+              .mediaType == "application/vnd.oci.image.index.v1+json" and
+              .annotations["org.opencontainers.image.version"] == $version and
+              .annotations["io.covalent.source.fingerprint"] == $fingerprint
+            ' published-version-index.json >/dev/null
+          digest=$(jq -r '.digest' published-version-index.json)
+          if [[ "${{ needs.validate.outputs.publish_latest }}" == "true" ]]; then
+            docker buildx imagetools inspect "${IMAGE}:latest" --format '{{json .Manifest}}' > published-latest-index.json
+            jq -e \
+              --arg digest "${digest}" \
+              --arg version "${{ needs.validate.outputs.image_version }}" \
+              --arg fingerprint "${{ needs.validate.outputs.source_fingerprint }}" '
+                .digest == $digest and
+                .mediaType == "application/vnd.oci.image.index.v1+json" and
+                .annotations["org.opencontainers.image.version"] == $version and
+                .annotations["io.covalent.source.fingerprint"] == $fingerprint
+              ' published-latest-index.json >/dev/null
+          fi
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+      - name: Remove private staging on every exit
+        if: always()
+        run: |
+          set +e
+          if [[ -f "${RUNNER_TEMP}/covalent-private-staging-digest" ]]; then
+            digest=$(cat "${RUNNER_TEMP}/covalent-private-staging-digest")
+            curl --fail --silent --show-error --request DELETE \
+              "http://localhost:5000/v2/covalent/manifests/${digest}" || true
+          fi
+          docker rm --force covalent-private-registry >/dev/null 2>&1 || true
       - name: Record the released image digest and checksums
         env:
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
-          IMAGE_DIGEST: ${{ steps.manifest.outputs.digest }}
+          IMAGE_DIGEST: ${{ steps.promote.outputs.digest }}
+          AMD64_DIGEST: ${{ steps.candidate.outputs.amd64_digest }}
+          ARM64_DIGEST: ${{ steps.candidate.outputs.arm64_digest }}
         run: |
           set -euo pipefail
           cat > covalent-container-digest.txt <<EOF
           image: ${IMAGE}:${RELEASE_VERSION}
           digest: ${IMAGE}@${IMAGE_DIGEST}
           platforms: linux/amd64, linux/arm64
+          linux-amd64-digest: ${IMAGE}@${AMD64_DIGEST}
+          linux-amd64-sbom: covalent-container-linux-amd64.spdx.json
+          linux-arm64-digest: ${IMAGE}@${ARM64_DIGEST}
+          linux-arm64-sbom: covalent-container-linux-arm64.spdx.json
           commit: ${GITHUB_SHA}
-          verify: cosign verify ${IMAGE}@${IMAGE_DIGEST} --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/" --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          source-fingerprint: ${{ needs.validate.outputs.source_fingerprint }}
+          verify-index: cosign verify ${IMAGE}@${IMAGE_DIGEST} --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container-supply-chain.yml@refs/tags/${RELEASE_VERSION}" --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          verify-linux-amd64-signature: cosign verify ${IMAGE}@${AMD64_DIGEST} --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container-supply-chain.yml@refs/tags/${RELEASE_VERSION}" --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          verify-linux-amd64-sbom-attestation: cosign verify-attestation --type spdxjson ${IMAGE}@${AMD64_DIGEST} --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container-supply-chain.yml@refs/tags/${RELEASE_VERSION}" --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          verify-linux-arm64-signature: cosign verify ${IMAGE}@${ARM64_DIGEST} --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container-supply-chain.yml@refs/tags/${RELEASE_VERSION}" --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          verify-linux-arm64-sbom-attestation: cosign verify-attestation --type spdxjson ${IMAGE}@${ARM64_DIGEST} --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container-supply-chain.yml@refs/tags/${RELEASE_VERSION}" --certificate-oidc-issuer https://token.actions.githubusercontent.com
           EOF
-          sha256sum covalent-container.spdx.json covalent-container-digest.txt \
+          sha256sum \
+            covalent-container-linux-amd64.spdx.json \
+            covalent-container-linux-arm64.spdx.json \
+            covalent-container-digest.txt \
             > covalent-container-SHA256SUMS.txt
           cat covalent-container-digest.txt
       - name: Publish container evidence to the release
@@ -222,14 +621,16 @@ jobs:
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
         run: |
           ./scripts/publish-release-assets.sh "${RELEASE_VERSION}" \
-            covalent-container.spdx.json \
+            covalent-container-linux-amd64.spdx.json \
+            covalent-container-linux-arm64.spdx.json \
             covalent-container-digest.txt \
             covalent-container-SHA256SUMS.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: container-sbom-${{ github.sha }}
           path: |
-            covalent-container.spdx.json
+            covalent-container-linux-amd64.spdx.json
+            covalent-container-linux-arm64.spdx.json
             covalent-container-digest.txt
             covalent-container-SHA256SUMS.txt
           if-no-files-found: error

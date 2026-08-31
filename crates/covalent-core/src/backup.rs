@@ -14,14 +14,17 @@ use walkdir::WalkDir;
 
 use crate::engine::JobControl;
 use crate::{
-    BackupKey, ChunkStore, ChunkingConfig, ContentDefinedChunker, CoreError, ReplicationReport,
-    StoredSnapshot,
+    BackupKey, ChunkStore, ChunkingConfig, ContentDefinedChunker, CoreError, EncryptedChunk,
+    ReplicationReport, StoredSnapshot,
 };
 
 const LEGACY_BACKUP_CHECKPOINT_SCHEMA_VERSION: u16 = 2;
 const BACKUP_WAL_SCHEMA_VERSION: u16 = 3;
 const BACKUP_WAL_COMPACTION_STALE_RECORDS: usize = 4_096;
 const BACKUP_WAL_SYNC_INTERVAL: usize = 64;
+const BACKUP_WRITE_BATCH_RECORDS: usize = 64;
+const BACKUP_WRITE_BATCH_BYTES: usize = 16 * 1_024 * 1_024;
+const PROVIDER_RECORD_FIXED_BYTES: usize = 4 + 1 + 8 + 4 + 24;
 
 /// Source-link handling. Covalent never follows source symlinks.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -153,7 +156,8 @@ pub struct BackupProgress {
 }
 
 /// Final locally durable backup result.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BackupResult {
     /// Decrypted manifest retained by the authorized owner.
     pub manifest: Manifest,
@@ -213,6 +217,7 @@ struct SourceFingerprint {
     unix_mode: Option<u32>,
 }
 
+#[cfg(test)]
 pub(crate) fn scan_source(
     source_root: &Path,
     options: &BackupOptions,
@@ -220,6 +225,26 @@ pub(crate) fn scan_source(
     store: &ChunkStore,
     control: &JobControl,
     progress_callback: &mut dyn FnMut(&BackupProgress),
+) -> Result<ScannedBackup, CoreError> {
+    scan_source_with_chunk_sink(
+        source_root,
+        options,
+        key,
+        store,
+        control,
+        progress_callback,
+        &mut |_| Ok(()),
+    )
+}
+
+pub(crate) fn scan_source_with_chunk_sink(
+    source_root: &Path,
+    options: &BackupOptions,
+    key: &BackupKey,
+    store: &ChunkStore,
+    control: &JobControl,
+    progress_callback: &mut dyn FnMut(&BackupProgress),
+    chunk_sink: &mut dyn FnMut(&[String]) -> Result<(), CoreError>,
 ) -> Result<ScannedBackup, CoreError> {
     validate_options(options, store)?;
     let source_metadata = fs::symlink_metadata(source_root).map_err(|source| CoreError::Io {
@@ -305,6 +330,12 @@ pub(crate) fn scan_source(
             reusable_fingerprints.get(&relative),
         ) && reusable_entry_matches(existing, fingerprint, &metadata)
         {
+            let reusable_locators = existing
+                .chunks
+                .iter()
+                .map(|reference| reference.opaque_locator.clone())
+                .collect::<Vec<_>>();
+            chunk_sink(&reusable_locators)?;
             checkpoint.chunk_locators.extend(
                 existing
                     .chunks
@@ -351,6 +382,7 @@ pub(crate) fn scan_source(
                 control,
                 &mut checkpoint,
                 progress_callback,
+                chunk_sink,
             )?
         } else {
             return Err(CoreError::UnsupportedSourceEntry(
@@ -417,6 +449,7 @@ fn process_file(
     control: &JobControl,
     checkpoint: &mut BackupCheckpoint,
     progress_callback: &mut dyn FnMut(&BackupProgress),
+    chunk_sink: &mut dyn FnMut(&[String]) -> Result<(), CoreError>,
 ) -> Result<(ManifestEntry, SourceFingerprint), CoreError> {
     let mut file = stable_root.open_entry(&relative, false)?;
     let opened_metadata = file
@@ -440,6 +473,8 @@ fn process_file(
     });
     let mut references = Vec::new();
     let mut sparse_extents = Vec::new();
+    let mut pending = Vec::<(EncryptedChunk, ChunkReference)>::new();
+    let mut pending_bytes = 0_usize;
 
     for (offset, extent_length) in extents {
         check_control_with_durable_checkpoint(control, store, &options.job_id)?;
@@ -459,19 +494,31 @@ fn process_file(
                 .bytes_read
                 .saturating_add(bytes.len() as u64);
             let encrypted = key.encrypt_chunk(options.backup_id, options.key_epoch, &bytes)?;
-            if store.put(&encrypted)? {
-                checkpoint.progress.chunks_stored += 1;
-            } else {
-                checkpoint.progress.chunks_deduplicated += 1;
+            let record_bytes =
+                PROVIDER_RECORD_FIXED_BYTES.saturating_add(encrypted.ciphertext_length() as usize);
+            if !pending.is_empty()
+                && (pending.len() >= BACKUP_WRITE_BATCH_RECORDS
+                    || pending_bytes.saturating_add(record_bytes) > BACKUP_WRITE_BATCH_BYTES)
+            {
+                flush_backup_write_batch(
+                    store,
+                    &mut pending,
+                    checkpoint,
+                    &mut references,
+                    progress_callback,
+                    chunk_sink,
+                )?;
+                pending_bytes = 0;
+                check_control_with_durable_checkpoint(control, store, &options.job_id)?;
             }
-            references.push(ChunkReference {
+            let reference = ChunkReference {
                 plaintext_digest: encrypted.plaintext_digest.clone(),
                 opaque_locator: encrypted.opaque_locator.clone(),
                 plaintext_length: encrypted.plaintext_length,
                 ciphertext_length: encrypted.ciphertext_length(),
-            });
-            checkpoint.chunk_locators.insert(encrypted.opaque_locator);
-            progress_callback(&checkpoint.progress);
+            };
+            pending_bytes = pending_bytes.saturating_add(record_bytes);
+            pending.push((encrypted, reference));
         }
         if processed != extent_length {
             return Err(CoreError::SourceChanged(path.to_path_buf()));
@@ -483,6 +530,15 @@ fn process_file(
             });
         }
     }
+    flush_backup_write_batch(
+        store,
+        &mut pending,
+        checkpoint,
+        &mut references,
+        progress_callback,
+        chunk_sink,
+    )?;
+    check_control_with_durable_checkpoint(control, store, &options.job_id)?;
 
     let final_open_metadata = file
         .metadata()
@@ -513,6 +569,46 @@ fn process_file(
         },
         fingerprint,
     ))
+}
+
+fn flush_backup_write_batch(
+    store: &ChunkStore,
+    pending: &mut Vec<(EncryptedChunk, ChunkReference)>,
+    checkpoint: &mut BackupCheckpoint,
+    references: &mut Vec<ChunkReference>,
+    progress_callback: &mut dyn FnMut(&BackupProgress),
+    chunk_sink: &mut dyn FnMut(&[String]) -> Result<(), CoreError>,
+) -> Result<(), CoreError> {
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let created = store.put_backup_batch(
+        &pending
+            .iter()
+            .map(|(encrypted, _)| encrypted)
+            .collect::<Vec<_>>(),
+    )?;
+    if created.len() != pending.len() {
+        return Err(CoreError::InvalidState(
+            "local write batch acknowledgement mismatch".to_owned(),
+        ));
+    }
+    let durable_locators = pending
+        .iter()
+        .map(|(encrypted, _)| encrypted.opaque_locator.clone())
+        .collect::<Vec<_>>();
+    chunk_sink(&durable_locators)?;
+    for ((encrypted, reference), created) in pending.drain(..).zip(created) {
+        if created {
+            checkpoint.progress.chunks_stored += 1;
+        } else {
+            checkpoint.progress.chunks_deduplicated += 1;
+        }
+        checkpoint.chunk_locators.insert(encrypted.opaque_locator);
+        references.push(reference);
+        progress_callback(&checkpoint.progress);
+    }
+    Ok(())
 }
 
 fn validate_options(options: &BackupOptions, store: &ChunkStore) -> Result<(), CoreError> {
@@ -555,7 +651,7 @@ struct OptionsFingerprint<'a> {
     symlink_policy: SymlinkPolicy,
 }
 
-fn options_digest(options: &BackupOptions) -> Result<String, CoreError> {
+pub(crate) fn options_digest(options: &BackupOptions) -> Result<String, CoreError> {
     Ok(blake3::hash(&serde_json::to_vec(&OptionsFingerprint {
         backup_id: options.backup_id,
         display_name: &options.display_name,

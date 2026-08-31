@@ -77,8 +77,8 @@ class KeyProtectionContractTest {
     fun theNativeStartDescriptorMatchesTheKotlinDeclaration() {
         val rust = rustJniSource()
         assertTrue(
-            "nativeStart's JNI descriptor must carry the trailing int protection level",
-            rust.contains("\"(Ljava/lang/String;Ljava/lang/String;Z[BJJI)Ljava/lang/String;\""),
+            "nativeStart's JNI descriptor must carry token, KEK, exact version, quotas, and protection",
+            rust.contains("\"(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJI)Ljava/lang/String;\""),
         )
         val kotlin = moduleFile("src/main/java/life/michaelwong/covalent/node/CovalentNative.kt")
             .readText()
@@ -90,9 +90,10 @@ class KeyProtectionContractTest {
             .map(String::trim)
             .filter(String::isNotEmpty)
         assertEquals(
-            "The descriptor (String, String, boolean, byte[], long, long, int) has seven " +
+            "The descriptor (String, String, boolean, token[], KEK[], version, long, long, " +
+                "protection) has nine " +
                 "parameters; Kotlin declares ${parameters.size}: $parameters",
-            7,
+            9,
             parameters.size,
         )
         assertTrue(
@@ -221,12 +222,89 @@ class KeyProtectionContractTest {
             manager.contains("private val csprng = SecureRandom()"),
         )
         assertTrue(
-            "The token must be 32 bytes drawn from that field",
-            manager.contains("ByteArray(32)") && manager.contains("csprng.nextBytes(generated)"),
+            "The token must be 32 random bytes drawn from that field",
+            manager.contains("const val TOKEN_RANDOM_BYTES = 32") &&
+                manager.contains("csprng.nextBytes(raw)"),
         )
         assertTrue(
             "The raw token buffer must be zeroed once it has been encoded",
-            manager.contains("generated.fill(0)"),
+            manager.contains("raw.fill(0)") && manager.contains("encoded?.fill(0)"),
+        )
+    }
+
+    @Test
+    fun kekIsCiphertextOnlyFailLockedAndZeroizedAcrossTheBoundary() {
+        val protector = moduleFile(
+            "src/main/java/life/michaelwong/covalent/node/IdentityKeyProtector.kt",
+        ).readText()
+        val manager = moduleFile(
+            "src/main/java/life/michaelwong/covalent/node/EmbeddedNodeManager.kt",
+        ).readText()
+        val native = moduleFile(
+            "src/main/java/life/michaelwong/covalent/node/CovalentNative.kt",
+        ).readText()
+        val rust = rustJniSource()
+
+        assertTrue(protector.contains("AtomicFile(") && protector.contains("noBackupFilesDir"))
+        assertTrue(protector.contains("kek-envelope.v1"))
+        assertTrue(protector.contains("ByteArray(KEK_BYTES)"))
+        assertTrue(protector.contains("const val KEK_BYTES = 32"))
+        assertTrue(
+            "Existing KEK ciphertext must be opened, never overwritten after auth/invalidation failure",
+            protector.contains("if (kekEnvelope.baseFile.exists()) return@synchronized openPersistedKek()"),
+        )
+        assertFalse(
+            "Invalidation must never delete the alias and silently rotate durable state",
+            protector.contains("deleteEntry(") || protector.contains("fun forget("),
+        )
+        assertTrue(manager.contains("keyEncryptionKey.close()"))
+        assertTrue(native.contains("keyEncryptionKey: ByteArray") && native.contains("keyVersion: Int"))
+        assertTrue(rust.contains("take_java_secret(environment, &key_encryption_key)"))
+        assertTrue(rust.contains("StaticKeyProtector::new(key_version as u32, kek)"))
+        assertTrue(rust.contains("configuration.key_protector = Some(Arc::new(protector))"))
+    }
+
+    @Test
+    fun api37ProviderEnableAlwaysRequestsLanAndUsesTheConnectedDeviceServiceContract() {
+        val manifest = moduleFile("src/main/AndroidManifest.xml").readText()
+        val build = moduleFile("build.gradle.kts").readText()
+        val ui = moduleFile("src/main/java/life/michaelwong/covalent/ui/CovalentApp.kt").readText()
+        val service = moduleFile(
+            "src/main/java/life/michaelwong/covalent/node/NodeProviderService.kt",
+        ).readText()
+
+        assertTrue(build.contains("compileSdk = 37") && build.contains("targetSdk = 37"))
+        assertTrue(manifest.contains("android.permission.ACCESS_LOCAL_NETWORK"))
+        assertTrue(manifest.contains("android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"))
+        assertTrue(manifest.contains("android:foregroundServiceType=\"connectedDevice\""))
+        assertTrue(manifest.contains("android:name=\".node.NodeProviderService\""))
+        assertTrue(manifest.contains("android:exported=\"false\""))
+        val providerPermissionGate = ui.substringAfter("fun requestProviderEnable()")
+            .substringBefore("val localNetworkPermission")
+        assertTrue(providerPermissionGate.contains("Build.VERSION.SDK_INT >= 37"))
+        assertTrue(providerPermissionGate.contains("add(LOCAL_NETWORK_PERMISSION)"))
+        assertFalse(
+            "Peer traffic needs ACCESS_LOCAL_NETWORK even when multicast discovery is off",
+            providerPermissionGate.contains("state.providerLanDiscovery && Build.VERSION.SDK_INT >= 37"),
+        )
+        assertTrue(service.contains("FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE"))
+    }
+
+    @Test
+    fun legacyMigrationIsAtomicAndNeverTouchesExternalCredentials() {
+        val manager = moduleFile(
+            "src/main/java/life/michaelwong/covalent/node/EmbeddedNodeManager.kt",
+        ).readText()
+        val directBoot = moduleFile(
+            "src/main/java/life/michaelwong/covalent/node/DirectBoot.kt",
+        ).readText()
+        assertTrue(manager.contains("protector.openLegacyToken(envelope)"))
+        assertTrue(manager.contains("preferences.commit { putString(\"token\", sealed) }"))
+        assertTrue(directBoot.contains("preferences.edit().apply(block).commit()"))
+        assertTrue(manager.contains("covalent_embedded_node_credentials"))
+        assertFalse(
+            "The local migration owner must not import or instantiate the external credential store",
+            manager.contains("SecureNodeStore"),
         )
     }
 

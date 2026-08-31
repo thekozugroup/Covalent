@@ -7,7 +7,8 @@ use std::time::Instant;
 
 use covalent_core::{
     BackupKey, BackupOptions, ChunkProvider, ChunkStore, ChunkingConfig, ContentDefinedChunker,
-    CoreError, DeviceIdentity, Engine, EngineOptions, JobControl, RestoreOptions, StoreProvider,
+    CoreError, DeviceIdentity, Engine, EngineOptions, JobControl, RestoreOptions,
+    StaticKeyProtector, StoreProvider,
 };
 use covalent_protocol::{BackupId, PeerGrant, PeerRole, ReplicaIntent};
 use tempfile::tempdir;
@@ -71,7 +72,10 @@ fn checkpoint_scale_threshold() {
         }
     }
     let expected_manifest_entries = entries;
-    let engine = Engine::open(EngineOptions::new(data.path())).expect("scale engine");
+    let engine = Engine::open(EngineOptions::new(data.path()).with_key_protector(Arc::new(
+        StaticKeyProtector::new(1, [0x91; 32]).expect("benchmark protector"),
+    )))
+    .expect("scale engine");
     let options = BackupOptions::new(BackupId::new(), "scale-snapshot", "scale-checkpoint");
     let control = JobControl::new();
     let pause_control = control.clone();
@@ -145,7 +149,10 @@ fn provider_restore_threshold(input: &[u8]) {
         let source = tempdir().expect("provider source");
         let destination = tempdir().expect("provider destination");
         fs::write(source.path().join("payload.bin"), input).expect("provider source file");
-        let engine = Engine::open(EngineOptions::new(data.path())).expect("provider engine");
+        let engine = Engine::open(EngineOptions::new(data.path()).with_key_protector(Arc::new(
+            StaticKeyProtector::new(1, [0x91; 32]).expect("benchmark protector"),
+        )))
+        .expect("provider engine");
         let mut provider_directories = Vec::new();
         let mut providers = Vec::<Arc<dyn ChunkProvider>>::new();
         let mut provider_ids = BTreeSet::new();

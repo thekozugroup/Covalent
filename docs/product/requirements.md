@@ -15,7 +15,7 @@ Supported platforms are Unraid, macOS, and Android. iOS and Windows are not supp
 | Priority | Platforms | Definition of ready |
 | --- | --- | --- |
 | Supported | macOS, Android, Docker/Unraid | All required functional, safety, accessibility, packaging, and disaster-restore checks pass. |
-| Not supported | iOS, Windows | No definition of ready. Neither is published or installable, and neither gates a release. Windows has no code at all; the iOS target exists and still builds in the `iOS Tier 2` CI lane, which is deliberately not a required check, but it carries no support promise. |
+| Not supported | iOS, Windows | No definition of ready. Neither is published or installable, and neither gates a release. Windows has no code at all; the iOS target exists and still builds in an informational CI lane, which is deliberately not a required check and carries no support promise. |
 
 ## Required journeys
 

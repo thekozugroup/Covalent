@@ -22,19 +22,23 @@ on:
         type: string
 
 permissions:
-  contents: write
-  checks: read
-  security-events: read
+  contents: read
 
 concurrency:
   group: unsigned-macos-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
-  build-unsigned:
-    name: Build and publish an ad-hoc signed Apple Silicon app
+  build-verify:
+    name: Build and verify an ad-hoc signed Apple Silicon app
     runs-on: macos-26
     timeout-minutes: 60
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+    permissions:
+      contents: read
+      checks: read
+      security-events: read
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -60,6 +64,10 @@ jobs:
             echo "release version must be an explicit v-prefixed semantic version" >&2
             exit 1
           fi
+          if [[ "${GITHUB_REF}" != "refs/tags/${version}" || "${GITHUB_REF_TYPE}" != "tag" ]]; then
+            echo "run this workflow from refs/tags/${version}; release publication must use the exact signed tag ref" >&2
+            exit 1
+          fi
           workspace_version=$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)
           test "${version#v}" = "${workspace_version}"
           test "$(git rev-list -n 1 "${version}")" = "${GITHUB_SHA}"
@@ -71,9 +79,26 @@ jobs:
             fi
           done
           ./scripts/release-version.sh check
-          ./scripts/verify-release-commit-signature.sh
+          RELEASE_VERSION="${version}" ./scripts/verify-release-commit-signature.sh
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
-      - run: brew install xcodegen
+      - name: Install checksum-pinned XcodeGen
+        run: ./scripts/install-xcodegen.sh "${RUNNER_TEMP}/covalent-xcodegen" >> "${GITHUB_PATH}"
+      - name: Generate and resolve locked Swift packages
+        run: |
+          set -euo pipefail
+          test -s apps/apple/Package.resolved
+          cd apps/apple
+          xcodegen generate --quiet
+          xcodebuild \
+            -resolvePackageDependencies \
+            -project Covalent.xcodeproj \
+            -scheme CovalentMac \
+            -clonedSourcePackagesDirPath "${RUNNER_TEMP}/covalent-swiftpm" \
+            -disableAutomaticPackageResolution \
+            -onlyUsePackageVersionsFromResolvedFile \
+            -skipPackageUpdates \
+            -packageFingerprintPolicy strict \
+            -packageSigningEntityPolicy strict
       - name: Refuse to reuse Developer ID material in the unsigned lane
         run: |
           set -euo pipefail
@@ -86,7 +111,6 @@ jobs:
         run: |
           set -euo pipefail
           cd apps/apple
-          xcodegen generate --quiet
           archive_path="${RUNNER_TEMP}/CovalentMac.xcarchive"
           xcodebuild \
             -project Covalent.xcodeproj \
@@ -94,6 +118,12 @@ jobs:
             -configuration Release \
             -destination 'generic/platform=macOS' \
             -archivePath "${archive_path}" \
+            -clonedSourcePackagesDirPath "${RUNNER_TEMP}/covalent-swiftpm" \
+            -disableAutomaticPackageResolution \
+            -onlyUsePackageVersionsFromResolvedFile \
+            -skipPackageUpdates \
+            -packageFingerprintPolicy strict \
+            -packageSigningEntityPolicy strict \
             ARCHS=arm64 \
             EXCLUDED_ARCHS=x86_64 \
             CODE_SIGN_STYLE=Manual \
@@ -123,30 +153,78 @@ jobs:
             echo "unexpected notarization ticket on the unsigned lane" >&2
             exit 1
           fi
-      - name: Package, checksum, and publish
+      - name: Package and checksum verified unsigned app
         env:
-          GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
+          handoff="${RUNNER_TEMP}/unsigned-release-handoff"
           output="${RUNNER_TEMP}/Covalent-${RELEASE_VERSION}-macOS-arm64-unsigned.zip"
+          output_checksum="${output}.sha256"
+          inventory="${handoff}/Covalent-${RELEASE_VERSION}-macOS-dependency-inventory.tar.gz"
+          manifest="${handoff}/Covalent-${RELEASE_VERSION}-macOS-arm64-unsigned-SHA256SUMS.txt"
           ditto -c -k --sequesterRsrc --keepParent "${COVALENT_ARCHIVE_APP}" "${output}"
-          shasum -a 256 "${output}" > "${output}.sha256"
-          cat "${output}.sha256"
+          (cd "$(dirname "${output}")" && shasum -a 256 "$(basename "${output}")") > "${output_checksum}"
           SOURCE_DATE_EPOCH=0 ./scripts/apple-dependency-inventory.sh "${RUNNER_TEMP}/covalent-apple-inventory"
           cp Cargo.lock "${RUNNER_TEMP}/covalent-apple-inventory/Cargo.lock"
           (cd "${RUNNER_TEMP}/covalent-apple-inventory" && shasum -a 256 Cargo.lock >> SHA256SUMS)
-          inventory="${RUNNER_TEMP}/Covalent-${RELEASE_VERSION}-macOS-dependency-inventory.tar.gz"
+          mkdir -p "${handoff}"
+          cp "${output}" "${output_checksum}" "${handoff}/"
           tar -czf "${inventory}" -C "${RUNNER_TEMP}" covalent-apple-inventory
-          ./scripts/publish-release-assets.sh "${RELEASE_VERSION}" \
-            "${output}" \
-            "${output}.sha256" \
-            "${inventory}"
-          echo "COVALENT_RELEASE_ARTIFACT=${output}" >> "${GITHUB_ENV}"
+          (
+            cd "${handoff}"
+            shasum -a 256 \
+              "$(basename "${output}")" \
+              "$(basename "${output_checksum}")" \
+              "$(basename "${inventory}")" > "$(basename "${manifest}")"
+            shasum -a 256 -c "$(basename "${output_checksum}")"
+          )
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: unsigned-covalent-macos-${{ steps.release.outputs.version }}-${{ github.sha }}
-          path: |
-            ${{ env.COVALENT_RELEASE_ARTIFACT }}
-            ${{ env.COVALENT_RELEASE_ARTIFACT }}.sha256
+          name: verified-unsigned-covalent-macos-${{ steps.release.outputs.version }}-${{ github.sha }}
+          path: ${{ runner.temp }}/unsigned-release-handoff
           if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Re-verify and publish unsigned macOS artifacts
+    needs: build-verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: verified-unsigned-covalent-macos-${{ needs.build-verify.outputs.version }}-${{ github.sha }}
+          path: ${{ runner.temp }}/unsigned-release-handoff
+      - name: Verify unsigned handoff before publication
+        env:
+          RELEASE_VERSION: ${{ needs.build-verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          handoff="${RUNNER_TEMP}/unsigned-release-handoff"
+          artifact="Covalent-${RELEASE_VERSION}-macOS-arm64-unsigned.zip"
+          artifact_checksum="${artifact}.sha256"
+          inventory="Covalent-${RELEASE_VERSION}-macOS-dependency-inventory.tar.gz"
+          manifest="Covalent-${RELEASE_VERSION}-macOS-arm64-unsigned-SHA256SUMS.txt"
+          cd "${handoff}"
+          test -f "${artifact}"
+          test -f "${artifact_checksum}"
+          test -f "${inventory}"
+          test -f "${manifest}"
+          shasum -a 256 -c "${manifest}"
+          shasum -a 256 -c "${artifact_checksum}"
+          tar -tzf "${inventory}" | grep -q '^covalent-apple-inventory/SHA256SUMS$'
+      - name: Publish the unsigned macOS build to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.build-verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          handoff="${RUNNER_TEMP}/unsigned-release-handoff"
+          ./scripts/publish-release-assets.sh "${RELEASE_VERSION}" \
+            "${handoff}/Covalent-${RELEASE_VERSION}-macOS-arm64-unsigned.zip" \
+            "${handoff}/Covalent-${RELEASE_VERSION}-macOS-arm64-unsigned.zip.sha256" \
+            "${handoff}/Covalent-${RELEASE_VERSION}-macOS-dependency-inventory.tar.gz"

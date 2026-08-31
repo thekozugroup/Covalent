@@ -13,6 +13,6 @@ Do not merge these rulesets while the owner bypass applies to required signature
 
 ## Release fail-closed gate
 
-Each credentialed Android, macOS, and container release workflow calls `scripts/verify-release-commit-signature.sh`. The script uses the GitHub commit-verification record and rejects a release commit unless `verification.verified` is true. It also requires the exact-commit `CodeQL policy` check, which rejects every open CodeQL alert.
+Each Android, macOS, and container release workflow calls `scripts/verify-release-commit-signature.sh`. The script uses GitHub's commit and annotated-tag verification records and rejects a release unless both are verified, except for the fixed historical v0.1.0 tag object documented in [commit-signing.md](commit-signing.md). It also requires the exact-commit `CodeQL policy` check, which rejects every open CodeQL alert.
 
 Before enabling the no-bypass signature ruleset, register the maintainer's signing key with GitHub, enable signed commits locally, and make one signed non-release commit to verify the repository's identity and release workflow permissions. This repository change does not alter remote rulesets.

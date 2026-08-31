@@ -66,17 +66,17 @@ struct CovalentMacApp: App {
                 .frame(width: 620, height: 540)
         }
 
-        // The `systemImage:` convenience publishes the raw SF Symbol name as
-        // the status item's accessibility title, so VoiceOver announced
-        // "externaldrive.badge.checkmark". Supply the label explicitly so the
-        // menu bar item is named for what it is, and says what it means.
+        // Keep the compact symbol presentation while making the status item
+        // independently discoverable as Covalent to VoiceOver and XCTest.
+        // The titled initializer alone exposes the SF Symbol name as the AX
+        // title, which is not a meaningful product label.
         MenuBarExtra {
             MacMenuBarMenu(model: model)
         } label: {
-            Image(systemName: menuBarSymbol)
+            Label("Covalent", systemImage: menuBarSymbol)
+                .labelStyle(.iconOnly)
                 .accessibilityLabel("Covalent")
                 .accessibilityValue(model.serviceStatusLabel)
-                .accessibilityIdentifier("Covalent")
         }
         .menuBarExtraStyle(.menu)
     }

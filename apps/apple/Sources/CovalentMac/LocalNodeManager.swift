@@ -11,14 +11,23 @@ final class LocalNodeManager: LocalNodeBootstrapping {
 
     private let fileManager: FileManager
     private let session: URLSession
+    private let keyStore: ManagedNodeKeyStore
     private var ownedProcess: Process?
     private var managedProcessID: Int32?
     private var managedReadyFile: URL?
+    /// Exists only while this app process owns or has adopted the local node.
+    /// It is never written to the node data directory or launch metadata.
+    private var managedAPIToken: String?
     private var logHandle: FileHandle?
     private var terminationObserver: NSObjectProtocol?
 
-    init(fileManager: FileManager = .default, session: URLSession? = nil) {
+    init(
+        fileManager: FileManager = .default,
+        session: URLSession? = nil,
+        keyStore: ManagedNodeKeyStore = ManagedNodeKeyStore()
+    ) {
         self.fileManager = fileManager
+        self.keyStore = keyStore
         if let session {
             self.session = session
         } else {
@@ -114,6 +123,7 @@ final class LocalNodeManager: LocalNodeBootstrapping {
         try logHandle.seekToEnd()
 
         let process = Process()
+        let keyPipe = Pipe()
         process.executableURL = paths.helper
         process.arguments = [
             "serve",
@@ -124,13 +134,27 @@ final class LocalNodeManager: LocalNodeBootstrapping {
             "--lan-discovery",
             "--platform-tier", "tier1",
             "--ready-file", paths.readyFile.path,
+            "--key-encryption-key-stdin",
         ]
+        process.standardInput = keyPipe
         process.standardOutput = logHandle
         process.standardError = logHandle
         process.terminationHandler = { _ in }
+        var keyMaterial = try loadKeyMaterial(for: paths.dataDirectory)
+        let apiToken = keyMaterial.token
         do {
             try process.run()
+            try keyPipe.fileHandleForReading.close()
+            defer { try? keyPipe.fileHandleForWriting.close() }
+            try keyMaterial.writeAndErase(to: keyPipe.fileHandleForWriting.fileDescriptor)
+            managedAPIToken = apiToken
         } catch {
+            keyMaterial.erase()
+            try? keyPipe.fileHandleForReading.close()
+            try? keyPipe.fileHandleForWriting.close()
+            if process.isRunning {
+                process.terminate()
+            }
             try? logHandle.close()
             throw LocalNodeError.launchFailed(error.localizedDescription)
         }
@@ -138,10 +162,40 @@ final class LocalNodeManager: LocalNodeBootstrapping {
         return process
     }
 
+    private func loadKeyMaterial(for dataDirectory: URL) throws -> ManagedNodeKeyMaterial {
+        if hasProtectedLocalSecret(in: dataDirectory) {
+            return try keyStore.loadExisting()
+        }
+        return try keyStore.loadOrCreate()
+    }
+
+    /// Missing Keychain data may be provisioned for a first run or a legacy
+    /// plaintext migration, but never over an already-wrapped local identity.
+    private func hasProtectedLocalSecret(in dataDirectory: URL) -> Bool {
+        let records = [
+            dataDirectory.appending(path: "identity.json"),
+            dataDirectory.appending(path: "tls/identity.json"),
+        ]
+        for record in records where fileManager.fileExists(atPath: record.path) {
+            guard let data = try? Data(contentsOf: record, options: .uncached),
+                  data.count <= 128 * 1_024,
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let schemaVersion = object["schemaVersion"] as? NSNumber
+            else {
+                return true
+            }
+            if schemaVersion.uintValue >= 2 || object["protectedPrivateKey"] != nil {
+                return true
+            }
+            guard schemaVersion.uintValue == 1, object["privateKey"] != nil else {
+                return true
+            }
+        }
+        return false
+    }
+
     private func healthyExistingConfiguration(paths: ManagedPaths) async throws -> NodeConnectionConfiguration? {
-        guard fileManager.fileExists(atPath: paths.readyFile.path),
-              fileManager.fileExists(atPath: paths.tokenFile.path)
-        else {
+        guard fileManager.fileExists(atPath: paths.readyFile.path) else {
             return nil
         }
         let ready: ManagedNodeReady
@@ -161,13 +215,22 @@ final class LocalNodeManager: LocalNodeBootstrapping {
         else {
             return nil
         }
-        guard try isPrivateRegularFile(paths.readyFile), try isPrivateRegularFile(paths.tokenFile) else {
+        guard try isPrivateRegularFile(paths.readyFile) else {
             throw LocalNodeError.insecurePrivateFile
         }
-        let token = try String(contentsOf: paths.tokenFile, encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let configuration = try NodeConnectionConfiguration(baseURL: baseURL, apiToken: token)
         guard await isHealthy(baseURL: baseURL) else { return nil }
+        // Probe readiness before touching Keychain. A crash-adopted node that
+        // is gone must not turn a transient locked Keychain into a start error.
+        let token: String
+        if let managedAPIToken {
+            token = managedAPIToken
+        } else {
+            var material = try keyStore.loadExisting()
+            token = material.token
+            material.erase()
+            managedAPIToken = token
+        }
+        let configuration = try NodeConnectionConfiguration(baseURL: baseURL, apiToken: token)
         managedProcessID = ready.processId
         managedReadyFile = paths.readyFile
         return configuration
@@ -205,7 +268,6 @@ final class LocalNodeManager: LocalNodeBootstrapping {
             helper: executableDirectory.appending(path: "covalent-node"),
             dataDirectory: dataDirectory,
             readyFile: dataDirectory.appending(path: "node-ready.json"),
-            tokenFile: dataDirectory.appending(path: "local-api-token"),
             logFile: dataDirectory.appending(path: "node.log")
         )
     }
@@ -277,6 +339,7 @@ final class LocalNodeManager: LocalNodeBootstrapping {
         let readyFile = managedReadyFile
         managedProcessID = nil
         managedReadyFile = nil
+        managedAPIToken = nil
         let process = ownedProcess
         ownedProcess = nil
         if let process, process.isRunning {
@@ -311,7 +374,6 @@ private struct ManagedPaths {
     let helper: URL
     let dataDirectory: URL
     let readyFile: URL
-    let tokenFile: URL
     let logFile: URL
 }
 

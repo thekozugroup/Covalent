@@ -1,7 +1,7 @@
 use std::io::{self, Read};
 
-/// Default content-defined target chunk size: 256 KiB.
-pub const DEFAULT_AVERAGE_CHUNK_SIZE: usize = 256 * 1_024;
+/// Default content-defined target chunk size: 512 KiB.
+pub const DEFAULT_AVERAGE_CHUNK_SIZE: usize = 512 * 1_024;
 const READ_BUFFER_SIZE: usize = 64 * 1_024;
 
 /// Validated streaming chunk-size limits.
@@ -47,7 +47,7 @@ impl ChunkingConfig {
 impl Default for ChunkingConfig {
     fn default() -> Self {
         Self {
-            minimum_size: 64 * 1_024,
+            minimum_size: 128 * 1_024,
             average_size: DEFAULT_AVERAGE_CHUNK_SIZE,
             maximum_size: 1_024 * 1_024,
         }
@@ -177,6 +177,15 @@ mod tests {
     }
 
     #[test]
+    fn production_default_halves_object_pressure_without_raising_peak_chunk_memory() {
+        let config = ChunkingConfig::default();
+        assert_eq!(config.minimum_size, 128 * 1_024);
+        assert_eq!(config.average_size, 512 * 1_024);
+        assert_eq!(config.maximum_size, 1_024 * 1_024);
+        assert!(config.is_valid());
+    }
+
+    #[test]
     fn streaming_chunks_recombine_and_obey_bounds() {
         let config = ChunkingConfig::default();
         let input = deterministic_bytes(8 * 1_024 * 1_024 + 17);
@@ -215,6 +224,28 @@ mod tests {
                 .iter()
                 .skip(1)
                 .any(|part| original_digests.contains(&blake3::hash(part)))
+        );
+    }
+
+    #[test]
+    fn production_default_retains_dedup_boundaries_around_a_local_edit() {
+        let config = ChunkingConfig::default();
+        let input = deterministic_bytes(16 * 1_024 * 1_024);
+        let mut edited = input.clone();
+        for byte in &mut edited[8 * 1_024 * 1_024..8 * 1_024 * 1_024 + 64 * 1_024] {
+            *byte ^= 0x5a;
+        }
+        let original_digests = chunk(&input, config)
+            .into_iter()
+            .map(|part| (blake3::hash(&part), part.len()))
+            .collect::<std::collections::HashMap<_, _>>();
+        let shared_bytes = chunk(&edited, config)
+            .iter()
+            .filter_map(|part| original_digests.get(&blake3::hash(part)))
+            .sum::<usize>();
+        assert!(
+            shared_bytes >= input.len() * 9 / 10,
+            "a 64 KiB local edit retained only {shared_bytes} reusable bytes"
         );
     }
 

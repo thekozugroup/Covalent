@@ -1,5 +1,6 @@
 package life.michaelwong.covalent.data
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
@@ -105,9 +106,16 @@ class CovalentNodeClient(
                     fingerprint = it.getString("certificateFingerprint"),
                     displayName = grant?.displayName,
                     roles = grant?.roles.orEmpty(),
-                    // The current API lists remembered connections but exposes no live probe or capacity.
-                    reachability = ProviderReachability.UNKNOWN,
-                    capacityBytes = null,
+                    reachability = when (it.optString("reachability", "unknown")) {
+                        "reachable" -> ProviderReachability.REACHABLE
+                        "unreachable" -> ProviderReachability.UNREACHABLE
+                        else -> ProviderReachability.UNKNOWN
+                    },
+                    capacityBytes = it.optionalLong("usableBytes"),
+                    allocatedBytes = it.optionalLong("allocatedBytes"),
+                    quotaBytes = it.optionalLong("quotaBytes"),
+                    observedAtUnixMs = it.optionalLong("observedAtUnixMs"),
+                    validUntilUnixMs = it.optionalLong("validUntilUnixMs"),
                 )
             }
         }
@@ -155,7 +163,16 @@ class CovalentNodeClient(
             peerId = json.getString("peerId"),
             address = json.getString("address"),
             fingerprint = json.getString("certificateFingerprint"),
-            reachability = ProviderReachability.CONNECTED,
+            reachability = when (json.optString("reachability", "unknown")) {
+                "reachable" -> ProviderReachability.REACHABLE
+                "unreachable" -> ProviderReachability.UNREACHABLE
+                else -> ProviderReachability.UNKNOWN
+            },
+            capacityBytes = json.optionalLong("usableBytes"),
+            allocatedBytes = json.optionalLong("allocatedBytes"),
+            quotaBytes = json.optionalLong("quotaBytes"),
+            observedAtUnixMs = json.optionalLong("observedAtUnixMs"),
+            validUntilUnixMs = json.optionalLong("validUntilUnixMs"),
         )
     }
 
@@ -1032,6 +1049,43 @@ private fun JSONObject.optionalLong(key: String): Long? =
 class SecureNodeStore(context: Context) {
     private val preferences = context.getSharedPreferences("covalent_node", Context.MODE_PRIVATE)
     private val vault = TokenVault()
+    private val transferJournal = DurableTransferJournal(
+        storage = object : DurableTransferStorage {
+            override fun read(key: String): String? = preferences.getString(key, null)
+
+            override fun keys(): Set<String> = preferences.all.keys
+
+            // KTX `edit(commit = true)` discards Editor.commit()'s Boolean result. The journal
+            // must observe a failed fsync and block the corresponding network side effect.
+            @SuppressLint("ApplySharedPref", "UseKtx")
+            override fun commit(puts: Map<String, String>, removals: Set<String>): Boolean =
+                synchronized(preferences) {
+                    val touchedKeys = puts.keys + removals
+                    val previous = touchedKeys.associateWith { key ->
+                        preferences.contains(key) to preferences.getString(key, null)
+                    }
+                    val committed = preferences.edit().apply {
+                        removals.forEach(::remove)
+                        puts.forEach(::putString)
+                    }.commit()
+                    if (!committed) {
+                        // SharedPreferences updates memory before its disk write. Restore the prior
+                        // view even if the compensating disk write also fails; the old atomic file is
+                        // still the only state a recreated process may trust.
+                        preferences.edit().apply {
+                            previous.forEach { (key, value) ->
+                                if (value.first) putString(key, value.second) else remove(key)
+                            }
+                        }.commit()
+                    }
+                    committed
+                }
+        },
+        protector = object : TransferValueProtector {
+            override fun protect(value: String): String = vault.encrypt(value)
+            override fun unprotect(value: String): String = vault.decrypt(value)
+        },
+    )
 
     var baseUrl: String
         get() = preferences.getString("base_url", "") ?: ""
@@ -1067,54 +1121,61 @@ class SecureNodeStore(context: Context) {
         mode: String = "json",
         treeUri: String? = null,
     ) {
-        preferences.edit { putString("pending_$jobId", vault.encrypt(JSONObject().apply {
-            put("path", path)
-            put("payload", payload)
-            put("mode", mode)
-            treeUri?.let { put("treeUri", it) }
-        }.toString())) }
+        transferJournal.savePending(jobId, path, payload, mode, treeUri)
     }
 
-    fun pending(jobId: String): JSONObject? = preferences.getString("pending_$jobId", null)
-        ?.let(vault::decrypt)?.let(::JSONObject)
+    fun saveQueuedTransfer(
+        record: TransferRecord,
+        path: String,
+        payload: JSONObject,
+        mode: String = "json",
+        treeUri: String? = null,
+    ) {
+        transferJournal.saveQueued(
+            record.jobId,
+            path,
+            payload,
+            mode,
+            treeUri,
+            record.toPersistenceJson(),
+        )
+    }
 
-    fun pendingJobIds(): List<String> = preferences.all.keys.asSequence()
-        .filter { it.startsWith(PENDING_PREFIX) }
-        .map { it.removePrefix(PENDING_PREFIX) }
-        .filter { it.isNotBlank() }
-        .sorted()
-        .toList()
+    fun preparePendingForExecution(jobId: String): JSONObject? = transferJournal.preparePending(jobId)
+
+    fun pending(jobId: String): JSONObject? = transferJournal.pending(jobId)
+
+    fun pendingJobIds(): List<String> = transferJournal.pendingJobIds()
 
     fun runnablePendingJobIds(): List<String> = pendingJobIds().filter { jobId ->
         transfer(jobId)?.state?.let { it == TransferState.QUEUED || it == TransferState.RUNNING } ?: true
     }
 
-    fun removePending(jobId: String) = preferences.edit { remove("pending_$jobId") }
+    fun removePending(jobId: String) = transferJournal.removePending(jobId)
 
-    fun savePendingAcknowledgement(jobId: String, completionDetail: String) {
-        preferences.edit {
-            putString(
-                "$ACKNOWLEDGEMENT_PREFIX$jobId",
-                vault.encrypt(JSONObject().put("completionDetail", completionDetail).toString()),
-            )
-        }
+    fun pendingAcknowledgementJobIds(): List<String> = transferJournal.pendingAcknowledgementJobIds()
+
+    fun acknowledgementCompletionDetail(jobId: String): String? =
+        transferJournal.acknowledgementCompletionDetail(jobId)
+
+    fun prepareAcknowledgement(jobId: String): String? =
+        transferJournal.prepareAcknowledgement(jobId)
+
+    fun removePendingAcknowledgement(jobId: String) = transferJournal.removePendingAcknowledgement(jobId)
+
+    fun consumeTerminalResult(jobId: String, pendingDetail: String, completionDetail: String) {
+        val completed = completedTransfer(jobId, pendingDetail)
+        transferJournal.consumeTerminalResult(jobId, completionDetail, completed.toPersistenceJson())
     }
 
-    fun pendingAcknowledgementJobIds(): List<String> = preferences.all.keys.asSequence()
-        .filter { it.startsWith(ACKNOWLEDGEMENT_PREFIX) }
-        .map { it.removePrefix(ACKNOWLEDGEMENT_PREFIX) }
-        .filter(String::isNotBlank)
-        .sorted()
-        .toList()
+    fun consumeTerminalResultWithoutAcknowledgement(jobId: String, completionDetail: String) {
+        val completed = completedTransfer(jobId, completionDetail)
+        transferJournal.consumeTerminalResultWithoutAcknowledgement(jobId, completed.toPersistenceJson())
+    }
 
-    fun acknowledgementCompletionDetail(jobId: String): String? = preferences
-        .getString("$ACKNOWLEDGEMENT_PREFIX$jobId", null)
-        ?.let(vault::decrypt)
-        ?.let(::JSONObject)
-        ?.optString("completionDetail")
-
-    fun removePendingAcknowledgement(jobId: String) = preferences.edit {
-        remove("$ACKNOWLEDGEMENT_PREFIX$jobId")
+    fun confirmAcknowledged(jobId: String, completionDetail: String) {
+        val completed = completedTransfer(jobId, completionDetail)
+        transferJournal.confirmAcknowledged(jobId, completed.toPersistenceJson())
     }
 
     fun savePendingDiscard(jobId: String, completionDetail: String) {
@@ -1144,19 +1205,9 @@ class SecureNodeStore(context: Context) {
     }
 
     fun saveTransfer(record: TransferRecord) {
-        val value = JSONObject()
-            .put("jobId", record.jobId)
-            .put("label", record.label)
-            .put("kind", record.kind.name.lowercase())
-            .put("state", record.state.name.lowercase())
-            .put("detail", record.detail)
-            .put("completedBytes", record.completedBytes)
-            .put("totalBytes", record.totalBytes)
-            .put("completedEntries", record.completedEntries)
-            .put("totalEntries", record.totalEntries)
-            .put("updatedAtUnixMs", record.updatedAtUnixMs)
-            .put("retryable", record.retryable)
-        preferences.edit { putString("$TRANSFER_PREFIX${record.jobId}", vault.encrypt(value.toString())) }
+        preferences.edit {
+            putString("$TRANSFER_PREFIX${record.jobId}", vault.encrypt(record.toPersistenceJson().toString()))
+        }
     }
 
     fun transfer(jobId: String): TransferRecord? = preferences
@@ -1176,6 +1227,15 @@ class SecureNodeStore(context: Context) {
         val current = transfer(jobId) ?: return null
         return update(current).copy(updatedAtUnixMs = System.currentTimeMillis()).also(::saveTransfer)
     }
+
+    private fun completedTransfer(jobId: String, detail: String): TransferRecord =
+        checkNotNull(transfer(jobId)) { "The completed transfer has no durable transfer record." }
+            .copy(
+                state = TransferState.COMPLETED,
+                detail = detail,
+                retryable = false,
+                updatedAtUnixMs = System.currentTimeMillis(),
+            )
 
     fun saveWorkflow(name: String, value: JSONObject?) {
         preferences.edit {
@@ -1254,8 +1314,6 @@ class SecureNodeStore(context: Context) {
     }
 
     private companion object {
-        const val PENDING_PREFIX = "pending_"
-        const val ACKNOWLEDGEMENT_PREFIX = "acknowledgement_"
         const val DISCARD_PREFIX = "discard_"
         const val TRANSFER_PREFIX = "transfer_"
         const val WORKFLOW_PREFIX = "workflow_"
@@ -1277,5 +1335,18 @@ private fun JSONObject.toTransferRecord(): TransferRecord = TransferRecord(
     updatedAtUnixMs = optLong("updatedAtUnixMs", 0),
     retryable = optBoolean("retryable", false),
 )
+
+private fun TransferRecord.toPersistenceJson(): JSONObject = JSONObject()
+    .put("jobId", jobId)
+    .put("label", label)
+    .put("kind", kind.name.lowercase())
+    .put("state", state.name.lowercase())
+    .put("detail", detail)
+    .put("completedBytes", completedBytes)
+    .put("totalBytes", totalBytes)
+    .put("completedEntries", completedEntries)
+    .put("totalEntries", totalEntries)
+    .put("updatedAtUnixMs", updatedAtUnixMs)
+    .put("retryable", retryable)
 
 fun newId(prefix: String): String = "$prefix-${UUID.randomUUID().toString().replace("-", "").take(20)}"

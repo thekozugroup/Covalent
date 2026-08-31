@@ -7,8 +7,8 @@ options:
   groupSortPosition: top
 settings:
   base:
-    MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "1000"
+    MARKETING_VERSION: "0.2.0"
+    CURRENT_PROJECT_VERSION: "2000"
     SWIFT_VERSION: "6.0"
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED: YES
@@ -114,7 +114,7 @@ targets:
       path: Config/CovalentMacUITests-Info.plist
       properties:
         CovalentUITestPort: $(COVALENT_UI_TEST_PORT)
-        CovalentUITestToken: $(COVALENT_UI_TEST_TOKEN)
+        CovalentUITestTokenFile: $(COVALENT_UI_TEST_TOKEN_FILE)
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: life.michaelwong.covalent.macos-uitests
@@ -134,7 +134,7 @@ targets:
       path: Config/CovalentIOSUITests-Info.plist
       properties:
         CovalentUITestPort: $(COVALENT_UI_TEST_PORT)
-        CovalentUITestToken: $(COVALENT_UI_TEST_TOKEN)
+        CovalentUITestTokenFile: $(COVALENT_UI_TEST_TOKEN_FILE)
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: life.michaelwong.covalent.ios-uitests

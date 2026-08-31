@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
-use covalent_core::{Engine, EngineOptions, ProviderQuotaPolicy};
+use covalent_core::{Engine, EngineOptions, KeyProtector, ProviderQuotaPolicy, RecoveryUnlockKey};
 use covalent_protocol::PlatformTier;
 use tokio::sync::{Mutex, watch};
 use tracing::info;
@@ -27,6 +27,10 @@ use crate::{
     router, validate_cleartext_api_bind, write_node_ready_file,
 };
 
+#[path = "recovery_bootstrap.rs"]
+mod recovery_bootstrap;
+use recovery_bootstrap::persist_recovered_provider_connections;
+
 /// Source for the local API bearer token.
 ///
 /// An embedded caller should pass [`Self::Provided`] only when its native
@@ -37,6 +41,14 @@ pub enum LocalApiTokenSource {
     Persisted,
     /// Use a token supplied by a native secure-storage bridge.
     Provided(Zeroizing<String>),
+}
+
+/// Explicit owner-loss input consumed only while creating a fresh state root.
+pub struct RecoveryBootstrap {
+    /// Stable signed recovery kit bytes.
+    pub kit: Vec<u8>,
+    /// High-entropy secret held outside the lost node state.
+    pub unlock: RecoveryUnlockKey,
 }
 
 /// A local API secret that can only be borrowed by the node-owning process.
@@ -84,6 +96,10 @@ pub struct NodeRuntimeConfig {
     pub archive_limits: ArchiveLimits,
     /// Provider-side quota and lease policy.
     pub provider_quota_policy: ProviderQuotaPolicy,
+    /// Required platform or explicitly provisioned KEK source.
+    pub key_protector: Option<Arc<dyn KeyProtector>>,
+    /// Optional owner-loss bootstrap for an empty state directory.
+    pub recovery: Option<RecoveryBootstrap>,
     /// Local API token source.  This is never logged.
     pub api_token: LocalApiTokenSource,
     /// Optional private record for an app supervising this runtime.
@@ -121,6 +137,8 @@ impl NodeRuntimeConfig {
             platform_tier: PlatformTier::Tier1,
             archive_limits: ArchiveLimits::default(),
             provider_quota_policy: ProviderQuotaPolicy::default(),
+            key_protector: None,
+            recovery: None,
             api_token: LocalApiTokenSource::Persisted,
             ready_file: None,
             first_run_claim_enabled: false,
@@ -190,14 +208,20 @@ impl NodeRuntime {
             platform_tier,
             archive_limits,
             provider_quota_policy,
+            key_protector,
+            recovery,
             api_token,
             ready_file,
             first_run_claim_enabled,
             tls_ca_certificate_file,
         } = configuration;
 
+        let key_protector =
+            key_protector.ok_or_else(|| anyhow!("key protection is locked or unavailable"))?;
         std::fs::create_dir_all(&data_directory)
             .with_context(|| format!("create data directory {}", data_directory.display()))?;
+        let data_directory = std::fs::canonicalize(&data_directory)
+            .with_context(|| format!("canonicalize data directory {}", data_directory.display()))?;
         validate_cleartext_api_bind(requested_api_address)
             .context("validate local API transport")?;
         let listener = tokio::net::TcpListener::bind(requested_api_address)
@@ -216,24 +240,85 @@ impl NodeRuntime {
         engine_options.initial_device_name = device_name;
         engine_options.initial_lan_discovery_enabled = lan_discovery_enabled;
         engine_options.provider_quota_policy = provider_quota_policy;
-        let engine = Arc::new(Engine::open(engine_options).context("open Covalent engine")?);
-        // Observed before the token is loaded, because loading creates it. A
-        // deployment that already had a token was provisioned the old way, so it
-        // is marked as owned rather than offered a code it never needed.
+        engine_options.key_protector = Some(Arc::clone(&key_protector));
+        let recovered = recovery.is_some();
+        let engine = Arc::new(match recovery {
+            Some(recovery) => {
+                Engine::recover_from_kit(engine_options, &recovery.kit, &recovery.unlock)
+                    .context("recover Covalent engine")?
+            }
+            None => Engine::open(engine_options).context("open Covalent engine")?,
+        });
+        if recovered {
+            persist_recovered_provider_connections(
+                &engine,
+                &data_directory.join("provider-connections.json"),
+            )
+            .context("restore signed provider transports")?;
+        }
         let token_path = data_directory.join("local-api-token");
-        let token_predates_this_start = std::fs::symlink_metadata(&token_path).is_ok();
+        // Commit the explicit unclaimed/claimed lifecycle before token loading
+        // can create the token. Token existence is used only once, to migrate a
+        // deployment that predates first-run claiming.
+        let claim_startup = if first_run_claim_enabled {
+            let token_already_exists = match std::fs::symlink_metadata(&token_path) {
+                Ok(_) => true,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                Err(source) => {
+                    return Err(source).with_context(|| {
+                        format!("inspect local API token {}", token_path.display())
+                    });
+                }
+            };
+            let startup = first_run_claim::prepare_claim_lifecycle(
+                &data_directory,
+                token_already_exists,
+                crate::now_unix_ms(),
+            )
+            .context("prepare first-run claim lifecycle")?;
+            if startup != first_run_claim::ClaimStartupState::Unclaimed && !token_already_exists {
+                return Err(anyhow!(
+                    "claimed node is missing its persisted local API token"
+                ));
+            }
+            Some(startup)
+        } else {
+            None
+        };
         let api_token = match api_token {
-            LocalApiTokenSource::Persisted => Zeroizing::new(
-                load_or_create_local_api_token(&token_path).context("load local API token")?,
-            ),
+            LocalApiTokenSource::Persisted => {
+                load_or_create_local_api_token(&token_path, &data_directory, key_protector.as_ref())
+                    .context("load local API token")?
+            }
             LocalApiTokenSource::Provided(token) => token,
         };
         if api_token.len() < 32 || api_token.len() > 512 {
             return Err(anyhow!("invalid local API token"));
         }
+        let first_run_claim = match claim_startup {
+            Some(first_run_claim::ClaimStartupState::Unclaimed) => {
+                arm_first_run_claim(&data_directory, tls_ca_certificate_file)
+                    .context("arm first-run ownership claim")?
+            }
+            Some(
+                first_run_claim::ClaimStartupState::Claimed
+                | first_run_claim::ClaimStartupState::RecoveringReplay,
+            ) => FirstRunClaim::load_replay(
+                &data_directory,
+                api_token.as_str(),
+                crate::now_unix_ms(),
+            )
+            .context("recover first-run ownership claim response")?
+            .map(Arc::new),
+            None => None,
+        };
 
-        let tls_identity = TlsIdentity::load_or_create(data_directory.join("tls"))
-            .context("load QUIC identity")?;
+        let tls_identity = TlsIdentity::load_or_create(
+            data_directory.join("tls"),
+            &data_directory,
+            key_protector.as_ref(),
+        )
+        .context("load QUIC identity")?;
         let discovery_enabled = engine
             .config()
             .context("load persisted discovery preference")?
@@ -260,23 +345,19 @@ impl NodeRuntime {
         if let Some(address) = static_advertised_peer_address {
             state = state.with_peer_address(address);
         }
-        if first_run_claim_enabled
-            && let Some(claim) = arm_first_run_claim(
-                &data_directory,
-                token_predates_this_start,
-                tls_ca_certificate_file,
-            )
-            .context("arm first-run ownership claim")?
-        {
+        if let Some(claim) = first_run_claim {
             state = state.with_first_run_claim(claim);
         }
         // The pairing-only ALPN shares the advertised QUIC endpoint, so the
         // address a peer discovers is the exact address it must dial to pair.
-        let quic_node = quic_node.with_pairing_service(Arc::new(NetworkPairingService::new(
+        let pairing_service = NetworkPairingService::open(
             Arc::clone(&engine),
             state.network_pairing_manager(),
             state.local_transport_binding().ok(),
-        )));
+            data_directory.join("pairing-start-admissions.json"),
+        )
+        .context("open pairing Start admission state")?;
+        let quic_node = quic_node.with_pairing_service(Arc::new(pairing_service));
 
         if let Some(path) = ready_file.as_deref()
             && let Err(error) = write_node_ready_file(
@@ -404,6 +485,13 @@ async fn wait_for_shutdown(mut shutdown: watch::Receiver<bool>) {
     }
 }
 
+const FIRST_RUN_CLAIM_GUIDANCE: [&str; 4] = [
+    "  Use the Covalent CLI only (not native/web):",
+    "  covalent claim --https-url <HTTPS_URL> \\",
+    "    --setup-code-file <PATH> --output-dir <PATH>",
+    "  The web console accepts only the resulting token.",
+];
+
 /// Mints a first-run code when this node has no owner, and prints it.
 ///
 /// Returns `None` — silently and correctly — when the node is already owned.
@@ -413,25 +501,17 @@ async fn wait_for_shutdown(mut shutdown: watch::Receiver<bool>) {
 /// is dropped as soon as it is printed; only its stretched key survives.
 fn arm_first_run_claim(
     data_directory: &std::path::Path,
-    token_predates_this_start: bool,
     tls_ca_certificate_file: Option<PathBuf>,
 ) -> Result<Option<Arc<FirstRunClaim>>> {
     let marker_path = first_run_claim::owner_marker_path(data_directory);
     if first_run_claim::is_claimed(&marker_path) {
         return Ok(None);
     }
-    if token_predates_this_start {
-        // An upgrade of a deployment provisioned before claiming existed. The
-        // operator already holds the token, so record the owner and never offer
-        // a code — an existing install must not gain a new way to be claimed.
-        first_run_claim::mark_claimed(&marker_path, crate::now_unix_ms())
-            .context("record pre-existing ownership")?;
-        return Ok(None);
-    }
 
     let code = ClaimCode::mint();
     let claim = Arc::new(FirstRunClaim::new(
         &code,
+        first_run_claim::claim_lifecycle_path(data_directory),
         marker_path,
         tls_ca_certificate_file,
         crate::now_unix_ms(),
@@ -440,7 +520,7 @@ fn arm_first_run_claim(
     // Width is fixed and every line is padded to it, so the box does not skew
     // when a value changes length. An operator reading a Docker log is already
     // hunting through JSON noise; a clean box is what makes this findable.
-    const WIDTH: usize = 46;
+    const WIDTH: usize = 54;
     let rule = "─".repeat(WIDTH);
     let row = |text: &str| println!("  │{text:<WIDTH$}│");
     println!();
@@ -449,8 +529,9 @@ fn arm_first_run_claim(
     row("");
     row(&format!("      {}", code.grouped()));
     row("");
-    row("  Enter this in the Covalent app or web page");
-    row("  to finish setting up this server.");
+    for line in FIRST_RUN_CLAIM_GUIDANCE {
+        row(line);
+    }
     row("");
     row(&format!("  Valid for {minutes} minutes, and usable once."));
     row("  Restart this container for a new code.");
@@ -516,26 +597,39 @@ fn resolve_advertised_peer_address(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+    use std::fs;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::sync::Arc;
     use std::time::Duration;
 
+    use base64::Engine as _;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use covalent_core::{Engine, EngineOptions, RecoveryUnlockKey, StaticKeyProtector};
+    use covalent_protocol::{PeerRole, TransportBinding};
+    use sha2::{Digest as _, Sha256};
     use tempfile::TempDir;
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-    use super::{NodeRuntime, NodeRuntimeConfig};
+    use super::{NodeRuntime, NodeRuntimeConfig, RecoveryBootstrap};
 
     fn loopback_zero() -> SocketAddr {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)
     }
 
+    fn test_configuration(directory: &TempDir) -> NodeRuntimeConfig {
+        let mut configuration =
+            NodeRuntimeConfig::new(directory.path(), loopback_zero(), loopback_zero());
+        configuration.key_protector = Some(Arc::new(
+            StaticKeyProtector::new(1, [0xa1; 32]).expect("test protector"),
+        ));
+        configuration
+    }
+
     async fn start_runtime(directory: &TempDir) -> NodeRuntime {
-        NodeRuntime::start(NodeRuntimeConfig::new(
-            directory.path(),
-            loopback_zero(),
-            loopback_zero(),
-        ))
-        .await
-        .expect("start runtime")
+        NodeRuntime::start(test_configuration(directory))
+            .await
+            .expect("start runtime")
     }
 
     async fn request(address: SocketAddr, request: &str) -> String {
@@ -592,13 +686,11 @@ mod tests {
     #[tokio::test]
     async fn stock_container_wildcard_peer_bind_starts_without_manual_advertise_address() {
         let directory = TempDir::new().expect("temp directory");
-        let runtime = NodeRuntime::start(NodeRuntimeConfig::new(
-            directory.path(),
-            loopback_zero(),
-            "0.0.0.0:0".parse().expect("wildcard peer address"),
-        ))
-        .await
-        .expect("stock Docker/Unraid peer bind starts");
+        let mut configuration = test_configuration(&directory);
+        configuration.peer_address = "0.0.0.0:0".parse().expect("wildcard peer address");
+        let runtime = NodeRuntime::start(configuration)
+            .await
+            .expect("stock Docker/Unraid peer bind starts");
         assert!(runtime.ready_info().peer_address().ip().is_unspecified());
         assert_ne!(runtime.ready_info().peer_address().port(), 0);
         runtime.stop().await.expect("stop wildcard node");
@@ -655,11 +747,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn caller_provided_api_token_is_never_persisted() {
+        let directory = TempDir::new().expect("temp directory");
+        let provided = "caller-provided-api-token-with-at-least-thirty-two-bytes";
+        let mut configuration = test_configuration(&directory);
+        configuration.api_token =
+            super::LocalApiTokenSource::Provided(zeroize::Zeroizing::new(provided.to_owned()));
+        let runtime = NodeRuntime::start(configuration)
+            .await
+            .expect("start with provided token");
+        assert_eq!(runtime.ready_info().api_token().expose(), provided);
+        assert!(!directory.path().join("local-api-token").exists());
+        runtime.stop().await.expect("stop runtime");
+    }
+
+    #[tokio::test]
     async fn drop_interrupts_runtime_and_removes_readiness_without_leaking_ports() {
         let directory = TempDir::new().expect("temp directory");
         let ready_file = directory.path().join("runtime-ready.json");
-        let mut configuration =
-            NodeRuntimeConfig::new(directory.path(), loopback_zero(), loopback_zero());
+        let mut configuration = test_configuration(&directory);
         configuration.ready_file = Some(ready_file.clone());
         let runtime = NodeRuntime::start(configuration)
             .await
@@ -688,5 +794,134 @@ mod tests {
         let rendered = format!("{token:?}");
         assert!(rendered.contains("REDACTED"));
         assert!(!rendered.contains(&secret));
+    }
+
+    #[test]
+    fn first_run_banner_directs_claiming_only_to_capable_clients() {
+        let guidance = super::FIRST_RUN_CLAIM_GUIDANCE.join("\n");
+        assert!(guidance.contains("Covalent CLI only (not native/web)"));
+        assert!(guidance.contains("covalent claim --https-url <HTTPS_URL>"));
+        assert!(guidance.contains("--setup-code-file <PATH> --output-dir <PATH>"));
+        assert!(guidance.contains("web console accepts only the resulting token"));
+        assert!(!guidance.contains("native app to claim"));
+    }
+
+    #[tokio::test]
+    async fn startup_without_an_injected_protector_fails_locked_before_writing_state() {
+        let parent = TempDir::new().expect("temp directory");
+        let directory = parent.path().join("missing-state");
+        let error = match NodeRuntime::start(NodeRuntimeConfig::new(
+            &directory,
+            loopback_zero(),
+            loopback_zero(),
+        ))
+        .await
+        {
+            Ok(_) => panic!("unprotected startup must fail"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("key protection is locked"));
+        assert!(!directory.exists(), "locked startup must not create state");
+    }
+
+    #[tokio::test]
+    async fn recovery_bootstrap_recreates_identity_and_activates_kit_provider_transports() {
+        let root = TempDir::new().expect("root");
+        let owner_path = root.path().join("lost-owner");
+        let provider_path = root.path().join("provider");
+        let recovered_path = root.path().join("recovered-owner");
+        let protector =
+            || Arc::new(StaticKeyProtector::new(1, [0xa1; 32]).expect("test protector"));
+        let named_options = |path: &std::path::Path, name: &str| {
+            let mut options = EngineOptions::new(path).with_key_protector(protector());
+            options.initial_device_name = name.to_owned();
+            options
+        };
+        let owner = Engine::open(named_options(&owner_path, "Recovered owner")).expect("owner");
+        let provider =
+            Engine::open(named_options(&provider_path, "Recovery provider")).expect("provider");
+        let binding =
+            |engine: &Engine, name: &str, address: &str, certificate: &[u8]| TransportBinding {
+                peer_id: engine.device_id(),
+                display_name: name.to_owned(),
+                address: address.to_owned(),
+                certificate_der: URL_SAFE_NO_PAD.encode(certificate),
+                certificate_fingerprint: Sha256::digest(certificate)
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect(),
+            };
+        let owner_binding = binding(&owner, "Recovered owner", "127.0.0.1:41001", b"owner cert");
+        let provider_binding = binding(
+            &provider,
+            "Recovery provider",
+            "127.0.0.1:41002",
+            b"provider cert",
+        );
+        let invitation = owner
+            .pairing_manager()
+            .create_invitation_with_transport(1_000, 60_000, Vec::new(), owner_binding)
+            .expect("invitation");
+        let mut session = provider
+            .accept_pairing_with_transport(
+                invitation,
+                provider_binding,
+                BTreeSet::from([PeerRole::StorageProvider]),
+                BTreeSet::from([PeerRole::BackupReader, PeerRole::BackupWriter]),
+                2_000,
+            )
+            .expect("accept pairing");
+        let code = session.authentication_string().to_string();
+        provider
+            .confirm_pairing_as_responder(&mut session, &code, 2_000)
+            .expect("provider confirmation");
+        owner
+            .confirm_pairing_as_inviter(&mut session, &code, 2_000)
+            .expect("owner confirmation");
+        owner
+            .finalize_pairing_as_inviter(&session, 2_000)
+            .expect("owner provider grant");
+        provider
+            .finalize_pairing_as_responder(&session, 2_000)
+            .expect("provider owner grant");
+        let owner_id = owner.device_id();
+        let provider_id = provider.device_id();
+        let unlock = RecoveryUnlockKey::generate();
+        let kit = owner.export_recovery_kit(&unlock).expect("recovery kit");
+        drop(owner);
+        fs::remove_dir_all(&owner_path).expect("destroy owner state");
+
+        let mut configuration =
+            NodeRuntimeConfig::new(&recovered_path, loopback_zero(), loopback_zero());
+        configuration.key_protector = Some(protector());
+        configuration.recovery = Some(RecoveryBootstrap { kit, unlock });
+        let runtime = NodeRuntime::start(configuration)
+            .await
+            .expect("recover node runtime");
+        let recovered_identity: serde_json::Value = serde_json::from_slice(
+            &fs::read(recovered_path.join("identity.json")).expect("identity"),
+        )
+        .expect("identity JSON");
+        assert_eq!(recovered_identity["deviceId"], owner_id.to_string());
+        assert_eq!(recovered_identity["schemaVersion"], 2);
+        assert!(recovered_identity.get("privateKey").is_none());
+        let providers: serde_json::Value = serde_json::from_slice(
+            &fs::read(recovered_path.join("provider-connections.json"))
+                .expect("provider connections"),
+        )
+        .expect("provider JSON");
+        assert!(
+            providers["providers"]
+                .get(provider_id.to_string())
+                .is_some()
+        );
+        let tls: serde_json::Value = serde_json::from_slice(
+            &fs::read(recovered_path.join("tls/identity.json")).expect("TLS identity"),
+        )
+        .expect("TLS JSON");
+        assert_eq!(tls["schemaVersion"], 2);
+        assert!(tls.get("privateKeyDer").is_none());
+        assert!(tls.get("protectedPrivateKey").is_some());
+        runtime.stop().await.expect("stop recovered runtime");
     }
 }

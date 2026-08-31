@@ -7,12 +7,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use covalent_core::{
     BackupOptions, ChunkProvider, ChunkStore, CoreError, DeviceIdentity, Engine, EngineOptions,
-    JobControl, ProviderHealth, RestoreOptions, StoreProvider,
+    JobControl, ProviderHealth, RestoreOptions, StaticKeyProtector, StoreProvider,
 };
 use covalent_protocol::{
     BackupId, ConflictPolicy, PeerGrant, PeerRole, ReplicaAvailability, ReplicaIntent,
 };
 use tempfile::tempdir;
+
+fn engine_options(path: impl Into<PathBuf>) -> EngineOptions {
+    EngineOptions::new(path).with_key_protector(Arc::new(
+        StaticKeyProtector::new(1, [0x61; 32]).expect("test protector"),
+    ))
+}
 
 struct PausingProvider {
     id: covalent_protocol::DeviceId,
@@ -128,7 +134,7 @@ fn multi_node_backup_resume_corruption_repair_restore_and_revocation() {
     sparse.sync_all().expect("sync sparse source");
     drop(sparse);
 
-    let engine = Engine::open(EngineOptions::new(node_data.path())).expect("engine");
+    let engine = Engine::open(engine_options(node_data.path())).expect("engine");
     let one_identity = DeviceIdentity::generate().public_identity();
     let two_identity = DeviceIdentity::generate().public_identity();
     let unselected_identity = DeviceIdentity::generate().public_identity();
@@ -219,10 +225,10 @@ fn multi_node_backup_resume_corruption_repair_restore_and_revocation() {
             .chunk_locators
             .is_disjoint(&second.stored_snapshot.chunk_locators)
     );
-    assert!(matches!(
-        engine.backup(source.path(), &second_options, &JobControl::new(), |_| {}),
-        Err(CoreError::InvalidState(_))
-    ));
+    let second_retry = engine
+        .backup(source.path(), &second_options, &JobControl::new(), |_| {})
+        .expect("completed backup retry");
+    assert_eq!(second_retry, second);
 
     let availability = engine
         .verify_snapshot_availability(backup_id, "0002")
@@ -371,7 +377,7 @@ fn multi_node_backup_resume_corruption_repair_restore_and_revocation() {
     ));
 
     drop(engine);
-    let reopened = Engine::open(EngineOptions::new(node_data.path())).expect("reopen engine");
+    let reopened = Engine::open(engine_options(node_data.path())).expect("reopen engine");
     assert!(
         reopened
             .verify_snapshot(backup_id, "0002")
@@ -392,11 +398,11 @@ fn multi_node_backup_resume_corruption_repair_restore_and_revocation() {
 #[test]
 fn durable_engine_state_has_an_exclusive_process_owner() {
     let data = tempdir().expect("engine data");
-    let first = Engine::open(EngineOptions::new(data.path())).expect("first engine");
+    let first = Engine::open(engine_options(data.path())).expect("first engine");
     assert!(matches!(
-        Engine::open(EngineOptions::new(data.path())),
+        Engine::open(engine_options(data.path())),
         Err(CoreError::StateLocked)
     ));
     drop(first);
-    Engine::open(EngineOptions::new(data.path())).expect("engine after lock release");
+    Engine::open(engine_options(data.path())).expect("engine after lock release");
 }

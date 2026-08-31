@@ -42,7 +42,13 @@ check_container() {
     echo "Docker daemon unavailable; container validation cannot pass." >&2
     exit 1
   fi
-  docker compose -f packaging/docker/compose.yaml config --quiet
+  compose_kek=$(mktemp "${TMPDIR:-/tmp}/covalent-compose-config-kek.XXXXXX")
+  chmod 600 "$compose_kek"
+  if ! COVALENT_KEK_FILE="$compose_kek" docker compose -f packaging/docker/compose.yaml config --quiet; then
+    rm -f "$compose_kek"
+    exit 1
+  fi
+  rm -f "$compose_kek"
   docker build -f packaging/docker/Dockerfile -t covalent:foundation .
   ./scripts/check-container-runtime.sh covalent:foundation
   ./scripts/check-artifact-budgets.sh covalent:foundation

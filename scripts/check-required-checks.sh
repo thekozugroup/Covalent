@@ -77,7 +77,7 @@ all_names=$(printf '%s\n' "$job_table" | cut -f2)
 #   3. its display name must be absent from every release workflow's required
 #      list, so this file and the workflows cannot disagree about what gates a
 #      release.
-# Every lane NOT named here is still required by name in all four workflows.
+# Every lane NOT named here is still required by name in all release workflows.
 not_required_names='iOS Tier 2'
 
 printf '%s\n' "$not_required_names" > "$tmp/exempt"
@@ -142,7 +142,8 @@ for workflow in \
   "$workflows/android-release.yml" \
   "$workflows/apple-release.yml" \
   "$workflows/apple-unsigned-release.yml" \
-  "$workflows/container-supply-chain.yml"
+  "$workflows/container-supply-chain.yml" \
+  "$workflows/cli-release.yml"
 do
   test -f "$workflow" || { echo "missing $workflow" >&2; rejected=1; continue; }
   required_line=$(grep -n 'for required in ' "$workflow" | head -n 1 | cut -d: -f2-)

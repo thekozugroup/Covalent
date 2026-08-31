@@ -47,9 +47,9 @@ class NodeFailureCopyTest {
     }
 
     /**
-     * `claim_code_incorrect` travels on a 401. Without code-before-status precedence a
-     * mistyped setup code is reported as a rejected access token, which sends a person to
-     * reconnect instead of retyping six characters.
+     * `claim_code_incorrect` travels on a 401. Without code-before-status precedence an
+     * owner-claim failure is reported as a rejected access token, which sends a person to
+     * reconnect instead of returning to the trusted CLI-only claim flow.
      */
     @Test
     fun aMistypedSetupCodeIsNotReportedAsARejectedAccessToken() {
@@ -66,7 +66,7 @@ class NodeFailureCopyTest {
         )
         assertEquals(context.getString(R.string.node_error_claim_code_incorrect), shown)
         assertFalse(
-            "A mistyped setup code must not be reported as a token problem: $shown",
+            "An owner-claim failure must not be reported as a token problem: $shown",
             shown == context.getString(R.string.error_server_needs_reconnect),
         )
     }

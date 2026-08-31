@@ -174,12 +174,12 @@ struct IOSNewBackupView: View {
                                         .font(.caption.monospaced())
                                         .foregroundStyle(.secondary)
                                         .lineLimit(1)
-                                    Text("Free space could not be checked just now — this device cannot be selected")
+                                    Text(provider.selectionStatus)
                                         .font(.caption)
-                                        .foregroundStyle(.red)
+                                        .foregroundStyle(provider.isEligibleForBackup ? Color.secondary : Color.red)
                                 }
                             }
-                            .disabled(true)
+                            .disabled(!provider.isEligibleForBackup)
                         }
                     }
                 } header: {
@@ -260,7 +260,6 @@ struct IOSNewBackupView: View {
     private var canCreate: Bool {
         !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && sourceGrantId != nil
-            && selectedProviderIds.isEmpty
             && !isCreating
     }
 
@@ -315,8 +314,10 @@ struct IOSNewBackupView: View {
         if let remembered = model.rememberedBackups.first(where: { $0.backupId == backupId }) {
             displayName = remembered.name
         }
-        // Fail closed until the node returns fresh signed reachability and reservable capacity.
-        selectedProviderIds = []
+        let eligible = Set(model.providers.filter(\.isEligibleForBackup).map(\.peerId))
+        selectedProviderIds = Set(
+            model.backups.first(where: { $0.backupId == backupId })?.selectedProviderIds ?? []
+        ).intersection(eligible)
     }
 
     private func createBackup() {

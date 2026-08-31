@@ -8,6 +8,8 @@
     <link rel="stylesheet" href="/assets/app.css" />
     <script src="/assets/pairing-flow.js" defer></script>
     <script src="/assets/restore-plan-flow.js" defer></script>
+    <script src="/assets/backup-terminal-flow.js" defer></script>
+    <script src="/assets/tab-flow.js" defer></script>
     <script src="/assets/app.js" defer></script>
   </head>
   <body>
@@ -32,7 +34,7 @@
       <section class="security-card" aria-labelledby="token-heading">
         <div>
           <h2 id="token-heading">Local access</h2>
-          <p class="muted">Enter the token from <code>/data/local-api-token</code> to use changes. It stays only in this browser tab and is never sent anywhere except this local node.</p>
+          <p class="muted">Enter the token from the owner-only output directory created by <code>covalent claim</code> on a trusted computer to make changes. This console accepts a token only; it does not accept a setup code. It stays only in this browser tab and is never sent anywhere except this local node.</p>
         </div>
         <form class="inline-form" data-token-form>
           <label for="api-token">Local API token</label>
@@ -42,13 +44,13 @@
       </section>
 
       <nav class="tabs" aria-label="Covalent actions" role="tablist">
-        <button id="pair-tab" role="tab" aria-selected="true" aria-controls="pair-panel" data-tab="pair">Pair</button>
-        <button id="backup-tab" role="tab" aria-selected="false" aria-controls="backup-panel" data-tab="backup">Backup</button>
-        <button id="restore-tab" role="tab" aria-selected="false" aria-controls="restore-panel" data-tab="restore">Restore</button>
-        <button id="settings-tab" role="tab" aria-selected="false" aria-controls="settings-panel" data-tab="settings">Settings</button>
+        <button id="pair-tab" role="tab" aria-selected="true" aria-controls="pair-panel" tabindex="0" data-tab="pair">Pair</button>
+        <button id="backup-tab" role="tab" aria-selected="false" aria-controls="backup-panel" tabindex="-1" data-tab="backup">Backup</button>
+        <button id="restore-tab" role="tab" aria-selected="false" aria-controls="restore-panel" tabindex="-1" data-tab="restore">Restore</button>
+        <button id="settings-tab" role="tab" aria-selected="false" aria-controls="settings-panel" tabindex="-1" data-tab="settings">Settings</button>
       </nav>
 
-      <section id="pair-panel" role="tabpanel" aria-labelledby="pair-tab" data-panel="pair">
+      <section id="pair-panel" role="tabpanel" aria-labelledby="pair-tab" tabindex="0" data-panel="pair">
         <div class="panel-heading"><div><h2>Pair a device</h2><p class="muted">Pairing requires both people to compare the same short code before a device receives any role.</p></div></div>
 
         <section class="card">
@@ -70,7 +72,7 @@
         <section class="card pairing-consent" data-network-card hidden aria-live="polite">
           <h3 data-network-peer></h3>
           <p class="muted" data-network-direction></p>
-          <p>Compare this code on both physical devices. Continue only if every group matches. Pairing copies nothing now; you choose this device separately when creating a backup.</p>
+          <p>Compare this code on both physical devices. Continue only if every group matches. Once both devices finish, Covalent verifies the connected backup device and its current capacity before it can be selected.</p>
           <p class="pairing-code" data-network-code role="status"></p>
           <p class="muted" data-network-expires></p>
           <p data-network-state></p>
@@ -111,11 +113,17 @@
           <div class="button-row"><button name="side" value="responder" data-pair-action="confirm">Add accepter confirmation</button><button name="side" value="inviter" data-pair-action="confirm" class="secondary">Add creator confirmation</button></div>
           <div class="button-row"><button name="side" value="responder" data-pair-action="finalize" disabled>Finalize as accepter</button><button name="side" value="inviter" data-pair-action="finalize" class="secondary" disabled>Finalize as creator</button><button type="button" class="quiet" data-pair-clear>Clear exchange</button></div>
         </form>
+        <section class="card pairing-consent" data-manual-provider-card hidden aria-live="polite">
+          <h3>Use this finalized device for backups</h3>
+          <p class="muted" data-manual-provider-summary></p>
+          <p>Use only the signed connection from this completed pairing. Covalent will verify the node retained that exact certificate pin and show its current capacity before it is selectable.</p>
+          <div class="button-row"><button type="button" data-manual-provider-connect>Use as backup device</button></div>
+        </section>
         </details>
       </section>
 
-      <section id="backup-panel" role="tabpanel" aria-labelledby="backup-tab" data-panel="backup" hidden>
-        <div class="panel-heading"><div><h2>Back up selected files</h2><p class="muted">Only read-only source mounts such as <code>/source</code> or <code>/boot-source</code> should be selected. Extra copies are made only on the provider IDs you enter.</p></div></div>
+      <section id="backup-panel" role="tabpanel" aria-labelledby="backup-tab" tabindex="0" data-panel="backup" hidden>
+        <div class="panel-heading"><div><h2>Back up selected files</h2><p class="muted">Only read-only source mounts such as <code>/source</code> or <code>/boot-source</code> should be selected. Extra copies are made only on the currently verified backup devices you choose.</p></div></div>
         <section class="card" aria-live="polite">
           <div class="button-row"><h3>Remembered backups</h3><button type="button" class="secondary" data-backups-refresh>Refresh list</button></div>
           <p class="muted" data-backups-empty>Unlock the console to load authoritative node backups.</p>
@@ -125,13 +133,22 @@
           <label>Source directory <input name="sourceRoot" value="/source" required /></label>
           <label>Backup name <input name="displayName" maxlength="120" required /></label>
           <label>Snapshot ID <input name="snapshotId" pattern="[A-Za-z0-9_-]+" value="snapshot-1" required /></label>
-          <label>Provider device IDs <textarea name="providers" rows="3" placeholder="One UUID per line. Leave empty for a local-only copy."></textarea></label>
-          <p class="notice">Provider selection is explicit. Covalent will not select or place replicas automatically.</p>
-          <button>Start backup</button>
+          <fieldset data-provider-selection>
+            <legend>Backup devices</legend>
+            <p class="muted" data-providers-empty>Unlock the console to inspect connected backup devices.</p>
+            <ul class="device-list" data-providers-list></ul>
+            <button type="button" class="secondary" data-providers-refresh>Refresh device capacity</button>
+          </fieldset>
+          <p class="notice">Provider selection is explicit. Unreachable, out-of-date, unknown, or full devices cannot be selected. Leave all devices clear for a local-only copy.</p>
+          <p data-backup-status role="status" aria-live="polite"></p>
+          <div class="button-row">
+            <button data-backup-submit>Start backup</button>
+            <button type="button" class="secondary" data-backup-retry hidden>Try again</button>
+          </div>
         </form>
       </section>
 
-      <section id="restore-panel" role="tabpanel" aria-labelledby="restore-tab" data-panel="restore" hidden>
+      <section id="restore-panel" role="tabpanel" aria-labelledby="restore-tab" tabindex="0" data-panel="restore" hidden>
         <div class="panel-heading"><div><h2>Preview before restore</h2><p class="muted">Choose a distinct writable target. Relative restore paths stay under that target; preview is required before any write.</p></div></div>
         <form class="card" data-restore-preview>
           <label>Backup ID <input name="backupId" required /></label>
@@ -152,7 +169,7 @@
         </section>
       </section>
 
-      <section id="settings-panel" role="tabpanel" aria-labelledby="settings-tab" data-panel="settings" hidden>
+      <section id="settings-panel" role="tabpanel" aria-labelledby="settings-tab" tabindex="0" data-panel="settings" hidden>
         <div class="panel-heading"><div><h2>Settings and reachability</h2><p class="muted">LAN discovery is <strong data-discovery>Unknown</strong>. It can remain off when you use explicit LAN addresses or Tailscale; neither method bypasses pairing.</p></div></div>
         <div class="two-column">
           <section class="card"><h3>Export safe settings</h3><p class="muted">Exports name, discovery preference, and remembered backups. It excludes identity keys, backup keys, grants, and provider credentials.</p><button type="button" data-settings-export>Download settings</button></section>

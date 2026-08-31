@@ -84,10 +84,10 @@ final class CovalentIOSUITests: XCTestCase {
         let testBundle = Bundle(for: CovalentIOSUITests.self)
         let port = environment["COVALENT_UI_TEST_PORT"]
             ?? testBundle.object(forInfoDictionaryKey: "CovalentUITestPort") as? String
-        let token = environment["COVALENT_UI_TEST_TOKEN"]
-            ?? testBundle.object(forInfoDictionaryKey: "CovalentUITestToken") as? String
+        let tokenFile = environment["COVALENT_UI_TEST_TOKEN_FILE"]
+            ?? testBundle.object(forInfoDictionaryKey: "CovalentUITestTokenFile") as? String
         app.launchEnvironment["COVALENT_UI_TEST_BASE_URL"] = "http://127.0.0.1:\(try XCTUnwrap(port))"
-        app.launchEnvironment["COVALENT_UI_TEST_TOKEN"] = try XCTUnwrap(token)
+        app.launchEnvironment["COVALENT_UI_TEST_TOKEN_FILE"] = try XCTUnwrap(tokenFile)
         app.launch()
         return app
     }

@@ -101,7 +101,7 @@ struct IOSSettingsView: View {
             }
 
             Section("About") {
-                LabeledContent("Client support", value: PlatformTier.tier2.label)
+                LabeledContent("Client support", value: "Preview — not released")
                 LabeledContent("Protocol", value: covalentProtocolVersion.formatted())
             }
         }

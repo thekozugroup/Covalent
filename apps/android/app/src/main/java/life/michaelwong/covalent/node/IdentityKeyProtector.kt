@@ -1,189 +1,261 @@
 package life.michaelwong.covalent.node
 
+import android.content.Context
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyInfo
-import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
+import android.util.AtomicFile
 import android.util.Base64
 import android.util.Log
 import androidx.annotation.RequiresApi
+import java.io.File
+import java.io.FileOutputStream
 import java.security.KeyStore
+import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 
-/**
- * How well this device can protect the credential that guards its Covalent identity.
- *
- * [wireValue] is a fixed part of the JNI contract and is decoded by
- * `IdentityProtection::from_wire` in `crates/covalent-android-jni`. Rust fails closed on
- * [UNAVAILABLE] and on any value it does not recognise, so these numbers must not be
- * reassigned; new levels may only be appended.
- */
+/** Fixed JNI wire values for the measured Android Keystore protection level. */
 enum class KeyProtectionLevel(val wireValue: Int) {
-    /** No Keystore key could be created or exercised. The embedded node must not run. */
     UNAVAILABLE(0),
-
-    /** A Keystore key exists, but this platform keeps it in software. */
     SOFTWARE(1),
-
-    /** The key lives in the device's trusted execution environment. */
     TRUSTED_ENVIRONMENT(2),
-
-    /** The key lives in a discrete StrongBox security chip. */
     STRONGBOX(3),
     ;
 
-    /** True when the key material is held by dedicated secure hardware. */
     val hardwareBacked: Boolean get() = this == TRUSTED_ENVIRONMENT || this == STRONGBOX
 }
 
 /**
- * Android Keystore protector for the embedded node's local API credential.
+ * Owned, versioned KEK plaintext. The caller must call [close] in a `finally` block.
  *
- * ## What this protects, and what it does not
- *
- * The embedded node keeps two long-lived secrets. This class owns the first outright and
- * gates the second:
- *
- *  1. **The local API bearer token.** Every management operation on the embedded node
- *     authenticates with it. It is generated here, sealed under a non-exportable
- *     AES-256-GCM key inside `AndroidKeyStore`, and only ever handed to Rust as a
- *     transient byte array that both sides zero after use.
- *  2. **The node's TLS identity keypair**, written by `covalent-node` into
- *     `data_directory/tls`. `covalent-node` owns that file directly and exposes no hook
- *     for wrapping it, so it is protected by the app-private UID sandbox plus Android
- *     file-based encryption rather than by a Keystore key. **It is not hardware-bound.**
- *     Closing that gap needs an identity-protector seam inside `crates/covalent-node`.
- *     Until it exists, [KeyProtectionLevel] describes the credential this class holds,
- *     and admission is fail-closed on it: no Keystore key, no embedded node, so the TLS
- *     identity is never created on a device that cannot protect anything at all.
- *
- * ## Key lifecycle decisions
- *
- * **Generation.** One AES-256-GCM key per install, alias [KEY_ALIAS], created lazily on
- * first use. StrongBox is requested first on API 28+ and the generation is retried
- * without it when the device has no StrongBox. `setRandomizedEncryptionRequired(true)`
- * forces a platform-generated IV per seal, so a caller cannot reuse one by mistake.
- *
- * **Storage.** The key is non-exportable: it never leaves the Keystore, and on a
- * hardware-backed device it never leaves secure hardware. Only the sealed envelope is
- * written to `SharedPreferences`, and the app's `allowBackup` is off, so no envelope
- * leaves the device in a cloud backup where its key could not follow.
- *
- * **Use.** No `setUserAuthenticationRequired(true)`. This is deliberate and is the one
- * decision here that trades security for function: the node runs headless in a foreground
- * service and in scheduled `WorkManager` transfers, including while the screen is locked.
- * An auth-bound key would make every unattended backup fail. Because the key is not
- * auth-bound, `setInvalidatedByBiometricEnrollment` has no effect on it — that flag only
- * governs auth-bound keys — so enrolling or removing a fingerprint does **not** invalidate
- * this key and does not interrupt backups. The trade-off: an attacker with a running,
- * unlocked device and code execution as this app can use the key, though still not
- * extract it.
- *
- * **Rotation.** The sealed envelope carries a version tag ([ENVELOPE_VERSION]). Any
- * failure to open an envelope — a replaced key, a corrupted record, a format change — is
- * treated as "this credential is gone": the caller mints a fresh token and re-seals it.
- * That is safe because the token is a loopback-only bearer credential that is always
- * passed explicitly to the node at start, so rotating it invalidates nothing durable. The
- * TLS identity is deliberately *not* rotated with it, because rotating it would break
- * every pairing this device has completed.
- *
- * **Device loss.** The key is non-exportable and, on hardware-backed devices, bound to
- * the device's secure hardware. Removing the storage does not yield a usable key.
- *
- * **App uninstall.** Android deletes the app's Keystore entries along with the app. The
- * node's state directory lives under `noBackupFilesDir`, which is deleted at the same
- * time, so the credential and the data it guarded disappear together.
- *
- * **Factory reset.** Erases the Keystore, including hardware-backed key material. Any
- * surviving copy of the node directory becomes permanently unopenable, which is the
- * intended outcome.
- *
- * **Lockscreen change.** Clearing the device lock wipes auth-bound keys on most Android
- * versions. This key is not auth-bound, so it normally survives. Some vendors are
- * stricter, so [KeyPermanentlyInvalidatedException] is still handled: the alias is
- * dropped and the credential rotates on the next start.
+ * The only persisted representation of these bytes is the AES-GCM ciphertext written to
+ * `noBackupFilesDir/covalent-node-secrets/kek-envelope.v1`.
  */
-internal class IdentityKeyProtector {
+internal class VersionedKeyEncryptionKey(
+    val version: Int,
+    val bytes: ByteArray,
+) : AutoCloseable {
+    override fun close() {
+        bytes.fill(0)
+    }
+}
 
-    /**
-     * The measured protection level for this device.
-     *
-     * This probes rather than assumes: it creates the key if needed, performs a real
-     * seal/open round trip through it, and only then reports the level recorded in the
-     * key's own [KeyInfo]. A key that exists but cannot actually encrypt reports
-     * [KeyProtectionLevel.UNAVAILABLE].
-     */
+/**
+ * Non-exportable Android Keystore wrapper for the embedded node's exact versioned KEK.
+ *
+ * The Android key never leaves `AndroidKeyStore`. A random 32-byte Covalent KEK is wrapped
+ * with AES-256-GCM and stored atomically under [Context.getNoBackupFilesDir]. The KEK is
+ * unwrapped only for a synchronous JNI start and every owned Kotlin/JNI/Rust input buffer is
+ * zeroized. Rust retains its own zeroizing `StaticKeyProtector` only while the node is live.
+ *
+ * Existing ciphertext is authoritative. If the Keystore entry is missing, invalidated,
+ * authentication fails, the envelope is malformed, or any I/O fails, no replacement key is
+ * generated and the provider stays locked. Minting a new KEK is allowed only when no KEK
+ * envelope exists; that is the legacy local-node migration case. The core then atomically
+ * rewrites legacy plaintext identity/TLS/key records under this KEK.
+ *
+ * The key is intentionally not user-authentication-bound. The opted-in provider must run in
+ * a foreground service while the screen is locked. Credential-encrypted no-backup storage
+ * still keeps the envelope unavailable before the first unlock after reboot.
+ */
+internal class IdentityKeyProtector(context: Context) {
+    private val applicationContext = context.applicationContext
+    // Resolve credential-encrypted no-backup storage only after DirectBoot admission.
+    private val kekEnvelope by lazy {
+        AtomicFile(File(applicationContext.noBackupFilesDir, "covalent-node-secrets/kek-envelope.v1"))
+    }
+    private val csprng = SecureRandom()
+
     fun protection(): KeyProtectionLevel {
-        cached?.let { return it }
-        val measured = measureProtection()
-        if (measured != KeyProtectionLevel.UNAVAILABLE) cached = measured
+        if (!DirectBoot.isUserUnlocked(applicationContext)) return KeyProtectionLevel.UNAVAILABLE
+        cachedProtection?.let { return it }
+        val measured = synchronized(lock) { measureProtection() }
+        if (measured != KeyProtectionLevel.UNAVAILABLE) cachedProtection = measured
         return measured
     }
 
-    /** Seals [plaintext] under the Keystore key, or returns null if the key is unusable. */
-    fun seal(plaintext: String): String? = runCatching {
-        val cipher = Cipher.getInstance(TRANSFORMATION).apply {
-            init(Cipher.ENCRYPT_MODE, requireKey())
-            updateAAD(AAD)
+    /**
+     * Opens the persisted KEK or creates it exactly once for a fresh/legacy local node.
+     * Existing-but-unopenable ciphertext always returns null and is never replaced.
+     */
+    fun loadOrCreateKeyEncryptionKey(): VersionedKeyEncryptionKey? = synchronized(lock) {
+        if (!DirectBoot.isUserUnlocked(applicationContext)) return@synchronized null
+        if (kekEnvelope.baseFile.exists()) return@synchronized openPersistedKek()
+
+        val generated = ByteArray(KEK_BYTES)
+        try {
+            csprng.nextBytes(generated)
+            val sealed = seal(generated, KEK_AAD) ?: return@synchronized null
+            if (!writeKekEnvelope("$KEK_ENVELOPE_VERSION:$CURRENT_KEK_VERSION:$sealed")) {
+                return@synchronized null
+            }
+            // Read through the durable representation. This proves the bytes that will be
+            // used after the next process start are the exact bytes passed to Rust now.
+            openPersistedKek()
+        } finally {
+            generated.fill(0)
         }
-        val ciphertext = cipher.doFinal(plaintext.encodeToByteArray())
-        listOf(
-            ENVELOPE_VERSION,
-            Base64.encodeToString(cipher.iv, Base64.NO_WRAP),
-            Base64.encodeToString(ciphertext, Base64.NO_WRAP),
-        ).joinToString(SEPARATOR)
-    }.getOrElse { failure ->
-        forgetIfPermanentlyInvalidated(failure)
-        Log.w(TAG, "Sealing the local node credential failed: ${failure.javaClass.simpleName}")
-        null
+    }
+
+    /** Seals a local-node API token under a separate authenticated domain. */
+    fun sealToken(plaintext: ByteArray): String? = synchronized(lock) {
+        seal(plaintext, TOKEN_AAD)?.let { "$TOKEN_ENVELOPE_VERSION:$it" }
+    }
+
+    /** Opens only the current token envelope. Every error is a locked result. */
+    fun openToken(envelope: String): ByteArray? = synchronized(lock) {
+        val parts = envelope.split(SEPARATOR)
+        if (parts.size != 3 || parts[0] != TOKEN_ENVELOPE_VERSION) return@synchronized null
+        open(parts[1], parts[2], TOKEN_AAD, requireCurrentKey(allowCreate = false))
     }
 
     /**
-     * Opens an envelope produced by [seal]. Returns null for every failure — a rotated
-     * key, a corrupted record, an envelope from an older format — so callers uniformly
-     * treat an unopenable credential as one that must be minted again.
+     * Opens the pre-v2 local-token envelope without modifying it. The caller atomically
+     * replaces the preference with [sealToken] only after this succeeds.
      */
-    fun open(envelope: String): String? = runCatching {
+    fun openLegacyToken(envelope: String): ByteArray? = synchronized(lock) {
         val parts = envelope.split(SEPARATOR)
-        require(parts.size == 3 && parts[0] == ENVELOPE_VERSION) { "unsupported envelope" }
-        val cipher = Cipher.getInstance(TRANSFORMATION).apply {
-            init(
-                Cipher.DECRYPT_MODE,
-                requireKey(),
-                GCMParameterSpec(GCM_TAG_BITS, Base64.decode(parts[1], Base64.NO_WRAP)),
-            )
-            updateAAD(AAD)
-        }
-        cipher.doFinal(Base64.decode(parts[2], Base64.NO_WRAP)).decodeToString()
-    }.getOrElse { failure ->
-        forgetIfPermanentlyInvalidated(failure)
-        Log.w(TAG, "Opening the local node credential failed: ${failure.javaClass.simpleName}")
-        null
+        if (parts.size != 2) return@synchronized null
+        val legacy = keyStore().getKey(LEGACY_TOKEN_KEY_ALIAS, null) as? SecretKey
+            ?: return@synchronized null
+        open(parts[0], parts[1], byteArrayOf(), legacy)
     }
 
-    /** Drops the Keystore entry so the next call regenerates it. */
-    fun forget() {
-        cached = null
-        runCatching { keyStore().deleteEntry(KEY_ALIAS) }
+    private fun openPersistedKek(): VersionedKeyEncryptionKey? {
+        val encoded = runCatching {
+            val file = kekEnvelope.baseFile
+            if (!file.isFile || file.length() !in 1..MAX_ENVELOPE_BYTES.toLong()) return null
+            kekEnvelope.openRead().bufferedReader(Charsets.UTF_8).use { it.readText() }
+        }.getOrElse { failure ->
+            Log.w(TAG, "Reading the protected node key failed: ${failure.javaClass.simpleName}")
+            return null
+        }
+        val parts = encoded.split(SEPARATOR)
+        if (parts.size != 4 || parts[0] != KEK_ENVELOPE_VERSION) return null
+        val version = parts[1].toIntOrNull()?.takeIf { it == CURRENT_KEK_VERSION } ?: return null
+        val plaintext = open(
+            iv = parts[2],
+            ciphertext = parts[3],
+            aad = kekAad(version),
+            key = requireCurrentKey(allowCreate = false),
+        ) ?: return null
+        if (plaintext.size != KEK_BYTES) {
+            plaintext.fill(0)
+            return null
+        }
+        return VersionedKeyEncryptionKey(version, plaintext)
     }
 
     private fun measureProtection(): KeyProtectionLevel = runCatching {
-        val key = requireKey()
-        // A round trip through the real key, because a key can exist and still be
-        // unusable: a wiped secure element, a revoked entry, a broken provider.
-        val probe = seal(PROBE_PLAINTEXT) ?: return KeyProtectionLevel.UNAVAILABLE
-        if (open(probe) != PROBE_PLAINTEXT) return KeyProtectionLevel.UNAVAILABLE
+        val key = requireCurrentKey(allowCreate = !hasCurrentProtectedMaterial())
+            ?: return KeyProtectionLevel.UNAVAILABLE
+        val probe = PROBE.copyOf()
+        val opened = try {
+            val sealed = seal(probe, PROBE_AAD, key) ?: return KeyProtectionLevel.UNAVAILABLE
+            val parts = sealed.split(SEPARATOR)
+            if (parts.size != 2) return KeyProtectionLevel.UNAVAILABLE
+            open(parts[0], parts[1], PROBE_AAD, key)
+        } finally {
+            probe.fill(0)
+        }
+        val roundTrip = try {
+            opened != null && opened.contentEquals(PROBE)
+        } finally {
+            opened?.fill(0)
+        }
+        if (!roundTrip) return KeyProtectionLevel.UNAVAILABLE
         securityLevel(key)
     }.getOrElse { failure ->
-        forgetIfPermanentlyInvalidated(failure)
-        Log.w(TAG, "Keystore identity protection is unavailable: ${failure.javaClass.simpleName}")
+        Log.w(TAG, "Keystore key protection is unavailable: ${failure.javaClass.simpleName}")
         KeyProtectionLevel.UNAVAILABLE
+    }
+
+    /** Existing ciphertext means alias loss/invalidation must not silently mint a new key. */
+    private fun hasCurrentProtectedMaterial(): Boolean {
+        if (!DirectBoot.isUserUnlocked(applicationContext)) return true
+        if (kekEnvelope.baseFile.exists()) return true
+        return runCatching {
+            applicationContext
+                .getSharedPreferences(LOCAL_CREDENTIAL_PREFERENCES, Context.MODE_PRIVATE)
+                .getString(TOKEN_PREFERENCE, null)
+                ?.startsWith("$TOKEN_ENVELOPE_VERSION$SEPARATOR") == true
+        }.getOrDefault(true)
+    }
+
+    private fun seal(plaintext: ByteArray, aad: ByteArray): String? {
+        val key = requireCurrentKey(allowCreate = !hasCurrentProtectedMaterial()) ?: return null
+        return seal(plaintext, aad, key)
+    }
+
+    private fun seal(plaintext: ByteArray, aad: ByteArray, key: SecretKey): String? = runCatching {
+        val cipher = Cipher.getInstance(TRANSFORMATION).apply {
+            init(Cipher.ENCRYPT_MODE, key)
+            updateAAD(aad)
+        }
+        val ciphertext = cipher.doFinal(plaintext)
+        try {
+            Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + SEPARATOR +
+                Base64.encodeToString(ciphertext, Base64.NO_WRAP)
+        } finally {
+            ciphertext.fill(0)
+        }
+    }.getOrElse { failure ->
+        Log.w(TAG, "Sealing protected node material failed: ${failure.javaClass.simpleName}")
+        null
+    }
+
+    private fun open(
+        iv: String,
+        ciphertext: String,
+        aad: ByteArray,
+        key: SecretKey?,
+    ): ByteArray? {
+        if (key == null || iv.length > MAX_ENVELOPE_BYTES || ciphertext.length > MAX_ENVELOPE_BYTES) return null
+        var decodedIv: ByteArray? = null
+        var decodedCiphertext: ByteArray? = null
+        return runCatching {
+            decodedIv = Base64.decode(iv, Base64.NO_WRAP)
+            decodedCiphertext = Base64.decode(ciphertext, Base64.NO_WRAP)
+            require(decodedIv!!.size == GCM_IV_BYTES) { "invalid IV" }
+            require(decodedCiphertext!!.size in GCM_TAG_BYTES..MAX_CIPHERTEXT_BYTES) { "invalid ciphertext" }
+            Cipher.getInstance(TRANSFORMATION).apply {
+                init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_BITS, decodedIv))
+                updateAAD(aad)
+            }.doFinal(decodedCiphertext)
+        }.getOrElse { failure ->
+            Log.w(TAG, "Opening protected node material failed: ${failure.javaClass.simpleName}")
+            null
+        }.also {
+            decodedIv?.fill(0)
+            decodedCiphertext?.fill(0)
+        }
+    }
+
+    private fun writeKekEnvelope(value: String): Boolean {
+        val parent = kekEnvelope.baseFile.parentFile ?: return false
+        if (!(parent.mkdirs() || parent.isDirectory)) return false
+        var output: FileOutputStream? = null
+        val bytes = value.encodeToByteArray()
+        return try {
+            output = kekEnvelope.startWrite()
+            output.write(bytes)
+            output.fd.sync()
+            kekEnvelope.finishWrite(output)
+            output = null
+            true
+        } catch (failure: Exception) {
+            output?.let(kekEnvelope::failWrite)
+            Log.w(TAG, "Persisting the protected node key failed: ${failure.javaClass.simpleName}")
+            false
+        } finally {
+            bytes.fill(0)
+        }
     }
 
     private fun securityLevel(key: SecretKey): KeyProtectionLevel {
@@ -192,35 +264,25 @@ internal class IdentityKeyProtector {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             securityLevelFromApi31(info)
         } else {
-            // API 26-30 has no KeyInfo.getSecurityLevel(), so this deprecated predicate is
-            // the only way to tell a TEE-backed key from a software one on those releases.
-            // Dropping it would report SOFTWARE for every pre-31 device and understate the
-            // hardware protection that is actually there. Delete this branch — and the
-            // CodeQL java/deprecated-call dismissal covering it — when minSdk reaches 31.
             @Suppress("DEPRECATION")
-            if (info.isInsideSecureHardware) {
-                KeyProtectionLevel.TRUSTED_ENVIRONMENT
-            } else {
-                KeyProtectionLevel.SOFTWARE
-            }
+            if (info.isInsideSecureHardware) KeyProtectionLevel.TRUSTED_ENVIRONMENT
+            else KeyProtectionLevel.SOFTWARE
         }
     }
 
     @RequiresApi(Build.VERSION_CODES.S)
-    private fun securityLevelFromApi31(info: KeyInfo): KeyProtectionLevel =
-        when (info.securityLevel) {
-            KeyProperties.SECURITY_LEVEL_STRONGBOX -> KeyProtectionLevel.STRONGBOX
-            KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT -> KeyProtectionLevel.TRUSTED_ENVIRONMENT
-            // UNKNOWN_SECURE means the platform vouches for secure hardware without
-            // naming it; anything else, including SECURITY_LEVEL_UNKNOWN, is reported
-            // as software so the UI never overstates what protects the credential.
-            KeyProperties.SECURITY_LEVEL_UNKNOWN_SECURE -> KeyProtectionLevel.TRUSTED_ENVIRONMENT
-            else -> KeyProtectionLevel.SOFTWARE
-        }
+    private fun securityLevelFromApi31(info: KeyInfo): KeyProtectionLevel = when (info.securityLevel) {
+        KeyProperties.SECURITY_LEVEL_STRONGBOX -> KeyProtectionLevel.STRONGBOX
+        KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT,
+        KeyProperties.SECURITY_LEVEL_UNKNOWN_SECURE,
+        -> KeyProtectionLevel.TRUSTED_ENVIRONMENT
+        else -> KeyProtectionLevel.SOFTWARE
+    }
 
-    private fun requireKey(): SecretKey {
+    private fun requireCurrentKey(allowCreate: Boolean): SecretKey? {
         val store = keyStore()
         (store.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
+        if (!allowCreate) return null
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             generateStrongBoxKey()?.let { return it }
         }
@@ -231,7 +293,6 @@ internal class IdentityKeyProtector {
     private fun generateStrongBoxKey(): SecretKey? = try {
         generateKey(strongBox = true)
     } catch (_: StrongBoxUnavailableException) {
-        // Expected on every device without a StrongBox chip.
         null
     }
 
@@ -246,6 +307,7 @@ internal class IdentityKeyProtector {
                     .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                     .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                     .setRandomizedEncryptionRequired(true)
+                    .setUserAuthenticationRequired(false)
                     .apply {
                         if (strongBox && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                             setIsStrongBoxBacked(true)
@@ -257,37 +319,35 @@ internal class IdentityKeyProtector {
 
     private fun keyStore(): KeyStore = KeyStore.getInstance(PROVIDER).apply { load(null) }
 
-    private fun forgetIfPermanentlyInvalidated(failure: Throwable) {
-        if (failure is KeyPermanentlyInvalidatedException) forget()
-    }
+    private fun kekAad(version: Int): ByteArray =
+        "covalent.node.kek-envelope/$version".encodeToByteArray()
 
     private companion object {
-        const val TAG = "CovalentIdentityKey"
+        const val TAG = "CovalentKeyProtector"
         const val PROVIDER = "AndroidKeyStore"
-
-        /**
-         * A new alias, distinct from the pre-Keystore-hardening `…token.v1` entry. The
-         * old alias was generated without an explicit key size, without randomized
-         * encryption, and without a StrongBox attempt; adopting a fresh alias means an
-         * upgrading install gets the hardened key rather than silently keeping the weaker
-         * one, at the cost of one credential rotation.
-         */
         const val KEY_ALIAS = "covalent.node.identity.protector.v2"
+        const val LEGACY_TOKEN_KEY_ALIAS = "covalent.embedded.node.token.v1"
+        const val LOCAL_CREDENTIAL_PREFERENCES = "covalent_embedded_node_credentials"
+        const val TOKEN_PREFERENCE = "token"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
-        const val ENVELOPE_VERSION = "v2"
+        const val KEK_ENVELOPE_VERSION = "kek1"
+        const val TOKEN_ENVELOPE_VERSION = "v2"
         const val SEPARATOR = ":"
+        const val CURRENT_KEK_VERSION = 1
+        const val KEK_BYTES = 32
         const val KEY_SIZE_BITS = 256
         const val GCM_TAG_BITS = 128
-        const val PROBE_PLAINTEXT = "covalent-key-protection-probe"
-        val AAD = "covalent.node.local-api-credential".encodeToByteArray()
+        const val GCM_TAG_BYTES = GCM_TAG_BITS / 8
+        const val GCM_IV_BYTES = 12
+        const val MAX_CIPHERTEXT_BYTES = 1024
+        const val MAX_ENVELOPE_BYTES = 4096
+        val PROBE = "covalent-key-protection-probe".encodeToByteArray()
+        val PROBE_AAD = "covalent.node.key-protection-probe".encodeToByteArray()
+        val TOKEN_AAD = "covalent.node.local-api-credential".encodeToByteArray()
+        val KEK_AAD = "covalent.node.kek-envelope/1".encodeToByteArray()
+        val lock = Any()
 
-        /**
-         * Probing costs a Keystore round trip, so a successful measurement is reused for
-         * the process lifetime. Only successes are cached: a device that failed once —
-         * during early boot, or while the secure element was busy — must be able to
-         * recover without a restart.
-         */
         @Volatile
-        var cached: KeyProtectionLevel? = null
+        var cachedProtection: KeyProtectionLevel? = null
     }
 }

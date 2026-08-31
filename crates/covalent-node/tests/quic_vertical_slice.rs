@@ -7,23 +7,30 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use covalent_core::{
-    BackupOptions, ChunkProvider, Engine, EngineOptions, JobControl, RestoreOptions,
+    BackupOptions, ChunkProvider, ChunkingConfig, Engine, EngineOptions, JobControl,
+    RestoreOptions, StaticKeyProtector,
 };
 use covalent_node::transport::{QuicNode, QuicProvider, TlsIdentity};
 use covalent_protocol::{BackupId, PeerRole, ReplicaAvailability, ReplicaIntent};
 use tempfile::tempdir;
 
+fn engine_options(path: &std::path::Path) -> EngineOptions {
+    EngineOptions::new(path).with_key_protector(Arc::new(
+        StaticKeyProtector::new(1, [0xd1; 32]).expect("test protector"),
+    ))
+}
+
 /// Executes at 64 MiB by default. `COVALENT_QUIC_SCALE_BYTES` raises that, and a
-/// value outside the 8 MiB..=10 GiB envelope - or one that is not a plain byte
+/// value outside the 8 MiB..=1 GiB envelope - or one that is not a plain byte
 /// count - now fails the test instead of silently reverting to the default.
 ///
 /// No workflow or script sets `COVALENT_QUIC_SCALE_BYTES` today, so the larger
 /// runs below are operator-invoked and must not be described as release
-/// validation until something actually invokes them. Capable dedicated hosts can
-/// run the production ceiling with
-/// `COVALENT_QUIC_SCALE_BYTES=10737418240 cargo test --locked -p covalent-node
-/// --test quic_vertical_slice real_quic_scale_backup_and_restore_is_streaming_and_disk_bounded
-/// -- --nocapture`.
+/// validation until something actually invokes them. A capable CI or local host
+/// can run the bounded 1 GiB gate with
+/// `COVALENT_QUIC_SCALE_BYTES=1073741824 cargo test --locked --release -p
+/// covalent-node --test quic_vertical_slice
+/// real_quic_scale_backup_and_restore_is_streaming_and_disk_bounded -- --nocapture`.
 #[tokio::test(flavor = "multi_thread")]
 async fn real_quic_scale_backup_and_restore_is_streaming_and_disk_bounded() {
     let owner_data = tempdir().expect("owner data");
@@ -46,8 +53,8 @@ async fn real_quic_scale_backup_and_restore_is_streaming_and_disk_bounded() {
         Err(error) => panic!("COVALENT_QUIC_SCALE_BYTES is unreadable: {error}"),
     };
     assert!(
-        (8_u64 << 20..=10_u64 << 30).contains(&transfer_bytes),
-        "COVALENT_QUIC_SCALE_BYTES={transfer_bytes} is outside the 8 MiB..=10 GiB envelope"
+        (8_u64 << 20..=1_u64 << 30).contains(&transfer_bytes),
+        "COVALENT_QUIC_SCALE_BYTES={transfer_bytes} is outside the 8 MiB..=1 GiB envelope"
     );
     let source_path = source.path().join("nested/data.bin");
     let mut source_file = File::create(&source_path).expect("source file");
@@ -72,9 +79,8 @@ async fn real_quic_scale_backup_and_restore_is_streaming_and_disk_bounded() {
     drop(source_file);
     let source_digest = source_digest.finalize();
 
-    let owner = Arc::new(Engine::open(EngineOptions::new(owner_data.path())).expect("owner"));
-    let provider =
-        Arc::new(Engine::open(EngineOptions::new(provider_data.path())).expect("provider"));
+    let owner = Arc::new(Engine::open(engine_options(owner_data.path())).expect("owner"));
+    let provider = Arc::new(Engine::open(engine_options(provider_data.path())).expect("provider"));
     let invitation = owner
         .pairing_manager()
         .create_invitation(1_000, 60_000, Vec::new())
@@ -121,7 +127,13 @@ async fn real_quic_scale_backup_and_restore_is_streaming_and_disk_bounded() {
         .finalize_pairing_as_responder(&session, 2_000)
         .expect("provider grant");
 
-    let tls = TlsIdentity::load_or_create(provider_data.path().join("tls")).expect("TLS");
+    let tls_protector = StaticKeyProtector::new(1, [0xd1; 32]).expect("test protector");
+    let tls = TlsIdentity::load_or_create(
+        provider_data.path().join("tls"),
+        provider_data.path(),
+        &tls_protector,
+    )
+    .expect("TLS");
     let node = QuicNode::bind(
         "127.0.0.1:0".parse().expect("address"),
         Arc::clone(&provider),
@@ -162,22 +174,43 @@ async fn real_quic_scale_backup_and_restore_is_streaming_and_disk_bounded() {
         provider_data.path().to_path_buf(),
     ]);
     let started = Instant::now();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10 * 60);
+    let maximum_elapsed = Duration::from_secs(10 * 60);
+    let deadline = tokio::time::Instant::now() + maximum_elapsed;
+    let backup_started = Instant::now();
+    let scan_elapsed_ms = Arc::new(AtomicU64::new(0));
     let backup_control = JobControl::new();
     let mut backup_task = tokio::task::spawn_blocking({
         let owner = Arc::clone(&owner);
         let source_path = source.path().to_path_buf();
         let control = backup_control.clone();
-        move || owner.backup(source_path, &options, &control, |_| {})
+        let scan_elapsed_ms = Arc::clone(&scan_elapsed_ms);
+        move || {
+            owner.backup(source_path, &options, &control, |progress| {
+                if progress.bytes_read >= transfer_bytes {
+                    let _ = scan_elapsed_ms.compare_exchange(
+                        0,
+                        backup_started.elapsed().as_millis() as u64,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    );
+                }
+            })
+        }
     });
     let backup = tokio::select! {
         result = &mut backup_task => result.expect("backup worker").expect("backup"),
         () = tokio::time::sleep_until(deadline) => {
             backup_control.cancel();
             let _ = backup_task.await;
-            panic!("real QUIC scale transfer exceeded the ten-minute gate during backup");
+            panic!("real QUIC scale transfer exceeded the {maximum_elapsed:?} gate during backup");
         }
     };
+    let backup_elapsed = backup_started.elapsed();
+    let backup_throughput_mib_per_second =
+        transfer_bytes as f64 / (1_024.0 * 1_024.0) / backup_elapsed.as_secs_f64();
+    let scan_elapsed_ms = scan_elapsed_ms.load(Ordering::Relaxed);
+    let backup_metrics = quic_provider.metrics();
+    let backup_peak_rss = rss_sampler.peak();
     assert!(
         backup
             .replication
@@ -191,7 +224,9 @@ async fn real_quic_scale_backup_and_restore_is_streaming_and_disk_bounded() {
     let provider_chunk_root = provider.store().root().join("chunks");
     let provider_chunk_bytes = tree_file_bytes(&provider_chunk_root);
     let provider_chunk_count = tree_file_count(&provider_chunk_root);
-    let minimum_chunk_count = transfer_bytes.div_ceil(1_024 * 1_024);
+    let minimum_chunk_count = transfer_bytes.div_ceil(
+        u64::try_from(ChunkingConfig::default().maximum_size).expect("maximum chunk size"),
+    );
     assert!(
         provider_chunk_bytes >= transfer_bytes.saturating_mul(9) / 10,
         "provider stored only {provider_chunk_bytes} encrypted chunk bytes for {transfer_bytes} nonrepeating source bytes"
@@ -204,7 +239,15 @@ async fn real_quic_scale_backup_and_restore_is_streaming_and_disk_bounded() {
         provider_chunk_count,
         u64::try_from(backup.stored_snapshot.chunk_locators.len()).expect("locator count")
     );
+    if transfer_bytes == 1_u64 << 30 {
+        let durable_lease_files = tree_file_count(&provider.store().root().join("provider-leases"));
+        assert!(
+            durable_lease_files >= 4,
+            "1 GiB pipeline used only {durable_lease_files} durable lease files; segmented lease expansion was not exercised"
+        );
+    }
 
+    let verification_started = Instant::now();
     let availability = tokio::task::spawn_blocking({
         let owner = Arc::clone(&owner);
         move || owner.verify_snapshot_availability(backup_id, "0001")
@@ -216,6 +259,9 @@ async fn real_quic_scale_backup_and_restore_is_streaming_and_disk_bounded() {
         availability.providers.get(&provider.device_id()),
         Some(&ReplicaAvailability::Complete)
     );
+    let verification_elapsed = verification_started.elapsed();
+    let verification_metrics = quic_provider.metrics();
+    let verification_peak_rss = rss_sampler.peak();
 
     for locator in &backup.stored_snapshot.chunk_locators {
         fs::remove_file(
@@ -244,6 +290,7 @@ async fn real_quic_scale_backup_and_restore_is_streaming_and_disk_bounded() {
             &RestoreOptions::all("quic-restore"),
         )
         .expect("preview");
+    let restore_started = Instant::now();
     let restore_control = JobControl::new();
     let mut restore_task = tokio::task::spawn_blocking({
         let owner = Arc::clone(&owner);
@@ -257,9 +304,11 @@ async fn real_quic_scale_backup_and_restore_is_streaming_and_disk_bounded() {
         () = tokio::time::sleep_until(deadline) => {
             restore_control.cancel();
             let _ = restore_task.await;
-            panic!("real QUIC scale transfer exceeded the ten-minute gate during restore");
+            panic!("real QUIC scale transfer exceeded the {maximum_elapsed:?} gate during restore");
         }
     }
+    let restore_elapsed = restore_started.elapsed();
+    let restore_peak_rss = rss_sampler.peak();
     let restored_path = restore.path().join("nested/data.bin");
     assert_eq!(
         fs::metadata(&restored_path).expect("restored file").len(),
@@ -304,15 +353,42 @@ async fn real_quic_scale_backup_and_restore_is_streaming_and_disk_bounded() {
         "peak RSS grew by {rss_growth} bytes for a {transfer_bytes}-byte transfer"
     );
     assert!(
-        started.elapsed() < Duration::from_secs(10 * 60),
-        "real QUIC scale transfer exceeded the ten-minute gate"
+        started.elapsed() < maximum_elapsed,
+        "real QUIC scale transfer exceeded the {maximum_elapsed:?} gate"
     );
+    let transport_metrics = quic_provider.metrics();
+    assert!(transport_metrics.requests > 0);
+    assert_eq!(transport_metrics.failures, 0);
+    assert_eq!(transport_metrics.cancellations, 0);
+    assert_eq!(transport_metrics.requests, transport_metrics.successes);
+    assert!(transport_metrics.request_bytes >= provider_chunk_bytes);
+    assert!(transport_metrics.response_bytes >= provider_chunk_bytes);
     eprintln!(
-        "QUIC scale: architecture={} bytes={transfer_bytes} elapsed_ms={} peak_rss_bytes={peak_rss} rss_growth_bytes={rss_growth} provider_chunk_bytes={provider_chunk_bytes} provider_chunk_count={provider_chunk_count} peak_owner_provider_disk_bytes={peak_disk} final_owner_provider_disk_bytes={}",
+        "QUIC scale: architecture={} bytes={transfer_bytes} source_digest={} elapsed_ms={} backup_ms={} backup_throughput_mib_per_second={backup_throughput_mib_per_second:.3} scan_and_local_commit_ms={scan_elapsed_ms} post_scan_backup_ms={} verification_ms={} restore_ms={} backup_peak_rss_bytes={backup_peak_rss} verification_peak_rss_bytes={verification_peak_rss} restore_peak_rss_bytes={restore_peak_rss} peak_rss_bytes={peak_rss} rss_growth_bytes={rss_growth} provider_chunk_bytes={provider_chunk_bytes} provider_chunk_count={provider_chunk_count} peak_owner_provider_disk_bytes={peak_disk} final_owner_provider_disk_bytes={} transport_requests={} backup_requests={} verification_requests={} transport_request_bytes={} transport_response_bytes={}",
         std::env::consts::ARCH,
+        source_digest.to_hex(),
         started.elapsed().as_millis(),
-        owner_disk.saturating_add(provider_disk)
+        backup_elapsed.as_millis(),
+        backup_elapsed
+            .as_millis()
+            .saturating_sub(u128::from(scan_elapsed_ms)),
+        verification_elapsed.as_millis(),
+        restore_elapsed.as_millis(),
+        owner_disk.saturating_add(provider_disk),
+        transport_metrics.requests,
+        backup_metrics.requests,
+        verification_metrics
+            .requests
+            .saturating_sub(backup_metrics.requests),
+        transport_metrics.request_bytes,
+        transport_metrics.response_bytes
     );
+    if transfer_bytes == 1_u64 << 30 {
+        assert!(
+            backup_throughput_mib_per_second >= 20.0,
+            "1 GiB complete backup throughput {backup_throughput_mib_per_second:.3} MiB/s is below the 20 MiB/s production gate"
+        );
+    }
 
     owner
         .revoke_peer(provider.device_id())
@@ -344,7 +420,7 @@ fn repeated_pattern_backup_deduplicates_physical_storage() {
     source_file.sync_all().expect("sync dedup source");
     drop(source_file);
 
-    let engine = Engine::open(EngineOptions::new(state.path())).expect("dedup engine");
+    let engine = Engine::open(engine_options(state.path())).expect("dedup engine");
     let backup_id = BackupId::new();
     let options = BackupOptions::new(backup_id, "0001", "dedup-regression");
     let result = engine
@@ -456,6 +532,10 @@ impl RssSampler {
              process has; the RSS ceiling would be asserting against nothing"
         );
         peak
+    }
+
+    fn peak(&self) -> u64 {
+        self.peak.load(Ordering::Relaxed)
     }
 }
 

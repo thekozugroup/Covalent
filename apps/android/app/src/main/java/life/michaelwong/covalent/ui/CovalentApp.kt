@@ -113,6 +113,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.viewmodel.compose.viewModel
+import java.io.InputStream
 import java.net.URI
 import java.net.InetAddress
 import java.net.URLDecoder
@@ -183,6 +184,31 @@ internal data class ValidatedSetup(
     val status: NodeStatus,
     val backups: List<RememberedBackup>,
 )
+
+private const val CLAIM_TOKEN_FILE_MAX_BYTES = 1_024
+
+internal fun parseClaimTokenFile(bytes: ByteArray): String {
+    require(bytes.size <= CLAIM_TOKEN_FILE_MAX_BYTES) { "token file is too large" }
+    val token = bytes.toString(Charsets.UTF_8).trim()
+    require(token.length in 32..512) { "token length is invalid" }
+    require(token.all { it.code in 0x21..0x7e && it != '"' && it != '\\' }) {
+        "token contains invalid characters"
+    }
+    return token
+}
+
+internal fun readClaimTokenFile(input: InputStream): String {
+    val bounded = ByteArray(CLAIM_TOKEN_FILE_MAX_BYTES + 1)
+    var count = 0
+    while (count < bounded.size) {
+        val read = input.read(bounded, count, bounded.size - count)
+        if (read < 0) break
+        if (read == 0) continue
+        count += read
+    }
+    require(count <= CLAIM_TOKEN_FILE_MAX_BYTES) { "token file is too large" }
+    return parseClaimTokenFile(bounded.copyOf(count))
+}
 
 internal fun validateAndPersistSetup(
     node: CovalentNodeClient,
@@ -439,7 +465,7 @@ internal fun CovalentApp(
                 add(android.Manifest.permission.POST_NOTIFICATIONS)
             }
             if (
-                state.providerLanDiscovery && Build.VERSION.SDK_INT >= 37 &&
+                Build.VERSION.SDK_INT >= 37 &&
                 ContextCompat.checkSelfPermission(context, LOCAL_NETWORK_PERMISSION) != PackageManager.PERMISSION_GRANTED
             ) {
                 add(LOCAL_NETWORK_PERMISSION)
@@ -542,6 +568,22 @@ internal fun CovalentApp(
         }.onFailure {
             Log.w(UI_LOG_TAG, "CA certificate enrolment failed", it)
             state.setupConnectionError = resources.getString(R.string.error_ca_certificate_invalid)
+        }
+    }
+    val tokenPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        runCatching {
+            val document = DocumentFile.fromSingleUri(context, uri)
+            check(document?.isFile == true)
+            val declaredLength = document.length()
+            check(declaredLength <= CLAIM_TOKEN_FILE_MAX_BYTES || declaredLength == 0L)
+            val parsed = context.contentResolver.openInputStream(uri)?.use(::readClaimTokenFile)
+                ?: error(resources.getString(R.string.error_file_not_readable))
+            state.setupToken = parsed
+            state.setupTokenError = ""
+        }.onFailure {
+            Log.w(UI_LOG_TAG, "Access token file rejected")
+            state.setupTokenError = resources.getString(R.string.error_token_file_invalid)
         }
     }
     val targetPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -749,6 +791,7 @@ internal fun CovalentApp(
                     state,
                     page,
                     ::requestSetup,
+                    pickTokenFile = { tokenPicker.launch(arrayOf("text/plain", "application/octet-stream")) },
                     pickCaCertificate = { caCertificatePicker.launch(arrayOf("application/x-x509-ca-cert", "application/pkix-cert", "text/plain")) },
                 )
                 Screen.PAIR -> Pair(state, node, activeConnection, scope, page) {
@@ -999,8 +1042,8 @@ private fun BackupSummaryCard(
                 backup.selectedProviderIds.sorted().forEach { providerId ->
                     val provider = providers.firstOrNull { it.peerId == providerId }
                     val status = when (provider?.reachability) {
-                        ProviderReachability.CONNECTED -> stringResource(R.string.provider_connected_state)
-                        ProviderReachability.OFFLINE, null -> stringResource(R.string.provider_offline_state)
+                        ProviderReachability.REACHABLE -> stringResource(R.string.provider_connected_state)
+                        ProviderReachability.UNREACHABLE, null -> stringResource(R.string.provider_offline_state)
                         ProviderReachability.UNKNOWN -> stringResource(R.string.provider_unknown_state)
                     }
                     Text(
@@ -1010,7 +1053,7 @@ private fun BackupSummaryCard(
                             status,
                         ),
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (provider?.reachability == ProviderReachability.CONNECTED) {
+                        color = if (provider?.let(::isProviderEligibleForBackup) == true) {
                             MaterialTheme.colorScheme.primary
                         } else {
                             MaterialTheme.colorScheme.error
@@ -1219,6 +1262,7 @@ private fun Setup(
     state: CovalentViewModel,
     modifier: Modifier,
     connect: () -> Unit,
+    pickTokenFile: () -> Unit,
     pickCaCertificate: () -> Unit,
 ) {
     val nameFocus = remember { FocusRequester() }
@@ -1236,7 +1280,7 @@ private fun Setup(
             detail = stringResource(R.string.setup_nearby_detail),
         )
         OnboardingChoice(
-            icon = Icons.Rounded.ContentCopy,
+            icon = Icons.Rounded.Security,
             title = stringResource(R.string.setup_handoff_title),
             detail = stringResource(R.string.setup_handoff_detail),
         )
@@ -1291,6 +1335,21 @@ private fun Setup(
             keyboardActions = KeyboardActions(onDone = { if (canSubmit) connect() }),
             modifier = Modifier.fillMaxWidth().focusRequester(tokenFocus),
         )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                stringResource(R.string.token_file_detail),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedButton(onClick = pickTokenFile) {
+                Text(stringResource(R.string.action_choose_token_file))
+            }
+        }
         Text(
             stringResource(R.string.setup_transport_policy),
             style = MaterialTheme.typography.bodySmall,
@@ -1378,13 +1437,16 @@ private fun Setup(
 
 @Composable
 private fun OnboardingChoice(icon: ImageVector, title: String, detail: String) {
-    OutlinedCard(Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Icon(icon, contentDescription = null)
-            Column {
-                Text(title, fontWeight = FontWeight.SemiBold)
-                Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+    // These are setup instructions, not actions. A plain layout avoids the
+    // tappable-card affordance until the app has a connected server to act on.
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Icon(icon, contentDescription = null)
+        Column {
+            Text(title, fontWeight = FontWeight.SemiBold)
+            Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -2230,8 +2292,8 @@ private fun Backup(
             state.selectedBackupId = ""
         } else if (selectedBackup != null && state.backupName.isBlank()) {
             state.backupName = selectedBackup.name
-            val connected = state.providers.map(Provider::peerId).toSet()
-            state.selectedProviderIds = selectedBackup.selectedProviderIds.intersect(connected)
+            val eligible = state.providers.filter(::isProviderEligibleForBackup).map(Provider::peerId).toSet()
+            state.selectedProviderIds = selectedBackup.selectedProviderIds.intersect(eligible)
         }
     }
     FormPage(
@@ -2424,8 +2486,12 @@ private fun BackupPreflight(
 }
 
 internal fun isProviderEligibleForBackup(provider: Provider): Boolean =
-    provider.reachability == ProviderReachability.CONNECTED &&
-        provider.capacityBytes != null && provider.capacityBytes > 0
+    provider.reachability == ProviderReachability.REACHABLE &&
+        provider.capacityBytes != null && provider.capacityBytes > 0 &&
+        provider.quotaBytes != null && provider.quotaBytes > 0 &&
+        provider.observedAtUnixMs != null && provider.validUntilUnixMs != null &&
+        provider.validUntilUnixMs >= provider.observedAtUnixMs &&
+        provider.validUntilUnixMs >= System.currentTimeMillis()
 
 @Composable
 private fun ProviderSelectionRow(
@@ -2436,8 +2502,8 @@ private fun ProviderSelectionRow(
 ) {
     val title = provider.displayName ?: stringResource(R.string.provider_unnamed)
     val reachability = when (provider.reachability) {
-        ProviderReachability.CONNECTED -> stringResource(R.string.provider_connected_state)
-        ProviderReachability.OFFLINE -> stringResource(R.string.provider_offline_state)
+        ProviderReachability.REACHABLE -> stringResource(R.string.provider_connected_state)
+        ProviderReachability.UNREACHABLE -> stringResource(R.string.provider_offline_state)
         ProviderReachability.UNKNOWN -> stringResource(R.string.provider_unknown_state)
     }
     val roles = provider.roles.sorted().joinToString(", ").ifBlank { stringResource(R.string.provider_roles_unavailable) }
@@ -2469,17 +2535,20 @@ private fun ProviderSelectionRow(
                 )
                 Text(
                     when {
-                        provider.reachability == ProviderReachability.OFFLINE ->
+                        provider.reachability == ProviderReachability.UNREACHABLE ->
                             stringResource(R.string.provider_capacity_offline)
                         provider.reachability == ProviderReachability.UNKNOWN ->
                             stringResource(R.string.provider_reachability_unverified)
-                        provider.capacityBytes == null ->
+                        provider.capacityBytes == null || provider.allocatedBytes == null ||
+                            provider.quotaBytes == null || provider.validUntilUnixMs == null ->
                             stringResource(R.string.provider_capacity_unavailable)
                         provider.capacityBytes <= 0 ->
                             stringResource(R.string.provider_capacity_insufficient)
                         else -> stringResource(
                             R.string.provider_capacity_available,
                             Formatter.formatFileSize(LocalContext.current, provider.capacityBytes),
+                            Formatter.formatFileSize(LocalContext.current, provider.allocatedBytes),
+                            Formatter.formatFileSize(LocalContext.current, provider.quotaBytes),
                         )
                     },
                     style = MaterialTheme.typography.bodySmall,
@@ -3368,7 +3437,6 @@ private fun ensureWritableTarget(context: Context, uri: Uri) {
     check(target != null && target.exists() && target.isDirectory) {
         context.getString(R.string.error_target_unavailable)
     }
-    check(target.listFiles().isEmpty()) { context.getString(R.string.error_target_not_empty) }
 }
 
 private fun queueTransfer(
@@ -3380,8 +3448,9 @@ private fun queueTransfer(
     mode: String = "json",
     treeUri: Uri? = null,
 ) {
-    store.savePending(record.jobId, path, payload, mode, treeUri?.toString())
-    store.saveTransfer(record)
+    // This runs on Dispatchers.IO through [api]. The synchronous journal commit keeps the
+    // exact request and its visible queue record recoverable before scheduling can send it.
+    store.saveQueuedTransfer(record, path, payload, mode, treeUri?.toString())
     try {
         TransferScheduler.enqueue(context, record.jobId)
     } catch (error: Exception) {

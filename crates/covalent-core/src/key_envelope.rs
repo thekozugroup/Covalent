@@ -4,6 +4,7 @@
 //! never leaves an additional caller-owned copy of either secret behind.
 
 use std::fmt;
+use std::path::Path;
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
@@ -25,6 +26,95 @@ const MAX_PURPOSE_LENGTH: usize = 128;
 const MAX_CONTEXT_LENGTH: usize = 4096;
 const MAX_PLAINTEXT_LENGTH: usize = 65_536;
 const DOMAIN: &[u8] = b"covalent/key-envelope/v1\0";
+const STATE_CONTEXT_DOMAIN: &[u8] = b"covalent/state-secret-context/v1\0";
+
+/// Platform-owned source of versioned key-encryption keys.
+///
+/// Implementations bridge a platform keystore, hardware-backed key, or an
+/// explicitly provisioned headless secret. The core never persists a KEK and
+/// requests a fresh, owned value for each envelope operation so the returned
+/// bytes can be zeroized immediately.
+pub trait KeyProtector: Send + Sync {
+    /// Version used for newly wrapped records.
+    fn current_key_version(&self) -> Result<u32, CoreError>;
+
+    /// Returns the exact KEK version required by an existing envelope.
+    fn key_encryption_key(&self, key_version: u32) -> Result<KeyEncryptionKey, CoreError>;
+}
+
+/// Explicit in-process KEK source for tests and provisioned headless runtimes.
+///
+/// Native apps should implement [`KeyProtector`] with their platform secure
+/// storage rather than retaining the KEK in process memory for the node's full
+/// lifetime.
+pub struct StaticKeyProtector {
+    key_version: u32,
+    key: Zeroizing<[u8; KEK_LENGTH]>,
+}
+
+impl StaticKeyProtector {
+    /// Takes ownership of an explicitly provisioned KEK.
+    pub fn new(key_version: u32, mut key: [u8; KEK_LENGTH]) -> Result<Self, CoreError> {
+        if key_version == 0 {
+            return Err(CoreError::InvalidState(
+                "invalid key-protection version".to_owned(),
+            ));
+        }
+        let protector = Self {
+            key_version,
+            key: Zeroizing::new(key),
+        };
+        key.zeroize();
+        Ok(protector)
+    }
+
+    /// Imports a base64url, unpadded 256-bit KEK from explicit provisioning.
+    pub fn from_base64(key_version: u32, encoded: &str) -> Result<Self, CoreError> {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+        let decoded = Zeroizing::new(
+            URL_SAFE_NO_PAD
+                .decode(encoded.trim())
+                .map_err(|_| CoreError::InvalidKeyMaterial)?,
+        );
+        let mut key = [0_u8; KEK_LENGTH];
+        if decoded.len() != KEK_LENGTH {
+            return Err(CoreError::InvalidKeyMaterial);
+        }
+        key.copy_from_slice(decoded.as_ref());
+        let result = Self::new(key_version, key);
+        key.zeroize();
+        result
+    }
+}
+
+impl KeyProtector for StaticKeyProtector {
+    fn current_key_version(&self) -> Result<u32, CoreError> {
+        Ok(self.key_version)
+    }
+
+    fn key_encryption_key(&self, key_version: u32) -> Result<KeyEncryptionKey, CoreError> {
+        if key_version != self.key_version {
+            return Err(CoreError::KeyVersionUnavailable(key_version));
+        }
+        let mut bytes = [0_u8; KEK_LENGTH];
+        bytes.copy_from_slice(self.key.as_ref());
+        let kek = KeyEncryptionKey::from_bytes(bytes);
+        bytes.zeroize();
+        Ok(kek)
+    }
+}
+
+impl fmt::Debug for StaticKeyProtector {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("StaticKeyProtector")
+            .field("key_version", &self.key_version)
+            .field("key", &"[REDACTED]")
+            .finish()
+    }
+}
 
 /// A non-copyable 256-bit key-encryption key, zeroized on drop.
 ///
@@ -36,8 +126,10 @@ pub struct KeyEncryptionKey(Zeroizing<[u8; KEK_LENGTH]>);
 impl KeyEncryptionKey {
     /// Takes ownership of a 256-bit key returned by protected key storage.
     #[must_use]
-    pub fn from_bytes(bytes: [u8; KEK_LENGTH]) -> Self {
-        Self(Zeroizing::new(bytes))
+    pub fn from_bytes(mut bytes: [u8; KEK_LENGTH]) -> Self {
+        let key = Self(Zeroizing::new(bytes));
+        bytes.zeroize();
+        key
     }
 
     fn zeroize(&mut self) {
@@ -107,6 +199,44 @@ pub struct WrappedSecret {
 }
 
 impl WrappedSecret {
+    /// Wraps with the current version supplied by an injected protector.
+    pub fn protect(
+        protector: &dyn KeyProtector,
+        purpose: &str,
+        context: &[u8],
+        plaintext: Zeroizing<Vec<u8>>,
+    ) -> Result<Self, CoreError> {
+        let key_version = protector.current_key_version()?;
+        let binding = SecretBinding {
+            purpose,
+            context,
+            key_version,
+        };
+        let kek = protector.key_encryption_key(key_version)?;
+        Self::wrap(kek, binding, plaintext)
+    }
+
+    /// Opens with the exact non-downgraded version named by this envelope.
+    pub fn open(
+        &self,
+        protector: &dyn KeyProtector,
+        purpose: &str,
+        context: &[u8],
+    ) -> Result<Zeroizing<Vec<u8>>, CoreError> {
+        self.validate()?;
+        let current = protector.current_key_version()?;
+        if current < self.key_version {
+            return Err(CoreError::KeyVersionUnavailable(self.key_version));
+        }
+        let binding = SecretBinding {
+            purpose,
+            context,
+            key_version: self.key_version,
+        };
+        let kek = protector.key_encryption_key(self.key_version)?;
+        self.unwrap(kek, binding)
+    }
+
     /// Wraps a secret with a consumed 256-bit KEK and random salt and nonce.
     ///
     /// Both secret inputs are consumed. The non-copyable KEK and plaintext are
@@ -259,6 +389,24 @@ impl WrappedSecret {
     }
 }
 
+/// Derives a bounded, non-secret AAD context for one state-volume record.
+///
+/// The canonical root intentionally participates in the binding. Copying an
+/// encrypted volume to another location therefore cannot silently make that
+/// copy a second usable identity. Owner-loss recovery rewraps secrets for the
+/// explicitly selected replacement root.
+#[must_use]
+pub fn state_secret_context(state_root: &Path, record_id: &str) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(STATE_CONTEXT_DOMAIN);
+    let root = state_root.as_os_str().as_encoded_bytes();
+    hasher.update(&(root.len() as u64).to_be_bytes());
+    hasher.update(root);
+    hasher.update(&(record_id.len() as u64).to_be_bytes());
+    hasher.update(record_id.as_bytes());
+    *hasher.finalize().as_bytes()
+}
+
 impl fmt::Debug for WrappedSecret {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -349,6 +497,10 @@ fn append_length_prefixed(output: &mut Vec<u8>, value: &[u8]) -> Result<(), Core
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn protector() -> StaticKeyProtector {
+        StaticKeyProtector::new(7, [42_u8; KEK_LENGTH]).unwrap()
+    }
 
     fn binding() -> SecretBinding<'static> {
         SecretBinding {
@@ -500,6 +652,31 @@ mod tests {
         assert!(!record_debug.contains("42"));
         let serialized = serde_json::to_string(&record).unwrap();
         assert!(!serialized.contains("secret material"));
+    }
+
+    #[test]
+    fn protector_open_rejects_version_downgrade_and_copied_volume_context() {
+        let source = Path::new("/state/volume-a");
+        let copied = Path::new("/state/volume-b");
+        let source_context = state_secret_context(source, "identity.json");
+        let copied_context = state_secret_context(copied, "identity.json");
+        let record = WrappedSecret::protect(
+            &protector(),
+            "device-identity",
+            &source_context,
+            Zeroizing::new(b"secret material".to_vec()),
+        )
+        .unwrap();
+        assert!(matches!(
+            record.open(&protector(), "device-identity", &copied_context),
+            Err(CoreError::AuthenticationFailed)
+        ));
+
+        let downgraded = StaticKeyProtector::new(6, [42_u8; KEK_LENGTH]).unwrap();
+        assert!(matches!(
+            record.open(&downgraded, "device-identity", &source_context),
+            Err(CoreError::KeyVersionUnavailable(7))
+        ));
     }
 
     // Migration code can use this fixed, clearly invalid v0 serialized shape as

@@ -102,12 +102,15 @@ for abi in arm64-v8a x86_64; do
 
   # --no-undefined keeps a missing runtime dependency a link error rather than
   # a load-time crash; --strip-all only drops .symtab, leaving .dynsym (and so
-  # the export contract) intact.
+  # the export contract) intact. Android's packed relocation format is
+  # supported from API 23; minSdk is API 26, so this reduces load metadata on
+  # every supported device without relying on unsafe identical-code folding.
   mkdir -p "$output_root/$abi"
   "$clang_bin" -shared -o "$output_root/$abi/libcovalent_android_jni.so" \
     -Wl,--version-script="$version_script" \
     -Wl,--undefined=JNI_OnLoad \
     -Wl,--gc-sections \
+    -Wl,--pack-dyn-relocs=android \
     -Wl,--hash-style=both \
     -Wl,--no-undefined \
     -Wl,-z,max-page-size=16384 \
@@ -151,6 +154,21 @@ for abi in arm64-v8a x86_64; do
   }
   "$llvm_readobj" --dynamic-table "$library" | grep -Eq 'TEXTREL|DT_TEXTREL' && {
     echo "JNI library for $abi contains forbidden text relocations" >&2
+    exit 1
+  }
+  # `--pack-dyn-relocs=android` is a minSdk-26 compatibility guarantee, not an
+  # optional size hint. Verify both the dynamic tags and the section type so a
+  # linker/toolchain change cannot silently expand relocations again.
+  "$llvm_readobj" --dynamic-table "$library" | grep -Fq 'ANDROID_RELA' || {
+    echo "JNI library for $abi is missing Android packed relocation metadata" >&2
+    exit 1
+  }
+  "$llvm_readobj" --dynamic-table "$library" | grep -Fq 'ANDROID_RELASZ' || {
+    echo "JNI library for $abi is missing the Android packed relocation size" >&2
+    exit 1
+  }
+  "$llvm_readobj" --sections "$library" | grep -Fq 'SHT_ANDROID_RELA' || {
+    echo "JNI library for $abi is missing an Android packed relocation section" >&2
     exit 1
   }
   "$llvm_readobj" --dyn-symbols "$library" > "$symbols_directory/$abi.txt"

@@ -18,11 +18,11 @@ crate-type = ["staticlib"]
 
 [dependencies]
 anyhow.workspace = true
-covalent-core = { version = "0.1.0", path = "../covalent-core" }
+covalent-core = { version = "0.2.0", path = "../covalent-core" }
 # default-features = false drops `covalent-node/cli` (clap +
 # tracing-subscriber/env-filter).  See crates/covalent-node/Cargo.toml.
-covalent-node = { version = "0.1.0", path = "../covalent-node", default-features = false }
-covalent-protocol = { version = "0.1.0", path = "../covalent-protocol" }
+covalent-node = { version = "0.2.0", path = "../covalent-node", default-features = false }
+covalent-protocol = { version = "0.2.0", path = "../covalent-protocol" }
 jni.workspace = true
 serde.workspace = true
 serde_json.workspace = true

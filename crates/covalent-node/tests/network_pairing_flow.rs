@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use std::sync::Arc;
 
-use covalent_core::{Engine, EngineOptions};
+use covalent_core::{Engine, EngineOptions, StaticKeyProtector};
 use covalent_node::advertised_address;
 use covalent_node::network_pairing::{
     NetworkPairingManager, NetworkPairingWireOperation, NetworkPairingWireResponse,
@@ -32,9 +32,23 @@ fn loopback_zero() -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)
 }
 
-async fn start_node(directory: &TempDir, device_name: &str) -> NodeRuntime {
+fn key_protector() -> Arc<StaticKeyProtector> {
+    Arc::new(StaticKeyProtector::new(1, [0xe1; 32]).expect("test protector"))
+}
+
+fn engine_options(path: &std::path::Path) -> EngineOptions {
+    EngineOptions::new(path).with_key_protector(key_protector())
+}
+
+fn runtime_configuration(directory: &TempDir) -> NodeRuntimeConfig {
     let mut configuration =
         NodeRuntimeConfig::new(directory.path(), loopback_zero(), loopback_zero());
+    configuration.key_protector = Some(key_protector());
+    configuration
+}
+
+async fn start_node(directory: &TempDir, device_name: &str) -> NodeRuntime {
+    let mut configuration = runtime_configuration(directory);
     configuration.device_name = device_name.to_owned();
     // A concrete advertised endpoint is what a discovered candidate carries and
     // what the signed transport binding must name.
@@ -331,6 +345,7 @@ async fn start_rejects_unknown_fields_and_public_routes() {
 /// test adds is that the property holds over a real QUIC endpoint, against a
 /// live node, with source attribution taken from the actual connection.
 const PAIRING_FLOOD_REQUESTS: usize = 96;
+const PAIRING_STARTS_PER_SOURCE: usize = 4;
 
 fn now_unix_ms() -> u64 {
     u64::try_from(
@@ -345,9 +360,98 @@ fn now_unix_ms() -> u64 {
 /// An unrelated signing identity: a stranger on the LAN with a valid keypair,
 /// which is all it takes to reach the responder's nonce table.
 fn flooder(directory: &TempDir) -> NetworkPairingManager {
-    let engine = Arc::new(Engine::open(EngineOptions::new(directory.path())).expect("engine"));
+    let engine = Arc::new(Engine::open(engine_options(directory.path())).expect("engine"));
     NetworkPairingManager::open(engine, directory.path().join("network-pairing.json"))
         .expect("flooder pairing manager")
+}
+
+fn signed_start(
+    attacker: &NetworkPairingManager,
+) -> covalent_node::network_pairing::NetworkPairingWireRequest {
+    let binding = attacker
+        .local_transport_binding(
+            "127.0.0.1:8787".parse().expect("attacker address"),
+            b"attacker pairing certificate",
+        )
+        .expect("attacker binding");
+    attacker
+        .sign_wire_request(
+            NetworkPairingWireOperation::Start {
+                responder_transport: binding,
+            },
+            now_unix_ms(),
+        )
+        .expect("sign Start")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn start_flood_is_source_bounded_and_survives_restart() {
+    let responder_data = TempDir::new().expect("responder data");
+    let attacker_data = TempDir::new().expect("attacker data");
+    let responder = start_node(&responder_data, "Responder server").await;
+    let attacker = flooder(&attacker_data);
+    let target = responder.ready_info().peer_address();
+    let connection = PairingConnection::connect(target)
+        .await
+        .expect("dial from attacker source");
+
+    let mut invitation_ids = Vec::new();
+    for _ in 0..PAIRING_STARTS_PER_SOURCE {
+        let response = connection
+            .request(&signed_start(&attacker))
+            .await
+            .expect("bounded Start");
+        let NetworkPairingWireResponse::Invitation { invitation } = response else {
+            panic!("a source inside its Start bound receives an invitation");
+        };
+        invitation_ids.push(invitation.invitation_id);
+    }
+    assert_eq!(
+        failure_code(
+            &connection
+                .request(&signed_start(&attacker))
+                .await
+                .expect("overflow Start")
+        ),
+        "pairing_resource_limit",
+        "fresh identities and nonces cannot bypass source admission"
+    );
+    drop(connection);
+
+    responder.stop().await.expect("stop responder");
+    let restarted = start_node(&responder_data, "Responder server").await;
+    let connection = PairingConnection::connect(restarted.ready_info().peer_address())
+        .await
+        .expect("redial after restart");
+    assert_eq!(
+        failure_code(
+            &connection
+                .request(&signed_start(&attacker))
+                .await
+                .expect("post-restart Start")
+        ),
+        "pairing_resource_limit",
+        "restart must not refill the attacker's Start budget"
+    );
+
+    let cancel = attacker
+        .sign_wire_request(
+            NetworkPairingWireOperation::Cancel {
+                pairing_id: invitation_ids[0].clone(),
+            },
+            now_unix_ms(),
+        )
+        .expect("sign bare-invitation cancellation");
+    assert!(matches!(
+        connection
+            .request(&cancel)
+            .await
+            .expect("cancel invitation"),
+        NetworkPairingWireResponse::Acknowledged
+    ));
+    drop(connection);
+
+    restarted.stop().await.expect("stop restarted responder");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -633,7 +737,7 @@ fn failure_code(response: &NetworkPairingWireResponse) -> String {
 /// named. This drives that path from a live attacker over real QUIC and pins
 /// down exactly how much of it survives: not a LAN scanner, and not a free one.
 #[tokio::test(flavor = "multi_thread")]
-async fn submit_cannot_aim_this_node_at_a_third_host_and_probes_are_rationed() {
+async fn submit_cannot_aim_this_node_at_a_third_host_and_probe_setup_is_rationed() {
     let initiator_data = TempDir::new().expect("initiator data");
     let responder_data = TempDir::new().expect("responder data");
     let attacker_data = TempDir::new().expect("attacker data");
@@ -730,23 +834,17 @@ async fn submit_cannot_aim_this_node_at_a_third_host_and_probes_are_rationed() {
         "a cached probe failure must not redial, took {cached_took:?}"
     );
 
-    // Fresh addresses each cost a slot, and the budget runs out. Scanning ports
-    // is what is left of the primitive, and this is the rate it is left at.
-    let mut refusals = Vec::new();
-    for port in 2..=8_u16 {
-        let attempt = signed_submit_naming(&connection, &attacker, target, closed(port)).await;
-        refusals.push(failure_code(
-            &connection.request(&attempt).await.expect("budgeted probe"),
-        ));
-    }
-    assert!(
-        refusals.contains(&"pairing_resource_limit".to_owned()),
-        "one source must run out of probe budget rather than scan freely: {refusals:?}"
-    );
+    // Every new probe transcript requires another durable Start. The source
+    // admission boundary is deliberately stricter than the probe guard, so it
+    // stops a scan before another invitation or dial is created.
+    let blocked = connection
+        .request(&signed_start(&attacker))
+        .await
+        .expect("rate-limited Start");
     assert_eq!(
-        refusals.last().map(String::as_str),
-        Some("pairing_resource_limit"),
-        "the budget must stay spent for the rest of the window: {refusals:?}"
+        failure_code(&blocked),
+        "pairing_resource_limit",
+        "one source must run out of Start budget before it can scan more ports"
     );
 
     drop(connection);
@@ -785,7 +883,7 @@ async fn submit_cannot_aim_this_node_at_a_third_host_and_probes_are_rationed() {
 #[tokio::test]
 async fn a_node_started_the_production_way_resolves_or_refuses_coherently() {
     let directory = TempDir::new().expect("temp directory");
-    let configuration = NodeRuntimeConfig::new(directory.path(), loopback_zero(), loopback_zero());
+    let configuration = runtime_configuration(&directory);
     let node = NodeRuntime::start(configuration)
         .await
         .expect("a node with no advertised address configured must still start");

@@ -1,5 +1,6 @@
 FROM rust:1.97.1-alpine3.23@sha256:c4a364ddbf684fe038e6fa6a4f25b30c8dc85247423e0e660676ece0d17be4a2 AS builder
 WORKDIR /source
+ENV CARGO_INCREMENTAL=0
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
 COPY packaging/web ./packaging/web
@@ -13,10 +14,13 @@ RUN cargo build --locked --release -p covalent-node -p covalent-cli
 #
 # This is not a fork. packaging/docker/caddy is the same three-line consumer
 # module `xcaddy` generates and the official image builds - it imports
-# caddy/v2/modules/standard and nothing else. Verified against the upstream
-# binary: identical 132-module set, and the unchanged packaging/docker/Caddyfile
-# adapts to a byte-identical JSON config. What changes is the compiler and two
-# module selections, not Caddy.
+# caddy/v2/modules/standard and nothing else. The selected upstream snapshot is
+# the canonical compatibility commit b2693fb63a30e6d7be0972c3645e9a2c0a500e93,
+# 33 commits after v2.11.4, adapting Caddy's CEL matcher to the post-v0.28 API.
+# The consumer module then selects cel-go v0.30.0, which fixes GO-2026-6094.
+# The full upstream delta is recorded and reviewed in
+# docs/security/container-image-vulnerabilities.md; its pseudo-version is
+# checked below so the snapshot cannot float.
 #
 # Pinning, in three independent places, because a supply-chain stage that
 # floats is not worth having:
@@ -47,12 +51,20 @@ RUN set -eu; \
     go version -m /caddy.unprivileged > /tmp/buildinfo; \
     grep -q 'go1\.26\.[6-9]' /tmp/buildinfo || grep -q 'go1\.2[7-9]\.' /tmp/buildinfo \
       || { echo 'caddy was linked with a toolchain older than go1.26.6' >&2; exit 1; }; \
-    grep -q 'github.com/caddyserver/caddy/v2[[:space:]]\+v2\.11\.4' /tmp/buildinfo \
-      || { echo 'caddy source version drifted from v2.11.4' >&2; exit 1; }; \
+    grep -q 'github.com/caddyserver/caddy/v2[[:space:]]\+v2\.11\.5-0\.20260711231708-b2693fb63a30' /tmp/buildinfo \
+      || { echo 'caddy source snapshot drifted from v2.11.5-0.20260711231708-b2693fb63a30' >&2; exit 1; }; \
     grep -q 'google.golang.org/grpc[[:space:]]\+v1\.8[2-9]\.' /tmp/buildinfo \
       || { echo 'grpc regressed below v1.82.1 (GHSA-hrxh-6v49-42gf)' >&2; exit 1; }; \
     grep -q 'golang.org/x/text[[:space:]]\+v0\.\(39\|[4-9][0-9]\)\.' /tmp/buildinfo \
       || { echo 'x/text regressed below v0.39.0 (GO-2026-5970)' >&2; exit 1; }; \
+    grep -q 'go.opentelemetry.io/otel[[:space:]]\+v1\.\(4[4-9]\|[5-9][0-9]\)\.' /tmp/buildinfo \
+      || { echo 'OpenTelemetry regressed below v1.44.0 (GO-2026-5158)' >&2; exit 1; }; \
+    grep -q 'github.com/google/cel-go[[:space:]]\+v0\.30\.0' /tmp/buildinfo \
+      || { echo 'cel-go drifted from reviewed v0.30.0 (GO-2026-6094)' >&2; exit 1; }; \
+    grep -q 'github.com/go-chi/chi/v5[[:space:]]\+v5\.3\.0' /tmp/buildinfo \
+      || { echo 'go-chi drifted from reviewed v5.3.0 (GO-2026-5774/5775/5777)' >&2; exit 1; }; \
+    grep -q 'github.com/klauspost/compress[[:space:]]\+v1\.18\.7' /tmp/buildinfo \
+      || { echo 'klauspost/compress drifted from reviewed v1.18.7 (GO-2026-5841)' >&2; exit 1; }; \
     /caddy.unprivileged version
 # The Caddyfile that ships in this image must be valid against the binary that
 # ships with it. Proving that here means a config/binary mismatch cannot reach
@@ -63,15 +75,31 @@ RUN /caddy.unprivileged validate --config /tmp/Caddyfile --adapter caddyfile
 
 FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40
 ARG VCS_REF=unknown
+ARG COVALENT_SOURCE_FINGERPRINT=unknown
+ARG RELEASE_VERSION=development
 LABEL org.opencontainers.image.title="Covalent" \
       org.opencontainers.image.description="Private distributed backup node" \
       org.opencontainers.image.source="https://github.com/thekozugroup/Covalent" \
       org.opencontainers.image.revision="$VCS_REF" \
+      io.covalent.source.fingerprint="$COVALENT_SOURCE_FINGERPRINT" \
+      org.opencontainers.image.version="$RELEASE_VERSION" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.base.name="docker.io/library/alpine:3.23" \
-      org.opencontainers.image.base.digest="sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40"
+      org.opencontainers.image.base.digest="sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40" \
+      io.covalent.runtime.openssl.version="3.5.8-r0"
 
-RUN addgroup -S -g 65532 covalent \
+# Alpine published the fixed OpenSSL security revision after the pinned 3.23.5
+# base image was assembled. Install only those two signed repository packages
+# at exact versions: a future repository change can fail this build, but cannot
+# silently select a different runtime. Both libraries are retained because
+# apk-tools and BusyBox ssl_client require them even though Covalent and Caddy
+# are statically linked and do not load OpenSSL.
+RUN apk add --no-cache --upgrade \
+      libcrypto3=3.5.8-r0 \
+      libssl3=3.5.8-r0 \
+    && apk info -e 'libcrypto3=3.5.8-r0' \
+    && apk info -e 'libssl3=3.5.8-r0' \
+    && addgroup -S -g 65532 covalent \
     && adduser -S -D -H -u 65532 -G covalent -s /sbin/nologin covalent \
     && install -d -m 0700 -o 65532 -g 65532 /config /data /restore
 COPY --from=builder /source/target/release/covalent-node /usr/local/bin/covalent-node

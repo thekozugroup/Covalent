@@ -9,7 +9,9 @@
 //! unit tests and would have been caught here.
 
 use std::path::Path;
+use std::sync::Arc;
 
+use covalent_core::StaticKeyProtector;
 use covalent_node::first_run_claim::{
     CLAIM_NONCE_BYTES, ClaimCode, client_proof, normalise_claim_code, open_sealed_token,
     stretch_claim_code,
@@ -20,19 +22,25 @@ use tempfile::TempDir;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 /// A self-signed CA, so the certificate-delivery path is exercised rather than
-/// skipped. Content only has to be a parseable certificate.
+/// skipped.
 fn write_certificate_authority(path: &Path) -> Vec<u8> {
-    let certificate = rcgen::generate_simple_self_signed(vec!["covalent-test-ca".to_owned()])
-        .expect("generate test CA");
-    let pem = certificate.cert.pem();
+    let mut parameters =
+        rcgen::CertificateParams::new(vec!["covalent-test-ca".to_owned()]).expect("CA parameters");
+    parameters.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    let key = rcgen::KeyPair::generate().expect("CA key");
+    let certificate = parameters.self_signed(&key).expect("generate test CA");
+    let pem = certificate.pem();
     std::fs::create_dir_all(path.parent().expect("parent")).expect("create CA directory");
     std::fs::write(path, &pem).expect("write CA");
-    certificate.cert.der().to_vec()
+    certificate.der().to_vec()
 }
 
 async fn start(directory: &TempDir, ca_path: Option<&Path>) -> NodeRuntime {
     let loopback = "127.0.0.1:0".parse().expect("loopback");
     let mut configuration = NodeRuntimeConfig::new(directory.path(), loopback, loopback);
+    configuration.key_protector = Some(Arc::new(
+        StaticKeyProtector::new(1, [0xf1; 32]).expect("test protector"),
+    ));
     configuration.device_name = "Covalent Unraid".to_owned();
     // Exactly what `main.rs` does for the standalone daemon: claim enabled
     // because no supervising app owns the process.
@@ -144,6 +152,7 @@ async fn a_setup_code_yields_a_working_token_and_the_certificate_to_pin() {
     let code = ClaimCode::mint();
     let claim = covalent_node::first_run_claim::FirstRunClaim::new(
         &code,
+        directory.path().join("owner-claim-state.json"),
         directory.path().join("owner-claimed"),
         Some(ca_path.clone()),
         0,
@@ -156,6 +165,7 @@ async fn a_setup_code_yields_a_working_token_and_the_certificate_to_pin() {
         .present(
             &decode(&nonce_b64),
             &decode(&proof_b64),
+            "Covalent Unraid",
             node.ready_info().api_token().expose(),
             1,
         )
@@ -167,8 +177,8 @@ async fn a_setup_code_yields_a_working_token_and_the_certificate_to_pin() {
         &key,
         &decode(&nonce_b64),
         &<sha2::Sha256 as sha2::Digest>::digest(&expected_der).into(),
-        &grant.seal_nonce,
-        &grant.sealed_token,
+        &decode(&grant.seal_nonce),
+        &decode(&grant.sealed_token),
     )
     .expect("the sealed token opens under the claimed code and the delivered CA");
     assert_eq!(
@@ -191,6 +201,7 @@ async fn a_setup_code_yields_a_working_token_and_the_certificate_to_pin() {
     assert!(
         grant
             .ca_certificate
+            .as_ref()
             .expect("a CA was configured")
             .contains("BEGIN CERTIFICATE")
     );
@@ -199,12 +210,45 @@ async fn a_setup_code_yields_a_working_token_and_the_certificate_to_pin() {
         .map(|byte| format!("{byte:02x}"))
         .collect();
     assert_eq!(
-        grant.ca_fingerprint.expect("fingerprint"),
-        expected_fingerprint,
+        grant.ca_fingerprint_sha256.as_ref().expect("fingerprint"),
+        &expected_fingerprint,
         "the advertised fingerprint must be of the certificate actually delivered"
     );
 
     node.stop().await.expect("stop node");
+
+    let restarted = start(&directory, Some(&ca_path)).await;
+    let replayed = request(
+        &restarted,
+        "POST",
+        "/api/v1/claim",
+        None,
+        Some(&format!(
+            r#"{{"clientNonce":"{nonce_b64}","clientProof":"{proof_b64}"}}"#
+        )),
+    )
+    .await;
+    assert_eq!(replayed.status, 200, "{}", replayed.body);
+    assert_eq!(
+        replayed.body,
+        serde_json::to_string(&grant).expect("serialize exact grant"),
+        "a lost response must replay byte-identically after restart"
+    );
+
+    let (nonce, proof, _) = presentation(&ClaimCode::mint().grouped());
+    let refused = request(
+        &restarted,
+        "POST",
+        "/api/v1/claim",
+        None,
+        Some(&format!(
+            r#"{{"clientNonce":"{nonce}","clientProof":"{proof}"}}"#
+        )),
+    )
+    .await;
+    assert_eq!(refused.status, 409, "{}", refused.body);
+    assert_eq!(refused.code(), "claim_unavailable");
+    restarted.stop().await.expect("stop restarted claimed node");
 }
 
 /// The route exists on a live router, is reachable without a token, and refuses
@@ -265,31 +309,76 @@ async fn the_claim_route_is_served_unauthenticated_and_refuses_a_wrong_code() {
     node.stop().await.expect("stop node");
 }
 
-/// Ownership is durable. A restart must not offer a second chance to claim a
-/// node someone already owns, and an upgrade of a node provisioned the old way
-/// must never become claimable at all.
+/// A fresh unclaimed lifecycle survives repeated restarts without being
+/// mistaken for a legacy token-owning deployment.
 #[tokio::test]
-async fn a_claimed_node_is_never_offered_for_claiming_again() {
+async fn an_unclaimed_node_remains_claimable_across_restarts() {
     let directory = TempDir::new().expect("temp directory");
     let node = start(&directory, None).await;
     let marker = directory.path().join("owner-claimed");
+    let lifecycle = directory.path().join("owner-claim-state.json");
     assert!(
         !marker.exists(),
         "a fresh node is unclaimed until someone claims it"
     );
+    assert!(
+        lifecycle.is_file(),
+        "unclaimed state is durable before token creation"
+    );
     node.stop().await.expect("stop node");
 
-    // A token now exists on disk, which is how an upgrade of a deployment
-    // provisioned before claiming existed looks. Such a node must be recorded
-    // as owned rather than handed a code it never needed.
-    let restarted = start(&directory, None).await;
-    assert!(
-        marker.exists(),
-        "a node that already had a token is recorded as owned on the next start"
+    for restart in 1..=3 {
+        let restarted = start(&directory, None).await;
+        assert!(
+            !marker.exists(),
+            "the token created inside an explicit unclaimed lifecycle is not legacy ownership"
+        );
+        let (nonce, proof, _) = presentation(&ClaimCode::mint().grouped());
+        let refused = request(
+            &restarted,
+            "POST",
+            "/api/v1/claim",
+            None,
+            Some(&format!(
+                r#"{{"clientNonce":"{nonce}","clientProof":"{proof}"}}"#
+            )),
+        )
+        .await;
+        assert_ne!(
+            refused.status, 409,
+            "unclaimed restart {restart} must still serve claim: {}",
+            refused.body
+        );
+        assert_ne!(refused.code(), "claim_unavailable");
+        restarted.stop().await.expect("stop unclaimed restart");
+    }
+}
+
+/// A pre-feature token has no lifecycle record. It migrates once to claimed
+/// and must never gain a new ownership path.
+#[tokio::test]
+async fn a_legacy_token_migrates_to_claimed_without_reopening_ownership() {
+    let directory = TempDir::new().expect("temp directory");
+    let mut configuration = NodeRuntimeConfig::new(
+        directory.path(),
+        "127.0.0.1:0".parse().expect("loopback"),
+        "127.0.0.1:0".parse().expect("loopback"),
     );
+    configuration.key_protector = Some(Arc::new(
+        StaticKeyProtector::new(1, [0xf1; 32]).expect("test protector"),
+    ));
+    let legacy = NodeRuntime::start(configuration)
+        .await
+        .expect("legacy node");
+    legacy.stop().await.expect("stop legacy node");
+    assert!(!directory.path().join("owner-claim-state.json").exists());
+
+    let migrated = start(&directory, None).await;
+    assert!(directory.path().join("owner-claim-state.json").is_file());
+    assert!(directory.path().join("owner-claimed").is_file());
     let (nonce, proof, _) = presentation(&ClaimCode::mint().grouped());
     let refused = request(
-        &restarted,
+        &migrated,
         "POST",
         "/api/v1/claim",
         None,
@@ -300,5 +389,5 @@ async fn a_claimed_node_is_never_offered_for_claiming_again() {
     .await;
     assert_eq!(refused.status, 409, "{}", refused.body);
     assert_eq!(refused.code(), "claim_unavailable");
-    restarted.stop().await.expect("stop node");
+    migrated.stop().await.expect("stop migrated node");
 }

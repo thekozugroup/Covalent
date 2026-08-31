@@ -80,6 +80,30 @@ import Testing
         #expect(scanned.contains("IOSHomeView.swift"))
     }
 
+    @Test func appleSurfacesNameBothBackupIdentifiersAndDescribeIOSSupport() throws {
+        let sources = try Dictionary(uniqueKeysWithValues: Self.viewSources().map {
+            ($0.lastPathComponent, try! String(contentsOf: $0, encoding: .utf8))
+        })
+        for name in ["MacBackupsView.swift", "IOSBackupsView.swift"] {
+            let source = try #require(sources[name])
+            #expect(source.contains("Backup ID"))
+            #expect(source.contains("Backup version ID"))
+        }
+        let settings = try #require(sources["IOSSettingsView.swift"])
+        #expect(settings.contains("Preview — not released"))
+        #expect(!settings.contains("PlatformTier.tier2.label"))
+    }
+
+    @Test func macRestoreLabelsOnlyActionsTheExecutorCanPerform() throws {
+        let source = try String(contentsOf: Self.source(named: "MacBackupsView.swift"), encoding: .utf8)
+        #expect(source.contains("Skip existing file"))
+        #expect(source.contains("Create renamed copy"))
+        #expect(source.contains("Replace existing file"))
+        #expect(source.contains("Replace and Restore"))
+        #expect(source.contains("hasSignedTargetInventory"))
+        #expect(!source.contains("Blocked conflict"))
+    }
+
     // MARK: - Scanner
 
     /// Words that mean something to this repository and nothing to a reader.
@@ -222,5 +246,15 @@ import Testing
         }
         #expect(found.count > 10, "Could not locate the Apple view sources at \(root.path)")
         return found
+    }
+
+    private static func source(named name: String) -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appending(path: "Sources", directoryHint: .isDirectory)
+            .appending(path: "CovalentMac", directoryHint: .isDirectory)
+            .appending(path: name, directoryHint: .notDirectory)
     }
 }

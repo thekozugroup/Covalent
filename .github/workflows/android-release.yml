@@ -14,9 +14,7 @@ on:
         type: boolean
 
 permissions:
-  contents: write
-  checks: read
-  security-events: read
+  contents: read
 
 concurrency:
   group: signed-android-${{ github.sha }}
@@ -24,14 +22,12 @@ concurrency:
 
 jobs:
   build-verify:
-    name: Sign and verify Android artifacts
+    name: Build and verify unsigned Android artifacts
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    env:
-      COVALENT_ANDROID_KEYSTORE_BASE64: ${{ secrets.COVALENT_ANDROID_KEYSTORE_BASE64 }}
-      COVALENT_ANDROID_STORE_PASSWORD: ${{ secrets.COVALENT_ANDROID_STORE_PASSWORD }}
-      COVALENT_ANDROID_KEY_ALIAS: ${{ secrets.COVALENT_ANDROID_KEY_ALIAS }}
-      COVALENT_ANDROID_KEY_PASSWORD: ${{ secrets.COVALENT_ANDROID_KEY_PASSWORD }}
+    permissions:
+      contents: read
+      checks: read
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -74,6 +70,10 @@ jobs:
             echo "release version must be an explicit v-prefixed semantic version" >&2
             exit 1
           fi
+          if [[ "${GITHUB_REF}" != "refs/tags/${RELEASE_VERSION}" || "${GITHUB_REF_TYPE}" != "tag" ]]; then
+            echo "run this workflow from refs/tags/${RELEASE_VERSION}; release publication must use the exact signed tag ref" >&2
+            exit 1
+          fi
           workspace_version=$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)
           android_version=$(awk -F'"' '/versionName = / { print $2; exit }' apps/android/app/build.gradle.kts)
           test "${RELEASE_VERSION#v}" = "${workspace_version}"
@@ -87,59 +87,160 @@ jobs:
             fi
           done
           ./scripts/release-version.sh check
-          ./scripts/verify-release-commit-signature.sh
-      - name: Install ephemeral release keystore
+          RELEASE_VERSION="${RELEASE_VERSION}" ./scripts/verify-release-commit-signature.sh
+      # This job deliberately has no signing secrets. It resolves dependencies,
+      # compiles the JNI payload, and produces the unsigned release candidates
+      # whose checksums become the handoff boundary for the signing job.
+      - name: Build unsigned APK, AAB, SBOM, mapping, and checksums
+        run: ./apps/android/gradlew -p apps/android --no-daemon --dependency-verification=strict generateReleaseChecksums
+      - name: Verify unsigned release checksums
         run: |
           set -euo pipefail
-          for variable in \
-            COVALENT_ANDROID_KEYSTORE_BASE64 \
-            COVALENT_ANDROID_STORE_PASSWORD \
-            COVALENT_ANDROID_KEY_ALIAS \
-            COVALENT_ANDROID_KEY_PASSWORD; do
+          (cd apps/android/app/build && shasum -a 256 -c reports/covalent/SHA256SUMS)
+          test -f apps/android/app/build/outputs/apk/release/app-release-unsigned.apk
+          test -f apps/android/app/build/outputs/bundle/release/app-release.aab
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unsigned-covalent-android-${{ inputs.version }}-${{ github.sha }}
+          path: |
+            apps/android/app/build/outputs/apk/release/app-release-unsigned.apk
+            apps/android/app/build/outputs/bundle/release/app-release.aab
+            apps/android/app/build/outputs/mapping/release/mapping.txt
+            apps/android/app/build/reports/covalent/android-sbom.cdx.json
+            apps/android/app/build/reports/covalent/android-license-inventory.json
+            apps/android/app/build/reports/covalent/SHA256SUMS
+          if-no-files-found: error
+
+  sign-verify:
+    name: Sign and verify Android artifacts
+    needs: build-verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
+      # Build-tools are needed only for local zip alignment and signature
+      # verification. This job never invokes Gradle or resolves a dependency.
+      - run: sdkmanager "build-tools;37.0.0"
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: unsigned-covalent-android-${{ inputs.version }}-${{ github.sha }}
+          path: ${{ runner.temp }}/unsigned-android-build
+      - name: Verify the unsigned handoff before loading signing material
+        run: |
+          set -euo pipefail
+          root="${RUNNER_TEMP}/unsigned-android-build"
+          mapfile -t checksums < <(find "${root}" -type f -path '*/reports/covalent/SHA256SUMS' -print)
+          if [[ "${#checksums[@]}" -ne 1 ]]; then
+            echo "expected exactly one unsigned release checksum manifest" >&2
+            exit 1
+          fi
+          build_root="${checksums[0]%/reports/covalent/SHA256SUMS}"
+          (cd "${build_root}" && shasum -a 256 -c reports/covalent/SHA256SUMS)
+      - name: Install ephemeral release keystore
+        env:
+          COVALENT_ANDROID_KEYSTORE_BASE64: ${{ secrets.COVALENT_ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${COVALENT_ANDROID_KEYSTORE_BASE64:-}" ]]; then
+            echo "required Android release credential is unavailable: COVALENT_ANDROID_KEYSTORE_BASE64" >&2
+            exit 1
+          fi
+          keystore="${RUNNER_TEMP}/covalent-release.keystore"
+          printf '%s' "${COVALENT_ANDROID_KEYSTORE_BASE64}" | base64 --decode > "${keystore}"
+          chmod 600 "${keystore}"
+          echo "COVALENT_ANDROID_KEYSTORE_PATH=${keystore}" >> "${GITHUB_ENV}"
+      - name: Sign the verified APK and AAB
+        env:
+          COVALENT_ANDROID_STORE_PASSWORD: ${{ secrets.COVALENT_ANDROID_STORE_PASSWORD }}
+          COVALENT_ANDROID_KEY_ALIAS: ${{ secrets.COVALENT_ANDROID_KEY_ALIAS }}
+          COVALENT_ANDROID_KEY_PASSWORD: ${{ secrets.COVALENT_ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for variable in COVALENT_ANDROID_STORE_PASSWORD COVALENT_ANDROID_KEY_ALIAS COVALENT_ANDROID_KEY_PASSWORD; do
             if [[ -z "${!variable:-}" ]]; then
               echo "required Android release credential is unavailable: ${variable}" >&2
               exit 1
             fi
           done
-          keystore="${RUNNER_TEMP}/covalent-release.keystore"
-          printf '%s' "${COVALENT_ANDROID_KEYSTORE_BASE64}" | base64 --decode > "${keystore}"
-          chmod 600 "${keystore}"
-          echo "COVALENT_ANDROID_KEYSTORE_PATH=${keystore}" >> "${GITHUB_ENV}"
-      - name: Build signed APK, AAB, SBOM, mapping, and checksums
-        run: ./apps/android/gradlew -p apps/android --no-daemon prepareReleaseCandidate
-      - name: Verify release signatures and checksums
-        run: |
-          set -euo pipefail
-          apk="apps/android/app/build/outputs/apk/release/app-release.apk"
-          aab="apps/android/app/build/outputs/bundle/release/app-release.aab"
+          root="${RUNNER_TEMP}/unsigned-android-build"
+          mapfile -t apks < <(find "${root}" -type f -name app-release-unsigned.apk -print)
+          mapfile -t aabs < <(find "${root}" -type f -path '*/outputs/bundle/release/app-release.aab' -print)
+          if [[ "${#apks[@]}" -ne 1 || "${#aabs[@]}" -ne 1 ]]; then
+            echo "expected exactly one unsigned APK and AAB" >&2
+            exit 1
+          fi
           apksigner_path=$(find "${ANDROID_HOME}/build-tools" -type f -name apksigner -print | sort -V | tail -n 1)
-          test -f "${apk}"
-          test -f "${aab}"
+          zipalign_path=$(find "${ANDROID_HOME}/build-tools" -type f -name zipalign -print | sort -V | tail -n 1)
           test -x "${apksigner_path}"
-          "${apksigner_path}" verify --verbose --print-certs "${apk}" | tee "${RUNNER_TEMP}/apk-signature.txt"
-          grep -q 'Verified using v2 scheme.*true' "${RUNNER_TEMP}/apk-signature.txt"
-          jarsigner -verify -certs "${aab}" > "${RUNNER_TEMP}/aab-signature.txt"
-          grep -q 'jar verified' "${RUNNER_TEMP}/aab-signature.txt"
-          (cd apps/android/app/build && shasum -a 256 -c reports/covalent/SHA256SUMS)
-          echo "COVALENT_RELEASE_APK=${apk}" >> "${GITHUB_ENV}"
-          echo "COVALENT_APKSIGNER=${apksigner_path}" >> "${GITHUB_ENV}"
-      # scripts/check-android-native-package.sh had no caller anywhere in the
-      # repository: its only mention was a `test -x` in check-android-jni-contract.sh,
-      # which asserts the file's permission bit and never runs it. So the
-      # `zipalign -c -P 16` alignment check, the whole-package budget, the
-      # per-ABI presence of libcovalent_android_jni.so and the per-ABI size
-      # budget have never run against any APK or AAB that shipped. Run them here,
-      # on the signed artefacts, where they were always meant to run.
-      # The size numbers themselves, and how they were derived by measurement,
-      # live in scripts/android-native-budgets.sh.
-      - name: Verify the signed native packages
+          test -x "${zipalign_path}"
+          staging="${RUNNER_TEMP}/android-release-assets"
+          mkdir -p "${staging}"
+          aligned_apk="${RUNNER_TEMP}/covalent-release-aligned.apk"
+          release_apk="${staging}/Covalent-${{ inputs.version }}-android-release.apk"
+          release_aab="${staging}/Covalent-${{ inputs.version }}-android.aab"
+          "${zipalign_path}" -f -p 16 "${apks[0]}" "${aligned_apk}"
+          "${apksigner_path}" sign \
+            --ks "${COVALENT_ANDROID_KEYSTORE_PATH}" \
+            --ks-key-alias "${COVALENT_ANDROID_KEY_ALIAS}" \
+            --ks-pass env:COVALENT_ANDROID_STORE_PASSWORD \
+            --key-pass env:COVALENT_ANDROID_KEY_PASSWORD \
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            --v3-signing-enabled true \
+            --v4-signing-enabled true \
+            --out "${release_apk}" \
+            "${aligned_apk}"
+          jarsigner \
+            -keystore "${COVALENT_ANDROID_KEYSTORE_PATH}" \
+            -storepass:env COVALENT_ANDROID_STORE_PASSWORD \
+            -keypass:env COVALENT_ANDROID_KEY_PASSWORD \
+            -signedjar "${release_aab}" \
+            "${aabs[0]}" "${COVALENT_ANDROID_KEY_ALIAS}"
+          {
+            echo "COVALENT_RELEASE_APK=${release_apk}"
+            echo "COVALENT_RELEASE_AAB=${release_aab}"
+            echo "COVALENT_APKSIGNER=${apksigner_path}"
+            echo "COVALENT_ANDROID_ZIPALIGN=${zipalign_path}"
+          } >> "${GITHUB_ENV}"
+      - name: Verify signed packages and preserve source reports
         run: |
           set -euo pipefail
-          zipalign_path=$(find "${ANDROID_HOME}/build-tools" -type f -name zipalign -print | sort -V | tail -n 1)
-          test -x "${zipalign_path}"
-          export COVALENT_ANDROID_ZIPALIGN="${zipalign_path}"
-          ./scripts/check-android-native-package.sh "apps/android/app/build/outputs/apk/release/app-release.apk"
-          ./scripts/check-android-native-package.sh "apps/android/app/build/outputs/bundle/release/app-release.aab"
+          "${COVALENT_APKSIGNER}" verify --verbose --print-certs "${COVALENT_RELEASE_APK}" | tee "${RUNNER_TEMP}/apk-signature.txt"
+          grep -q 'Verified using v2 scheme.*true' "${RUNNER_TEMP}/apk-signature.txt"
+          jarsigner -verify -certs "${COVALENT_RELEASE_AAB}" > "${RUNNER_TEMP}/aab-signature.txt"
+          grep -q 'jar verified' "${RUNNER_TEMP}/aab-signature.txt"
+          ./scripts/check-android-native-package.sh "${COVALENT_RELEASE_APK}"
+          ./scripts/check-android-native-package.sh "${COVALENT_RELEASE_AAB}"
+          root="${RUNNER_TEMP}/unsigned-android-build"
+          mapfile -t mappings < <(find "${root}" -type f -path '*/outputs/mapping/release/mapping.txt' -print)
+          mapfile -t sboms < <(find "${root}" -type f -path '*/reports/covalent/android-sbom.cdx.json' -print)
+          if [[ "${#mappings[@]}" -ne 1 || "${#sboms[@]}" -ne 1 ]]; then
+            echo "expected exactly one mapping file and SBOM from the unsigned handoff" >&2
+            exit 1
+          fi
+          cp "${mappings[0]}" "${RUNNER_TEMP}/android-release-assets/Covalent-${{ inputs.version }}-android-r8-mapping.txt"
+          cp "${sboms[0]}" "${RUNNER_TEMP}/android-release-assets/Covalent-${{ inputs.version }}-android-sbom.cdx.json"
+      # Do not carry the private signing key into the emulator action or any
+      # later publication step. The signed files have already been verified.
+      - name: Remove release keystore before emulator verification
+        run: |
+          set -euo pipefail
+          keystore="${RUNNER_TEMP}/covalent-release.keystore"
+          if [[ -f "${keystore}" ]]; then
+            shred --remove --zero "${keystore}" 2>/dev/null || rm -f "${keystore}"
+          fi
+          if [[ -e "${keystore}" || -L "${keystore}" ]]; then
+            echo "release keystore could not be deleted before emulator verification" >&2
+            exit 1
+          fi
+          echo "COVALENT_ANDROID_KEYSTORE_PATH=" >> "${GITHUB_ENV}"
       - name: Resolve prior signed package for a real upgrade gate
         env:
           GH_TOKEN: ${{ github.token }}
@@ -148,14 +249,31 @@ jobs:
           set -euo pipefail
           previous_dir="${RUNNER_TEMP}/previous-android"
           mkdir -p "${previous_dir}"
-          if gh release view --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            gh release download --repo "${GITHUB_REPOSITORY}" --pattern '*release.apk' --dir "${previous_dir}"
-            mapfile -t candidates < <(find "${previous_dir}" -maxdepth 1 -type f -name '*release.apk' -print)
-            if [[ "${#candidates[@]}" -ne 1 ]]; then
-              echo "expected exactly one prior signed release APK" >&2
+          previous_apk=""
+          while IFS= read -r prior_tag; do
+            [[ -n "${prior_tag}" ]] || continue
+            mapfile -t asset_names < <(
+              gh release view "${prior_tag}" --repo "${GITHUB_REPOSITORY}" --json assets \
+                --jq '.assets[].name | select(endswith("-android-release.apk"))'
+            )
+            if [[ "${#asset_names[@]}" -gt 1 ]]; then
+              echo "release ${prior_tag} contains more than one signed Android release APK" >&2
               exit 1
             fi
-            previous_apk="${candidates[0]}"
+            if [[ "${#asset_names[@]}" -eq 0 ]]; then
+              continue
+            fi
+            gh release download "${prior_tag}" --repo "${GITHUB_REPOSITORY}" \
+              --pattern "${asset_names[0]}" --dir "${previous_dir}"
+            previous_apk="${previous_dir}/${asset_names[0]}"
+            test -f "${previous_apk}"
+            break
+          done < <(
+            gh release list --repo "${GITHUB_REPOSITORY}" --limit 100 \
+              --json tagName,isDraft --jq '.[] | select(.isDraft == false) | .tagName'
+          )
+
+          if [[ -n "${previous_apk}" ]]; then
             current_digest=$("${COVALENT_APKSIGNER}" verify --print-certs "${COVALENT_RELEASE_APK}" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)
             previous_digest=$("${COVALENT_APKSIGNER}" verify --print-certs "${previous_apk}" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)
             test -n "${current_digest}"
@@ -165,13 +283,6 @@ jobs:
             echo "no prior signed Android release exists; rerun only with explicit first_release confirmation" >&2
             exit 1
           fi
-      # The hardware envelope here has to match ci.yml's. Without `profile`,
-      # `cores`, `ram-size`, `heap-size` and `disk-size` the action falls back to
-      # a bare `avdmanager create avd`, which produces a 320x640 device with a
-      # 64 MB Dalvik heap - an envelope ci.yml's own comment records as too small
-      # for an API 37 google_apis x86_64 guest to reach userspace. This lane
-      # omitted all of them, so by that same reasoning its emulator could never
-      # boot and this upgrade gate has very likely never completed. Mirror CI.
       - name: Install and upgrade signed package on API 37
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
@@ -211,41 +322,80 @@ jobs:
             after_install=$(adb shell dumpsys package life.michaelwong.covalent | sed -n 's/.*firstInstallTime=//p' | head -n 1 | tr -d '\r')
             test "${after_install}" = "${first_install}"
             adb shell pm path life.michaelwong.covalent
-      - name: Publish the signed Android build to the release
+      - name: Package verified Android release handoff
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          staging="${RUNNER_TEMP}/android-release-assets"
+          cd "${staging}"
+          for artifact in \
+            "Covalent-${RELEASE_VERSION}-android-release.apk" \
+            "Covalent-${RELEASE_VERSION}-android.aab" \
+            "Covalent-${RELEASE_VERSION}-android-r8-mapping.txt" \
+            "Covalent-${RELEASE_VERSION}-android-sbom.cdx.json"; do
+            test -f "${artifact}"
+          done
+          shasum -a 256 \
+            "Covalent-${RELEASE_VERSION}-android-release.apk" \
+            "Covalent-${RELEASE_VERSION}-android.aab" \
+            "Covalent-${RELEASE_VERSION}-android-r8-mapping.txt" \
+            "Covalent-${RELEASE_VERSION}-android-sbom.cdx.json" \
+            > "Covalent-${RELEASE_VERSION}-android-SHA256SUMS.txt"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-signed-covalent-android-${{ inputs.version }}-${{ github.sha }}
+          path: ${{ runner.temp }}/android-release-assets
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove ephemeral release keystore
+        if: always()
+        run: |
+          set +e
+          keystore="${RUNNER_TEMP}/covalent-release.keystore"
+          [[ -f "${keystore}" ]] || exit 0
+          shred --remove --zero "${keystore}" 2>/dev/null || rm -f "${keystore}"
+
+  publish:
+    name: Re-verify and publish signed Android artifacts
+    needs: sign-verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: verified-signed-covalent-android-${{ inputs.version }}-${{ github.sha }}
+          path: ${{ runner.temp }}/android-release-assets
+      - name: Verify signed Android handoff before publication
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          staging="${RUNNER_TEMP}/android-release-assets"
+          cd "${staging}"
+          manifest="Covalent-${RELEASE_VERSION}-android-SHA256SUMS.txt"
+          test -f "${manifest}"
+          shasum -a 256 -c "${manifest}"
+          for artifact in \
+            "Covalent-${RELEASE_VERSION}-android-release.apk" \
+            "Covalent-${RELEASE_VERSION}-android.aab" \
+            "Covalent-${RELEASE_VERSION}-android-r8-mapping.txt" \
+            "Covalent-${RELEASE_VERSION}-android-sbom.cdx.json"; do
+            test -f "${artifact}"
+          done
+      - name: Publish signed Android build to the release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           staging="${RUNNER_TEMP}/android-release-assets"
-          mkdir -p "${staging}"
-          outputs="apps/android/app/build/outputs"
-          reports="apps/android/app/build/reports/covalent"
-          # The upgrade gate for the next release resolves the prior package with
-          # `--pattern '*release.apk'`, so the published APK must keep that suffix.
-          cp "${outputs}/apk/release/app-release.apk" \
-            "${staging}/Covalent-${RELEASE_VERSION}-android-release.apk"
-          cp "${outputs}/bundle/release/app-release.aab" \
-            "${staging}/Covalent-${RELEASE_VERSION}-android.aab"
-          cp "${outputs}/mapping/release/mapping.txt" \
-            "${staging}/Covalent-${RELEASE_VERSION}-android-r8-mapping.txt"
-          cp "${reports}/android-sbom.cdx.json" \
-            "${staging}/Covalent-${RELEASE_VERSION}-android-sbom.cdx.json"
-          (cd "${staging}" && shasum -a 256 ./* > "Covalent-${RELEASE_VERSION}-android-SHA256SUMS.txt")
           ./scripts/publish-release-assets.sh "${RELEASE_VERSION}" \
             "${staging}/Covalent-${RELEASE_VERSION}-android-release.apk" \
             "${staging}/Covalent-${RELEASE_VERSION}-android.aab" \
             "${staging}/Covalent-${RELEASE_VERSION}-android-r8-mapping.txt" \
             "${staging}/Covalent-${RELEASE_VERSION}-android-sbom.cdx.json" \
             "${staging}/Covalent-${RELEASE_VERSION}-android-SHA256SUMS.txt"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: signed-covalent-android-${{ inputs.version }}-${{ github.sha }}
-          path: |
-            apps/android/app/build/outputs/apk/release/*.apk
-            apps/android/app/build/outputs/bundle/release/*.aab
-            apps/android/app/build/outputs/mapping/release/*
-            apps/android/app/build/reports/covalent/android-sbom.cdx.json
-            apps/android/app/build/reports/covalent/android-license-inventory.json
-            apps/android/app/build/reports/covalent/SHA256SUMS
-          if-no-files-found: error

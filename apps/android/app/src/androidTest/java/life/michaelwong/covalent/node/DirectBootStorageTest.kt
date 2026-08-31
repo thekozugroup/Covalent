@@ -169,7 +169,7 @@ class DirectBootStorageTest {
         assertEquals(
             "Once unlocked, key protection must be the measured level, not the Direct Boot " +
                 "refusal",
-            IdentityKeyProtector().protection(),
+            IdentityKeyProtector(realContext).protection(),
             manager.keyProtectionLevel(),
         )
     }

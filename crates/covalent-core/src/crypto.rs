@@ -30,8 +30,10 @@ impl BackupKey {
 
     /// Imports an exact 256-bit key from a protected platform key store.
     #[must_use]
-    pub fn from_bytes(bytes: [u8; KEY_LENGTH]) -> Self {
-        Self(Zeroizing::new(bytes))
+    pub fn from_bytes(mut bytes: [u8; KEY_LENGTH]) -> Self {
+        let key = Self(Zeroizing::new(bytes));
+        bytes.zeroize();
+        key
     }
 
     /// Returns a temporary copy for transfer into platform key protection.

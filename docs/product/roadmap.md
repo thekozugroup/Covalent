@@ -15,7 +15,7 @@ Performance bounds, corruption repair, migrations, crash recovery, accessibility
 ## iOS: out of scope for now
 
 iOS is not a supported platform and is not on this roadmap. The `CovalentIOS`
-target still exists and still compiles in the `iOS Tier 2` CI lane, but it is
+target still exists and still compiles in the informational iOS CI lane, but it is
 not published, not installable, not gated on, and not being invested in. That
 lane is deliberately excluded from every release workflow's required checks.
 There is no committed milestone for making iOS supported.

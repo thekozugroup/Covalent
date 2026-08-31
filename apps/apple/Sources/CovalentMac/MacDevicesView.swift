@@ -68,15 +68,9 @@ struct MacDevicesView: View {
                 Text("Nearby devices")
                     .font(.title2.weight(.semibold))
                 Spacer()
-                Button {
-                    Task { await model.refreshDiscovery() }
-                } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                }
-                .disabled(!model.isAuthorized)
             }
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                TextField("Tailscale hostname or IP", text: $tailscaleAddress, prompt: Text("nas.tailnet-name.ts.net:8788"))
+                TextField("Tailscale hostname or IP", text: $tailscaleAddress, prompt: Text("nas.tailnet-name.ts.net:8787"))
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { startTailscalePairing() }
                     .accessibilityHint("Enter the address shown by the other device in Tailscale")

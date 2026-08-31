@@ -5,6 +5,7 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -14,12 +15,11 @@ use covalent_protocol::{
     StorageLease, TransportBinding,
 };
 use fs2::FileExt as _;
-use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::atomic::{read_json_bounded, sync_directory, write_atomic, write_json_atomic};
-use crate::backup::{BackupProgress, scan_source};
+use crate::backup::{BackupProgress, options_digest, scan_source_with_chunk_sink};
 use crate::manifest::{SignedRosterBuilder, roster_digest, verify_roster};
 use crate::recovery::{
     MAX_RECOVERY_KIT_BYTES, RecoveryCapsule, RecoveryKit, RecoveryMasterKey,
@@ -30,14 +30,16 @@ use crate::replication::ProviderFailure;
 use crate::restore::{execute_restore, preview_restore};
 use crate::{
     AuthorizedRoot, BackupKey, BackupOptions, BackupResult, ChunkProvider, ChunkStore, CoreError,
-    DeviceIdentity, IntegrityReport, PairingConfirmation, PairingManager, PairingSession,
-    ProviderQuotaPolicy, PublicIdentity, RecoveryCapsuleDescriptor, ReplicationScheduler,
-    RestoreOptions, RestorePlan, RestoreReport, StoreProvider, StoredSnapshot, decrypt_manifest,
-    encrypt_manifest, export_settings, import_settings,
+    DeviceIdentity, IntegrityReport, KeyProtector, PairingConfirmation, PairingManager,
+    PairingSession, ProviderQuotaPolicy, PublicIdentity, RecoveryCapsuleDescriptor,
+    ReplicationScheduler, RestoreOptions, RestorePlan, RestoreReport, StoreProvider,
+    StoredSnapshot, WrappedSecret, decrypt_manifest, encrypt_manifest, export_settings,
+    import_settings, state_secret_context,
 };
 
 const NODE_CONFIG_SCHEMA_VERSION: u16 = 1;
-const BACKUP_KEY_SCHEMA_VERSION: u16 = 1;
+const LEGACY_BACKUP_KEY_SCHEMA_VERSION: u16 = 1;
+const PROTECTED_BACKUP_KEY_SCHEMA_VERSION: u16 = 2;
 const MAX_NODE_CONFIG_BYTES: usize = 16 * 1_024 * 1_024;
 const MAX_BACKUP_KEY_BYTES: usize = 16 * 1_024;
 const MAX_ROSTER_BYTES: usize = 1_048_576;
@@ -45,7 +47,36 @@ const ROSTER_TRANSACTION_SCHEMA_VERSION: u16 = 1;
 const MAX_ROSTER_TRANSACTION_BYTES: usize = MAX_NODE_CONFIG_BYTES + MAX_ROSTER_BYTES;
 const BACKUP_TRANSACTION_SCHEMA_VERSION: u16 = 1;
 const MAX_BACKUP_TRANSACTION_BYTES: usize = 256 * 1_024 * 1_024;
+const BACKUP_TERMINAL_RECEIPT_SCHEMA_VERSION: u16 = 1;
+/// Maximum completed backup results retained until explicit durable acknowledgement.
+pub const MAX_UNACKNOWLEDGED_BACKUP_RESULTS: usize = 8;
+const BACKUP_TERMINAL_RECEIPT_SIGNATURE_DOMAIN: &[u8] = b"covalent/backup-terminal-receipt/v1";
 const STORAGE_LEASE_SIGNATURE_DOMAIN: &[u8] = b"covalent/storage-lease/v1";
+const BACKUP_KEY_SECRET_PURPOSE: &str = "backup-key";
+
+#[cfg(test)]
+thread_local! {
+    static BACKUP_COMPLETION_FAILPOINT: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn backup_completion_failpoint(boundary: u8) -> Result<(), CoreError> {
+    BACKUP_COMPLETION_FAILPOINT.with(|failpoint| {
+        if failpoint.get() == boundary {
+            failpoint.set(0);
+            Err(CoreError::InvalidState(format!(
+                "backup completion failpoint {boundary}"
+            )))
+        } else {
+            Ok(())
+        }
+    })
+}
+
+#[cfg(not(test))]
+const fn backup_completion_failpoint(_boundary: u8) -> Result<(), CoreError> {
+    Ok(())
+}
 
 /// Persisted non-key backup state.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -307,7 +338,7 @@ fn storage_lease_signing_bytes(lease: &StorageLease) -> Result<Vec<u8>, CoreErro
 }
 
 /// Engine construction and resource limits.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct EngineOptions {
     /// Durable state directory.
     pub data_directory: PathBuf,
@@ -321,6 +352,8 @@ pub struct EngineOptions {
     pub maximum_parallel_transfers: usize,
     /// Provider byte/object quotas and real free-space reserve.
     pub provider_quota_policy: ProviderQuotaPolicy,
+    /// Platform-backed KEK source required before any private state is opened.
+    pub key_protector: Option<Arc<dyn KeyProtector>>,
 }
 
 impl EngineOptions {
@@ -334,7 +367,39 @@ impl EngineOptions {
             maximum_chunk_size: 1_024 * 1_024,
             maximum_parallel_transfers: 8,
             provider_quota_policy: ProviderQuotaPolicy::default(),
+            key_protector: None,
         }
+    }
+
+    /// Injects the only source authorized to wrap or open persisted secrets.
+    #[must_use]
+    pub fn with_key_protector(mut self, key_protector: Arc<dyn KeyProtector>) -> Self {
+        self.key_protector = Some(key_protector);
+        self
+    }
+}
+
+impl std::fmt::Debug for EngineOptions {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("EngineOptions")
+            .field("data_directory", &self.data_directory)
+            .field("initial_device_name", &self.initial_device_name)
+            .field(
+                "initial_lan_discovery_enabled",
+                &self.initial_lan_discovery_enabled,
+            )
+            .field("maximum_chunk_size", &self.maximum_chunk_size)
+            .field(
+                "maximum_parallel_transfers",
+                &self.maximum_parallel_transfers,
+            )
+            .field("provider_quota_policy", &self.provider_quota_policy)
+            .field(
+                "key_protector",
+                &self.key_protector.as_ref().map(|_| "[CONFIGURED]"),
+            )
+            .finish()
     }
 }
 
@@ -420,6 +485,79 @@ pub struct Engine {
     scheduler: Mutex<ReplicationScheduler>,
     backup_lock: Mutex<()>,
     recovery_master: RecoveryMasterKey,
+    key_protector: Arc<dyn KeyProtector>,
+}
+
+fn required_key_protector(options: &EngineOptions) -> Result<Arc<dyn KeyProtector>, CoreError> {
+    let protector = options
+        .key_protector
+        .as_ref()
+        .cloned()
+        .ok_or(CoreError::KeyProtectionLocked)?;
+    let version = protector.current_key_version()?;
+    if version == 0 {
+        return Err(CoreError::KeyProtectionLocked);
+    }
+    drop(protector.key_encryption_key(version)?);
+    Ok(protector)
+}
+
+const RECOVERY_BOOTSTRAP_JOURNAL_SCHEMA_VERSION: u16 = 1;
+const RECOVERY_BOOTSTRAP_JOURNAL_FILE: &str = "recovery-bootstrap.json";
+const MAX_RECOVERY_BOOTSTRAP_JOURNAL_BYTES: usize = 4 * 1_024;
+const MAX_RECOVERY_BOOTSTRAP_IDENTITY_BYTES: usize = 16 * 1_024;
+
+#[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RecoveryBootstrapJournal {
+    schema_version: u16,
+    kit_digest: [u8; 32],
+    target_digest: [u8; 32],
+}
+
+#[cfg(test)]
+thread_local! {
+    static RECOVERY_BOOTSTRAP_FAILPOINT: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn recovery_bootstrap_failpoint(boundary: u8) -> Result<(), CoreError> {
+    RECOVERY_BOOTSTRAP_FAILPOINT.with(|failpoint| {
+        if failpoint.get() == boundary {
+            failpoint.set(0);
+            Err(CoreError::InvalidState(format!(
+                "recovery bootstrap failpoint {boundary}"
+            )))
+        } else {
+            Ok(())
+        }
+    })
+}
+
+#[cfg(not(test))]
+const fn recovery_bootstrap_failpoint(_boundary: u8) -> Result<(), CoreError> {
+    Ok(())
+}
+
+fn validate_recovery_target_identity(
+    target_root: &Path,
+    expected_device_id: DeviceId,
+) -> Result<(), CoreError> {
+    let identity: serde_json::Value = read_json_bounded(
+        &target_root.join("identity.json"),
+        MAX_RECOVERY_BOOTSTRAP_IDENTITY_BYTES,
+    )?;
+    let actual = identity
+        .get("deviceId")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| value.parse::<DeviceId>().ok())
+        .ok_or_else(|| {
+            CoreError::InvalidState("recovery target identity is missing or invalid".to_owned())
+        })?;
+    if actual != expected_device_id {
+        return Err(CoreError::AuthenticationFailed);
+    }
+    Ok(())
 }
 
 impl Engine {
@@ -428,6 +566,7 @@ impl Engine {
         if !(1..=32).contains(&options.maximum_parallel_transfers) {
             return Err(CoreError::ResourceLimit("maximum parallel transfers"));
         }
+        let key_protector = required_key_protector(&options)?;
         fs::create_dir_all(&options.data_directory).map_err(|source| CoreError::Io {
             operation: "create engine data directory",
             path: options.data_directory.clone(),
@@ -461,11 +600,16 @@ impl Engine {
                 source,
             })?;
         let state_lock = acquire_state_lock(&options.data_directory)?;
-        let identity = Arc::new(DeviceIdentity::load_or_create(
-            options.data_directory.join("identity.json"),
+        let identity = Arc::new(DeviceIdentity::load_or_create_protected(
+            &options.data_directory.join("identity.json"),
+            &options.data_directory,
+            key_protector.as_ref(),
         )?);
-        let recovery_master =
-            load_or_create_recovery_master(&options.data_directory.join("recovery-master.json"))?;
+        let recovery_master = load_or_create_recovery_master(
+            &options.data_directory.join("recovery-master.json"),
+            &options.data_directory,
+            key_protector.as_ref(),
+        )?;
         let config_path = options.data_directory.join("config.json");
         let mut config = load_or_create_config(&config_path, &options)?;
         recover_roster_transaction(
@@ -491,6 +635,11 @@ impl Engine {
                 },
             )?;
         }
+        migrate_backup_key_directory(
+            &key_directory,
+            &options.data_directory,
+            key_protector.as_ref(),
+        )?;
         let store = ChunkStore::open_with_provider_quotas(
             options.data_directory.join("store"),
             options.maximum_chunk_size,
@@ -502,6 +651,7 @@ impl Engine {
             &config_path,
             &mut config,
             &identity,
+            key_protector.as_ref(),
         )?;
         let pairing = Arc::new(PairingManager::open(
             Arc::clone(&identity),
@@ -525,6 +675,7 @@ impl Engine {
             keys: Mutex::new(BTreeMap::new()),
             backup_lock: Mutex::new(()),
             recovery_master,
+            key_protector,
         })
     }
 
@@ -534,35 +685,224 @@ impl Engine {
         kit_bytes: &[u8],
         unlock: &RecoveryUnlockKey,
     ) -> Result<Self, CoreError> {
+        let key_protector = required_key_protector(&options)?;
         if kit_bytes.len() > MAX_RECOVERY_KIT_BYTES {
             return Err(CoreError::ResourceLimit("recovery kit"));
         }
         let kit: RecoveryKit = serde_json::from_slice(kit_bytes)?;
         let opened = kit.open(unlock)?;
-        fs::create_dir_all(&options.data_directory).map_err(|source| CoreError::Io {
-            operation: "create recovered engine directory",
-            path: options.data_directory.clone(),
+        let requested_root = options.data_directory.clone();
+        let target_name = requested_root.file_name().ok_or_else(|| {
+            CoreError::InvalidState("recovery target must name one directory".to_owned())
+        })?;
+        let requested_parent = requested_root
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(requested_parent).map_err(|source| CoreError::Io {
+            operation: "create recovery target parent",
+            path: requested_parent.to_path_buf(),
             source,
         })?;
-        if fs::read_dir(&options.data_directory)
-            .map_err(|source| CoreError::Io {
-                operation: "inspect recovered engine directory",
-                path: options.data_directory.clone(),
-                source,
-            })?
-            .next()
-            .is_some()
-        {
-            return Err(CoreError::InvalidState(
-                "recovery target directory is not empty".to_owned(),
-            ));
+        let parent = fs::canonicalize(requested_parent).map_err(|source| CoreError::Io {
+            operation: "canonicalize recovery target parent",
+            path: requested_parent.to_path_buf(),
+            source,
+        })?;
+        let target_root = parent.join(target_name);
+        let kit_digest = *blake3::hash(kit_bytes).as_bytes();
+        let target_digest = *blake3::hash(target_root.as_os_str().as_encoded_bytes()).as_bytes();
+        let journal = RecoveryBootstrapJournal {
+            schema_version: RECOVERY_BOOTSTRAP_JOURNAL_SCHEMA_VERSION,
+            kit_digest,
+            target_digest,
+        };
+        let recovered_device_id = opened.identity.device_id();
+        options.data_directory = target_root.clone();
+        options.initial_device_name = opened.display_name.clone();
+
+        match fs::symlink_metadata(&target_root) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    return Err(CoreError::InvalidState(
+                        "recovery target is not a real directory".to_owned(),
+                    ));
+                }
+                let journal_path = target_root.join(RECOVERY_BOOTSTRAP_JOURNAL_FILE);
+                if journal_path.exists() {
+                    let persisted: RecoveryBootstrapJournal =
+                        read_json_bounded(&journal_path, MAX_RECOVERY_BOOTSTRAP_JOURNAL_BYTES)?;
+                    if persisted != journal {
+                        return Err(CoreError::InvalidState(
+                            "recovery target belongs to another recovery operation".to_owned(),
+                        ));
+                    }
+                    validate_recovery_target_identity(&target_root, recovered_device_id)?;
+                    fs::remove_file(&journal_path).map_err(|source| CoreError::Io {
+                        operation: "complete recovered engine publish",
+                        path: journal_path,
+                        source,
+                    })?;
+                    sync_directory(&target_root)?;
+                    let engine = Self::open(options)?;
+                    if engine.device_id() != recovered_device_id {
+                        return Err(CoreError::AuthenticationFailed);
+                    }
+                    return Ok(engine);
+                }
+                if fs::read_dir(&target_root)
+                    .map_err(|source| CoreError::Io {
+                        operation: "inspect recovered engine directory",
+                        path: target_root.clone(),
+                        source,
+                    })?
+                    .next()
+                    .is_some()
+                {
+                    validate_recovery_target_identity(&target_root, recovered_device_id)?;
+                    let engine = Self::open(options)?;
+                    if engine.device_id() != recovered_device_id {
+                        return Err(CoreError::AuthenticationFailed);
+                    }
+                    return Ok(engine);
+                }
+                fs::remove_dir(&target_root).map_err(|source| CoreError::Io {
+                    operation: "remove empty recovery target",
+                    path: target_root.clone(),
+                    source,
+                })?;
+                sync_directory(&parent)?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(CoreError::Io {
+                    operation: "inspect recovery target",
+                    path: target_root.clone(),
+                    source,
+                });
+            }
         }
-        opened
-            .identity
-            .persist_recovered(&options.data_directory.join("identity.json"))?;
+
+        let staging_id = blake3::hash(target_root.as_os_str().as_encoded_bytes()).to_hex();
+        let staging_root = parent.join(format!(
+            ".covalent-recovery-{}.staging",
+            &staging_id.as_str()[..16]
+        ));
+        match fs::symlink_metadata(&staging_root) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    return Err(CoreError::InvalidState(
+                        "recovery staging path is not a real directory".to_owned(),
+                    ));
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt as _;
+                    if metadata.permissions().mode() & 0o077 != 0 {
+                        return Err(CoreError::InvalidState(
+                            "recovery staging directory permissions are too broad".to_owned(),
+                        ));
+                    }
+                }
+                let journal_path = staging_root.join(RECOVERY_BOOTSTRAP_JOURNAL_FILE);
+                if !journal_path.exists() {
+                    if fs::read_dir(&staging_root)
+                        .map_err(|source| CoreError::Io {
+                            operation: "inspect incomplete recovery staging directory",
+                            path: staging_root.clone(),
+                            source,
+                        })?
+                        .next()
+                        .is_some()
+                    {
+                        return Err(CoreError::InvalidState(
+                            "recovery staging journal is missing".to_owned(),
+                        ));
+                    }
+                    fs::remove_dir(&staging_root).map_err(|source| CoreError::Io {
+                        operation: "remove empty recovery staging directory",
+                        path: staging_root.clone(),
+                        source,
+                    })?;
+                } else {
+                    let persisted: RecoveryBootstrapJournal =
+                        read_json_bounded(&journal_path, MAX_RECOVERY_BOOTSTRAP_JOURNAL_BYTES)?;
+                    if persisted != journal {
+                        return Err(CoreError::InvalidState(
+                            "recovery staging belongs to another recovery operation".to_owned(),
+                        ));
+                    }
+                    for entry in fs::read_dir(&staging_root).map_err(|source| CoreError::Io {
+                        operation: "inspect recovery staging contents",
+                        path: staging_root.clone(),
+                        source,
+                    })? {
+                        let entry = entry.map_err(|source| CoreError::Io {
+                            operation: "inspect recovery staging entry",
+                            path: staging_root.clone(),
+                            source,
+                        })?;
+                        if !matches!(
+                            entry.file_name().to_str(),
+                            Some(
+                                RECOVERY_BOOTSTRAP_JOURNAL_FILE
+                                    | "identity.json"
+                                    | "recovery-master.json"
+                                    | "config.json"
+                            )
+                        ) {
+                            return Err(CoreError::InvalidState(
+                                "recovery staging contains an unexpected entry".to_owned(),
+                            ));
+                        }
+                    }
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(CoreError::Io {
+                    operation: "inspect recovery staging directory",
+                    path: staging_root.clone(),
+                    source,
+                });
+            }
+        }
+        if !staging_root.exists() {
+            fs::create_dir(&staging_root).map_err(|source| CoreError::Io {
+                operation: "create recovery staging directory",
+                path: staging_root.clone(),
+                source,
+            })?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                fs::set_permissions(&staging_root, fs::Permissions::from_mode(0o700)).map_err(
+                    |source| CoreError::Io {
+                        operation: "protect recovery staging directory",
+                        path: staging_root.clone(),
+                        source,
+                    },
+                )?;
+            }
+            write_json_atomic(
+                &staging_root.join(RECOVERY_BOOTSTRAP_JOURNAL_FILE),
+                &journal,
+                true,
+            )?;
+        }
+        recovery_bootstrap_failpoint(1)?;
+
+        opened.identity.persist_recovered_protected(
+            &staging_root.join("identity.json"),
+            &target_root,
+            key_protector.as_ref(),
+        )?;
+        recovery_bootstrap_failpoint(2)?;
         persist_recovery_master(
-            &options.data_directory.join("recovery-master.json"),
+            &staging_root.join("recovery-master.json"),
+            &target_root,
             &opened.master,
+            key_protector.as_ref(),
         )?;
         let mut recovered_config = NodeConfig::new(opened.display_name.clone(), false)?;
         for entry in opened.provider_directory {
@@ -573,13 +913,58 @@ impl Engine {
                 .insert(peer_id, entry.transport);
         }
         recovered_config.validate()?;
-        write_json_atomic(
-            &options.data_directory.join("config.json"),
-            &recovered_config,
-            true,
-        )?;
-        options.initial_device_name = opened.display_name;
-        Self::open(options)
+        write_json_atomic(&staging_root.join("config.json"), &recovered_config, true)?;
+        sync_directory(&staging_root)?;
+        recovery_bootstrap_failpoint(3)?;
+        #[cfg(any(target_os = "linux", target_vendor = "apple", target_os = "redox"))]
+        {
+            use rustix::fs::{Mode, OFlags, RenameFlags, open, renameat_with};
+
+            let parent_descriptor = open(
+                &parent,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+                Mode::empty(),
+            )
+            .map_err(|error| CoreError::Io {
+                operation: "open recovery parent for atomic publish",
+                path: parent.clone(),
+                source: std::io::Error::from_raw_os_error(error.raw_os_error()),
+            })?;
+            renameat_with(
+                &parent_descriptor,
+                staging_root
+                    .file_name()
+                    .expect("staging path has a filename"),
+                &parent_descriptor,
+                target_name,
+                RenameFlags::NOREPLACE,
+            )
+            .map_err(|error| CoreError::Io {
+                operation: "atomically publish recovered engine directory without replacement",
+                path: target_root.clone(),
+                source: std::io::Error::from_raw_os_error(error.raw_os_error()),
+            })?;
+        }
+        #[cfg(not(any(target_os = "linux", target_vendor = "apple", target_os = "redox")))]
+        fs::rename(&staging_root, &target_root).map_err(|source| CoreError::Io {
+            operation: "atomically publish recovered engine directory",
+            path: target_root.clone(),
+            source,
+        })?;
+        sync_directory(&parent)?;
+        recovery_bootstrap_failpoint(4)?;
+        let published_journal = target_root.join(RECOVERY_BOOTSTRAP_JOURNAL_FILE);
+        fs::remove_file(&published_journal).map_err(|source| CoreError::Io {
+            operation: "complete recovered engine publish",
+            path: published_journal,
+            source,
+        })?;
+        sync_directory(&target_root)?;
+        let engine = Self::open(options)?;
+        if engine.device_id() != recovered_device_id {
+            return Err(CoreError::AuthenticationFailed);
+        }
+        Ok(engine)
     }
 
     /// Exports one stable kit. Future snapshot capsules remain recoverable without re-export.
@@ -661,7 +1046,13 @@ impl Engine {
             {
                 return Err(CoreError::AuthenticationFailed);
             }
-            persist_or_validate_backup_key_file(&self.key_path(backup_id), &opened.backup_key)?;
+            persist_or_validate_backup_key_file(
+                &self.key_path(backup_id),
+                &self.options.data_directory,
+                backup_id,
+                &opened.backup_key,
+                self.key_protector.as_ref(),
+            )?;
             self.keys
                 .lock()
                 .map_err(|_| CoreError::Synchronization)?
@@ -830,12 +1221,39 @@ impl Engine {
         issued_at_unix_ms: u64,
         expires_at_unix_ms: u64,
     ) -> Result<StorageLease, CoreError> {
+        self.issue_storage_lease_idempotent(
+            peer_device_id,
+            backup_id,
+            max_new_bytes,
+            max_new_objects,
+            issued_at_unix_ms,
+            expires_at_unix_ms,
+            &uuid::Uuid::new_v4().to_string(),
+        )
+    }
+
+    /// Issues the same signed lease for every retry of one durable acquisition identity.
+    #[allow(clippy::too_many_arguments)]
+    pub fn issue_storage_lease_idempotent(
+        &self,
+        peer_device_id: DeviceId,
+        backup_id: BackupId,
+        max_new_bytes: u64,
+        max_new_objects: u64,
+        issued_at_unix_ms: u64,
+        expires_at_unix_ms: u64,
+        acquisition_id: &str,
+    ) -> Result<StorageLease, CoreError> {
         self.authorized_peer(peer_device_id, PeerRole::BackupWriter)?;
-        let mut nonce = [0_u8; 24];
-        OsRng.fill_bytes(&mut nonce);
+        if !matches!(
+            uuid::Uuid::parse_str(acquisition_id),
+            Ok(value) if value.hyphenated().to_string() == acquisition_id
+        ) {
+            return Err(CoreError::AuthenticationFailed);
+        }
         let mut lease = StorageLease {
             schema_version: 1,
-            lease_id: uuid::Uuid::new_v4().to_string(),
+            lease_id: acquisition_id.to_owned(),
             peer_device_id,
             provider_device_id: self.device_id(),
             backup_id,
@@ -843,15 +1261,25 @@ impl Engine {
             max_new_objects,
             issued_at_unix_ms,
             expires_at_unix_ms,
-            nonce: URL_SAFE_NO_PAD.encode(nonce),
+            nonce: acquisition_id.to_owned(),
             signature: String::new(),
         };
         lease.signature = self.identity.sign(
             STORAGE_LEASE_SIGNATURE_DOMAIN,
             &storage_lease_signing_bytes(&lease)?,
         );
-        self.store.reserve_provider_lease(&lease)?;
-        Ok(lease)
+        self.store.reserve_provider_lease_idempotent(&lease)
+    }
+
+    /// Authenticates, cancels, and compacts one exact provider-issued lease.
+    pub fn cancel_storage_lease(
+        &self,
+        peer_device_id: DeviceId,
+        lease: &StorageLease,
+        now_unix_ms: u64,
+    ) -> Result<(), CoreError> {
+        self.verify_storage_lease_identity(peer_device_id, lease)?;
+        self.store.cancel_provider_lease(lease, now_unix_ms)
     }
 
     /// Verifies and atomically consumes a lease for one opaque remote chunk.
@@ -977,6 +1405,39 @@ impl Engine {
         )
     }
 
+    /// Authenticates an explicit acknowledgement of one terminal segmented
+    /// capsule-upload result. Expired leases remain valid identities for this
+    /// receipt-only operation.
+    pub fn acknowledge_recovery_capsule_upload(
+        &self,
+        peer_device_id: DeviceId,
+        lease: &StorageLease,
+        upload_id: &str,
+    ) -> Result<(), CoreError> {
+        self.verify_storage_lease_identity(peer_device_id, lease)?;
+        self.store
+            .acknowledge_recovery_capsule_upload(lease, upload_id)
+    }
+
+    /// Authenticates an exact terminal capsule probe without reserving new quota.
+    pub fn recovery_capsule_is_committed_for_peer(
+        &self,
+        peer_device_id: DeviceId,
+        backup_id: BackupId,
+        snapshot_id: &str,
+        total_bytes: u64,
+        capsule_digest: &str,
+    ) -> Result<bool, CoreError> {
+        self.authorized_peer(peer_device_id, PeerRole::BackupWriter)?;
+        self.store.recovery_capsule_is_committed_for_owner(
+            peer_device_id,
+            backup_id,
+            snapshot_id,
+            total_bytes,
+            capsule_digest,
+        )
+    }
+
     /// Lists one owner-scoped page of bounded recovery capsule descriptors.
     pub fn recovery_capsule_descriptors_for_peer(
         &self,
@@ -992,6 +1453,26 @@ impl Engine {
             cursor,
             limit,
         )
+    }
+
+    /// Lists one owner page while enforcing the transport worker's deadline.
+    pub fn recovery_capsule_descriptors_for_peer_with_deadline(
+        &self,
+        peer_device_id: DeviceId,
+        backup_id: Option<BackupId>,
+        cursor: Option<&str>,
+        limit: u16,
+        deadline: Instant,
+    ) -> Result<(Vec<RecoveryCapsuleDescriptor>, Option<String>), CoreError> {
+        self.authorized_peer(peer_device_id, PeerRole::BackupReader)?;
+        self.store
+            .list_recovery_capsule_descriptors_for_owner_with_deadline(
+                peer_device_id,
+                backup_id,
+                cursor,
+                limit,
+                deadline,
+            )
     }
 
     /// Reads one bounded owner-scoped capsule segment.
@@ -1019,11 +1500,22 @@ impl Engine {
         lease: &StorageLease,
         now_unix_ms: u64,
     ) -> Result<(), CoreError> {
+        self.verify_storage_lease_identity(peer_device_id, lease)?;
+        if lease.expires_at_unix_ms <= now_unix_ms {
+            return Err(CoreError::AuthenticationFailed);
+        }
+        Ok(())
+    }
+
+    fn verify_storage_lease_identity(
+        &self,
+        peer_device_id: DeviceId,
+        lease: &StorageLease,
+    ) -> Result<(), CoreError> {
         self.authorized_peer(peer_device_id, PeerRole::BackupWriter)?;
         if lease.schema_version != 1
             || lease.peer_device_id != peer_device_id
             || lease.provider_device_id != self.device_id()
-            || lease.expires_at_unix_ms <= now_unix_ms
         {
             return Err(CoreError::AuthenticationFailed);
         }
@@ -1354,6 +1846,12 @@ impl Engine {
     }
 
     /// Runs a complete local encrypted backup and explicit provider replication.
+    ///
+    /// A signed result remains retryable by job ID until
+    /// [`Self::acknowledge_backup_result`] succeeds. Starting a ninth distinct
+    /// job before acknowledging an earlier result returns
+    /// `CoreError::ResourceLimit("unacknowledged backup terminal results")`
+    /// before source scanning or replication begins.
     pub fn backup(
         &self,
         source_root: impl AsRef<Path>,
@@ -1365,6 +1863,25 @@ impl Engine {
             .backup_lock
             .lock()
             .map_err(|_| CoreError::Synchronization)?;
+        let source_root = source_root.as_ref();
+        let source_root_digest = blake3::hash(source_root.as_os_str().as_encoded_bytes())
+            .to_hex()
+            .to_string();
+        let request_digest = options_digest(options)?;
+        if let Some(result) = self.load_or_complete_backup_terminal_receipt(
+            options,
+            &request_digest,
+            &source_root_digest,
+        )? {
+            let _ = self.repair_backup_completion(&options.job_id);
+            return Ok(result);
+        }
+        let receipt_path = self.backup_terminal_receipt_path(&options.job_id)?;
+        let receipt_directory = receipt_path.parent().ok_or_else(|| {
+            CoreError::InvalidState("backup terminal receipt has no parent".to_owned())
+        })?;
+        ensure_private_state_directory(receipt_directory)?;
+        self.ensure_backup_terminal_receipt_capacity(&receipt_path)?;
         self.validate_backup_transition(options)?;
         {
             let config = self.config.lock().map_err(|_| CoreError::Synchronization)?;
@@ -1385,27 +1902,28 @@ impl Engine {
             }
         }
         let key = self.load_or_create_backup_key(options.backup_id)?;
-        let scanned = scan_source(
-            source_root.as_ref(),
-            options,
-            &key,
-            &self.store,
-            control,
-            &mut progress_callback,
-        )?;
-        control.check()?;
         let scheduler = self
             .scheduler
             .lock()
             .map_err(|_| CoreError::Synchronization)?
             .clone();
-        let mut replication = scheduler.replicate_controlled(
-            &self.store,
-            &options.replica_intent,
-            &scanned.chunk_locators,
-            control,
+        let pipeline = scheduler.start_pipeline(
+            self.store.clone(),
+            options.replica_intent.clone(),
+            control.clone(),
             options.backup_id,
+        );
+        let scanned = scan_source_with_chunk_sink(
+            source_root,
+            options,
+            &key,
+            &self.store,
+            control,
+            &mut progress_callback,
+            &mut |locators| pipeline.submit(locators),
         )?;
+        control.check()?;
+        let mut replication = pipeline.finish()?;
         let mut manifest = scanned.manifest;
         manifest.provider_acknowledgements = replication.acknowledgements.clone();
         manifest.validate()?;
@@ -1436,6 +1954,12 @@ impl Engine {
             &mut replication,
         );
         let remembered = remembered_backup_state(options, self.device_id())?;
+        let result = BackupResult {
+            manifest,
+            stored_snapshot: stored_snapshot.clone(),
+            progress: scanned.progress,
+            replication,
+        };
         let transaction = PendingBackupCommit {
             schema_version: BACKUP_TRANSACTION_SCHEMA_VERSION,
             snapshot: stored_snapshot.clone(),
@@ -1446,26 +1970,51 @@ impl Engine {
             .data_directory
             .join("transactions")
             .join(format!("{}.json", options.job_id));
+        self.persist_backup_terminal_receipt(options, request_digest, source_root_digest, &result)?;
         write_json_atomic(&transaction_path, &transaction, true)?;
         self.store.commit_snapshot(&stored_snapshot)?;
         self.remember_backup_state(options.backup_id, remembered)?;
-        fs::remove_file(&transaction_path).map_err(|source| CoreError::Io {
-            operation: "complete backup transaction",
-            path: transaction_path.clone(),
+        let _ = self.repair_backup_completion(&options.job_id);
+        Ok(result)
+    }
+
+    /// Durably acknowledges delivery of one terminal backup result.
+    ///
+    /// Until this succeeds, the signed result remains retryable by job ID and
+    /// counts against the bounded terminal-result window.
+    pub fn acknowledge_backup_result(&self, job_id: &str) -> Result<(), CoreError> {
+        let _backup_guard = self
+            .backup_lock
+            .lock()
+            .map_err(|_| CoreError::Synchronization)?;
+        if self
+            .read_authenticated_backup_terminal_receipt(job_id)?
+            .is_none()
+        {
+            return Ok(());
+        }
+        let path = self.backup_terminal_receipt_path(job_id)?;
+        fs::remove_file(&path).map_err(|source| CoreError::Io {
+            operation: "acknowledge backup terminal result",
+            path: path.clone(),
             source,
         })?;
-        sync_directory(
-            transaction_path
-                .parent()
-                .ok_or_else(|| CoreError::InvalidState("transaction has no parent".to_owned()))?,
-        )?;
-        self.store.remove_checkpoint(&options.job_id)?;
-        Ok(BackupResult {
-            manifest,
-            stored_snapshot,
-            progress: scanned.progress,
-            replication,
-        })
+        sync_directory(path.parent().ok_or_else(|| {
+            CoreError::InvalidState("backup terminal receipt has no parent".to_owned())
+        })?)
+    }
+
+    /// Returns the backup ID from one signed unacknowledged terminal result.
+    /// Native/API callers use this to preserve a server-generated backup ID
+    /// while retrying a response-lost job.
+    pub fn unacknowledged_backup_id(&self, job_id: &str) -> Result<Option<BackupId>, CoreError> {
+        let _backup_guard = self
+            .backup_lock
+            .lock()
+            .map_err(|_| CoreError::Synchronization)?;
+        Ok(self
+            .read_authenticated_backup_terminal_receipt(job_id)?
+            .map(|receipt| receipt.result.manifest.backup_id))
     }
 
     /// Loads, authenticates, and decrypts a committed snapshot.
@@ -1722,6 +2271,241 @@ impl Engine {
         Ok(())
     }
 
+    fn backup_terminal_receipt_path(&self, job_id: &str) -> Result<PathBuf, CoreError> {
+        if !valid_identifier(job_id) {
+            return Err(CoreError::InvalidState(
+                "invalid backup terminal receipt id".to_owned(),
+            ));
+        }
+        Ok(self
+            .options
+            .data_directory
+            .join("backup-results")
+            .join(format!("{job_id}.json")))
+    }
+
+    fn persist_backup_terminal_receipt(
+        &self,
+        options: &BackupOptions,
+        request_digest: String,
+        source_root_digest: String,
+        result: &BackupResult,
+    ) -> Result<(), CoreError> {
+        let path = self.backup_terminal_receipt_path(&options.job_id)?;
+        let directory = path.parent().ok_or_else(|| {
+            CoreError::InvalidState("backup terminal receipt has no parent".to_owned())
+        })?;
+        ensure_private_state_directory(directory)?;
+        self.ensure_backup_terminal_receipt_capacity(&path)?;
+        let mut receipt = BackupTerminalReceipt {
+            schema_version: BACKUP_TERMINAL_RECEIPT_SCHEMA_VERSION,
+            job_id: options.job_id.clone(),
+            options_digest: request_digest,
+            source_root_digest,
+            result: result.clone(),
+            signature: String::new(),
+        };
+        receipt.signature = self.identity.sign(
+            BACKUP_TERMINAL_RECEIPT_SIGNATURE_DOMAIN,
+            &backup_terminal_receipt_signing_bytes(&receipt)?,
+        );
+        write_json_atomic(&path, &receipt, true)
+    }
+
+    fn ensure_backup_terminal_receipt_capacity(&self, retained: &Path) -> Result<(), CoreError> {
+        let directory = retained.parent().ok_or_else(|| {
+            CoreError::InvalidState("backup terminal receipt has no parent".to_owned())
+        })?;
+        let mut entries = fs::read_dir(directory)
+            .map_err(|source| CoreError::Io {
+                operation: "read backup terminal receipts",
+                path: directory.to_path_buf(),
+                source,
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|source| CoreError::Io {
+                operation: "read backup terminal receipt entry",
+                path: directory.to_path_buf(),
+                source,
+            })?;
+        entries.sort_by_key(fs::DirEntry::file_name);
+        let mut paths = Vec::new();
+        for entry in entries {
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path).map_err(|source| CoreError::Io {
+                operation: "inspect backup terminal receipt",
+                path: path.clone(),
+                source,
+            })?;
+            if metadata.file_type().is_symlink()
+                || !metadata.is_file()
+                || path.extension().and_then(|value| value.to_str()) != Some("json")
+                || !path
+                    .file_stem()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(valid_identifier)
+            {
+                return Err(CoreError::InvalidState(
+                    "unexpected backup terminal receipt entry".to_owned(),
+                ));
+            }
+            paths.push(path);
+        }
+        if paths.len() >= MAX_UNACKNOWLEDGED_BACKUP_RESULTS && !retained.exists() {
+            return Err(CoreError::ResourceLimit(
+                "unacknowledged backup terminal results",
+            ));
+        }
+        Ok(())
+    }
+
+    fn load_or_complete_backup_terminal_receipt(
+        &self,
+        options: &BackupOptions,
+        request_digest: &str,
+        source_root_digest: &str,
+    ) -> Result<Option<BackupResult>, CoreError> {
+        let Some(receipt) = self.read_authenticated_backup_terminal_receipt(&options.job_id)?
+        else {
+            return Ok(None);
+        };
+        if receipt.options_digest != request_digest
+            || receipt.source_root_digest != source_root_digest
+        {
+            return Err(CoreError::JobConflict);
+        }
+        if receipt.result.manifest.backup_id != options.backup_id
+            || receipt.result.manifest.snapshot_id != options.snapshot_id
+            || receipt.result.stored_snapshot.backup_id != options.backup_id
+            || receipt.result.stored_snapshot.snapshot_id != options.snapshot_id
+        {
+            return Err(CoreError::AuthenticationFailed);
+        }
+        self.store
+            .commit_snapshot(&receipt.result.stored_snapshot)?;
+
+        let expected = remembered_backup_state(options, self.device_id())?;
+        let should_advance = {
+            let config = self.config.lock().map_err(|_| CoreError::Synchronization)?;
+            match config.remembered_backups.get(&options.backup_id) {
+                None => true,
+                Some(previous) if previous.descriptor.owner_device_id != self.device_id() => {
+                    return Err(CoreError::AuthenticationFailed);
+                }
+                Some(previous) => match previous.latest_snapshot_id.as_deref() {
+                    None => true,
+                    Some(snapshot) if snapshot < options.snapshot_id.as_str() => {
+                        if previous.key_epoch > expected.key_epoch {
+                            return Err(CoreError::AuthenticationFailed);
+                        }
+                        true
+                    }
+                    Some(snapshot) if snapshot == options.snapshot_id => {
+                        if previous != &expected {
+                            return Err(CoreError::AuthenticationFailed);
+                        }
+                        false
+                    }
+                    Some(_) => {
+                        if previous.key_epoch < expected.key_epoch {
+                            return Err(CoreError::AuthenticationFailed);
+                        }
+                        false
+                    }
+                },
+            }
+        };
+        if should_advance {
+            self.remember_backup_state(options.backup_id, expected)?;
+        }
+        let stored = self
+            .store
+            .load_snapshot(options.backup_id, &options.snapshot_id)?;
+        if stored != receipt.result.stored_snapshot
+            || self
+                .authenticate_snapshot(options.backup_id, &options.snapshot_id, stored)?
+                .manifest
+                != receipt.result.manifest
+        {
+            return Err(CoreError::AuthenticationFailed);
+        }
+        Ok(Some(receipt.result))
+    }
+
+    fn read_authenticated_backup_terminal_receipt(
+        &self,
+        job_id: &str,
+    ) -> Result<Option<BackupTerminalReceipt>, CoreError> {
+        let path = self.backup_terminal_receipt_path(job_id)?;
+        match fs::symlink_metadata(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => {
+                return Err(CoreError::Io {
+                    operation: "inspect backup terminal receipt",
+                    path,
+                    source,
+                });
+            }
+            Ok(metadata)
+                if metadata.file_type().is_symlink()
+                    || !metadata.is_file()
+                    || metadata.len() > MAX_BACKUP_TRANSACTION_BYTES as u64 =>
+            {
+                return Err(CoreError::AuthenticationFailed);
+            }
+            Ok(_) => {}
+        }
+        let receipt: BackupTerminalReceipt =
+            read_json_bounded(&path, MAX_BACKUP_TRANSACTION_BYTES)?;
+        if receipt.schema_version != BACKUP_TERMINAL_RECEIPT_SCHEMA_VERSION {
+            return Err(CoreError::AuthenticationFailed);
+        }
+        self.identity.public_identity().verify(
+            BACKUP_TERMINAL_RECEIPT_SIGNATURE_DOMAIN,
+            &backup_terminal_receipt_signing_bytes(&receipt)?,
+            &receipt.signature,
+        )?;
+        if receipt.job_id != job_id
+            || !valid_lower_hex_digest(&receipt.options_digest)
+            || !valid_lower_hex_digest(&receipt.source_root_digest)
+            || receipt.result.manifest.backup_id != receipt.result.stored_snapshot.backup_id
+            || receipt.result.manifest.snapshot_id != receipt.result.stored_snapshot.snapshot_id
+            || receipt.result.manifest.provider_acknowledgements
+                != receipt.result.replication.acknowledgements
+        {
+            return Err(CoreError::AuthenticationFailed);
+        }
+        Ok(Some(receipt))
+    }
+
+    fn repair_backup_completion(&self, job_id: &str) -> Result<(), CoreError> {
+        let transaction_path = self
+            .options
+            .data_directory
+            .join("transactions")
+            .join(format!("{job_id}.json"));
+        backup_completion_failpoint(1)?;
+        match fs::remove_file(&transaction_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(CoreError::Io {
+                    operation: "complete backup transaction",
+                    path: transaction_path.clone(),
+                    source,
+                });
+            }
+        }
+        backup_completion_failpoint(2)?;
+        sync_directory(
+            transaction_path
+                .parent()
+                .ok_or_else(|| CoreError::InvalidState("transaction has no parent".to_owned()))?,
+        )?;
+        backup_completion_failpoint(3)?;
+        self.store.remove_checkpoint(job_id)
+    }
+
     fn validate_backup_transition(&self, options: &BackupOptions) -> Result<(), CoreError> {
         let config = self.config.lock().map_err(|_| CoreError::Synchronization)?;
         if let Some(previous) = config.remembered_backups.get(&options.backup_id) {
@@ -1760,11 +2544,22 @@ impl Engine {
                         "backup key path is not a regular file".to_owned(),
                     ));
                 }
-                load_backup_key_file(&path)?
+                load_backup_key_file(
+                    &path,
+                    &self.options.data_directory,
+                    backup_id,
+                    self.key_protector.as_ref(),
+                )?
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 let key = BackupKey::generate();
-                persist_backup_key_file(&path, &key)?;
+                persist_backup_key_file(
+                    &path,
+                    &self.options.data_directory,
+                    backup_id,
+                    &key,
+                    self.key_protector.as_ref(),
+                )?;
                 key
             }
             Err(source) => {
@@ -1792,7 +2587,12 @@ impl Engine {
         {
             return Ok(key);
         }
-        let key = load_backup_key_file(&self.key_path(backup_id))?;
+        let key = load_backup_key_file(
+            &self.key_path(backup_id),
+            &self.options.data_directory,
+            backup_id,
+            self.key_protector.as_ref(),
+        )?;
         self.keys
             .lock()
             .map_err(|_| CoreError::Synchronization)?
@@ -1906,6 +2706,38 @@ struct PendingBackupCommit {
     schema_version: u16,
     snapshot: StoredSnapshot,
     remembered: RememberedBackupState,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BackupTerminalReceipt {
+    schema_version: u16,
+    job_id: String,
+    options_digest: String,
+    source_root_digest: String,
+    result: BackupResult,
+    signature: String,
+}
+
+fn backup_terminal_receipt_signing_bytes(
+    receipt: &BackupTerminalReceipt,
+) -> Result<Vec<u8>, CoreError> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Fields<'a> {
+        schema_version: u16,
+        job_id: &'a str,
+        options_digest: &'a str,
+        source_root_digest: &'a str,
+        result: &'a BackupResult,
+    }
+    Ok(serde_json::to_vec(&Fields {
+        schema_version: receipt.schema_version,
+        job_id: &receipt.job_id,
+        options_digest: &receipt.options_digest,
+        source_root_digest: &receipt.source_root_digest,
+        result: &receipt.result,
+    })?)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -2265,6 +3097,7 @@ fn recover_backup_transactions(
     config_path: &Path,
     config: &mut NodeConfig,
     identity: &DeviceIdentity,
+    protector: &dyn KeyProtector,
 ) -> Result<(), CoreError> {
     let directory = data_directory.join("transactions");
     ensure_private_state_directory(&directory)?;
@@ -2303,7 +3136,7 @@ fn recover_backup_transactions(
         }
         let transaction: PendingBackupCommit =
             read_json_bounded(&path, MAX_BACKUP_TRANSACTION_BYTES)?;
-        validate_pending_backup_commit(&transaction, data_directory, identity)?;
+        validate_pending_backup_commit(&transaction, data_directory, identity, protector)?;
 
         let backup_id = transaction.snapshot.backup_id;
         let should_advance = match config.remembered_backups.get(&backup_id) {
@@ -2379,6 +3212,7 @@ fn validate_pending_backup_commit(
     transaction: &PendingBackupCommit,
     data_directory: &Path,
     identity: &DeviceIdentity,
+    protector: &dyn KeyProtector,
 ) -> Result<(), CoreError> {
     if transaction.schema_version != BACKUP_TRANSACTION_SCHEMA_VERSION
         || transaction.remembered.descriptor.backup_id != transaction.snapshot.backup_id
@@ -2401,6 +3235,9 @@ fn validate_pending_backup_commit(
         &data_directory
             .join("keys")
             .join(format!("{}.json", transaction.snapshot.backup_id)),
+        data_directory,
+        transaction.snapshot.backup_id,
+        protector,
     )?;
     let manifest = decrypt_manifest(
         &transaction.snapshot.envelope,
@@ -2482,18 +3319,98 @@ fn ensure_private_state_directory(path: &Path) -> Result<(), CoreError> {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PersistedBackupKey {
     schema_version: u16,
+    protected_key: WrappedSecret,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LegacyPersistedBackupKey {
+    #[serde(default)]
+    schema_version: u16,
     key: Zeroizing<String>,
 }
 
-fn persist_backup_key_file(path: &Path, key: &BackupKey) -> Result<(), CoreError> {
-    let encoded = PersistedBackupKey {
-        schema_version: BACKUP_KEY_SCHEMA_VERSION,
-        key: Zeroizing::new(URL_SAFE_NO_PAD.encode(key.to_bytes().as_ref())),
-    };
-    write_atomic(path, &serde_json::to_vec_pretty(&encoded)?, true)
+fn backup_key_record_id(backup_id: BackupId) -> String {
+    format!("keys/{backup_id}.json")
 }
 
-fn persist_or_validate_backup_key_file(path: &Path, key: &BackupKey) -> Result<(), CoreError> {
+fn migrate_backup_key_directory(
+    key_directory: &Path,
+    state_root: &Path,
+    protector: &dyn KeyProtector,
+) -> Result<(), CoreError> {
+    let mut entries = fs::read_dir(key_directory)
+        .map_err(|source| CoreError::Io {
+            operation: "read backup key directory",
+            path: key_directory.to_path_buf(),
+            source,
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|source| CoreError::Io {
+            operation: "read backup key entry",
+            path: key_directory.to_path_buf(),
+            source,
+        })?;
+    if entries.len() > 4_096 {
+        return Err(CoreError::ResourceLimit("persisted backup keys"));
+    }
+    entries.sort_by_key(fs::DirEntry::file_name);
+    for entry in entries {
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|source| CoreError::Io {
+            operation: "inspect backup key entry",
+            path: path.clone(),
+            source,
+        })?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || path.extension().and_then(|value| value.to_str()) != Some("json")
+        {
+            return Err(CoreError::InvalidState(
+                "unexpected backup key entry".to_owned(),
+            ));
+        }
+        let backup_id = path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .and_then(|value| value.parse::<BackupId>().ok())
+            .ok_or_else(|| CoreError::InvalidState("invalid backup key filename".to_owned()))?;
+        drop(load_backup_key_file(
+            &path, state_root, backup_id, protector,
+        )?);
+    }
+    Ok(())
+}
+
+fn persist_backup_key_file(
+    path: &Path,
+    state_root: &Path,
+    backup_id: BackupId,
+    key: &BackupKey,
+    protector: &dyn KeyProtector,
+) -> Result<(), CoreError> {
+    let context = state_secret_context(state_root, &backup_key_record_id(backup_id));
+    let key_bytes = key.to_bytes();
+    let encoded = PersistedBackupKey {
+        schema_version: PROTECTED_BACKUP_KEY_SCHEMA_VERSION,
+        protected_key: WrappedSecret::protect(
+            protector,
+            BACKUP_KEY_SECRET_PURPOSE,
+            &context,
+            Zeroizing::new(key_bytes.as_ref().to_vec()),
+        )?,
+    };
+    let bytes = Zeroizing::new(serde_json::to_vec_pretty(&encoded)?);
+    write_atomic(path, &bytes, true)
+}
+
+fn persist_or_validate_backup_key_file(
+    path: &Path,
+    state_root: &Path,
+    backup_id: BackupId,
+    key: &BackupKey,
+    protector: &dyn KeyProtector,
+) -> Result<(), CoreError> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
             if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -2501,14 +3418,14 @@ fn persist_or_validate_backup_key_file(path: &Path, key: &BackupKey) -> Result<(
                     "backup key path is not a regular file".to_owned(),
                 ));
             }
-            let incumbent = load_backup_key_file(path)?;
+            let incumbent = load_backup_key_file(path, state_root, backup_id, protector)?;
             if incumbent.to_bytes().as_ref() != key.to_bytes().as_ref() {
                 return Err(CoreError::AuthenticationFailed);
             }
             Ok(())
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            persist_backup_key_file(path, key)
+            persist_backup_key_file(path, state_root, backup_id, key, protector)
         }
         Err(source) => Err(CoreError::Io {
             operation: "inspect recovered backup key",
@@ -2518,7 +3435,12 @@ fn persist_or_validate_backup_key_file(path: &Path, key: &BackupKey) -> Result<(
     }
 }
 
-fn load_backup_key_file(path: &Path) -> Result<BackupKey, CoreError> {
+fn load_backup_key_file(
+    path: &Path,
+    state_root: &Path,
+    backup_id: BackupId,
+    protector: &dyn KeyProtector,
+) -> Result<BackupKey, CoreError> {
     let metadata = fs::symlink_metadata(path).map_err(|source| CoreError::Io {
         operation: "inspect backup key file",
         path: path.to_path_buf(),
@@ -2544,45 +3466,45 @@ fn load_backup_key_file(path: &Path) -> Result<BackupKey, CoreError> {
         .get("schemaVersion")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
-    let persisted: PersistedBackupKey = if schema_version == u64::from(BACKUP_KEY_SCHEMA_VERSION) {
-        serde_json::from_value(value)?
-    } else if schema_version == 0 {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct LegacyBackupKey {
-            #[serde(default)]
-            schema_version: u16,
-            key: Zeroizing<String>,
-        }
-        let legacy: LegacyBackupKey = serde_json::from_value(value)?;
-        if legacy.schema_version != 0 {
+    if schema_version == u64::from(PROTECTED_BACKUP_KEY_SCHEMA_VERSION) {
+        let persisted: PersistedBackupKey = serde_json::from_value(value)?;
+        let context = state_secret_context(state_root, &backup_key_record_id(backup_id));
+        let plaintext =
+            persisted
+                .protected_key
+                .open(protector, BACKUP_KEY_SECRET_PURPOSE, &context)?;
+        let mut bytes: [u8; 32] = plaintext
+            .as_slice()
+            .try_into()
+            .map_err(|_| CoreError::InvalidKeyMaterial)?;
+        let key = BackupKey::from_bytes(bytes);
+        bytes.zeroize();
+        return Ok(key);
+    }
+    if schema_version == 0 || schema_version == u64::from(LEGACY_BACKUP_KEY_SCHEMA_VERSION) {
+        let legacy: LegacyPersistedBackupKey = serde_json::from_value(value)?;
+        if legacy.schema_version != 0 && legacy.schema_version != LEGACY_BACKUP_KEY_SCHEMA_VERSION {
             return Err(CoreError::InvalidState(
                 "unsupported backup key schema".to_owned(),
             ));
         }
-        PersistedBackupKey {
-            schema_version: BACKUP_KEY_SCHEMA_VERSION,
-            key: legacy.key,
-        }
-    } else {
-        return Err(CoreError::InvalidState(
-            "unsupported backup key schema".to_owned(),
-        ));
-    };
-    let decoded = Zeroizing::new(
-        URL_SAFE_NO_PAD
-            .decode(persisted.key.as_bytes())
-            .map_err(|_| CoreError::InvalidKeyMaterial)?,
-    );
-    let bytes: [u8; 32] = decoded
-        .as_slice()
-        .try_into()
-        .map_err(|_| CoreError::InvalidKeyMaterial)?;
-    let key = BackupKey::from_bytes(bytes);
-    if schema_version == 0 {
-        persist_backup_key_file(path, &key)?;
+        let decoded = Zeroizing::new(
+            URL_SAFE_NO_PAD
+                .decode(legacy.key.as_bytes())
+                .map_err(|_| CoreError::InvalidKeyMaterial)?,
+        );
+        let mut bytes: [u8; 32] = decoded
+            .as_slice()
+            .try_into()
+            .map_err(|_| CoreError::InvalidKeyMaterial)?;
+        let key = BackupKey::from_bytes(bytes);
+        bytes.zeroize();
+        persist_backup_key_file(path, state_root, backup_id, &key, protector)?;
+        return Ok(key);
     }
-    Ok(key)
+    Err(CoreError::InvalidState(
+        "unsupported backup key schema".to_owned(),
+    ))
 }
 
 fn load_or_create_config(path: &Path, options: &EngineOptions) -> Result<NodeConfig, CoreError> {
@@ -2658,6 +3580,14 @@ mod tests {
 
     use super::*;
 
+    fn test_protector() -> Arc<dyn KeyProtector> {
+        Arc::new(crate::StaticKeyProtector::new(1, [0x51; 32]).expect("test protector"))
+    }
+
+    fn test_options(path: impl Into<PathBuf>) -> EngineOptions {
+        EngineOptions::new(path).with_key_protector(test_protector())
+    }
+
     #[test]
     fn legacy_config_migrates_without_identity_material() {
         let migrated = decode_or_migrate_config(br#"{"name":"Old node","lanDiscovery":true}"#)
@@ -2671,6 +3601,8 @@ mod tests {
     fn legacy_backup_key_migrates_without_changing_key_material() {
         let directory = tempdir().expect("directory");
         let path = directory.path().join("legacy-key.json");
+        let backup_id = BackupId::new();
+        let protector = test_protector();
         let expected = BackupKey::generate();
         write_json_atomic(
             &path,
@@ -2681,17 +3613,65 @@ mod tests {
         )
         .expect("legacy key");
 
-        let loaded = load_backup_key_file(&path).expect("migrate key");
+        let loaded = load_backup_key_file(&path, directory.path(), backup_id, protector.as_ref())
+            .expect("migrate key");
         assert_eq!(loaded.to_bytes().as_ref(), expected.to_bytes().as_ref());
         let migrated: serde_json::Value =
             serde_json::from_slice(&fs::read(path).expect("persisted key")).expect("json");
-        assert_eq!(migrated["schemaVersion"], BACKUP_KEY_SCHEMA_VERSION);
+        assert_eq!(
+            migrated["schemaVersion"],
+            PROTECTED_BACKUP_KEY_SCHEMA_VERSION
+        );
+        assert!(migrated.get("key").is_none());
+    }
+
+    #[test]
+    fn recovery_bootstrap_resumes_after_every_durable_boundary() {
+        for boundary in 1_u8..=4 {
+            let root = tempdir().expect("root");
+            let original_path = root.path().join("lost-owner");
+            let recovered_path = root.path().join("recovered-owner");
+            let original = Engine::open(test_options(&original_path)).expect("original engine");
+            let original_device_id = original.device_id();
+            let unlock = RecoveryUnlockKey::generate();
+            let kit = original.export_recovery_kit(&unlock).expect("recovery kit");
+            drop(original);
+            fs::remove_dir_all(&original_path).expect("remove lost state");
+
+            RECOVERY_BOOTSTRAP_FAILPOINT.with(|failpoint| failpoint.set(boundary));
+            assert!(
+                Engine::recover_from_kit(test_options(&recovered_path), &kit, &unlock).is_err(),
+                "boundary {boundary} must simulate a crash"
+            );
+            let recovered = Engine::recover_from_kit(test_options(&recovered_path), &kit, &unlock)
+                .expect("restart resumes recovery");
+            assert_eq!(recovered.device_id(), original_device_id);
+            assert!(
+                !recovered_path
+                    .join(RECOVERY_BOOTSTRAP_JOURNAL_FILE)
+                    .exists()
+            );
+            assert!(
+                fs::read_dir(root.path())
+                    .expect("root entries")
+                    .all(|entry| !entry
+                        .expect("root entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .ends_with(".staging"))
+            );
+
+            drop(recovered);
+            let reopened = Engine::recover_from_kit(test_options(&recovered_path), &kit, &unlock)
+                .expect("completed recovery is idempotent");
+            assert_eq!(reopened.device_id(), original_device_id);
+        }
     }
 
     #[test]
     fn settings_import_requires_confirmation_and_preserves_trust() {
         let directory = tempdir().expect("directory");
-        let engine = Engine::open(EngineOptions::new(directory.path())).expect("engine");
+        let engine = Engine::open(test_options(directory.path())).expect("engine");
         let peer = DeviceIdentity::generate().public_identity();
         engine
             .trust_peer(PeerGrant {
@@ -2721,7 +3701,7 @@ mod tests {
         let restore = tempdir().expect("restore");
         fs::create_dir(source.path().join("empty")).expect("empty directory");
         fs::write(source.path().join("hello.txt"), b"hello engine").expect("source file");
-        let engine = Engine::open(EngineOptions::new(node_data.path())).expect("engine");
+        let engine = Engine::open(test_options(node_data.path())).expect("engine");
         let provider_identity = DeviceIdentity::generate().public_identity();
         engine
             .trust_peer(PeerGrant {
@@ -2784,7 +3764,7 @@ mod tests {
         let node_data = tempdir().expect("node data");
         let source = tempdir().expect("source");
         fs::write(source.path().join("recover.txt"), b"recover me").expect("source file");
-        let engine = Engine::open(EngineOptions::new(node_data.path())).expect("engine");
+        let engine = Engine::open(test_options(node_data.path())).expect("engine");
         let backup_id = BackupId::new();
         let mut options = BackupOptions::new(backup_id, "0001", "recovery-job");
         options.display_name = "Recovery".to_owned();
@@ -2826,7 +3806,7 @@ mod tests {
         )
         .expect("stage recovery transaction");
 
-        let recovered = Engine::open(EngineOptions::new(node_data.path())).expect("recover engine");
+        let recovered = Engine::open(test_options(node_data.path())).expect("recover engine");
         assert!(
             recovered
                 .verify_snapshot(backup_id, "0001")
@@ -2846,11 +3826,160 @@ mod tests {
     }
 
     #[test]
+    fn terminal_backup_receipt_survives_every_post_commit_cleanup_failure() {
+        for boundary in 1_u8..=3 {
+            let node_data = tempdir().expect("node data");
+            let source = tempdir().expect("source");
+            fs::write(
+                source.path().join("terminal.txt"),
+                format!("terminal boundary {boundary}"),
+            )
+            .expect("source file");
+            let engine = Engine::open(test_options(node_data.path())).expect("engine");
+            let backup_id = BackupId::new();
+            let job_id = format!("terminal-boundary-{boundary}");
+            let mut options = BackupOptions::new(backup_id, "0001", &job_id);
+            options.display_name = "Terminal receipt".to_owned();
+            options.created_at_unix_ms = u64::from(boundary);
+            BACKUP_COMPLETION_FAILPOINT.with(|failpoint| failpoint.set(boundary));
+            let first = engine
+                .backup(source.path(), &options, &JobControl::new(), |_| {})
+                .expect("terminal success despite cleanup failure");
+            let receipt_path = node_data
+                .path()
+                .join("backup-results")
+                .join(format!("{job_id}.json"));
+            assert!(receipt_path.is_file());
+            drop(engine);
+            let source_path = source.path().to_path_buf();
+            drop(source);
+
+            let reopened = Engine::open(test_options(node_data.path())).expect("reopen");
+            let retry = reopened
+                .backup(&source_path, &options, &JobControl::new(), |_| {})
+                .expect("receipt retry without source");
+            assert_eq!(retry, first);
+            let different_source = tempdir().expect("different source");
+            fs::write(
+                different_source.path().join("terminal.txt"),
+                b"different request",
+            )
+            .expect("different source file");
+            assert!(matches!(
+                reopened.backup(
+                    different_source.path(),
+                    &options,
+                    &JobControl::new(),
+                    |_| {}
+                ),
+                Err(CoreError::JobConflict)
+            ));
+            let mut conflicting_options = options.clone();
+            conflicting_options.snapshot_id = "0002".to_owned();
+            assert!(matches!(
+                reopened.backup(
+                    &source_path,
+                    &conflicting_options,
+                    &JobControl::new(),
+                    |_| {}
+                ),
+                Err(CoreError::JobConflict)
+            ));
+            assert_eq!(
+                reopened
+                    .store()
+                    .list_snapshot_ids()
+                    .expect("snapshots")
+                    .into_iter()
+                    .filter(|(id, snapshot)| *id == backup_id && snapshot == "0001")
+                    .count(),
+                1
+            );
+            assert!(receipt_path.is_file());
+            assert!(
+                !node_data
+                    .path()
+                    .join("transactions")
+                    .join(format!("{job_id}.json"))
+                    .exists()
+            );
+            assert!(
+                !reopened
+                    .store()
+                    .has_checkpoint(&job_id)
+                    .expect("checkpoint")
+            );
+        }
+    }
+
+    #[test]
+    fn unacknowledged_terminal_backup_receipts_backpressure_without_losing_retry_truth() {
+        let node_data = tempdir().expect("node data");
+        let source = tempdir().expect("source");
+        fs::write(source.path().join("bounded.txt"), b"bounded receipts").expect("source");
+        let engine = Engine::open(test_options(node_data.path())).expect("engine");
+        let mut first = None;
+        let mut first_options = None;
+        for index in 0..MAX_UNACKNOWLEDGED_BACKUP_RESULTS {
+            let mut options = BackupOptions::new(
+                BackupId::new(),
+                "0001",
+                format!("bounded-receipt-{index:02}"),
+            );
+            options.created_at_unix_ms = index as u64;
+            let result = engine
+                .backup(source.path(), &options, &JobControl::new(), |_| {})
+                .expect("backup");
+            if index == 0 {
+                first = Some(result);
+                first_options = Some(options);
+            }
+        }
+        let mut blocked = BackupOptions::new(BackupId::new(), "0001", "bounded-receipt-blocked");
+        blocked.created_at_unix_ms = MAX_UNACKNOWLEDGED_BACKUP_RESULTS as u64;
+        assert!(matches!(
+            engine.backup(source.path(), &blocked, &JobControl::new(), |_| {}),
+            Err(CoreError::ResourceLimit(
+                "unacknowledged backup terminal results"
+            ))
+        ));
+        let receipts = fs::read_dir(node_data.path().join("backup-results"))
+            .expect("receipts")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("receipt entries");
+        assert_eq!(receipts.len(), MAX_UNACKNOWLEDGED_BACKUP_RESULTS);
+        drop(engine);
+        let reopened = Engine::open(test_options(node_data.path())).expect("reopen");
+        let first_options = first_options.expect("first options");
+        assert_eq!(
+            reopened
+                .backup(source.path(), &first_options, &JobControl::new(), |_| {})
+                .expect("oldest unacknowledged retry"),
+            first.expect("first result")
+        );
+        reopened
+            .acknowledge_backup_result(&first_options.job_id)
+            .expect("acknowledge oldest result");
+        reopened
+            .acknowledge_backup_result(&first_options.job_id)
+            .expect("idempotent acknowledgement");
+        reopened
+            .backup(source.path(), &blocked, &JobControl::new(), |_| {})
+            .expect("capacity after acknowledgement");
+        assert!(
+            node_data
+                .path()
+                .join("backup-results/bounded-receipt-blocked.json")
+                .is_file()
+        );
+    }
+
+    #[test]
     fn requested_snapshot_id_is_bound_to_authenticated_manifest() {
         let node_data = tempdir().expect("node data");
         let source = tempdir().expect("source");
         fs::write(source.path().join("file"), b"version one").expect("source");
-        let engine = Engine::open(EngineOptions::new(node_data.path())).expect("engine");
+        let engine = Engine::open(test_options(node_data.path())).expect("engine");
         let backup_id = BackupId::new();
         let mut first = BackupOptions::new(backup_id, "0001", "snapshot-bind-one");
         first.created_at_unix_ms = 1;
@@ -2907,7 +4036,7 @@ mod tests {
         let source = tempdir().expect("source");
         let plaintext = b"epoch-bound locator";
         fs::write(source.path().join("file"), plaintext).expect("source");
-        let engine = Engine::open(EngineOptions::new(node_data.path())).expect("engine");
+        let engine = Engine::open(test_options(node_data.path())).expect("engine");
         let backup_id = BackupId::new();
         let mut options = BackupOptions::new(backup_id, "epoch-one", "epoch-one-job");
         options.created_at_unix_ms = 11;
@@ -2952,7 +4081,7 @@ mod tests {
         let node_data = tempdir().expect("node data");
         let source = tempdir().expect("source");
         fs::write(source.path().join("file"), b"retained").expect("source");
-        let engine = Engine::open(EngineOptions::new(node_data.path())).expect("engine");
+        let engine = Engine::open(test_options(node_data.path())).expect("engine");
         let backup_id = BackupId::new();
         let mut options = BackupOptions::new(backup_id, "0001", "gc-binding");
         options.created_at_unix_ms = 7;
@@ -3003,7 +4132,7 @@ mod tests {
     #[test]
     fn startup_recovers_revocation_roster_and_current_roster_is_fully_verified() {
         let node_data = tempdir().expect("node data");
-        let engine = Engine::open(EngineOptions::new(node_data.path())).expect("engine");
+        let engine = Engine::open(test_options(node_data.path())).expect("engine");
         let peer = DeviceIdentity::generate().public_identity();
         engine
             .trust_peer(PeerGrant {
@@ -3045,7 +4174,7 @@ mod tests {
         .expect("stage roster transaction");
         drop(engine);
 
-        let recovered = Engine::open(EngineOptions::new(node_data.path())).expect("recover");
+        let recovered = Engine::open(test_options(node_data.path())).expect("recover");
         assert!(matches!(
             recovered.authorized_peer(peer.device_id, PeerRole::StorageProvider),
             Err(CoreError::PeerRevoked)
