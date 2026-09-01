@@ -766,11 +766,19 @@ pub(crate) async fn serve_pairing_connection(
     stream_limit: Arc<Semaphore>,
 ) {
     let connection_streams = Arc::new(Semaphore::new(MAX_PAIRING_STREAMS_PER_CONNECTION));
+    let mut requests = tokio::task::JoinSet::new();
     // The address every request on this connection is attributed to. QUIC
     // address validation has already run, so it is a reachable peer rather than
     // a spoofed header.
     let source = connection.remote_address().ip();
-    while let Ok(streams) = connection.accept_bi().await {
+    loop {
+        let streams = tokio::select! {
+            streams = connection.accept_bi() => streams,
+            _ = requests.join_next(), if !requests.is_empty() => continue,
+        };
+        let Ok(streams) = streams else {
+            break;
+        };
         let Ok(connection_permit) = Arc::clone(&connection_streams).try_acquire_owned() else {
             break;
         };
@@ -778,7 +786,7 @@ pub(crate) async fn serve_pairing_connection(
             break;
         };
         let service = Arc::clone(&service);
-        tokio::spawn(async move {
+        requests.spawn(async move {
             let _connection_permit = connection_permit;
             let _stream_permit = stream_permit;
             let _ = tokio::time::timeout(
@@ -788,6 +796,8 @@ pub(crate) async fn serve_pairing_connection(
             .await;
         });
     }
+
+    while requests.join_next().await.is_some() {}
 }
 
 async fn serve_pairing_stream(

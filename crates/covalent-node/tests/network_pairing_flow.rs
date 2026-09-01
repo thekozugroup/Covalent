@@ -416,9 +416,11 @@ async fn start_flood_is_source_bounded_and_survives_restart() {
         "pairing_resource_limit",
         "fresh identities and nonces cannot bypass source admission"
     );
-    drop(connection);
-
+    // Stop while the attacker's connection is still live. Shutdown must own
+    // and drain accepted connection tasks before it releases the runtime; an
+    // immediate restart cannot race a detached task retaining the engine lock.
     responder.stop().await.expect("stop responder");
+    drop(connection);
     let restarted = start_node(&responder_data, "Responder server").await;
     let connection = PairingConnection::connect(restarted.ready_info().peer_address())
         .await

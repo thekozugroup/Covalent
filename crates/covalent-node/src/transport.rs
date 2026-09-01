@@ -477,6 +477,18 @@ pub struct QuicNode {
     pairing_service: Option<Arc<NetworkPairingService>>,
 }
 
+/// Close capability retained after a node enters its serving task.
+pub(crate) struct QuicNodeShutdown {
+    endpoint: Endpoint,
+}
+
+impl QuicNodeShutdown {
+    pub(crate) fn close(&self) {
+        self.endpoint
+            .close(VarInt::from_u32(0), b"node shutting down");
+    }
+}
+
 impl QuicNode {
     /// Binds a resource-limited QUIC/TLS 1.3 endpoint.
     pub fn bind(
@@ -524,9 +536,24 @@ impl QuicNode {
         })
     }
 
+    /// Returns the capability used by the runtime to begin graceful shutdown.
+    pub(crate) fn shutdown_handle(&self) -> QuicNodeShutdown {
+        QuicNodeShutdown {
+            endpoint: self.endpoint.clone(),
+        }
+    }
+
     /// Accepts connections until the endpoint is closed or the task is cancelled.
     pub async fn run(self) {
-        while let Some(incoming) = self.endpoint.accept().await {
+        let mut connections = tokio::task::JoinSet::new();
+        loop {
+            let incoming = tokio::select! {
+                incoming = self.endpoint.accept() => incoming,
+                _ = connections.join_next(), if !connections.is_empty() => continue,
+            };
+            let Some(incoming) = incoming else {
+                break;
+            };
             if !incoming.remote_address_validated() {
                 let _ = incoming.retry();
                 continue;
@@ -552,7 +579,7 @@ impl QuicNode {
             let pairing_stream_limit = Arc::clone(&self.pairing_stream_limit);
             let blocking_limit = Arc::clone(&self.blocking_limit);
             let pairing_service = self.pairing_service.clone();
-            tokio::spawn(async move {
+            connections.spawn(async move {
                 let _connection_permit = connection_permit;
                 let _source_permit = source_permit;
                 let Ok(Ok(connection)) =
@@ -566,40 +593,70 @@ impl QuicNode {
                     }
                     return;
                 }
-                loop {
-                    let mut streams = match connection.accept_bi().await {
-                        Ok(streams) => streams,
-                        Err(_) => break,
-                    };
-                    let engine = Arc::clone(&engine);
-                    let fingerprint = fingerprint.clone();
-                    let replay_window = Arc::clone(&replay_window);
-                    let rate_limiter = Arc::clone(&rate_limiter);
-                    let Ok(stream_permit) = Arc::clone(&stream_limit).try_acquire_owned() else {
-                        streams.0.reset(VarInt::from_u32(1)).ok();
-                        streams.1.stop(VarInt::from_u32(1)).ok();
-                        continue;
-                    };
-                    let blocking_limit = Arc::clone(&blocking_limit);
-                    tokio::spawn(async move {
-                        let _stream_permit = stream_permit;
-                        let _ = tokio::time::timeout(
-                            STREAM_OPERATION_TIMEOUT,
-                            handle_stream(
-                                streams,
-                                engine,
-                                &fingerprint,
-                                replay_window,
-                                rate_limiter,
-                                blocking_limit,
-                            ),
-                        )
-                        .await;
-                    });
-                }
+                serve_storage_connection(
+                    connection,
+                    engine,
+                    fingerprint,
+                    replay_window,
+                    rate_limiter,
+                    stream_limit,
+                    blocking_limit,
+                )
+                .await;
             });
         }
+
+        while connections.join_next().await.is_some() {}
     }
+}
+
+async fn serve_storage_connection(
+    connection: quinn::Connection,
+    engine: Arc<Engine>,
+    fingerprint: String,
+    replay_window: Arc<Mutex<ReplayWindow>>,
+    rate_limiter: Arc<Mutex<PeerRateLimiter>>,
+    stream_limit: Arc<Semaphore>,
+    blocking_limit: Arc<Semaphore>,
+) {
+    let mut requests = tokio::task::JoinSet::new();
+    loop {
+        let streams = tokio::select! {
+            streams = connection.accept_bi() => streams,
+            _ = requests.join_next(), if !requests.is_empty() => continue,
+        };
+        let mut streams = match streams {
+            Ok(streams) => streams,
+            Err(_) => break,
+        };
+        let engine = Arc::clone(&engine);
+        let fingerprint = fingerprint.clone();
+        let replay_window = Arc::clone(&replay_window);
+        let rate_limiter = Arc::clone(&rate_limiter);
+        let Ok(stream_permit) = Arc::clone(&stream_limit).try_acquire_owned() else {
+            streams.0.reset(VarInt::from_u32(1)).ok();
+            streams.1.stop(VarInt::from_u32(1)).ok();
+            continue;
+        };
+        let blocking_limit = Arc::clone(&blocking_limit);
+        requests.spawn(async move {
+            let _stream_permit = stream_permit;
+            let _ = tokio::time::timeout(
+                STREAM_OPERATION_TIMEOUT,
+                handle_stream(
+                    streams,
+                    engine,
+                    &fingerprint,
+                    replay_window,
+                    rate_limiter,
+                    blocking_limit,
+                ),
+            )
+            .await;
+        });
+    }
+
+    while requests.join_next().await.is_some() {}
 }
 
 fn negotiated_alpn(connection: &quinn::Connection) -> Option<Vec<u8>> {

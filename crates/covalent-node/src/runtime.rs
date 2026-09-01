@@ -448,10 +448,16 @@ async fn supervise_runtime(
             .await
             .context("serve local API")
     });
+    let quic_shutdown = quic_node.shutdown_handle();
     let mut quic_task = tokio::spawn(quic_node.run());
 
     let result = tokio::select! {
-        result = &mut http_task => result.context("join local API task")?,
+        result = &mut http_task => {
+            let result = result.context("join local API task")?;
+            quic_shutdown.close();
+            quic_task.await.context("join QUIC peer task")?;
+            result
+        },
         result = &mut quic_task => {
             result.context("join QUIC peer task")?;
             let _ = shutdown_sender.send(true);
@@ -459,8 +465,6 @@ async fn supervise_runtime(
         }
     };
 
-    quic_task.abort();
-    let _ = quic_task.await;
     let discovery_result = discovery.set_enabled(false).context("stop LAN discovery");
     let readiness_result = match ready_file {
         Some(path) => {
