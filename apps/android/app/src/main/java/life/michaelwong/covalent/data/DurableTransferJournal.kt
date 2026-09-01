@@ -253,7 +253,7 @@ internal class DurableTransferJournal(
         val payload = request.getJSONObject("payload")
         when (mode) {
             MODE_SAF_BACKUP -> {
-                require(path == BACKUP_ARCHIVE_PATH && payload.getString("jobId") == jobId) {
+                require(path == "/api/v1/backups/archive" && payload.getString("jobId") == jobId) {
                     "The backup request metadata does not match its durable job."
                 }
                 require(request.getString("treeUri").isNotBlank()) { "The backup source is missing." }
@@ -266,7 +266,7 @@ internal class DurableTransferJournal(
                     .optString("planId")
                     .takeIf(String::isNotBlank)
                 require(
-                    path == RESTORE_ARCHIVE_PATH &&
+                    path == "/api/v1/restores/archive/execute" &&
                         reference.getString("jobId") == jobId &&
                         expectedPlanId == referencePlanId &&
                         requestPlanId == referencePlanId &&
@@ -327,8 +327,6 @@ internal class DurableTransferJournal(
         const val SCHEMA_VERSION = 1
         const val MODE_SAF_BACKUP = "saf_backup"
         const val MODE_SAF_RESTORE = "saf_restore"
-        const val BACKUP_ARCHIVE_PATH = "/api/v1/backups/archive"
-        const val RESTORE_ARCHIVE_PATH = "/api/v1/restores/archive/execute"
         const val PENDING_PREFIX = "pending_"
         const val ACKNOWLEDGEMENT_PREFIX = "acknowledgement_"
         const val TRANSFER_PREFIX = "transfer_"

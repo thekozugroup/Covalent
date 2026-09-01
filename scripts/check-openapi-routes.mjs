@@ -151,6 +151,7 @@ const nonClientRegions = [
   { label: "node implementation and its tests", match: (path) => path.startsWith("crates/") },
   { label: "gate tooling", match: (path) => path.startsWith("scripts/") },
   { label: "CI configuration", match: (path) => path.startsWith(".github/") },
+  { label: "route-contract fixtures", match: (path) => path.startsWith("fixtures/openapi-routes/") },
   { label: "documentation", match: (path) => path.startsWith("docs/") || path.endsWith(".md") },
 ];
 
@@ -1284,7 +1285,9 @@ try {
   }
 
   const issued = new Set(
-    references.filter((reference) => reference.method !== null && reference.method !== "HANDOFF").map((reference) => reference.template),
+    references
+      .filter((reference) => reference.method !== null && reference.method !== "HANDOFF")
+      .map((reference) => `${reference.tree.label}\0${reference.template}`),
   );
   const unrouted = [];
   for (const reference of references) {
@@ -1294,7 +1297,7 @@ try {
       continue;
     }
     if (reference.method === "HANDOFF") {
-      if (!issued.has(reference.template)) {
+      if (!issued.has(`${reference.tree.label}\0${reference.template}`)) {
         unrouted.push(
           `${reference.template} (${reference.tree.label}, ${reference.location}): stored as a path constant but the client never issues it, so its method is unverifiable`,
         );
