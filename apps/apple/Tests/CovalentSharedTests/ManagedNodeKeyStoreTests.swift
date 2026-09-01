@@ -198,12 +198,12 @@ import Testing
     }
 
     let project = try String(contentsOf: appleRoot.appending(path: "Project.yml"), encoding: .utf8)
-    #expect(project.contains("CovalentUITestTokenFile"))
+    let tokenFileSetting = "CovalentUITestTokenFile: $(COVALENT_UI_TEST_TOKEN_FILE)"
+    #expect(project.components(separatedBy: tokenFileSetting).count == 3,
+            "Both UI-test targets must receive only the private token-file path")
     #expect(!project.contains("CovalentUITestToken: $(COVALENT_UI_TEST_TOKEN)"))
     for plist in ["Config/CovalentMacUITests-Info.plist", "Config/CovalentIOSUITests-Info.plist"] {
-        let source = try String(contentsOf: appleRoot.appending(path: plist), encoding: .utf8)
-        #expect(source.contains("CovalentUITestTokenFile"))
-        #expect(!source.contains("<key>CovalentUITestToken</key>"))
+        #expect(project.contains("path: \(plist)"), "Project.yml must generate \(plist)")
     }
 
     let model = try String(

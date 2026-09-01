@@ -139,10 +139,27 @@ require_text 'the claimed CA accepted the wrong hostname' "$claim_script"
 # The node-side local-api-token is an encrypted durable record, not a client
 # credential. Deterministic harnesses must inject a separate caller-owned token
 # file and must never recover or forward this wrapped record.
-if rg -n --glob '*.sh' \
-  --glob '!check-container-contract.sh' \
-  --glob '!test-release-guardrails.sh' \
-  '/data/local-api-token' "$repo_root/scripts" "$repo_root/packaging/docker"; then
+token_reference_scan_status=0
+if command -v rg >/dev/null 2>&1; then
+  token_reference_hits=$(rg -n --glob '*.sh' \
+    --glob '!check-container-contract.sh' \
+    --glob '!test-release-guardrails.sh' \
+    '/data/local-api-token' "$repo_root/scripts" "$repo_root/packaging/docker") || \
+    token_reference_scan_status=$?
+else
+  token_reference_hits=$(find "$repo_root/scripts" "$repo_root/packaging/docker" \
+    -type f -name '*.sh' \
+    ! -name 'check-container-contract.sh' \
+    ! -name 'test-release-guardrails.sh' \
+    -exec grep -nH -F -- '/data/local-api-token' {} \;) || \
+    token_reference_scan_status=$?
+fi
+if [ "$token_reference_scan_status" -gt 1 ]; then
+  echo "could not scan container harnesses for wrapped token access" >&2
+  exit 1
+fi
+if [ -n "$token_reference_hits" ]; then
+  printf '%s\n' "$token_reference_hits"
   echo "executable container harnesses must not read the wrapped node API token" >&2
   exit 1
 fi

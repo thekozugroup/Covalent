@@ -8,12 +8,55 @@ manager="$repo_root/apps/android/app/src/main/java/life/michaelwong/covalent/nod
 service="$repo_root/apps/android/app/src/main/java/life/michaelwong/covalent/node/NodeProviderService.kt"
 manifest="$repo_root/apps/android/app/src/main/AndroidManifest.xml"
 package_gate="$repo_root/scripts/check-android-native-package.sh"
+verification_metadata="$repo_root/apps/android/gradle/verification-metadata.xml"
 
 test -f "$crate/Cargo.toml"
 test -f "$crate/src/lib.rs"
 test -f "$native"
 test -f "$manager"
 test -f "$service"
+test -f "$verification_metadata"
+
+# AAPT2 resolves a host-specific executable JAR lazily during resource
+# processing. Dependency verification generated on macOS therefore sees only
+# the OS X artifact unless Linux is asserted explicitly; that let clean Linux
+# CI fail after every other dependency had already verified. Keep both host
+# artifacts bound to the exact AGP 9.2.1 component and reviewed checksums.
+aapt2_component=$(
+  awk '
+    /<component group="com.android.tools.build" name="aapt2" version="9.2.1-15009934">/ { inside = 1 }
+    inside { print }
+    inside && /<\/component>/ { exit }
+  ' "$verification_metadata"
+)
+test -n "$aapt2_component" || {
+  echo "AAPT2 9.2.1-15009934 verification component is missing" >&2
+  exit 1
+}
+
+require_aapt2_checksum() {
+  artifact_name=$1
+  expected_sha256=$2
+  printf '%s\n' "$aapt2_component" | awk \
+    -v artifact_name="$artifact_name" \
+    -v expected_sha256="$expected_sha256" '
+      index($0, "<artifact name=\"" artifact_name "\">") { artifact = 1 }
+      artifact && index($0, "<sha256 value=\"" expected_sha256 "\"") { verified = 1 }
+      artifact && /<\/artifact>/ { exit }
+      END { exit verified ? 0 : 1 }
+    ' || {
+    echo "$artifact_name must keep its independently reviewed SHA-256 in verification-metadata.xml" >&2
+    exit 1
+  }
+}
+
+require_aapt2_checksum \
+  "aapt2-9.2.1-15009934-linux.jar" \
+  "755f6727fb3f4cce5e319eac0f3618ed4b36b49a46d4bb2cbb6fa8e9175a54d6"
+require_aapt2_checksum \
+  "aapt2-9.2.1-15009934-osx.jar" \
+  "ece4bbeb8a9b89410943cd83a12446a93741d1a8a249873d830653bd84fb9d44"
+
 # This is only a presence check: the package gate needs a built APK or AAB and a
 # zipalign binary, so it cannot run here. It is invoked for real on the signed
 # artefacts in .github/workflows/android-release.yml ("Verify the signed native

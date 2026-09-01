@@ -74,8 +74,11 @@ for key_name in correct wrong; do
   docker run --rm --user "$(id -u):$(id -g)" \
     --mount "type=bind,source=$kek_directory,target=/secrets" \
     "$image" provision-key --key-file "/secrets/$key_name.kek" >/dev/null
-  mode=$(stat -f '%Lp' "$kek_directory/$key_name.kek" 2>/dev/null || stat -c '%a' "$kek_directory/$key_name.kek")
-  test "$mode" = 600
+  mode=$(stat -c '%a' "$kek_directory/$key_name.kek" 2>/dev/null || stat -f '%Lp' "$kek_directory/$key_name.kek")
+  if [ "$mode" != 600 ]; then
+    echo "provisioned KEK mode is $mode; expected 600" >&2
+    exit 1
+  fi
   # The host-only temporary directory stays 0700 and owned by the caller. Only
   # the individual key is assigned to the immutable runtime UID, so the
   # owner-only file can be mounted directly without a world-writable staging

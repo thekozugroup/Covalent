@@ -150,7 +150,19 @@ jq empty fixtures/contracts/pairing-invitation-v1.json
 jq empty fixtures/contracts/manifest-v1.json
 
 for script in scripts/*.sh; do
-  sh -n "$script"
+  shell_declaration=$(sed -n '1p' "$script")
+  case "$shell_declaration" in
+    '#!/usr/bin/env bash'|'#!/bin/bash')
+      bash -n "$script"
+      ;;
+    '#!/bin/sh'|'# shellcheck shell=sh')
+      sh -n "$script"
+      ;;
+    *)
+      echo "unsupported shell declaration in $script: $shell_declaration" >&2
+      exit 1
+      ;;
+  esac
 done
 
 ./scripts/test-zero-open-codeql-alerts.sh
