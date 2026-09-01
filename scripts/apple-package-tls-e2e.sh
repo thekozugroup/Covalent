@@ -26,9 +26,12 @@ if [ ! -f "$api_token_file" ] || [ -L "$api_token_file" ]; then
   echo "package TLS E2E requires a regular owner-only API token file" >&2
   exit 64
 fi
-token_mode=$(stat -f '%Lp' "$api_token_file" 2>/dev/null || stat -c '%a' "$api_token_file")
+if ! token_mode=$(stat -c '%a' "$api_token_file" 2>/dev/null || stat -f '%Lp' "$api_token_file" 2>/dev/null); then
+  echo "package TLS E2E could not read the API token file mode" >&2
+  exit 69
+fi
 if [ "$token_mode" != 600 ]; then
-  echo "package TLS E2E API token file must be mode 0600" >&2
+  echo "package TLS E2E API token file mode is $token_mode; expected 600" >&2
   exit 64
 fi
 

@@ -66,8 +66,13 @@ for node in a b c; do
 done
 for node in a b c; do
   test -f "$kek_directory/$node.kek"
-  mode=$(stat -f '%Lp' "$kek_directory/$node.kek" 2>/dev/null || stat -c '%a' "$kek_directory/$node.kek")
-  test "$mode" = 600
+  # GNU stat -f can print filesystem details before returning non-zero. Try
+  # GNU's mode form first so fallback output cannot contaminate the value.
+  mode=$(stat -c '%a' "$kek_directory/$node.kek" 2>/dev/null || stat -f '%Lp' "$kek_directory/$node.kek")
+  if [ "$mode" != 600 ]; then
+    echo "provisioned KEK mode is $mode; expected 600" >&2
+    exit 1
+  fi
   make_runtime_secret_readable "$kek_directory/$node.kek"
   server_token_path="$token_directory/$node.token"
   client_token_path="$client_token_directory/$node.token"

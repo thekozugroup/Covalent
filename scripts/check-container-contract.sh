@@ -10,6 +10,7 @@ e2e_compose="$repo_root/packaging/docker/compose.e2e.yaml"
 e2e_script="$repo_root/scripts/docker-compose-e2e.sh"
 runtime_script="$repo_root/scripts/check-container-runtime.sh"
 claim_script="$repo_root/scripts/check-container-claim.sh"
+apple_tls_script="$repo_root/scripts/apple-package-tls-e2e.sh"
 caddy_gomod="$repo_root/packaging/docker/caddy/go.mod"
 caddy_gosum="$repo_root/packaging/docker/caddy/go.sum"
 runtime_digest="sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40"
@@ -123,6 +124,17 @@ require_text 'if { printf x >> /secret; } 2>/dev/null; then' "$e2e_script"
 require_text 'before_digest=$(docker run --rm --user 0:0 --entrypoint sha256sum' "$e2e_script"
 require_text 'after_digest=$(docker run --rm --user 0:0 --entrypoint sha256sum' "$e2e_script"
 require_text '--api-token-file /run/secrets/covalent-api-token' "$runtime_script"
+
+# GNU stat -f treats its following format as another path and can emit
+# filesystem details before failing. If its BSD form runs first, the fallback
+# mode is appended to that output and otherwise-correct permission checks fail.
+for portable_stat_script in "$runtime_script" "$e2e_script" "$claim_script" "$apple_tls_script"; do
+  if grep -Eq 'stat[[:space:]]+-f[^|]*\|\|[[:space:]]*stat[[:space:]]+-c' "$portable_stat_script"; then
+    echo "packaged TLS/container harness must try GNU stat -c before BSD stat -f: $portable_stat_script" >&2
+    exit 1
+  fi
+done
+
 [ -x "$claim_script" ] || {
   echo "packaged claim replay harness is missing or not executable: $claim_script" >&2
   exit 1

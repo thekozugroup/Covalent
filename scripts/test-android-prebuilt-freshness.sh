@@ -30,4 +30,21 @@ grep -Fq '[ "$running_avd" != "$avd_name" ]' "$device_gate"
 grep -Fq '$serial is $running_avd, not required AVD $avd_name.' "$device_gate"
 grep -Fq '[ "$api_level" != "37" ]' "$device_gate"
 
+# GNU stat -f can emit filesystem details before failing, contaminating a
+# command substitution before its BSD fallback appends the actual file mode.
+# Keep the device fixture's host-mode probe ordered and its failure explicit.
+gnu_stat_line=$(grep -n "stat -c '%a'" "$device_gate" | head -n 1 | cut -d: -f1)
+bsd_stat_line=$(grep -n "stat -f '%Lp'" "$device_gate" | head -n 1 | cut -d: -f1)
+if [[ -z "$gnu_stat_line" || -z "$bsd_stat_line" || "$gnu_stat_line" -ge "$bsd_stat_line" ]]; then
+  echo "Android device gate must try GNU stat -c before BSD stat -f" >&2
+  exit 1
+fi
+bare_mode_test_pattern='^[[:space:]]*test[[:space:]]+"\$mode"[[:space:]]*=[[:space:]]*600[[:space:]]*$'
+if grep -Eq "$bare_mode_test_pattern" "$device_gate"; then
+  echo "Android device gate must diagnose an unexpected fixture-secret mode" >&2
+  exit 1
+fi
+mode_diagnostic='provisioned Android fixture KEK mode is $mode; expected 600'
+grep -Fq "$mode_diagnostic" "$device_gate"
+
 echo "Android prebuilt freshness and dedicated-device contracts: ok"

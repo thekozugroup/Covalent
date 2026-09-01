@@ -284,6 +284,20 @@ runtime_secret_digest() {
     "$tls_image" /secret | awk '{print $1}'
 }
 
+portable_file_mode() {
+  mode_path=$1
+  if mode_value=$(stat -c '%a' "$mode_path" 2>/dev/null); then
+    printf '%s\n' "$mode_value"
+    return 0
+  fi
+  if mode_value=$(stat -f '%Lp' "$mode_path" 2>/dev/null); then
+    printf '%s\n' "$mode_value"
+    return 0
+  fi
+  echo "could not read Android fixture secret mode: $mode_path" >&2
+  return 1
+}
+
 make_runtime_secret_readable() {
   secret_path=$1
   docker run --rm --user 0:0 --entrypoint sh \
@@ -310,8 +324,11 @@ for key_name in tls wrong-tls; do
   docker run --rm --user "$(id -u):$(id -g)" \
     --mount "type=bind,source=$tls_kek_directory,target=/secrets" \
     "$tls_image" provision-key --key-file "/secrets/$key_name.kek" >/dev/null
-  mode=$(stat -f '%Lp' "$tls_kek_directory/$key_name.kek" 2>/dev/null || stat -c '%a' "$tls_kek_directory/$key_name.kek")
-  test "$mode" = 600
+  mode=$(portable_file_mode "$tls_kek_directory/$key_name.kek")
+  if [ "$mode" != 600 ]; then
+    echo "provisioned Android fixture KEK mode is $mode; expected 600" >&2
+    exit 1
+  fi
   make_runtime_secret_readable "$tls_kek_directory/$key_name.kek"
 done
 for token_name in tls wrong-tls; do

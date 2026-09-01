@@ -184,7 +184,7 @@ jq -e '
 journal_path=$(find "$claim_directory" -maxdepth 1 -type f -name '.covalent-claim-attempt-*' -print)
 [ -n "$journal_path" ] || fail "the exact pending request journal was not retained"
 [ "$(printf '%s\n' "$journal_path" | wc -l | tr -d ' ')" = 1 ] || fail "more than one claim journal was retained"
-[ "$(stat -f '%Lp' "$journal_path" 2>/dev/null || stat -c '%a' "$journal_path")" = 600 ] \
+[ "$(stat -c '%a' "$journal_path" 2>/dev/null || stat -f '%Lp' "$journal_path")" = 600 ] \
   || fail "claim journal is not owner-only"
 
 docker stop --timeout 10 "$node_name" >/dev/null
@@ -217,11 +217,11 @@ grep -Eq '^HTTP/[0-9.]+ 200([[:space:]]|$)' "$claim_directory/replay-headers" \
 cmp -s "$claim_directory/first-response.json" "$claim_directory/replay-response.json" \
   || fail "the replayed grant was not byte-identical after restart"
 [ -d "$claim_directory/claimed" ] || fail "verified credentials were not published"
-[ "$(stat -f '%Lp' "$claim_directory/claimed" 2>/dev/null || stat -c '%a' "$claim_directory/claimed")" = 700 ] \
+[ "$(stat -c '%a' "$claim_directory/claimed" 2>/dev/null || stat -f '%Lp' "$claim_directory/claimed")" = 700 ] \
   || fail "claim output directory is not owner-only"
 for credential in root.crt local-api-token; do
   [ -f "$claim_directory/claimed/$credential" ] || fail "missing claimed credential: $credential"
-  [ "$(stat -f '%Lp' "$claim_directory/claimed/$credential" 2>/dev/null || stat -c '%a' "$claim_directory/claimed/$credential")" = 600 ] \
+  [ "$(stat -c '%a' "$claim_directory/claimed/$credential" 2>/dev/null || stat -f '%Lp' "$claim_directory/claimed/$credential")" = 600 ] \
     || fail "claimed credential is not owner-only: $credential"
 done
 if find "$claim_directory" -maxdepth 1 -type f -name '.covalent-claim-attempt-*' -print -quit | grep -q .; then
