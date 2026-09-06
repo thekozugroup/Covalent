@@ -27,7 +27,7 @@ jobs:
       checks: read
       security-events: read
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
@@ -145,7 +145,7 @@ jobs:
               "$(basename "${inventory}")" > "$(basename "${manifest}")"
             shasum -a 256 -c "$(basename "${input_checksum}")"
           )
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: verified-unsigned-covalent-macos-signing-input-${{ steps.release.outputs.version }}-${{ github.sha }}
           path: ${{ runner.temp }}/unsigned-signing-input
@@ -160,8 +160,8 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: verified-unsigned-covalent-macos-signing-input-${{ needs.build-unsigned.outputs.version }}-${{ github.sha }}
           path: ${{ runner.temp }}/unsigned-signing-input
@@ -330,7 +330,7 @@ jobs:
             echo "COVALENT_SIGNING_IDENTITY="
             echo "COVALENT_SIGNING_P12="
           } >> "${GITHUB_ENV}"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: verified-signed-covalent-macos-notarization-input-${{ needs.build-unsigned.outputs.version }}-${{ github.sha }}
           path: ${{ runner.temp }}/signed-notarization-input
@@ -357,8 +357,8 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: verified-signed-covalent-macos-notarization-input-${{ needs.build-unsigned.outputs.version }}-${{ github.sha }}
           path: ${{ runner.temp }}/signed-notarization-input
@@ -440,7 +440,7 @@ jobs:
               "${inventory}" > "$(basename "${manifest}")"
             shasum -a 256 -c "$(basename "${artifact_checksum}")"
           )
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: verified-notarized-covalent-macos-${{ needs.build-unsigned.outputs.version }}-${{ github.sha }}
           path: ${{ runner.temp }}/notarized-release-handoff
@@ -463,8 +463,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: verified-notarized-covalent-macos-${{ needs.build-unsigned.outputs.version }}-${{ github.sha }}
           path: ${{ runner.temp }}/notarized-release-handoff
