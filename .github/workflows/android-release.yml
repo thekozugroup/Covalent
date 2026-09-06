@@ -29,10 +29,10 @@ jobs:
       contents: read
       checks: read
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+      - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
         with:
           distribution: temurin
           java-version: "17"
@@ -99,7 +99,7 @@ jobs:
           (cd apps/android/app/build && shasum -a 256 -c reports/covalent/SHA256SUMS)
           test -f apps/android/app/build/outputs/apk/release/app-release-unsigned.apk
           test -f apps/android/app/build/outputs/bundle/release/app-release.aab
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: unsigned-covalent-android-${{ inputs.version }}-${{ github.sha }}
           path: |
@@ -119,8 +119,8 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
         with:
           distribution: temurin
           java-version: "17"
@@ -128,7 +128,7 @@ jobs:
       # Build-tools are needed only for local zip alignment and signature
       # verification. This job never invokes Gradle or resolves a dependency.
       - run: sdkmanager "build-tools;37.0.0"
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: unsigned-covalent-android-${{ inputs.version }}-${{ github.sha }}
           path: ${{ runner.temp }}/unsigned-android-build
@@ -342,7 +342,7 @@ jobs:
             "Covalent-${RELEASE_VERSION}-android-r8-mapping.txt" \
             "Covalent-${RELEASE_VERSION}-android-sbom.cdx.json" \
             > "Covalent-${RELEASE_VERSION}-android-SHA256SUMS.txt"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: verified-signed-covalent-android-${{ inputs.version }}-${{ github.sha }}
           path: ${{ runner.temp }}/android-release-assets
@@ -364,8 +364,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: verified-signed-covalent-android-${{ inputs.version }}-${{ github.sha }}
           path: ${{ runner.temp }}/android-release-assets
