@@ -63,6 +63,8 @@ const PAIRING_FLOW_JS: &str = include_str!("../../../packaging/web/pairing-flow.
 const RESTORE_PLAN_FLOW_JS: &str = include_str!("../../../packaging/web/restore-plan-flow.js");
 const BACKUP_TERMINAL_FLOW_JS: &str =
     include_str!("../../../packaging/web/backup-terminal-flow.js");
+const BACKUP_VERIFICATION_FLOW_JS: &str =
+    include_str!("../../../packaging/web/backup-verification-flow.js");
 const TAB_FLOW_JS: &str = include_str!("../../../packaging/web/tab-flow.js");
 const MAX_LOCAL_API_BODY_BYTES: usize = 2 * 1_024 * 1_024;
 const MAX_LOCAL_API_TOKEN_FILE_BYTES: u64 = 16 * 1_024;
@@ -1240,6 +1242,10 @@ pub fn router(state: AppState) -> Router {
             "/assets/backup-terminal-flow.js",
             get(backup_terminal_flow_javascript),
         )
+        .route(
+            "/assets/backup-verification-flow.js",
+            get(backup_verification_flow_javascript),
+        )
         .route("/assets/tab-flow.js", get(tab_flow_javascript))
         .route("/healthz", get(health))
         .route("/api/v1/status", get(status))
@@ -1802,6 +1808,16 @@ async fn backup_terminal_flow_javascript() -> impl IntoResponse {
             (header::CACHE_CONTROL, "no-cache"),
         ],
         BACKUP_TERMINAL_FLOW_JS,
+    )
+}
+
+async fn backup_verification_flow_javascript() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        BACKUP_VERIFICATION_FLOW_JS,
     )
 }
 
@@ -6696,6 +6712,7 @@ mod tests {
             "/assets/pairing-flow.js",
             "/assets/restore-plan-flow.js",
             "/assets/backup-terminal-flow.js",
+            "/assets/backup-verification-flow.js",
             "/assets/tab-flow.js",
         ] {
             let response = app

@@ -3,6 +3,7 @@ package life.michaelwong.covalent.data
 import android.content.Context
 import android.net.Uri
 import android.os.ParcelFileDescriptor
+import android.provider.DocumentsContract
 import android.util.Base64
 import androidx.documentfile.provider.DocumentFile
 import java.io.BufferedInputStream
@@ -33,7 +34,7 @@ class SafTransferBridge(private val node: CovalentNodeClient = CovalentNodeClien
     fun targetInventory(context: Context, targetTree: Uri): TargetInventoryDraft {
         val root = DocumentFile.fromTreeUri(context, targetTree)
             ?.takeIf { it.exists() && it.isDirectory }
-            ?: error("The selected restore folder is unavailable. Choose it again.")
+            ?: throw SafTargetAccessException()
         val rootBefore = snapshot(root)
         val seenDocuments = mutableSetOf<String>()
         val seenPaths = mutableSetOf<String>()
@@ -45,7 +46,7 @@ class SafTransferBridge(private val node: CovalentNodeClient = CovalentNodeClien
             check(seenDocuments.add(directory.uri.toString())) {
                 "The document provider returned a folder cycle."
             }
-            directory.listFiles().forEach { child ->
+            listTargetFiles(context, directory).forEach { child ->
                 ensureTransferActive()
                 val before = snapshot(child)
                 val name = SafArchivePath.requireComponent(before.name)
@@ -109,6 +110,10 @@ class SafTransferBridge(private val node: CovalentNodeClient = CovalentNodeClien
             } catch (error: NodeApiException) {
                 val serverOffset = archiveUploadRetryOffset(error, descriptor.length) ?: throw error
                 offset = serverOffset
+            } catch (error: SafSourceAccessException) {
+                // A document-provider failure cannot be repaired by probing the server's
+                // durable upload offset. Keep it terminal so the person can reselect the folder.
+                throw error
             } catch (error: IOException) {
                 // A broken connection has no durable-offset response. Probe offset zero once;
                 // the node responds with its authoritative 409 offset without duplicating bytes.
@@ -130,7 +135,7 @@ class SafTransferBridge(private val node: CovalentNodeClient = CovalentNodeClien
     ): ArchiveTransferResult {
         val target = DocumentFile.fromTreeUri(context, targetTree)
             ?.takeIf { it.exists() && it.isDirectory }
-            ?: error("The selected restore folder is unavailable. Choose it again.")
+            ?: throw SafTargetAccessException()
         val restoreRequest = transfer.getJSONObject("restoreRequest")
         val legacyPlan = restoreRequest.optJSONObject("plan")
         val storedReference = transfer.optJSONObject("planReference")
@@ -140,7 +145,7 @@ class SafTransferBridge(private val node: CovalentNodeClient = CovalentNodeClien
         val expected: MutableMap<String, RestorePreviewEntry>
         val requestBody: JSONObject
         if (legacyPlan != null) {
-            check(target.listFiles().isEmpty()) {
+            check(listTargetFiles(context, target).isEmpty()) {
                 "This older restore preview requires an empty folder. Preview again to restore safely into existing content."
             }
             freshInventory = null
@@ -211,7 +216,7 @@ class SafTransferBridge(private val node: CovalentNodeClient = CovalentNodeClien
                     "The restore folder changed after preview. Refresh the preview before restoring."
                 }
             } else {
-                check(target.listFiles().isEmpty()) {
+                check(listTargetFiles(context, target).isEmpty()) {
                     "The restore folder changed after preview. Choose an empty folder and preview again."
                 }
             }
@@ -230,7 +235,9 @@ class SafTransferBridge(private val node: CovalentNodeClient = CovalentNodeClien
                 }
             } catch (error: Exception) {
                 created.asReversed().forEach { item ->
-                    if (item.isFile || item.listFiles().isEmpty()) item.delete()
+                    runCatching {
+                        if (item.isFile || listTargetFiles(context, item).isEmpty()) item.delete()
+                    }
                 }
                 throw error
             }
@@ -256,7 +263,8 @@ class SafTransferBridge(private val node: CovalentNodeClient = CovalentNodeClien
     ) {
         val root = DocumentFile.fromTreeUri(context, treeUri)
             ?.takeIf { it.exists() && it.isDirectory }
-            ?: error("The selected source folder is unavailable. Choose it again.")
+            ?: throw SafSourceAccessException()
+        val rootBefore = snapshot(root)
         val seenDocuments = mutableSetOf<Uri>()
         val seenPaths = mutableSetOf<String>()
         var entries = 0
@@ -265,50 +273,64 @@ class SafTransferBridge(private val node: CovalentNodeClient = CovalentNodeClien
         fun writeDirectory(directory: DocumentFile, parentPath: String, depth: Int) {
             check(depth <= MAX_TREE_DEPTH) { "The selected folder is nested too deeply." }
             check(seenDocuments.add(directory.uri)) { "The document provider returned a folder cycle." }
-            val children = directory.listFiles().sortedWith(
+            val children = listSourceFiles(context, directory).sortedWith(
                 compareBy<DocumentFile>({ it.name.orEmpty() }, { it.uri.toString() }),
             )
             children.forEach { child ->
-                val name = SafArchivePath.requireComponent(child.name)
+                ensureTransferActive()
+                val before = snapshot(child)
+                val name = SafArchivePath.requireComponent(before.name)
                 val path = if (parentPath.isEmpty()) name else "$parentPath/$name"
                 check(seenPaths.add(path)) { "The document provider returned duplicate path $path." }
                 entries += 1
                 check(entries <= MAX_ARCHIVE_ENTRIES) { "The selected folder contains too many entries." }
-                when {
-                    child.isDirectory -> {
-                        archive.putNextEntry(ZipEntry("$path/").apply { time = ZIP_EPOCH_MILLIS })
-                        try {
-                            writeZeroByteZipContent(archive)
-                        } finally {
-                            archive.closeEntry()
-                        }
-                        onProgress(totalBytes, entries.toLong())
-                        writeDirectory(child, path, depth + 1)
+                if (before.isDirectory) {
+                    archive.putNextEntry(ZipEntry("$path/").apply { time = ZIP_EPOCH_MILLIS })
+                    try {
+                        writeZeroByteZipContent(archive)
+                    } finally {
+                        archive.closeEntry()
                     }
-                    child.isFile -> {
-                        archive.putNextEntry(ZipEntry(path).apply { time = ZIP_EPOCH_MILLIS })
-                        try {
-                            // A write call is deliberate even for a zero-byte SAF document: ZIP
-                            // entries represent empty files/directories without changing their data.
-                            writeZeroByteZipContent(archive)
-                            val descriptor = context.contentResolver.openFileDescriptor(child.uri, "r")
-                                ?: error("The document provider could not open $path.")
-                            ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { input ->
-                                totalBytes = copySource(input, archive, totalBytes) { bytes ->
-                                    onProgress(bytes, entries.toLong())
-                                }
+                    onProgress(totalBytes, entries.toLong())
+                    writeDirectory(child, path, depth + 1)
+                } else {
+                    archive.putNextEntry(ZipEntry(path).apply { time = ZIP_EPOCH_MILLIS })
+                    try {
+                        // A write call is deliberate even for a zero-byte SAF document: ZIP
+                        // entries represent empty files/directories without changing their data.
+                        writeZeroByteZipContent(archive)
+                        val descriptor = try {
+                            context.contentResolver.openFileDescriptor(child.uri, "r")
+                                ?: throw SafSourceAccessException()
+                        } catch (error: InterruptedIOException) {
+                            throw error
+                        } catch (error: SecurityException) {
+                            throw error
+                        } catch (error: SafSourceAccessException) {
+                            throw error
+                        } catch (error: IOException) {
+                            throw SafSourceAccessException(error)
+                        }
+                        SafSourceInputStream(ParcelFileDescriptor.AutoCloseInputStream(descriptor)).use { input ->
+                            totalBytes = copySource(input, archive, totalBytes) { bytes ->
+                                onProgress(bytes, entries.toLong())
                             }
-                        } finally {
-                            archive.closeEntry()
                         }
-                        onProgress(totalBytes, entries.toLong())
+                    } finally {
+                        archive.closeEntry()
                     }
-                    else -> error("The document provider returned an unsupported entry at $path.")
+                    onProgress(totalBytes, entries.toLong())
+                }
+                check(snapshot(child) == before) {
+                    "The selected source folder changed while it was being read."
                 }
             }
         }
 
         writeDirectory(root, "", 0)
+        check(snapshot(root) == rootBefore) {
+            "The selected source folder changed while it was being read."
+        }
     }
 
     private fun describeArchive(context: Context, sourceTree: Uri): ArchiveDescriptor {
@@ -384,17 +406,15 @@ class SafTransferBridge(private val node: CovalentNodeClient = CovalentNodeClien
             check(entries <= MAX_ARCHIVE_ENTRIES) { "The restore archive contains too many entries." }
             val parentComponents = path.components.dropLast(1)
             val parentPath = parentComponents.joinToString("/")
-            val parent = resolveDirectory(root, parentComponents, knownDirectories)
+            val parent = resolveDirectory(context, root, parentComponents, knownDirectories)
             val name = path.components.last()
             if (path.isDirectory) {
                 check(planned.action == "create_directory") {
                     "The restore archive included a directory that should remain unchanged."
                 }
-                val existing = parent.findFile(name)
+                val existing = listTargetFiles(context, parent).firstOrNull { it.name == name }
                 check(existing == null) { "The restore folder changed after preview." }
-                val directory = checkNotNull(parent.createDirectory(name)) {
-                    "The document provider could not create ${path.canonical}."
-                }
+                val directory = parent.createDirectory(name) ?: throw SafTargetAccessException()
                 check(directory.name == name && directory.isDirectory) {
                     directory.delete()
                     "The document provider changed the restore directory name."
@@ -410,14 +430,24 @@ class SafTransferBridge(private val node: CovalentNodeClient = CovalentNodeClien
             check(planned.action == "create_file" || planned.action == "rename_file") {
                 "The restore archive included a file that should remain unchanged."
             }
-            val existing = parent.findFile(name)
+            val existing = listTargetFiles(context, parent).firstOrNull { it.name == name }
             check(existing == null) { "The restore folder changed after preview." }
             val destination = createFile(parent, name)
             created += destination
             try {
-                val descriptor = context.contentResolver.openFileDescriptor(destination.uri, "rwt")
-                    ?: error("The document provider could not open ${path.canonical} for writing.")
-                ParcelFileDescriptor.AutoCloseOutputStream(descriptor).use { output ->
+                val descriptor = try {
+                    context.contentResolver.openFileDescriptor(destination.uri, "rwt")
+                        ?: throw SafTargetAccessException()
+                } catch (error: InterruptedIOException) {
+                    throw error
+                } catch (error: SecurityException) {
+                    throw error
+                } catch (error: SafTargetAccessException) {
+                    throw error
+                } catch (error: IOException) {
+                    throw SafTargetAccessException(error)
+                }
+                SafTargetOutputStream(ParcelFileDescriptor.AutoCloseOutputStream(descriptor)).use { output ->
                     totalBytes = copyEntry(archive, output, totalBytes) { bytes ->
                         onProgress(bytes, entries.toLong())
                     }
@@ -486,6 +516,7 @@ class SafTransferBridge(private val node: CovalentNodeClient = CovalentNodeClien
     }
 
     private fun resolveDirectory(
+        context: Context,
         root: DocumentFile,
         components: List<String>,
         knownDirectories: Map<String, String>,
@@ -498,7 +529,7 @@ class SafTransferBridge(private val node: CovalentNodeClient = CovalentNodeClien
         components.forEach { name ->
             traversed += name
             val path = traversed.joinToString("/")
-            val existing = current.findFile(name)
+            val existing = listTargetFiles(context, current).firstOrNull { it.name == name }
                 ?: error("The restore archive omitted parent directory $name.")
             check(existing.isDirectory) { "A file blocks restore directory $name." }
             check(snapshot(existing).identityToken == knownDirectories[path]) {
@@ -510,9 +541,8 @@ class SafTransferBridge(private val node: CovalentNodeClient = CovalentNodeClien
     }
 
     private fun createFile(parent: DocumentFile, name: String): DocumentFile {
-        val created = checkNotNull(parent.createFile("application/octet-stream", name)) {
-            "The document provider could not create restore file $name."
-        }
+        val created = parent.createFile("application/octet-stream", name)
+            ?: throw SafTargetAccessException()
         check(created.name == name) {
             created.delete()
             "The document provider changed the restore file name."
@@ -538,6 +568,79 @@ class SafTransferBridge(private val node: CovalentNodeClient = CovalentNodeClien
             onProgress(total)
         }
         return total
+    }
+
+    /**
+     * DocumentFile deliberately turns a failed child query into an empty list. That behavior is
+     * unsafe for backup: a temporarily unavailable provider would look like a genuinely empty
+     * folder and could commit an empty snapshot. Query before and after without suppression,
+     * then require DocumentFile's objects to describe that exact stable child set.
+     */
+    private fun listSourceFiles(context: Context, directory: DocumentFile): List<DocumentFile> =
+        listFilesStrict(context, directory, MAX_ARCHIVE_ENTRIES) { cause ->
+            SafSourceAccessException(cause)
+        }
+
+    private fun listTargetFiles(context: Context, directory: DocumentFile): List<DocumentFile> =
+        listFilesStrict(context, directory, MAX_TARGET_INVENTORY_ENTRIES) { cause ->
+            SafTargetAccessException(cause)
+        }
+
+    private fun listFilesStrict(
+        context: Context,
+        directory: DocumentFile,
+        maximumEntries: Int,
+        failure: (Throwable?) -> IOException,
+    ): List<DocumentFile> {
+        return try {
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
+                directory.uri,
+                DocumentsContract.getDocumentId(directory.uri),
+            )
+            fun queriedChildren(): List<String> = context.contentResolver.query(
+                childrenUri,
+                arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                val idColumn = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                buildList {
+                    while (cursor.moveToNext()) {
+                        requireSafEntryCapacity(size, maximumEntries)
+                        add(
+                            DocumentsContract.buildDocumentUriUsingTree(
+                                directory.uri,
+                                cursor.getString(idColumn),
+                            ).toString(),
+                        )
+                    }
+                }
+            } ?: throw failure(null)
+            val queriedBefore = queriedChildren()
+            val queriedAfter = queriedChildren()
+            if (queriedBefore.size != queriedBefore.toSet().size ||
+                queriedAfter.size != queriedAfter.toSet().size ||
+                queriedBefore.toSet() != queriedAfter.toSet()
+            ) {
+                throw failure(null)
+            }
+            queriedAfter.map { childUri ->
+                DocumentFile.fromTreeUri(context, Uri.parse(childUri)) ?: throw failure(null)
+            }
+        } catch (error: InterruptedIOException) {
+            throw error
+        } catch (error: SecurityException) {
+            throw error
+        } catch (error: SafSourceAccessException) {
+            throw error
+        } catch (error: SafTargetAccessException) {
+            throw error
+        } catch (error: SafResourceLimitException) {
+            throw error
+        } catch (error: Exception) {
+            throw failure(error)
+        }
     }
 
     private fun snapshot(document: DocumentFile): SafDocumentSnapshot {
@@ -609,6 +712,58 @@ private data class SafDocumentSnapshot(
     val modifiedAtUnixMs: Long?,
     val identityToken: String,
 )
+
+/** A local provider could not supply backup bytes; retrying the server cannot repair this. */
+internal class SafSourceAccessException(cause: Throwable? = null) :
+    IOException("The selected source folder could not be read.", cause)
+
+/** A local provider could not accept restored bytes; retrying the server cannot repair this. */
+internal class SafTargetAccessException(cause: Throwable? = null) :
+    IOException("The selected restore folder could not be written.", cause)
+
+/** The provider returned more documents than this transfer can process safely. */
+internal class SafResourceLimitException : IllegalStateException(
+    "The selected folder contains too many entries.",
+)
+
+/** Stops a provider cursor before another row can grow its in-memory inventory past the limit. */
+internal fun requireSafEntryCapacity(currentCount: Int, maximumEntries: Int) {
+    require(maximumEntries >= 0)
+    if (currentCount >= maximumEntries) throw SafResourceLimitException()
+}
+
+/** Keeps source-provider I/O distinguishable from writes to the HTTP request body. */
+internal class SafSourceInputStream(private val delegate: InputStream) : InputStream() {
+    override fun read(): Int = sourceAccess { delegate.read() }
+    override fun read(bytes: ByteArray, offset: Int, length: Int): Int =
+        sourceAccess { delegate.read(bytes, offset, length) }
+    override fun close() = sourceAccess { delegate.close() }
+}
+
+/** Keeps destination-provider I/O distinguishable from reads of the HTTP response body. */
+internal class SafTargetOutputStream(private val delegate: OutputStream) : OutputStream() {
+    override fun write(value: Int) = targetAccess { delegate.write(value) }
+    override fun write(bytes: ByteArray, offset: Int, length: Int) =
+        targetAccess { delegate.write(bytes, offset, length) }
+    override fun flush() = targetAccess { delegate.flush() }
+    override fun close() = targetAccess { delegate.close() }
+}
+
+private inline fun <T> sourceAccess(block: () -> T): T = try {
+    block()
+} catch (error: InterruptedIOException) {
+    throw error
+} catch (error: IOException) {
+    throw SafSourceAccessException(error)
+}
+
+private inline fun <T> targetAccess(block: () -> T): T = try {
+    block()
+} catch (error: InterruptedIOException) {
+    throw error
+} catch (error: IOException) {
+    throw SafTargetAccessException(error)
+}
 
 internal fun safRootIdentity(treeUri: String, rootSnapshotToken: String): String {
     require(treeUri.isNotBlank() && rootSnapshotToken.isNotBlank())

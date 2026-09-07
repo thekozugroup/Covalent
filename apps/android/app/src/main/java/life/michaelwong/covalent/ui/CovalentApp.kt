@@ -130,6 +130,8 @@ import life.michaelwong.covalent.data.CovalentNodeClient
 import life.michaelwong.covalent.data.EnrolledTrust
 import life.michaelwong.covalent.data.NodeApiException
 import life.michaelwong.covalent.data.SafTransferBridge
+import life.michaelwong.covalent.data.SafSourceAccessException
+import life.michaelwong.covalent.data.SafTargetAccessException
 import life.michaelwong.covalent.data.SecureNodeStore
 import life.michaelwong.covalent.data.encodeEnrolledCertificate
 import life.michaelwong.covalent.data.newId
@@ -551,9 +553,15 @@ internal fun CovalentApp(
 
     val sourcePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri?.let {
-            context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            state.selectedSource = it
-            state.notice = resources.getString(R.string.source_access_saved)
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }.onSuccess {
+                state.selectedSource = uri
+                state.notice = resources.getString(R.string.source_access_saved)
+            }.onFailure { error ->
+                Log.w(UI_LOG_TAG, "Source folder access could not be retained", error)
+                state.notice = resources.getString(R.string.error_source_access_revoked)
+            }
         }
     }
     val caCertificatePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -588,12 +596,18 @@ internal fun CovalentApp(
     }
     val targetPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri?.let {
-            context.contentResolver.takePersistableUriPermission(
-                it,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-            )
-            state.selectedTarget = it
-            state.persistRestorePlan(null)
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    it,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+            }.onSuccess {
+                state.selectedTarget = uri
+                state.persistRestorePlan(null)
+            }.onFailure { error ->
+                Log.w(UI_LOG_TAG, "Restore folder access could not be retained", error)
+                state.notice = resources.getString(R.string.error_target_access_revoked)
+            }
         }
     }
     val createSettings = rememberLauncherForActivityResult(
@@ -3422,20 +3436,22 @@ private fun setLanDiscovery(
 }
 
 private fun ensureReadableSource(context: Context, uri: Uri) {
-    check(context.contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission }) {
-        context.getString(R.string.error_source_access_revoked)
+    if (context.contentResolver.persistedUriPermissions.none { it.uri == uri && it.isReadPermission }) {
+        throw SafSourceAccessException()
     }
 }
 
 private fun ensureWritableTarget(context: Context, uri: Uri) {
-    check(
-        context.contentResolver.persistedUriPermissions.any {
+    if (
+        context.contentResolver.persistedUriPermissions.none {
             it.uri == uri && it.isReadPermission && it.isWritePermission
-        },
-    ) { context.getString(R.string.error_target_access_revoked) }
+        }
+    ) {
+        throw SafTargetAccessException()
+    }
     val target = DocumentFile.fromTreeUri(context, uri)
-    check(target != null && target.exists() && target.isDirectory) {
-        context.getString(R.string.error_target_unavailable)
+    if (target == null || !target.exists() || !target.isDirectory) {
+        throw SafTargetAccessException()
     }
 }
 

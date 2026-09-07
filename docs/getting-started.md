@@ -111,14 +111,16 @@ durable job rather than starting a duplicate.
 
 ## 5. Verify it
 
-On Android or macOS, open the completed backup and choose **Verify**. Continue
+On Android or macOS, open the completed backup and choose **Verify**. In the
+web console, open **Backup**, find the completed backup under **Your backups**,
+and choose **Verify backup**. Continue
 only when Covalent reports **Verified: everything checked is intact** or the
 equivalent intact result.
 
-The web console currently lists completed backups but does not expose the
-Verify action. If you used only the web console, complete the restore test below
-before treating setup as successful, then verify from a paired Android or Mac
-client.
+Verification checks the latest local snapshot and the copies on your selected
+backup devices. If a selected device is offline or cannot confirm a complete
+copy, reconnect it and verify again. A verified local-only backup still needs
+another device to protect against losing the computer or server holding it.
 
 ## 6. Restore into a different folder
 

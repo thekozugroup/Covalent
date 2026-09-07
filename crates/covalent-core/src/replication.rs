@@ -21,6 +21,7 @@ const MAXIMUM_WRITE_BATCH_RECORDS: usize = 64;
 const MAXIMUM_WRITE_BATCH_BYTES: usize = 16 * 1_024 * 1_024;
 const PIPELINE_LEASE_SEGMENT_BYTES: u64 = 256 * 1_024 * 1_024;
 const PIPELINE_QUEUE_SEGMENTS: usize = 8;
+const MAXIMUM_RECOVERY_CATALOGS: usize = 1_000_000;
 
 /// Coarse provider reachability and integrity state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -235,6 +236,11 @@ pub(crate) struct ReplicationPipeline {
     worker: Option<JoinHandle<Result<ReplicationReport, CoreError>>>,
 }
 
+pub(crate) struct RecoveryCatalogListing {
+    pub capsules: Vec<(DeviceId, RecoveryCapsule)>,
+    pub first_failure: Option<CoreError>,
+}
+
 impl ReplicationPipeline {
     pub(crate) fn submit(&self, locators: &[String]) -> Result<(), CoreError> {
         if locators.is_empty() {
@@ -334,16 +340,30 @@ impl ReplicationScheduler {
         });
     }
 
-    pub(crate) fn recovery_capsules(&self) -> Result<Vec<(DeviceId, RecoveryCapsule)>, CoreError> {
+    pub(crate) fn recovery_capsules(&self) -> RecoveryCatalogListing {
         let mut capsules = Vec::new();
+        let mut first_failure = None;
         for (provider_id, provider) in self.providers.iter() {
             if provider.health() != ProviderHealth::Online {
                 continue;
             }
-            for capsule in provider.list_recovery_capsules()? {
-                capsules.push((*provider_id, capsule));
-                if capsules.len() > 1_000_000 {
-                    return Err(CoreError::ResourceLimit("recovery catalog listing"));
+            match provider.list_recovery_capsules() {
+                Ok(provider_capsules) => {
+                    if provider_capsules.len()
+                        > MAXIMUM_RECOVERY_CATALOGS.saturating_sub(capsules.len())
+                    {
+                        first_failure
+                            .get_or_insert(CoreError::ResourceLimit("recovery catalog listing"));
+                        continue;
+                    }
+                    capsules.extend(
+                        provider_capsules
+                            .into_iter()
+                            .map(|capsule| (*provider_id, capsule)),
+                    );
+                }
+                Err(error) => {
+                    first_failure.get_or_insert(error);
                 }
             }
         }
@@ -354,7 +374,10 @@ impl ReplicationScheduler {
                 right.0,
             ))
         });
-        Ok(capsules)
+        RecoveryCatalogListing {
+            capsules,
+            first_failure,
+        }
     }
 
     /// No-provider scheduler for local-only backups.

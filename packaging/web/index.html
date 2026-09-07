@@ -9,6 +9,7 @@
     <script src="/assets/pairing-flow.js" defer></script>
     <script src="/assets/restore-plan-flow.js" defer></script>
     <script src="/assets/backup-terminal-flow.js" defer></script>
+    <script src="/assets/backup-verification-flow.js" defer></script>
     <script src="/assets/tab-flow.js" defer></script>
     <script src="/assets/app.js" defer></script>
   </head>
@@ -125,7 +126,8 @@
       <section id="backup-panel" role="tabpanel" aria-labelledby="backup-tab" tabindex="0" data-panel="backup" hidden>
         <div class="panel-heading"><div><h2>Back up selected files</h2><p class="muted">Only read-only source mounts such as <code>/source</code> or <code>/boot-source</code> should be selected. Extra copies are made only on the currently verified backup devices you choose.</p></div></div>
         <section class="card" aria-live="polite">
-          <div class="button-row"><h3>Remembered backups</h3><button type="button" class="secondary" data-backups-refresh>Refresh list</button></div>
+          <div class="button-row"><h3>Your backups</h3><button type="button" class="secondary" data-backups-refresh>Refresh list</button></div>
+          <p class="muted">Verify checks the latest backup and the extra copies on your selected backup devices. It does not change your files.</p>
           <p class="muted" data-backups-empty>Unlock the console to load authoritative node backups.</p>
           <ul data-backups-list></ul>
         </section>

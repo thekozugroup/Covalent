@@ -8,6 +8,9 @@ import javax.net.ssl.SSLException
 import life.michaelwong.covalent.R
 import life.michaelwong.covalent.data.NodeApiException
 import life.michaelwong.covalent.data.NodeProtocolException
+import life.michaelwong.covalent.data.SafResourceLimitException
+import life.michaelwong.covalent.data.SafSourceAccessException
+import life.michaelwong.covalent.data.SafTargetAccessException
 
 /**
  * Transport- and protocol-level failures that mean the same thing to a person no matter
@@ -148,6 +151,16 @@ internal fun nodeErrorCodeMessageRes(code: String): Int? = when (code) {
  * reconnect when what they need is to retype six characters.
  */
 internal fun nodeFailureMessage(context: Context, error: Throwable, fallbackRes: Int): String {
+    val chain = causeChain(error)
+    if (chain.any { it is SafSourceAccessException }) {
+        return context.getString(R.string.error_source_access_revoked)
+    }
+    if (chain.any { it is SafTargetAccessException }) {
+        return context.getString(R.string.error_target_access_revoked)
+    }
+    if (chain.any { it is SafResourceLimitException }) {
+        return context.getString(R.string.node_error_resource_limit)
+    }
     if (error is NodeApiException) {
         nodeErrorCodeMessageRes(error.code)?.let { return context.getString(it) }
     }

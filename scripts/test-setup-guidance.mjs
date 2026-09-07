@@ -99,7 +99,7 @@ requireText("packaging/docker/README.md", "first-backup.txt", "restorable Docker
 requireText("packaging/docker/README.md", "COVALENT_HTTPS_BIND_IP=192.168.1.50", "ordinary LAN publishing example");
 requireText("packaging/docker/README.md", 'covalent_host_root="$HOME/.covalent-server"', "Docker Desktop shared host root");
 requireText("packaging/docker/README.md", "## Enroll or remove the claimed CA", "exact CA enrollment anchor");
-requireText("docs/platform/atlas-tailscale.md", "operator@atlas.example-tailnet.ts.net sh -s", "remote Atlas path validation");
+requireText("docs/platform/atlas-tailscale.md", "root@atlas.example-tailnet.ts.net sh -s", "remote Atlas path validation");
 for (const file of ["docs/platform/unraid.md", "docs/platform/atlas-tailscale.md"]) {
   requireText(file, "../../packaging/docker/README.md#enroll-or-remove-the-claimed-ca", "exact CA enrollment link");
 }

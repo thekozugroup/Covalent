@@ -156,7 +156,7 @@ class TransferJobService : JobService() {
             )
         }
         val task = FutureTask<Unit> {
-            val outcome = TransferExecution.run(applicationContext, jobId)
+            val outcome = TransferExecution.runSafely(applicationContext, jobId)
             if (running.remove(params) != null) {
                 mainHandler.post { jobFinished(params, outcome == TransferOutcome.RETRY) }
             }

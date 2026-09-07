@@ -463,9 +463,11 @@ let providerConnections = [];
 let manualProviderConfirmation = null;
 let backupSubmissionInFlight = false;
 let failedBackupAttempt = null;
+let verificationInFlight = false;
 const pairing = globalThis.CovalentPairingFlow;
 const restore = globalThis.CovalentRestorePlanFlow;
 const backupTerminal = globalThis.CovalentBackupTerminalFlow;
+const backupVerification = globalThis.CovalentBackupVerification;
 const tabFlow = globalThis.CovalentTabFlow;
 const errorCopy = globalThis.CovalentNodeErrorCopy;
 const pairingStorageKey = "covalent.pairing-session.v1";
@@ -564,10 +566,51 @@ async function loadBackups() {
     const item = document.createElement("li");
     const latest = backup.latestSnapshotId ? `latest ${backup.latestSnapshotId}` : "no local snapshot";
     item.textContent = `${backup.name} — ${latest}; ${backup.snapshotCount} retained; ${backup.selectedProviderIds.length} explicitly selected providers`;
+    if (backup.latestSnapshotId) {
+      const actions = document.createElement("div");
+      actions.className = "button-row";
+      const verifyButton = document.createElement("button");
+      verifyButton.type = "button";
+      verifyButton.className = "secondary";
+      verifyButton.dataset.backupVerify = "";
+      verifyButton.textContent = "Verify backup";
+      verifyButton.setAttribute("aria-label", `Verify ${backup.name}`);
+      verifyButton.disabled = verificationInFlight;
+      const verificationStatus = document.createElement("p");
+      verificationStatus.setAttribute("role", "status");
+      verificationStatus.setAttribute("aria-live", "polite");
+      verifyButton.addEventListener("click", () => verifyBackup(backup, verificationStatus, verifyButton));
+      actions.append(verifyButton);
+      item.append(actions, verificationStatus);
+    }
     list.append(item);
   });
   $("[data-backups-empty]").hidden = backups.length > 0;
   if (backups.length === 0) $("[data-backups-empty]").textContent = "No remembered backups on this node.";
+}
+
+async function verifyBackup(backup, status, trigger) {
+  if (!requireUnlocked() || verificationInFlight) return;
+  verificationInFlight = true;
+  const list = $("[data-backups-list]");
+  list.setAttribute("aria-busy", "true");
+  document.querySelectorAll("[data-backup-verify]").forEach((button) => { button.disabled = true; });
+  status.textContent = "Checking this backup and its selected copies…";
+  try {
+    const result = await backupVerification.verify(api, backup);
+    status.textContent = result.summary;
+    say(result.summary, !result.intact);
+  } catch (error) {
+    status.textContent = errorCopy.describe(error).summary;
+    fail(error);
+  } finally {
+    verificationInFlight = false;
+    list.setAttribute("aria-busy", "false");
+    document.querySelectorAll("[data-backup-verify]").forEach((button) => { button.disabled = false; });
+    // Disabling the active control can move keyboard focus to the page body.
+    // Restore it only if the user has not moved elsewhere while waiting.
+    if (trigger.isConnected && document.activeElement === document.body) trigger.focus();
+  }
 }
 
 function formatBytes(bytes) {
