@@ -126,8 +126,10 @@ another device to protect against losing the computer or server holding it.
 
 Never restore this test over the source.
 
-1. Open **Restore** and select the completed backup and snapshot. On macOS,
-   choose **Preview Restore…** from the completed backup.
+1. Open **Restore** and select the completed backup. The web console selects
+   its latest completed snapshot automatically; manual identifiers are under
+   **Manual recovery identifiers**. On macOS, choose **Preview Restore…**
+   from the completed backup.
 2. Choose the separate empty restore folder. In Docker, use `/restore`.
 3. Keep **Stop on conflicts** for the first test.
 4. Preview the signed plan. Confirm the displayed destination and file list.

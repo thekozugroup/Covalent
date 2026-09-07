@@ -191,6 +191,15 @@ jobs:
       # existed with no caller anywhere in the repo, so it gated nothing.
       - run: ./scripts/check-android-jni-contract.sh
       - run: ./scripts/check-android.sh
+      - name: Preserve Android foundation failure reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-foundation-reports-${{ github.sha }}
+          path: |
+            apps/android/app/build/reports/lint-results-*
+            apps/android/app/build/test-results
+          if-no-files-found: warn
       - run: ./apps/android/gradlew -p apps/android :app:generateAndroidSbom
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -674,7 +683,10 @@ jobs:
         if: always()
         with:
           name: android-api37-evidence-${{ github.sha }}
-          path: ${{ runner.temp }}/covalent-android-api37
+          path: |
+            ${{ runner.temp }}/covalent-android-api37
+            apps/android/app/build/reports/lint-results-*
+            apps/android/app/build/test-results
           if-no-files-found: warn
 
   container-foundation:

@@ -457,6 +457,7 @@ let restorePlan = null;
 let restorePage = null;
 let restoreCursor = null;
 let restoreCursorHistory = [];
+let activeRestorePreviewRevision = 0;
 let networkPairing = null;
 let networkPoll = null;
 let providerConnections = [];
@@ -464,10 +465,14 @@ let manualProviderConfirmation = null;
 let backupSubmissionInFlight = false;
 let failedBackupAttempt = null;
 let verificationInFlight = false;
+let rememberedRestoreChoices = [];
+let restoreExecutionInFlight = false;
 const pairing = globalThis.CovalentPairingFlow;
 const restore = globalThis.CovalentRestorePlanFlow;
+const restorePreview = globalThis.CovalentRestorePreviewFlow.coordinator();
 const backupTerminal = globalThis.CovalentBackupTerminalFlow;
 const backupVerification = globalThis.CovalentBackupVerification;
+const backupSelection = globalThis.CovalentBackupSelectionFlow;
 const tabFlow = globalThis.CovalentTabFlow;
 const errorCopy = globalThis.CovalentNodeErrorCopy;
 const pairingStorageKey = "covalent.pairing-session.v1";
@@ -559,7 +564,12 @@ async function loadStatus() {
 
 async function loadBackups() {
   if (!token) return;
-  const backups = await api("/api/v1/backups");
+  const [backups, receipt] = await Promise.all([
+    api("/api/v1/backups"),
+    backupTerminal.load(globalThis.localStorage, backupServerContext).catch(() => null),
+  ]);
+  rememberedRestoreChoices = backupSelection.choices(backups, receipt);
+  renderRestoreChoices(rememberedRestoreChoices);
   const list = $("[data-backups-list]");
   list.replaceChildren();
   backups.forEach((backup) => {
@@ -587,6 +597,69 @@ async function loadBackups() {
   });
   $("[data-backups-empty]").hidden = backups.length > 0;
   if (backups.length === 0) $("[data-backups-empty]").textContent = "No remembered backups on this node.";
+}
+
+function restoreIdentifierInputs() {
+  const form = $("[data-restore-preview]");
+  return {
+    backupId: form.elements.namedItem("backupId"),
+    snapshotId: form.elements.namedItem("snapshotId"),
+  };
+}
+
+function invalidateRestorePreview() {
+  restorePreview.invalidate();
+  activeRestorePreviewRevision = 0;
+  const previous = restorePlan;
+  clearRestorePreview();
+  return previous;
+}
+
+function discardRestorePreviewForChangedInput() {
+  const previous = invalidateRestorePreview();
+  if (previous) {
+    void restore.discard(api, previous).catch((error) => fail(error));
+  }
+}
+
+function restoreChoiceHelp(choice = null) {
+  const help = $("[data-restore-choice-help]");
+  help.textContent = choice === null
+    ? (rememberedRestoreChoices.length === 0
+      ? "No completed remembered backups are available. Open Manual recovery only when you have exact identifiers."
+      : "Choose a completed backup to use its latest snapshot, or open Manual recovery when you have exact identifiers.")
+    : `${choice.label}. ${choice.detail}`;
+}
+
+function renderRestoreChoices(choices) {
+  const select = $("[data-restore-choice]");
+  const selectedKey = select.value;
+  select.replaceChildren();
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = choices.length === 0 ? "No completed backups available" : "Choose a completed backup";
+  select.append(placeholder);
+  for (const choice of choices) {
+    const option = document.createElement("option");
+    option.value = choice.key;
+    option.textContent = choice.label;
+    select.append(option);
+  }
+  select.disabled = choices.length === 0;
+  const preserved = choices.find((choice) => choice.key === selectedKey) ?? null;
+  if (preserved !== null) {
+    select.value = preserved.key;
+    restoreChoiceHelp(preserved);
+    return;
+  }
+  select.value = "";
+  restoreChoiceHelp();
+  if (selectedKey !== "") {
+    const identifiers = restoreIdentifierInputs();
+    identifiers.backupId.value = "";
+    identifiers.snapshotId.value = "";
+    discardRestorePreviewForChangedInput();
+  }
 }
 
 async function verifyBackup(backup, status, trigger) {
@@ -674,6 +747,22 @@ function selected(form, name) { return [...form.querySelectorAll(`[name="${name}
 function randomId(prefix) { return `${prefix}-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`; }
 function display(value) { return JSON.stringify(value, null, 2); }
 
+function updateAutomaticBackupName() {
+  const form = $("[data-backup-form]");
+  const field = form.elements.namedItem("displayName");
+  if (field.dataset.automaticName !== "true" && field.value.trim() !== "") return;
+  field.value = backupSelection.defaultBackupName(form.elements.namedItem("sourceRoot").value);
+  field.dataset.automaticName = "true";
+}
+
+function clearGeneratedSnapshotId() {
+  const field = $("[data-backup-form]").elements.namedItem("snapshotId");
+  if (field.dataset.generatedSnapshot === "true") {
+    field.value = "";
+    delete field.dataset.generatedSnapshot;
+  }
+}
+
 function renderRestorePage(page) {
   restorePage = page;
   const first = page.entries.length === 0 ? 0 : page.entryOffset + 1;
@@ -687,8 +776,17 @@ function renderRestorePage(page) {
 }
 
 async function loadRestorePage(cursor, rememberCurrent = false) {
-  if (!restorePlan) return;
-  const page = await restore.page(api, restorePlan, cursor, 100);
+  const plan = restorePlan;
+  const revision = activeRestorePreviewRevision;
+  if (!plan || revision === 0) return;
+  let page;
+  try {
+    page = await restore.page(api, plan, cursor, 100);
+  } catch (error) {
+    if (restorePreview.isCurrentPlan(revision, plan, restorePlan)) throw error;
+    return;
+  }
+  if (!restorePreview.isCurrentPlan(revision, plan, restorePlan)) return;
   if (rememberCurrent) restoreCursorHistory.push(restoreCursor);
   restoreCursor = cursor;
   renderRestorePage(page);
@@ -996,10 +1094,15 @@ function withBackupTerminalLock(callback) {
 
 function newBackupAttempt(form) {
   const data = formData(form);
+  const snapshotField = form.elements.namedItem("snapshotId");
+  const suppliedSnapshot = String(data.get("snapshotId") ?? "").trim();
+  const snapshotId = suppliedSnapshot || backupSelection.nextSnapshotId(() => crypto.randomUUID());
+  if (suppliedSnapshot === "") snapshotField.dataset.generatedSnapshot = "true";
+  snapshotField.value = snapshotId;
   return backupTerminal.requireAttempt({
     sourceRoot: data.get("sourceRoot"),
     displayName: data.get("displayName"),
-    snapshotId: data.get("snapshotId"),
+    snapshotId,
     selectedProviderIds: pairing.providers.selectedIds(providerConnections, selected(form, "providers")),
     // Retry reuses this ID if a response was interrupted after acceptance.
     jobId: randomId("backup"),
@@ -1047,6 +1150,7 @@ async function acknowledgeBackupTerminalReceipt(receipt = null) {
       backupServerContext,
       apiResponse,
     );
+    clearGeneratedSnapshotId();
     setBackupSubmissionState("complete", `${complete} Receipt confirmed.`);
     await refreshBackupsAfterTerminalResult(complete);
     return true;
@@ -1156,6 +1260,14 @@ $("[data-backup-form]").addEventListener("submit", async (event) => {
   try { await submitBackup(newBackupAttempt(event.currentTarget)); }
   catch (error) { fail(error); }
 });
+$("[data-backup-form]").elements.namedItem("sourceRoot").addEventListener("input", updateAutomaticBackupName);
+$("[data-backup-form]").elements.namedItem("displayName").addEventListener("input", (event) => {
+  event.currentTarget.dataset.automaticName = "false";
+});
+$("[data-backup-form]").elements.namedItem("snapshotId").addEventListener("input", (event) => {
+  delete event.currentTarget.dataset.generatedSnapshot;
+});
+updateAutomaticBackupName();
 $("[data-backup-retry]").addEventListener("click", async () => {
   if (backupSubmissionInFlight) return;
   try {
@@ -1178,19 +1290,40 @@ $("[data-backup-retry]").addEventListener("click", async () => {
 
 $("[data-restore-preview]").addEventListener("submit", async (event) => {
   event.preventDefault(); const data = formData(event.currentTarget);
+  const previewRevision = restorePreview.begin();
   let candidate = null;
   try {
     const previous = restorePlan;
-    candidate = restore.requireReference(await api("/api/v1/restores/preview", { method: "POST", body: JSON.stringify({ backupId: data.get("backupId"), snapshotId: data.get("snapshotId"), targetRoot: data.get("targetRoot"), conflictPolicy: data.get("conflictPolicy"), jobId: randomId("restore") }) }));
+    const selectedBackup = backupSelection.resolve(rememberedRestoreChoices, data.get("rememberedRestore"), {
+      backupId: data.get("backupId"), snapshotId: data.get("snapshotId"),
+    });
+    candidate = restore.requireReference(await api("/api/v1/restores/preview", { method: "POST", body: JSON.stringify({ backupId: selectedBackup.backupId, snapshotId: selectedBackup.snapshotId, targetRoot: data.get("targetRoot"), conflictPolicy: data.get("conflictPolicy"), jobId: randomId("restore") }) }));
+    if (await restorePreview.discardIfStale(previewRevision, candidate, (plan) => restore.discard(api, plan))) return;
     const firstPage = await restore.page(api, candidate, null, 100);
+    if (await restorePreview.discardIfStale(previewRevision, candidate, (plan) => restore.discard(api, plan))) return;
+    if (previous) await restore.discard(api, previous).catch(() => {});
+    if (await restorePreview.discardIfStale(previewRevision, candidate, (plan) => restore.discard(api, plan))) return;
     restorePlan = candidate;
+    activeRestorePreviewRevision = previewRevision;
     restoreCursor = null; restoreCursorHistory = [];
     renderRestorePage(firstPage);
-    if (previous) await restore.discard(api, previous).catch(() => {});
     $("[data-restore-result]").hidden = false; $("[data-restore-confirm]").checked = false; $("[data-restore-execute]").disabled = true;
     say("Preview complete. Review the target and conflict actions before authorizing the write.");
   } catch (error) { if (candidate) await restore.discard(api, candidate).catch(() => {}); fail(error); }
 });
+$("[data-restore-choice]").addEventListener("change", (event) => {
+  const selectedChoice = rememberedRestoreChoices.find((choice) => choice.key === event.currentTarget.value) ?? null;
+  const identifiers = restoreIdentifierInputs();
+  identifiers.backupId.value = selectedChoice?.backupId ?? "";
+  identifiers.snapshotId.value = selectedChoice?.snapshotId ?? "";
+  restoreChoiceHelp(selectedChoice);
+  discardRestorePreviewForChangedInput();
+});
+const restoreForm = $("[data-restore-preview]");
+for (const name of ["backupId", "snapshotId", "targetRoot"]) {
+  restoreForm.elements.namedItem(name).addEventListener("input", discardRestorePreviewForChangedInput);
+}
+restoreForm.elements.namedItem("conflictPolicy").addEventListener("change", discardRestorePreviewForChangedInput);
 $("[data-restore-next]").addEventListener("click", async () => {
   if (!restorePage?.nextCursor) return;
   try { await loadRestorePage(restorePage.nextCursor, true); } catch (error) { fail(error); }
@@ -1201,15 +1334,22 @@ $("[data-restore-previous]").addEventListener("click", async () => {
   try { await loadRestorePage(cursor); } catch (error) { fail(error); }
 });
 $("[data-restore-discard]").addEventListener("click", async () => {
-  const plan = restorePlan;
-  clearRestorePreview();
+  const plan = invalidateRestorePreview();
   try { await restore.discard(api, plan); say("Restore preview discarded without writing files."); } catch (error) { fail(error); }
 });
-$("[data-restore-confirm]").addEventListener("change", (event) => { $("[data-restore-execute]").disabled = !event.currentTarget.checked || !restorePlan; });
+$("[data-restore-confirm]").addEventListener("change", (event) => { $("[data-restore-execute]").disabled = !event.currentTarget.checked || !restorePlan || restoreExecutionInFlight; });
 $("[data-restore-execute]").addEventListener("click", async () => {
-  if (!restorePlan) return;
-  try { const plan = restorePlan; const result = await restore.execute(api, plan); await restore.discard(api, plan).catch(() => {}); clearRestorePreview(); say(`Restore complete: ${result.filesRestored} files, ${result.directoriesCreated} directories.`); }
+  if (!restorePlan || restoreExecutionInFlight) return;
+  const button = $("[data-restore-execute]");
+  const plan = restorePlan;
+  restoreExecutionInFlight = true;
+  button.disabled = true;
+  try { restorePreview.invalidate(); activeRestorePreviewRevision = 0; const result = await restore.execute(api, plan); await restore.discard(api, plan).catch(() => {}); if (restorePlan === plan) clearRestorePreview(); say(`Restore complete: ${result.filesRestored} files, ${result.directoriesCreated} directories.`); }
   catch (error) { fail(error); }
+  finally {
+    restoreExecutionInFlight = false;
+    if (restorePlan === plan) button.disabled = !$("[data-restore-confirm]").checked;
+  }
 });
 
 $("[data-settings-export]").addEventListener("click", async () => {

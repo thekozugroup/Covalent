@@ -4,21 +4,77 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.InterruptedIOException
 import java.io.OutputStream
+import java.util.concurrent.ConcurrentHashMap
 import life.michaelwong.covalent.data.SafResourceLimitException
 import life.michaelwong.covalent.data.SafSourceAccessException
 import life.michaelwong.covalent.data.SafSourceInputStream
 import life.michaelwong.covalent.data.SafTargetAccessException
 import life.michaelwong.covalent.data.SafTargetOutputStream
+import life.michaelwong.covalent.data.archiveUploadRestartOffset
 import life.michaelwong.covalent.data.requireSafEntryCapacity
+import life.michaelwong.covalent.ui.retainFolderSelection
 import life.michaelwong.covalent.work.TransferOutcome
+import life.michaelwong.covalent.work.completeIfStillRunning
 import life.michaelwong.covalent.work.guardedTransferExecution
 import life.michaelwong.covalent.work.safSecurityFailureMessageRes
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SafFailureAndSchedulerTest {
+    @Test
+    fun folderReplacementClearsRejectedSelectionButCancellationPreservesIt() {
+        val cancelled = retainFolderSelection("folder-a", null) {
+            error("must not retain cancellation")
+        }
+        assertEquals("folder-a", cancelled.selected)
+        assertFalse(cancelled.replacementAttempted)
+
+        val failure = SecurityException("permission not persisted")
+        val rejected = retainFolderSelection("folder-a", "folder-b") { throw failure }
+        assertNull(rejected.selected)
+        assertTrue(rejected.replacementAttempted)
+        assertSame(failure, rejected.failure)
+
+        val accepted = retainFolderSelection("folder-a", "folder-b") {}
+        assertEquals("folder-b", accepted.selected)
+        assertTrue(accepted.replacementAttempted)
+        assertNull(accepted.failure)
+    }
+
+    @Test
+    fun stoppedJobSuppressesItsQueuedMainThreadCompletion() {
+        val running = ConcurrentHashMap<String, Unit>().apply { put("job", Unit) }
+        var completions = 0
+
+        running.remove("job") // onStopJob wins before the posted completion callback.
+        completeIfStillRunning(running, "job") { completions += 1 }
+        assertEquals(0, completions)
+
+        running["job"] = Unit
+        completeIfStillRunning(running, "job") { completions += 1 }
+        completeIfStillRunning(running, "job") { completions += 1 }
+        assertEquals(1, completions)
+    }
+
+    @Test
+    fun schedulerInterruptionNeverStartsAnotherArchiveRequest() {
+        val interruption = InterruptedIOException("stopped")
+        var nextRequestStarted = false
+
+        val shown = assertThrows(InterruptedIOException::class.java) {
+            archiveUploadRestartOffset(interruption, alreadyRestarted = false)
+            nextRequestStarted = true
+        }
+
+        assertSame(interruption, shown)
+        assertFalse(nextRequestStarted)
+    }
+
     @Test
     fun providerCursorStopsBeforeGrowingPastItsTransferLimit() {
         requireSafEntryCapacity(currentCount = 99_999, maximumEntries = 100_000)

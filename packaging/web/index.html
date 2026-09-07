@@ -8,8 +8,10 @@
     <link rel="stylesheet" href="/assets/app.css" />
     <script src="/assets/pairing-flow.js" defer></script>
     <script src="/assets/restore-plan-flow.js" defer></script>
+    <script src="/assets/restore-preview-flow.js" defer></script>
     <script src="/assets/backup-terminal-flow.js" defer></script>
     <script src="/assets/backup-verification-flow.js" defer></script>
+    <script src="/assets/backup-selection-flow.js" defer></script>
     <script src="/assets/tab-flow.js" defer></script>
     <script src="/assets/app.js" defer></script>
   </head>
@@ -133,8 +135,12 @@
         </section>
         <form class="card" data-backup-form>
           <label>Source directory <input name="sourceRoot" value="/source" required /></label>
-          <label>Backup name <input name="displayName" maxlength="120" required /></label>
-          <label>Snapshot ID <input name="snapshotId" pattern="[A-Za-z0-9_-]+" value="snapshot-1" required /></label>
+          <label>Backup name <input name="displayName" data-backup-name maxlength="120" required /></label>
+          <details class="advanced">
+            <summary>Advanced backup identifiers</summary>
+            <p class="muted">Covalent creates a safe snapshot ID when you start. Enter one only when continuing a manual recovery procedure.</p>
+            <label>Snapshot ID <input name="snapshotId" pattern="[A-Za-z0-9_-]+" autocomplete="off" /></label>
+          </details>
           <fieldset data-provider-selection>
             <legend>Backup devices</legend>
             <p class="muted" data-providers-empty>Unlock the console to inspect connected backup devices.</p>
@@ -153,8 +159,14 @@
       <section id="restore-panel" role="tabpanel" aria-labelledby="restore-tab" tabindex="0" data-panel="restore" hidden>
         <div class="panel-heading"><div><h2>Preview before restore</h2><p class="muted">Choose a distinct writable target. Relative restore paths stay under that target; preview is required before any write.</p></div></div>
         <form class="card" data-restore-preview>
-          <label>Backup ID <input name="backupId" required /></label>
-          <label>Snapshot ID <input name="snapshotId" required /></label>
+          <label>Completed backup <select name="rememberedRestore" data-restore-choice aria-describedby="restore-choice-help"><option value="">Unlock the console to load completed backups</option></select></label>
+          <p id="restore-choice-help" class="muted" data-restore-choice-help>Choose a remembered backup to use its latest completed snapshot.</p>
+          <details class="advanced">
+            <summary>Manual recovery identifiers</summary>
+            <p class="muted">Use this only when a support or recovery procedure gave you exact identifiers.</p>
+            <label>Backup ID <input name="backupId" autocomplete="off" /></label>
+            <label>Snapshot ID <input name="snapshotId" pattern="[A-Za-z0-9_-]+" autocomplete="off" /></label>
+          </details>
           <label>Writable target directory <input name="targetRoot" value="/restore" required /></label>
           <label>Conflict policy <select name="conflictPolicy"><option value="fail">Stop on conflicts (safest)</option><option value="skip">Skip existing files</option><option value="rename">Create renamed copies</option><option value="replace">Replace regular files</option></select></label>
           <button>Preview restore</button>

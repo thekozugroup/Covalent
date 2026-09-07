@@ -97,7 +97,7 @@ class SafTransferBridge(private val node: CovalentNodeClient = CovalentNodeClien
         val descriptor = describeArchive(context, sourceTree)
         var offset = 0L
         var attempt = 0
-        var probedAfterInterruption = false
+        var restartedAfterIoFailure = false
         while (attempt++ < MAX_ARCHIVE_UPLOAD_ATTEMPTS) {
             try {
                 val connection = openArchiveUpload(baseUrl, token, metadataHeader, descriptor, offset)
@@ -110,6 +110,8 @@ class SafTransferBridge(private val node: CovalentNodeClient = CovalentNodeClien
             } catch (error: NodeApiException) {
                 val serverOffset = archiveUploadRetryOffset(error, descriptor.length) ?: throw error
                 offset = serverOffset
+            } catch (error: InterruptedIOException) {
+                throw error
             } catch (error: SafSourceAccessException) {
                 // A document-provider failure cannot be repaired by probing the server's
                 // durable upload offset. Keep it terminal so the person can reselect the folder.
@@ -117,9 +119,8 @@ class SafTransferBridge(private val node: CovalentNodeClient = CovalentNodeClien
             } catch (error: IOException) {
                 // A broken connection has no durable-offset response. Probe offset zero once;
                 // the node responds with its authoritative 409 offset without duplicating bytes.
-                if (probedAfterInterruption) throw error
-                probedAfterInterruption = true
-                offset = 0L
+                offset = archiveUploadRestartOffset(error, restartedAfterIoFailure)
+                restartedAfterIoFailure = true
             }
         }
         error("Archive upload did not converge on a durable offset.")
@@ -730,6 +731,12 @@ internal class SafResourceLimitException : IllegalStateException(
 internal fun requireSafEntryCapacity(currentCount: Int, maximumEntries: Int) {
     require(maximumEntries >= 0)
     if (currentCount >= maximumEntries) throw SafResourceLimitException()
+}
+
+/** Allows one network restart while keeping scheduler cancellation and local SAF errors terminal. */
+internal fun archiveUploadRestartOffset(error: IOException, alreadyRestarted: Boolean): Long {
+    if (error is InterruptedIOException || error is SafSourceAccessException || alreadyRestarted) throw error
+    return 0L
 }
 
 /** Keeps source-provider I/O distinguishable from writes to the HTTP request body. */

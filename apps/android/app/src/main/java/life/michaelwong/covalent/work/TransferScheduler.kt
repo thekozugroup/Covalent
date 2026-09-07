@@ -28,6 +28,14 @@ import life.michaelwong.covalent.data.SecureNodeStore
 import life.michaelwong.covalent.model.TransferState
 import life.michaelwong.covalent.R
 
+internal inline fun <K, V> completeIfStillRunning(
+    running: MutableMap<K, V>,
+    key: K,
+    completion: () -> Unit,
+) {
+    if (running.remove(key) != null) completion()
+}
+
 internal enum class TransferExecutionModel {
     LEGACY_WORK_MANAGER,
     USER_INITIATED_JOB,
@@ -157,15 +165,16 @@ class TransferJobService : JobService() {
         }
         val task = FutureTask<Unit> {
             val outcome = TransferExecution.runSafely(applicationContext, jobId)
-            if (running.remove(params) != null) {
-                mainHandler.post { jobFinished(params, outcome == TransferOutcome.RETRY) }
+            mainHandler.post {
+                completeIfStillRunning(running, params) {
+                    jobFinished(params, outcome == TransferOutcome.RETRY)
+                }
             }
         }
         running[params] = task
         try {
             executor.execute(task)
         } catch (_: RejectedExecutionException) {
-            running.remove(params)
             SecureNodeStore(applicationContext).updateTransfer(jobId) {
                 it.copy(
                     state = TransferState.QUEUED,
@@ -173,7 +182,9 @@ class TransferJobService : JobService() {
                     retryable = true,
                 )
             }
-            mainHandler.post { jobFinished(params, true) }
+            mainHandler.post {
+                completeIfStillRunning(running, params) { jobFinished(params, true) }
+            }
         }
         return true
     }

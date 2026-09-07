@@ -266,7 +266,6 @@
     <string name="restore_entry_metadata">%1$s · %2$s</string>
     <string name="restore_queued">Restore queued. Progress and any recoverable error stay on Home.</string>
     <string name="error_target_access_revoked">Folder write access was revoked. Choose the restore folder again.</string>
-    <string name="error_target_unavailable">The selected restore folder is unavailable.</string>
 
     <string name="settings_title">Settings</string>
     <string name="settings_subtitle">Control discovery, connection, and safe settings. Identity keys and device credentials are never exported.</string>

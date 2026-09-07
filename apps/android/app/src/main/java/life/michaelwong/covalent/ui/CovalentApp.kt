@@ -187,6 +187,24 @@ internal data class ValidatedSetup(
     val backups: List<RememberedBackup>,
 )
 
+internal data class FolderSelectionAttempt<T>(
+    val selected: T?,
+    val replacementAttempted: Boolean,
+    val failure: Throwable? = null,
+)
+
+internal inline fun <T : Any> retainFolderSelection(
+    current: T?,
+    candidate: T?,
+    retainPermission: (T) -> Unit,
+): FolderSelectionAttempt<T> {
+    if (candidate == null) return FolderSelectionAttempt(current, replacementAttempted = false)
+    return runCatching { retainPermission(candidate) }.fold(
+        onSuccess = { FolderSelectionAttempt(candidate, replacementAttempted = true) },
+        onFailure = { FolderSelectionAttempt(null, replacementAttempted = true, failure = it) },
+    )
+}
+
 private const val CLAIM_TOKEN_FILE_MAX_BYTES = 1_024
 
 internal fun parseClaimTokenFile(bytes: ByteArray): String {
@@ -552,14 +570,15 @@ internal fun CovalentApp(
     }
 
     val sourcePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        uri?.let {
-            runCatching {
-                context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }.onSuccess {
-                state.selectedSource = uri
+        val selection = retainFolderSelection(state.selectedSource, uri) {
+            context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        if (selection.replacementAttempted) {
+            state.selectedSource = selection.selected
+            if (selection.failure == null) {
                 state.notice = resources.getString(R.string.source_access_saved)
-            }.onFailure { error ->
-                Log.w(UI_LOG_TAG, "Source folder access could not be retained", error)
+            } else {
+                Log.w(UI_LOG_TAG, "Source folder access could not be retained", selection.failure)
                 state.notice = resources.getString(R.string.error_source_access_revoked)
             }
         }
@@ -595,16 +614,16 @@ internal fun CovalentApp(
         }
     }
     val targetPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        uri?.let {
-            runCatching {
-                context.contentResolver.takePersistableUriPermission(
-                    it,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-                )
-            }.onSuccess {
-                state.selectedTarget = uri
-                state.persistRestorePlan(null)
-            }.onFailure { error ->
+        val selection = retainFolderSelection(state.selectedTarget, uri) {
+            context.contentResolver.takePersistableUriPermission(
+                it,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }
+        if (selection.replacementAttempted) {
+            state.selectedTarget = selection.selected
+            state.persistRestorePlan(null)
+            selection.failure?.let { error ->
                 Log.w(UI_LOG_TAG, "Restore folder access could not be retained", error)
                 state.notice = resources.getString(R.string.error_target_access_revoked)
             }

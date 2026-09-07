@@ -61,10 +61,14 @@ const APP_CSS: &str = include_str!("../../../packaging/web/app.css");
 const APP_JS: &str = include_str!("../../../packaging/web/app.js");
 const PAIRING_FLOW_JS: &str = include_str!("../../../packaging/web/pairing-flow.js");
 const RESTORE_PLAN_FLOW_JS: &str = include_str!("../../../packaging/web/restore-plan-flow.js");
+const RESTORE_PREVIEW_FLOW_JS: &str =
+    include_str!("../../../packaging/web/restore-preview-flow.js");
 const BACKUP_TERMINAL_FLOW_JS: &str =
     include_str!("../../../packaging/web/backup-terminal-flow.js");
 const BACKUP_VERIFICATION_FLOW_JS: &str =
     include_str!("../../../packaging/web/backup-verification-flow.js");
+const BACKUP_SELECTION_FLOW_JS: &str =
+    include_str!("../../../packaging/web/backup-selection-flow.js");
 const TAB_FLOW_JS: &str = include_str!("../../../packaging/web/tab-flow.js");
 const MAX_LOCAL_API_BODY_BYTES: usize = 2 * 1_024 * 1_024;
 const MAX_LOCAL_API_TOKEN_FILE_BYTES: u64 = 16 * 1_024;
@@ -1239,12 +1243,20 @@ pub fn router(state: AppState) -> Router {
             get(restore_plan_flow_javascript),
         )
         .route(
+            "/assets/restore-preview-flow.js",
+            get(restore_preview_flow_javascript),
+        )
+        .route(
             "/assets/backup-terminal-flow.js",
             get(backup_terminal_flow_javascript),
         )
         .route(
             "/assets/backup-verification-flow.js",
             get(backup_verification_flow_javascript),
+        )
+        .route(
+            "/assets/backup-selection-flow.js",
+            get(backup_selection_flow_javascript),
         )
         .route("/assets/tab-flow.js", get(tab_flow_javascript))
         .route("/healthz", get(health))
@@ -1801,6 +1813,16 @@ async fn restore_plan_flow_javascript() -> impl IntoResponse {
     )
 }
 
+async fn restore_preview_flow_javascript() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        RESTORE_PREVIEW_FLOW_JS,
+    )
+}
+
 async fn backup_terminal_flow_javascript() -> impl IntoResponse {
     (
         [
@@ -1818,6 +1840,16 @@ async fn backup_verification_flow_javascript() -> impl IntoResponse {
             (header::CACHE_CONTROL, "no-cache"),
         ],
         BACKUP_VERIFICATION_FLOW_JS,
+    )
+}
+
+async fn backup_selection_flow_javascript() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        BACKUP_SELECTION_FLOW_JS,
     )
 }
 
@@ -6711,8 +6743,10 @@ mod tests {
             "/assets/app.js",
             "/assets/pairing-flow.js",
             "/assets/restore-plan-flow.js",
+            "/assets/restore-preview-flow.js",
             "/assets/backup-terminal-flow.js",
             "/assets/backup-verification-flow.js",
+            "/assets/backup-selection-flow.js",
             "/assets/tab-flow.js",
         ] {
             let response = app
