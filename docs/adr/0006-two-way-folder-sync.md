@@ -197,9 +197,16 @@ folder lock, checks quotas before append, syncs before exposing committed
 state, and requires reopen after an uncertain write. Only a valid incomplete
 physical EOF frame can be repaired; a complete corrupt record halts replay.
 
-These are foundations, not a shipped sync runtime. The event machine must
-still validate complete membership transitions, authorize and admit each
-operation, exchange data with peers, and journal safe application to a chosen
-user folder. Native folder setup, SAF scanning/apply and the multi-device
-acceptance gates above remain outstanding. Existing Backup and Restore
-behavior remains independently tested.
+The initial concrete event machine accepts genesis and ordinary operations
+after exact signature, current-grant, causal-history and body checks. Prepared
+changes are bound to their engine instance and revision; accepted indexes have
+independent operation, path and conservative byte-charge quotas. The local
+publisher derives a folder-global counter and full clock and exposes signed
+bytes only after durable append. New log handles require empty replay state.
+
+Network folder sync remains unshipped. The current runtime rejects subsequent
+membership epochs and bootstrap/write-loss events. Their signed codecs and
+pure transition validator do not activate membership. Full historical
+membership replay, peer exchange, safe user-folder apply, native setup, SAF
+scanning/apply and the multi-device acceptance gates above remain outstanding.
+Existing Backup and Restore behavior remains independently tested.

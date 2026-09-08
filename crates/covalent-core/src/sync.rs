@@ -3,7 +3,9 @@
 //! These types provide canonical paths, signature checking, causal math,
 //! conflict projection, read-only inventories, and private encrypted event
 //! storage. They do not expose a network sync runtime or mutate shared user
-//! files. The future folder engine must enforce exact epoch authorization,
+//! files. The initial replay engine and local publisher accept genesis and
+//! ordinary operations; membership changes still fail closed. The future
+//! complete folder engine must enforce exact epoch authorization,
 //! causal admission, and durable transitions before acknowledging a peer.
 
 /// Read-only causal-history admission checks for a future synchronized path.
@@ -12,6 +14,8 @@ pub mod admission;
 pub mod body;
 /// Canonical signed read-only bootstrap permits and candidate receipts.
 pub mod bootstrap;
+/// Closed bounded event envelopes and explicitly untrusted routing hints.
+pub mod event;
 /// Bounded encrypted append and replay storage for private folder events.
 #[cfg(unix)]
 pub mod event_log;
@@ -23,14 +27,22 @@ pub mod frontier;
 pub mod ids;
 /// Bounded authenticated frames for future private synchronization logs.
 pub mod log_frame;
+/// Replay-derived genesis and ordinary-operation admission with bounded indexes.
+#[cfg(unix)]
+pub mod machine;
 /// Canonical signed epoch records for future folder membership.
 pub mod membership;
+/// Exact accepted-history validation of full-roster membership transitions.
+pub mod membership_transition;
 /// Canonical bounded signatures for future folder operation headers.
 pub mod operation;
 /// Bounded canonical paths and conservative collision hints.
 pub mod path;
 /// Pure deterministic folder projection for future sync apply planning.
 pub mod projection;
+/// Durable local operation signing from accepted folder-global history.
+#[cfg(unix)]
+pub mod publication;
 /// Pure multi-value causal register math for a future synchronized path.
 pub mod register;
 /// Read-only descriptor-anchored local source inventory for future sync.

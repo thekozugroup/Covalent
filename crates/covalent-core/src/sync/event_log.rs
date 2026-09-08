@@ -47,6 +47,11 @@ pub enum PreparedEvent<P> {
 pub trait EventMachine {
     type Prepared;
 
+    /// True only before any accepted event has entered this replay state.
+    /// Durable log constructors reject pre-populated state so every exposed
+    /// accepted event must come from that log's authenticated frames.
+    fn is_empty_for_replay(&self) -> bool;
+
     fn prepare(&self, event: &[u8]) -> Result<PreparedEvent<Self::Prepared>, EventValidationError>;
     fn commit(&mut self, prepared: Self::Prepared) -> Result<(), EventValidationError>;
 }
@@ -61,6 +66,8 @@ pub enum EventAppendOutcome {
 /// Fixed storage/validation errors contain no event, key, or user path bytes.
 #[derive(Debug, Error)]
 pub enum EventLogError {
+    #[error("folder log replay requires a fresh empty event machine")]
+    NonemptyReplayMachine,
     #[error("folder event log limits cannot contain the file header")]
     InvalidLimits,
     #[error("folder event log exceeds its configured quota")]
@@ -97,6 +104,7 @@ impl<M: EventMachine> DurableEventLog<M> {
         machine: M,
     ) -> Result<Self, EventLogError> {
         validate_limits(limits)?;
+        require_empty_machine(&machine)?;
         let lock = directory.try_lock()?;
         let file = directory.create_new_file(
             &lock,
@@ -122,6 +130,7 @@ impl<M: EventMachine> DurableEventLog<M> {
         machine: M,
     ) -> Result<Self, EventLogError> {
         validate_limits(limits)?;
+        require_empty_machine(&machine)?;
         let lock = directory.try_lock()?;
         let file = directory.open_file(file_name, limits.maximum_bytes)?;
         // A prior creation may have stopped before its parent sync. Persist
@@ -143,6 +152,14 @@ impl<M: EventMachine> DurableEventLog<M> {
     /// Returns only successfully replayed state from a usable handle.
     pub fn machine(&self) -> Result<&M, EventLogError> {
         self.inner.machine()
+    }
+
+    /// Returns the configured frame namespace binding from a usable log handle.
+    /// Existing complete frames have authenticated it during replay; an empty
+    /// stream has no authenticated frame yet.
+    pub fn binding(&self) -> Result<LogBinding, EventLogError> {
+        self.inner.ensure_usable()?;
+        Ok(self.inner.binding)
     }
 
     /// Number of committed frames replayed by this handle.
@@ -219,6 +236,7 @@ impl<M: EventMachine, I: LogIo> LogInner<M, I> {
         mut machine: M,
     ) -> Result<Self, EventLogError> {
         validate_limits(limits)?;
+        require_empty_machine(&machine)?;
         let initial_length = io.len()?;
         if initial_length > limits.maximum_bytes {
             return Err(EventLogError::QuotaExceeded);
@@ -347,6 +365,13 @@ impl<M: EventMachine, I: LogIo> LogInner<M, I> {
     }
 }
 
+fn require_empty_machine(machine: &impl EventMachine) -> Result<(), EventLogError> {
+    if !machine.is_empty_for_replay() {
+        return Err(EventLogError::NonemptyReplayMachine);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -367,6 +392,10 @@ mod tests {
 
     impl EventMachine for Machine {
         type Prepared = Vec<u8>;
+
+        fn is_empty_for_replay(&self) -> bool {
+            self.records.is_empty()
+        }
 
         fn prepare(&self, event: &[u8]) -> Result<PreparedEvent<Vec<u8>>, EventValidationError> {
             let (&sequence, _) = event.split_first().ok_or(EventValidationError)?;
