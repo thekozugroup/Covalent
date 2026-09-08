@@ -11,7 +11,10 @@ use std::os::unix::fs::FileExt as _;
 use std::path::Path;
 
 use fs2::FileExt as _;
-use rustix::fs::{FileType, Mode, OFlags, RawMode, fchmod, fstat, fsync, mkdirat, open, openat};
+use rustix::fs::{
+    AtFlags, Dir, FileType, Mode, OFlags, RawMode, RenameFlags, fchmod, fstat, fsync, mkdirat,
+    open, openat, renameat_with, statat,
+};
 use thiserror::Error;
 
 const MAX_STORAGE_KEY_BYTES: usize = 64;
@@ -48,9 +51,133 @@ impl StateKey {
         Ok(Self(value.to_owned()))
     }
 
-    fn as_str(&self) -> &str {
+    /// Returns an internal storage component, never a synchronized user path.
+    ///
+    /// Callers must not include this value in diagnostics or user-visible text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
         &self.0
     }
+}
+
+/// One opaque observed private directory-entry identity.
+///
+/// The fields deliberately remain inaccessible: this value can only be
+/// obtained from a complete PrivateStateInventory.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct PrivateStateEntryIdentity {
+    device: u64,
+    inode: u64,
+}
+
+/// The safe type of one observed private directory entry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PrivateStateEntryKind {
+    /// An owner-only, singly linked regular file.
+    RegularFile,
+    /// An owner-only private child directory. Inventory does not recurse into it.
+    Directory,
+    /// The fixed private writer lock entry, not a caller-selected StateKey.
+    WriterLock,
+}
+
+/// One inventory name. writer.lock is deliberately distinct from StateKey.
+pub enum PrivateStateInventoryName {
+    /// A caller-selectable validated internal storage key.
+    State(StateKey),
+    /// The fixed writer lock name.
+    WriterLock,
+}
+
+impl PrivateStateInventoryName {
+    /// Returns the validated state key when this is not the fixed writer lock.
+    #[must_use]
+    pub const fn state_key(&self) -> Option<&StateKey> {
+        match self {
+            Self::State(key) => Some(key),
+            Self::WriterLock => None,
+        }
+    }
+}
+
+/// One complete bounded private-directory observation.
+pub struct PrivateStateInventoryEntry {
+    name: PrivateStateInventoryName,
+    identity: PrivateStateEntryIdentity,
+    kind: PrivateStateEntryKind,
+    byte_length: u64,
+}
+
+impl PrivateStateInventoryEntry {
+    /// Returns the entry name, including the distinct writer-lock case.
+    #[must_use]
+    pub const fn name(&self) -> &PrivateStateInventoryName {
+        &self.name
+    }
+
+    /// Returns the observed safe entry type.
+    #[must_use]
+    pub const fn kind(&self) -> PrivateStateEntryKind {
+        self.kind
+    }
+
+    /// Returns the observed metadata size. Directories are not recursively sized.
+    #[must_use]
+    pub const fn byte_length(&self) -> u64 {
+        self.byte_length
+    }
+
+    /// Returns an opaque entry identity for future exact-entry operations.
+    #[must_use]
+    pub const fn identity(&self) -> PrivateStateEntryIdentity {
+        self.identity
+    }
+}
+
+/// A complete bounded, descriptor-relative private directory inventory.
+///
+/// This is best-effort observation under the matching cooperative exclusive
+/// lock, not an atomic filesystem snapshot. A failure returns no partial
+/// inventory. Both writer.lock and every accepted entry name count toward
+/// total_key_bytes; only regular files and the writer lock count toward
+/// total_file_bytes.
+pub struct PrivateStateInventory {
+    entries: Vec<PrivateStateInventoryEntry>,
+    total_key_bytes: u64,
+    total_file_bytes: u64,
+}
+
+impl PrivateStateInventory {
+    /// Returns every validated direct entry in this complete observation.
+    #[must_use]
+    pub fn entries(&self) -> &[PrivateStateInventoryEntry] {
+        &self.entries
+    }
+
+    /// Returns direct-entry name bytes, including writer.lock.
+    #[must_use]
+    pub const fn total_key_bytes(&self) -> u64 {
+        self.total_key_bytes
+    }
+
+    /// Returns direct regular-file bytes, including the writer lock.
+    #[must_use]
+    pub const fn total_file_bytes(&self) -> u64 {
+        self.total_file_bytes
+    }
+}
+
+/// Result of a private no-replace promotion.
+pub enum PrivateStatePromotion {
+    /// The source was atomically renamed and this is its new validated capability.
+    Promoted(PrivateStateFile),
+    /// The destination already existed; both validated capabilities remain available.
+    Existing {
+        /// The unchanged source capability.
+        source: PrivateStateFile,
+        /// The validated incumbent destination capability.
+        destination: PrivateStateFile,
+    },
 }
 
 /// A redacted private-state capability failure.
@@ -86,6 +213,15 @@ pub enum StateDirError {
     /// Immutable creation found an incumbent and left it untouched.
     #[error("private state entry already exists")]
     AlreadyExists,
+    /// A direct inventory entry was not a permitted private regular file or directory.
+    #[error("unsafe private state directory entry")]
+    UnsafeEntry,
+    /// A complete inventory exceeded its caller-supplied entry or key-byte bound.
+    #[error("private state directory inventory exceeds its limit")]
+    InventoryLimit,
+    /// A previously observed entry or the enumerated directory changed.
+    #[error("private state directory changed during inventory")]
+    InventoryChanged,
     /// Another cooperative writer holds the advisory lock.
     #[error("private state is locked")]
     Locked,
@@ -98,6 +234,9 @@ pub enum StateDirError {
     /// An opened file is no longer the directory's current entry.
     #[error("private state file entry was replaced")]
     EntryReplaced,
+    /// Rename may have completed but required parent durability confirmation failed.
+    #[error("private state promotion outcome is uncertain")]
+    UncertainPromotion,
     /// A system call failed. No path or storage key is retained.
     #[error("private state I/O failed during {operation} ({kind:?}, errno {raw_os_error:?})")]
     Io {
@@ -120,6 +259,24 @@ struct DirectoryIdentity {
 struct FileIdentity {
     device: u64,
     inode: u64,
+}
+
+impl From<FileIdentity> for PrivateStateEntryIdentity {
+    fn from(identity: FileIdentity) -> Self {
+        Self {
+            device: identity.device,
+            inode: identity.inode,
+        }
+    }
+}
+
+impl From<DirectoryIdentity> for PrivateStateEntryIdentity {
+    fn from(identity: DirectoryIdentity) -> Self {
+        Self {
+            device: identity.device,
+            inode: identity.inode,
+        }
+    }
 }
 
 /// A retained descriptor for one private, application-owned state directory.
@@ -297,6 +454,304 @@ impl PrivateStateDir {
     pub fn sync(&self, lock: &PrivateStateLock) -> Result<(), StateDirError> {
         self.require_lock(lock)?;
         fsync(&self.descriptor).map_err(|error| io_error("sync private state directory", error))
+    }
+
+    /// Returns a complete bounded direct-entry inventory under this writer lock.
+    ///
+    /// The iterator and every returned entry are descriptor-relative and
+    /// revalidated. This is best-effort under the supplied cooperative exclusive
+    /// lock, not an atomic filesystem snapshot and not a recursive walk.
+    pub fn inventory(
+        &self,
+        lock: &PrivateStateLock,
+        maximum_entries: usize,
+        maximum_key_bytes: u64,
+    ) -> Result<PrivateStateInventory, StateDirError> {
+        self.inventory_with_check(lock, maximum_entries, maximum_key_bytes, || {})
+    }
+
+    fn inventory_with_check(
+        &self,
+        lock: &PrivateStateLock,
+        maximum_entries: usize,
+        maximum_key_bytes: u64,
+        before_revalidation: impl FnOnce(),
+    ) -> Result<PrivateStateInventory, StateDirError> {
+        self.require_lock(lock)?;
+        let initial_directory = fstat(&self.descriptor)
+            .map_err(|error| io_error("inspect inventory directory", error))?;
+        let mut entries = Vec::new();
+        let mut total_key_bytes = 0_u64;
+        let mut total_file_bytes = 0_u64;
+        let mut reader = Dir::read_from(&self.descriptor)
+            .map_err(|error| io_error("read private state directory", error))?;
+        for result in &mut reader {
+            let entry =
+                result.map_err(|error| io_error("read private state directory entry", error))?;
+            let raw_name = entry.file_name().to_bytes();
+            if matches!(raw_name, b"." | b"..") {
+                continue;
+            }
+            let spelling = std::str::from_utf8(raw_name).map_err(|_| StateDirError::UnsafeEntry)?;
+            let key_bytes =
+                u64::try_from(raw_name.len()).map_err(|_| StateDirError::InventoryLimit)?;
+            if entries.len() == maximum_entries
+                || total_key_bytes
+                    .checked_add(key_bytes)
+                    .is_none_or(|total| total > maximum_key_bytes)
+            {
+                return Err(StateDirError::InventoryLimit);
+            }
+
+            let stat = statat(&self.descriptor, spelling, AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(|error| io_error("inspect private state directory entry", error))?;
+            let identity = PrivateStateEntryIdentity {
+                device: stat.st_dev as u64,
+                inode: stat.st_ino as u64,
+            };
+            let (name, kind, byte_length) = match FileType::from_raw_mode(stat.st_mode) {
+                FileType::RegularFile => {
+                    let file = openat(&self.descriptor, spelling, file_open_flags(), Mode::empty())
+                        .map(File::from)
+                        .map_err(|error| {
+                            file_open_error("open private state inventory file", error)
+                        })?;
+                    let current = if spelling == WRITER_LOCK_KEY {
+                        validate_lock_file(&file)?
+                    } else {
+                        validate_file(&file)?
+                    };
+                    if PrivateStateEntryIdentity::from(current) != identity {
+                        return Err(StateDirError::EntryReplaced);
+                    }
+                    let name = if spelling == WRITER_LOCK_KEY {
+                        PrivateStateInventoryName::WriterLock
+                    } else {
+                        PrivateStateInventoryName::State(
+                            StateKey::new(spelling).map_err(|_| StateDirError::UnsafeEntry)?,
+                        )
+                    };
+                    let kind = if spelling == WRITER_LOCK_KEY {
+                        PrivateStateEntryKind::WriterLock
+                    } else {
+                        PrivateStateEntryKind::RegularFile
+                    };
+                    let length =
+                        u64::try_from(stat.st_size).map_err(|_| StateDirError::UnsafeEntry)?;
+                    (name, kind, length)
+                }
+                FileType::Directory => {
+                    if spelling == WRITER_LOCK_KEY {
+                        return Err(StateDirError::UnsafeEntry);
+                    }
+                    let directory = openat(
+                        &self.descriptor,
+                        spelling,
+                        directory_open_flags(),
+                        Mode::empty(),
+                    )
+                    .map_err(|error| {
+                        directory_open_error("open private state inventory directory", error)
+                    })?;
+                    let current = validate_directory(&directory)?;
+                    if PrivateStateEntryIdentity::from(current) != identity {
+                        return Err(StateDirError::EntryReplaced);
+                    }
+                    let length =
+                        u64::try_from(stat.st_size).map_err(|_| StateDirError::UnsafeEntry)?;
+                    (
+                        PrivateStateInventoryName::State(
+                            StateKey::new(spelling).map_err(|_| StateDirError::UnsafeEntry)?,
+                        ),
+                        PrivateStateEntryKind::Directory,
+                        length,
+                    )
+                }
+                _ => return Err(StateDirError::UnsafeEntry),
+            };
+            entries
+                .try_reserve(1)
+                .map_err(|_| StateDirError::AllocationFailed)?;
+            total_key_bytes = total_key_bytes
+                .checked_add(key_bytes)
+                .ok_or(StateDirError::InventoryLimit)?;
+            if matches!(
+                kind,
+                PrivateStateEntryKind::RegularFile | PrivateStateEntryKind::WriterLock
+            ) {
+                total_file_bytes = total_file_bytes
+                    .checked_add(byte_length)
+                    .ok_or(StateDirError::InventoryLimit)?;
+            }
+            entries.push(PrivateStateInventoryEntry {
+                name,
+                identity,
+                kind,
+                byte_length,
+            });
+        }
+        before_revalidation();
+        for entry in &entries {
+            self.revalidate_inventory_entry(entry)?;
+        }
+        let final_directory = fstat(&self.descriptor)
+            .map_err(|error| io_error("reinspect inventory directory", error))?;
+        if initial_directory.st_size != final_directory.st_size
+            || initial_directory.st_mtime != final_directory.st_mtime
+            || initial_directory.st_mtime_nsec != final_directory.st_mtime_nsec
+            || initial_directory.st_ctime != final_directory.st_ctime
+            || initial_directory.st_ctime_nsec != final_directory.st_ctime_nsec
+        {
+            return Err(StateDirError::InventoryChanged);
+        }
+        self.require_lock(lock)?;
+        Ok(PrivateStateInventory {
+            entries,
+            total_key_bytes,
+            total_file_bytes,
+        })
+    }
+
+    fn revalidate_inventory_entry(
+        &self,
+        entry: &PrivateStateInventoryEntry,
+    ) -> Result<(), StateDirError> {
+        let spelling = match entry.name() {
+            PrivateStateInventoryName::State(key) => key.as_str(),
+            PrivateStateInventoryName::WriterLock => WRITER_LOCK_KEY,
+        };
+        let (identity, byte_length) = match entry.kind() {
+            PrivateStateEntryKind::RegularFile | PrivateStateEntryKind::WriterLock => {
+                let file = openat(&self.descriptor, spelling, file_open_flags(), Mode::empty())
+                    .map(File::from)
+                    .map_err(|error| file_open_error("reopen private inventory file", error))?;
+                let identity = if entry.kind() == PrivateStateEntryKind::WriterLock {
+                    validate_lock_file(&file)?
+                } else {
+                    validate_file(&file)?
+                };
+                let length = file
+                    .metadata()
+                    .map_err(|error| std_io_error("reinspect private inventory file", error))?
+                    .len();
+                (PrivateStateEntryIdentity::from(identity), length)
+            }
+            PrivateStateEntryKind::Directory => {
+                let descriptor = openat(
+                    &self.descriptor,
+                    spelling,
+                    directory_open_flags(),
+                    Mode::empty(),
+                )
+                .map_err(|error| {
+                    directory_open_error("reopen private inventory directory", error)
+                })?;
+                let identity = validate_directory(&descriptor)?;
+                let stat = fstat(&descriptor)
+                    .map_err(|error| io_error("reinspect private inventory child", error))?;
+                let length = u64::try_from(stat.st_size).map_err(|_| StateDirError::UnsafeEntry)?;
+                (PrivateStateEntryIdentity::from(identity), length)
+            }
+        };
+        if identity != entry.identity() || byte_length != entry.byte_length() {
+            return Err(StateDirError::InventoryChanged);
+        }
+        Ok(())
+    }
+
+    /// Atomically promotes one current private source file without replacement.
+    ///
+    /// The source and destination locks must each match their own anchored
+    /// directories. On an existing safe destination both capabilities are
+    /// returned unchanged. A post-rename failure is deliberately uncertain:
+    /// callers must re-open and re-inventory rather than treating it as durable.
+    pub fn promote_new_file(
+        &self,
+        destination_lock: &PrivateStateLock,
+        source_lock: &PrivateStateLock,
+        source: PrivateStateFile,
+        destination: &StateKey,
+    ) -> Result<PrivateStatePromotion, StateDirError> {
+        self.promote_new_file_with_sync(
+            destination_lock,
+            source_lock,
+            source,
+            destination,
+            |source_directory, destination_directory| {
+                // Make the new name durable before committing removal of the
+                // old name when the directories have independent sync order.
+                fsync(destination_directory).map_err(|error| {
+                    io_error("sync promoted private state destination parent", error)
+                })?;
+                fsync(source_directory)
+                    .map_err(|error| io_error("sync promoted private state source parent", error))
+            },
+        )
+    }
+
+    fn promote_new_file_with_sync(
+        &self,
+        destination_lock: &PrivateStateLock,
+        source_lock: &PrivateStateLock,
+        source: PrivateStateFile,
+        destination: &StateKey,
+        sync_parents: impl FnOnce(
+            &std::os::fd::OwnedFd,
+            &std::os::fd::OwnedFd,
+        ) -> Result<(), StateDirError>,
+    ) -> Result<PrivateStatePromotion, StateDirError> {
+        self.require_lock(destination_lock)?;
+        source.require_lock(source_lock)?;
+        if source.directory == self.identity && source.key == destination.as_str() {
+            let incumbent = self.open_file(destination, source.maximum_bytes)?;
+            return Ok(PrivateStatePromotion::Existing {
+                source,
+                destination: incumbent,
+            });
+        }
+        source.sync_all(source_lock)?;
+        self.require_lock(destination_lock)?;
+        source.require_lock(source_lock)?;
+        match renameat_with(
+            &source.directory_descriptor,
+            source.key.as_str(),
+            &self.descriptor,
+            destination.as_str(),
+            RenameFlags::NOREPLACE,
+        ) {
+            Ok(()) => {}
+            Err(error) if error == rustix::io::Errno::EXIST => {
+                let incumbent = self.open_file(destination, source.maximum_bytes)?;
+                return Ok(PrivateStatePromotion::Existing {
+                    source,
+                    destination: incumbent,
+                });
+            }
+            Err(error) => {
+                return Err(io_error(
+                    "promote private state file without replacement",
+                    error,
+                ));
+            }
+        }
+
+        if source
+            .require_parent_lock_after_promotion(source_lock)
+            .and_then(|()| self.require_lock(destination_lock))
+            .and_then(|()| sync_parents(&source.directory_descriptor, &self.descriptor))
+            .is_err()
+        {
+            return Err(StateDirError::UncertainPromotion);
+        }
+        self.require_lock(destination_lock)
+            .map_err(|_| StateDirError::UncertainPromotion)?;
+        let promoted = self
+            .open_file(destination, source.maximum_bytes)
+            .map_err(|_| StateDirError::UncertainPromotion)?;
+        if promoted.file_identity != source.file_identity {
+            return Err(StateDirError::UncertainPromotion);
+        }
+        Ok(PrivateStatePromotion::Promoted(promoted))
     }
 
     fn from_descriptor(descriptor: std::os::fd::OwnedFd) -> Result<Self, StateDirError> {
@@ -542,6 +997,21 @@ impl PrivateStateFile {
         self.validate_current_entry()
     }
 
+    fn require_parent_lock_after_promotion(
+        &self,
+        lock: &PrivateStateLock,
+    ) -> Result<(), StateDirError> {
+        if lock.directory != self.directory {
+            return Err(StateDirError::WrongLock);
+        }
+        lock.validate()?;
+        let directory = validate_directory(&self.directory_descriptor)?;
+        if directory != self.directory {
+            return Err(StateDirError::EntryReplaced);
+        }
+        Ok(())
+    }
+
     fn validate_current_entry(&self) -> Result<(), StateDirError> {
         let directory = validate_directory(&self.directory_descriptor)?;
         if directory != self.directory {
@@ -708,7 +1178,7 @@ fn std_io_error(operation: &'static str, error: std::io::Error) -> StateDirError
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::os::unix::fs::{PermissionsExt as _, symlink};
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _, symlink};
     use std::process::{Command, ExitStatus};
     use std::thread;
     use std::time::{Duration, Instant};
@@ -1128,6 +1598,360 @@ mod tests {
             state.open_file(&key("pipe.v1"), 64),
             Err(StateDirError::UnsafeFile)
         ));
+    }
+
+    #[test]
+    fn inventory_is_complete_bounded_and_keeps_writer_lock_distinct() {
+        let (_temporary, _root, state) = private_root();
+        let child = state
+            .open_or_create_child(&key("nested"))
+            .expect("child directory");
+        let lock = state.try_lock().expect("lock");
+        state
+            .create_new_file(&lock, &key("record.v1"), b"record", 64)
+            .expect("record");
+        let inventory = state.inventory(&lock, 3, 64).expect("inventory");
+        assert_eq!(inventory.entries().len(), 3);
+        assert_eq!(
+            inventory
+                .entries()
+                .iter()
+                .filter(|entry| entry.kind() == PrivateStateEntryKind::WriterLock)
+                .count(),
+            1
+        );
+        assert!(inventory.entries().iter().any(|entry| {
+            entry.name().state_key().is_some_and(|entry_key| {
+                entry_key.as_str() == "record.v1"
+                    && entry.kind() == PrivateStateEntryKind::RegularFile
+                    && entry.byte_length() == 6
+            })
+        }));
+        assert!(inventory.entries().iter().any(|entry| {
+            entry.name().state_key().is_some_and(|entry_key| {
+                entry_key.as_str() == "nested" && entry.kind() == PrivateStateEntryKind::Directory
+            })
+        }));
+        assert!(inventory.total_key_bytes() >= u64::try_from(WRITER_LOCK_KEY.len()).unwrap());
+        assert!(inventory.total_file_bytes() >= 6);
+        assert!(matches!(
+            state.inventory(&lock, 2, 64),
+            Err(StateDirError::InventoryLimit)
+        ));
+        assert!(matches!(
+            state.inventory(&lock, 3, 1),
+            Err(StateDirError::InventoryLimit)
+        ));
+        child.try_lock().expect("independent child remains safe");
+    }
+
+    #[test]
+    fn inventory_rejects_unsafe_entries_without_blocking_on_fifo() {
+        let (_temporary, root, state) = private_root();
+        let lock = state.try_lock().expect("lock");
+        symlink(root.join("missing"), root.join("link.v1")).expect("symlink");
+        assert!(matches!(
+            state.inventory(&lock, 8, 256),
+            Err(StateDirError::UnsafeEntry)
+        ));
+        fs::remove_file(root.join("link.v1")).expect("remove symlink");
+        assert!(
+            Command::new("mkfifo")
+                .arg(root.join("pipe.v1"))
+                .status()
+                .expect("run mkfifo")
+                .success()
+        );
+        assert!(matches!(
+            state.inventory(&lock, 8, 256),
+            Err(StateDirError::UnsafeEntry)
+        ));
+    }
+
+    #[test]
+    fn inventory_rejects_hard_linked_private_file() {
+        let (_temporary, root, state) = private_root();
+        let lock = state.try_lock().expect("lock");
+        state
+            .create_new_file(&lock, &key("record.v1"), b"record", 64)
+            .expect("record");
+        fs::hard_link(root.join("record.v1"), root.join("alias.v1")).expect("hard link");
+        assert!(matches!(
+            state.inventory(&lock, 8, 256),
+            Err(StateDirError::UnsafeFile)
+        ));
+    }
+
+    fn two_private_children(
+        state: &PrivateStateDir,
+    ) -> (
+        PrivateStateDir,
+        PrivateStateDir,
+        PrivateStateLock,
+        PrivateStateLock,
+    ) {
+        let source = state
+            .open_or_create_child(&key("source"))
+            .expect("source child");
+        let destination = state
+            .open_or_create_child(&key("destination"))
+            .expect("destination child");
+        let source_lock = source.try_lock().expect("source lock");
+        let destination_lock = destination.try_lock().expect("destination lock");
+        (source, destination, source_lock, destination_lock)
+    }
+
+    #[test]
+    fn promotion_preserves_single_link_and_reopens_destination() {
+        let (_temporary, root, state) = private_root();
+        let (source_dir, destination_dir, source_lock, destination_lock) =
+            two_private_children(&state);
+        let source = source_dir
+            .create_new_file(&source_lock, &key("staged.v1"), b"bytes", 64)
+            .expect("source");
+        let promoted = destination_dir
+            .promote_new_file(&destination_lock, &source_lock, source, &key("final.v1"))
+            .expect("promote");
+        let PrivateStatePromotion::Promoted(destination) = promoted else {
+            panic!("promotion unexpectedly found an incumbent");
+        };
+        assert_eq!(destination.read_all().expect("destination bytes"), b"bytes");
+        assert!(!root.join("source/staged.v1").exists());
+        assert_eq!(
+            fs::metadata(root.join("destination/final.v1"))
+                .expect("destination metadata")
+                .nlink(),
+            1
+        );
+        assert_eq!(
+            destination_dir
+                .open_file(&key("final.v1"), 64)
+                .expect("reopen")
+                .read_all()
+                .expect("reopened bytes"),
+            b"bytes"
+        );
+    }
+
+    #[test]
+    fn promotion_collision_preserves_both_files() {
+        let (_temporary, _root, state) = private_root();
+        let (source_dir, destination_dir, source_lock, destination_lock) =
+            two_private_children(&state);
+        let source = source_dir
+            .create_new_file(&source_lock, &key("staged.v1"), b"source", 64)
+            .expect("source");
+        destination_dir
+            .create_new_file(&destination_lock, &key("final.v1"), b"incumbent", 64)
+            .expect("incumbent");
+        let outcome = destination_dir
+            .promote_new_file(&destination_lock, &source_lock, source, &key("final.v1"))
+            .expect("existing outcome");
+        let PrivateStatePromotion::Existing {
+            source,
+            destination,
+        } = outcome
+        else {
+            panic!("collision unexpectedly promoted");
+        };
+        assert_eq!(source.read_all().expect("source remains"), b"source");
+        assert_eq!(
+            destination.read_all().expect("incumbent remains"),
+            b"incumbent"
+        );
+    }
+
+    #[test]
+    fn promotion_rejects_wrong_or_replaced_source_lock_without_mutation() {
+        let (_temporary, root, state) = private_root();
+        let (source_dir, destination_dir, source_lock, destination_lock) =
+            two_private_children(&state);
+        let source = source_dir
+            .create_new_file(&source_lock, &key("staged.v1"), b"source", 64)
+            .expect("source");
+        assert!(matches!(
+            destination_dir.promote_new_file(
+                &destination_lock,
+                &destination_lock,
+                source,
+                &key("final.v1"),
+            ),
+            Err(StateDirError::WrongLock)
+        ));
+        assert!(root.join("source/staged.v1").exists());
+        let source = source_dir
+            .open_file(&key("staged.v1"), 64)
+            .expect("source reopen");
+        fs::rename(
+            root.join("source/staged.v1"),
+            root.join("source/retired.v1"),
+        )
+        .expect("replace source");
+        source_dir
+            .create_new_file(&source_lock, &key("staged.v1"), b"replacement", 64)
+            .expect("replacement");
+        assert!(matches!(
+            destination_dir.promote_new_file(
+                &destination_lock,
+                &source_lock,
+                source,
+                &key("final.v1"),
+            ),
+            Err(StateDirError::EntryReplaced)
+        ));
+        assert!(!root.join("destination/final.v1").exists());
+    }
+
+    #[test]
+    fn promotion_rejects_unsafe_destination_and_same_key_returns_existing() {
+        let (_temporary, root, state) = private_root();
+        let (source_dir, destination_dir, source_lock, destination_lock) =
+            two_private_children(&state);
+        let source = source_dir
+            .create_new_file(&source_lock, &key("staged.v1"), b"source", 64)
+            .expect("source");
+        let target = root.join("destination/target.v1");
+        fs::write(&target, b"target").expect("target");
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).expect("protect target");
+        symlink(&target, root.join("destination/final.v1")).expect("destination symlink");
+        assert!(matches!(
+            destination_dir.promote_new_file(
+                &destination_lock,
+                &source_lock,
+                source,
+                &key("final.v1"),
+            ),
+            Err(StateDirError::UnsafeFile)
+        ));
+        assert!(root.join("source/staged.v1").exists());
+        fs::remove_file(root.join("destination/final.v1")).expect("remove symlink");
+        fs::hard_link(&target, root.join("destination/final.v1")).expect("destination hard link");
+        let source = source_dir
+            .open_file(&key("staged.v1"), 64)
+            .expect("source for hard-link destination");
+        assert!(matches!(
+            destination_dir.promote_new_file(
+                &destination_lock,
+                &source_lock,
+                source,
+                &key("final.v1"),
+            ),
+            Err(StateDirError::UnsafeFile)
+        ));
+        assert!(root.join("source/staged.v1").exists());
+        fs::remove_file(root.join("destination/final.v1")).expect("remove hard link");
+        let same = source_dir
+            .open_file(&key("staged.v1"), 64)
+            .expect("source for same key");
+        let outcome = source_dir
+            .promote_new_file(&source_lock, &source_lock, same, &key("staged.v1"))
+            .expect("same key existing");
+        assert!(matches!(outcome, PrivateStatePromotion::Existing { .. }));
+    }
+
+    #[test]
+    fn promotion_parent_sync_failure_is_uncertain_but_keeps_bytes() {
+        let (_temporary, root, state) = private_root();
+        let (source_dir, destination_dir, source_lock, destination_lock) =
+            two_private_children(&state);
+        let source = source_dir
+            .create_new_file(&source_lock, &key("staged.v1"), b"bytes", 64)
+            .expect("source");
+        assert!(matches!(
+            destination_dir.promote_new_file_with_sync(
+                &destination_lock,
+                &source_lock,
+                source,
+                &key("final.v1"),
+                |_source, _destination| Err(StateDirError::Io {
+                    operation: "test promotion parent sync",
+                    kind: ErrorKind::Other,
+                    raw_os_error: None,
+                }),
+            ),
+            Err(StateDirError::UncertainPromotion)
+        ));
+        assert!(!root.join("source/staged.v1").exists());
+        assert_eq!(
+            destination_dir
+                .open_file(&key("final.v1"), 64)
+                .expect("reopen uncertain destination")
+                .read_all()
+                .expect("bytes"),
+            b"bytes"
+        );
+    }
+
+    #[test]
+    fn promotion_never_returns_an_unrelated_post_rename_replacement() {
+        let (_temporary, root, state) = private_root();
+        let (source_dir, destination_dir, source_lock, destination_lock) =
+            two_private_children(&state);
+        let source = source_dir
+            .create_new_file(&source_lock, &key("staged.v1"), b"original", 64)
+            .expect("source");
+        let outcome = destination_dir.promote_new_file_with_sync(
+            &destination_lock,
+            &source_lock,
+            source,
+            &key("final.v1"),
+            |source_directory, destination_directory| {
+                fs::rename(
+                    root.join("destination/final.v1"),
+                    root.join("destination/displaced.v1"),
+                )
+                .expect("retain original");
+                fs::write(root.join("destination/final.v1"), b"replacement").expect("replacement");
+                fs::set_permissions(
+                    root.join("destination/final.v1"),
+                    fs::Permissions::from_mode(0o600),
+                )
+                .expect("private replacement");
+                fsync(source_directory).expect("sync source");
+                fsync(destination_directory).expect("sync destination");
+                Ok(())
+            },
+        );
+        assert!(matches!(outcome, Err(StateDirError::UncertainPromotion)));
+        assert_eq!(
+            fs::read(root.join("destination/displaced.v1")).unwrap(),
+            b"original"
+        );
+        assert_eq!(
+            fs::read(root.join("destination/final.v1")).unwrap(),
+            b"replacement"
+        );
+    }
+
+    #[test]
+    fn inventory_rejects_growth_replacement_and_late_new_entries() {
+        for change in 0..3 {
+            let (_temporary, root, state) = private_root();
+            let lock = state.try_lock().expect("lock");
+            state
+                .create_new_file(&lock, &key("record.v1"), b"record", 64)
+                .expect("record");
+            let result = state.inventory_with_check(&lock, 4, 256, || match change {
+                0 => fs::OpenOptions::new()
+                    .append(true)
+                    .open(root.join("record.v1"))
+                    .unwrap()
+                    .write_all(b"growth")
+                    .unwrap(),
+                1 => {
+                    fs::rename(root.join("record.v1"), root.join("displaced.v1")).unwrap();
+                    fs::write(root.join("record.v1"), b"record").unwrap();
+                    fs::set_permissions(root.join("record.v1"), fs::Permissions::from_mode(0o600))
+                        .unwrap();
+                }
+                _ => {
+                    fs::write(root.join("late.v1"), b"late").unwrap();
+                    fs::set_permissions(root.join("late.v1"), fs::Permissions::from_mode(0o600))
+                        .unwrap();
+                }
+            });
+            assert!(matches!(result, Err(StateDirError::InventoryChanged)));
+        }
     }
 
     #[test]

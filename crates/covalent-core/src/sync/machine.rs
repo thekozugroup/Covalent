@@ -1,10 +1,10 @@
 //! Replay-derived admission state for one private folder event log.
 //!
-//! This first slice accepts one canonical genesis epoch followed by ordinary
-//! operations authorized by that epoch. Bootstrap, membership transitions,
-//! write-loss freezes, and reconciliation fail closed until their complete
-//! durable state machines are implemented. Successful preparation is not a
-//! peer acknowledgement and does not mutate files in the synchronized folder.
+//! This slice accepts a canonical membership chain containing bootstrap-backed
+//! Add/upgrade and ordinary read-only removal transitions, plus operations
+//! authorized by its retained history. Write-loss transitions and reconciliation
+//! remain fail closed. Successful preparation is not a peer acknowledgement and
+//! does not mutate files in the synchronized folder.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -14,21 +14,28 @@ use covalent_protocol::DeviceId;
 use ed25519_dalek::VerifyingKey;
 use thiserror::Error;
 
-use super::VersionVector;
 use super::admission::{self, Admission, AuthorTip, History, HistoryQueryError};
 use super::body::{EntryValue, OperationBody};
+use super::bootstrap::{
+    SignatureCheckedBootstrapPermit, SignatureCheckedBootstrapReceipt,
+    decode_signature_checked_bootstrap_permit, decode_signature_checked_bootstrap_receipt,
+};
 use super::event::{EventEnvelope, EventKind};
 use super::event_log::{EventMachine, EventValidationError, PreparedEvent};
+use super::frontier::{FrontierError, check_closed_frontier};
 use super::ids::{FolderId, WriterId};
 use super::membership::{
     EpochDigest, MemberGrant, MemberRole, SignatureCheckedEpoch, decode_signature_checked_epoch,
 };
 use super::membership_transition::{
-    HistoricalWriterKeyAssignment, MembershipArchive, MembershipArchiveQueryError, WriterLifetime,
+    BootstrapTransitionEvidence, HistoricalWriterKeyAssignment, MembershipArchive,
+    MembershipArchiveQueryError, MembershipTransitionEvidence, WriterLifetime,
+    check_survivor_history_compatibility, validate_membership_transition,
 };
 use super::operation::{ClockEntry, decode_signature_checked_operation};
 use super::path::SyncPath;
 use super::register::{CausalRegister, OpId, RegisterEntry};
+use super::{VersionVector, VersionVectorOrder};
 
 // These deterministic charges include retained payload bytes separately, then
 // reserve a complete sparsely occupied BTree node plus fixed object/container
@@ -44,6 +51,10 @@ const AUTHOR_INDEX_BYTES: u64 = 2 * 1_024;
 const PATH_INDEX_BYTES: u64 = 1_024;
 const REGISTER_ENTRY_BYTES: u64 = 4 * 1_024;
 const CLOCK_COMPONENT_INDEX_BYTES: u64 = 1_024;
+const EPOCH_PROOF_REFERENCE_BYTES: u64 = 1_024;
+const EVIDENCE_INDEX_BYTES: u64 = 4 * 1_024;
+const PENDING_REFERENCE_INDEX_BYTES: u64 = 1_024;
+const WRITER_TIMELINE_INDEX_BYTES: u64 = 2 * 1_024;
 
 /// Independent bounds for replay-derived in-memory indexes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,6 +65,12 @@ pub struct FolderMachineLimits {
     pub maximum_operations: u64,
     /// Maximum distinct canonical paths retained by the causal registers.
     pub maximum_paths: u64,
+    /// Maximum exact accepted membership epochs retained for replay.
+    pub maximum_membership_epochs: u64,
+    /// Maximum canonical bytes referenced by actionable bootstrap evidence.
+    pub maximum_pending_evidence_bytes: u64,
+    /// Maximum actionable permit and receipt references.
+    pub maximum_pending_evidence_records: u64,
 }
 
 /// Immutable namespace, authority, local identity, and quota configuration.
@@ -111,6 +128,9 @@ pub enum FolderEventError {
     /// One or more causally required operations have not arrived yet.
     #[error("folder operation history is incomplete")]
     MissingHistory,
+    /// An exact permit or receipt needed by a transition is not actionable.
+    #[error("folder membership evidence is incomplete")]
+    MissingEvidence,
     /// The configured operation, path, or index bound would be exceeded.
     #[error("folder machine resource limit exceeded")]
     ResourceLimit,
@@ -244,9 +264,50 @@ struct AcceptedOperation {
     canonical_record: Box<[u8]>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct PermitIdentity {
+    base: EpochDigest,
+    candidate: WriterId,
+    nonce: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct ReceiptIdentity {
+    permit_digest: [u8; 32],
+    candidate: WriterId,
+}
+
+struct RetainedPermit {
+    checked: SignatureCheckedBootstrapPermit,
+}
+
+struct RetainedReceipt {
+    checked: SignatureCheckedBootstrapReceipt,
+}
+
+#[derive(Clone)]
+struct WriterTimeline {
+    first_epoch: u64,
+    removed_epoch: Option<u64>,
+    writer_key: VerifyingKey,
+    writable_since: Option<u64>,
+    minimum_context: VersionVector,
+}
+
+struct PendingPermitRef {
+    identity: PermitIdentity,
+    base: EpochDigest,
+}
+
+struct PendingReceiptRef {
+    identity: ReceiptIdentity,
+    base: EpochDigest,
+}
+
 enum PreparedChange {
     Genesis {
         epoch: SignatureCheckedEpoch,
+        timeline: WriterTimeline,
         index_bytes: u64,
     },
     Operation {
@@ -258,6 +319,28 @@ enum PreparedChange {
         path: SyncPath,
         register: CausalRegister<EntryValue>,
         index_bytes: u64,
+    },
+    BootstrapPermit {
+        identity: PermitIdentity,
+        digest: [u8; 32],
+        retained: RetainedPermit,
+        index_bytes: u64,
+        pending_bytes: u64,
+        pending_records: u64,
+    },
+    BootstrapReceipt {
+        identity: ReceiptIdentity,
+        digest: [u8; 32],
+        retained: RetainedReceipt,
+        index_bytes: u64,
+        pending_bytes: u64,
+        pending_records: u64,
+    },
+    MembershipTransition {
+        epoch: SignatureCheckedEpoch,
+        timeline_updates: Vec<(WriterId, WriterTimeline)>,
+        index_bytes: u64,
+        retired_index_bytes: u64,
     },
 }
 
@@ -273,6 +356,9 @@ impl fmt::Debug for PreparedFolderEvent {
         let kind = match self.change {
             PreparedChange::Genesis { .. } => "genesis",
             PreparedChange::Operation { .. } => "operation",
+            PreparedChange::BootstrapPermit { .. } => "bootstrap-permit",
+            PreparedChange::BootstrapReceipt { .. } => "bootstrap-receipt",
+            PreparedChange::MembershipTransition { .. } => "membership-transition",
         };
         formatter
             .debug_struct("PreparedFolderEvent")
@@ -287,11 +373,22 @@ pub struct FolderEventMachine {
     config: FolderMachineConfig,
     machine_token: Arc<()>,
     revision: u64,
-    current_epoch: Option<SignatureCheckedEpoch>,
+    current_epoch_digest: Option<EpochDigest>,
+    epochs: BTreeMap<EpochDigest, SignatureCheckedEpoch>,
+    epoch_digests: BTreeMap<u64, EpochDigest>,
+    writer_timelines: BTreeMap<WriterId, WriterTimeline>,
     operations: BTreeMap<OpId, AcceptedOperation>,
     tips: BTreeMap<WriterId, AuthorTip>,
     frontier: VersionVector,
     registers: BTreeMap<SyncPath, CausalRegister<EntryValue>>,
+    permits: BTreeMap<[u8; 32], RetainedPermit>,
+    permit_identities: BTreeMap<PermitIdentity, [u8; 32]>,
+    receipts: BTreeMap<[u8; 32], RetainedReceipt>,
+    receipt_identities: BTreeMap<ReceiptIdentity, [u8; 32]>,
+    pending_permits: BTreeMap<[u8; 32], PendingPermitRef>,
+    pending_receipts: BTreeMap<[u8; 32], PendingReceiptRef>,
+    pending_evidence_bytes: u64,
+    pending_evidence_records: u64,
     index_bytes: u64,
 }
 
@@ -301,6 +398,9 @@ impl FolderEventMachine {
         if config.limits.maximum_index_bytes < MACHINE_INDEX_BYTES
             || config.limits.maximum_operations == 0
             || config.limits.maximum_paths == 0
+            || config.limits.maximum_membership_epochs == 0
+            || config.limits.maximum_pending_evidence_bytes == 0
+            || config.limits.maximum_pending_evidence_records == 0
         {
             return Err(FolderEventError::InvalidLimits);
         }
@@ -311,11 +411,22 @@ impl FolderEventMachine {
             config,
             machine_token: Arc::new(()),
             revision: 0,
-            current_epoch: None,
+            current_epoch_digest: None,
+            epochs: BTreeMap::new(),
+            epoch_digests: BTreeMap::new(),
+            writer_timelines: BTreeMap::new(),
             operations: BTreeMap::new(),
             tips: BTreeMap::new(),
             frontier: VersionVector::empty(),
             registers: BTreeMap::new(),
+            permits: BTreeMap::new(),
+            permit_identities: BTreeMap::new(),
+            receipts: BTreeMap::new(),
+            receipt_identities: BTreeMap::new(),
+            pending_permits: BTreeMap::new(),
+            pending_receipts: BTreeMap::new(),
+            pending_evidence_bytes: 0,
+            pending_evidence_records: 0,
             index_bytes: MACHINE_INDEX_BYTES,
         })
     }
@@ -329,8 +440,7 @@ impl FolderEventMachine {
     /// Returns the exact committed membership head, when genesis exists.
     #[must_use]
     pub fn current_head(&self) -> Option<AcceptedMembershipHeadRef<'_>> {
-        self.current_epoch
-            .as_ref()
+        self.current_epoch()
             .map(|epoch| AcceptedMembershipHeadRef { epoch })
     }
 
@@ -359,8 +469,7 @@ impl FolderEventMachine {
             return Err(FolderEventError::PublicationDenied);
         }
         let epoch = self
-            .current_epoch
-            .as_ref()
+            .current_epoch()
             .ok_or(FolderEventError::PublicationDenied)?;
         let grant = member_by_writer(epoch.roster(), writer)
             .filter(|grant| grant.role() == MemberRole::ReadWrite)
@@ -422,13 +531,24 @@ impl FolderEventMachine {
     ) -> Result<PreparedEvent<PreparedFolderEvent>, FolderEventError> {
         let envelope = EventEnvelope::parse(event).map_err(|_| FolderEventError::InvalidEvent)?;
         match envelope.kind() {
-            EventKind::MembershipEpoch => self.prepare_genesis(&envelope),
+            EventKind::MembershipEpoch => self.prepare_membership_epoch(&envelope),
             EventKind::Operation => self.prepare_operation(&envelope),
-            EventKind::BootstrapPermit
-            | EventKind::BootstrapReceipt
-            | EventKind::WriteLossProposal
-            | EventKind::FreezeReceipt
-            | EventKind::FreezeAbort => Err(FolderEventError::UnsupportedEvent),
+            EventKind::BootstrapPermit => self.prepare_bootstrap_permit(&envelope),
+            EventKind::BootstrapReceipt => self.prepare_bootstrap_receipt(&envelope),
+            EventKind::WriteLossProposal | EventKind::FreezeReceipt | EventKind::FreezeAbort => {
+                Err(FolderEventError::UnsupportedEvent)
+            }
+        }
+    }
+
+    fn prepare_membership_epoch(
+        &self,
+        envelope: &EventEnvelope<'_>,
+    ) -> Result<PreparedEvent<PreparedFolderEvent>, FolderEventError> {
+        if self.current_epoch_digest.is_none() {
+            self.prepare_genesis(envelope)
+        } else {
+            self.prepare_transition(envelope)
         }
     }
 
@@ -436,13 +556,6 @@ impl FolderEventMachine {
         &self,
         envelope: &EventEnvelope<'_>,
     ) -> Result<PreparedEvent<PreparedFolderEvent>, FolderEventError> {
-        if let Some(current) = &self.current_epoch {
-            return if current.canonical_record() == envelope.record() {
-                Ok(PreparedEvent::Duplicate)
-            } else {
-                Err(FolderEventError::UnsupportedEvent)
-            };
-        }
         let epoch = decode_signature_checked_epoch(
             envelope.record(),
             self.config.folder_id,
@@ -453,7 +566,29 @@ impl FolderEventMachine {
         if epoch.epoch() != 1 {
             return Err(FolderEventError::InvalidEvent);
         }
+        if let Some(existing) = self.epoch_digests.get(&epoch.epoch()) {
+            let retained = self
+                .epochs
+                .get(existing)
+                .ok_or(FolderEventError::InvalidEvent)?;
+            return if retained.canonical_record() == envelope.record() {
+                Ok(PreparedEvent::Duplicate)
+            } else {
+                Err(FolderEventError::Equivocation)
+            };
+        }
         self.require_revision_capacity()?;
+        let grant = epoch
+            .roster()
+            .first()
+            .ok_or(FolderEventError::InvalidEvent)?;
+        let timeline = WriterTimeline {
+            first_epoch: 1,
+            removed_epoch: None,
+            writer_key: *grant.writer_key(),
+            writable_since: Some(1),
+            minimum_context: VersionVector::empty(),
+        };
         let index_bytes = self
             .index_bytes
             .checked_add(EPOCH_INDEX_BYTES)
@@ -463,12 +598,17 @@ impl FolderEventMachine {
                     .checked_mul(MEMBER_INDEX_BYTES)
                     .and_then(|charge| bytes.checked_add(charge))
             })
+            .and_then(|bytes| bytes.checked_add(WRITER_TIMELINE_INDEX_BYTES))
             .ok_or(FolderEventError::ResourceLimit)?;
         self.require_index_limit(index_bytes)?;
         Ok(PreparedEvent::Append(PreparedFolderEvent {
             machine_token: Arc::clone(&self.machine_token),
             expected_revision: self.revision,
-            change: PreparedChange::Genesis { epoch, index_bytes },
+            change: PreparedChange::Genesis {
+                epoch,
+                timeline,
+                index_bytes,
+            },
         }))
     }
 
@@ -476,28 +616,24 @@ impl FolderEventMachine {
         &self,
         envelope: &EventEnvelope<'_>,
     ) -> Result<PreparedEvent<PreparedFolderEvent>, FolderEventError> {
-        let epoch = self
-            .current_epoch
-            .as_ref()
+        let current_epoch = self
+            .current_epoch()
             .ok_or(FolderEventError::MissingGenesis)?;
         let writer = envelope
             .untrusted_operation_writer_hint()
             .map_err(|_| FolderEventError::InvalidEvent)?;
-        let grant = member_by_writer(epoch.roster(), writer)
-            .filter(|grant| grant.role() == MemberRole::ReadWrite)
+        let routing_grant = self
+            .writer_timelines
+            .get(&writer)
             .ok_or(FolderEventError::UnauthorizedOperation)?;
         let operation = decode_signature_checked_operation(
             envelope.record(),
             self.config.folder_id,
             writer,
-            grant.writer_key(),
+            &routing_grant.writer_key,
         )
         .map_err(|_| FolderEventError::InvalidEvent)?;
-        if operation.header().membership_epoch() != epoch.epoch()
-            || operation.header().membership_epoch_digest() != epoch.digest().to_bytes()
-        {
-            return Err(FolderEventError::UnauthorizedOperation);
-        }
+        self.authorize_operation(&operation, current_epoch)?;
         let header = operation
             .to_admission_header()
             .map_err(|_| FolderEventError::InvalidEvent)?;
@@ -579,6 +715,467 @@ impl FolderEventMachine {
         }))
     }
 
+    fn prepare_bootstrap_permit(
+        &self,
+        envelope: &EventEnvelope<'_>,
+    ) -> Result<PreparedEvent<PreparedFolderEvent>, FolderEventError> {
+        let permit = decode_signature_checked_bootstrap_permit(
+            envelope.record(),
+            self.config.folder_id,
+            self.config.authority_writer_id,
+            &self.config.pinned_authority_key,
+        )
+        .map_err(|_| FolderEventError::InvalidEvent)?;
+        let identity = PermitIdentity {
+            base: permit.base_epoch_digest(),
+            candidate: permit.candidate().writer_id(),
+            nonce: permit.nonce(),
+        };
+        let digest = permit.digest().to_bytes();
+        if let Some(existing_digest) = self.permit_identities.get(&identity) {
+            let retained = self
+                .permits
+                .get(existing_digest)
+                .ok_or(FolderEventError::InvalidEvent)?;
+            return if retained.checked.canonical_record() == envelope.record()
+                && *existing_digest == digest
+            {
+                Ok(PreparedEvent::Duplicate)
+            } else {
+                Err(FolderEventError::Equivocation)
+            };
+        }
+        if self.permits.contains_key(&digest) {
+            return Err(FolderEventError::Equivocation);
+        }
+        let current = self
+            .current_epoch()
+            .ok_or(FolderEventError::MissingGenesis)?;
+        if permit.base_epoch() != current.epoch() || permit.base_epoch_digest() != current.digest()
+        {
+            return Err(FolderEventError::UnauthorizedOperation);
+        }
+        self.validate_permit_candidate(&permit)?;
+        map_frontier_result(check_closed_frontier(self, permit.required_frontier()))?;
+        self.require_revision_capacity()?;
+        let (index_bytes, pending_bytes, pending_records) = self.evidence_resource_delta(
+            envelope.record().len(),
+            permit.required_frontier().actor_count(),
+        )?;
+        Ok(PreparedEvent::Append(PreparedFolderEvent {
+            machine_token: Arc::clone(&self.machine_token),
+            expected_revision: self.revision,
+            change: PreparedChange::BootstrapPermit {
+                identity,
+                digest,
+                retained: RetainedPermit { checked: permit },
+                index_bytes,
+                pending_bytes,
+                pending_records,
+            },
+        }))
+    }
+
+    fn prepare_bootstrap_receipt(
+        &self,
+        envelope: &EventEnvelope<'_>,
+    ) -> Result<PreparedEvent<PreparedFolderEvent>, FolderEventError> {
+        let hint = envelope
+            .untrusted_bootstrap_receipt_hint()
+            .map_err(|_| FolderEventError::InvalidEvent)?;
+        let identity = ReceiptIdentity {
+            permit_digest: hint.permit_digest().to_bytes(),
+            candidate: hint.candidate_writer_id(),
+        };
+        let retained_permit = self
+            .permits
+            .get(&identity.permit_digest)
+            .ok_or(FolderEventError::MissingEvidence)?;
+        let receipt = decode_signature_checked_bootstrap_receipt(
+            envelope.record(),
+            &retained_permit.checked,
+            retained_permit.checked.candidate().writer_key(),
+        )
+        .map_err(|_| FolderEventError::InvalidEvent)?;
+        if receipt.candidate_writer_id() != identity.candidate
+            || receipt.permit_digest().to_bytes() != identity.permit_digest
+        {
+            return Err(FolderEventError::InvalidEvent);
+        }
+        if let Some(existing_digest) = self.receipt_identities.get(&identity) {
+            let retained = self
+                .receipts
+                .get(existing_digest)
+                .ok_or(FolderEventError::InvalidEvent)?;
+            return if retained.checked.canonical_record() == envelope.record()
+                && *existing_digest == receipt.digest().to_bytes()
+            {
+                Ok(PreparedEvent::Duplicate)
+            } else {
+                Err(FolderEventError::Equivocation)
+            };
+        }
+        let pending_permit = self
+            .pending_permits
+            .get(&identity.permit_digest)
+            .ok_or(FolderEventError::MissingEvidence)?;
+        if pending_permit.identity.candidate != identity.candidate {
+            return Err(FolderEventError::InvalidEvent);
+        }
+        map_frontier_result(check_closed_frontier(self, receipt.applied_frontier()))?;
+        let digest = receipt.digest().to_bytes();
+        if self.receipts.contains_key(&digest) {
+            return Err(FolderEventError::Equivocation);
+        }
+        self.require_revision_capacity()?;
+        let (index_bytes, pending_bytes, pending_records) = self.evidence_resource_delta(
+            envelope.record().len(),
+            receipt.applied_frontier().actor_count(),
+        )?;
+        Ok(PreparedEvent::Append(PreparedFolderEvent {
+            machine_token: Arc::clone(&self.machine_token),
+            expected_revision: self.revision,
+            change: PreparedChange::BootstrapReceipt {
+                identity,
+                digest,
+                retained: RetainedReceipt { checked: receipt },
+                index_bytes,
+                pending_bytes,
+                pending_records,
+            },
+        }))
+    }
+
+    fn prepare_transition(
+        &self,
+        envelope: &EventEnvelope<'_>,
+    ) -> Result<PreparedEvent<PreparedFolderEvent>, FolderEventError> {
+        let current = self
+            .current_epoch()
+            .ok_or(FolderEventError::MissingGenesis)?;
+        let candidate = decode_signature_checked_epoch(
+            envelope.record(),
+            self.config.folder_id,
+            self.config.authority_writer_id,
+            &self.config.pinned_authority_key,
+        )
+        .map_err(|_| FolderEventError::InvalidEvent)?;
+        if let Some(existing_digest) = self.epoch_digests.get(&candidate.epoch()) {
+            let retained = self
+                .epochs
+                .get(existing_digest)
+                .ok_or(FolderEventError::InvalidEvent)?;
+            return if retained.canonical_record() == envelope.record() {
+                Ok(PreparedEvent::Duplicate)
+            } else {
+                Err(FolderEventError::Equivocation)
+            };
+        }
+        if candidate.proposal_digest().is_some()
+            || !candidate.cutoffs().is_empty()
+            || !candidate.freeze_receipt_digests().is_empty()
+            || has_read_write_loss(current.roster(), candidate.roster())
+        {
+            return Err(FolderEventError::UnsupportedEvent);
+        }
+        self.require_revision_capacity()?;
+        let mut raw_bootstrap = Vec::with_capacity(candidate.bootstrap_receipt_digests().len());
+        for receipt_digest in candidate.bootstrap_receipt_digests() {
+            let pending_receipt = self
+                .pending_receipts
+                .get(receipt_digest)
+                .ok_or(FolderEventError::MissingEvidence)?;
+            let receipt = self
+                .receipts
+                .get(receipt_digest)
+                .ok_or(FolderEventError::InvalidEvent)?;
+            let permit_digest = pending_receipt.identity.permit_digest;
+            if !self.pending_permits.contains_key(&permit_digest) {
+                return Err(FolderEventError::MissingEvidence);
+            }
+            let permit = self
+                .permits
+                .get(&permit_digest)
+                .ok_or(FolderEventError::InvalidEvent)?;
+            raw_bootstrap.push(BootstrapTransitionEvidence::new(
+                pending_receipt.identity.candidate,
+                permit.checked.canonical_record(),
+                receipt.checked.canonical_record(),
+            ));
+        }
+        let evidence = if raw_bootstrap.is_empty() {
+            MembershipTransitionEvidence::Ordinary
+        } else {
+            MembershipTransitionEvidence::Bootstrap(&raw_bootstrap)
+        };
+        let plan = validate_membership_transition(
+            current.canonical_record(),
+            envelope.record(),
+            self.config.folder_id,
+            self.config.authority_writer_id,
+            &self.config.pinned_authority_key,
+            self,
+            self,
+            evidence,
+        )
+        .map_err(|_| FolderEventError::InvalidEvent)?;
+        if plan.write_loss().is_some() || !plan.downgraded().is_empty() {
+            return Err(FolderEventError::UnsupportedEvent);
+        }
+        if member_by_writer(plan.next_epoch().roster(), self.config.local_writer_id).is_some() {
+            check_survivor_history_compatibility(self, &plan, self.config.local_writer_id)
+                .map_err(|_| FolderEventError::InvalidEvent)?;
+        }
+        let timeline_updates = self.prepare_timeline_updates(&plan)?;
+        let retired_index_bytes = self.pending_reference_index_bytes()?;
+        let index_bytes =
+            self.transition_index_bytes(plan.next_epoch(), &timeline_updates, retired_index_bytes)?;
+        Ok(PreparedEvent::Append(PreparedFolderEvent {
+            machine_token: Arc::clone(&self.machine_token),
+            expected_revision: self.revision,
+            change: PreparedChange::MembershipTransition {
+                epoch: plan.next_epoch().clone(),
+                timeline_updates,
+                index_bytes,
+                retired_index_bytes,
+            },
+        }))
+    }
+
+    fn current_epoch(&self) -> Option<&SignatureCheckedEpoch> {
+        self.current_epoch_digest
+            .as_ref()
+            .and_then(|digest| self.epochs.get(digest))
+    }
+
+    fn validate_permit_candidate(
+        &self,
+        permit: &SignatureCheckedBootstrapPermit,
+    ) -> Result<(), FolderEventError> {
+        let current = self
+            .current_epoch()
+            .ok_or(FolderEventError::MissingGenesis)?;
+        let candidate = permit.candidate();
+        match member_by_writer(current.roster(), candidate.writer_id()) {
+            Some(existing) => {
+                if existing.role() != MemberRole::Read
+                    || candidate.role() != MemberRole::ReadWrite
+                    || existing.writer_key() != candidate.writer_key()
+                    || existing.transport_device_id() != candidate.transport_device_id()
+                    || existing.transport_key() != candidate.transport_key()
+                {
+                    return Err(FolderEventError::InvalidEvent);
+                }
+            }
+            None => {
+                if self.writer_timelines.contains_key(&candidate.writer_id())
+                    || self.writer_timelines.values().any(|timeline| {
+                        timeline.writer_key.to_bytes() == candidate.writer_key().to_bytes()
+                    })
+                {
+                    return Err(FolderEventError::InvalidEvent);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn authorize_operation(
+        &self,
+        operation: &super::operation::SignatureCheckedOperation,
+        current: &SignatureCheckedEpoch,
+    ) -> Result<(), FolderEventError> {
+        let header = operation.header();
+        let claimed_digest = EpochDigest::from_bytes(header.membership_epoch_digest());
+        let claimed = self
+            .epochs
+            .get(&claimed_digest)
+            .filter(|epoch| epoch.epoch() == header.membership_epoch())
+            .ok_or(FolderEventError::UnauthorizedOperation)?;
+        let writer = header.writer_id();
+        let timeline = self
+            .writer_timelines
+            .get(&writer)
+            .ok_or(FolderEventError::UnauthorizedOperation)?;
+        for (_, digest) in self.epoch_digests.range(claimed.epoch()..=current.epoch()) {
+            let epoch = self
+                .epochs
+                .get(digest)
+                .ok_or(FolderEventError::InvalidEvent)?;
+            let grant = member_by_writer(epoch.roster(), writer)
+                .filter(|grant| grant.role() == MemberRole::ReadWrite)
+                .filter(|grant| grant.writer_key() == &timeline.writer_key)
+                .ok_or(FolderEventError::UnauthorizedOperation)?;
+            let _ = grant;
+        }
+        if timeline
+            .writable_since
+            .is_none_or(|start| claimed.epoch() < start)
+            || !matches!(
+                header.clock().compare(&timeline.minimum_context),
+                VersionVectorOrder::Equal | VersionVectorOrder::After
+            )
+        {
+            return Err(FolderEventError::UnauthorizedOperation);
+        }
+        Ok(())
+    }
+
+    fn evidence_resource_delta(
+        &self,
+        record_bytes: usize,
+        frontier_components: usize,
+    ) -> Result<(u64, u64, u64), FolderEventError> {
+        let record_bytes = record_bytes as u64;
+        let pending_bytes = self
+            .pending_evidence_bytes
+            .checked_add(record_bytes)
+            .ok_or(FolderEventError::ResourceLimit)?;
+        let pending_records = self
+            .pending_evidence_records
+            .checked_add(1)
+            .ok_or(FolderEventError::ResourceLimit)?;
+        if pending_bytes > self.config.limits.maximum_pending_evidence_bytes
+            || pending_records > self.config.limits.maximum_pending_evidence_records
+        {
+            return Err(FolderEventError::ResourceLimit);
+        }
+        let index_bytes = self
+            .index_bytes
+            .checked_add(EVIDENCE_INDEX_BYTES)
+            .and_then(|bytes| bytes.checked_add(PENDING_REFERENCE_INDEX_BYTES))
+            .and_then(|bytes| bytes.checked_add(record_bytes))
+            .and_then(|bytes| {
+                (frontier_components as u64)
+                    .checked_mul(CLOCK_COMPONENT_INDEX_BYTES)
+                    .and_then(|charge| bytes.checked_add(charge))
+            })
+            .ok_or(FolderEventError::ResourceLimit)?;
+        self.require_index_limit(index_bytes)?;
+        Ok((index_bytes, pending_bytes, pending_records))
+    }
+
+    fn prepare_timeline_updates(
+        &self,
+        plan: &super::membership_transition::ValidatedMembershipTransition,
+    ) -> Result<Vec<(WriterId, WriterTimeline)>, FolderEventError> {
+        let mut contexts = BTreeMap::new();
+        for context in plan.bootstrap_minimum_contexts() {
+            if contexts
+                .insert(context.writer_id(), context.applied_frontier().clone())
+                .is_some()
+            {
+                return Err(FolderEventError::InvalidEvent);
+            }
+        }
+        let next_epoch = plan.next_epoch().epoch();
+        let mut updates = Vec::new();
+        for added in plan.added() {
+            let minimum_context = contexts
+                .remove(&added.writer_id())
+                .ok_or(FolderEventError::InvalidEvent)?;
+            updates.push((
+                added.writer_id(),
+                WriterTimeline {
+                    first_epoch: next_epoch,
+                    removed_epoch: None,
+                    writer_key: *added.writer_key(),
+                    writable_since: (added.role() == MemberRole::ReadWrite).then_some(next_epoch),
+                    minimum_context: if added.role() == MemberRole::ReadWrite {
+                        minimum_context
+                    } else {
+                        VersionVector::empty()
+                    },
+                },
+            ));
+        }
+        for upgraded in plan.upgraded() {
+            let writer = upgraded.writer_id();
+            let mut timeline = self
+                .writer_timelines
+                .get(&writer)
+                .cloned()
+                .ok_or(FolderEventError::InvalidEvent)?;
+            timeline.writable_since = Some(next_epoch);
+            timeline.minimum_context = contexts
+                .remove(&writer)
+                .ok_or(FolderEventError::InvalidEvent)?;
+            updates.push((writer, timeline));
+        }
+        for removed in plan.removed() {
+            if removed.role() != MemberRole::Read {
+                return Err(FolderEventError::UnsupportedEvent);
+            }
+            let mut timeline = self
+                .writer_timelines
+                .get(&removed.writer_id())
+                .cloned()
+                .ok_or(FolderEventError::InvalidEvent)?;
+            timeline.removed_epoch = Some(next_epoch);
+            updates.push((removed.writer_id(), timeline));
+        }
+        if !contexts.is_empty() {
+            return Err(FolderEventError::InvalidEvent);
+        }
+        updates.sort_unstable_by_key(|(writer, _)| *writer);
+        if updates.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return Err(FolderEventError::InvalidEvent);
+        }
+        Ok(updates)
+    }
+
+    fn pending_reference_index_bytes(&self) -> Result<u64, FolderEventError> {
+        self.pending_evidence_records
+            .checked_mul(PENDING_REFERENCE_INDEX_BYTES)
+            .ok_or(FolderEventError::ResourceLimit)
+    }
+
+    fn transition_index_bytes(
+        &self,
+        epoch: &SignatureCheckedEpoch,
+        updates: &[(WriterId, WriterTimeline)],
+        retired_index_bytes: u64,
+    ) -> Result<u64, FolderEventError> {
+        let epoch_count = (self.epochs.len() as u64)
+            .checked_add(1)
+            .ok_or(FolderEventError::ResourceLimit)?;
+        if epoch_count > self.config.limits.maximum_membership_epochs {
+            return Err(FolderEventError::ResourceLimit);
+        }
+        let mut bytes = self
+            .index_bytes
+            .checked_sub(retired_index_bytes)
+            .and_then(|value| value.checked_add(EPOCH_INDEX_BYTES))
+            .and_then(|value| value.checked_add(epoch.canonical_record().len() as u64))
+            .and_then(|value| {
+                (epoch.roster().len() as u64)
+                    .checked_mul(MEMBER_INDEX_BYTES)
+                    .and_then(|charge| value.checked_add(charge))
+            })
+            .and_then(|value| {
+                (epoch.bootstrap_receipt_digests().len() as u64)
+                    .checked_mul(EPOCH_PROOF_REFERENCE_BYTES)
+                    .and_then(|charge| value.checked_add(charge))
+            })
+            .ok_or(FolderEventError::ResourceLimit)?;
+        for (writer, timeline) in updates {
+            if !self.writer_timelines.contains_key(writer) {
+                bytes = bytes
+                    .checked_add(WRITER_TIMELINE_INDEX_BYTES)
+                    .ok_or(FolderEventError::ResourceLimit)?;
+            }
+            bytes = bytes
+                .checked_add(
+                    (timeline.minimum_context.actor_count() as u64)
+                        .checked_mul(CLOCK_COMPONENT_INDEX_BYTES)
+                        .ok_or(FolderEventError::ResourceLimit)?,
+                )
+                .ok_or(FolderEventError::ResourceLimit)?;
+        }
+        self.require_index_limit(bytes)?;
+        Ok(bytes)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn operation_index_bytes(
         &self,
@@ -646,11 +1243,25 @@ impl FolderEventMachine {
             .checked_add(1)
             .ok_or(FolderEventError::ResourceLimit)?;
         match prepared.change {
-            PreparedChange::Genesis { epoch, index_bytes } => {
-                if self.current_epoch.is_some() {
+            PreparedChange::Genesis {
+                epoch,
+                timeline,
+                index_bytes,
+            } => {
+                if self.current_epoch_digest.is_some() {
                     return Err(FolderEventError::StalePrepared);
                 }
-                self.current_epoch = Some(epoch);
+                let digest = epoch.digest();
+                let epoch_number = epoch.epoch();
+                let writer = epoch
+                    .roster()
+                    .first()
+                    .ok_or(FolderEventError::InvalidEvent)?
+                    .writer_id();
+                self.epochs.insert(digest, epoch);
+                self.epoch_digests.insert(epoch_number, digest);
+                self.writer_timelines.insert(writer, timeline);
+                self.current_epoch_digest = Some(digest);
                 self.index_bytes = index_bytes;
             }
             PreparedChange::Operation {
@@ -670,6 +1281,97 @@ impl FolderEventMachine {
                 self.tips.insert(writer_id, tip);
                 self.frontier = frontier;
                 self.registers.insert(path, register);
+                self.index_bytes = index_bytes;
+            }
+            PreparedChange::BootstrapPermit {
+                identity,
+                digest,
+                retained,
+                index_bytes,
+                pending_bytes,
+                pending_records,
+            } => {
+                if self.permit_identities.contains_key(&identity)
+                    || self.permits.contains_key(&digest)
+                {
+                    return Err(FolderEventError::StalePrepared);
+                }
+                self.permit_identities.insert(identity, digest);
+                self.permits.insert(digest, retained);
+                self.pending_permits.insert(
+                    digest,
+                    PendingPermitRef {
+                        identity,
+                        base: identity.base,
+                    },
+                );
+                self.pending_evidence_bytes = pending_bytes;
+                self.pending_evidence_records = pending_records;
+                self.index_bytes = index_bytes;
+            }
+            PreparedChange::BootstrapReceipt {
+                identity,
+                digest,
+                retained,
+                index_bytes,
+                pending_bytes,
+                pending_records,
+            } => {
+                if self.receipt_identities.contains_key(&identity)
+                    || self.receipts.contains_key(&digest)
+                {
+                    return Err(FolderEventError::StalePrepared);
+                }
+                let base = retained.checked.base_epoch_digest();
+                self.receipt_identities.insert(identity, digest);
+                self.receipts.insert(digest, retained);
+                self.pending_receipts
+                    .insert(digest, PendingReceiptRef { identity, base });
+                self.pending_evidence_bytes = pending_bytes;
+                self.pending_evidence_records = pending_records;
+                self.index_bytes = index_bytes;
+            }
+            PreparedChange::MembershipTransition {
+                epoch,
+                timeline_updates,
+                index_bytes,
+                retired_index_bytes,
+            } => {
+                let current = self
+                    .current_epoch_digest
+                    .ok_or(FolderEventError::StalePrepared)?;
+                if epoch.previous_epoch_digest() != Some(current) {
+                    return Err(FolderEventError::StalePrepared);
+                }
+                let digest = epoch.digest();
+                let epoch_number = epoch.epoch();
+                if self.epochs.contains_key(&digest)
+                    || self.epoch_digests.contains_key(&epoch_number)
+                {
+                    return Err(FolderEventError::StalePrepared);
+                }
+                if self.pending_reference_index_bytes()? != retired_index_bytes
+                    || self
+                        .pending_permits
+                        .values()
+                        .any(|pending| pending.base != current)
+                    || self
+                        .pending_receipts
+                        .values()
+                        .any(|pending| pending.base != current)
+                {
+                    return Err(FolderEventError::StalePrepared);
+                }
+                self.epochs.insert(digest, epoch);
+                self.epoch_digests.insert(epoch_number, digest);
+                for (writer, timeline) in timeline_updates {
+                    self.writer_timelines.insert(writer, timeline);
+                }
+                self.current_epoch_digest = Some(digest);
+                self.pending_permits.clear();
+                self.pending_receipts.clear();
+                self.pending_evidence_bytes = 0;
+                self.pending_evidence_records = 0;
                 self.index_bytes = index_bytes;
             }
         }
@@ -717,7 +1419,12 @@ impl MembershipArchive for FolderEventMachine {
         folder: FolderId,
         base: EpochDigest,
     ) -> Result<usize, MembershipArchiveQueryError> {
-        Ok(self.exact_archive_head(folder, base)?.roster().len())
+        let epoch = self.exact_archive_head(folder, base)?.epoch();
+        Ok(self
+            .writer_timelines
+            .values()
+            .filter(|timeline| timeline.first_epoch <= epoch)
+            .count())
     }
 
     fn writer_lifetime(
@@ -726,12 +1433,23 @@ impl MembershipArchive for FolderEventMachine {
         base: EpochDigest,
         writer: WriterId,
     ) -> Result<WriterLifetime, MembershipArchiveQueryError> {
-        let epoch = self.exact_archive_head(folder, base)?;
-        Ok(if member_by_writer(epoch.roster(), writer).is_some() {
-            WriterLifetime::Active
-        } else {
-            WriterLifetime::NeverSeen
-        })
+        let epoch = self.exact_archive_head(folder, base)?.epoch();
+        let Some(timeline) = self.writer_timelines.get(&writer) else {
+            return Ok(WriterLifetime::NeverSeen);
+        };
+        if timeline.first_epoch > epoch {
+            return Ok(WriterLifetime::NeverSeen);
+        }
+        Ok(
+            if timeline
+                .removed_epoch
+                .is_some_and(|removed| removed <= epoch)
+            {
+                WriterLifetime::Removed
+            } else {
+                WriterLifetime::Active
+            },
+        )
     }
 
     fn writer_key_assignment(
@@ -740,14 +1458,15 @@ impl MembershipArchive for FolderEventMachine {
         base: EpochDigest,
         key: &VerifyingKey,
     ) -> Result<HistoricalWriterKeyAssignment, MembershipArchiveQueryError> {
-        let epoch = self.exact_archive_head(folder, base)?;
-        Ok(epoch
-            .roster()
+        let epoch = self.exact_archive_head(folder, base)?.epoch();
+        Ok(self
+            .writer_timelines
             .iter()
-            .find(|grant| grant.writer_key() == key)
-            .map_or(HistoricalWriterKeyAssignment::NeverAssigned, |grant| {
-                HistoricalWriterKeyAssignment::AssignedTo(grant.writer_id())
-            }))
+            .find(|(_, timeline)| timeline.first_epoch <= epoch && &timeline.writer_key == key)
+            .map_or(
+                HistoricalWriterKeyAssignment::NeverAssigned,
+                |(writer, _)| HistoricalWriterKeyAssignment::AssignedTo(*writer),
+            ))
     }
 }
 
@@ -757,9 +1476,9 @@ impl FolderEventMachine {
         folder: FolderId,
         base: EpochDigest,
     ) -> Result<&SignatureCheckedEpoch, MembershipArchiveQueryError> {
-        self.current_epoch
-            .as_ref()
-            .filter(|epoch| folder == self.config.folder_id && epoch.digest() == base)
+        self.epochs
+            .get(&base)
+            .filter(|_| folder == self.config.folder_id)
             .ok_or(MembershipArchiveQueryError::UnknownBaseHead)
     }
 }
@@ -769,6 +1488,26 @@ fn member_by_writer(roster: &[MemberGrant], writer: WriterId) -> Option<&MemberG
         .binary_search_by_key(&writer, MemberGrant::writer_id)
         .ok()
         .map(|index| &roster[index])
+}
+
+fn has_read_write_loss(base: &[MemberGrant], next: &[MemberGrant]) -> bool {
+    base.iter()
+        .filter(|grant| grant.role() == MemberRole::ReadWrite)
+        .any(|grant| {
+            member_by_writer(next, grant.writer_id())
+                .is_none_or(|next_grant| next_grant.role() != MemberRole::ReadWrite)
+        })
+}
+
+fn map_frontier_result(result: Result<(), FrontierError>) -> Result<(), FolderEventError> {
+    result.map_err(|error| match error {
+        FrontierError::HistoryUnavailable | FrontierError::MissingOperation => {
+            FolderEventError::MissingHistory
+        }
+        FrontierError::WrongOperation
+        | FrontierError::InconsistentClock
+        | FrontierError::NotClosed => FolderEventError::InvalidEvent,
+    })
 }
 
 fn register_index_bytes(register: &CausalRegister<EntryValue>) -> Result<u64, FolderEventError> {
@@ -786,19 +1525,32 @@ fn register_index_bytes(register: &CausalRegister<EntryValue>) -> Result<u64, Fo
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
     use ed25519_dalek::SigningKey;
     use uuid::Uuid;
 
     use super::*;
     use crate::sync::body::OperationBody;
+    use crate::sync::bootstrap::{
+        decode_signature_checked_bootstrap_permit, encode_signed_bootstrap_permit,
+        encode_signed_bootstrap_receipt,
+    };
     use crate::sync::event::EventEnvelope;
+    use crate::sync::event_log::{DurableEventLog, EventAppendOutcome, EventLogLimits};
+    use crate::sync::log_frame::{LogBinding, LogFileKind, LogFrameKey};
     use crate::sync::membership::{MemberGrant, encode_signed_epoch};
     use crate::sync::operation::{OperationDigest, encode_signed_operation};
+    use crate::sync::state_dir::{PrivateStateDir, StateKey};
 
     const GENEROUS_LIMITS: FolderMachineLimits = FolderMachineLimits {
         maximum_index_bytes: 16 * 1_024 * 1_024,
         maximum_operations: 1_000,
         maximum_paths: 1_000,
+        maximum_membership_epochs: 128,
+        maximum_pending_evidence_bytes: 256 * 1_024,
+        maximum_pending_evidence_records: 128,
     };
 
     fn folder(number: u128) -> FolderId {
@@ -921,6 +1673,141 @@ mod tests {
             )
             .expect("operation");
             Self::envelope(EventKind::Operation, &record)
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn operation_for(
+            &self,
+            signing_key: &SigningKey,
+            writer_id: WriterId,
+            epoch: u64,
+            epoch_digest: EpochDigest,
+            counter: u64,
+            predecessor: Option<OperationDigest>,
+            clock: &[ClockEntry],
+            path: &str,
+            value: EntryValue,
+        ) -> Vec<u8> {
+            let body = OperationBody::new(SyncPath::from_wire(path).expect("path"), value).encode();
+            let record = encode_signed_operation(
+                signing_key,
+                self.folder_id,
+                writer_id,
+                epoch,
+                epoch_digest.to_bytes(),
+                counter,
+                predecessor.map(OperationDigest::to_bytes),
+                clock,
+                &body,
+            )
+            .expect("operation");
+            Self::envelope(EventKind::Operation, &record)
+        }
+
+        fn grant(
+            &self,
+            writer_id: WriterId,
+            writer_key: &SigningKey,
+            transport_number: u128,
+            transport_key: &SigningKey,
+            role: MemberRole,
+        ) -> MemberGrant {
+            MemberGrant::new(
+                writer_id,
+                writer_key.verifying_key(),
+                device(transport_number),
+                transport_key.verifying_key(),
+                role,
+            )
+            .expect("member grant")
+        }
+
+        fn authority_grant(&self) -> MemberGrant {
+            self.grant(
+                self.authority_writer,
+                &self.authority_key,
+                30,
+                &key(2),
+                MemberRole::ReadWrite,
+            )
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn bootstrap_pair(
+            &self,
+            base_epoch: u64,
+            base_digest: EpochDigest,
+            candidate: &MemberGrant,
+            candidate_key: &SigningKey,
+            nonce_byte: u8,
+            required: &[ClockEntry],
+            applied: &[ClockEntry],
+        ) -> (Vec<u8>, Vec<u8>, [u8; 32]) {
+            let permit_record = encode_signed_bootstrap_permit(
+                &self.authority_key,
+                self.folder_id,
+                self.authority_writer,
+                base_epoch,
+                base_digest,
+                candidate,
+                [nonce_byte; 32],
+                1,
+                required,
+            )
+            .expect("permit");
+            let permit = decode_signature_checked_bootstrap_permit(
+                &permit_record,
+                self.folder_id,
+                self.authority_writer,
+                &self.authority_key.verifying_key(),
+            )
+            .expect("checked permit");
+            let receipt_record =
+                encode_signed_bootstrap_receipt(candidate_key, &permit, applied, [8; 32])
+                    .expect("receipt");
+            let receipt = decode_signature_checked_bootstrap_receipt(
+                &receipt_record,
+                &permit,
+                candidate.writer_key(),
+            )
+            .expect("checked receipt");
+            (
+                Self::envelope(EventKind::BootstrapPermit, &permit_record),
+                Self::envelope(EventKind::BootstrapReceipt, &receipt_record),
+                receipt.digest().to_bytes(),
+            )
+        }
+
+        fn next_epoch(
+            &self,
+            epoch: u64,
+            previous: EpochDigest,
+            roster: &[MemberGrant],
+            receipts: &[[u8; 32]],
+        ) -> (Vec<u8>, EpochDigest) {
+            let record = encode_signed_epoch(
+                &self.authority_key,
+                self.folder_id,
+                epoch,
+                self.authority_writer,
+                Some(previous),
+                roster,
+                None,
+                &[],
+                &[],
+                &[],
+                receipts,
+            )
+            .expect("next epoch");
+            let digest = decode_signature_checked_epoch(
+                &record,
+                self.folder_id,
+                self.authority_writer,
+                &self.authority_key.verifying_key(),
+            )
+            .expect("checked next epoch")
+            .digest();
+            (Self::envelope(EventKind::MembershipEpoch, &record), digest)
         }
     }
 
@@ -1102,11 +1989,15 @@ mod tests {
         let genesis_bytes = MACHINE_INDEX_BYTES
             + EPOCH_INDEX_BYTES
             + MEMBER_INDEX_BYTES
+            + WRITER_TIMELINE_INDEX_BYTES
             + fixture.genesis_record.len() as u64;
         let exact_genesis_limits = FolderMachineLimits {
             maximum_index_bytes: genesis_bytes,
             maximum_operations: 1,
             maximum_paths: 1,
+            maximum_membership_epochs: 1,
+            maximum_pending_evidence_bytes: 1,
+            maximum_pending_evidence_records: 1,
         };
         let mut exact =
             FolderEventMachine::new(fixture.config(exact_genesis_limits)).expect("exact machine");
@@ -1133,12 +2024,15 @@ mod tests {
         };
         let exact_operation_bytes = match &prepared.change {
             PreparedChange::Operation { index_bytes, .. } => *index_bytes,
-            PreparedChange::Genesis { .. } => panic!("operation"),
+            _ => panic!("operation"),
         };
         let mut exact = FolderEventMachine::new(fixture.config(FolderMachineLimits {
             maximum_index_bytes: exact_operation_bytes,
             maximum_operations: 1,
             maximum_paths: 1,
+            maximum_membership_epochs: 1,
+            maximum_pending_evidence_bytes: 1,
+            maximum_pending_evidence_records: 1,
         }))
         .expect("machine");
         append(&mut exact, &fixture.genesis_event());
@@ -1179,6 +2073,9 @@ mod tests {
             maximum_index_bytes: genesis_bytes - 1,
             maximum_operations: 1,
             maximum_paths: 1,
+            maximum_membership_epochs: 1,
+            maximum_pending_evidence_bytes: 1,
+            maximum_pending_evidence_records: 1,
         }))
         .expect("below machine");
         assert_eq!(
@@ -1302,26 +2199,43 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_evidence_kinds_and_later_epoch_never_mutate() {
+    fn unsupported_write_loss_and_invalid_bootstrap_kinds_never_mutate() {
         let fixture = Fixture::new();
         let mut machine = fixture.machine();
         append(&mut machine, &fixture.genesis_event());
         let revision = machine.revision;
-        for (kind, magic) in [
-            (EventKind::BootstrapPermit, b"COVSBP01"),
-            (EventKind::BootstrapReceipt, b"COVSBR01"),
-            (EventKind::WriteLossProposal, b"COVSFP01"),
-            (EventKind::FreezeReceipt, b"COVSFR01"),
-            (EventKind::FreezeAbort, b"COVSFA01"),
+        for (kind, magic, expected) in [
+            (
+                EventKind::BootstrapPermit,
+                b"COVSBP01",
+                FolderEventError::InvalidEvent,
+            ),
+            (
+                EventKind::BootstrapReceipt,
+                b"COVSBR01",
+                FolderEventError::InvalidEvent,
+            ),
+            (
+                EventKind::WriteLossProposal,
+                b"COVSFP01",
+                FolderEventError::UnsupportedEvent,
+            ),
+            (
+                EventKind::FreezeReceipt,
+                b"COVSFR01",
+                FolderEventError::UnsupportedEvent,
+            ),
+            (
+                EventKind::FreezeAbort,
+                b"COVSFA01",
+                FolderEventError::UnsupportedEvent,
+            ),
         ] {
             let mut record = magic.to_vec();
             record.extend_from_slice(&1_u16.to_be_bytes());
             record.push(0);
             let event = Fixture::envelope(kind, &record);
-            assert_eq!(
-                prepare_error(&machine, &event),
-                FolderEventError::UnsupportedEvent
-            );
+            assert_eq!(prepare_error(&machine, &event), expected);
         }
         assert!(matches!(
             machine.prepare_event(&fixture.genesis_event()),
@@ -1404,6 +2318,18 @@ mod tests {
             },
             FolderMachineLimits {
                 maximum_paths: 0,
+                ..GENEROUS_LIMITS
+            },
+            FolderMachineLimits {
+                maximum_membership_epochs: 0,
+                ..GENEROUS_LIMITS
+            },
+            FolderMachineLimits {
+                maximum_pending_evidence_bytes: 0,
+                ..GENEROUS_LIMITS
+            },
+            FolderMachineLimits {
+                maximum_pending_evidence_records: 0,
                 ..GENEROUS_LIMITS
             },
         ] {
@@ -1552,5 +2478,847 @@ mod tests {
         );
         assert!(machine.operations.is_empty());
         assert!(machine.registers.is_empty());
+    }
+
+    #[test]
+    fn bootstrap_add_replays_two_writer_concurrency_and_global_publication_clock() {
+        let fixture = Fixture::new();
+        let candidate_writer = writer(40);
+        let candidate_key = key(4);
+        let candidate = fixture.grant(
+            candidate_writer,
+            &candidate_key,
+            50,
+            &key(5),
+            MemberRole::ReadWrite,
+        );
+        let mut authority_machine = fixture.machine();
+        append(&mut authority_machine, &fixture.genesis_event());
+        let authority_first = fixture.operation(
+            1,
+            None,
+            &[ClockEntry::new(fixture.authority_writer, 1).expect("clock")],
+            "shared",
+            directory(),
+        );
+        append(&mut authority_machine, &authority_first);
+        let authority_first_checked = decode_signature_checked_operation(
+            &authority_first[1..],
+            fixture.folder_id,
+            fixture.authority_writer,
+            &fixture.authority_key.verifying_key(),
+        )
+        .expect("first authority operation");
+        let bootstrap_frontier = [ClockEntry::new(fixture.authority_writer, 1).expect("frontier")];
+        let (permit, receipt, receipt_digest) = fixture.bootstrap_pair(
+            1,
+            fixture.genesis_digest,
+            &candidate,
+            &candidate_key,
+            7,
+            &bootstrap_frontier,
+            &bootstrap_frontier,
+        );
+        let (epoch_two, epoch_two_digest) = fixture.next_epoch(
+            2,
+            fixture.genesis_digest,
+            &[fixture.authority_grant(), candidate.clone()],
+            &[receipt_digest],
+        );
+        assert_eq!(
+            prepare_error(&authority_machine, &epoch_two),
+            FolderEventError::MissingEvidence
+        );
+        append(&mut authority_machine, &permit);
+        assert_eq!(
+            prepare_error(&authority_machine, &epoch_two),
+            FolderEventError::MissingEvidence
+        );
+        append(&mut authority_machine, &receipt);
+
+        let mut unauthenticated_conflict = receipt.clone();
+        *unauthenticated_conflict
+            .last_mut()
+            .expect("receipt signature byte") ^= 1;
+        assert_eq!(
+            prepare_error(&authority_machine, &unauthenticated_conflict),
+            FolderEventError::InvalidEvent
+        );
+        let permit_envelope = EventEnvelope::parse(&permit).expect("permit envelope");
+        let checked_permit = decode_signature_checked_bootstrap_permit(
+            permit_envelope.record(),
+            fixture.folder_id,
+            fixture.authority_writer,
+            &fixture.authority_key.verifying_key(),
+        )
+        .expect("checked permit");
+        let signed_conflict_record = encode_signed_bootstrap_receipt(
+            &candidate_key,
+            &checked_permit,
+            &bootstrap_frontier,
+            [9; 32],
+        )
+        .expect("signed conflicting receipt");
+        let signed_conflict =
+            Fixture::envelope(EventKind::BootstrapReceipt, &signed_conflict_record);
+        assert_eq!(
+            prepare_error(&authority_machine, &signed_conflict),
+            FolderEventError::Equivocation
+        );
+        append(&mut authority_machine, &epoch_two);
+        assert_eq!(authority_machine.pending_evidence_records, 0);
+        assert_eq!(authority_machine.pending_evidence_bytes, 0);
+        assert!(matches!(
+            authority_machine.prepare_event(&permit),
+            Ok(PreparedEvent::Duplicate)
+        ));
+        assert!(matches!(
+            authority_machine.prepare_event(&receipt),
+            Ok(PreparedEvent::Duplicate)
+        ));
+        assert_eq!(authority_machine.pending_evidence_records, 0);
+
+        let authority_context = authority_machine
+            .publication_context(
+                fixture.authority_writer,
+                &fixture.authority_key.verifying_key(),
+            )
+            .expect("authority context before concurrency");
+        assert_eq!(authority_context.counter(), 2);
+        let authority_second = fixture.operation_for(
+            &fixture.authority_key,
+            fixture.authority_writer,
+            2,
+            epoch_two_digest,
+            2,
+            Some(authority_first_checked.digest()),
+            authority_context.clock_entries(),
+            "shared",
+            EntryValue::Tombstone,
+        );
+        let candidate_clock = [
+            ClockEntry::new(fixture.authority_writer, 1).expect("authority component"),
+            ClockEntry::new(candidate_writer, 1).expect("candidate component"),
+        ];
+        let candidate_first = fixture.operation_for(
+            &candidate_key,
+            candidate_writer,
+            2,
+            epoch_two_digest,
+            1,
+            None,
+            &candidate_clock,
+            "shared",
+            directory(),
+        );
+        append(&mut authority_machine, &candidate_first);
+        append(&mut authority_machine, &authority_second);
+        let shared = SyncPath::from_wire("shared").expect("shared path");
+        let active: Vec<_> = authority_machine
+            .register(&shared)
+            .expect("shared register")
+            .active()
+            .collect();
+        assert_eq!(active.len(), 2);
+        assert!(
+            active
+                .iter()
+                .any(|entry| entry.id().actor() == candidate_writer.into_vector_actor())
+        );
+        assert!(
+            active
+                .iter()
+                .any(|entry| entry.id().actor() == fixture.authority_writer.into_vector_actor())
+        );
+        let next_authority = authority_machine
+            .publication_context(
+                fixture.authority_writer,
+                &fixture.authority_key.verifying_key(),
+            )
+            .expect("joined authority context");
+        assert_eq!(next_authority.counter(), 3);
+        assert_eq!(next_authority.clock_entries().len(), 2);
+        assert_eq!(
+            next_authority
+                .clock_entries()
+                .iter()
+                .find(|entry| entry.writer_id() == candidate_writer)
+                .expect("remote component")
+                .counter(),
+            1
+        );
+
+        let joining_config = FolderMachineConfig {
+            local_writer_id: candidate_writer,
+            ..fixture.config(GENEROUS_LIMITS)
+        };
+        let mut joining = FolderEventMachine::new(joining_config).expect("joining machine");
+        append(&mut joining, &fixture.genesis_event());
+        append(&mut joining, &authority_first);
+        assert_eq!(
+            joining
+                .publication_context(candidate_writer, &candidate_key.verifying_key())
+                .err(),
+            Some(FolderEventError::PublicationDenied)
+        );
+        for event in [
+            &permit,
+            &receipt,
+            &epoch_two,
+            &candidate_first,
+            &authority_second,
+        ] {
+            append(&mut joining, event);
+        }
+        let joining_context = joining
+            .publication_context(candidate_writer, &candidate_key.verifying_key())
+            .expect("joined candidate context");
+        assert_eq!(joining_context.counter(), 2);
+        assert_eq!(joining_context.clock_entries().len(), 2);
+        assert_eq!(joining.register(&shared).expect("shared").active_count(), 2);
+
+        assert_eq!(
+            joining.retained_writer_count(fixture.folder_id, fixture.genesis_digest),
+            Ok(1)
+        );
+        assert_eq!(
+            joining.writer_lifetime(fixture.folder_id, fixture.genesis_digest, candidate_writer),
+            Ok(WriterLifetime::NeverSeen)
+        );
+        assert_eq!(
+            joining.writer_key_assignment(
+                fixture.folder_id,
+                fixture.genesis_digest,
+                &candidate_key.verifying_key()
+            ),
+            Ok(HistoricalWriterKeyAssignment::NeverAssigned)
+        );
+        assert_eq!(
+            joining.retained_writer_count(fixture.folder_id, epoch_two_digest),
+            Ok(2)
+        );
+    }
+
+    #[test]
+    fn read_member_upgrade_enforces_bootstrap_floor_and_old_epoch_continuity() {
+        let fixture = Fixture::new();
+        let candidate_writer = writer(40);
+        let candidate_key = key(4);
+        let read_grant = fixture.grant(
+            candidate_writer,
+            &candidate_key,
+            50,
+            &key(5),
+            MemberRole::Read,
+        );
+        let mut machine = FolderEventMachine::new(FolderMachineConfig {
+            local_writer_id: candidate_writer,
+            ..fixture.config(GENEROUS_LIMITS)
+        })
+        .expect("candidate machine");
+        append(&mut machine, &fixture.genesis_event());
+
+        let (add_permit, add_receipt, add_receipt_digest) = fixture.bootstrap_pair(
+            1,
+            fixture.genesis_digest,
+            &read_grant,
+            &candidate_key,
+            11,
+            &[],
+            &[],
+        );
+        let (epoch_two, epoch_two_digest) = fixture.next_epoch(
+            2,
+            fixture.genesis_digest,
+            &[fixture.authority_grant(), read_grant.clone()],
+            &[add_receipt_digest],
+        );
+        append(&mut machine, &add_permit);
+        append(&mut machine, &add_receipt);
+        append(&mut machine, &epoch_two);
+        assert_eq!(
+            machine
+                .publication_context(candidate_writer, &candidate_key.verifying_key())
+                .err(),
+            Some(FolderEventError::PublicationDenied)
+        );
+
+        let delayed_authority = fixture.operation_for(
+            &fixture.authority_key,
+            fixture.authority_writer,
+            1,
+            fixture.genesis_digest,
+            1,
+            None,
+            &[ClockEntry::new(fixture.authority_writer, 1).expect("clock")],
+            "old-epoch",
+            directory(),
+        );
+        append(&mut machine, &delayed_authority);
+
+        let write_grant = MemberGrant::new(
+            candidate_writer,
+            candidate_key.verifying_key(),
+            read_grant.transport_device_id(),
+            *read_grant.transport_key(),
+            MemberRole::ReadWrite,
+        )
+        .expect("upgraded grant");
+        let floor = [ClockEntry::new(fixture.authority_writer, 1).expect("floor")];
+        let (upgrade_permit, upgrade_receipt, upgrade_receipt_digest) = fixture.bootstrap_pair(
+            2,
+            epoch_two_digest,
+            &write_grant,
+            &candidate_key,
+            12,
+            &floor,
+            &floor,
+        );
+        let (epoch_three, epoch_three_digest) = fixture.next_epoch(
+            3,
+            epoch_two_digest,
+            &[fixture.authority_grant(), write_grant],
+            &[upgrade_receipt_digest],
+        );
+        append(&mut machine, &upgrade_permit);
+        append(&mut machine, &upgrade_receipt);
+        append(&mut machine, &epoch_three);
+
+        let context = machine
+            .publication_context(candidate_writer, &candidate_key.verifying_key())
+            .expect("upgraded publication context");
+        assert_eq!(context.membership_epoch(), 3);
+        assert_eq!(
+            context.membership_epoch_digest(),
+            epoch_three_digest.to_bytes()
+        );
+        assert_eq!(context.counter(), 1);
+        assert_eq!(context.clock_entries().len(), 2);
+        assert_eq!(
+            context
+                .clock_entries()
+                .iter()
+                .find(|entry| entry.writer_id() == fixture.authority_writer)
+                .expect("bootstrap floor component")
+                .counter(),
+            1
+        );
+
+        let below_floor = fixture.operation_for(
+            &candidate_key,
+            candidate_writer,
+            3,
+            epoch_three_digest,
+            1,
+            None,
+            &[ClockEntry::new(candidate_writer, 1).expect("self clock")],
+            "below-floor",
+            directory(),
+        );
+        assert_eq!(
+            prepare_error(&machine, &below_floor),
+            FolderEventError::UnauthorizedOperation
+        );
+        assert!(
+            machine
+                .register(&SyncPath::from_wire("below-floor").expect("path"))
+                .is_none()
+        );
+
+        let accepted = fixture.operation_for(
+            &candidate_key,
+            candidate_writer,
+            3,
+            epoch_three_digest,
+            1,
+            None,
+            context.clock_entries(),
+            "at-floor",
+            directory(),
+        );
+        append(&mut machine, &accepted);
+        assert_eq!(machine.current_frontier().actor_count(), 2);
+
+        let before_add = fixture.operation_for(
+            &candidate_key,
+            candidate_writer,
+            1,
+            fixture.genesis_digest,
+            1,
+            None,
+            &[
+                ClockEntry::new(fixture.authority_writer, 1).expect("authority clock"),
+                ClockEntry::new(candidate_writer, 1).expect("candidate clock"),
+            ],
+            "pre-membership",
+            directory(),
+        );
+        assert_eq!(
+            prepare_error(&machine, &before_add),
+            FolderEventError::UnauthorizedOperation
+        );
+    }
+
+    #[test]
+    fn ordinary_read_only_removal_is_historical_and_read_write_loss_is_unsupported() {
+        let fixture = Fixture::new();
+        let reader_writer = writer(40);
+        let reader_key = key(4);
+        let reader = fixture.grant(reader_writer, &reader_key, 50, &key(5), MemberRole::Read);
+        let mut machine = FolderEventMachine::new(FolderMachineConfig {
+            local_writer_id: reader_writer,
+            ..fixture.config(GENEROUS_LIMITS)
+        })
+        .expect("reader machine");
+        append(&mut machine, &fixture.genesis_event());
+        let (permit, receipt, receipt_digest) = fixture.bootstrap_pair(
+            1,
+            fixture.genesis_digest,
+            &reader,
+            &reader_key,
+            21,
+            &[],
+            &[],
+        );
+        let (epoch_two, epoch_two_digest) = fixture.next_epoch(
+            2,
+            fixture.genesis_digest,
+            &[fixture.authority_grant(), reader.clone()],
+            &[receipt_digest],
+        );
+        append(&mut machine, &permit);
+        append(&mut machine, &receipt);
+        append(&mut machine, &epoch_two);
+
+        let (epoch_three, epoch_three_digest) =
+            fixture.next_epoch(3, epoch_two_digest, &[fixture.authority_grant()], &[]);
+        append(&mut machine, &epoch_three);
+        assert_eq!(
+            machine.writer_lifetime(fixture.folder_id, epoch_two_digest, reader_writer),
+            Ok(WriterLifetime::Active)
+        );
+        assert_eq!(
+            machine.writer_lifetime(fixture.folder_id, epoch_three_digest, reader_writer),
+            Ok(WriterLifetime::Removed)
+        );
+        assert_eq!(
+            machine.writer_key_assignment(
+                fixture.folder_id,
+                epoch_three_digest,
+                &reader_key.verifying_key()
+            ),
+            Ok(HistoricalWriterKeyAssignment::AssignedTo(reader_writer))
+        );
+        assert_eq!(
+            machine.retained_writer_count(fixture.folder_id, epoch_three_digest),
+            Ok(2)
+        );
+        assert_eq!(
+            machine
+                .publication_context(reader_writer, &reader_key.verifying_key())
+                .err(),
+            Some(FolderEventError::PublicationDenied)
+        );
+
+        let mut loss_machine = fixture.machine();
+        append(&mut loss_machine, &fixture.genesis_event());
+        let loss_writer = writer(60);
+        let loss_key = key(6);
+        let loss_grant = fixture.grant(loss_writer, &loss_key, 70, &key(7), MemberRole::ReadWrite);
+        let (loss_permit, loss_receipt, loss_receipt_digest) = fixture.bootstrap_pair(
+            1,
+            fixture.genesis_digest,
+            &loss_grant,
+            &loss_key,
+            22,
+            &[],
+            &[],
+        );
+        let (loss_epoch_two, loss_epoch_two_digest) = fixture.next_epoch(
+            2,
+            fixture.genesis_digest,
+            &[fixture.authority_grant(), loss_grant],
+            &[loss_receipt_digest],
+        );
+        append(&mut loss_machine, &loss_permit);
+        append(&mut loss_machine, &loss_receipt);
+        append(&mut loss_machine, &loss_epoch_two);
+        let (write_loss, _) =
+            fixture.next_epoch(3, loss_epoch_two_digest, &[fixture.authority_grant()], &[]);
+        let revision = loss_machine.revision;
+        assert_eq!(
+            prepare_error(&loss_machine, &write_loss),
+            FolderEventError::UnsupportedEvent
+        );
+        assert_eq!(loss_machine.revision, revision);
+        assert_eq!(loss_machine.current_head().expect("head").epoch(), 2);
+    }
+
+    #[test]
+    fn evidence_equivocation_and_pending_quota_fail_without_mutation() {
+        let fixture = Fixture::new();
+        let candidate_writer = writer(40);
+        let candidate_key = key(4);
+        let candidate = fixture.grant(
+            candidate_writer,
+            &candidate_key,
+            50,
+            &key(5),
+            MemberRole::ReadWrite,
+        );
+        let limits = FolderMachineLimits {
+            maximum_pending_evidence_records: 1,
+            ..GENEROUS_LIMITS
+        };
+        let mut machine = FolderEventMachine::new(fixture.config(limits)).expect("quota machine");
+        append(&mut machine, &fixture.genesis_event());
+        let (permit, receipt, receipt_digest) = fixture.bootstrap_pair(
+            1,
+            fixture.genesis_digest,
+            &candidate,
+            &candidate_key,
+            31,
+            &[],
+            &[],
+        );
+        append(&mut machine, &permit);
+        let revision = machine.revision;
+        let index_bytes = machine.index_bytes;
+        assert_eq!(machine.pending_evidence_records, 1);
+        assert_eq!(
+            prepare_error(&machine, &receipt),
+            FolderEventError::ResourceLimit
+        );
+        assert_eq!(machine.revision, revision);
+        assert_eq!(machine.index_bytes, index_bytes);
+        assert_eq!(machine.receipts.len(), 0);
+        assert_eq!(machine.pending_receipts.len(), 0);
+
+        let conflicting_record = encode_signed_bootstrap_permit(
+            &fixture.authority_key,
+            fixture.folder_id,
+            fixture.authority_writer,
+            1,
+            fixture.genesis_digest,
+            &candidate,
+            [31; 32],
+            2,
+            &[],
+        )
+        .expect("conflicting permit");
+        let conflicting = Fixture::envelope(EventKind::BootstrapPermit, &conflicting_record);
+        assert_eq!(
+            prepare_error(&machine, &conflicting),
+            FolderEventError::Equivocation
+        );
+        assert_eq!(machine.revision, revision);
+
+        let (transition, _) = fixture.next_epoch(
+            2,
+            fixture.genesis_digest,
+            &[fixture.authority_grant(), candidate],
+            &[receipt_digest],
+        );
+        assert_eq!(
+            prepare_error(&machine, &transition),
+            FolderEventError::MissingEvidence
+        );
+        assert_eq!(machine.revision, revision);
+    }
+
+    #[test]
+    fn membership_noop_and_missing_frontier_history_fail_without_mutation() {
+        let fixture = Fixture::new();
+        let candidate_writer = writer(40);
+        let candidate_key = key(4);
+        let candidate = fixture.grant(
+            candidate_writer,
+            &candidate_key,
+            50,
+            &key(5),
+            MemberRole::ReadWrite,
+        );
+        let mut machine = fixture.machine();
+        append(&mut machine, &fixture.genesis_event());
+        let revision = machine.revision;
+        let (noop, _) =
+            fixture.next_epoch(2, fixture.genesis_digest, &[fixture.authority_grant()], &[]);
+        assert_eq!(
+            prepare_error(&machine, &noop),
+            FolderEventError::InvalidEvent
+        );
+
+        let missing = [ClockEntry::new(fixture.authority_writer, 1).expect("missing frontier")];
+        let (permit, _, _) = fixture.bootstrap_pair(
+            1,
+            fixture.genesis_digest,
+            &candidate,
+            &candidate_key,
+            41,
+            &missing,
+            &missing,
+        );
+        assert_eq!(
+            prepare_error(&machine, &permit),
+            FolderEventError::MissingHistory
+        );
+        assert_eq!(machine.revision, revision);
+        assert!(machine.permits.is_empty());
+        assert!(machine.pending_permits.is_empty());
+
+        let operation = fixture.operation(1, None, &missing, "required", directory());
+        append(&mut machine, &operation);
+        append(&mut machine, &permit);
+        assert_eq!(machine.pending_evidence_records, 1);
+    }
+
+    #[test]
+    fn multi_actor_evidence_frontier_has_an_exact_index_boundary() {
+        let fixture = Fixture::new();
+        let first_writer = writer(40);
+        let first_key = key(4);
+        let first_grant =
+            fixture.grant(first_writer, &first_key, 50, &key(5), MemberRole::ReadWrite);
+        let authority_operation = fixture.operation(
+            1,
+            None,
+            &[ClockEntry::new(fixture.authority_writer, 1).expect("clock")],
+            "authority",
+            directory(),
+        );
+        let authority_frontier = [ClockEntry::new(fixture.authority_writer, 1).expect("frontier")];
+        let (first_permit, first_receipt, first_receipt_digest) = fixture.bootstrap_pair(
+            1,
+            fixture.genesis_digest,
+            &first_grant,
+            &first_key,
+            61,
+            &authority_frontier,
+            &authority_frontier,
+        );
+        let (epoch_two, epoch_two_digest) = fixture.next_epoch(
+            2,
+            fixture.genesis_digest,
+            &[fixture.authority_grant(), first_grant],
+            &[first_receipt_digest],
+        );
+        let joined_frontier = [
+            ClockEntry::new(fixture.authority_writer, 1).expect("authority component"),
+            ClockEntry::new(first_writer, 1).expect("first writer component"),
+        ];
+        let first_operation = fixture.operation_for(
+            &first_key,
+            first_writer,
+            2,
+            epoch_two_digest,
+            1,
+            None,
+            &joined_frontier,
+            "first-writer",
+            directory(),
+        );
+        let second_writer = writer(60);
+        let second_key = key(6);
+        let second_grant = fixture.grant(second_writer, &second_key, 70, &key(7), MemberRole::Read);
+        let (second_permit, _, _) = fixture.bootstrap_pair(
+            2,
+            epoch_two_digest,
+            &second_grant,
+            &second_key,
+            62,
+            &joined_frontier,
+            &joined_frontier,
+        );
+        let base_events = [
+            &fixture.genesis_event(),
+            &authority_operation,
+            &first_permit,
+            &first_receipt,
+            &epoch_two,
+            &first_operation,
+        ];
+        let replay_base = |limits| {
+            let mut machine =
+                FolderEventMachine::new(fixture.config(limits)).expect("bounded machine");
+            for event in base_events {
+                append(&mut machine, event);
+            }
+            machine
+        };
+
+        let generous = replay_base(GENEROUS_LIMITS);
+        let record_bytes = EventEnvelope::parse(&second_permit)
+            .expect("permit envelope")
+            .record()
+            .len() as u64;
+        let exact_index_bytes = generous
+            .index_bytes
+            .checked_add(EVIDENCE_INDEX_BYTES)
+            .and_then(|bytes| bytes.checked_add(PENDING_REFERENCE_INDEX_BYTES))
+            .and_then(|bytes| bytes.checked_add(record_bytes))
+            .and_then(|bytes| bytes.checked_add(2 * CLOCK_COMPONENT_INDEX_BYTES))
+            .expect("exact index charge");
+        let PreparedEvent::Append(prepared) = generous
+            .prepare_event(&second_permit)
+            .expect("multi-actor evidence preflight")
+        else {
+            panic!("new permit");
+        };
+        assert!(matches!(
+            prepared.change,
+            PreparedChange::BootstrapPermit { index_bytes, .. }
+                if index_bytes == exact_index_bytes
+        ));
+
+        let exact_limits = FolderMachineLimits {
+            maximum_index_bytes: exact_index_bytes,
+            ..GENEROUS_LIMITS
+        };
+        let mut exact = replay_base(exact_limits);
+        append(&mut exact, &second_permit);
+        assert_eq!(exact.index_bytes, exact_index_bytes);
+
+        let below = replay_base(FolderMachineLimits {
+            maximum_index_bytes: exact_index_bytes - 1,
+            ..GENEROUS_LIMITS
+        });
+        let revision = below.revision;
+        let pending = below.pending_evidence_records;
+        assert_eq!(
+            prepare_error(&below, &second_permit),
+            FolderEventError::ResourceLimit
+        );
+        assert_eq!(below.revision, revision);
+        assert_eq!(below.pending_evidence_records, pending);
+        assert!(!below.permit_identities.values().any(|digest| {
+            below
+                .permits
+                .get(digest)
+                .is_some_and(|permit| permit.checked.candidate().writer_id() == second_writer)
+        }));
+    }
+
+    #[test]
+    fn encrypted_durable_log_replays_bootstrap_epoch_and_two_writer_history() {
+        let fixture = Fixture::new();
+        let candidate_writer = writer(40);
+        let candidate_key = key(4);
+        let candidate = fixture.grant(
+            candidate_writer,
+            &candidate_key,
+            50,
+            &key(5),
+            MemberRole::ReadWrite,
+        );
+        let authority_operation = fixture.operation(
+            1,
+            None,
+            &[ClockEntry::new(fixture.authority_writer, 1).expect("clock")],
+            "durable-authority",
+            directory(),
+        );
+        let frontier = [ClockEntry::new(fixture.authority_writer, 1).expect("frontier")];
+        let (permit, receipt, receipt_digest) = fixture.bootstrap_pair(
+            1,
+            fixture.genesis_digest,
+            &candidate,
+            &candidate_key,
+            51,
+            &frontier,
+            &frontier,
+        );
+        let (epoch_two, epoch_two_digest) = fixture.next_epoch(
+            2,
+            fixture.genesis_digest,
+            &[fixture.authority_grant(), candidate],
+            &[receipt_digest],
+        );
+        let candidate_operation = fixture.operation_for(
+            &candidate_key,
+            candidate_writer,
+            2,
+            epoch_two_digest,
+            1,
+            None,
+            &[
+                ClockEntry::new(fixture.authority_writer, 1).expect("authority component"),
+                ClockEntry::new(candidate_writer, 1).expect("candidate component"),
+            ],
+            "durable-candidate",
+            directory(),
+        );
+
+        let temp = tempfile::tempdir().expect("temporary state");
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))
+            .expect("private state mode");
+        let directory = PrivateStateDir::open_root(temp.path()).expect("private state");
+        let file_name = StateKey::new("events.v1").expect("state key");
+        let binding = LogBinding::new(
+            fixture.folder_id,
+            Uuid::from_u128(101),
+            Uuid::from_u128(102),
+            LogFileKind::FolderEvents,
+        );
+        let frame_key_bytes = [103; 32];
+        let limits = EventLogLimits {
+            maximum_bytes: 4 * 1_024 * 1_024,
+            maximum_records: 16,
+        };
+        let mut log = DurableEventLog::create(
+            &directory,
+            &file_name,
+            binding,
+            LogFrameKey::from_bytes(frame_key_bytes),
+            limits,
+            fixture.machine(),
+        )
+        .expect("create log");
+        for (index, event) in [
+            &fixture.genesis_event(),
+            &authority_operation,
+            &permit,
+            &receipt,
+            &epoch_two,
+            &candidate_operation,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(
+                log.append(event).expect("durable append"),
+                EventAppendOutcome::Committed {
+                    ordinal: index as u64 + 1
+                }
+            );
+        }
+        assert_eq!(log.machine().expect("machine").operations.len(), 2);
+        drop(log);
+
+        let joining_machine = FolderEventMachine::new(FolderMachineConfig {
+            local_writer_id: candidate_writer,
+            ..fixture.config(GENEROUS_LIMITS)
+        })
+        .expect("fresh joining machine");
+        let replay = DurableEventLog::open(
+            &directory,
+            &file_name,
+            binding,
+            LogFrameKey::from_bytes(frame_key_bytes),
+            limits,
+            joining_machine,
+        )
+        .expect("replay log");
+        assert_eq!(replay.committed_records().expect("records"), 6);
+        let replayed = replay.machine().expect("replayed machine");
+        assert_eq!(replayed.current_head().expect("head").epoch(), 2);
+        assert_eq!(replayed.current_frontier().actor_count(), 2);
+        assert_eq!(
+            replayed
+                .publication_context(candidate_writer, &candidate_key.verifying_key())
+                .expect("candidate publication")
+                .counter(),
+            2
+        );
+        assert_eq!(replayed.pending_evidence_records, 0);
     }
 }

@@ -1,9 +1,10 @@
 //! Local operation publication through an exclusively held durable folder log.
 //!
 //! The writer's counter, predecessor and full causal context come from the
-//! same replay-derived machine that validates the append. Signed bytes remain
-//! private until the append and machine commit succeed. This layer does not
-//! claim that file content is retained, applied, or acknowledged by a peer.
+//! same replay-derived machine that validates the append. File references also
+//! require an exact verified receipt from the matching private content-store
+//! generation. Signed bytes remain private until the append and machine commit
+//! succeed. This layer does not apply content or acknowledge it to a peer.
 
 use std::fmt;
 
@@ -11,7 +12,8 @@ use ed25519_dalek::SigningKey;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-use super::body::OperationBody;
+use super::body::{EntryValue, OperationBody};
+use super::content_store::VerifiedContentReceipt;
 use super::event::{EncodedEventEnvelope, EventEnvelope, EventKind};
 use super::event_log::{DurableEventLog, EventAppendOutcome, EventLogError};
 use super::ids::WriterId;
@@ -27,6 +29,12 @@ pub enum PublicationError {
     WrongLogBinding,
     #[error("local writer cannot publish in the current folder state")]
     NotWritable,
+    #[error("file publication requires verified retained content")]
+    RetentionRequired,
+    #[error("retained publication requires a file operation")]
+    RetentionNotApplicable,
+    #[error("content retention receipt does not match the publication")]
+    RetentionMismatch,
     #[error("local operation could not be encoded")]
     Encoding,
     #[error("local publication requires reopen after an invariant failure")]
@@ -125,13 +133,53 @@ impl DurableFolderLog {
         Ok(self.log.append(event)?)
     }
 
-    /// Allocates and signs the next operation inside this log's transaction.
-    /// Rejection or uncertain persistence returns no signed publication bytes.
+    /// Allocates and signs a directory or tombstone operation.
+    ///
+    /// File references require [`Self::publish_retained`]. Rejection or
+    /// uncertain persistence returns no signed publication bytes.
     pub fn publish_local(
         &mut self,
         body: &OperationBody,
     ) -> Result<PublishedOperation, PublicationError> {
         self.ensure_usable()?;
+        let _ = self.log.machine()?;
+        if matches!(body.value(), EntryValue::File(_)) {
+            return Err(PublicationError::RetentionRequired);
+        }
+        self.publish_checked(body)
+    }
+
+    /// Allocates and signs one file operation only after exact local retention.
+    ///
+    /// The receipt must name the same file reference, including executable
+    /// mode, and the exact folder, installation, and generation bound to this
+    /// event log. The surrounding coordinator must create the content store and
+    /// log with that shared generation. This does not re-read retained objects.
+    pub fn publish_retained(
+        &mut self,
+        body: &OperationBody,
+        receipt: &VerifiedContentReceipt,
+    ) -> Result<PublishedOperation, PublicationError> {
+        self.ensure_usable()?;
+        let binding = self.log.binding()?;
+        let EntryValue::File(content) = body.value() else {
+            return Err(PublicationError::RetentionNotApplicable);
+        };
+        let domain = receipt.domain();
+        if receipt.content() != content
+            || domain.folder_id() != binding.folder_id()
+            || domain.installation_id() != binding.installation_id()
+            || domain.generation_id() != binding.generation_id()
+        {
+            return Err(PublicationError::RetentionMismatch);
+        }
+        self.publish_checked(body)
+    }
+
+    fn publish_checked(
+        &mut self,
+        body: &OperationBody,
+    ) -> Result<PublishedOperation, PublicationError> {
         let context = self
             .log
             .machine()?
@@ -188,7 +236,10 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::sync::body::EntryValue;
+    use crate::engine::JobControl;
+    use crate::sync::body::{ContentDigest, EntryValue, FileContent};
+    use crate::sync::content_crypto::{SyncContentCrypto, SyncContentDomain};
+    use crate::sync::content_store::{ContentStoreLimits, SyncContentStore};
     use crate::sync::event_log::{EventLogLimits, EventMachine, PreparedEvent};
     use crate::sync::ids::FolderId;
     use crate::sync::log_frame::{LogBinding, LogFrameKey};
@@ -220,6 +271,9 @@ mod tests {
                 maximum_index_bytes: 1 << 20,
                 maximum_operations: 128,
                 maximum_paths: 128,
+                maximum_membership_epochs: 128,
+                maximum_pending_evidence_bytes: 1 << 18,
+                maximum_pending_evidence_records: 128,
             },
         })
         .unwrap()
@@ -314,6 +368,31 @@ mod tests {
 
     fn body(path: &str, value: EntryValue) -> OperationBody {
         OperationBody::new(SyncPath::from_wire(path).unwrap(), value)
+    }
+
+    fn retained_receipt(
+        domain: SyncContentDomain,
+        expected: FileContent,
+        plaintext: &[u8],
+        key_byte: u8,
+    ) -> (tempfile::TempDir, SyncContentStore, VerifiedContentReceipt) {
+        let temp = tempfile::tempdir().unwrap();
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let root = PrivateStateDir::open_root(temp.path()).unwrap();
+        let crypto = SyncContentCrypto::from_bytes(domain, [key_byte; 32]).unwrap();
+        let mut store = SyncContentStore::open(
+            root,
+            crypto,
+            ContentStoreLimits {
+                maximum_stored_bytes: 1 << 20,
+                maximum_objects: 32,
+            },
+        )
+        .unwrap();
+        let receipt = store
+            .retain_stream(expected, plaintext, &JobControl::new())
+            .unwrap();
+        (temp, store, receipt)
     }
 
     #[test]
@@ -567,5 +646,100 @@ mod tests {
             Err(EventLogError::NonemptyReplayMachine)
         ));
         assert_eq!(fs::read(temp.path().join("events.v1")).unwrap(), original);
+    }
+
+    #[test]
+    fn verified_retention_gates_file_publication_and_replays_exact_reference() {
+        let plaintext = b"retained file publication bytes";
+        let digest = ContentDigest::from_bytes(*blake3::hash(plaintext).as_bytes());
+        let retained = FileContent::new(digest, plaintext.len() as u64, false).unwrap();
+        let exact_domain = SyncContentDomain::new(
+            folder(),
+            binding().installation_id(),
+            binding().generation_id(),
+        );
+        let (_exact_temp, _exact_store, exact_receipt) =
+            retained_receipt(exact_domain, retained, plaintext, 101);
+        let (_folder_temp, _folder_store, wrong_folder) = retained_receipt(
+            SyncContentDomain::new(
+                FolderId::from_uuid(Uuid::from_u128(201)),
+                binding().installation_id(),
+                binding().generation_id(),
+            ),
+            retained,
+            plaintext,
+            102,
+        );
+        let (_installation_temp, _installation_store, wrong_installation) = retained_receipt(
+            SyncContentDomain::new(folder(), Uuid::from_u128(202), binding().generation_id()),
+            retained,
+            plaintext,
+            103,
+        );
+        let (_generation_temp, _generation_store, wrong_generation) = retained_receipt(
+            SyncContentDomain::new(folder(), binding().installation_id(), Uuid::from_u128(203)),
+            retained,
+            plaintext,
+            104,
+        );
+
+        let (log_temp, mut log) = fixture(128, true);
+        let file_body = body("retained-file", EntryValue::File(retained));
+        let original_log = fs::read(log_temp.path().join("events.v1")).unwrap();
+        assert!(matches!(
+            log.publish_local(&file_body),
+            Err(PublicationError::RetentionRequired)
+        ));
+        assert!(matches!(
+            log.publish_retained(&body("not-a-file", EntryValue::Directory), &exact_receipt),
+            Err(PublicationError::RetentionNotApplicable)
+        ));
+        for receipt in [&wrong_folder, &wrong_installation, &wrong_generation] {
+            assert!(matches!(
+                log.publish_retained(&file_body, receipt),
+                Err(PublicationError::RetentionMismatch)
+            ));
+        }
+        for mismatch in [
+            FileContent::new(
+                ContentDigest::from_bytes([205; 32]),
+                plaintext.len() as u64,
+                false,
+            )
+            .unwrap(),
+            FileContent::new(digest, plaintext.len() as u64 + 1, false).unwrap(),
+            FileContent::new(digest, plaintext.len() as u64, true).unwrap(),
+        ] {
+            assert!(matches!(
+                log.publish_retained(
+                    &body("mismatched-file", EntryValue::File(mismatch)),
+                    &exact_receipt
+                ),
+                Err(PublicationError::RetentionMismatch)
+            ));
+        }
+        assert_eq!(log.log.committed_records().unwrap(), 1);
+        assert_eq!(log.machine().unwrap().current_frontier().actor_count(), 0);
+        assert_eq!(
+            fs::read(log_temp.path().join("events.v1")).unwrap(),
+            original_log
+        );
+
+        let publication = log.publish_retained(&file_body, &exact_receipt).unwrap();
+        assert_eq!(publication.id().counter(), 1);
+        assert_eq!(publication.ordinal(), 2);
+        drop(log);
+
+        let replay = reopen(&log_temp, 128);
+        let value = replay
+            .machine()
+            .unwrap()
+            .register(&SyncPath::from_wire("retained-file").unwrap())
+            .unwrap()
+            .active()
+            .next()
+            .unwrap()
+            .value();
+        assert_eq!(*value, EntryValue::File(retained));
     }
 }

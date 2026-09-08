@@ -197,16 +197,35 @@ folder lock, checks quotas before append, syncs before exposing committed
 state, and requires reopen after an uncertain write. Only a valid incomplete
 physical EOF frame can be repaired; a complete corrupt record halts replay.
 
-The initial concrete event machine accepts genesis and ordinary operations
-after exact signature, current-grant, causal-history and body checks. Prepared
-changes are bound to their engine instance and revision; accepted indexes have
-independent operation, path and conservative byte-charge quotas. The local
-publisher derives a folder-global counter and full clock and exposes signed
-bytes only after durable append. New log handles require empty replay state.
+The concrete event machine retains exact epochs and permanent writer/key
+history. It accepts bootstrap permits and receipts, bootstrap-backed Add and
+Read-to-RW upgrades, ordinary Read removal, and operations under uninterrupted
+historical write grants. New writers must include their bootstrap frontier in
+subsequent operations. Advancing the membership head retires all pending
+evidence for the old head while retaining exact duplicate/equivocation history.
+Receipt signatures are checked before classifying equivocation. Prepared
+changes remain bound to one engine instance and revision, with independent
+operation, path, epoch, pending-evidence and conservative index-byte quotas.
 
-Network folder sync remains unshipped. The current runtime rejects subsequent
-membership epochs and bootstrap/write-loss events. Their signed codecs and
-pure transition validator do not activate membership. Full historical
-membership replay, peer exchange, safe user-folder apply, native setup, SAF
-scanning/apply and the multi-device acceptance gates above remain outstanding.
-Existing Backup and Restore behavior remains independently tested.
+The local publisher derives a folder-global counter and full clock and exposes
+signed bytes only after durable append. File publication additionally requires
+an unforgeable complete-content receipt matching the file's digest, length and
+executable mode, plus the log's exact folder/installation/generation. New log
+handles require empty replay state.
+
+Local content storage uses independent sync-only XChaCha20-Poly1305/HKDF keys,
+keyed chunk/manifest locators and folder/installation/generation authentication.
+Bounded ordered manifests exclude executable mode from cache identity. Fixed
+4 MiB chunks are verified individually and as a complete ordered file before
+issuing a retention receipt. Private staged records are synced and promoted
+without replacing an incumbent; both parent directories are synced, destination
+first. Reopening counts all final and abandoned staging files against finite
+quotas. This first store never evicts content or cleans staging implicitly;
+explicit reclaim of proven unreferenced staging remains future work. Quotas
+describe logical encrypted bytes and objects, not filesystem overhead or RSS.
+
+Network folder sync remains unshipped. Write-loss/freeze transitions and their
+history reconciliation still fail closed. Private installation/key lifecycle,
+peer exchange, safe user-folder apply, native setup, SAF scanning/apply and the
+multi-device acceptance gates above remain outstanding. Existing Backup and
+Restore behavior remains independently tested.
