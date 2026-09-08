@@ -14,6 +14,7 @@ output_root=$2
 syncthing_commit=946e2b83a1f6c6ae119427c09e0a5802940b82ff
 syncthing_gomod_sha=a129d6ae9cf20593fab4b1fb04ac09b176c4942d3a4bec9394f9c888fe2d1bd1
 syncthing_gosum_sha=7e9606117eca33e9263181a3d0141e403c940c55022a061d8ed9e22d4bda2acd
+syncthing_source_date_epoch=1785792965
 go_version='go version go1.26.7 '
 govuln_module=golang.org/x/vuln/cmd/govulncheck
 govuln_version=v1.7.0
@@ -87,6 +88,7 @@ fail_stage() {
 command -v git >/dev/null 2>&1 || fail "git is required"
 command -v python3 >/dev/null 2>&1 || fail "python3 is required"
 command -v shasum >/dev/null 2>&1 || fail "shasum is required"
+command -v tar >/dev/null 2>&1 || fail "tar is required"
 timeout_bin=$(command -v timeout || command -v gtimeout || true)
 test -n "$timeout_bin" || fail "GNU timeout or gtimeout is required"
 go_bin=$(command -v go || true)
@@ -94,6 +96,7 @@ test -n "$go_bin" || fail "Go 1.26.7 is required on PATH"
 
 test -d "$source_dir" || fail "Syncthing source checkout is missing"
 source_dir=$(CDPATH='' cd -- "$source_dir" && pwd -P)
+pinned_source_dir=$source_dir
 { test -d "$source_dir/.git" || test -f "$source_dir/.git"; } ||
   fail "source must be a git checkout"
 test "$(git -C "$source_dir" rev-parse HEAD)" = "$syncthing_commit" ||
@@ -185,6 +188,165 @@ export GOSUMDB=sum.golang.org
 export GOFLAGS=-mod=readonly
 target_goflags='-mod=readonly -tags=noupgrade'
 mkdir "$GOPATH" "$GOMODCACHE" "$GOCACHE"
+
+# The tagged tree intentionally omits generated GUI assets. The official build path
+# generates them before compiling cmd/syncthing, so scan an owned export prepared by
+# that same `build.go assets` command. Never generate into the caller's pinned checkout.
+source_archive=$cache/syncthing-source.tar
+working_source=$cache/source-export
+mkdir "$working_source"
+if "$timeout_bin" "$command_timeout_seconds" git -C "$pinned_source_dir" archive \
+    --format=tar --output="$source_archive" "$syncthing_commit" \
+    > "$reports/source-export.stdout" 2> "$reports/source-export.stderr"; then
+  :
+else
+  stage_code=$?
+  fail_stage "pinned source export" "$stage_code" \
+    "git archive stderr" "$reports/source-export.stderr"
+fi
+check_output_bounds
+source_archive_sha=$(shasum -a 256 "$source_archive" | awk '{print $1}')
+source_tree_id=$(git -C "$pinned_source_dir" rev-parse "$syncthing_commit^{tree}")
+if "$timeout_bin" "$command_timeout_seconds" tar -xf "$source_archive" -C "$working_source" \
+    > "$reports/source-extract.stdout" 2> "$reports/source-extract.stderr"; then
+  :
+else
+  stage_code=$?
+  fail_stage "pinned source extraction" "$stage_code" \
+    "source extraction stderr" "$reports/source-extract.stderr"
+fi
+rm "$source_archive"
+check_output_bounds
+test "$(shasum -a 256 "$working_source/go.mod" | awk '{print $1}')" = "$syncthing_gomod_sha" ||
+  fail "exported pinned go.mod hash differs"
+test "$(shasum -a 256 "$working_source/go.sum" | awk '{print $1}')" = "$syncthing_gosum_sha" ||
+  fail "exported pinned go.sum hash differs"
+
+fingerprint_source_export() {
+  fingerprint_phase=$1
+  fingerprint_expected=$2
+  fingerprint_output=$3
+  python3 - "$working_source" "$fingerprint_phase" "$fingerprint_expected" \
+    "$fingerprint_output" <<'PY'
+import hashlib, json, os, pathlib, stat, struct, sys
+
+root = pathlib.Path(sys.argv[1])
+phase, expected_path, output_path = sys.argv[2:]
+generated_paths = {
+    "lib/api/auto/gui.files.go",
+    "cmd/infra/strelaypoolsrv/auto/gui.files.go",
+}
+maximum_files = 100_000
+maximum_source_bytes = 1024 * 1024 * 1024
+maximum_asset_bytes = 16 * 1024 * 1024
+maximum_all_assets = 24 * 1024 * 1024
+
+tree = hashlib.sha256(b"covalent-syncthing-source-export-v1\0")
+files = total_bytes = 0
+assets = []
+seen_generated = set()
+for base, dirs, names in os.walk(root, followlinks=False):
+    dirs.sort()
+    names.sort()
+    for name in dirs:
+        path = pathlib.Path(base, name)
+        if not stat.S_ISDIR(path.lstat().st_mode):
+            raise SystemExit("source export contains a non-directory traversal entry")
+    for name in names:
+        path = pathlib.Path(base, name)
+        metadata = path.lstat()
+        if not stat.S_ISREG(metadata.st_mode):
+            raise SystemExit("source export contains a non-regular file")
+        relative = path.relative_to(root).as_posix()
+        files += 1
+        total_bytes += metadata.st_size
+        if files > maximum_files or total_bytes > maximum_source_bytes:
+            raise SystemExit("source export exceeds its fingerprint bound")
+        content_digest = hashlib.sha256()
+        with path.open("rb") as source:
+            while chunk := source.read(1024 * 1024):
+                content_digest.update(chunk)
+        if relative in generated_paths:
+            seen_generated.add(relative)
+            if metadata.st_size <= 0 or metadata.st_size > maximum_asset_bytes:
+                raise SystemExit("generated asset size is outside its bound")
+            assets.append({"path": relative, "bytes": metadata.st_size,
+                           "sha256": content_digest.hexdigest()})
+            continue
+        encoded_path = relative.encode("utf-8")
+        tree.update(struct.pack(">I", len(encoded_path)))
+        tree.update(encoded_path)
+        tree.update(struct.pack(">IQ", stat.S_IMODE(metadata.st_mode), metadata.st_size))
+        tree.update(content_digest.digest())
+
+assets.sort(key=lambda item: item["path"])
+if phase == "before-assets":
+    if seen_generated:
+        raise SystemExit("source export unexpectedly contains generated assets")
+elif phase in {"after-assets", "after-scans"}:
+    if seen_generated != generated_paths:
+        raise SystemExit("official asset generation did not produce both exact outputs")
+    if sum(item["bytes"] for item in assets) > maximum_all_assets:
+        raise SystemExit("generated assets exceed their aggregate bound")
+else:
+    raise SystemExit("unknown source fingerprint phase")
+
+evidence = {
+    "schemaVersion": 1,
+    "phase": phase,
+    "sourceTreeSha256ExcludingGeneratedAssets": tree.hexdigest(),
+    "sourceFileCountIncludingGeneratedAssets": files,
+    "sourceBytesIncludingGeneratedAssets": total_bytes,
+    "generatedAssets": assets,
+}
+if expected_path != "-":
+    expected = json.loads(pathlib.Path(expected_path).read_text())
+    expected_count = expected["sourceFileCountIncludingGeneratedAssets"]
+    expected_bytes = expected["sourceBytesIncludingGeneratedAssets"]
+    if expected.get("generatedAssets"):
+        expected_count -= len(expected["generatedAssets"])
+        expected_bytes -= sum(item["bytes"] for item in expected["generatedAssets"])
+    if (evidence["sourceTreeSha256ExcludingGeneratedAssets"] !=
+            expected["sourceTreeSha256ExcludingGeneratedAssets"] or
+            files - len(assets) != expected_count or
+            total_bytes - sum(item["bytes"] for item in assets) != expected_bytes):
+        raise SystemExit("non-generated source bytes changed")
+    if phase == "after-scans" and assets != expected["generatedAssets"]:
+        raise SystemExit("generated assets changed during target scans")
+pathlib.Path(output_path).write_text(
+    json.dumps(evidence, sort_keys=True, indent=2) + "\n")
+PY
+}
+
+fingerprint_source_export before-assets - "$reports/source-before-assets.json"
+python3 - "$reports/source-export.json" "$syncthing_commit" "$source_tree_id" \
+  "$source_archive_sha" "$syncthing_gomod_sha" "$syncthing_gosum_sha" \
+  "$syncthing_source_date_epoch" <<'PY'
+import json, pathlib, sys
+out, commit, tree, archive_sha, gomod_sha, gosum_sha, source_epoch = sys.argv[1:]
+pathlib.Path(out).write_text(json.dumps({
+    "schemaVersion": 1, "commit": commit, "gitTree": tree,
+    "gitArchiveSha256": archive_sha, "goModSha256": gomod_sha,
+    "goSumSha256": gosum_sha, "sourceDateEpoch": int(source_epoch),
+}, sort_keys=True, indent=2) + "\n")
+PY
+
+if "$timeout_bin" "$command_timeout_seconds" env \
+    BUILD_HOST=covalent-engine-proof BUILD_USER=covalent-engine-proof \
+    GOFLAGS=-mod=readonly GOTOOLCHAIN=local \
+    SOURCE_DATE_EPOCH="$syncthing_source_date_epoch" \
+    "$go_bin" -C "$working_source" run build.go assets \
+    > "$reports/asset-generation.stdout" 2> "$reports/asset-generation.stderr"; then
+  :
+else
+  stage_code=$?
+  fail_stage "official Syncthing asset generation" "$stage_code" \
+    "asset generation stderr" "$reports/asset-generation.stderr"
+fi
+fingerprint_source_export after-assets "$reports/source-before-assets.json" \
+  "$reports/source-after-assets.json"
+check_output_bounds
+source_dir=$working_source
 
 host_os=$("$go_bin" env GOHOSTOS)
 host_arch=$("$go_bin" env GOHOSTARCH)
@@ -332,6 +494,12 @@ def decode_stream(path, max_bytes, max_records):
 official = {}
 for osv_id in sorted(known_packages):
     official[osv_id] = json.loads((reports / "official-osv" / f"{osv_id}.json").read_text())
+source_export = json.loads((reports / "source-export.json").read_text())
+asset_generation = json.loads((reports / "source-after-assets.json").read_text())
+if (source_export.get("commit") != commit or
+        asset_generation.get("phase") != "after-assets" or
+        len(asset_generation.get("generatedAssets") or []) != 2):
+    raise SystemExit("source export or generated asset evidence is incomplete")
 
 errors, target_summaries = [], []
 for goarch, abi in (("arm64", "arm64-v8a"), ("amd64", "x86_64")):
@@ -485,6 +653,12 @@ summary = {
         "version": "v2.1.3", "commit": commit,
         "goModSha256": hashlib.sha256((source / "go.mod").read_bytes()).hexdigest(),
         "goSumSha256": hashlib.sha256((source / "go.sum").read_bytes()).hexdigest(),
+        "gitTree": source_export["gitTree"],
+        "gitArchiveSha256": source_export["gitArchiveSha256"],
+        "sourceDateEpoch": source_export["sourceDateEpoch"],
+        "treeSha256ExcludingGeneratedAssets":
+            asset_generation["sourceTreeSha256ExcludingGeneratedAssets"],
+        "generatedAssets": asset_generation["generatedAssets"],
     },
     "scanner": {"module": "golang.org/x/vuln/cmd/govulncheck",
                 "version": scanner_version, "database": "https://vuln.go.dev"},
@@ -500,7 +674,15 @@ then
 fi
 
 check_output_bounds
-test -z "$(git -C "$source_dir" status --porcelain=v1 --untracked-files=all)" ||
+fingerprint_source_export after-scans "$reports/source-after-assets.json" \
+  "$reports/source-after-scans.json"
+test "$(git -C "$pinned_source_dir" rev-parse HEAD)" = "$syncthing_commit" ||
+  fail "pinned source checkout changed commits during evidence collection"
+test "$(shasum -a 256 "$pinned_source_dir/go.mod" | awk '{print $1}')" = "$syncthing_gomod_sha" ||
+  fail "pinned source go.mod changed during evidence collection"
+test "$(shasum -a 256 "$pinned_source_dir/go.sum" | awk '{print $1}')" = "$syncthing_gosum_sha" ||
+  fail "pinned source go.sum changed during evidence collection"
+test -z "$(git -C "$pinned_source_dir" status --porcelain=v1 --untracked-files=all)" ||
   fail "evidence collection modified the pinned source checkout"
 cat > "$reports/collection-status.json" <<'EOF'
 {
