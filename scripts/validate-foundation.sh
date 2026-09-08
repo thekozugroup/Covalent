@@ -76,6 +76,9 @@ scripts/test-personal-macos-app-builder.sh
 scripts/test-macos-sync-engine-packaging.sh
 scripts/build-android-sync-engine.sh
 scripts/build-linux-sync-engine.sh
+scripts/test-linux-sync-engine-notice-packaging.sh
+scripts/collect-go-target-license-inventory.py
+scripts/test-collect-go-target-license-inventory.py
 scripts/collect-sync-engine-notices.py
 scripts/container-folder-sync-e2e.py
 scripts/test-collect-sync-engine-notices.py
@@ -152,6 +155,8 @@ node ./scripts/test-setup-guidance.mjs
 ./scripts/test-macos-sync-engine-packaging.sh
 ./scripts/test-android-native-package.sh
 python3 -B ./scripts/test-collect-sync-engine-notices.py
+python3 -B ./scripts/test-collect-go-target-license-inventory.py
+./scripts/test-linux-sync-engine-notice-packaging.sh
 ./scripts/test-personal-android-apk-builder.sh
 ./scripts/test-android-jni-build-command.sh
 ./scripts/test-remote-drill-owner-loss.sh

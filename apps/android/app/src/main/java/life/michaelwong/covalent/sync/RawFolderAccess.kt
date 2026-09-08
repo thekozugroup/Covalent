@@ -127,7 +127,9 @@ internal class RawFolderAccess(private val context: Context) {
         val descriptor = runCatching {
             Os.open(
                 selected,
-                OsConstants.O_RDONLY or OsConstants.O_DIRECTORY or O_CLOEXEC or
+                // Android does not expose O_DIRECTORY in its public SDK. The
+                // nonblocking, no-follow open is checked with fstat before use.
+                OsConstants.O_RDONLY or O_CLOEXEC or
                     OsConstants.O_NOFOLLOW or OsConstants.O_NONBLOCK,
                 0,
             )

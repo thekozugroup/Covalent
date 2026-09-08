@@ -678,13 +678,29 @@ function renderFolderActions(container, status, share, view) {
   }
 
   const removeLabel = share.incoming && share.phase === "offered" && !share.expired ? "Decline" : "Remove…";
-  container.append(folderActionButton(removeLabel, () => {
-    if (!globalThis.confirm("Stop syncing this folder? Local files will stay on this server.")) return;
+  const confirmation = document.createElement("div");
+  confirmation.className = "folder-removal-confirmation";
+  confirmation.hidden = true;
+  confirmation.setAttribute("role", "group");
+  confirmation.setAttribute("aria-label", `Stop sharing ${share.label}`);
+  const explanation = document.createElement("p");
+  explanation.textContent = "Stop syncing this folder? Local files will stay on this server.";
+  const remove = folderActionButton(removeLabel, () => {
+    confirmation.hidden = false;
+    cancel.focus();
+  }, "quiet");
+  const cancel = folderActionButton("Keep sharing", () => {
+    confirmation.hidden = true;
+    remove.focus();
+  }, "quiet");
+  const confirmed = folderActionButton("Stop sharing", () => {
     void runFolderMutation(
       () => folderController.remove(share.offerId),
       "Folder removed from sync. Local files were preserved.",
     );
-  }, "quiet"));
+  }, "quiet");
+  confirmation.append(explanation, cancel, confirmed);
+  container.append(remove, confirmation);
 
   if (view.kind === "expired") {
     container.querySelectorAll("button:not(.quiet)").forEach((button) => { button.disabled = true; });
@@ -694,12 +710,19 @@ function renderFolderActions(container, status, share, view) {
 function renderFolderPeers(status) {
   const select = $("[data-folder-peer]");
   const previous = select.value;
+  const labels = status.peers.map((peer) => [peer.peerId, peer.displayName]);
+  const rendered = Array.from(select.options).slice(1).map((option) => [option.value, option.textContent]);
+  const placeholderText = status.peers.length === 0
+    ? "No confirmed paired devices"
+    : "Choose a confirmed paired device";
+  if (select.options[0]?.textContent === placeholderText && JSON.stringify(labels) === JSON.stringify(rendered)) {
+    select.disabled = status.peers.length === 0;
+    return;
+  }
   select.replaceChildren();
   const placeholder = document.createElement("option");
   placeholder.value = "";
-  placeholder.textContent = status.peers.length === 0
-    ? "No confirmed paired devices"
-    : "Choose a confirmed paired device";
+  placeholder.textContent = placeholderText;
   select.append(placeholder);
   for (const peer of status.peers) {
     const option = document.createElement("option");
@@ -723,26 +746,43 @@ function renderFolderStatus(status) {
   const retry = $("[data-folders-retry-service]");
   retry.hidden = !(status.lifecycle === "needsAttention" || status.issue !== null);
   const list = $("[data-folders-list]");
-  list.replaceChildren();
   const visibleShares = status.shares.filter((share) => share.phase !== "removed");
-  for (const share of visibleShares) {
+  const retained = new Map(Array.from(list.children).map((item) => [item.dataset.folderOfferId, item]));
+  const visibleIds = new Set(visibleShares.map((share) => share.offerId));
+  for (const [id, item] of retained) {
+    if (!visibleIds.has(id)) item.remove();
+  }
+  for (const [index, share] of visibleShares.entries()) {
     const view = folderSync.shareView(status, share);
-    const item = document.createElement("li");
-    const details = document.createElement("div");
-    const name = document.createElement("strong");
+    let item = retained.get(share.offerId);
+    if (!item) {
+      item = document.createElement("li");
+      item.dataset.folderOfferId = share.offerId;
+      const details = document.createElement("div");
+      const name = document.createElement("strong");
+      const peer = document.createElement("span");
+      const state = document.createElement("span");
+      state.className = "folder-state";
+      details.append(name, peer, state);
+      const actions = document.createElement("div");
+      actions.className = "folder-actions";
+      item.append(details, actions);
+    }
+    const [details, actions] = item.children;
+    const [name, peer, state] = details.children;
     name.textContent = share.label;
-    const peer = document.createElement("span");
     peer.textContent = folderPeerName(status, share.peerId);
-    const state = document.createElement("span");
-    state.className = "folder-state";
     state.dataset.kind = view.kind;
     state.textContent = view.text;
-    details.append(name, peer, state);
-    const actions = document.createElement("div");
-    actions.className = "folder-actions";
-    renderFolderActions(actions, status, share, view);
-    item.append(details, actions);
-    list.append(item);
+    // Routine health polling must preserve typed paths, keyboard focus, and
+    // explicit confirmation. Rebuild controls only when their meaning changes.
+    const actionState = JSON.stringify([folderDeviceId, share.incoming, share.phase, share.expired]);
+    if (actions.dataset.state !== actionState) {
+      actions.replaceChildren();
+      renderFolderActions(actions, status, share, view);
+      actions.dataset.state = actionState;
+    }
+    if (list.children[index] !== item) list.insertBefore(item, list.children[index] ?? null);
   }
   const empty = $("[data-folders-empty]");
   empty.hidden = visibleShares.length > 0;

@@ -14,6 +14,7 @@ repo_root=$1
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 exec "$script_dir/android-source-fingerprint.sh" "$repo_root" \
   .dockerignore \
+  LICENSE \
   Cargo.toml \
   Cargo.lock \
   rust-toolchain.toml \
@@ -24,4 +25,7 @@ exec "$script_dir/android-source-fingerprint.sh" "$repo_root" \
   packaging/docker/entrypoint.sh \
   packaging/docker/caddy \
   packaging/sync-engine \
-  scripts/build-linux-sync-engine.sh
+  docs/licenses/sync-engine \
+  scripts/build-linux-sync-engine.sh \
+  scripts/collect-go-target-license-inventory.py \
+  scripts/collect-sync-engine-notices.py

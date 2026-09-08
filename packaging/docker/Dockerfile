@@ -9,7 +9,32 @@ ADD --checksum=sha256:dbcc9498602286a843f29a7104833bd1422082999aa51ff92eef493172
 RUN mkdir -m 0700 /tmp/syncthing-source \
     && tar -xzf /tmp/syncthing-source.tar.gz --strip-components=1 -C /tmp/syncthing-source
 COPY --chmod=0555 scripts/build-linux-sync-engine.sh /usr/local/bin/build-linux-sync-engine
-RUN build-linux-sync-engine worker /tmp/syncthing-source /engine-worker "$TARGETARCH"
+COPY --chmod=0555 scripts/collect-go-target-license-inventory.py /usr/local/bin/collect-go-target-license-inventory
+COPY --chmod=0555 scripts/collect-sync-engine-notices.py /usr/local/bin/collect-sync-engine-notices
+COPY --chmod=0444 packaging/sync-engine/engine-guardian.c /tmp/engine-guardian.c
+COPY --chmod=0444 LICENSE /tmp/Covalent-LICENSE.txt
+COPY --chmod=0444 docs/licenses/sync-engine/OFL-1.1.txt /tmp/OFL-1.1.txt
+RUN apk add --no-cache python3=3.12.14-r0 \
+    && test "$(python3 --version)" = "Python 3.12.14" \
+    && build-linux-sync-engine worker /tmp/syncthing-source /engine-worker "$TARGETARCH" \
+    && mkdir -m 0700 /engine-evidence \
+    && collect-go-target-license-inventory \
+      --source-root /tmp/syncthing-source \
+      --module-cache /go/pkg/mod \
+      --target "linux-$TARGETARCH" linux "$TARGETARCH" 0 noupgrade \
+        /engine-worker/go-target-deps.ndjson \
+      --output /engine-evidence/target-license-inventory.json \
+    && collect-sync-engine-notices \
+      --inventory /engine-evidence/target-license-inventory.json \
+      --source-root /tmp/syncthing-source \
+      --module-cache /go/pkg/mod \
+      --go-root /usr/local/go \
+      --guardian-source /tmp/engine-guardian.c \
+      --project-license /tmp/Covalent-LICENSE.txt \
+      --ofl-license /tmp/OFL-1.1.txt \
+      --output /engine-notices \
+    && install -m 0444 /engine-evidence/target-license-inventory.json \
+      /engine-worker/target-license-inventory.json
 
 FROM rust:1.97.1-alpine3.23@sha256:c4a364ddbf684fe038e6fa6a4f25b30c8dc85247423e0e660676ece0d17be4a2 AS builder
 ARG TARGETARCH
@@ -22,8 +47,9 @@ RUN cargo build --locked --release -p covalent-node -p covalent-cli
 COPY --chmod=0444 packaging/sync-engine/engine-guardian.c /tmp/engine-guardian.c
 COPY --chmod=0555 scripts/build-linux-sync-engine.sh /usr/local/bin/build-linux-sync-engine
 COPY --from=sync-engine-worker /engine-worker /engine-worker
+COPY --from=sync-engine-worker /engine-notices /engine-notices
 RUN build-linux-sync-engine package \
-      /engine-worker /tmp/engine-guardian.c /sync-engine "$TARGETARCH"
+      /engine-worker /tmp/engine-guardian.c /engine-notices /sync-engine "$TARGETARCH"
 
 # Caddy is compiled here rather than lifted out of caddy:2.11.4-alpine, whose
 # published binary is linked against go1.26.3. That toolchain accounted for ten

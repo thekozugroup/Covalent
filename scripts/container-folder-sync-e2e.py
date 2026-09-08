@@ -95,11 +95,14 @@ class Fixture:
         self.containers: list[str] = []
         self.nodes: dict[str, dict] = {}
         self.checks: list[str] = []
+        self.phase = "fixture creation"
 
     def setup(self):
+        self.phase = "isolated network creation"
         self.network_created = True
         docker("network", "create", "--label", "covalent.sync-gate=" + self.prefix, self.network)
         for key in ("a", "b"):
+            self.phase = "isolated volume creation for node " + key
             name = self.prefix + "-" + key
             volumes = {}
             for kind in ("config", "data", "sync", "secrets"):
@@ -113,6 +116,7 @@ class Fixture:
                 mounts += ["--mount", f"type=volume,source={volume},target=/{kind}"]
             initializer = name + "-initialize"
             self.containers.append(initializer)
+            self.phase = "private secret initialization for node " + key
             docker("run", "--rm", "--name", initializer,
                    "--label", "covalent.sync-gate=" + self.prefix,
                    "--interactive", "--network=none", "--read-only",
@@ -122,10 +126,13 @@ class Fixture:
                    "--entrypoint=sh", self.image, "-c",
                    "set -eu; umask 077; IFS= read -r token; printf '%s' \"$token\" > /secrets/token; "
                    "covalent-node provision-key --key-file /secrets/kek >/dev/null; "
-                   "chown 65532:65532 /config /data /sync /secrets /secrets/token /secrets/kek; "
-                   "chmod 700 /config /data /sync /secrets; chmod 600 /secrets/token /secrets/kek",
+                   "chmod 600 /secrets/token /secrets/kek; "
+                   "chown 65532:65532 /secrets/token /secrets/kek; "
+                   "chmod 700 /config /data /sync /secrets; "
+                   "chown 65532:65532 /config /data /sync /secrets",
                    data=(token + "\n").encode())
             self.containers.append(name)
+            self.phase = "packaged node startup for node " + key
             docker("run", "--detach", "--name", name,
                    "--label", "covalent.sync-gate=" + self.prefix,
                    "--network", self.network, "--network-alias", name,
@@ -146,6 +153,7 @@ class Fixture:
             port = int(inspected["NetworkSettings"]["Ports"]["8443/tcp"][0]["HostPort"])
             ip = inspected["NetworkSettings"]["Networks"][self.network]["IPAddress"]
             self.nodes[key] = {"name": name, "token": token, "port": port, "ip": ip}
+            self.phase = "TLS readiness for node " + key
             self.wait(lambda: self.load_ca(key), "server CA creation")
             self.wait(lambda: self.request(key, "/api/v1/status").get("state") == "ready", "node readiness")
         self.checks.append("two-rootless-read-only-bounded-packaged-nodes")
@@ -196,6 +204,7 @@ class Fixture:
         return self.request(key, "/api/v1/sync/status")
 
     def exercise(self):
+        self.phase = "mutual signed pairing"
         invitation = self.request("a", "/api/v1/pair/invitations",
                                   {"lifetimeMs": 600000, "endpoints": [self.nodes["a"]["ip"] + ":8787"]})
         session = self.request("b", "/api/v1/pair/accept", {
@@ -210,6 +219,7 @@ class Fixture:
         self.request("b", "/api/v1/pair/finalize/responder", {"session": session})
         peer = self.request("b", "/api/v1/transport/identity")["deviceId"]
         self.checks.append("mutual-signed-pairing")
+        self.phase = "durable signed folder offer"
         payload = b"packaged-container-folder-gate\n"
         self.write("a", "forward.txt", payload)
         body = {"peerId": peer, "folderId": str(uuid.uuid4()), "label": "Container folder gate", "selectedRoot": "/sync"}
@@ -218,9 +228,11 @@ class Fixture:
         if self.request("a", "/api/v1/sync/folders", body)["offerId"] != offer_id:
             raise GateError("offer retry created a duplicate")
         self.wait(lambda: any(s["offerId"] == offer_id and s["incoming"] for s in self.status("b")["shares"]), "offer delivery")
+        self.phase = "folder acceptance and forward transfer"
         self.request("b", "/api/v1/sync/accept", {"offerId": offer_id, "selectedRoot": "/sync"})
         self.wait(lambda: self.matches("b", "forward.txt", payload), "forward transfer")
         self.checks.append("idempotent-offer-dual-consent-full-scan-and-forward-transfer")
+        self.phase = "pause and resume"
         self.request("a", "/api/v1/sync/pause", {"offerId": offer_id, "paused": True})
         self.wait(lambda: self.status("a")["lifecycle"] == "stopped", "paused worker stop")
         paused_payload = b"edit withheld while source paused\n"
@@ -233,6 +245,7 @@ class Fixture:
         self.request("a", "/api/v1/sync/pause", {"offerId": offer_id, "paused": False})
         self.wait(lambda: self.matches("b", "forward.txt", paused_payload), "resumed transfer")
         self.checks.append("pause-withholds-edit-and-resume-converges")
+        self.phase = "cold restart and reverse transfer"
         before = self.request("b", "/api/v1/transport/identity")["deviceId"]
         docker("stop", "--time=20", self.nodes["b"]["name"])
         docker("start", self.nodes["b"]["name"])
@@ -243,6 +256,7 @@ class Fixture:
         self.write("b", "reverse.txt", reverse)
         self.wait(lambda: self.matches("a", "reverse.txt", reverse), "reverse transfer after restart")
         self.checks.append("durable-identity-restart-and-reverse-transfer")
+        self.phase = "local removal and file preservation"
         self.request("a", "/api/v1/sync/remove", {"offerId": offer_id})
         if not self.matches("a", "forward.txt", paused_payload) or not self.matches("a", "reverse.txt", reverse):
             raise GateError("local removal changed selected files")
@@ -324,7 +338,8 @@ def main():
         finally:
             fixture.cleanup()
     except (GateError, OSError, ValueError, http.client.HTTPException) as error:
-        print(json.dumps({"status": "failed", "reason": str(error), "passedChecks": fixture.checks}))
+        print(json.dumps({"status": "failed", "phase": fixture.phase,
+                          "reason": str(error), "passedChecks": fixture.checks}))
         return 1
     print(json.dumps({"status": "passed", "checks": fixture.checks}, sort_keys=True))
     return 0

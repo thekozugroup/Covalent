@@ -145,7 +145,7 @@ class NoticeBundleTests(unittest.TestCase):
 
         self.assertEqual(manifest["status"], "texts-collected-review-required")
         self.assertEqual(len(manifest["modules"]), 2)
-        self.assertEqual(manifest["bounds"]["files"], 8)
+        self.assertEqual(manifest["bounds"]["files"], 9)
         self.assertEqual(
             (self.fixture.output / "modules/0001/LICENSE").read_bytes(),
             self.fixture.module_license,
@@ -162,6 +162,10 @@ class NoticeBundleTests(unittest.TestCase):
         )
         stored = json.loads((self.fixture.output / "manifest.json").read_text())
         self.assertEqual(stored, manifest)
+        combined = (self.fixture.output / "THIRD-PARTY-NOTICES.txt").read_bytes()
+        self.assertEqual(hashlib.sha256(combined).hexdigest(), manifest["combinedNotice"]["sha256"])
+        self.assertIn(self.fixture.module_license, combined)
+        self.assertIn(b"Go go1.26.7 / LICENSE", combined)
 
     def test_missing_candidate_fails_without_success_manifest(self) -> None:
         (self.fixture.module / "LICENSE").unlink()
@@ -211,6 +215,36 @@ class NoticeBundleTests(unittest.TestCase):
             self.fixture.build()
 
         self.assertFalse((self.fixture.output / "manifest.json").exists())
+
+    def test_replaced_module_copies_exact_replacement_source(self) -> None:
+        document = json.loads(self.fixture.inventory.read_text())
+        replacement_path = "example.org/Replacement"
+        replacement_version = "v1.2.4"
+        replacement_root = self.fixture.cache / pathlib.Path(
+            f"{notices._escape_module(replacement_path)}@"
+            f"{notices._escape_module(replacement_version)}"
+        )
+        self.fixture.module.rename(replacement_root)
+        document["modules"][1]["replacement"] = {
+            "path": replacement_path,
+            "version": replacement_version,
+        }
+        self.fixture.inventory.write_text(json.dumps(document), encoding="utf-8")
+
+        manifest = self.fixture.build()
+
+        self.assertEqual(
+            manifest["modules"][1]["replacement"],
+            {"path": replacement_path, "version": replacement_version},
+        )
+        self.assertEqual(
+            (self.fixture.output / "modules/0001/LICENSE").read_bytes(),
+            self.fixture.module_license,
+        )
+        self.assertIn(
+            b"source example.org/Replacement@v1.2.4",
+            (self.fixture.output / "THIRD-PARTY-NOTICES.txt").read_bytes(),
+        )
 
 
 if __name__ == "__main__":

@@ -19,6 +19,9 @@ const WORKER: &str = "/usr/local/libexec/covalent-sync-engine/covalent-syncthing
 const RUNTIME_PARENT: &str = "/tmp/cvs";
 const MAX_MANIFEST_BYTES: u64 = 8 * 1024;
 const MAX_NOTICE_BYTES: u64 = 64 * 1024;
+const MAX_COMBINED_NOTICE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_TARGET_EVIDENCE_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_BUILD_METADATA_BYTES: u64 = 1024 * 1024;
 const MAX_RUNTIME_PARENT_BYTES: usize = 74;
 const MIN_WORKER_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_WORKER_BYTES: u64 = 48 * 1024 * 1024;
@@ -149,6 +152,7 @@ fn discover_at(
     let manifest: PackageManifest =
         serde_json::from_slice(&manifest_bytes).map_err(|_| LinuxHostError::InvalidPackage)?;
     validate_manifest(&manifest)?;
+    validate_target_notices(manifest_path, &manifest)?;
     validate_packaged_size(guardian_path, manifest.executables.guardian.bytes)?;
     validate_packaged_size(worker_path, manifest.executables.worker.bytes)?;
     let guardian_digest = parse_lower_hex(&manifest.executables.guardian.sha256)?;
@@ -180,12 +184,79 @@ fn validate_manifest(manifest: &PackageManifest) -> Result<(), LinuxHostError> {
         || manifest.guardian.source_sha256 != GUARDIAN_SOURCE_SHA256
         || manifest.notices.license_sha256 != LICENSE_SHA256
         || manifest.notices.authors_sha256 != AUTHORS_SHA256
-        || manifest.notices.third_party_status != "pending-fail-closed-target-inventory"
+        || manifest.notices.third_party_status != "target-texts-collected-review-required"
         || manifest.architecture != std::env::consts::ARCH
         || !(MIN_WORKER_BYTES..=MAX_WORKER_BYTES).contains(&manifest.executables.worker.bytes)
         || !(MIN_GUARDIAN_BYTES..=MAX_GUARDIAN_BYTES).contains(&manifest.executables.guardian.bytes)
     {
         return Err(LinuxHostError::InvalidPackage);
+    }
+    Ok(())
+}
+
+fn validate_target_notices(
+    manifest_path: &Path,
+    manifest: &PackageManifest,
+) -> Result<(), LinuxHostError> {
+    let share = manifest_path
+        .parent()
+        .ok_or(LinuxHostError::InvalidPackage)?;
+    for name in ["notices", "evidence"] {
+        let directory = share.join(name);
+        if !fs::symlink_metadata(&directory)
+            .map_err(|_| LinuxHostError::InvalidPackage)?
+            .is_dir()
+            || fs::canonicalize(&directory).map_err(|_| LinuxHostError::InvalidPackage)?
+                != directory
+        {
+            return Err(LinuxHostError::InvalidPackage);
+        }
+    }
+    // Verify the complete readable license text and the exact target graph
+    // retained by the image build, before authorizing either executable.
+    let evidence = &manifest.target_evidence;
+    for (name, digest, expected, maximum) in [
+        (
+            "notices/manifest.json",
+            &manifest.notices.target_manifest_sha256,
+            None,
+            MAX_TARGET_EVIDENCE_BYTES,
+        ),
+        (
+            "THIRD-PARTY-NOTICES.txt",
+            &manifest.notices.combined_sha256,
+            Some(manifest.notices.combined_bytes),
+            MAX_COMBINED_NOTICE_BYTES,
+        ),
+        (
+            "evidence/go-target-deps.ndjson",
+            &evidence.go_list_sha256,
+            Some(evidence.go_list_bytes),
+            MAX_TARGET_EVIDENCE_BYTES,
+        ),
+        (
+            "evidence/go-version.txt",
+            &evidence.go_version_sha256,
+            Some(evidence.go_version_bytes),
+            MAX_BUILD_METADATA_BYTES,
+        ),
+        (
+            "evidence/target-license-inventory.json",
+            &evidence.license_inventory_sha256,
+            Some(evidence.license_inventory_bytes),
+            MAX_TARGET_EVIDENCE_BYTES,
+        ),
+    ] {
+        if expected.is_some_and(|bytes| bytes == 0 || bytes > maximum) {
+            return Err(LinuxHostError::InvalidPackage);
+        }
+        let bytes = read_bounded_file(&share.join(name), maximum)?;
+        let observed: [u8; 32] = Sha256::digest(&bytes).into();
+        if expected.is_some_and(|expected| expected != bytes.len() as u64)
+            || observed != parse_lower_hex(digest)?
+        {
+            return Err(LinuxHostError::InvalidPackage);
+        }
     }
     Ok(())
 }
@@ -322,6 +393,7 @@ struct PackageManifest {
     engine: EngineRecord,
     guardian: GuardianRecord,
     notices: NoticeRecord,
+    target_evidence: TargetEvidence,
     architecture: String,
     executables: ExecutableInventory,
 }
@@ -348,6 +420,20 @@ struct NoticeRecord {
     license_sha256: String,
     authors_sha256: String,
     third_party_status: String,
+    target_manifest_sha256: String,
+    combined_sha256: String,
+    combined_bytes: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TargetEvidence {
+    go_list_sha256: String,
+    go_list_bytes: u64,
+    go_version_sha256: String,
+    go_version_bytes: u64,
+    license_inventory_sha256: String,
+    license_inventory_bytes: u64,
 }
 
 #[derive(Deserialize)]
@@ -475,6 +561,19 @@ mod tests {
             b"bounded fixture provenance\n",
         )
         .unwrap();
+        fs::create_dir(share.join("notices")).unwrap();
+        fs::create_dir(share.join("evidence")).unwrap();
+        for name in [
+            "notices/manifest.json",
+            "THIRD-PARTY-NOTICES.txt",
+            "evidence/go-target-deps.ndjson",
+            "evidence/go-version.txt",
+            "evidence/target-license-inventory.json",
+        ] {
+            fs::write(share.join(name), b"fixture evidence\n").unwrap();
+        }
+        let evidence_sha = digest_file(&share.join("notices/manifest.json"));
+        let evidence_bytes = b"fixture evidence\n".len();
         let manifest = share.join("manifest.json");
         fs::write(
             &manifest,
@@ -491,7 +590,18 @@ mod tests {
                 "notices": {
                     "licenseSha256": LICENSE_SHA256,
                     "authorsSha256": AUTHORS_SHA256,
-                    "thirdPartyStatus": "pending-fail-closed-target-inventory",
+                    "thirdPartyStatus": "target-texts-collected-review-required",
+                    "targetManifestSha256": evidence_sha,
+                    "combinedSha256": evidence_sha,
+                    "combinedBytes": evidence_bytes,
+                },
+                "targetEvidence": {
+                    "goListSha256": evidence_sha,
+                    "goListBytes": evidence_bytes,
+                    "goVersionSha256": evidence_sha,
+                    "goVersionBytes": evidence_bytes,
+                    "licenseInventorySha256": evidence_sha,
+                    "licenseInventoryBytes": evidence_bytes,
                 },
                 "architecture": std::env::consts::ARCH,
                 "executables": {
@@ -573,6 +683,59 @@ mod tests {
             ),
             LinuxHostError::InvalidPackage,
         );
+    }
+
+    #[test]
+    fn missing_or_tampered_target_notices_never_authorize_helpers() {
+        for name in [
+            "notices/manifest.json",
+            "THIRD-PARTY-NOTICES.txt",
+            "evidence/go-target-deps.ndjson",
+            "evidence/go-version.txt",
+            "evidence/target-license-inventory.json",
+        ] {
+            let fixture = fixture();
+            let path = fixture.manifest.parent().unwrap().join(name);
+            fs::write(&path, b"replaced evidence\n").unwrap();
+            assert_error(
+                discover_at(
+                    &fixture.manifest,
+                    &fixture.guardian,
+                    &fixture.worker,
+                    &fixture.runtime,
+                ),
+                LinuxHostError::InvalidPackage,
+            );
+            assert!(!fixture.runtime.exists());
+            fs::remove_file(path).unwrap();
+            assert_error(
+                discover_at(
+                    &fixture.manifest,
+                    &fixture.guardian,
+                    &fixture.worker,
+                    &fixture.runtime,
+                ),
+                LinuxHostError::InvalidPackage,
+            );
+        }
+    }
+
+    #[test]
+    fn symlinked_target_evidence_directory_is_rejected() {
+        let fixture = fixture();
+        let share = fixture.manifest.parent().unwrap();
+        fs::rename(share.join("evidence"), share.join("moved-evidence")).unwrap();
+        symlink(share.join("moved-evidence"), share.join("evidence")).unwrap();
+        assert_error(
+            discover_at(
+                &fixture.manifest,
+                &fixture.guardian,
+                &fixture.worker,
+                &fixture.runtime,
+            ),
+            LinuxHostError::InvalidPackage,
+        );
+        assert!(!fixture.runtime.exists());
     }
 
     #[test]

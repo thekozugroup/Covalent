@@ -189,6 +189,50 @@ def _write_new(path: pathlib.Path, data: bytes, mode: int = 0o444) -> None:
     os.chmod(path, mode)
 
 
+def _combined_notice(
+    output: pathlib.Path,
+    go_files: list[dict[str, Any]],
+    module_rows: list[dict[str, Any]],
+) -> bytes:
+    sections: list[tuple[str, str]] = []
+    for item in go_files:
+        sections.append((f"Go {GO_VERSION} / {item['sourcePath']}", item["bundlePath"]))
+    for module in module_rows:
+        version = module["version"] or ENGINE_COMMIT
+        replacement = module.get("replacement")
+        replacement_label = ""
+        if replacement is not None:
+            replacement_label = (
+                f" (source {replacement['path']}@{replacement['version']})"
+            )
+        for item in module["files"]:
+            sections.append(
+                (
+                    f"{module['path']}@{version}{replacement_label} / {item['sourcePath']}",
+                    item["bundlePath"],
+                )
+            )
+    sections.extend(
+        (
+            ("Covalent engine guardian / MIT license", "guardian/Covalent-LICENSE.txt"),
+            ("Embedded Fork Awesome assets / OFL-1.1", "supplemental/OFL-1.1.txt"),
+        )
+    )
+    combined = bytearray(
+        b"Covalent synchronized-folder engine notices\n"
+        b"Exact copied texts for the compiled target graph; release review remains required.\n"
+    )
+    for label, relative in sections:
+        data = _read_regular(_safe_child(output, relative), MAX_CANDIDATE_BYTES)
+        combined.extend(f"\n===== {label} =====\n".encode("utf-8"))
+        combined.extend(data)
+        if not data.endswith(b"\n"):
+            combined.extend(b"\n")
+        if len(combined) > MAX_TOTAL_BYTES:
+            raise NoticeError("combined notice byte bound exceeded")
+    return bytes(combined)
+
+
 def _copy_candidate(
     source_root: pathlib.Path,
     source_path: str,
@@ -363,6 +407,7 @@ def build_bundle(
         version_value = module.get("version")
         candidates = module.get("licenseAndNoticeFiles")
         module_targets = module.get("targets")
+        replacement = module.get("replacement")
         if (
             not isinstance(path, str)
             or SAFE_MODULE.fullmatch(path) is None
@@ -380,6 +425,15 @@ def build_bundle(
             or module.get("status") != "observed"
         ):
             raise NoticeError("module inventory row is malformed")
+        if replacement is not None and (
+            not isinstance(replacement, dict)
+            or set(replacement) != {"path", "version"}
+            or not isinstance(replacement.get("path"), str)
+            or SAFE_MODULE.fullmatch(replacement["path"]) is None
+            or not isinstance(replacement.get("version"), str)
+            or SAFE_VERSION.fullmatch(replacement["version"]) is None
+        ):
+            raise NoticeError("module replacement evidence is malformed")
         key = (path, version_value)
         if key in seen_modules:
             raise NoticeError("module inventory contains a duplicate")
@@ -391,7 +445,9 @@ def build_bundle(
         else:
             if version_value is None:
                 raise NoticeError("dependency module has no version")
-            root = _module_root(module_caches, path, version_value)
+            source_path = replacement["path"] if replacement else path
+            source_version = replacement["version"] if replacement else version_value
+            root = _module_root(module_caches, source_path, source_version)
         candidate_rows: list[dict[str, Any]] = []
         seen_paths: set[str] = set()
         for candidate in candidates:
@@ -430,6 +486,7 @@ def build_bundle(
             {
                 "path": path,
                 "version": version_value,
+                "replacement": replacement,
                 "targets": module_targets,
                 "files": candidate_rows,
             }
@@ -474,6 +531,14 @@ def build_bundle(
     if budget.files > MAX_CANDIDATES or budget.bytes > MAX_TOTAL_BYTES:
         raise NoticeError("notice bundle aggregate bound exceeded")
 
+    combined = _combined_notice(output, go_files, module_rows)
+    combined_digest = _sha256(combined)
+    budget.files += 1
+    budget.bytes += len(combined)
+    if budget.files > MAX_CANDIDATES or budget.bytes > MAX_TOTAL_BYTES:
+        raise NoticeError("notice bundle aggregate bound exceeded")
+    _write_new(output / "THIRD-PARTY-NOTICES.txt", combined)
+
     manifest: dict[str, Any] = {
         "schemaVersion": 1,
         "status": "texts-collected-review-required",
@@ -502,11 +567,16 @@ def build_bundle(
                 "bundlePath": "supplemental/OFL-1.1.txt",
             }
         ],
+        "combinedNotice": {
+            "bundlePath": "THIRD-PARTY-NOTICES.txt",
+            "bytes": len(combined),
+            "sha256": combined_digest,
+        },
         "bounds": {"files": budget.files, "bytes": budget.bytes},
         "reviewRequired": [
             "Classify the copied texts and retain every notice required by each exact target graph.",
-            "Review NDK/compiler-runtime material separately for Android; it is outside the Go module graph.",
-            "Generate and compare a separate Linux CGO_ENABLED=0 target inventory before using this bundle in the container image.",
+            "Review compiler and platform runtime material separately; it is outside the Go module graph.",
+            "Never substitute an inventory from another GOOS, GOARCH, CGO, or build-tag combination.",
         ],
     }
     encoded = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")

@@ -1,10 +1,10 @@
 # Completion progress
 
-Updated: 2026-09-08. Checkpoint 26 builds on published commit
-`d19e189f535ef0d489ec59764c9015d1f1294210`; evidence includes the integrated
+Updated: 2026-09-08. Checkpoint 27 builds on published commit
+`7ed4526717525b45f65bf95de8a1975b8c6f9b61`; evidence includes the integrated
 checkpoint changes described below.
 
-**60% of acceptance milestones are verified: 12 of 20.** This is a milestone
+**65% of acceptance milestones are verified: 13 of 20.** This is a milestone
 count, not an estimate of elapsed time or remaining effort. Each milestone has
 equal weight. An implemented feature does not pass until its stated execution
 evidence exists. A regression can lower the score. The project is not release
@@ -15,6 +15,14 @@ accepted Unraid target while Atlas is offline. Developer ID/notarization and
 production Android signing are deferred. Existing backup and recovery remain
 independent from folder sync. Full completion requires all milestones plus the
 applicable detailed gates in [the validation matrix](validation-matrix.md).
+The macOS UI must follow Apple Human Interface Guidelines; this explicit user
+requirement is part of milestones 13 and 19. Review native navigation, system
+controls, standard commands/shortcuts, folder pickers, permission repair,
+resizing, appearance, keyboard focus and VoiceOver with execution evidence.
+Use Apple’s [macOS design guidance](https://developer.apple.com/design/human-interface-guidelines/designing-for-macos/),
+[keyboard guidance](https://developer.apple.com/design/human-interface-guidelines/keyboards),
+and [accessibility guidance](https://developer.apple.com/design/human-interface-guidelines/accessibility/).
+Passing automated tests alone does not establish HIG conformance.
 
 | # | Acceptance milestone | Status | Evidence or remaining work |
 | --- | --- | --- | --- |
@@ -31,9 +39,9 @@ applicable detailed gates in [the validation matrix](validation-matrix.md).
 | 11 | The Android packaged worker executes under Android process restrictions | Verified | Pinned arm64/x86_64 builds and actual API 37 x86_64 guardian/worker execution in proof run 34241597202. |
 | 12 | A full initial scan succeeds before any folder exchange | Verified | Two real production-runtime proofs used the exact integrated controller and pinned worker: 120,000-entry scan stayed network-inert; pause cancelled/reaped; resume transferred both ways; cold restart repeated the barrier. |
 | 13 | The complete macOS user-selected-folder journey and permission repair work | Open | Native UI exists; external security-scope grant, repair and install/upgrade acceptance remain. |
-| 14 | The complete Android folder journey and foreground lifecycle work | Open | Native folder UI, durable raw-folder grants and serialized foreground lifecycle are integrated; ten JNI tests pass. Actual Kotlin/Compose/device execution remains. |
-| 15 | Both complete Docker architectures install and run with safe writable sync mounts | Open | Both images build; amd64 hardened runtime passes. A measured 128 MiB combined-image budget, opt-in writable mount, mapped-port fix and isolated two-node test await fresh hosted execution. Atlas uses this Docker acceptance path. |
-| 16 | The server console offers an intuitive folder setup and management journey | Open | The primary Folders tab passes 101 web tests and an actual delayed DOM submit with a bounded fake node; complete real-node UI acceptance remains. |
+| 14 | The complete Android folder journey and foreground lifecycle work | Open | Native folder UI, durable raw-folder grants and serialized foreground lifecycle are integrated; ten JNI tests pass. Hosted checkpoint 26 found two Kotlin compile errors; fixes and actual device execution remain. |
+| 15 | Both complete Docker architectures install and run with safe writable sync mounts | Open | Both architectures pass image budgets and hardened runtime checks. The new two-node harness exposed an initializer permission-order error; isolated Ubuntu reproduction confirms the correction. Full packaged sync awaits fresh hosted execution. Atlas uses this Docker acceptance path. |
+| 16 | The server console offers an intuitive folder setup and management journey | Verified | Chrome drove two real NodeRuntime instances through offer, accept, bidirectional transfer, pause/resume and explicit removal. Typed paths and focus survive polling; cancel preserves sharing; removal preserves files and blocks later transfer. Both runtimes and test fixtures were cleaned. |
 | 17 | Peer connectivity, invitation expiry/renewal, removal and address changes have complete user journeys | Open | Basic consent/pause/remove exist; renewal, remote removal and network-address changes remain. |
 | 18 | Shipped dependencies, notices and security gates are complete | Open | Rust and CodeQL checks pass; exact platform inventories, shipped notices and final container findings remain. |
 | 19 | Platform installation, upgrade, accessibility and end-to-end regression gates pass | Open | Fresh hosted gates and complete native/package acceptance are required. |

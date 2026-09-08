@@ -342,6 +342,59 @@ improvement or a skipped budget check. The check still measures each actual
 uncompressed image. Node/CLI limits remain unchanged. Final notices, security
 scans, two-architecture acceptance and performance optimization remain open.
 
+## Checkpoint 27: real server console journey and package corrections
+
+The Chrome server-console acceptance used two actual `NodeRuntime` instances,
+mutually confirmed network pairing, and the pinned macOS arm64 worker and
+guardian. Every folder mutation was driven through the production browser UI.
+The test offered a named folder, accepted a separate destination directory,
+verified exact file bytes in both directions, paused the source and withheld a
+new file for seven seconds, resumed and transferred it, cancelled an explicit
+removal confirmation, then stopped sharing and verified all existing files
+remained unchanged. A later remote file stayed absent from the removed source
+for seven seconds. Both nodes stopped, both listeners were released, both
+private runtime directories emptied, and the test folders were removed.
+
+The test also found that replacing the entire folder list on each health poll
+could erase an incoming folder path and keyboard focus. Rows now retain their
+controls until the underlying consent or pause state changes. The actual test
+kept a typed destination path and focus across multiple polls. An inline,
+labelled removal confirmation also retained focus across polls; cancellation
+restored focus to the original Remove button. Neither browser reported console
+warnings or errors. The two Chrome test tabs were closed.
+
+Evidence is retained in the ignored artifact directory
+`web-real-node-journey-20260908-2ea937b4`; `result.json` SHA-256 is
+`b45b5b79085864b3d8b90d080296df2d55cf9fb6d48d17790cbb117909e37a2f`.
+Its source hashes identify the exercised working tree. A subsequent narrow
+placeholder-copy correction handles an unlocked node with zero paired devices;
+it does not change the exercised two-node flow. An earlier in-app-browser
+attempt passed transfer/pause/resume but could not complete native confirmation
+through its browser automation APIs. That partial attempt is recorded separately
+and does not substitute for this complete Chrome result.
+
+Hosted checkpoint 26 passed Rust/contracts, dependency checks, the macOS app
+bundle, macOS integration/UI, and iOS. Both Android lanes stopped at two Kotlin
+compile errors: a missing Compose Button import and an SDK-unavailable
+O_DIRECTORY constant. The fixes preserve the existing nonblocking, no-follow
+open and immediate descriptor directory check.
+
+Both Docker architectures passed their packaged runtime and 128 MiB image
+budget checks: amd64 measured 122,259,968 bytes and arm64 113,321,472 bytes.
+The new sync harness failed during private secret setup because a capability-
+restricted root process changed the directory owner before its final file-mode
+operation. An isolated, read-only Ubuntu container reproduced the denial and
+verified the reordered initialization with the same CHOWN/FOWNER capabilities.
+Its temporary container was removed; existing server resources were untouched.
+Complete packaged Docker sync is still awaiting fresh hosted execution.
+
+Linux target notice generation now runs in each exact build architecture and
+installs readable combined texts plus bounded target evidence. The runtime
+checks the combined texts, manifest and retained evidence hashes before launching
+a worker. Missing/tampered text and symlinked evidence-directory regressions
+pass. Exact target generation, final sizes and notice classification remain
+open; details are in [Linux target notices](../security/syncthing-linux-target-notices.md).
+
 ## Remaining integration and release work
 
 The macOS folder screen now consumes the authenticated API, uses confirmed
