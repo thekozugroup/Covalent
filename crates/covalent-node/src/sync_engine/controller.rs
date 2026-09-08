@@ -547,6 +547,46 @@ impl ManagedEngineSession {
         Ok(health)
     }
 
+    /// Observe folder health and configured peer connections within one
+    /// controller-owned polling cycle. Connection failure is kept separate so
+    /// an ordinary unavailable/malformed connection response cannot turn a
+    /// healthy folder worker into a stopped worker.
+    pub async fn health_observation(
+        &mut self,
+    ) -> (
+        Result<Vec<super::FolderHealth>, EngineSessionError>,
+        Result<Vec<super::EnginePeerConnection>, EngineSessionError>,
+    ) {
+        if let Err(error) = self.revalidate_roots() {
+            self.worker.close_lifeline();
+            return (Err(error), Err(error));
+        }
+        let folders = self
+            .configuration
+            .folders()
+            .iter()
+            .map(|folder| folder.id())
+            .collect::<Vec<_>>();
+        let peers = self
+            .configuration
+            .peers()
+            .iter()
+            .map(|peer| peer.id().clone())
+            .collect::<Vec<_>>();
+        let (folders, connections) = tokio::join!(
+            super::collect_folder_health(&self.client, &folders),
+            super::collect_peer_connections(&self.client, &peers),
+        );
+        if let Err(error) = self.revalidate_roots() {
+            self.worker.close_lifeline();
+            return (Err(error), Err(error));
+        }
+        (
+            folders.map_err(|_| EngineSessionError::EngineUnavailable),
+            connections.map_err(|_| EngineSessionError::EngineUnavailable),
+        )
+    }
+
     /// Request stop through the owner lifeline and await bounded reaping.
     pub async fn stop(&mut self) -> Result<StopOutcome, super::EngineSupervisorError> {
         self.worker.stop().await

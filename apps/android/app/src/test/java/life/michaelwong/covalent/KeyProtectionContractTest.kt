@@ -79,8 +79,8 @@ class KeyProtectionContractTest {
         assertTrue(
             "nativeStart's JNI descriptor must carry token, KEK, exact version, quotas, and protection",
             rust.contains(
-                "\"(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJIZLjava/lang/String;" +
-                    "Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)" +
+                "\"(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJIZZZLjava/lang/String;" +
+                    "Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)" +
                     "Ljava/lang/String;\"",
             ),
         )
@@ -94,17 +94,19 @@ class KeyProtectionContractTest {
             .map(String::trim)
             .filter(String::isNotEmpty)
         assertEquals(
-            "The descriptor has nine node parameters, one package-state boolean, and five " +
-                "verified sync-engine strings; " +
+            "The descriptor has nine node parameters, three package/access booleans, five " +
+                "verified package strings, and one test-overridable listener port; " +
                 "Kotlin declares ${parameters.size}: $parameters",
-            15,
+            18,
             parameters.size,
         )
         assertTrue(parameters[9].endsWith(": Boolean"))
+        assertTrue(parameters.slice(9..11).all { it.endsWith(": Boolean") })
         assertTrue(
-            "The final five parameters must be verified sync-engine strings: $parameters",
-            parameters.takeLast(5).all { it.endsWith(": String") },
+            "The package parameters must be five verified strings: $parameters",
+            parameters.slice(12..16).all { it.endsWith(": String") },
         )
+        assertTrue(parameters.last().endsWith(": Int"))
         assertTrue(
             "Native methods must stay registered from JNI_OnLoad, never exported by name",
             rust.contains("register_native_methods") && !rust.contains("Java_life_michaelwong"),
@@ -116,7 +118,7 @@ class KeyProtectionContractTest {
         val rust = rustJniSource()
         assertTrue(
             rust.contains(
-                "\"(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJI[B[BZ" +
+                "\"(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJI[B[BZZZ" +
                     "Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;" +
                     "Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;\"",
             ),
@@ -130,9 +132,9 @@ class KeyProtectionContractTest {
             .split(",")
             .map(String::trim)
             .filter(String::isNotEmpty)
-        assertEquals(17, parameters.size)
+        assertEquals(19, parameters.size)
         assertTrue(parameters.slice(9..10).all { it.endsWith(": ByteArray") })
-        assertTrue(parameters[11].endsWith(": Boolean"))
+        assertTrue(parameters.slice(11..13).all { it.endsWith(": Boolean") })
         assertTrue(parameters.takeLast(5).all { it.endsWith(": String") })
         assertTrue(rust.contains("take_java_secret(environment, &recovery_key)"))
         assertTrue(rust.contains("take_java_secret(environment, &recovery_kit)"))

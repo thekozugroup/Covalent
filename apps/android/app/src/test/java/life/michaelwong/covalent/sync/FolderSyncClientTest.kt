@@ -5,6 +5,8 @@ import life.michaelwong.covalent.data.CovalentNodeClient
 import life.michaelwong.covalent.model.FolderSharePhase
 import life.michaelwong.covalent.model.FolderSyncIssue
 import life.michaelwong.covalent.model.FolderSyncLifecycle
+import life.michaelwong.covalent.model.PeerConnectionFreshness
+import life.michaelwong.covalent.model.PeerConnectionState
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
@@ -26,6 +28,8 @@ class FolderSyncClientTest {
             assertEquals("Phone", status.peers.single().displayName)
             assertEquals(FolderSharePhase.OFFERED, status.shares.single().phase)
             assertFalse(status.shares.single().expired)
+            assertEquals(PeerConnectionFreshness.FRESH, status.connectionFreshness)
+            assertEquals(PeerConnectionState.DISCONNECTED, status.shares.single().peerConnection)
 
             client.offerFolder(base, "token", PEER, UUID.fromString(FOLDER), "Photos", "/storage/emulated/0/Photos")
             client.acceptFolder(base, "token", OFFER, "/storage/emulated/0/Shared")
@@ -84,15 +88,36 @@ class FolderSyncClientTest {
         }
     }
 
+    @Test
+    fun olderStatusDefaultsReachabilityToUnknownButMalformedValuesFail() {
+        val legacy = STATUS
+            .replace(",\"connectionFreshness\":\"fresh\"", "")
+            .replace(",\"peerConnection\":\"disconnected\"", "")
+        val server = MockWebServer().apply {
+            enqueue(MockResponse().setBody(legacy))
+            enqueue(MockResponse().setBody(STATUS.replace("\"disconnected\"", "\"invented\"")))
+            start()
+        }
+        try {
+            val base = server.url("/").toString().removeSuffix("/")
+            val old = CovalentNodeClient().folderSyncStatus(base, "token")
+            assertEquals(PeerConnectionFreshness.NEVER_OBSERVED, old.connectionFreshness)
+            assertEquals(PeerConnectionState.UNKNOWN, old.shares.single().peerConnection)
+            assertTrue(runCatching { CovalentNodeClient().folderSyncStatus(base, "token") }.isFailure)
+        } finally {
+            server.shutdown()
+        }
+    }
+
     private companion object {
         const val PEER = "22222222-2222-4222-8222-222222222222"
         const val FOLDER = "11111111-1111-4111-8111-111111111111"
         const val OFFER = "33333333-3333-4333-8333-333333333333"
         const val STATUS = """{
           "schemaVersion":1,"availability":"available","lifecycle":"stopped","issue":null,
-          "healthFreshness":"neverObserved",
+          "healthFreshness":"neverObserved","connectionFreshness":"fresh",
           "peers":[{"peerId":"$PEER","displayName":"Phone"}],
-          "shares":[{"offerId":"$OFFER","folderId":"$FOLDER","label":"Photos","peerId":"$PEER","incoming":true,"phase":"offered","expiresAtUnixMs":4102444800000,"expired":false}],
+          "shares":[{"offerId":"$OFFER","folderId":"$FOLDER","label":"Photos","peerId":"$PEER","incoming":true,"phase":"offered","expiresAtUnixMs":4102444800000,"expired":false,"peerConnection":"disconnected"}],
           "folders":[]
         }"""
         const val MUTATION = """{"schemaVersion":1,"offerId":"$OFFER","lifecycle":"stopped","issue":null}"""

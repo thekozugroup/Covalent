@@ -228,10 +228,30 @@ fn lifecycle_fields(
     }
 }
 
+#[cfg(unix)]
+fn peer_connection_field(
+    phase: crate::sync_engine::SharingPhase,
+    observed: crate::sync_engine::PeerConnectionState,
+) -> &'static str {
+    use crate::sync_engine::{PeerConnectionState, SharingPhase};
+    match phase {
+        SharingPhase::Paused => "paused",
+        SharingPhase::Ready => match observed {
+            PeerConnectionState::Unknown => "unknown",
+            PeerConnectionState::Connected => "connected",
+            PeerConnectionState::Disconnected => "disconnected",
+            PeerConnectionState::Paused => "paused",
+        },
+        SharingPhase::Offered | SharingPhase::AwaitingCommit | SharingPhase::Removed => "unknown",
+    }
+}
+
 #[cfg(all(test, unix))]
 mod lifecycle_tests {
-    use super::lifecycle_fields;
-    use crate::sync_engine::{FolderSyncIssue, FolderSyncLifecycle};
+    use super::{lifecycle_fields, peer_connection_field};
+    use crate::sync_engine::{
+        FolderSyncIssue, FolderSyncLifecycle, PeerConnectionState, SharingPhase,
+    };
 
     #[test]
     fn initial_scan_states_have_distinct_stable_wire_values() {
@@ -246,6 +266,28 @@ mod lifecycle_tests {
             ("needsAttention", Some("initialScan"))
         );
     }
+
+    #[test]
+    fn pending_and_removed_shares_never_inherit_an_active_peer_connection() {
+        for phase in [
+            SharingPhase::Offered,
+            SharingPhase::AwaitingCommit,
+            SharingPhase::Removed,
+        ] {
+            assert_eq!(
+                peer_connection_field(phase, PeerConnectionState::Connected),
+                "unknown"
+            );
+        }
+        assert_eq!(
+            peer_connection_field(SharingPhase::Paused, PeerConnectionState::Connected),
+            "paused"
+        );
+        assert_eq!(
+            peer_connection_field(SharingPhase::Ready, PeerConnectionState::Disconnected),
+            "disconnected"
+        );
+    }
 }
 
 #[derive(Serialize)]
@@ -256,6 +298,7 @@ pub(crate) struct SyncStatusResponse {
     lifecycle: &'static str,
     issue: Option<&'static str>,
     health_freshness: &'static str,
+    connection_freshness: &'static str,
     peers: Vec<PeerResponse>,
     shares: Vec<ShareResponse>,
     folders: Vec<FolderResponse>,
@@ -279,6 +322,7 @@ struct ShareResponse {
     phase: &'static str,
     expires_at_unix_ms: Option<u64>,
     expired: bool,
+    peer_connection: &'static str,
 }
 
 #[derive(Serialize)]
@@ -303,6 +347,7 @@ impl SyncStatusResponse {
             lifecycle: "stopped",
             issue,
             health_freshness: "neverObserved",
+            connection_freshness: "neverObserved",
             peers: Vec::new(),
             shares: Vec::new(),
             folders: Vec::new(),
@@ -318,7 +363,8 @@ pub(crate) async fn status(
     #[cfg(unix)]
     {
         use crate::sync_engine::{
-            FolderHealthFreshness, FolderLifecycle, FolderSyncRuntimeState, SharingPhase,
+            FolderHealthFreshness, FolderLifecycle, FolderSyncRuntimeState,
+            PeerConnectionFreshness, SharingPhase,
         };
         let service = match &state.folder_sync {
             FolderSyncRuntimeState::NotPackaged => {
@@ -375,6 +421,10 @@ pub(crate) async fn status(
                 expired: share
                     .expires_at_unix_ms
                     .is_some_and(|expires| now >= expires),
+                peer_connection: peer_connection_field(
+                    share.phase,
+                    snapshot.peer_connection(share.peer_id),
+                ),
                 phase: match share.phase {
                     SharingPhase::Offered => "offered",
                     SharingPhase::AwaitingCommit => "awaitingCommit",
@@ -427,6 +477,11 @@ pub(crate) async fn status(
                 FolderHealthFreshness::NeverObserved => "neverObserved",
                 FolderHealthFreshness::Fresh => "fresh",
                 FolderHealthFreshness::Stale => "stale",
+            },
+            connection_freshness: match snapshot.connection_freshness() {
+                PeerConnectionFreshness::NeverObserved => "neverObserved",
+                PeerConnectionFreshness::Fresh => "fresh",
+                PeerConnectionFreshness::Stale => "stale",
             },
             shares,
             folders,

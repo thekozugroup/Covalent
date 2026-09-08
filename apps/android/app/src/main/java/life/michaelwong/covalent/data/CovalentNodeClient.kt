@@ -31,6 +31,8 @@ import org.json.JSONObject
 import life.michaelwong.covalent.model.DiscoveryCandidate
 import life.michaelwong.covalent.model.FolderHealth
 import life.michaelwong.covalent.model.FolderHealthFreshness
+import life.michaelwong.covalent.model.PeerConnectionFreshness
+import life.michaelwong.covalent.model.PeerConnectionState
 import life.michaelwong.covalent.model.FolderShare
 import life.michaelwong.covalent.model.FolderSharePhase
 import life.michaelwong.covalent.model.FolderSyncAvailability
@@ -894,6 +896,7 @@ private fun JSONObject.toFolderSyncStatus(): FolderSyncStatus {
     requireJsonKeys(
         this,
         setOf("schemaVersion", "availability", "lifecycle", "issue", "healthFreshness", "peers", "shares", "folders"),
+        setOf("connectionFreshness"),
     )
     check(getInt("schemaVersion") == COVALENT_PROTOCOL_VERSION)
     val peerValues = getJSONArray("peers")
@@ -919,6 +922,7 @@ private fun JSONObject.toFolderSyncStatus(): FolderSyncStatus {
             requireJsonKeys(
                 share,
                 setOf("offerId", "folderId", "label", "peerId", "incoming", "phase", "expiresAtUnixMs", "expired"),
+                setOf("peerConnection"),
             )
             FolderShare(
                 offerId = requireUuid(share.getString("offerId"), "folder offer ID"),
@@ -938,6 +942,13 @@ private fun JSONObject.toFolderSyncStatus(): FolderSyncStatus {
                 },
                 expiresAtUnixMs = share.optionalLong("expiresAtUnixMs")?.also { check(it > 0) },
                 expired = share.getBoolean("expired"),
+                peerConnection = when (if (share.has("peerConnection")) share.getString("peerConnection") else "unknown") {
+                    "unknown" -> PeerConnectionState.UNKNOWN
+                    "connected" -> PeerConnectionState.CONNECTED
+                    "disconnected" -> PeerConnectionState.DISCONNECTED
+                    "paused" -> PeerConnectionState.PAUSED
+                    else -> error("The node returned an unknown peer connection state.")
+                },
             )
         }
     }
@@ -985,6 +996,12 @@ private fun JSONObject.toFolderSyncStatus(): FolderSyncStatus {
             "stale" -> FolderHealthFreshness.STALE
             else -> error("The node returned an unknown folder-health freshness.")
         },
+        connectionFreshness = when (if (has("connectionFreshness")) getString("connectionFreshness") else "neverObserved") {
+            "neverObserved" -> PeerConnectionFreshness.NEVER_OBSERVED
+            "fresh" -> PeerConnectionFreshness.FRESH
+            "stale" -> PeerConnectionFreshness.STALE
+            else -> error("The node returned an unknown peer connection freshness.")
+        },
         peers = peers,
         shares = shares,
         folders = folders,
@@ -1012,12 +1029,18 @@ private fun folderSyncIssue(value: String): FolderSyncIssue = when (value) {
     else -> error("The node returned an unknown folder-sync issue.")
 }
 
-private fun requireJsonKeys(value: JSONObject, expected: Set<String>) {
+private fun requireJsonKeys(
+    value: JSONObject,
+    expected: Set<String>,
+    optional: Set<String> = emptySet(),
+) {
     val actual = buildSet {
         val keys = value.keys()
         while (keys.hasNext()) add(keys.next())
     }
-    check(actual == expected) { "The node returned an unexpected folder-sync response." }
+    check(actual.containsAll(expected) && actual.all { it in expected || it in optional }) {
+        "The node returned an unexpected folder-sync response."
+    }
 }
 
 private val FOLDER_STATES = setOf(

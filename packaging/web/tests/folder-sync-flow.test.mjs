@@ -26,6 +26,7 @@ function status(overrides = {}) {
     lifecycle: "running",
     issue: null,
     healthFreshness: "fresh",
+    connectionFreshness: "fresh",
     peers: [{ peerId, displayName: "Kitchen server" }],
     shares: [],
     folders: [],
@@ -43,6 +44,7 @@ function share(overrides = {}) {
     phase: "offered",
     expiresAtUnixMs: 10,
     expired: false,
+    peerConnection: "unknown",
     ...overrides,
   };
 }
@@ -219,6 +221,14 @@ test("folder status decoding rejects malformed and oversized responses", () => {
     () => folders.requireStatus(status({ shares: [share({ expired: "false" })] })),
     /folder sync guidance/,
   );
+  assert.throws(
+    () => folders.requireStatus(status({ connectionFreshness: null })),
+    /folder sync guidance/,
+  );
+  assert.throws(
+    () => folders.requireStatus(status({ shares: [share({ peerConnection: null })] })),
+    /folder sync guidance/,
+  );
 });
 
 test("folder response bytes are bounded before JSON parsing", async () => {
@@ -231,8 +241,8 @@ test("folder response bytes are bounded before JSON parsing", async () => {
   await assert.rejects(folders.readJson(oversized), /folder sync guidance/);
 });
 
-test("idle health only claims local folder readiness and never transfer completion", () => {
-  const readyShare = share({ incoming: false, phase: "ready", expiresAtUnixMs: null });
+test("fresh reachability names the peer without claiming transfer completion", () => {
+  const readyShare = share({ incoming: false, phase: "ready", expiresAtUnixMs: null, peerConnection: "connected" });
   const decoded = folders.requireStatus(status({
     shares: [readyShare],
     folders: [{
@@ -246,18 +256,36 @@ test("idle health only claims local folder readiness and never transfer completi
       watchError: false,
     }],
   }));
-  assert.deepEqual(folders.shareView(decoded, decoded.shares[0]), { kind: "ready", text: "Folder ready" });
+  assert.deepEqual(folders.shareView(decoded, decoded.shares[0]), { kind: "ready", text: "Connected to Kitchen server" });
   assert.doesNotMatch(folders.shareView(decoded, decoded.shares[0]).text, /up to date|complete/i);
 
   const unknown = folders.requireStatus(status({
-    healthFreshness: "stale",
+    connectionFreshness: "stale",
     shares: [readyShare],
     folders: decoded.folders,
   }));
   assert.deepEqual(folders.shareView(unknown, unknown.shares[0]), {
     kind: "unknown",
-    text: "Current folder health unknown",
+    text: "Connection status unknown",
   });
+
+  const disconnected = folders.requireStatus(status({
+    shares: [share({ ...readyShare, peerConnection: "disconnected" })],
+    folders: decoded.folders,
+  }));
+  assert.deepEqual(folders.shareView(disconnected, disconnected.shares[0]), {
+    kind: "waiting", text: "Waiting for Kitchen server",
+  });
+});
+
+test("older status safely defaults new reachability fields to unknown", () => {
+  const legacyShare = share({ phase: "ready" });
+  delete legacyShare.peerConnection;
+  const legacy = status({ shares: [legacyShare] });
+  delete legacy.connectionFreshness;
+  const decoded = folders.requireStatus(legacy);
+  assert.equal(decoded.connectionFreshness, "neverObserved");
+  assert.equal(decoded.shares[0].peerConnection, "unknown");
 });
 
 test("initial scanning reports local checking before offered or ready phases", () => {

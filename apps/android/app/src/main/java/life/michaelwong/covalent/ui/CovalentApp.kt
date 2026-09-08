@@ -3143,6 +3143,10 @@ private fun Settings(
     val lanEnabled = state.status?.lanDiscovery == true
     var confirmImport by remember { mutableStateOf(false) }
     var confirmRecoveryRetry by remember { mutableStateOf(false) }
+    var showOpenSourceNotices by remember { mutableStateOf(false) }
+    if (showOpenSourceNotices) {
+        OpenSourceNoticesDialog { showOpenSourceNotices = false }
+    }
     FormPage(
         modifier,
         stringResource(R.string.settings_title),
@@ -3312,6 +3316,19 @@ private fun Settings(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        HorizontalDivider()
+        SectionTitle(stringResource(R.string.open_source_notices_title))
+        Text(
+            stringResource(R.string.open_source_notices_detail),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedButton(
+            modifier = Modifier.testTag("settings.openSourceNotices"),
+            onClick = { showOpenSourceNotices = true },
+        ) {
+            Text(stringResource(R.string.action_view_open_source_notices))
+        }
     }
 }
 

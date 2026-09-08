@@ -147,8 +147,11 @@ public actor NodeClient {
         )
     }
 
-      public func folderSyncStatus() async throws -> FolderSyncStatus {
-      try await send(path: "api/v1/sync/status")
+    public func folderSyncStatus() async throws -> FolderSyncStatus {
+      let status: FolderSyncStatus = try await send(path: "api/v1/sync/status")
+      guard ["neverObserved", "fresh", "stale"].contains(status.connectionFreshness)
+      else { throw NodeClientError.invalidResponse }
+      return status
     }
 
     public func offerFolder(_ request: FolderOfferRequest) async throws -> FolderSyncMutation {

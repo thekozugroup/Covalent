@@ -66,7 +66,7 @@ fi
 # `:app:buildAndroidJni`, which cross-compiles the Rust crates through the NDK,
 # so the crates and the Cargo lockfile are build inputs of the Android artifacts
 # exactly as much as apps/android is.
-android_build_inputs="apps/android crates packaging/sync-engine Cargo.toml Cargo.lock rust-toolchain.toml scripts/build-android-jni.sh scripts/build-android-sync-engine.sh scripts/android-native-budgets.sh scripts/check-android-native-package.sh scripts/test-android-native-package.sh"
+android_build_inputs="apps/android crates packaging/sync-engine Cargo.toml Cargo.lock rust-toolchain.toml LICENSE docs/licenses/sync-engine/OFL-1.1.txt scripts/build-android-jni.sh scripts/build-android-sync-engine.sh scripts/collect-go-target-license-inventory.py scripts/collect-sync-engine-notices.py scripts/android-native-budgets.sh scripts/check-android-native-package.sh scripts/test-android-native-package.sh"
 android_prebuild_stamp="$repo_root/apps/android/app/build/covalent-prebuild-stamp"
 
 # Fingerprint every tracked and untracked nonignored build input by content,

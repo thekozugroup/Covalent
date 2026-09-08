@@ -113,7 +113,7 @@ struct MacFoldersView: View {
           Text(peerName(for: share, status: status))
             .font(.subheadline)
             .foregroundStyle(.secondary)
-          Text(state.label)
+          Text(status.displayLabel(for: share))
             .font(.subheadline)
             .foregroundStyle(
               state == .needsAttention || state == .invitationExpired ? .red : .secondary)

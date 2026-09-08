@@ -1020,6 +1020,7 @@ mod tests {
         assert_eq!(first["availability"], "available");
         assert_eq!(first["lifecycle"], "stopped");
         assert_eq!(first["healthFreshness"], "neverObserved");
+        assert_eq!(first["connectionFreshness"], "neverObserved");
         assert_eq!(first["shares"], serde_json::json!([]));
         let root = directory.path().join("folder-sync");
         let identity = fs::read(root.join("engine-identity.v1")).unwrap();

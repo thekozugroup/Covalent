@@ -5,6 +5,7 @@
 //! the journal made it durable. Worker failure after that point is reported in
 //! the returned lifecycle and never rolls the decision back.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
@@ -20,9 +21,9 @@ use uuid::Uuid;
 
 use super::controller::InitialScanTask;
 use super::{
-    EngineInstallation, EngineSessionError, EngineSessionSettings, FolderHealth,
-    FolderSharingJournal, ManagedEngineSession, ShareSummary, SharingError, StopOutcome,
-    VerifiedEngineExecutable,
+    EngineInstallation, EnginePeerConnection, EnginePeerConnectionState, EngineSessionError,
+    EngineSessionSettings, FolderHealth, FolderSharingJournal, ManagedEngineSession, ShareSummary,
+    SharingError, StopOutcome, VerifiedEngineExecutable,
 };
 
 const HEALTH_INTERVAL: Duration = Duration::from_secs(5);
@@ -55,6 +56,24 @@ pub enum FolderHealthFreshness {
     NeverObserved,
     Fresh,
     Stale,
+}
+
+/// Whether the cached peer connection observation describes the current
+/// running worker. Stale observations never retain a connected claim.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PeerConnectionFreshness {
+    NeverObserved,
+    Fresh,
+    Stale,
+}
+
+/// Redacted connection state for one authenticated Covalent peer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PeerConnectionState {
+    Unknown,
+    Connected,
+    Disconnected,
+    Paused,
 }
 
 /// A pre-commit service failure. Post-commit failures are represented by
@@ -116,6 +135,8 @@ pub struct FolderSyncStatus {
     shares: Vec<ShareSummary>,
     folder_health: Vec<FolderHealth>,
     health_freshness: FolderHealthFreshness,
+    peer_connections: BTreeMap<DeviceId, PeerConnectionState>,
+    connection_freshness: PeerConnectionFreshness,
 }
 
 impl FolderSyncStatus {
@@ -139,6 +160,24 @@ impl FolderSyncStatus {
     #[must_use]
     pub fn health_freshness(&self) -> FolderHealthFreshness {
         self.health_freshness
+    }
+
+    /// Return the fresh redacted state for one Covalent peer. An absent or
+    /// stale observation is always unknown.
+    #[must_use]
+    pub fn peer_connection(&self, peer: DeviceId) -> PeerConnectionState {
+        if self.connection_freshness != PeerConnectionFreshness::Fresh {
+            return PeerConnectionState::Unknown;
+        }
+        self.peer_connections
+            .get(&peer)
+            .copied()
+            .unwrap_or(PeerConnectionState::Unknown)
+    }
+
+    #[must_use]
+    pub fn connection_freshness(&self) -> PeerConnectionFreshness {
+        self.connection_freshness
     }
 }
 
@@ -226,9 +265,17 @@ impl Session {
         }
     }
 
-    async fn health(&mut self) -> Result<Vec<FolderHealth>, ()> {
+    async fn health(
+        &mut self,
+    ) -> (
+        Result<Vec<FolderHealth>, ()>,
+        Result<Vec<EnginePeerConnection>, ()>,
+    ) {
         match self {
-            Self::Production(session) => session.folder_health().await.map_err(|_| ()),
+            Self::Production(session) => {
+                let (folders, connections) = session.health_observation().await;
+                (folders.map_err(|_| ()), connections.map_err(|_| ()))
+            }
             #[cfg(test)]
             Self::Test(session) => session.health().await,
         }
@@ -245,6 +292,8 @@ struct ServiceInner {
     restart_after_stop: bool,
     folder_health: Vec<FolderHealth>,
     health_freshness: FolderHealthFreshness,
+    peer_connections: BTreeMap<DeviceId, PeerConnectionState>,
+    connection_freshness: PeerConnectionFreshness,
 }
 
 struct ServiceShared {
@@ -320,6 +369,8 @@ impl FolderSyncService {
                 restart_after_stop: false,
                 folder_health: Vec::new(),
                 health_freshness: FolderHealthFreshness::NeverObserved,
+                peer_connections: BTreeMap::new(),
+                connection_freshness: PeerConnectionFreshness::NeverObserved,
             }),
             launcher,
             engine,
@@ -529,6 +580,8 @@ impl FolderSyncService {
             shares,
             folder_health: inner.folder_health.clone(),
             health_freshness: inner.health_freshness,
+            peer_connections: inner.peer_connections.clone(),
+            connection_freshness: inner.connection_freshness,
         })
     }
 
@@ -680,12 +733,16 @@ async fn apply_desired(
         inner.applied_settings = None;
         inner.folder_health.clear();
         inner.health_freshness = FolderHealthFreshness::NeverObserved;
+        inner.peer_connections.clear();
+        inner.connection_freshness = PeerConnectionFreshness::NeverObserved;
         inner.lifecycle = FolderSyncLifecycle::Stopped;
         return Ok(());
     }
     let retained_settings = settings.clone();
     inner.folder_health.clear();
     inner.health_freshness = FolderHealthFreshness::NeverObserved;
+    inner.peer_connections.clear();
+    inner.connection_freshness = PeerConnectionFreshness::NeverObserved;
     // Cancellation leaves a visible retryable problem while the reaper
     // releases the startup lease; it is not an ordinary stopped session.
     inner.lifecycle = FolderSyncLifecycle::NeedsAttention(FolderSyncIssue::WorkerLaunch);
@@ -730,6 +787,10 @@ async fn quiesce(
     if inner.health_freshness == FolderHealthFreshness::Fresh {
         inner.health_freshness = FolderHealthFreshness::Stale;
     }
+    if inner.connection_freshness == PeerConnectionFreshness::Fresh {
+        inner.connection_freshness = PeerConnectionFreshness::Stale;
+    }
+    inner.peer_connections.clear();
     inner.after_stop = after_stop;
     inner.restart_after_stop = restart_after_stop;
     inner.lifecycle = FolderSyncLifecycle::StillStopping;
@@ -815,10 +876,48 @@ async fn check_health(shared: &ServiceShared, inner: &mut ServiceInner) {
         }
         return;
     }
-    let observation = match &mut inner.session {
+    let (observation, connections) = match &mut inner.session {
         Some(session) => session.health().await,
-        None => Err(()),
+        None => (Err(()), Err(())),
     };
+    let current = match inner.journal.desired_settings() {
+        Ok(current) => current,
+        Err(_) => {
+            let _ = quiesce(
+                inner,
+                FolderSyncLifecycle::NeedsAttention(FolderSyncIssue::Journal),
+                false,
+            )
+            .await;
+            return;
+        }
+    };
+    if inner.applied_settings.as_ref() != Some(&current) {
+        if quiesce(inner, FolderSyncLifecycle::Stopped, true)
+            .await
+            .is_ok()
+            && let Err(issue) = start_desired(shared, inner).await
+        {
+            inner.lifecycle = FolderSyncLifecycle::NeedsAttention(issue);
+        }
+        return;
+    }
+    match connections {
+        Ok(connections) => match map_peer_connections(&inner.journal, connections) {
+            Ok(connections) => {
+                inner.peer_connections = connections;
+                inner.connection_freshness = PeerConnectionFreshness::Fresh;
+            }
+            Err(()) => {
+                inner.peer_connections.clear();
+                inner.connection_freshness = stale_connection_freshness(inner.connection_freshness);
+            }
+        },
+        Err(()) => {
+            inner.peer_connections.clear();
+            inner.connection_freshness = stale_connection_freshness(inner.connection_freshness);
+        }
+    }
     match observation {
         Ok(observation) => {
             let reported_error = observation.iter().any(FolderHealth::has_reported_errors);
@@ -840,6 +939,40 @@ async fn check_health(shared: &ServiceShared, inner: &mut ServiceInner) {
         false,
     )
     .await;
+}
+
+fn stale_connection_freshness(current: PeerConnectionFreshness) -> PeerConnectionFreshness {
+    if current == PeerConnectionFreshness::NeverObserved {
+        PeerConnectionFreshness::NeverObserved
+    } else {
+        PeerConnectionFreshness::Stale
+    }
+}
+
+fn map_peer_connections(
+    journal: &FolderSharingJournal,
+    connections: Vec<EnginePeerConnection>,
+) -> Result<BTreeMap<DeviceId, PeerConnectionState>, ()> {
+    let mut expected = journal.active_engine_peers().map_err(|_| ())?;
+    if connections.len() != expected.len() {
+        return Err(());
+    }
+    let mut result = BTreeMap::new();
+    for connection in connections {
+        let peer = expected.remove(connection.id()).ok_or(())?;
+        let state = match connection.state() {
+            EnginePeerConnectionState::Connected => PeerConnectionState::Connected,
+            EnginePeerConnectionState::Disconnected => PeerConnectionState::Disconnected,
+            EnginePeerConnectionState::Paused => PeerConnectionState::Paused,
+        };
+        if result.insert(peer, state).is_some() {
+            return Err(());
+        }
+    }
+    if !expected.is_empty() {
+        return Err(());
+    }
+    Ok(result)
 }
 
 async fn advance_initial_scan(inner: &mut ServiceInner) {
@@ -947,12 +1080,15 @@ struct TestBackendState {
     fail_promotions: usize,
     fail_health: bool,
     health_observation: Vec<FolderHealth>,
+    fail_connections: bool,
+    connection_states: Vec<EnginePeerConnectionState>,
     launches: usize,
     active: usize,
     maximum_active: usize,
     close_calls: usize,
     stop_calls: usize,
     health_calls: usize,
+    connection_calls: usize,
     scan_calls: usize,
     promotions: usize,
     launched_folder_counts: Vec<usize>,
@@ -994,6 +1130,14 @@ impl TestBackend {
         self.state.lock().unwrap().health_observation = observation;
     }
 
+    pub(super) fn set_connection_failure(&self, fail: bool) {
+        self.state.lock().unwrap().fail_connections = fail;
+    }
+
+    pub(super) fn set_connection_states(&self, states: Vec<EnginePeerConnectionState>) {
+        self.state.lock().unwrap().connection_states = states;
+    }
+
     pub(super) fn snapshot(&self) -> TestBackendSnapshot {
         let state = self.state.lock().unwrap();
         TestBackendSnapshot {
@@ -1003,6 +1147,7 @@ impl TestBackend {
             close_calls: state.close_calls,
             stop_calls: state.stop_calls,
             health_calls: state.health_calls,
+            connection_calls: state.connection_calls,
             scan_calls: state.scan_calls,
             promotions: state.promotions,
             launched_folder_counts: state.launched_folder_counts.clone(),
@@ -1033,6 +1178,11 @@ impl TestBackend {
         Ok(TestSession {
             backend: Arc::clone(self),
             closed: false,
+            peer_ids: settings
+                .peers
+                .iter()
+                .map(|peer| peer.id().clone())
+                .collect(),
         })
     }
 }
@@ -1045,6 +1195,7 @@ pub(super) struct TestBackendSnapshot {
     pub(super) close_calls: usize,
     pub(super) stop_calls: usize,
     pub(super) health_calls: usize,
+    pub(super) connection_calls: usize,
     pub(super) scan_calls: usize,
     pub(super) promotions: usize,
     pub(super) launched_folder_counts: Vec<usize>,
@@ -1054,6 +1205,7 @@ pub(super) struct TestBackendSnapshot {
 struct TestSession {
     backend: Arc<TestBackend>,
     closed: bool,
+    peer_ids: Vec<super::config::EngineDeviceId>,
 }
 
 #[cfg(test)]
@@ -1121,15 +1273,42 @@ impl TestSession {
         }
     }
 
-    async fn health(&mut self) -> Result<Vec<FolderHealth>, ()> {
+    async fn health(
+        &mut self,
+    ) -> (
+        Result<Vec<FolderHealth>, ()>,
+        Result<Vec<EnginePeerConnection>, ()>,
+    ) {
         let mut state = self.backend.state.lock().unwrap();
         state.health_calls += 1;
+        state.connection_calls += 1;
         self.backend.health_observed.notify_one();
-        if state.fail_health {
+        let folders = if state.fail_health {
             Err(())
         } else {
             Ok(state.health_observation.clone())
-        }
+        };
+        let connections = if state.fail_connections {
+            Err(())
+        } else {
+            let states = if state.connection_states.is_empty() {
+                vec![EnginePeerConnectionState::Disconnected; self.peer_ids.len()]
+            } else {
+                state.connection_states.clone()
+            };
+            if states.len() != self.peer_ids.len() {
+                Err(())
+            } else {
+                Ok(self
+                    .peer_ids
+                    .iter()
+                    .cloned()
+                    .zip(states)
+                    .map(|(id, state)| EnginePeerConnection::new(id, state))
+                    .collect())
+            }
+        };
+        (folders, connections)
     }
 }
 

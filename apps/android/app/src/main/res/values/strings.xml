@@ -53,7 +53,7 @@
     <string name="folder_sync_subtitle">Keep one folder in sync with a paired device. You choose the folder and device explicitly.</string>
     <string name="folder_sync_personal_build_only">Direct folder sync is available only in the personal debug build. The production app does not request broad file access.</string>
     <string name="folder_sync_access_title">Allow access for shared folders</string>
-    <string name="folder_sync_access_explanation">The maintained sync engine needs ordinary file paths and cannot use Android’s document-provider links. Android’s “all files” setting is broad: it lets this personal build read and change shared storage. Covalent does not request it at startup or use it for backups. Continue only if you want direct folder sync on this phone.</string>
+    <string name="folder_sync_access_explanation">Folder sync needs ordinary file paths, which Android’s folder picker does not provide. Android’s “all files” setting is broad: it lets this personal build read and change shared storage. Covalent does not request it at startup or use it for backups. Continue only if you want direct folder sync on this phone.</string>
     <string name="folder_sync_open_special_access">Open Android special access</string>
     <string name="folder_sync_enable">Start folder sync on this phone</string>
     <string name="folder_sync_host_unavailable">Android could not durably enable folder sync.</string>
@@ -509,4 +509,18 @@
     </plurals>
     <string name="recovery_show_details">Show technical details</string>
     <string name="recovery_hide_details">Hide technical details</string>
+    <string name="folder_sync_connection_checking">Checking folder</string>
+    <string name="folder_sync_connection_paused">Paused</string>
+    <string name="folder_sync_connection_attention">Needs attention</string>
+    <string name="folder_sync_waiting_other_device">Waiting for other device</string>
+    <string name="folder_sync_connection_offline">Folder sync offline</string>
+    <string name="folder_sync_connection_syncing">Syncing</string>
+    <string name="folder_sync_waiting_for_device">Waiting for %1$s</string>
+    <string name="folder_sync_connected_to_device">Connected to %1$s</string>
+    <string name="folder_sync_connection_unknown">Connection status unknown</string>
+    <string name="open_source_notices_title">Open Source Notices</string>
+    <string name="open_source_notices_detail">Licenses and notices for the open source software included with Covalent.</string>
+    <string name="open_source_notices_error">Covalent could not verify the notices included in this app.</string>
+    <string name="action_view_open_source_notices">View notices</string>
+    <string name="action_close">Close</string>
 </resources>

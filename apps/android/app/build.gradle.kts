@@ -218,6 +218,11 @@ val buildAndroidSyncEngine = tasks.register<Exec>("buildAndroidSyncEngine") {
     group = "build"
     description = "Builds the exact Syncthing v2.1.3 worker and reviewed guardian for Android."
     workingDir = covalentRepoRoot
+    doFirst {
+        val generatedRoot = syncEngineGeneratedRoot.get().asFile
+        project.delete(generatedRoot)
+        check(generatedRoot.parentFile.mkdirs() || generatedRoot.parentFile.isDirectory)
+    }
     val checkedSource = syncthingSourceDir
     if (checkedSource == null) {
         commandLine("false")
@@ -239,7 +244,11 @@ val buildAndroidSyncEngine = tasks.register<Exec>("buildAndroidSyncEngine") {
             },
             covalentRepoRoot.resolve("scripts/build-android-sync-engine.sh"),
             covalentRepoRoot.resolve("scripts/android-native-budgets.sh"),
+            covalentRepoRoot.resolve("scripts/collect-go-target-license-inventory.py"),
+            covalentRepoRoot.resolve("scripts/collect-sync-engine-notices.py"),
             covalentRepoRoot.resolve("packaging/sync-engine/engine-guardian.c"),
+            covalentRepoRoot.resolve("docs/licenses/sync-engine/OFL-1.1.txt"),
+            covalentRepoRoot.resolve("LICENSE"),
         )
     }
     outputs.dir(syncEngineGeneratedRoot)

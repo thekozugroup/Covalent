@@ -1808,7 +1808,7 @@ func realDaemonBackupVerifyAndRestore() async throws {
             request,
             status: 200,
             json: """
-            {"schemaVersion":1,"availability":"available","lifecycle":"running","issue":null,"healthFreshness":"fresh","peers":[{"peerId":"\(peer.uuidString.lowercased())","displayName":"Kitchen Mac"}],"shares":[{"offerId":"\(offer.uuidString.lowercased())","folderId":"\(folder.uuidString.lowercased())","label":"Plans","peerId":"\(peer.uuidString.lowercased())","incoming":true,"phase":"offered","expiresAtUnixMs":1234,"expired":true}],"folders":[]}
+            {"schemaVersion":1,"availability":"available","lifecycle":"running","issue":null,"healthFreshness":"fresh","connectionFreshness":"fresh","peers":[{"peerId":"\(peer.uuidString.lowercased())","displayName":"Kitchen Mac"}],"shares":[{"offerId":"\(offer.uuidString.lowercased())","folderId":"\(folder.uuidString.lowercased())","label":"Plans","peerId":"\(peer.uuidString.lowercased())","incoming":true,"phase":"offered","expiresAtUnixMs":1234,"expired":true,"peerConnection":"disconnected"}],"folders":[]}
             """
         )
     }
@@ -1818,6 +1818,43 @@ func realDaemonBackupVerifyAndRestore() async throws {
     #expect(status.shares[0].expired)
     #expect(status.shares[0].expiresAtUnixMs == 1234)
     #expect(status.displayState(for: status.shares[0]) == .invitationExpired)
+}
+
+@Test func signedPairingInvitationPreservesExactTransportBindingAcrossNativeRoundTrip() throws {
+    let owner = UUID()
+    let object: [String: Any] = [
+        "protocolVersion": 2,
+        "minimumProtocolVersion": 1,
+        "inviterDeviceId": owner.uuidString.lowercased(),
+        "inviterPublicKey": "public-key",
+        "inviterDeviceName": "Kitchen Mac",
+        "invitationId": "invitation-id",
+        "invitationSecret": "invitation-secret",
+        "invitationSecretCommitment": "commitment",
+        "expiresAtUnixMs": 4_102_444_800_000 as UInt64,
+        "endpoints": ["127.0.0.1:8787"],
+        "transportBinding": [
+            "peerId": owner.uuidString.lowercased(),
+            "displayName": "Kitchen Mac",
+            "address": "127.0.0.1:8789",
+            "certificateDer": "Y2VydGlmaWNhdGU",
+            "certificateFingerprint": String(repeating: "a", count: 64),
+        ],
+        "signature": "signed-record",
+    ]
+    let source = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    let invitation = try JSONDecoder().decode(PairingInvitation.self, from: source)
+    let rebound = try #require(invitation.transportBinding)
+    #expect(rebound.peerId == owner)
+    #expect(rebound.displayName == "Kitchen Mac")
+    #expect(rebound.address == "127.0.0.1:8789")
+    #expect(rebound.certificateDer == "Y2VydGlmaWNhdGU")
+    #expect(rebound.certificateFingerprint == String(repeating: "a", count: 64))
+    let encoded = try JSONEncoder().encode(invitation)
+    let roundTrip = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+    let encodedBinding = try #require(roundTrip["transportBinding"] as? [String: Any])
+    let sourceBinding = try #require(object["transportBinding"] as? [String: Any])
+    #expect(NSDictionary(dictionary: encodedBinding).isEqual(to: sourceBinding))
 }
 
 @Test func folderMutationsUseBoundedCanonicalRoutesAndPayloads() async throws {
@@ -1869,7 +1906,8 @@ func realDaemonBackupVerifyAndRestore() async throws {
     )
     let ready = FolderShare(
         offerId: UUID(), folderId: UUID(), label: "Plans", peerId: peer,
-        incoming: false, phase: .ready, expiresAtUnixMs: nil, expired: false
+        incoming: false, phase: .ready, expiresAtUnixMs: nil, expired: false,
+        peerConnection: .connected
     )
     let healthy = FolderHealth(
         folderId: ready.folderId, state: "idle", remainingFiles: 0, remainingBytes: 0,
@@ -1877,11 +1915,13 @@ func realDaemonBackupVerifyAndRestore() async throws {
     )
     let status = FolderSyncStatus(
         availability: "available", lifecycle: "running", issue: nil, healthFreshness: "fresh",
+        connectionFreshness: "fresh",
         peers: [FolderSyncPeer(peerId: peer, displayName: "Kitchen Mac")],
         shares: [offered, ready], folders: [healthy]
     )
     #expect(status.displayState(for: offered) == .waitingForOtherDevice)
     #expect(status.displayState(for: ready) == .folderReady)
+    #expect(status.displayLabel(for: ready) == "Connected to Kitchen Mac")
     #expect(status.displayState(for: ready).label != "Up to date")
 
     let scanning = FolderSyncStatus(
@@ -1900,6 +1940,20 @@ func realDaemonBackupVerifyAndRestore() async throws {
     )
     #expect(scanning.displayState(for: ready) == .checkingFolder)
     #expect(failed.displayState(for: ready) == .needsAttention)
+
+    let disconnected = FolderShare(
+        offerId: ready.offerId, folderId: ready.folderId, label: ready.label, peerId: peer,
+        incoming: false, phase: .ready, expiresAtUnixMs: nil, expired: false,
+        peerConnection: .disconnected
+    )
+    let waiting = FolderSyncStatus(
+        availability: "available", lifecycle: "running", issue: nil, healthFreshness: "fresh",
+        connectionFreshness: "fresh",
+        peers: [FolderSyncPeer(peerId: peer, displayName: "Kitchen Mac")],
+        shares: [disconnected], folders: [healthy]
+    )
+    #expect(waiting.displayState(for: disconnected) == .waitingForConnection)
+    #expect(waiting.displayLabel(for: disconnected) == "Waiting for Kitchen Mac")
 }
 
 @Test func folderInitialScanUsesCheckingStateUntilSafetyGateCompletes() {

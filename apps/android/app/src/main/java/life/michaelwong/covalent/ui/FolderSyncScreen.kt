@@ -45,6 +45,8 @@ import life.michaelwong.covalent.model.FolderShare
 import life.michaelwong.covalent.model.FolderSharePhase
 import life.michaelwong.covalent.model.FolderSyncStatus
 import life.michaelwong.covalent.model.FolderSyncLifecycle
+import life.michaelwong.covalent.model.FolderShareSummary
+import life.michaelwong.covalent.model.summaryFor
 import life.michaelwong.covalent.model.NodeConnection
 import life.michaelwong.covalent.node.EmbeddedNodeManager
 import life.michaelwong.covalent.sync.FolderSyncActions
@@ -333,6 +335,7 @@ internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier =
             }
             items(snapshot.shares, key = FolderShare::offerId) { share ->
                 FolderShareCard(
+                    status = snapshot,
                     share = share,
                     peerName = snapshot.peers.firstOrNull { it.peerId == share.peerId }?.displayName
                         ?: context.getString(R.string.folder_sync_paired_device),
@@ -402,6 +405,7 @@ private fun FolderChooser(
 
 @Composable
 private fun FolderShareCard(
+    status: FolderSyncStatus,
     share: FolderShare,
     peerName: String,
     hasFolder: Boolean,
@@ -411,7 +415,19 @@ private fun FolderShareCard(
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(share.label, fontWeight = FontWeight.SemiBold)
-            Text("$peerName · ${share.phase.name.lowercase()}")
+            val summary = when (status.summaryFor(share)) {
+                FolderShareSummary.INVITATION_EXPIRED -> stringResource(R.string.folder_sync_invitation_expired)
+                FolderShareSummary.PAUSED -> stringResource(R.string.folder_sync_connection_paused)
+                FolderShareSummary.CHECKING -> stringResource(R.string.folder_sync_connection_checking)
+                FolderShareSummary.NEEDS_ATTENTION -> stringResource(R.string.folder_sync_connection_attention)
+                FolderShareSummary.WAITING_FOR_OTHER_DEVICE -> stringResource(R.string.folder_sync_waiting_other_device)
+                FolderShareSummary.OFFLINE -> stringResource(R.string.folder_sync_connection_offline)
+                FolderShareSummary.SYNCING -> stringResource(R.string.folder_sync_connection_syncing)
+                FolderShareSummary.WAITING_FOR_PEER -> stringResource(R.string.folder_sync_waiting_for_device, peerName)
+                FolderShareSummary.CONNECTED -> stringResource(R.string.folder_sync_connected_to_device, peerName)
+                FolderShareSummary.CONNECTION_UNKNOWN -> stringResource(R.string.folder_sync_connection_unknown)
+            }
+            Text(summary)
             if (share.expired) Text(stringResource(R.string.folder_sync_invitation_expired), color = MaterialTheme.colorScheme.error)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (share.incoming && share.phase == FolderSharePhase.OFFERED) {

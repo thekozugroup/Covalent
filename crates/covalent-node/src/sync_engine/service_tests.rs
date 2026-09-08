@@ -174,6 +174,54 @@ async fn make_ready(
 }
 
 #[tokio::test]
+async fn disconnect_reconnect_and_unknown_do_not_stop_a_healthy_worker() {
+    let first = Device::new("Mac", 44209);
+    let second = Device::new("Server", 44210);
+    pair(&first, &second);
+    let first_backend = Arc::new(TestBackend::default());
+    let second_backend = Arc::new(TestBackend::default());
+    let first_service = first.service(first.journal(), Arc::clone(&first_backend));
+    let second_service = second.service(second.journal(), Arc::clone(&second_backend));
+    make_ready(&first, &second, &first_service, &second_service).await;
+
+    first_backend.set_connection_states(vec![EnginePeerConnectionState::Disconnected]);
+    let disconnected = first_service.status().await.unwrap();
+    assert_eq!(disconnected.lifecycle(), FolderSyncLifecycle::Running);
+    assert_eq!(
+        disconnected.connection_freshness(),
+        PeerConnectionFreshness::Fresh
+    );
+    assert_eq!(
+        disconnected.peer_connection(second.engine.device_id()),
+        PeerConnectionState::Disconnected
+    );
+
+    first_backend.set_connection_states(vec![EnginePeerConnectionState::Connected]);
+    let connected = first_service.status().await.unwrap();
+    assert_eq!(
+        connected.peer_connection(second.engine.device_id()),
+        PeerConnectionState::Connected
+    );
+
+    first_backend.set_connection_failure(true);
+    let unavailable = first_service.status().await.unwrap();
+    assert_eq!(unavailable.lifecycle(), FolderSyncLifecycle::Running);
+    assert_eq!(
+        unavailable.connection_freshness(),
+        PeerConnectionFreshness::Stale
+    );
+    assert_eq!(
+        unavailable.peer_connection(second.engine.device_id()),
+        PeerConnectionState::Unknown
+    );
+    let calls = first_backend.snapshot();
+    assert_eq!(calls.health_calls, 3);
+    assert_eq!(calls.connection_calls, 3);
+    assert_eq!(calls.stop_calls, 0);
+    assert_eq!(calls.close_calls, 0);
+}
+
+#[tokio::test]
 async fn empty_consent_never_launches_a_helper() {
     let device = Device::new("Mac", 44211);
     let backend = Arc::new(TestBackend::default());

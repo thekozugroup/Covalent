@@ -6,6 +6,9 @@
 
 mod client;
 pub mod config;
+mod connection;
+#[cfg(test)]
+mod connection_tests;
 mod controller;
 #[cfg(test)]
 mod controller_tests;
@@ -26,6 +29,9 @@ mod state;
 mod supervisor;
 
 pub use client::{EngineApiClient, EngineApiError, EngineEndpoint};
+pub use connection::{
+    EnginePeerConnection, EnginePeerConnectionState, PeerConnectionError, collect_peer_connections,
+};
 pub use health::{FolderHealth, FolderHealthError, FolderLifecycle, collect_folder_health};
 pub use host::FolderSyncRuntimeConfig;
 pub(crate) use host::FolderSyncRuntimeState;
@@ -47,7 +53,8 @@ pub use recovery::{
 };
 pub use service::{
     CommittedMutation, FolderHealthFreshness, FolderSyncIssue, FolderSyncLifecycle,
-    FolderSyncService, FolderSyncServiceError, FolderSyncStatus,
+    FolderSyncService, FolderSyncServiceError, FolderSyncStatus, PeerConnectionFreshness,
+    PeerConnectionState,
 };
 pub use sharing::{
     FolderShareDelivery, FolderShareRecord, FolderSharingJournal, ShareSummary, SharingError,

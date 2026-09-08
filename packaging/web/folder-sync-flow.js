@@ -13,6 +13,7 @@
   const LIFECYCLES = new Set(["stopped", "running", "stillStopping", "needsAttention", "initialScanning"]);
   const AVAILABILITY = new Set(["available", "notPackaged", "needsAttention"]);
   const FRESHNESS = new Set(["neverObserved", "fresh", "stale"]);
+  const CONNECTION_STATES = new Set(["unknown", "connected", "disconnected", "paused"]);
   const PHASES = new Set(["offered", "awaitingCommit", "ready", "paused", "removed"]);
   const HEALTH_STATES = new Set([
     "starting", "idle", "scanning", "scan-waiting", "sync-waiting", "sync-preparing",
@@ -108,8 +109,11 @@
 
   function requireStatus(value) {
     const status = object(value, "The node returned an invalid folder status.");
+    const connectionFreshness = Object.prototype.hasOwnProperty.call(status, "connectionFreshness")
+      ? status.connectionFreshness : "neverObserved";
     if (status.schemaVersion !== 1 || !AVAILABILITY.has(status.availability)
       || !LIFECYCLES.has(status.lifecycle) || !FRESHNESS.has(status.healthFreshness)
+      || !FRESHNESS.has(connectionFreshness)
       || !(status.issue === null || ISSUES.has(status.issue))) {
       throw guidance("The node returned a folder status this console cannot safely read.");
     }
@@ -122,7 +126,10 @@
     });
     const shares = boundedArray(status.shares, "The node returned too many shared folders.").map((value) => {
       const share = object(value, "The node returned an invalid shared folder.");
-      if (!PHASES.has(share.phase) || typeof share.incoming !== "boolean"
+      const peerConnection = Object.prototype.hasOwnProperty.call(share, "peerConnection")
+        ? share.peerConnection : "unknown";
+      if (!PHASES.has(share.phase) || !CONNECTION_STATES.has(peerConnection)
+        || typeof share.incoming !== "boolean"
         || typeof share.expired !== "boolean"
         || !(share.expiresAtUnixMs === null || share.expiresAtUnixMs === undefined
           || Number.isSafeInteger(share.expiresAtUnixMs) && share.expiresAtUnixMs >= 0)) {
@@ -138,6 +145,7 @@
         expiresAtUnixMs: share.expiresAtUnixMs ?? null,
         // The server owns expiry. Browser clock arithmetic must never override it.
         expired: share.expired,
+        peerConnection,
       });
     });
     const folders = boundedArray(status.folders, "The node returned too many folder health records.").map((value) => {
@@ -163,6 +171,7 @@
       lifecycle: status.lifecycle,
       issue: status.issue,
       healthFreshness: status.healthFreshness,
+      connectionFreshness,
       peers: Object.freeze(peers),
       shares: Object.freeze(shares),
       folders: Object.freeze(folders),
@@ -220,24 +229,33 @@
       return Object.freeze({ kind: "waiting", text: share.incoming ? "Waiting for your folder" : "Waiting for other device" });
     }
     if (status.lifecycle !== "running") return Object.freeze({ kind: "offline", text: "Folder sync offline" });
-    if (status.healthFreshness !== "fresh") {
-      return Object.freeze({ kind: "unknown", text: "Current folder health unknown" });
-    }
+    const peer = status.peers.find((item) => item.peerId === share.peerId);
+    const peerName = peer?.displayName ?? "other device";
     const health = status.folders.find((item) => item.folderId === share.folderId);
-    if (!health) return Object.freeze({ kind: "unknown", text: "Waiting for folder status" });
-    if (health.statusError || health.watchError || health.scanPullErrorCount > 0
-      || health.reportedErrorRows > 0 || health.state === "error") {
+    if (status.healthFreshness === "fresh" && health
+      && (health.statusError || health.watchError || health.scanPullErrorCount > 0
+      || health.reportedErrorRows > 0 || health.state === "error")) {
       return Object.freeze({ kind: "attention", text: "Needs attention" });
     }
-    if (health.state === "starting" || health.state === "scanning" || health.state === "scan-waiting") {
+    if (status.healthFreshness === "fresh" && health
+      && (health.state === "starting" || health.state === "scanning" || health.state === "scan-waiting")) {
       return Object.freeze({ kind: "checking", text: "Checking folder" });
     }
-    if (health.state === "syncing" || health.state === "sync-waiting" || health.state === "sync-preparing"
-      || health.remainingFiles > 0 || health.remainingBytes > 0) {
+    if (status.healthFreshness === "fresh" && health
+      && (health.state === "syncing" || health.state === "sync-waiting" || health.state === "sync-preparing"
+      || health.remainingFiles > 0 || health.remainingBytes > 0)) {
       return Object.freeze({ kind: "syncing", text: "Syncing" });
     }
-    if (health.state === "idle") return Object.freeze({ kind: "ready", text: "Folder ready" });
-    return Object.freeze({ kind: "checking", text: "Checking folder" });
+    if (status.connectionFreshness === "fresh" && share.peerConnection === "paused") {
+      return Object.freeze({ kind: "paused", text: "Paused" });
+    }
+    if (status.connectionFreshness === "fresh" && share.peerConnection === "disconnected") {
+      return Object.freeze({ kind: "waiting", text: `Waiting for ${peerName}` });
+    }
+    if (status.connectionFreshness === "fresh" && share.peerConnection === "connected") {
+      return Object.freeze({ kind: "ready", text: `Connected to ${peerName}` });
+    }
+    return Object.freeze({ kind: "unknown", text: "Connection status unknown" });
   }
 
   function storageKey(deviceId) {

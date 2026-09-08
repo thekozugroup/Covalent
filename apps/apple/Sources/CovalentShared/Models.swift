@@ -221,6 +221,9 @@ public struct PairingInvitation: Codable, Equatable, Sendable {
     public let invitationSecretCommitment: String
     public let expiresAtUnixMs: UInt64
     public let endpoints: [String]
+    /// Transport identity covered by the signed invitation. It must survive
+    /// native decode and re-encode unchanged for the peer to verify the record.
+    public let transportBinding: PeerTransport?
     public let signature: String
 
     private enum CodingKeys: String, CodingKey {
@@ -234,6 +237,7 @@ public struct PairingInvitation: Codable, Equatable, Sendable {
         case invitationSecretCommitment
         case expiresAtUnixMs
         case endpoints
+        case transportBinding
         case signature
     }
 
@@ -249,6 +253,7 @@ public struct PairingInvitation: Codable, Equatable, Sendable {
         invitationSecretCommitment = try container.decodeIfPresent(String.self, forKey: .invitationSecretCommitment) ?? ""
         expiresAtUnixMs = try container.decode(UInt64.self, forKey: .expiresAtUnixMs)
         endpoints = try container.decode([String].self, forKey: .endpoints)
+        transportBinding = try container.decodeIfPresent(PeerTransport.self, forKey: .transportBinding)
         signature = try container.decodeIfPresent(String.self, forKey: .signature) ?? ""
     }
 }
@@ -899,6 +904,13 @@ public enum FolderSharePhase: String, Codable, Sendable {
     case removed
 }
 
+public enum PeerConnectionState: String, Codable, Sendable {
+    case unknown
+    case connected
+    case disconnected
+    case paused
+}
+
 public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
     public let offerId: UUID
     public let folderId: UUID
@@ -910,6 +922,7 @@ public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
     /// its own clock; the client never tries to decide expiry locally.
     public let expiresAtUnixMs: UInt64?
     public let expired: Bool
+    public let peerConnection: PeerConnectionState
 
     public var id: UUID { offerId }
 
@@ -921,7 +934,8 @@ public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
       incoming: Bool,
       phase: FolderSharePhase,
       expiresAtUnixMs: UInt64?,
-      expired: Bool
+      expired: Bool,
+      peerConnection: PeerConnectionState = .unknown
     ) {
       self.offerId = offerId
       self.folderId = folderId
@@ -931,6 +945,26 @@ public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
       self.phase = phase
       self.expiresAtUnixMs = expiresAtUnixMs
       self.expired = expired
+      self.peerConnection = peerConnection
+    }
+
+    private enum CodingKeys: String, CodingKey {
+      case offerId, folderId, label, peerId, incoming, phase, expiresAtUnixMs, expired
+      case peerConnection
+    }
+
+    public init(from decoder: Decoder) throws {
+      let values = try decoder.container(keyedBy: CodingKeys.self)
+      offerId = try values.decode(UUID.self, forKey: .offerId)
+      folderId = try values.decode(UUID.self, forKey: .folderId)
+      label = try values.decode(String.self, forKey: .label)
+      peerId = try values.decode(UUID.self, forKey: .peerId)
+      incoming = try values.decode(Bool.self, forKey: .incoming)
+      phase = try values.decode(FolderSharePhase.self, forKey: .phase)
+      expiresAtUnixMs = try values.decodeIfPresent(UInt64.self, forKey: .expiresAtUnixMs)
+      expired = try values.decode(Bool.self, forKey: .expired)
+      peerConnection = values.contains(.peerConnection)
+        ? try values.decode(PeerConnectionState.self, forKey: .peerConnection) : .unknown
     }
 }
 
@@ -984,6 +1018,7 @@ public struct FolderSyncStatus: Codable, Equatable, Sendable {
     public let lifecycle: String
     public let issue: String?
     public let healthFreshness: String
+    public let connectionFreshness: String
     public let peers: [FolderSyncPeer]
     public let shares: [FolderShare]
     public let folders: [FolderHealth]
@@ -993,6 +1028,7 @@ public struct FolderSyncStatus: Codable, Equatable, Sendable {
       lifecycle: String,
       issue: String?,
       healthFreshness: String,
+      connectionFreshness: String = "neverObserved",
       peers: [FolderSyncPeer],
       shares: [FolderShare],
       folders: [FolderHealth]
@@ -1001,9 +1037,28 @@ public struct FolderSyncStatus: Codable, Equatable, Sendable {
       self.lifecycle = lifecycle
       self.issue = issue
       self.healthFreshness = healthFreshness
+      self.connectionFreshness = connectionFreshness
       self.peers = peers
       self.shares = shares
       self.folders = folders
+    }
+
+    private enum CodingKeys: String, CodingKey {
+      case availability, lifecycle, issue, healthFreshness, connectionFreshness
+      case peers, shares, folders
+    }
+
+    public init(from decoder: Decoder) throws {
+      let values = try decoder.container(keyedBy: CodingKeys.self)
+      availability = try values.decode(String.self, forKey: .availability)
+      lifecycle = try values.decode(String.self, forKey: .lifecycle)
+      issue = try values.decodeIfPresent(String.self, forKey: .issue)
+      healthFreshness = try values.decode(String.self, forKey: .healthFreshness)
+      connectionFreshness = values.contains(.connectionFreshness)
+        ? try values.decode(String.self, forKey: .connectionFreshness) : "neverObserved"
+      peers = try values.decode([FolderSyncPeer].self, forKey: .peers)
+      shares = try values.decode([FolderShare].self, forKey: .shares)
+      folders = try values.decode([FolderHealth].self, forKey: .folders)
     }
 }
 
@@ -1036,8 +1091,8 @@ extension FolderSyncStatus {
       availability == "available" && lifecycle == "initialScanning"
     }
 
-    /// This is deliberately local-engine health, not a remote-convergence
-    /// claim. The status endpoint currently has no connected-peer signal.
+    /// This combines local engine health with a fresh peer reachability
+    /// observation. It never claims remote convergence.
     public func displayState(for share: FolderShare) -> FolderShareDisplayState {
       if share.expired {
         return .invitationExpired
@@ -1054,27 +1109,42 @@ extension FolderSyncStatus {
       if share.phase == .offered || share.phase == .awaitingCommit {
         return .waitingForOtherDevice
       }
-      guard healthFreshness == "fresh",
-        let health = folders.first(where: { $0.folderId == share.folderId })
-      else {
-        return .waitingForConnection
-      }
-      if health.statusError || health.watchError || health.scanPullErrorCount > 0
+      let health = healthFreshness == "fresh"
+        ? folders.first(where: { $0.folderId == share.folderId }) : nil
+      if let health, health.statusError || health.watchError || health.scanPullErrorCount > 0
         || health.reportedErrorRows > 0
       {
         return .needsAttention
       }
-      switch health.state.lowercased() {
-      case "error":
-        return .needsAttention
-      case "starting", "scanning":
-        return .checkingFolder
-      case "syncing":
-        return .syncing
-      case "idle":
-        return health.remainingFiles > 0 || health.remainingBytes > 0 ? .syncing : .folderReady
-      default:
-        return .waitingForConnection
+      if let health {
+        if health.remainingFiles > 0 || health.remainingBytes > 0 { return .syncing }
+        switch health.state.lowercased() {
+        case "error": return .needsAttention
+        case "starting", "scanning", "scan-waiting", "cleaning", "clean-waiting":
+          return .checkingFolder
+        case "syncing", "sync-waiting", "sync-preparing": return .syncing
+        default: break
+        }
+      }
+      guard connectionFreshness == "fresh" else { return .waitingForConnection }
+      switch share.peerConnection {
+      case .connected: return .folderReady
+      case .disconnected, .unknown: return .waitingForConnection
+      case .paused: return .paused
+      }
+    }
+
+    public func displayLabel(for share: FolderShare) -> String {
+      let state = displayState(for: share)
+      let peer = peers.first(where: { $0.peerId == share.peerId })?.displayName ?? "other device"
+      switch state {
+      case .waitingForConnection where connectionFreshness == "fresh"
+        && share.peerConnection == .disconnected:
+        return "Waiting for \(peer)"
+      case .folderReady where connectionFreshness == "fresh"
+        && share.peerConnection == .connected:
+        return "Connected to \(peer)"
+      default: return state.label
       }
     }
 }

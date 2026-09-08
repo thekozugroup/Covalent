@@ -340,6 +340,42 @@ impl FolderSharingJournal {
         Ok(summaries)
     }
 
+    /// Map each active engine peer identity back to the authenticated Covalent
+    /// peer that supplied it. Pending, paused and removed shares have no live
+    /// engine membership and are deliberately absent.
+    pub(crate) fn active_engine_peers(
+        &self,
+    ) -> Result<BTreeMap<EngineDeviceId, DeviceId>, SharingError> {
+        self.store
+            .payload()
+            .map_err(|_| SharingError::PersistenceUncertain)?;
+        let mut result = BTreeMap::new();
+        for share in self
+            .snapshot
+            .shares
+            .iter()
+            .filter(|share| !share.removed && !share.paused && share.commit.is_some())
+        {
+            let binding = if share.offer.source_device_id == self.engine.device_id() {
+                &share
+                    .acceptance
+                    .as_ref()
+                    .ok_or(SharingError::InvalidState)?
+                    .target_engine
+            } else {
+                &share.offer.source_engine
+            };
+            let engine_id = EngineDeviceId::parse(binding.engine_device_id.as_str())
+                .map_err(|_| SharingError::InvalidRecord)?;
+            if let Some(previous) = result.insert(engine_id, share.peer_identity.device_id)
+                && previous != share.peer_identity.device_id
+            {
+                return Err(SharingError::InvalidRecord);
+            }
+        }
+        Ok(result)
+    }
+
     /// Retain the source user's selected folder before returning a signed offer.
     pub fn offer(
         &mut self,

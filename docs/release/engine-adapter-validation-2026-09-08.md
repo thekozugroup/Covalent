@@ -395,6 +395,51 @@ a worker. Missing/tampered text and symlinked evidence-directory regressions
 pass. Exact target generation, final sizes and notice classification remain
 open; details are in [Linux target notices](../security/syncthing-linux-target-notices.md).
 
+## Checkpoint 28: current peer status and Android notices
+
+The service now observes connections to exactly its configured paired workers.
+Fresh connected, disconnected and paused states are redacted to Covalent peer
+identities; missing or stale observations become unknown. A normal disconnect
+does not stop the surviving worker. Android, macOS and the server console use
+this state without claiming that an idle or connected peer has received every
+file. Older status bodies decode to unknown in the updated native clients.
+
+A real two-node pinned-worker proof completed 34 checks and observed
+`connected → disconnected → connected` while the uninterrupted node remained
+running. All owned processes were reaped. Its ignored artifact directory is
+`peer-connection-live-proof-5f9d7b12`; `result.json` SHA-256 is
+`384c4d51788b789386443500da3554c89c8205d156ee978ce704810366f23c5f`.
+This evidence covers connectivity observation, not invitation renewal, remote
+removal notification or address migration. Swift manual invitation decoding now
+also retains the signed transport binding when forwarding an invitation.
+
+Hosted checkpoint 27 passed Rust/contracts, dependency checks, macOS app
+bundling, macOS integration/UI and iOS. Android compiled, then three unit tests
+failed on outdated JNI descriptors and a user-facing technical term. The updated
+checks pin the full native method signatures, including the debug-only listener
+port override used for isolated device tests. Production retains its fixed port.
+The full Android folder journey is still being integrated with offline removal
+and does not yet count as device acceptance.
+
+Both exact Docker architectures generated and verified Linux target notices,
+passed their image contracts and remained within the 128 MiB budget. Their new
+folder journey reached mutual pairing and acceptance, then timed out awaiting
+the first file. The next harness retains bounded, allowlisted lifecycle and
+connection states before cleanup; it does not retain tokens, folder paths,
+labels or raw logs. Complete Docker synchronization remains a release blocker.
+
+Android now generates notice inventories from each actual CGO-enabled target
+with the pinned NDK compiler and build tags, retains source fingerprints and
+ships complete combined texts. The native Settings viewer checks bounded asset
+sizes, hashes and strict encoding before displaying them. The build uses private
+Go caches and removes them after completion. These additions still require exact
+hosted generation, Kotlin tests and device execution; they do not establish legal
+approval of every dependency. See [Android notices](../../apps/android/OPEN_SOURCE_NOTICES.md).
+
+Local integrated validation passes 262 node library tests, 11 JNI tests,
+102 browser tests, strict workspace Clippy and foundation checks. Apple HIG
+conformance, native access repair and complete platform journeys remain open.
+
 ## Remaining integration and release work
 
 The macOS folder screen now consumes the authenticated API, uses confirmed
@@ -411,8 +456,7 @@ published while another subtree is unreadable. Permission restoration needs
 an explicit scan-before-exchange barrier and its own execution proof. Neither
 zero remaining bytes nor idle state alone proves an offline peer has received
 all changes. Local remove preserves files but does not yet notify the other
-node to remove its invitation; expiry/renewal and current peer-connectivity
-presentation remain usability work.
+node to remove its invitation; expiry/renewal and network-address migration remain usability work.
 
 Arbitrary same-UID filesystem replacement is outside the portable boundary.
 macOS guardian `SIGKILL` containment remains unproven; Android/Linux use a

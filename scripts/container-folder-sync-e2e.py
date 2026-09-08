@@ -96,6 +96,7 @@ class Fixture:
         self.nodes: dict[str, dict] = {}
         self.checks: list[str] = []
         self.phase = "fixture creation"
+        self.diagnostics: dict = {}
 
     def setup(self):
         self.phase = "isolated network creation"
@@ -202,6 +203,44 @@ class Fixture:
 
     def status(self, key: str):
         return self.request(key, "/api/v1/sync/status")
+
+    def capture_diagnostics(self):
+        """Retain only bounded public state, never tokens, paths or peer data."""
+        enums = {
+            "availability": {"notPackaged", "needsAttention", "available"},
+            "lifecycle": {"stopped", "initialScanning", "running", "stillStopping", "needsAttention"},
+            "issue": {None, "installation", "folderAccess", "journal", "workerLaunch", "initialScan",
+                      "workerHealth", "workerStop", "peerRevocation"},
+            "healthFreshness": {"neverObserved", "fresh", "stale"},
+            "connectionFreshness": {"neverObserved", "fresh", "stale"},
+        }
+        for key in ("a", "b"):
+            if key not in self.nodes:
+                continue
+            try:
+                status = self.status(key)
+                row = {name: value for name, allowed in enums.items()
+                       if isinstance(value := status.get(name), (str, type(None))) and value in allowed}
+                row["shares"] = [
+                    {name: value for name, allowed in {
+                        "phase": {"offered", "awaitingCommit", "ready", "paused", "removed"},
+                        "peerConnection": {"unknown", "connected", "disconnected", "paused"},
+                    }.items() if isinstance(value := share.get(name), str) and value in allowed}
+                    for share in status.get("shares", [])[:8] if isinstance(share, dict)
+                ]
+                row["folders"] = [
+                    {name: value for name in ("remainingFiles", "remainingBytes", "scanPullErrorCount", "reportedErrorRows")
+                     if type(value := folder.get(name)) is int and 0 <= value <= 2**63 - 1}
+                    | {name: value for name in ("statusError", "watchError")
+                       if type(value := folder.get(name)) is bool}
+                    | ({"state": folder["state"]} if folder.get("state") in {
+                        "starting", "idle", "scanning", "scan-waiting", "sync-waiting", "sync-preparing",
+                        "syncing", "cleaning", "clean-waiting", "error"} else {})
+                    for folder in status.get("folders", [])[:8] if isinstance(folder, dict)
+                ]
+                self.diagnostics[key] = row
+            except (GateError, OSError, ValueError, TypeError, http.client.HTTPException):
+                self.diagnostics[key] = {"status": "unavailable"}
 
     def exercise(self):
         self.phase = "mutual signed pairing"
@@ -335,11 +374,15 @@ def main():
         try:
             fixture.setup()
             fixture.exercise()
+        except (GateError, OSError, ValueError, http.client.HTTPException):
+            fixture.capture_diagnostics()
+            raise
         finally:
             fixture.cleanup()
     except (GateError, OSError, ValueError, http.client.HTTPException) as error:
         print(json.dumps({"status": "failed", "phase": fixture.phase,
-                          "reason": str(error), "passedChecks": fixture.checks}))
+                          "reason": str(error), "passedChecks": fixture.checks,
+                          "nodeStates": fixture.diagnostics}))
         return 1
     print(json.dumps({"status": "passed", "checks": fixture.checks}, sort_keys=True))
     return 0

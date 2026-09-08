@@ -1572,7 +1572,7 @@ components:
     FolderSyncStatus:
       type: object
       additionalProperties: false
-      required: [schemaVersion, availability, lifecycle, issue, healthFreshness, peers, shares, folders]
+      required: [schemaVersion, availability, lifecycle, issue, healthFreshness, connectionFreshness, peers, shares, folders]
       properties:
         schemaVersion:
           const: 1
@@ -1588,6 +1588,10 @@ components:
         healthFreshness:
           type: string
           enum: [neverObserved, fresh, stale]
+        connectionFreshness:
+          type: string
+          enum: [neverObserved, fresh, stale]
+          description: Freshness of the current worker's paired-device connection observation; connection state does not establish file convergence.
         peers:
           type: array
           description: Paired devices with a current confirmed grant and retained transport pin, including devices without a backup storage role.
@@ -1616,7 +1620,7 @@ components:
     FolderShareSummary:
       type: object
       additionalProperties: false
-      required: [offerId, folderId, label, peerId, incoming, phase, expiresAtUnixMs, expired]
+      required: [offerId, folderId, label, peerId, incoming, phase, expiresAtUnixMs, expired, peerConnection]
       properties:
         offerId:
           type: string
@@ -1643,6 +1647,10 @@ components:
         expired:
           type: boolean
           description: The node's clock has reached the unaccepted invitation deadline.
+        peerConnection:
+          type: string
+          enum: [unknown, connected, disconnected, paused]
+          description: Connection to this share's paired device from a fresh current-worker observation, or unknown when no such observation is available. A durably paused share reports paused.
     FolderHealthObservation:
       type: object
       additionalProperties: false
