@@ -153,8 +153,13 @@ packages, credentials, private server inventories, or raw diagnostic bundles.
   or ignored. A subsequent lossless cross-Unix timestamp conversion passed
   all seven focused scanner tests. Strict all-target/all-feature workspace
   Clippy and foundation validation passed. Exact-revision hosted checks are
-  still required before treating the new checkpoint as software-gate evidence. It does not
-  yet provide network synchronization or mutate shared user folders.
+  still required before treating the new checkpoint as software-gate evidence.
+  It does not yet provide network synchronization or mutate shared user folders.
+- Hosted Linux validation of `3920616` compiled the new library but stopped
+  on a test-fixture cast rejected by strict Clippy. The private-directory
+  fixture now uses its explicit `0700` mode, which is portable across the
+  target mode types. All 20 affected local state-directory tests and strict
+  workspace Clippy passed after the correction; fresh hosted checks are required.
 - [Android size and host transfer evidence](android-size-profile-2026-09-07.md)
   records measured native reductions with the unchanged size ceiling and the
   four alternating host QUIC correctness/resource runs.

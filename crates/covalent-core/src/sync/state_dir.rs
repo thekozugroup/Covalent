@@ -729,11 +729,7 @@ mod tests {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let path = temporary.path().join("state");
         fs::create_dir(&path).expect("create state root");
-        fs::set_permissions(
-            &path,
-            fs::Permissions::from_mode(PRIVATE_DIRECTORY_MODE as u32),
-        )
-        .expect("protect state root");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).expect("protect state root");
         let state = PrivateStateDir::open_root(&path).expect("open state root");
         (temporary, path, state)
     }
