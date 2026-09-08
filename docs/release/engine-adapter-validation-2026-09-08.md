@@ -21,7 +21,10 @@ ancestors, checks directory/socket identity before and after connect, verifies
 the peer UID and sends the key only in a sensitive request header. Exchanges
 have a five-second whole-request deadline; responses are bounded at 2 MiB,
 with a separate 8 MiB allowance for complete configuration. Redirects and
-compressed responses are rejected.
+compressed responses are rejected. The positive full-folder scan endpoint has
+an explicit exception: `/rest/db/scan` alone can run for up to 24 hours, inside
+an aggregate 24-hour initial-scan task. Its owner can cancel the request and
+reap the worker. All ordinary API exchanges retain their five-second limit.
 
 Configuration admits only explicit device/folder/member sets and direct
 numeric addresses. It disables discovery, relays, NAT traversal, browser,
@@ -30,6 +33,65 @@ version, certificate-derived device ID and effective security, membership,
 retention and filesystem settings. Missing or contradictory controlled fields
 fail closed; unrelated upstream defaults may coexist. Overlapping roots,
 filesystem root and roots containing private state are rejected.
+
+Startup now renders every authorized folder active while pausing all peers and
+disabling all sync listeners. One owned task requests a complete scan of each
+folder, revalidates retained roots around each request, and requires fresh
+health for the exact complete folder set. Only then does the controller verify
+the still-inert configuration, apply its exact desired listener/peer state and
+verify the resulting configuration and identity. Status reports
+`initialScanning` until that promotion succeeds. Cancellation, changed desired
+folders, failed scans and failed promotion reap the old worker; a restart scans
+the complete replacement set again. A passing fake-backend lifecycle test is
+not recorded as real-worker acceptance.
+
+## Checkpoint 26 integration checks
+
+Before the Android Folders integration, the combined initial-scan, server UI
+and Docker address changes passed 841 Rust tests across 22 top-level suites,
+strict workspace Clippy, formatting and foundation contracts. Nine isolated
+entrypoint tests include custom host ports, IPv4, IPv6 and invalid ports.
+The server UI passed 101 web tests and an actual delayed browser form submission;
+peer-supplied markup remained literal text and the console had no browser
+warnings or errors. The delayed browser proof used a bounded fake node.
+
+The Android Folders screen and its private grant journal are now integrated.
+Personal debug builds expose an explicit special-storage-access choice before
+the raw-folder picker; release builds retain the unsupported state and do not
+declare that broad permission. SAF backup access remains independent. Grant
+records are committed before network mutation, preserve explicit JSON nulls,
+and reuse a pending folder UUID. The foreground service serializes filesystem
+and JNI work on an owned background actor, keeps foreground state through
+restart, and retains the exact handle and process ownership through failed
+stops. The integrated JNI rerun passed all ten tests and strict workspace
+Clippy. Swift 6 source typechecking also passed. Android Kotlin/Compose,
+instrumentation and complete native journeys still require hosted execution.
+
+The initial-scan acceptance gate passed twice against the actual pinned macOS
+arm64 worker and production `NodeRuntime`, with all five relevant integrated
+production-source hashes matched before accepting the result. A bounded tree
+of 120,000 empty files kept scanning observable: the listener remained unbound
+and the recipient had no sentinel; pause cancelled the scan and reaped the
+worker; resume promoted and transferred both directions. A cold restart repeated
+the scan barrier. Both runs preserved selected files and released both ports,
+private runtime directories and all owned processes; both temporary fixtures
+were removed. This proves macOS localhost controller ordering, not Android
+lifecycle, removable-storage behavior or a performance benchmark.
+
+Evidence manifest SHA-256:
+`c7425a2497dff5b5c56f9fa310534f65480199afdb368431b71e050c9f48ba61`.
+Harness SHA-256:
+`c26b4d5aa92ae93bcb83c177a0da82b9caf6c993b518fce30927905675d00a98`.
+Result hashes:
+`34ca186c155d39def5878d29c1535d11015f32e09fe0087531aba3f212f6d110`
+and `4e376aaa655c4b35a058ce93a0dd19a6b63a1ee528c31db9f256b641777b5add`.
+
+Both Docker architecture jobs now include an isolated two-node packaged-folder
+test using unique labelled volumes, a unique network, dynamic loopback HTTPS
+ports and resource-limited rootless containers. It covers consent, retry,
+forward transfer, pause/resume, durable restart, reverse transfer, local removal
+with file preservation and exact-resource cleanup. It has not yet executed on
+checkpoint 26; syntax validation alone does not satisfy the Docker gate.
 
 The supervisor verifies manifest digests through bounded no-follow file reads,
 rechecks executable identity at launch, and owns one direct guardian with a
@@ -214,9 +276,8 @@ image and packages the canonical guardian, immutable manifest and upstream
 notices. Linux discovery uses owner-private `/tmp/cvs` and durable
 `/data/folder-sync`; Compose and Unraid declare TCP 8789. The image fingerprint
 now covers the engine build script and guardian source, with mutation tests.
-Both actual architecture builds, image vulnerability scans, rootless runtime
-and the unchanged 96 MiB image budget still need hosted evidence. Compiled
-third-party notice aggregation remains a release gate.
+The first combined images needed hosted build, runtime and budget evidence.
+Compiled third-party notice aggregation remains a release gate.
 
 Checkpoint `6a8be5a8` passed hosted macOS app bundling, iOS Tier 2, dependency
 delta and both CodeQL analyses. Its aggregate software gate failed: Linux Clippy
@@ -243,7 +304,8 @@ shared/app Swift 6 source typecheck passes locally; hosted Swift Testing and
 Android lint/device acceptance still require the next run.
 
 Android's API-26 path passes the existing arm64/x86_64 Linux `O_CLOEXEC` value
-atomically to `open`, then checks `F_GETFD` before reading the executable.
+atomically to `open`, with an additional `F_GETFD` assertion on API 30 and later
+where Android exposes `Os.fcntlInt`.
 The constant is documented by the
 [Android 8 UAPI header](https://raw.githubusercontent.com/aosp-mirror/platform_bionic/android-8.0.0_r1/libc/kernel/uapi/asm-generic/fcntl.h).
 No non-atomic open/flag-setting fallback is used.
@@ -262,6 +324,23 @@ module texts and 109 total payload files (321,396 bytes); the manifest digest
 is `194ab907dccf3da2bb94e70d942887b14571ebb4763523d851098b3012d579ea`.
 The [target inventory review](../security/syncthing-target-license-inventory.md)
 retains the Linux-specific graph, NDK runtime and shipped-notice gaps.
+
+## Combined image measurements
+
+At `d19e189f`, both native Docker builds now finish and pass the image contract.
+The amd64 lane also passes its rootless/read-only runtime checks. Both images
+exceed the previous backup-only 96 MiB ceiling:
+
+| Architecture | Uncompressed image | Pinned sync worker | Stripped guardian |
+| --- | ---: | ---: | ---: |
+| amd64 | 122,164,736 bytes (116.51 MiB) | 31,959,550 bytes | 30,344 bytes |
+| arm64 | 113,254,912 bytes (108.01 MiB) | 30,262,604 bytes | 67,128 bytes |
+
+The combined product now uses a 128 MiB image ceiling. This is an explicit
+scope adjustment for adding the maintained sync worker, not a performance
+improvement or a skipped budget check. The check still measures each actual
+uncompressed image. Node/CLI limits remain unchanged. Final notices, security
+scans, two-architecture acceptance and performance optimization remain open.
 
 ## Remaining integration and release work
 

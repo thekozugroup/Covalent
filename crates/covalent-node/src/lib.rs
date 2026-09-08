@@ -68,6 +68,7 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 const INDEX_HTML: &str = include_str!("../../../packaging/web/index.html");
 const APP_CSS: &str = include_str!("../../../packaging/web/app.css");
 const APP_JS: &str = include_str!("../../../packaging/web/app.js");
+const FOLDER_SYNC_FLOW_JS: &str = include_str!("../../../packaging/web/folder-sync-flow.js");
 const PAIRING_FLOW_JS: &str = include_str!("../../../packaging/web/pairing-flow.js");
 const RESTORE_PLAN_FLOW_JS: &str = include_str!("../../../packaging/web/restore-plan-flow.js");
 const RESTORE_PREVIEW_FLOW_JS: &str =
@@ -1269,6 +1270,10 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(index))
         .route("/assets/app.css", get(css))
         .route("/assets/app.js", get(javascript))
+        .route(
+            "/assets/folder-sync-flow.js",
+            get(folder_sync_flow_javascript),
+        )
         .route("/assets/pairing-flow.js", get(pairing_flow_javascript))
         .route(
             "/assets/restore-plan-flow.js",
@@ -1832,6 +1837,16 @@ async fn javascript() -> impl IntoResponse {
             (header::CACHE_CONTROL, "no-cache"),
         ],
         APP_JS,
+    )
+}
+
+async fn folder_sync_flow_javascript() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        FOLDER_SYNC_FLOW_JS,
     )
 }
 
@@ -7138,6 +7153,7 @@ mod tests {
         let app = router(test_state(&directory));
         for path in [
             "/assets/app.js",
+            "/assets/folder-sync-flow.js",
             "/assets/pairing-flow.js",
             "/assets/restore-plan-flow.js",
             "/assets/restore-preview-flow.js",

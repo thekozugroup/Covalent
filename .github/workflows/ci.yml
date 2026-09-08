@@ -740,6 +740,8 @@ jobs:
       - run: ./scripts/check-container-runtime.sh covalent:ci
       - run: ./scripts/check-artifact-budgets.sh --image-only covalent:ci --platform linux/amd64
       - run: ./scripts/validate-unraid-template.sh
+      - name: Validate packaged folder sync with isolated writable volumes
+        run: python3 -B scripts/container-folder-sync-e2e.py covalent:ci
       - run: ./scripts/docker-compose-e2e.sh covalent:ci
 
   container-arm64:
@@ -767,6 +769,8 @@ jobs:
       - run: docker buildx build --platform linux/arm64 --load --build-arg VCS_REF=${{ github.sha }} --build-arg COVALENT_SOURCE_FINGERPRINT=${{ steps.docker-source.outputs.fingerprint }} -f packaging/docker/Dockerfile -t covalent:ci-arm64 .
       - run: ./scripts/check-container-contract.sh covalent:ci-arm64 "${GITHUB_SHA}" development "${{ steps.docker-source.outputs.fingerprint }}"
       - run: ./scripts/check-artifact-budgets.sh --image-only covalent:ci-arm64 --platform linux/arm64
+      - name: Validate packaged arm64 folder sync with isolated writable volumes
+        run: python3 -B scripts/container-folder-sync-e2e.py covalent:ci-arm64
 
   ios-tier2:
     name: iOS Tier 2

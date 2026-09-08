@@ -14,6 +14,7 @@ use std::time::Duration;
 use covalent_core::sync::state_dir::{PrivateStateDir, StateKey};
 use rand_core::{OsRng, RngCore as _};
 use serde_json::Value;
+use tokio::task::JoinHandle;
 use zeroize::Zeroizing;
 
 use super::config::{
@@ -26,6 +27,7 @@ use super::{
 };
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
+const INITIAL_SCAN_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 const PINNED_ENGINE_VERSION: &str = "v2.1.3";
 
 /// Already-authorized desired state for one engine session. The enclosing
@@ -75,15 +77,54 @@ impl fmt::Display for EngineSessionError {
 
 impl std::error::Error for EngineSessionError {}
 
-/// A verified active session. Dropping it closes the guardian lifeline; the
-/// dedicated reaper retains runtime files, installation lock and selected-root
-/// descriptors until the actual child exits. A stop timeout is not completion.
+/// A verified owned session. It starts with every network path disabled while
+/// its authorized folders are scanned and becomes active only after explicit
+/// promotion. Dropping it closes the guardian lifeline; the dedicated reaper
+/// retains runtime files, installation lock and selected-root descriptors
+/// until the actual child exits. A stop timeout is not completion.
 pub struct ManagedEngineSession {
     worker: OwnedEngineWorker,
-    client: EngineApiClient,
+    client: Arc<EngineApiClient>,
     configuration: DesiredEngineConfig,
     installation: Arc<EngineInstallation>,
     roots: Arc<Vec<FolderRootLease>>,
+}
+
+/// One controller-owned, cancellable initial scan. Dropping this value aborts
+/// the active private API request; the session owner separately closes and
+/// reaps the worker before releasing its filesystem capabilities.
+pub(super) struct InitialScanTask {
+    task: Option<JoinHandle<Result<(), EngineSessionError>>>,
+}
+
+impl InitialScanTask {
+    pub(super) fn new(task: JoinHandle<Result<(), EngineSessionError>>) -> Self {
+        Self { task: Some(task) }
+    }
+
+    pub(super) fn is_finished(&self) -> bool {
+        self.task.as_ref().is_none_or(JoinHandle::is_finished)
+    }
+
+    pub(super) fn abort(&self) {
+        if let Some(task) = &self.task {
+            task.abort();
+        }
+    }
+
+    pub(super) async fn finish(&mut self) -> Result<(), EngineSessionError> {
+        let Some(task) = self.task.take() else {
+            return Err(EngineSessionError::EngineUnavailable);
+        };
+        task.await
+            .map_err(|_| EngineSessionError::EngineUnavailable)?
+    }
+}
+
+impl Drop for InitialScanTask {
+    fn drop(&mut self) {
+        self.abort();
+    }
 }
 
 impl fmt::Debug for ManagedEngineSession {
@@ -105,6 +146,25 @@ struct FolderRootLease {
     path: PathBuf,
     file: File,
     identity: (u64, u64),
+}
+
+struct PromotionGuard<'a> {
+    worker: &'a mut OwnedEngineWorker,
+    armed: bool,
+}
+
+impl PromotionGuard<'_> {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for PromotionGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.worker.close_lifeline();
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -150,7 +210,7 @@ impl EphemeralGuiTls {
 
 impl ManagedEngineSession {
     /// Create fresh per-run private configuration, launch the exact pinned
-    /// worker, and verify its version, identity and effective desired state.
+    /// worker, and verify its version, identity and effective scan-gate state.
     /// `runtime_parent` is the native host's authorized temporary location; a
     /// short path is required on hosts using Unix control. macOS uses pinned
     /// loopback TLS within its app sandbox. This location is separate from the
@@ -217,7 +277,7 @@ impl ManagedEngineSession {
                 .collect::<Result<Vec<_>, _>>()?,
         );
         let xml = configuration
-            .render_desired_xml()
+            .render_scan_gate_xml()
             .map_err(|_| EngineSessionError::InvalidConfiguration)?;
         let certificate = installation.identity().certificate_pem();
         for (name, bytes, maximum) in [
@@ -275,7 +335,7 @@ impl ManagedEngineSession {
                 .map_err(|_| EngineSessionError::LaunchFailed)?;
         let mut session = Self {
             worker,
-            client,
+            client: Arc::new(client),
             configuration,
             installation,
             roots,
@@ -336,9 +396,117 @@ impl ManagedEngineSession {
             .await
             .map_err(|_| EngineSessionError::StartupMismatch)?;
         self.configuration
-            .verify_effective(&effective)
+            .verify_scan_gate_effective(&effective)
             .map_err(|_| EngineSessionError::StartupMismatch)?;
         self.revalidate_roots()
+    }
+
+    /// Begin one positive full scan of every authorized root. The task owns no
+    /// worker or filesystem lease, so its owner must retain this session and
+    /// reap it if the task fails or is cancelled.
+    pub(super) fn begin_initial_scan(&self) -> InitialScanTask {
+        let client = Arc::clone(&self.client);
+        let installation = Arc::clone(&self.installation);
+        let roots = Arc::clone(&self.roots);
+        let folders = self
+            .configuration
+            .folders()
+            .iter()
+            .map(|folder| folder.id())
+            .collect::<Vec<_>>();
+        InitialScanTask::new(tokio::spawn(async move {
+            tokio::time::timeout(INITIAL_SCAN_TIMEOUT, async {
+                revalidate_capabilities(&installation, &roots)?;
+                for folder in &folders {
+                    revalidate_capabilities(&installation, &roots)?;
+                    // Pinned v2.1.3 `postDBScan` synchronously calls
+                    // `ScanFolderSubdirs(folder, nil)`. The latter waits for
+                    // the automatic initial scan, then runs this requested
+                    // full scan through the folder runner before responding.
+                    client
+                        .scan_folder(*folder, INITIAL_SCAN_TIMEOUT)
+                        .await
+                        .map_err(|_| EngineSessionError::EngineUnavailable)?;
+                    revalidate_capabilities(&installation, &roots)?;
+                }
+                // Earlier roots may become unhealthy while a later full scan
+                // runs. Require one fresh all-folder observation at the end.
+                let health = super::collect_folder_health(&client, &folders)
+                    .await
+                    .map_err(|_| EngineSessionError::EngineUnavailable)?;
+                validate_initial_scan_health(&folders, &health)?;
+                revalidate_capabilities(&installation, &roots)
+            })
+            .await
+            .map_err(|_| EngineSessionError::EngineUnavailable)?
+        }))
+    }
+
+    /// Promote a successfully scanned, still-network-inert session to its
+    /// exact desired listener and peer state, then verify the resulting worker.
+    pub(super) async fn promote_after_initial_scan(&mut self) -> Result<(), EngineSessionError> {
+        self.revalidate_roots()?;
+        let client = Arc::clone(&self.client);
+        let installation = Arc::clone(&self.installation);
+        let roots = Arc::clone(&self.roots);
+        let configuration = &self.configuration;
+        let mut guard = PromotionGuard {
+            worker: &mut self.worker,
+            armed: true,
+        };
+        let effective: Value = client
+            .json(EngineEndpoint::Configuration)
+            .await
+            .map_err(|_| EngineSessionError::StartupMismatch)?;
+        let promotion = configuration
+            .promotion_payload(effective)
+            .map_err(|_| EngineSessionError::StartupMismatch)?;
+        revalidate_capabilities(&installation, &roots)?;
+        client
+            .replace_configuration(&promotion)
+            .await
+            .map_err(|_| EngineSessionError::StartupMismatch)?;
+        let result = tokio::time::timeout(STARTUP_TIMEOUT, async {
+            loop {
+                revalidate_capabilities(&installation, &roots)?;
+                if guard
+                    .worker
+                    .try_status()
+                    .map_err(|_| EngineSessionError::StartupMismatch)?
+                    .is_some()
+                {
+                    return Err(EngineSessionError::StartupMismatch);
+                }
+                let effective: Result<Value, _> = client.json(EngineEndpoint::Configuration).await;
+                match effective {
+                    Ok(effective) => {
+                        configuration
+                            .verify_effective(&effective)
+                            .map_err(|_| EngineSessionError::StartupMismatch)?;
+                        let status: Value = client
+                            .json(EngineEndpoint::SystemStatus)
+                            .await
+                            .map_err(|_| EngineSessionError::StartupMismatch)?;
+                        if status.get("myID").and_then(Value::as_str)
+                            != Some(configuration.own_id().as_str())
+                        {
+                            return Err(EngineSessionError::StartupMismatch);
+                        }
+                        revalidate_capabilities(&installation, &roots)?;
+                        return Ok(());
+                    }
+                    Err(EngineApiError::Unavailable | EngineApiError::Timeout) => {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                    Err(_) => return Err(EngineSessionError::StartupMismatch),
+                }
+            }
+        })
+        .await
+        .map_err(|_| EngineSessionError::StartupTimeout)?;
+        result?;
+        guard.disarm();
+        Ok(())
     }
 
     /// Verify retained filesystem capabilities before consulting local status.
@@ -391,25 +559,49 @@ impl ManagedEngineSession {
     }
 
     fn revalidate_roots(&self) -> Result<(), EngineSessionError> {
-        self.installation
-            .revalidate()
-            .map_err(|_| EngineSessionError::InvalidConfiguration)?;
-        for root in self.roots.iter() {
-            let metadata = std::fs::symlink_metadata(&root.path)
-                .map_err(|_| EngineSessionError::InvalidConfiguration)?;
-            let held = root
-                .file
-                .metadata()
-                .map_err(|_| EngineSessionError::InvalidConfiguration)?;
-            if !metadata.is_dir()
-                || (metadata.dev(), metadata.ino()) != root.identity
-                || (held.dev(), held.ino()) != root.identity
-            {
-                return Err(EngineSessionError::InvalidConfiguration);
-            }
-        }
-        Ok(())
+        revalidate_capabilities(&self.installation, &self.roots)
     }
+}
+
+pub(super) fn validate_initial_scan_health(
+    folders: &[uuid::Uuid],
+    health: &[super::FolderHealth],
+) -> Result<(), EngineSessionError> {
+    if folders.is_empty()
+        || health.len() != folders.len()
+        || health.iter().zip(folders).any(|(observed, expected)| {
+            observed.folder != *expected
+                || observed.lifecycle == super::FolderLifecycle::Error
+                || observed.has_reported_errors()
+        })
+    {
+        return Err(EngineSessionError::EngineUnavailable);
+    }
+    Ok(())
+}
+
+fn revalidate_capabilities(
+    installation: &EngineInstallation,
+    roots: &[FolderRootLease],
+) -> Result<(), EngineSessionError> {
+    installation
+        .revalidate()
+        .map_err(|_| EngineSessionError::InvalidConfiguration)?;
+    for root in roots {
+        let metadata = std::fs::symlink_metadata(&root.path)
+            .map_err(|_| EngineSessionError::InvalidConfiguration)?;
+        let held = root
+            .file
+            .metadata()
+            .map_err(|_| EngineSessionError::InvalidConfiguration)?;
+        if !metadata.is_dir()
+            || (metadata.dev(), metadata.ino()) != root.identity
+            || (held.dev(), held.ino()) != root.identity
+        {
+            return Err(EngineSessionError::InvalidConfiguration);
+        }
+    }
+    Ok(())
 }
 
 fn admit_root(

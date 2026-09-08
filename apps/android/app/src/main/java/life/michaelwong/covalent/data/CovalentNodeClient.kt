@@ -29,6 +29,16 @@ import javax.net.ssl.X509TrustManager
 import org.json.JSONArray
 import org.json.JSONObject
 import life.michaelwong.covalent.model.DiscoveryCandidate
+import life.michaelwong.covalent.model.FolderHealth
+import life.michaelwong.covalent.model.FolderHealthFreshness
+import life.michaelwong.covalent.model.FolderShare
+import life.michaelwong.covalent.model.FolderSharePhase
+import life.michaelwong.covalent.model.FolderSyncAvailability
+import life.michaelwong.covalent.model.FolderSyncIssue
+import life.michaelwong.covalent.model.FolderSyncLifecycle
+import life.michaelwong.covalent.model.FolderSyncMutation
+import life.michaelwong.covalent.model.FolderSyncPeer
+import life.michaelwong.covalent.model.FolderSyncStatus
 import life.michaelwong.covalent.model.NodeStatus
 import life.michaelwong.covalent.model.NetworkPairing
 import life.michaelwong.covalent.model.NetworkPairingDirection
@@ -134,6 +144,74 @@ class CovalentNodeClient(
             certificateFingerprint = json.getString("certificateFingerprint"),
         )
     }
+
+    /** Reads only the redacted folder-sync projection from the authenticated node. */
+    fun folderSyncStatus(baseUrl: String, token: String): FolderSyncStatus =
+        request(baseUrl, "GET", "/api/v1/sync/status", token, null).body.toFolderSyncStatus()
+
+    fun offerFolder(
+        baseUrl: String,
+        token: String,
+        peerId: String,
+        folderId: UUID,
+        label: String,
+        selectedRoot: String,
+    ): FolderSyncMutation {
+        requireUuid(peerId, "peer")
+        require(label.isNotBlank() && label.length <= MAX_FOLDER_LABEL_CHARS && label.none(Char::isISOControl)) {
+            "The shared folder name is invalid."
+        }
+        requireSelectedRoot(selectedRoot)
+        return post(
+            baseUrl,
+            token,
+            "/api/v1/sync/folders",
+            JSONObject()
+                .put("peerId", peerId)
+                .put("folderId", folderId.toString())
+                .put("label", label)
+                .put("selectedRoot", selectedRoot),
+        ).toFolderSyncMutation()
+    }
+
+    fun acceptFolder(
+        baseUrl: String,
+        token: String,
+        offerId: String,
+        selectedRoot: String,
+    ): FolderSyncMutation {
+        requireUuid(offerId, "offer")
+        requireSelectedRoot(selectedRoot)
+        return post(
+            baseUrl,
+            token,
+            "/api/v1/sync/accept",
+            JSONObject().put("offerId", offerId).put("selectedRoot", selectedRoot),
+        ).toFolderSyncMutation()
+    }
+
+    fun pauseFolder(baseUrl: String, token: String, offerId: String, paused: Boolean): FolderSyncMutation {
+        requireUuid(offerId, "offer")
+        return post(
+            baseUrl,
+            token,
+            "/api/v1/sync/pause",
+            JSONObject().put("offerId", offerId).put("paused", paused),
+        ).toFolderSyncMutation()
+    }
+
+    fun removeFolder(baseUrl: String, token: String, offerId: String): FolderSyncMutation {
+        requireUuid(offerId, "offer")
+        return post(
+            baseUrl,
+            token,
+            "/api/v1/sync/remove",
+            JSONObject().put("offerId", offerId),
+        ).toFolderSyncMutation()
+    }
+
+    fun retryFolderSync(baseUrl: String, token: String): FolderSyncMutation =
+        post(baseUrl, token, "/api/v1/sync/retry", JSONObject()).toFolderSyncMutation()
 
     fun peerGrants(baseUrl: String, token: String): List<PeerGrant> {
         val roster = request(baseUrl, "GET", "/api/v1/rosters/current", token, null).nullableBody
@@ -646,6 +724,11 @@ private const val MAX_RESTORE_PREVIEW_PAGE_SIZE = 1_000
 private const val TARGET_INVENTORY_PAGE_SIZE = 5_000
 private const val MAX_TARGET_INVENTORY_PAGE_SIZE = 5_000
 private const val MAX_TARGET_INVENTORY_ENTRIES = 250_000
+private const val MAX_FOLDER_LABEL_CHARS = 256
+private const val MAX_SELECTED_ROOT_CHARS = 4_096
+private const val MAX_FOLDER_SYNC_PEERS = 128
+private const val MAX_FOLDER_SYNC_SHARES = 4_096
+private const val MAX_FOLDER_SYNC_FOLDERS = 128
 private val SAFE_PLAN_ID = Regex("[A-Za-z0-9_-]{16,128}")
 private val SAFE_AUTHENTICATION_STRING = Regex("(?:[0-9]{4}-){3}[0-9]{4}")
 private val SAFE_NETWORK_PAIRING_ID = Regex("[A-Za-z0-9_-]{1,128}")
@@ -789,6 +872,158 @@ private fun requireUuid(value: String, label: String): String {
     }
     return value
 }
+
+private fun requireSelectedRoot(value: String) {
+    require(
+        value.length in 1..MAX_SELECTED_ROOT_CHARS && value.startsWith('/') &&
+            value.none(Char::isISOControl),
+    ) { "The selected folder path is invalid." }
+}
+
+private fun JSONObject.toFolderSyncMutation(): FolderSyncMutation {
+    requireJsonKeys(this, setOf("schemaVersion", "offerId", "lifecycle", "issue"))
+    check(getInt("schemaVersion") == COVALENT_PROTOCOL_VERSION)
+    return FolderSyncMutation(
+        offerId = optionalString("offerId")?.let { requireUuid(it, "folder offer ID") },
+        lifecycle = folderSyncLifecycle(getString("lifecycle")),
+        issue = optionalString("issue")?.let(::folderSyncIssue),
+    )
+}
+
+private fun JSONObject.toFolderSyncStatus(): FolderSyncStatus {
+    requireJsonKeys(
+        this,
+        setOf("schemaVersion", "availability", "lifecycle", "issue", "healthFreshness", "peers", "shares", "folders"),
+    )
+    check(getInt("schemaVersion") == COVALENT_PROTOCOL_VERSION)
+    val peerValues = getJSONArray("peers")
+    val shareValues = getJSONArray("shares")
+    val folderValues = getJSONArray("folders")
+    check(peerValues.length() <= MAX_FOLDER_SYNC_PEERS)
+    check(shareValues.length() <= MAX_FOLDER_SYNC_SHARES)
+    check(folderValues.length() <= MAX_FOLDER_SYNC_FOLDERS)
+    val peers = List(peerValues.length()) { index ->
+        peerValues.getJSONObject(index).let { peer ->
+            requireJsonKeys(peer, setOf("peerId", "displayName"))
+            FolderSyncPeer(
+                requireUuid(peer.getString("peerId"), "folder-sync peer ID"),
+                peer.getString("displayName").also {
+                    check(it.isNotBlank() && it.length <= 128 && it.none(Char::isISOControl))
+                },
+            )
+        }
+    }
+    check(peers.map(FolderSyncPeer::peerId).toSet().size == peers.size)
+    val shares = List(shareValues.length()) { index ->
+        shareValues.getJSONObject(index).let { share ->
+            requireJsonKeys(
+                share,
+                setOf("offerId", "folderId", "label", "peerId", "incoming", "phase", "expiresAtUnixMs", "expired"),
+            )
+            FolderShare(
+                offerId = requireUuid(share.getString("offerId"), "folder offer ID"),
+                folderId = requireUuid(share.getString("folderId"), "folder ID"),
+                label = share.getString("label").also {
+                    check(it.isNotBlank() && it.length <= MAX_FOLDER_LABEL_CHARS && it.none(Char::isISOControl))
+                },
+                peerId = requireUuid(share.getString("peerId"), "folder-sync peer ID"),
+                incoming = share.getBoolean("incoming"),
+                phase = when (share.getString("phase")) {
+                    "offered" -> FolderSharePhase.OFFERED
+                    "awaitingCommit" -> FolderSharePhase.AWAITING_COMMIT
+                    "ready" -> FolderSharePhase.READY
+                    "paused" -> FolderSharePhase.PAUSED
+                    "removed" -> FolderSharePhase.REMOVED
+                    else -> error("The node returned an unknown folder-share phase.")
+                },
+                expiresAtUnixMs = share.optionalLong("expiresAtUnixMs")?.also { check(it > 0) },
+                expired = share.getBoolean("expired"),
+            )
+        }
+    }
+    check(shares.map(FolderShare::offerId).toSet().size == shares.size)
+    check(shares.all { share ->
+        share.phase == FolderSharePhase.REMOVED || peers.any { it.peerId == share.peerId }
+    })
+    val folders = List(folderValues.length()) { index ->
+        folderValues.getJSONObject(index).let { folder ->
+            requireJsonKeys(
+                folder,
+                setOf("folderId", "state", "stateChanged", "remainingFiles", "remainingBytes", "scanPullErrorCount", "reportedErrorRows", "statusError", "watchError"),
+            )
+            FolderHealth(
+                folderId = requireUuid(folder.getString("folderId"), "folder health ID"),
+                state = folder.getString("state").also {
+                    check(it in FOLDER_STATES) { "The node returned an unknown folder state." }
+                },
+                remainingFiles = folder.getLong("remainingFiles").also { check(it >= 0) },
+                remainingBytes = folder.getLong("remainingBytes").also { check(it >= 0) },
+                scanPullErrorCount = folder.getLong("scanPullErrorCount").also { check(it >= 0) },
+                reportedErrorRows = folder.getInt("reportedErrorRows").also { check(it in 0..128) },
+                statusError = folder.getBoolean("statusError"),
+                watchError = folder.getBoolean("watchError"),
+            ).also {
+                check(folder.getString("stateChanged").let { value ->
+                    value.length in 1..64 && value.none(Char::isISOControl)
+                }) { "The node returned an invalid folder state timestamp." }
+            }
+        }
+    }
+    check(folders.map(FolderHealth::folderId).toSet().size == folders.size)
+    return FolderSyncStatus(
+        availability = when (getString("availability")) {
+            "notPackaged" -> FolderSyncAvailability.NOT_PACKAGED
+            "needsAttention" -> FolderSyncAvailability.NEEDS_ATTENTION
+            "available" -> FolderSyncAvailability.AVAILABLE
+            else -> error("The node returned an unknown folder-sync availability.")
+        },
+        lifecycle = folderSyncLifecycle(getString("lifecycle")),
+        issue = optionalString("issue")?.let(::folderSyncIssue),
+        healthFreshness = when (getString("healthFreshness")) {
+            "neverObserved" -> FolderHealthFreshness.NEVER_OBSERVED
+            "fresh" -> FolderHealthFreshness.FRESH
+            "stale" -> FolderHealthFreshness.STALE
+            else -> error("The node returned an unknown folder-health freshness.")
+        },
+        peers = peers,
+        shares = shares,
+        folders = folders,
+    )
+}
+
+private fun folderSyncLifecycle(value: String): FolderSyncLifecycle = when (value) {
+    "stopped" -> FolderSyncLifecycle.STOPPED
+    "initialScanning" -> FolderSyncLifecycle.INITIAL_SCANNING
+    "running" -> FolderSyncLifecycle.RUNNING
+    "stillStopping" -> FolderSyncLifecycle.STILL_STOPPING
+    "needsAttention" -> FolderSyncLifecycle.NEEDS_ATTENTION
+    else -> error("The node returned an unknown folder-sync lifecycle.")
+}
+
+private fun folderSyncIssue(value: String): FolderSyncIssue = when (value) {
+    "installation" -> FolderSyncIssue.INSTALLATION
+    "folderAccess" -> FolderSyncIssue.FOLDER_ACCESS
+    "initialScan" -> FolderSyncIssue.INITIAL_SCAN
+    "journal" -> FolderSyncIssue.JOURNAL
+    "workerLaunch" -> FolderSyncIssue.WORKER_LAUNCH
+    "workerHealth" -> FolderSyncIssue.WORKER_HEALTH
+    "workerStop" -> FolderSyncIssue.WORKER_STOP
+    "peerRevocation" -> FolderSyncIssue.PEER_REVOCATION
+    else -> error("The node returned an unknown folder-sync issue.")
+}
+
+private fun requireJsonKeys(value: JSONObject, expected: Set<String>) {
+    val actual = buildSet {
+        val keys = value.keys()
+        while (keys.hasNext()) add(keys.next())
+    }
+    check(actual == expected) { "The node returned an unexpected folder-sync response." }
+}
+
+private val FOLDER_STATES = setOf(
+    "starting", "idle", "scanning", "scan-waiting", "sync-waiting", "sync-preparing",
+    "syncing", "cleaning", "clean-waiting", "error",
+)
 
 private data class TargetInventoryUpload(
     val inventoryId: String,

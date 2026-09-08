@@ -49,7 +49,7 @@ class ContractTest {
 
     @Test
     fun systemBackReturnsEverySecondaryScreenHome() {
-        listOf(Screen.PAIR, Screen.BACKUP, Screen.RESTORE, Screen.SETTINGS).forEach {
+        listOf(Screen.PAIR, Screen.FOLDERS, Screen.BACKUP, Screen.RESTORE, Screen.SETTINGS).forEach {
             assertEquals(Screen.HOME, it.systemBackTarget())
         }
         assertEquals(null, Screen.HOME.systemBackTarget())

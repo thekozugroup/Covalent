@@ -21,7 +21,9 @@ internal object CovalentNative {
         maximumTotalBytes: Long,
         freeSpaceReserveBytes: Long,
         keyProtectionLevel: Int,
+        backupProviderEnabled: Boolean,
         syncPackageInvalid: Boolean,
+        folderSyncAccessUnavailable: Boolean,
         syncGuardianPath: String,
         syncGuardianSha256: String,
         syncWorkerPath: String,
@@ -42,7 +44,9 @@ internal object CovalentNative {
         keyProtectionLevel: Int,
         recoveryKit: ByteArray,
         recoveryKey: ByteArray,
+        backupProviderEnabled: Boolean,
         syncPackageInvalid: Boolean,
+        folderSyncAccessUnavailable: Boolean,
         syncGuardianPath: String,
         syncGuardianSha256: String,
         syncWorkerPath: String,
@@ -77,6 +81,8 @@ internal object CovalentNative {
         freeSpaceReserveBytes: Long,
         keyProtectionLevel: KeyProtectionLevel,
         syncEngine: PackagedSyncEnginePackage,
+        backupProviderEnabled: Boolean = true,
+        folderSyncAccessUnavailable: Boolean = false,
     ): NativeNodeResponse {
         if (!libraryLoaded) return NativeNodeResponse.unavailable()
         return parse(runCatching {
@@ -91,7 +97,9 @@ internal object CovalentNative {
                 maximumTotalBytes,
                 freeSpaceReserveBytes,
                 keyProtectionLevel.wireValue,
+                backupProviderEnabled,
                 syncEngine is PackagedSyncEnginePackage.Invalid,
+                folderSyncAccessUnavailable,
                 packaged?.guardianPath.orEmpty(),
                 packaged?.guardianSha256.orEmpty(),
                 packaged?.workerPath.orEmpty(),
@@ -119,6 +127,8 @@ internal object CovalentNative {
         recoveryKit: ByteArray,
         recoveryKey: ByteArray,
         syncEngine: PackagedSyncEnginePackage,
+        backupProviderEnabled: Boolean = true,
+        folderSyncAccessUnavailable: Boolean = false,
     ): NativeNodeResponse {
         if (!libraryLoaded) return NativeNodeResponse.unavailable()
         return parse(runCatching {
@@ -135,7 +145,9 @@ internal object CovalentNative {
                 keyProtectionLevel.wireValue,
                 recoveryKit,
                 recoveryKey,
+                backupProviderEnabled,
                 syncEngine is PackagedSyncEnginePackage.Invalid,
+                folderSyncAccessUnavailable,
                 packaged?.guardianPath.orEmpty(),
                 packaged?.guardianSha256.orEmpty(),
                 packaged?.workerPath.orEmpty(),

@@ -87,7 +87,7 @@ fn identity_protection_accepted(level: i32) -> bool {
 
 struct NativeRegistry {
     runtime: Arc<tokio::runtime::Runtime>,
-    nodes: BTreeMap<u64, NodeRuntime>,
+    nodes: BTreeMap<u64, Arc<NodeRuntime>>,
     reserved_handles: BTreeSet<u64>,
     next_handle: u64,
 }
@@ -163,7 +163,7 @@ impl<'a> NativeResponse<'a> {
         Self {
             ok: true,
             code: "ok",
-            message: "This phone is storing backups.",
+            message: "Covalent's on-phone node is running.",
             handle: Some(handle),
             api_base_url: Some(api_base_url),
             peer_address: Some(peer_address),
@@ -219,6 +219,17 @@ fn provider_quota(
     })
 }
 
+fn apply_host_runtime_flags(
+    configuration: &mut NodeRuntimeConfig,
+    backup_provider_enabled: bool,
+    folder_sync_package_invalid: bool,
+    folder_sync_access_unavailable: bool,
+) {
+    configuration.local_provider_enabled = backup_provider_enabled;
+    configuration.folder_sync_package_invalid = folder_sync_package_invalid;
+    configuration.folder_sync_access_unavailable = folder_sync_access_unavailable;
+}
+
 struct StartNodeRequest {
     data_directory: String,
     device_name: String,
@@ -229,9 +240,11 @@ struct StartNodeRequest {
     maximum_total_bytes: u64,
     free_space_reserve_bytes: u64,
     key_protection_level: i32,
+    backup_provider_enabled: bool,
     recovery: Option<RecoveryBootstrap>,
     folder_sync: Option<FolderSyncRuntimeConfig>,
     folder_sync_package_invalid: bool,
+    folder_sync_access_unavailable: bool,
 }
 
 fn start_node(request: StartNodeRequest) -> NativeResponse<'static> {
@@ -245,9 +258,11 @@ fn start_node(request: StartNodeRequest) -> NativeResponse<'static> {
         maximum_total_bytes,
         free_space_reserve_bytes,
         key_protection_level,
+        backup_provider_enabled,
         recovery,
         folder_sync,
         folder_sync_package_invalid,
+        folder_sync_access_unavailable,
     } = request;
     let recovering = recovery.is_some();
     let result = (|| {
@@ -299,7 +314,14 @@ fn start_node(request: StartNodeRequest) -> NativeResponse<'static> {
         configuration.key_protector = Some(Arc::new(protector));
         configuration.recovery = recovery;
         configuration.folder_sync = folder_sync;
-        configuration.folder_sync_package_invalid = folder_sync_package_invalid;
+        // Capture the persisted provider toggle in this launch snapshot. Folder sync and
+        // owner/client backup stay available while remote chunk admission is disabled.
+        apply_host_runtime_flags(
+            &mut configuration,
+            backup_provider_enabled,
+            folder_sync_package_invalid,
+            folder_sync_access_unavailable,
+        );
         let node = match runtime.block_on(NodeRuntime::start(configuration)) {
             Ok(node) => node,
             Err(_) => {
@@ -325,7 +347,7 @@ fn start_node(request: StartNodeRequest) -> NativeResponse<'static> {
             let _ = runtime.block_on(node.stop());
             return Err("runtime_unavailable");
         }
-        registry.nodes.insert(handle, node);
+        registry.nodes.insert(handle, Arc::new(node));
         Ok(response)
     })();
     match result {
@@ -376,8 +398,8 @@ fn stop_node(handle: u64) -> NativeResponse<'static> {
         }
         let registry = registry().map_err(|_| "runtime_unavailable")?;
         let (node, runtime) = {
-            let mut registry = registry.lock().map_err(|_| "runtime_unavailable")?;
-            let node = registry.nodes.remove(&handle);
+            let registry = registry.lock().map_err(|_| "runtime_unavailable")?;
+            let node = registry.nodes.get(&handle).cloned();
             (node, Arc::clone(&registry.runtime))
         };
         let Some(node) = node else {
@@ -386,6 +408,14 @@ fn stop_node(handle: u64) -> NativeResponse<'static> {
         runtime
             .block_on(node.stop())
             .map_err(|_| "node_stop_failed")?;
+        let mut registry = registry.lock().map_err(|_| "runtime_unavailable")?;
+        if registry
+            .nodes
+            .get(&handle)
+            .is_some_and(|incumbent| Arc::ptr_eq(incumbent, &node))
+        {
+            registry.nodes.remove(&handle);
+        }
         Ok(NativeResponse::stopped())
     })();
     match result {
@@ -559,7 +589,9 @@ extern "system" fn native_start<'local>(
     maximum_total_bytes: jlong,
     free_space_reserve_bytes: jlong,
     key_protection_level: jint,
+    backup_provider_enabled: jboolean,
     sync_package_invalid: jboolean,
+    folder_sync_access_unavailable: jboolean,
     sync_guardian_path: JString<'local>,
     sync_guardian_sha256: JString<'local>,
     sync_worker_path: JString<'local>,
@@ -591,9 +623,11 @@ extern "system" fn native_start<'local>(
                     maximum_total_bytes: maximum_total_bytes as u64,
                     free_space_reserve_bytes: free_space_reserve_bytes as u64,
                     key_protection_level,
+                    backup_provider_enabled,
                     recovery: None,
                     folder_sync,
                     folder_sync_package_invalid,
+                    folder_sync_access_unavailable,
                 })
             }
             _ => NativeResponse::error(
@@ -618,7 +652,9 @@ extern "system" fn native_recover_start<'local>(
     key_protection_level: jint,
     recovery_kit: JByteArray<'local>,
     recovery_key: JByteArray<'local>,
+    backup_provider_enabled: jboolean,
     sync_package_invalid: jboolean,
+    folder_sync_access_unavailable: jboolean,
     sync_guardian_path: JString<'local>,
     sync_guardian_sha256: JString<'local>,
     sync_worker_path: JString<'local>,
@@ -665,9 +701,11 @@ extern "system" fn native_recover_start<'local>(
                     maximum_total_bytes: maximum_total_bytes as u64,
                     free_space_reserve_bytes: free_space_reserve_bytes as u64,
                     key_protection_level,
+                    backup_provider_enabled,
                     recovery: Some(recovery),
                     folder_sync,
                     folder_sync_package_invalid,
+                    folder_sync_access_unavailable,
                 })
             }
             _ => NativeResponse::error(
@@ -730,11 +768,11 @@ pub unsafe extern "system" fn JNI_OnLoad(
             let class = environment.find_class(JNIString::from(NATIVE_CLASS))?;
             let native_start_name = JNIString::from("nativeStart");
             let native_start_signature = JNIString::from(
-                "(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJIZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+                "(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJIZZZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
             );
             let native_recover_start_name = JNIString::from("nativeRecoverStart");
             let native_recover_start_signature = JNIString::from(
-                "(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJI[B[BZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+                "(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJI[B[BZZZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
             );
             let native_stop_name = JNIString::from("nativeStop");
             let native_stop_signature = JNIString::from("(J)Ljava/lang/String;");
@@ -791,8 +829,11 @@ mod tests {
     use super::{
         IdentityProtection, MAX_RECOVERY_KIT_BYTES, NativeRegistry, PROTECTION_SOFTWARE,
         PROTECTION_STRONGBOX, PROTECTION_TRUSTED_ENVIRONMENT, PROTECTION_UNAVAILABLE,
-        identity_protection_accepted, packaged_folder_sync, provider_quota, recovery_bootstrap,
+        apply_host_runtime_flags, identity_protection_accepted, loopback_zero,
+        packaged_folder_sync, provider_quota, recovery_bootstrap, wildcard_peer_zero,
     };
+    use covalent_node::runtime::NodeRuntimeConfig;
+    use std::path::PathBuf;
 
     #[test]
     fn identity_protection_decodes_every_contract_level() {
@@ -850,9 +891,11 @@ mod tests {
             maximum_total_bytes: 2 * 1_024 * 1_024 * 1_024,
             free_space_reserve_bytes: 512 * 1_024 * 1_024,
             key_protection_level: PROTECTION_UNAVAILABLE,
+            backup_provider_enabled: true,
             recovery: None,
             folder_sync: None,
             folder_sync_package_invalid: false,
+            folder_sync_access_unavailable: false,
         });
         assert!(!response.ok);
         assert_eq!(response.code, "secure_key_protector_required");
@@ -876,9 +919,11 @@ mod tests {
                 maximum_total_bytes: 2 * 1_024 * 1_024 * 1_024,
                 free_space_reserve_bytes: 512 * 1_024 * 1_024,
                 key_protection_level: PROTECTION_SOFTWARE,
+                backup_provider_enabled: true,
                 recovery: None,
                 folder_sync: None,
                 folder_sync_package_invalid: false,
+                folder_sync_access_unavailable: false,
             });
             assert!(!response.ok);
             assert_eq!(response.code, "invalid_key_encryption_key");
@@ -929,6 +974,19 @@ mod tests {
         assert!(provider_quota(0, 0).is_err());
         assert!(provider_quota(256 * 1_024 * 1_024, 1).is_err());
         assert!(provider_quota(512 * 1_024 * 1_024, 0).is_ok());
+    }
+
+    #[test]
+    fn host_flags_keep_provider_and_folder_access_policies_independent() {
+        let mut configuration = NodeRuntimeConfig::new(
+            PathBuf::from("private-node"),
+            loopback_zero(),
+            wildcard_peer_zero(),
+        );
+        apply_host_runtime_flags(&mut configuration, false, true, true);
+        assert!(!configuration.local_provider_enabled);
+        assert!(configuration.folder_sync_package_invalid);
+        assert!(configuration.folder_sync_access_unavailable);
     }
 
     #[test]

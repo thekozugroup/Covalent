@@ -18,6 +18,7 @@ use tokio::sync::{Mutex, watch};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
+use super::controller::InitialScanTask;
 use super::{
     EngineInstallation, EngineSessionError, EngineSessionSettings, FolderHealth,
     FolderSharingJournal, ManagedEngineSession, ShareSummary, SharingError, StopOutcome,
@@ -31,15 +32,18 @@ const HEALTH_INTERVAL: Duration = Duration::from_secs(5);
 pub enum FolderSyncIssue {
     Journal,
     WorkerLaunch,
+    InitialScan,
     WorkerHealth,
     WorkerStop,
     PeerRevocation,
 }
 
-/// Current worker lifecycle. This does not claim that folders are up to date.
+/// Current worker lifecycle. `InitialScanning` is network-inert and this enum
+/// never claims that folders are up to date.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FolderSyncLifecycle {
     Stopped,
+    InitialScanning,
     Running,
     StillStopping,
     NeedsAttention(FolderSyncIssue),
@@ -183,6 +187,22 @@ impl Launcher {
 }
 
 impl Session {
+    fn begin_initial_scan(&self) -> InitialScanTask {
+        match self {
+            Self::Production(session) => session.begin_initial_scan(),
+            #[cfg(test)]
+            Self::Test(session) => session.begin_initial_scan(),
+        }
+    }
+
+    async fn promote_after_initial_scan(&mut self) -> Result<(), ()> {
+        match self {
+            Self::Production(session) => session.promote_after_initial_scan().await.map_err(|_| ()),
+            #[cfg(test)]
+            Self::Test(session) => session.promote_after_initial_scan().await,
+        }
+    }
+
     fn close_lifeline(&mut self) {
         match self {
             Self::Production(session) => session.close_lifeline(),
@@ -217,6 +237,7 @@ impl Session {
 
 struct ServiceInner {
     journal: FolderSharingJournal,
+    initial_scan: Option<InitialScanTask>,
     session: Option<Session>,
     applied_settings: Option<EngineSessionSettings>,
     lifecycle: FolderSyncLifecycle,
@@ -291,6 +312,7 @@ impl FolderSyncService {
         let shared = Arc::new(ServiceShared {
             inner: Mutex::new(ServiceInner {
                 journal,
+                initial_scan: None,
                 session: None,
                 applied_settings: None,
                 lifecycle: FolderSyncLifecycle::Stopped,
@@ -332,9 +354,14 @@ impl FolderSyncService {
                 return Err(map_journal_error(error));
             }
         };
-        if inner.lifecycle == FolderSyncLifecycle::Running
-            && inner.applied_settings.as_ref() == Some(&desired)
+        if matches!(
+            inner.lifecycle,
+            FolderSyncLifecycle::Running | FolderSyncLifecycle::InitialScanning
+        ) && inner.applied_settings.as_ref() == Some(&desired)
         {
+            if inner.lifecycle == FolderSyncLifecycle::InitialScanning {
+                advance_initial_scan(&mut inner).await;
+            }
             return Ok(inner.lifecycle);
         }
         if inner.session.is_some() {
@@ -395,7 +422,10 @@ impl FolderSyncService {
         // Reading the outbox must not restart a worker stopped by a health
         // failure. Only an explicit retry or a new user/peer decision may do
         // that. A running worker still reconciles newly revoked membership.
-        if inner.lifecycle == FolderSyncLifecycle::Running {
+        if matches!(
+            inner.lifecycle,
+            FolderSyncLifecycle::Running | FolderSyncLifecycle::InitialScanning
+        ) {
             reconcile_committed(&self.shared, &mut inner).await;
         }
         Ok(CommittedMutation {
@@ -603,9 +633,14 @@ async fn reconcile_committed(
             return inner.lifecycle;
         }
     };
-    if inner.lifecycle == FolderSyncLifecycle::Running
-        && inner.applied_settings.as_ref() == Some(&desired)
+    if matches!(
+        inner.lifecycle,
+        FolderSyncLifecycle::Running | FolderSyncLifecycle::InitialScanning
+    ) && inner.applied_settings.as_ref() == Some(&desired)
     {
+        if inner.lifecycle == FolderSyncLifecycle::InitialScanning {
+            advance_initial_scan(inner).await;
+        }
         return inner.lifecycle;
     }
     if inner.session.is_some()
@@ -656,10 +691,19 @@ async fn apply_desired(
     inner.lifecycle = FolderSyncLifecycle::NeedsAttention(FolderSyncIssue::WorkerLaunch);
     match shared.launcher.launch(settings).await {
         Ok(session) => {
+            let initial_scan = session.begin_initial_scan();
             inner.session = Some(session);
+            inner.initial_scan = Some(initial_scan);
             inner.applied_settings = Some(retained_settings);
-            inner.lifecycle = FolderSyncLifecycle::Running;
-            Ok(())
+            inner.lifecycle = FolderSyncLifecycle::InitialScanning;
+            tokio::task::yield_now().await;
+            advance_initial_scan(inner).await;
+            if inner.lifecycle == FolderSyncLifecycle::NeedsAttention(FolderSyncIssue::InitialScan)
+            {
+                Err(FolderSyncIssue::InitialScan)
+            } else {
+                Ok(())
+            }
         }
         Err(_) => Err(FolderSyncIssue::WorkerLaunch),
     }
@@ -671,6 +715,7 @@ async fn quiesce(
     restart_after_stop: bool,
 ) -> Result<(), FolderSyncServiceError> {
     let Some(session) = &mut inner.session else {
+        inner.initial_scan.take();
         inner.lifecycle = after_stop;
         inner.after_stop = after_stop;
         inner.restart_after_stop = false;
@@ -678,6 +723,10 @@ async fn quiesce(
     };
     // This is deliberately synchronous and precedes the stop future.
     session.close_lifeline();
+    if let Some(mut scan) = inner.initial_scan.take() {
+        scan.abort();
+        let _ = scan.finish().await;
+    }
     if inner.health_freshness == FolderHealthFreshness::Fresh {
         inner.health_freshness = FolderHealthFreshness::Stale;
     }
@@ -713,6 +762,32 @@ async fn check_health(shared: &ServiceShared, inner: &mut ServiceInner) {
         {
             inner.lifecycle = FolderSyncLifecycle::NeedsAttention(issue);
         }
+        return;
+    }
+    if inner.lifecycle == FolderSyncLifecycle::InitialScanning {
+        let desired = match inner.journal.desired_settings() {
+            Ok(desired) => desired,
+            Err(_) => {
+                let _ = quiesce(
+                    inner,
+                    FolderSyncLifecycle::NeedsAttention(FolderSyncIssue::Journal),
+                    false,
+                )
+                .await;
+                return;
+            }
+        };
+        if inner.applied_settings.as_ref() != Some(&desired) {
+            if quiesce(inner, FolderSyncLifecycle::Stopped, true)
+                .await
+                .is_ok()
+                && let Err(issue) = start_desired(shared, inner).await
+            {
+                inner.lifecycle = FolderSyncLifecycle::NeedsAttention(issue);
+            }
+            return;
+        }
+        advance_initial_scan(inner).await;
         return;
     }
     if inner.lifecycle != FolderSyncLifecycle::Running {
@@ -765,6 +840,41 @@ async fn check_health(shared: &ServiceShared, inner: &mut ServiceInner) {
         false,
     )
     .await;
+}
+
+async fn advance_initial_scan(inner: &mut ServiceInner) {
+    let Some(scan) = &inner.initial_scan else {
+        let attention = FolderSyncLifecycle::NeedsAttention(FolderSyncIssue::InitialScan);
+        if quiesce(inner, attention, false).await.is_err()
+            && inner.lifecycle != FolderSyncLifecycle::StillStopping
+        {
+            inner.lifecycle = attention;
+        }
+        return;
+    };
+    if !scan.is_finished() {
+        return;
+    }
+    let mut scan = inner.initial_scan.take().expect("scan checked above");
+    let scan_result = scan.finish().await;
+    let promotion_result = if scan_result.is_ok() {
+        match &mut inner.session {
+            Some(session) => session.promote_after_initial_scan().await,
+            None => Err(()),
+        }
+    } else {
+        Err(())
+    };
+    if promotion_result.is_ok() {
+        inner.lifecycle = FolderSyncLifecycle::Running;
+        return;
+    }
+    let attention = FolderSyncLifecycle::NeedsAttention(FolderSyncIssue::InitialScan);
+    if quiesce(inner, attention, false).await.is_err()
+        && inner.lifecycle != FolderSyncLifecycle::StillStopping
+    {
+        inner.lifecycle = attention;
+    }
 }
 
 async fn health_loop(
@@ -823,9 +933,18 @@ pub(super) enum TestStopBehavior {
 }
 
 #[cfg(test)]
+#[derive(Clone)]
+pub(super) enum TestScanBehavior {
+    Complete,
+    Fail,
+    Wait(Arc<Notify>),
+}
+
+#[cfg(test)]
 #[derive(Default)]
 struct TestBackendState {
     fail_launches: usize,
+    fail_promotions: usize,
     fail_health: bool,
     health_observation: Vec<FolderHealth>,
     launches: usize,
@@ -834,8 +953,11 @@ struct TestBackendState {
     close_calls: usize,
     stop_calls: usize,
     health_calls: usize,
+    scan_calls: usize,
+    promotions: usize,
     launched_folder_counts: Vec<usize>,
     stops: VecDeque<TestStopBehavior>,
+    scans: VecDeque<TestScanBehavior>,
 }
 
 #[cfg(test)]
@@ -856,6 +978,14 @@ impl TestBackend {
         self.state.lock().unwrap().fail_launches += 1;
     }
 
+    pub(super) fn push_scan(&self, behavior: TestScanBehavior) {
+        self.state.lock().unwrap().scans.push_back(behavior);
+    }
+
+    pub(super) fn fail_next_promotion(&self) {
+        self.state.lock().unwrap().fail_promotions += 1;
+    }
+
     pub(super) fn set_health_failure(&self, fail: bool) {
         self.state.lock().unwrap().fail_health = fail;
     }
@@ -873,6 +1003,8 @@ impl TestBackend {
             close_calls: state.close_calls,
             stop_calls: state.stop_calls,
             health_calls: state.health_calls,
+            scan_calls: state.scan_calls,
+            promotions: state.promotions,
             launched_folder_counts: state.launched_folder_counts.clone(),
         }
     }
@@ -913,6 +1045,8 @@ pub(super) struct TestBackendSnapshot {
     pub(super) close_calls: usize,
     pub(super) stop_calls: usize,
     pub(super) health_calls: usize,
+    pub(super) scan_calls: usize,
+    pub(super) promotions: usize,
     pub(super) launched_folder_counts: Vec<usize>,
 }
 
@@ -924,6 +1058,43 @@ struct TestSession {
 
 #[cfg(test)]
 impl TestSession {
+    fn begin_initial_scan(&self) -> InitialScanTask {
+        let behavior = {
+            let mut state = self.backend.state.lock().unwrap();
+            state.scan_calls += 1;
+            state
+                .scans
+                .pop_front()
+                .unwrap_or(TestScanBehavior::Complete)
+        };
+        InitialScanTask::new(tokio::spawn(async move {
+            match behavior {
+                TestScanBehavior::Complete => Ok(()),
+                TestScanBehavior::Fail => Err(EngineSessionError::EngineUnavailable),
+                TestScanBehavior::Wait(notify) => {
+                    notify.notified().await;
+                    Ok(())
+                }
+            }
+        }))
+    }
+
+    async fn promote_after_initial_scan(&mut self) -> Result<(), ()> {
+        let fail = {
+            let mut state = self.backend.state.lock().unwrap();
+            state.promotions += 1;
+            let fail = state.fail_promotions > 0;
+            state.fail_promotions = state.fail_promotions.saturating_sub(1);
+            fail
+        };
+        if fail {
+            self.close_lifeline();
+            Err(())
+        } else {
+            Ok(())
+        }
+    }
+
     fn close_lifeline(&mut self) {
         if !self.closed {
             self.closed = true;

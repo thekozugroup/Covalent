@@ -1559,6 +1559,11 @@ func realDaemonBackupVerifyAndRestore() async throws {
                 status: 200,
                 json: #"{"deviceName":"Apple test","protocolVersion":1,"lanDiscovery":false,"platformTier":"tier1","state":"ready"}"#
             )
+        case "/api/v1/sync/status":
+            return TestResponse.response(
+                request, status: 200,
+                json: #"{"schemaVersion":1,"availability":"notPackaged","lifecycle":"stopped","issue":null,"healthFreshness":"neverObserved","peers":[],"shares":[],"folders":[]}"#
+            )
         case "/api/v1/config/export":
             return TestResponse.response(
                 request,
@@ -1827,8 +1832,8 @@ func realDaemonBackupVerifyAndRestore() async throws {
             #expect(request.httpMethod == "POST")
             let payload = try #require(requestBody(request))
             let object = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
-            #expect(object["peerId"] as? String == peer.uuidString.lowercased())
-            #expect(object["folderId"] as? String == folder.uuidString.lowercased())
+            #expect(UUID(uuidString: try #require(object["peerId"] as? String)) == peer)
+            #expect(UUID(uuidString: try #require(object["folderId"] as? String)) == folder)
             #expect(object["label"] as? String == "Plans")
             #expect(object["selectedRoot"] as? String == "/chosen/by/user")
         case 1:
@@ -1895,6 +1900,33 @@ func realDaemonBackupVerifyAndRestore() async throws {
     )
     #expect(scanning.displayState(for: ready) == .checkingFolder)
     #expect(failed.displayState(for: ready) == .needsAttention)
+}
+
+@Test func folderInitialScanUsesCheckingStateUntilSafetyGateCompletes() {
+    let peer = UUID()
+    let offered = FolderShare(
+        offerId: UUID(), folderId: UUID(), label: "Plans", peerId: peer,
+        incoming: false, phase: .offered, expiresAtUnixMs: 10, expired: false
+    )
+    let scanning = FolderSyncStatus(
+        availability: "available", lifecycle: "initialScanning", issue: nil,
+        healthFreshness: "unknown", peers: [], shares: [offered], folders: []
+    )
+    #expect(scanning.isInitialScanning)
+    #expect(scanning.displayState(for: offered) == .checkingFolder)
+
+    let failed = FolderSyncStatus(
+        availability: "available", lifecycle: "needsAttention", issue: "initialScan",
+        healthFreshness: "unknown", peers: [], shares: [offered], folders: []
+    )
+    #expect(!failed.isInitialScanning)
+    #expect(failed.displayState(for: offered) == .needsAttention)
+
+    let unavailable = FolderSyncStatus(
+        availability: "unavailable", lifecycle: "initialScanning", issue: nil,
+        healthFreshness: "unknown", peers: [], shares: [offered], folders: []
+    )
+    #expect(!unavailable.isInitialScanning)
 }
 
 private func policyRestorePlan(
@@ -2090,6 +2122,11 @@ private func durableRestoreRecorder(
                 request,
                 status: 200,
                 json: #"{"deviceName":"Apple test","protocolVersion":1,"lanDiscovery":false,"platformTier":"tier1","state":"ready"}"#
+            )
+        case "/api/v1/sync/status":
+            return TestResponse.response(
+                request, status: 200,
+                json: #"{"schemaVersion":1,"availability":"notPackaged","lifecycle":"stopped","issue":null,"healthFreshness":"neverObserved","peers":[],"shares":[],"folders":[]}"#
             )
         case "/api/v1/config/export":
             return TestResponse.response(

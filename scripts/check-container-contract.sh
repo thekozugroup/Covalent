@@ -6,6 +6,7 @@ dockerfile="$repo_root/packaging/docker/Dockerfile"
 documentation="$repo_root/packaging/docker/README.md"
 entrypoint="$repo_root/packaging/docker/entrypoint.sh"
 compose="$repo_root/packaging/docker/compose.yaml"
+sync_compose="$repo_root/packaging/docker/compose.sync.yaml"
 e2e_compose="$repo_root/packaging/docker/compose.e2e.yaml"
 e2e_script="$repo_root/scripts/docker-compose-e2e.sh"
 runtime_script="$repo_root/scripts/check-container-runtime.sh"
@@ -26,6 +27,10 @@ require_text() {
 
 require_text "FROM rust:1.97.1-alpine3.23@sha256:" "$dockerfile"
 require_text "ENV CARGO_INCREMENTAL=0" "$dockerfile"
+require_text 'source: "${COVALENT_SYNC_FOLDER:?Set COVALENT_SYNC_FOLDER to an existing folder you want to sync}"' "$sync_compose"
+require_text 'target: /sync' "$sync_compose"
+require_text 'read_only: false' "$sync_compose"
+require_text 'create_host_path: false' "$sync_compose"
 require_text "FROM alpine:3.23@$runtime_digest" "$dockerfile"
 
 # Caddy is built from source against a pinned Go toolchain rather than lifted

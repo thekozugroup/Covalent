@@ -50,4 +50,21 @@ if run_fixture DurableTransferJournal.valid.kt SafTransferBridge.missing-backup.
 fi
 grep -q '/api/v1/backups/archive.*Android client.*stored as a path constant but the client never issues it' "$issuer_output"
 
+run_fixture DurableTransferJournal.valid.kt SafTransferBridge.valid.kt >/dev/null
+python3 - "$fixture_root/packaging/web/folder-sync-flow.js" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+source = path.read_text()
+expected = 'options.api(path, { method: "POST", body: JSON.stringify(body) })'
+assert source.count(expected) == 1
+path.write_text(source.replace(expected, expected.replace('"POST"', '"GET"')))
+PY
+web_method_output="$fixture_root/web-wrong-method.out"
+if node "$fixture_root/scripts/check-openapi-routes.mjs" >"$web_method_output" 2>&1; then
+  echo "route checker accepted a GET folder mutation" >&2
+  exit 1
+fi
+grep -q 'GET /api/v1/sync/folders.*the router serves only POST there' "$web_method_output"
+
 echo "OpenAPI route handoff fixtures: ok"

@@ -6,6 +6,7 @@
     <meta name="color-scheme" content="light dark" />
     <title>Covalent node</title>
     <link rel="stylesheet" href="/assets/app.css" />
+    <script src="/assets/folder-sync-flow.js" defer></script>
     <script src="/assets/pairing-flow.js" defer></script>
     <script src="/assets/restore-plan-flow.js" defer></script>
     <script src="/assets/restore-preview-flow.js" defer></script>
@@ -48,13 +49,49 @@
       </section>
 
       <nav class="tabs" aria-label="Covalent actions" role="tablist">
-        <button id="pair-tab" role="tab" aria-selected="true" aria-controls="pair-panel" tabindex="0" data-tab="pair">Pair</button>
+        <button id="folders-tab" role="tab" aria-selected="true" aria-controls="folders-panel" tabindex="0" data-tab="folders">Folders</button>
+        <button id="pair-tab" role="tab" aria-selected="false" aria-controls="pair-panel" tabindex="-1" data-tab="pair">Pair</button>
         <button id="backup-tab" role="tab" aria-selected="false" aria-controls="backup-panel" tabindex="-1" data-tab="backup">Backup</button>
         <button id="restore-tab" role="tab" aria-selected="false" aria-controls="restore-panel" tabindex="-1" data-tab="restore">Restore</button>
         <button id="settings-tab" role="tab" aria-selected="false" aria-controls="settings-panel" tabindex="-1" data-tab="settings">Settings</button>
       </nav>
 
-      <section id="pair-panel" role="tabpanel" aria-labelledby="pair-tab" tabindex="0" data-panel="pair">
+      <section id="folders-panel" role="tabpanel" aria-labelledby="folders-tab" tabindex="0" data-panel="folders">
+        <div class="panel-heading"><div><h2>Keep folders in sync</h2><p class="muted">Share a folder with a confirmed paired device. Covalent reports local folder health; it does not call an idle folder “up to date.”</p></div></div>
+
+        <section class="card" aria-live="polite">
+          <div class="button-row"><h3>Shared folders</h3><button type="button" class="secondary" data-folders-refresh>Refresh folders</button></div>
+          <p data-folders-status>Unlock the console to load folder sync status.</p>
+          <p class="muted" data-folders-empty>No shared folders are available yet.</p>
+          <ul class="device-list folder-list" data-folders-list></ul>
+          <button type="button" class="secondary" data-folders-retry-service data-folder-mutation hidden>Try folder sync again</button>
+        </section>
+
+        <section class="card" data-folder-pending hidden>
+          <h3>Saved folder offer</h3>
+          <p>A previous request may have reached this server. Retry its exact saved folder identity and path to avoid creating a duplicate.</p>
+          <p class="muted" data-folder-pending-summary></p>
+          <div class="button-row">
+            <button type="button" data-folder-offer-retry data-folder-mutation>Retry saved offer</button>
+            <button type="button" class="quiet" data-folder-offer-discard data-folder-mutation>Discard saved retry</button>
+          </div>
+        </section>
+
+        <form class="card" data-folder-offer-form>
+          <h3>Share another folder</h3>
+          <label>Paired device <select name="peerId" data-folder-peer required disabled><option value="">Unlock the console to load confirmed devices</option></select></label>
+          <label>Folder name <input name="label" maxlength="120" placeholder="Shared documents" required /></label>
+          <details class="advanced">
+            <summary>Advanced server folder path</summary>
+            <p class="muted">Choose a path already mounted into this server. A browser folder picker would select files on the computer running the browser and cannot grant this server access.</p>
+            <label>Folder path on this server <input name="selectedRoot" value="/sync" maxlength="1024" required /></label>
+          </details>
+          <p class="notice">The default <code>/sync</code> path must be a writable folder mounted into the Covalent server.</p>
+          <button data-folder-offer-submit data-folder-mutation disabled>Share folder</button>
+        </form>
+      </section>
+
+      <section id="pair-panel" role="tabpanel" aria-labelledby="pair-tab" tabindex="0" data-panel="pair" hidden>
         <div class="panel-heading"><div><h2>Pair a device</h2><p class="muted">Pairing requires both people to compare the same short code before a device receives any role.</p></div></div>
 
         <section class="card">

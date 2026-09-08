@@ -1361,7 +1361,21 @@ mod tests {
         )
         .expect("recovery JSON");
         assert_eq!(durable_recovery["schemaVersion"], 1);
-        assert_eq!(durable_recovery["status"]["phase"], "blocked");
+        // Immediate shutdown can cancel recovery before the unavailable
+        // provider has been contacted. Both states must remain retryable;
+        // neither may be reported as completed or lose the provider roster.
+        assert!(matches!(
+            durable_recovery["status"]["phase"].as_str(),
+            Some("pending" | "blocked")
+        ));
+        assert!(
+            crate::recovery_state::RecoveryStateStore::open(
+                recovered_path.join("recovery-state.json")
+            )
+            .expect("reopen durable recovery progress")
+            .should_retry()
+            .expect("interrupted recovery stays retryable")
+        );
         assert_eq!(
             durable_recovery["status"]["configuredProviderIds"],
             serde_json::json!([provider_id])

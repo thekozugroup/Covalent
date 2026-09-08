@@ -20,8 +20,24 @@ not published, not installable, not gated on, and not being invested in. That
 lane is deliberately excluded from every release workflow's required checks.
 There is no committed milestone for making iOS supported.
 
-## Later
+## Two-way folder synchronization
 
-Two-way folder synchronization is planned, not implemented or released. The intended journey is simple: choose a folder, choose member devices and roles, then synchronize. Its concrete behavior and acceptance gates are recorded in [ADR 0006](../adr/0006-two-way-folder-sync.md) and [Folder synchronization](synchronization.md).
+Two-way folder synchronization is under active development and is not yet
+released. The intended journey is simple: choose a folder, choose a paired
+device, then accept the invitation on that device. [ADR 0007](../adr/0007-maintained-folder-sync-engine.md)
+selects a pinned maintained Syncthing worker, controlled by Covalent's native
+folder consent, verified package and durable lifecycle boundaries. The
+experimental custom protocol in ADR 0006 is inactive.
 
-Any release claim requires authenticated distinct writer identities, explicit membership and revocation, independent epoch keys and recipient wraps, causally preserved concurrent file/directory/delete values, safe tombstone retention, opaque encrypted providers, crash-safe authorized-root application on macOS and SAF-safe application on Android. Backup and restore remain their own supported scope; Windows, iOS, automatic replica placement, and required hosted services remain excluded.
+Actual production runtime tests already cover pairing, signed folder consent,
+bidirectional transfer, pause/resume, restart and file-preserving revocation.
+Completion still requires the initial full-scan barrier, complete native and
+server setup, permission repair, lifecycle clarity, packaging acceptance,
+security and notices, and measured performance. Track these gates in
+[Completion progress](../release/completion-progress.md).
+
+Backup and restore retain their own identity and supported scope. Android's
+SAF backup path remains separate from the personal-build raw-folder sync
+permission. Windows, iOS, automatic replica placement and required hosted
+services remain excluded. Docker is the accepted Unraid validation target
+while Atlas is offline.

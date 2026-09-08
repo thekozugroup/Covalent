@@ -1032,6 +1032,10 @@ public enum FolderShareDisplayState: Equatable, Sendable {
 }
 
 extension FolderSyncStatus {
+    public var isInitialScanning: Bool {
+      availability == "available" && lifecycle == "initialScanning"
+    }
+
     /// This is deliberately local-engine health, not a remote-convergence
     /// claim. The status endpoint currently has no connected-peer signal.
     public func displayState(for share: FolderShare) -> FolderShareDisplayState {
@@ -1040,6 +1044,9 @@ extension FolderSyncStatus {
       }
       if share.phase == .paused {
         return .paused
+      }
+      if isInitialScanning {
+        return .checkingFolder
       }
       if lifecycle == "needsAttention" || issue != nil {
         return .needsAttention

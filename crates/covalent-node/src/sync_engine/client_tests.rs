@@ -189,6 +189,63 @@ async fn whole_exchange_deadline_closes_a_stalled_response() {
 }
 
 #[tokio::test]
+async fn full_scan_can_use_a_longer_bound_without_expanding_normal_requests() {
+    let mut ordinary = Server::new();
+    ordinary.client.timeout = Duration::from_millis(20);
+    let ordinary_peer = async {
+        let (mut socket, _) = ordinary.accept_request().await;
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let _ = socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+            .await;
+    };
+    let (ordinary_result, ()) = tokio::join!(
+        ordinary.client.command(EngineEndpoint::Shutdown),
+        ordinary_peer
+    );
+    assert_eq!(ordinary_result.unwrap_err(), EngineApiError::Timeout);
+
+    let scan = Server::new();
+    let folder = Uuid::from_u128(7);
+    let scan_peer = async {
+        let (mut socket, request) = scan.accept_request().await;
+        let expected = format!("POST /rest/db/scan?folder={folder} HTTP/1.1\r\n");
+        assert!(request.starts_with(expected.as_bytes()));
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+            .await
+            .unwrap();
+    };
+    let (scan_result, ()) = tokio::join!(
+        scan.client.scan_folder(folder, Duration::from_millis(200)),
+        scan_peer
+    );
+    scan_result.unwrap();
+}
+
+#[tokio::test]
+async fn scan_timeout_bounds_are_rejected_before_connecting() {
+    let server = Server::new();
+    let folder = Uuid::from_u128(9);
+    for timeout in [Duration::ZERO, Duration::from_secs(24 * 60 * 60 + 1)] {
+        assert_eq!(
+            server
+                .client
+                .scan_folder(folder, timeout)
+                .await
+                .unwrap_err(),
+            EngineApiError::InvalidConfiguration
+        );
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), server.listener.accept())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn cancellation_drops_the_connection_driver() {
     let server = Server::new();
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();

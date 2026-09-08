@@ -1515,10 +1515,10 @@ components:
           format: uuid
         lifecycle:
           type: string
-          enum: [stopped, running, stillStopping, needsAttention]
+          enum: [stopped, initialScanning, running, stillStopping, needsAttention]
         issue:
           type: [string, "null"]
-          enum: [null, journal, workerLaunch, workerHealth, workerStop, peerRevocation]
+          enum: [null, journal, workerLaunch, initialScan, workerHealth, workerStop, peerRevocation]
     FolderReference:
       type: object
       additionalProperties: false
@@ -1581,10 +1581,10 @@ components:
           enum: [notPackaged, needsAttention, available]
         lifecycle:
           type: string
-          enum: [stopped, running, stillStopping, needsAttention]
+          enum: [stopped, initialScanning, running, stillStopping, needsAttention]
         issue:
           type: [string, "null"]
-          enum: [null, installation, folderAccess, journal, workerLaunch, workerHealth, workerStop, peerRevocation]
+          enum: [null, installation, folderAccess, journal, workerLaunch, initialScan, workerHealth, workerStop, peerRevocation]
         healthFreshness:
           type: string
           enum: [neverObserved, fresh, stale]

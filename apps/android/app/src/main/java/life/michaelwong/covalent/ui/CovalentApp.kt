@@ -173,10 +173,10 @@ import org.json.JSONObject
 
 private const val UI_LOG_TAG = "CovalentUi"
 
-internal enum class Screen { HOME, SETUP, PAIR, BACKUP, RESTORE, SETTINGS }
+internal enum class Screen { HOME, SETUP, PAIR, FOLDERS, BACKUP, RESTORE, SETTINGS }
 
 internal fun Screen.systemBackTarget(): Screen? = when (this) {
-    Screen.PAIR, Screen.BACKUP, Screen.RESTORE, Screen.SETTINGS -> Screen.HOME
+    Screen.PAIR, Screen.FOLDERS, Screen.BACKUP, Screen.RESTORE, Screen.SETTINGS -> Screen.HOME
     Screen.HOME, Screen.SETUP -> null
 }
 
@@ -1054,6 +1054,7 @@ internal fun CovalentApp(
                         discover()
                     }
                 }
+                Screen.FOLDERS -> FolderSyncScreen(embeddedManager, page)
                 Screen.BACKUP -> Backup(state, node, store, activeConnection, scope, page) { sourcePicker.launch(null) }
                 Screen.RESTORE -> Restore(state, node, store, activeConnection, scope, page) { targetPicker.launch(null) }
                 Screen.SETTINGS -> Settings(
@@ -1148,6 +1149,11 @@ private fun Home(
         item {
             ConnectionCard(state) {
                 connection?.let { reconnectNode(context, state, node, store, it, scope) }
+            }
+        }
+        item {
+            Button(onClick = { state.screen = Screen.FOLDERS }, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.folder_sync_open))
             }
         }
         if (state.transfers.isNotEmpty()) {

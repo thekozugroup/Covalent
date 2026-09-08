@@ -23,6 +23,7 @@ class EntrypointTests(unittest.TestCase):
             executable = self.root / "bin" / name
             executable.write_text(
                 '#!/bin/sh\nset -eu\n'
+                'printf "%s\\n" "${COVALENT_SYNC_ADVERTISED_ADDRESS:-}" > "$FIXTURE_ROOT/' + name + '.sync-address"\n'
                 # Existence is the parent's readiness signal. Publish the
                 # complete argument vector atomically, after printf closes it.
                 'printf "%s\\n" "$@" > "$FIXTURE_ROOT/' + name + '.args.tmp"\n'
@@ -42,7 +43,8 @@ class EntrypointTests(unittest.TestCase):
             "XDG_CONFIG_HOME": str(self.root / "config/caddy/config"),
             "UMASK": "027",
         }
-        for name in ("PUID", "PGID", "COVALENT_HTTPS_HOST", "COVALENT_ADVERTISED_PEER_ADDRESS"):
+        for name in ("PUID", "PGID", "COVALENT_HTTPS_HOST", "COVALENT_ADVERTISED_PEER_ADDRESS",
+                     "COVALENT_SYNC_PORT", "COVALENT_SYNC_ADVERTISED_ADDRESS"):
             self.env.pop(name, None)
 
     def start(self, *args):
@@ -82,6 +84,39 @@ class EntrypointTests(unittest.TestCase):
 
     def test_normal_start_is_supervised(self):
         self.assert_supervised("serve")
+
+    def test_default_sync_address_uses_host_ip(self):
+        self.env["COVALENT_ADVERTISED_PEER_ADDRESS"] = "192.168.1.50:8787"
+        self.assert_supervised("serve")
+        self.assertEqual((self.root / "covalent-node.sync-address").read_text(), "192.168.1.50:8789\n")
+
+    def test_mapped_sync_port_is_advertised(self):
+        self.env["COVALENT_ADVERTISED_PEER_ADDRESS"] = "192.168.1.50:18787"
+        self.env["COVALENT_SYNC_PORT"] = "18789"
+        self.assert_supervised("serve")
+        self.assertEqual((self.root / "covalent-node.sync-address").read_text(), "192.168.1.50:18789\n")
+
+    def test_ipv6_sync_address_keeps_brackets(self):
+        self.env["COVALENT_ADVERTISED_PEER_ADDRESS"] = "[fd00::1234]:8787"
+        self.env["COVALENT_SYNC_PORT"] = "28789"
+        self.assert_supervised("serve")
+        self.assertEqual((self.root / "covalent-node.sync-address").read_text(), "[fd00::1234]:28789\n")
+
+    def test_explicit_sync_address_is_preserved(self):
+        self.env["COVALENT_ADVERTISED_PEER_ADDRESS"] = "192.168.1.50:8787"
+        self.env["COVALENT_SYNC_ADVERTISED_ADDRESS"] = "100.64.0.10:38789"
+        self.assert_supervised("serve")
+        self.assertEqual((self.root / "covalent-node.sync-address").read_text(), "100.64.0.10:38789\n")
+
+    def test_invalid_mapped_sync_port_fails_before_children(self):
+        self.env["COVALENT_ADVERTISED_PEER_ADDRESS"] = "192.168.1.50:8787"
+        for value in ("0", "65536", "abc", "8789/tcp", "123456"):
+            self.env["COVALENT_SYNC_PORT"] = value
+            process = self.start("serve")
+            _, error = process.communicate(timeout=5)
+            self.assertEqual(process.returncode, 64, error.decode())
+            self.assertFalse((self.root / "covalent-node.args").exists())
+            self.assertFalse((self.root / "caddy.args").exists())
 
     def test_recovery_retains_tls_proxy_and_exact_file_arguments(self):
         self.assert_supervised("recover", "--recovery-kit-file", "/run/secrets/saved kit",

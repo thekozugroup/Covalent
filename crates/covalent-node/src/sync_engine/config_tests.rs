@@ -197,6 +197,20 @@ fn effective_fixture(config: &DesiredEngineConfig, desired: bool) -> Value {
     })
 }
 
+fn scan_gate_fixture(config: &DesiredEngineConfig) -> Value {
+    let mut value = effective_fixture(config, true);
+    value["options"]["listenAddresses"] = json!([""]);
+    for device in value["devices"].as_array_mut().expect("devices") {
+        if device["deviceID"].as_str() != Some(config.own_id().as_str()) {
+            device["paused"] = json!(true);
+        }
+    }
+    for folder in value["folders"].as_array_mut().expect("folders") {
+        folder["paused"] = json!(false);
+    }
+    value
+}
+
 fn assert_effective_mismatch(config: &DesiredEngineConfig, value: &Value) {
     assert_eq!(
         config.verify_effective(value).unwrap_err(),
@@ -310,6 +324,53 @@ fn initial_xml_is_network_inert_and_redacts_private_values() {
 }
 
 #[test]
+fn scan_gate_keeps_folders_local_until_exact_promotion() {
+    let fixture = TempDir::new().expect("temporary directory");
+    let root = fixture.path().join("folder");
+    std::fs::create_dir(&root).expect("root");
+    let config = desired(
+        &fixture,
+        vec![peer()],
+        vec![folder(root, vec![id(PEER_ID), id(OWN_ID)]).with_paused(true)],
+        Some(address(22000)),
+    )
+    .expect("config");
+
+    let xml = config.render_scan_gate_xml().expect("scan-gate XML");
+    assert!(xml.contains("<folder "));
+    assert!(xml.contains(PEER_ID));
+    assert!(xml.contains("<listenAddress></listenAddress>"));
+    assert!(!xml.contains("tcp://127.0.0.1:22000"));
+    assert_eq!(xml.matches("<paused>true</paused>").count(), 1);
+
+    let scanning = scan_gate_fixture(&config);
+    config
+        .verify_scan_gate_effective(&scanning)
+        .expect("exact scan gate");
+    assert_eq!(
+        config.verify_effective(&scanning).unwrap_err(),
+        EngineConfigError::EffectiveConfigMismatch
+    );
+    let promoted = config
+        .promotion_payload(scanning.clone())
+        .expect("derived promotion");
+    config.verify_effective(&promoted).expect("desired config");
+    assert_eq!(
+        promoted["options"]["listenAddresses"],
+        json!(["tcp://127.0.0.1:22000"])
+    );
+    assert_eq!(promoted["devices"][1]["paused"], json!(false));
+    assert_eq!(promoted["folders"][0]["paused"], json!(true));
+
+    let mut drifted = scanning;
+    drifted["options"]["relaysEnabled"] = json!(true);
+    assert_eq!(
+        config.promotion_payload(drifted).unwrap_err(),
+        EngineConfigError::EffectiveConfigMismatch
+    );
+}
+
+#[test]
 fn desired_xml_is_deterministic_complete_and_escaped() {
     let fixture = TempDir::new().expect("temporary directory");
     let root = fixture.path().join("root & 'quote' <folder>");
@@ -375,6 +436,9 @@ fn verifies_retained_v2_1_3_effective_initial_and_desired_shapes() {
     config
         .verify_initial_effective(&effective_fixture(&config, false))
         .expect("network-inert effective config");
+    config
+        .verify_scan_gate_effective(&scan_gate_fixture(&config))
+        .expect("network-inert scanning config");
     config
         .verify_effective(&effective_fixture(&config, true))
         .expect("desired effective config");

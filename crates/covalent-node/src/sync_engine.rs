@@ -7,6 +7,8 @@
 mod client;
 pub mod config;
 mod controller;
+#[cfg(test)]
+mod controller_tests;
 mod health;
 mod host;
 mod identity;

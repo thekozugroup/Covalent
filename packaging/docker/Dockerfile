@@ -60,7 +60,7 @@ RUN go mod download
 COPY packaging/docker/caddy/main.go ./
 # -trimpath keeps absolute build paths out of the binary so the two release
 # runners produce the same bytes; -s -w drops the symbol and DWARF tables, which
-# is what keeps this inside the 96 MiB image budget.
+# keeps the combined runtime within its reviewed image budget.
 RUN go build -trimpath -ldflags "-s -w" -o /caddy.unprivileged . \
     && chmod 0555 /caddy.unprivileged
 # Assert the three properties this stage exists to guarantee. A toolchain

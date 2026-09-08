@@ -157,7 +157,11 @@ internal object PackagedSyncEngine {
             0,
         )
         FileInputStream(descriptor).use { input ->
-            check(Os.fcntlInt(input.fd, OsConstants.F_GETFD, 0) and OsConstants.FD_CLOEXEC != 0)
+            // The atomic open flag is supported on every packaged ABI. Android
+            // exposes this additional descriptor assertion only from API 30.
+            if (Build.VERSION.SDK_INT >= 30) {
+                check(Os.fcntlInt(input.fd, OsConstants.F_GETFD, 0) and OsConstants.FD_CLOEXEC != 0)
+            }
             val opened = Os.fstat(input.fd)
             check(
                 opened.st_dev == before.st_dev &&

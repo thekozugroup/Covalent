@@ -1,5 +1,6 @@
 //! Linux container discovery for the pinned maintained sync engine.
 
+use std::ffi::OsStr;
 use std::fs::{self, DirBuilder, File};
 use std::io::Read as _;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -40,6 +41,8 @@ pub enum LinuxHostError {
     InvalidPackage,
     /// The short private socket parent is unavailable or unsafe.
     InvalidRuntimeDirectory,
+    /// An operator-supplied sync address is not a concrete numeric endpoint.
+    InvalidAdvertisedAddress,
 }
 
 /// Discover the immutable package installed in the container image.
@@ -48,12 +51,42 @@ pub enum LinuxHostError {
 /// partial or damaged image is an error that the caller maps to folder-sync
 /// needs-attention while the backup runtime continues.
 pub fn discover_packaged_engine() -> Result<Option<FolderSyncRuntimeConfig>, LinuxHostError> {
-    discover_at(
+    let mut package = discover_at(
         Path::new(MANIFEST),
         Path::new(GUARDIAN),
         Path::new(WORKER),
         Path::new(RUNTIME_PARENT),
-    )
+    )?;
+    if let Some(configuration) = &mut package {
+        configuration.advertised_address = parse_advertised_address(
+            std::env::var_os("COVALENT_SYNC_ADVERTISED_ADDRESS").as_deref(),
+        )?;
+    }
+    Ok(package)
+}
+
+fn parse_advertised_address(value: Option<&OsStr>) -> Result<Option<SocketAddr>, LinuxHostError> {
+    let Some(value) = value else { return Ok(None) };
+    let value = value
+        .to_str()
+        .ok_or(LinuxHostError::InvalidAdvertisedAddress)?;
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.len() > 80 {
+        return Err(LinuxHostError::InvalidAdvertisedAddress);
+    }
+    let address: SocketAddr = value
+        .parse()
+        .map_err(|_| LinuxHostError::InvalidAdvertisedAddress)?;
+    super::config::validate_peer_address(address)
+        .map_err(|_| LinuxHostError::InvalidAdvertisedAddress)?;
+    if let SocketAddr::V6(address) = address
+        && (address.scope_id() != 0 || address.flowinfo() != 0)
+    {
+        return Err(LinuxHostError::InvalidAdvertisedAddress);
+    }
+    Ok(Some(address))
 }
 
 fn discover_at(
@@ -337,6 +370,38 @@ mod tests {
     use std::os::unix::fs::{PermissionsExt as _, symlink};
 
     use super::*;
+
+    #[test]
+    fn advertised_sync_address_preserves_mapped_port_and_rejects_unsafe_values() {
+        assert_eq!(parse_advertised_address(None), Ok(None));
+        assert_eq!(parse_advertised_address(Some(OsStr::new(""))), Ok(None));
+        for value in ["192.168.1.50:18789", "[fd00::1234]:28789"] {
+            assert_eq!(
+                parse_advertised_address(Some(OsStr::new(value))),
+                Ok(Some(value.parse().unwrap()))
+            );
+        }
+        for value in [
+            "atlas:8789",
+            "tcp://192.168.1.50:8789",
+            "0.0.0.0:8789",
+            "[::]:8789",
+            "224.0.0.1:8789",
+            "192.168.1.50:0",
+            "[fe80::1%2]:8789",
+            " 192.168.1.50:8789",
+            "192.168.1.50:8789\n",
+        ] {
+            assert_eq!(
+                parse_advertised_address(Some(OsStr::new(value))),
+                Err(LinuxHostError::InvalidAdvertisedAddress)
+            );
+        }
+        assert_eq!(
+            parse_advertised_address(Some(OsStr::from_bytes(&[0xff]))),
+            Err(LinuxHostError::InvalidAdvertisedAddress)
+        );
+    }
 
     struct Fixture {
         _root: tempfile::TempDir,

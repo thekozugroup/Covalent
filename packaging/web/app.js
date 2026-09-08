@@ -91,6 +91,15 @@
       "The folder you chose is no longer available to Covalent. Choose it again.",
       RECOVERY.chooseFolderAgain,
     ],
+    folder_sync_unavailable: [
+      "Folder sync is unavailable on this server. Check its folder-sync package and mounted folder, then try again.",
+      RECOVERY.retry,
+    ],
+    folder_sync_busy: ["Another folder change is still in progress. Try again shortly.", RECOVERY.retry],
+    folder_sync_needs_attention: [
+      "Folder sync needs attention before it can continue. Check the folder status, then try again.",
+      RECOVERY.retry,
+    ],
 
     // Restore
     unsafe_restore_path: [
@@ -481,11 +490,23 @@ let recoveryGeneration = 0;
 let recoveryStatusInFlight = false;
 const tabFlow = globalThis.CovalentTabFlow;
 const errorCopy = globalThis.CovalentNodeErrorCopy;
+const folderSync = globalThis.CovalentFolderSyncFlow;
 const pairingStorageKey = "covalent.pairing-session.v1";
 const backupServerContext = backupTerminal.requireContext({
   origin: globalThis.location.origin,
   protocolVersion: PROTOCOL_VERSION,
 });
+let folderDeviceId = null;
+const folderController = folderSync.coordinator({
+  api: folderApi,
+  storage: folderSync.lazySessionStorage(globalThis),
+  onStatus: renderFolderStatus,
+  onLockChange: setFolderMutationLock,
+});
+
+function folderApi(path, options) {
+  return api(path, options, folderSync.readJson);
+}
 
 class NodeApiError extends Error {
   constructor(status, payload) {
@@ -566,6 +587,213 @@ async function loadStatus() {
     $("[data-state]").textContent = errorCopy.describe(error).summary;
     fail(error);
   }
+}
+
+function folderPollingEligible() {
+  return Boolean(
+    token
+    && folderDeviceId
+    && document.visibilityState === "visible"
+    && $("[data-tab=folders]").getAttribute("aria-selected") === "true",
+  );
+}
+
+function syncFolderPolling(refreshNow = false) {
+  const enabled = folderPollingEligible();
+  folderController.setPollingEnabled(enabled);
+  if (enabled && refreshNow) void loadFolders(false);
+}
+
+function renderFolderError(error) {
+  const failure = errorCopy.describe(error);
+  const status = $("[data-folders-status]");
+  status.textContent = failure.summary;
+  status.className = "folder-state";
+  status.dataset.kind = "attention";
+}
+
+function setFolderMutationLock(locked) {
+  document.querySelectorAll("[data-folder-mutation]").forEach((control) => {
+    control.disabled = locked;
+  });
+  $("[data-folder-offer-form]").setAttribute("aria-busy", String(locked));
+}
+
+function folderPeerName(status, peerId) {
+  return status.peers.find((peer) => peer.peerId === peerId)?.displayName
+    ?? "Confirmed paired device unavailable";
+}
+
+function folderActionButton(label, action, className = "secondary") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = className;
+  button.dataset.folderMutation = "";
+  button.textContent = label;
+  button.disabled = folderController.isMutationLocked();
+  button.addEventListener("click", action);
+  return button;
+}
+
+async function runFolderMutation(action, success) {
+  try {
+    await action();
+    renderPendingFolderOffer();
+    await loadFolders(false);
+    say(success);
+  } catch (error) {
+    renderPendingFolderOffer();
+    fail(error);
+  }
+}
+
+function renderFolderActions(container, status, share, view) {
+  if (share.incoming && share.phase === "offered" && !share.expired) {
+    const pathLabel = document.createElement("label");
+    pathLabel.textContent = "Folder path on this server";
+    const path = document.createElement("input");
+    path.value = "/sync";
+    path.maxLength = 1024;
+    path.required = true;
+    pathLabel.append(path);
+    const accept = folderActionButton("Accept folder", () => {
+      void runFolderMutation(
+        () => folderController.accept(share.offerId, path.value),
+        "Folder accepted. Covalent is checking its local contents.",
+      );
+    }, "");
+    container.append(pathLabel, accept);
+  }
+
+  if (!(share.incoming && share.phase === "offered")) {
+    const paused = share.phase === "paused";
+    const pause = folderActionButton(paused ? "Resume" : "Pause", () => {
+      void runFolderMutation(
+        () => folderController.pause(share.offerId, !paused),
+        paused ? "Folder sync resumed." : "Folder sync paused.",
+      );
+    });
+    pause.disabled = pause.disabled || share.expired;
+    container.append(pause);
+  }
+
+  const removeLabel = share.incoming && share.phase === "offered" && !share.expired ? "Decline" : "Remove…";
+  container.append(folderActionButton(removeLabel, () => {
+    if (!globalThis.confirm("Stop syncing this folder? Local files will stay on this server.")) return;
+    void runFolderMutation(
+      () => folderController.remove(share.offerId),
+      "Folder removed from sync. Local files were preserved.",
+    );
+  }, "quiet"));
+
+  if (view.kind === "expired") {
+    container.querySelectorAll("button:not(.quiet)").forEach((button) => { button.disabled = true; });
+  }
+}
+
+function renderFolderPeers(status) {
+  const select = $("[data-folder-peer]");
+  const previous = select.value;
+  select.replaceChildren();
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = status.peers.length === 0
+    ? "No confirmed paired devices"
+    : "Choose a confirmed paired device";
+  select.append(placeholder);
+  for (const peer of status.peers) {
+    const option = document.createElement("option");
+    option.value = peer.peerId;
+    // Peer-controlled labels are always assigned as text, never parsed as markup.
+    option.textContent = peer.displayName;
+    select.append(option);
+  }
+  select.value = status.peers.some((peer) => peer.peerId === previous) ? previous : "";
+  select.disabled = status.peers.length === 0;
+}
+
+function renderFolderStatus(status) {
+  const summary = folderSync.statusSummary(status);
+  const statusCopy = $("[data-folders-status]");
+  statusCopy.textContent = summary.text;
+  statusCopy.className = "folder-state";
+  statusCopy.dataset.kind = summary.kind;
+  renderFolderPeers(status);
+
+  const retry = $("[data-folders-retry-service]");
+  retry.hidden = !(status.lifecycle === "needsAttention" || status.issue !== null);
+  const list = $("[data-folders-list]");
+  list.replaceChildren();
+  const visibleShares = status.shares.filter((share) => share.phase !== "removed");
+  for (const share of visibleShares) {
+    const view = folderSync.shareView(status, share);
+    const item = document.createElement("li");
+    const details = document.createElement("div");
+    const name = document.createElement("strong");
+    name.textContent = share.label;
+    const peer = document.createElement("span");
+    peer.textContent = folderPeerName(status, share.peerId);
+    const state = document.createElement("span");
+    state.className = "folder-state";
+    state.dataset.kind = view.kind;
+    state.textContent = view.text;
+    details.append(name, peer, state);
+    const actions = document.createElement("div");
+    actions.className = "folder-actions";
+    renderFolderActions(actions, status, share, view);
+    item.append(details, actions);
+    list.append(item);
+  }
+  const empty = $("[data-folders-empty]");
+  empty.hidden = visibleShares.length > 0;
+  if (visibleShares.length === 0) {
+    empty.textContent = status.availability === "available"
+      ? "No shared folders yet. Choose a confirmed paired device below."
+      : "Shared folders cannot be loaded while folder sync is offline.";
+  }
+}
+
+function renderPendingFolderOffer() {
+  const card = $("[data-folder-pending]");
+  const form = $("[data-folder-offer-form]");
+  let pending = null;
+  try { pending = folderController.loadPending(); }
+  catch (error) { renderFolderError(error); }
+  card.hidden = pending === null;
+  form.querySelector("[data-folder-offer-submit]").disabled = pending !== null
+    || folderController.isMutationLocked()
+    || folderDeviceId === null
+    || (folderController.current()?.peers.length ?? 0) === 0;
+  if (pending === null) return;
+  const peerName = folderController.current()
+    ? folderPeerName(folderController.current(), pending.peerId)
+    : "the saved confirmed device";
+  $("[data-folder-pending-summary]").textContent = `${pending.label} for ${peerName}, using ${pending.selectedRoot}.`;
+}
+
+async function loadFolders(reportError = false) {
+  try {
+    const result = await folderController.refresh();
+    if (result.applied) renderPendingFolderOffer();
+  } catch (error) {
+    renderFolderError(error);
+    if (reportError) fail(error);
+  }
+}
+
+async function initializeFolderSync() {
+  const identity = await folderApi("/api/v1/transport/identity");
+  folderDeviceId = identity?.deviceId ?? null;
+  folderController.setAccess({ deviceId: folderDeviceId, unlocked: true });
+  renderPendingFolderOffer();
+  syncFolderPolling(false);
+  if (folderPollingEligible()) await loadFolders(false);
+}
+
+function clearFolderSyncAccess() {
+  folderDeviceId = null;
+  folderController.setAccess({ deviceId: null, unlocked: false });
+  folderController.setPollingEnabled(false);
 }
 
 function backupSummaryCopy(backup) {
@@ -958,17 +1186,57 @@ $("[data-token-form]").addEventListener("submit", async (event) => {
     await loadBackups();
     await loadProviders();
     await refreshNetworkPairings();
+    try { await initializeFolderSync(); }
+    catch (error) { clearFolderSyncAccess(); renderFolderError(error); }
     const resumedBackup = await resumeBackupTerminalReceipt();
     if (!resumedBackup) say("Console unlocked for this tab only.");
   }
-  catch (error) { token = ""; fail(error); }
+  catch (error) { token = ""; clearFolderSyncAccess(); fail(error); }
 });
 
 $("[data-refresh]").addEventListener("click", async () => {
   await loadStatus();
   if (!token) return;
-  try { await Promise.all([loadBackups(), loadProviders()]); }
+  try { await Promise.all([loadBackups(), loadProviders(), loadFolders(false)]); }
   catch (error) { fail(error); }
+});
+$("[data-folders-refresh]").addEventListener("click", async () => {
+  if (!requireUnlocked()) return;
+  syncFolderPolling(false);
+  await loadFolders(true);
+});
+$("[data-folders-retry-service]").addEventListener("click", () => {
+  void runFolderMutation(() => folderController.retryService(), "Folder sync retry started.");
+});
+$("[data-folder-offer-form]").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (!requireUnlocked()) return;
+  // DOM Event.currentTarget becomes null once dispatch returns. Keep the form
+  // itself across the async offer so a successful response can reset it.
+  const form = event.currentTarget;
+  const data = formData(form);
+  const body = {
+    peerId: data.get("peerId"),
+    folderId: crypto.randomUUID(),
+    label: data.get("label"),
+    selectedRoot: data.get("selectedRoot"),
+  };
+  void runFolderMutation(async () => {
+    await folderController.sendOffer(body);
+    form.reset();
+    form.elements.selectedRoot.value = "/sync";
+  }, "Folder offer sent to the confirmed paired device.");
+});
+$("[data-folder-offer-retry]").addEventListener("click", () => {
+  void runFolderMutation(() => folderController.retryPendingOffer(), "Saved folder offer sent.");
+});
+$("[data-folder-offer-discard]").addEventListener("click", () => {
+  if (!globalThis.confirm("Discard this saved retry? This does not remove an offer that may already have reached the server.")) return;
+  try {
+    folderController.discardPendingOffer();
+    renderPendingFolderOffer();
+    say("Saved folder-offer retry discarded.");
+  } catch (error) { fail(error); }
 });
 $("[data-backups-refresh]").addEventListener("click", async () => {
   try { await loadBackups(); say("Backup list refreshed from the node."); }
@@ -980,6 +1248,14 @@ $("[data-providers-refresh]").addEventListener("click", async () => {
   catch (error) { fail(error); }
 });
 tabFlow.install(document);
+document.querySelectorAll("[data-tab]").forEach((tab) => {
+  tab.addEventListener("click", () => queueMicrotask(() => syncFolderPolling(true)));
+  tab.addEventListener("keydown", () => queueMicrotask(() => syncFolderPolling(true)));
+});
+document.addEventListener("visibilitychange", () => syncFolderPolling(true));
+setInterval(() => {
+  if (folderPollingEligible()) void loadFolders(false);
+}, 5000);
 
 $("[data-network-discover]").addEventListener("click", async () => {
   if (!requireUnlocked()) return;

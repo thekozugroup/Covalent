@@ -1,4 +1,4 @@
-use super::service::{TestBackend, TestStopBehavior};
+use super::service::{TestBackend, TestScanBehavior, TestStopBehavior};
 use super::*;
 use crate::transport::TlsIdentity;
 use base64::Engine as _;
@@ -264,6 +264,202 @@ async fn signed_consent_launches_only_after_both_durable_decisions() {
     let after_pending = first_backend.snapshot();
     assert_eq!(after_pending.launches, before_pending.launches);
     assert_eq!(after_pending.close_calls, before_pending.close_calls);
+}
+
+#[tokio::test]
+async fn pending_initial_scan_is_network_inert_and_stop_cancels_it() {
+    let first = Device::new("Mac", 44223);
+    let second = Device::new("Docker", 44224);
+    pair(&first, &second);
+    let first_backend = Arc::new(TestBackend::default());
+    let second_backend = Arc::new(TestBackend::default());
+    let scan_gate = Arc::new(Notify::new());
+    first_backend.push_scan(TestScanBehavior::Wait(Arc::clone(&scan_gate)));
+    let first_service = first.service(first.journal(), Arc::clone(&first_backend));
+    let second_service = second.service(second.journal(), second_backend);
+
+    make_ready(&first, &second, &first_service, &second_service).await;
+    assert_eq!(
+        first_service.status().await.unwrap().lifecycle(),
+        FolderSyncLifecycle::InitialScanning
+    );
+    let pending = first_backend.snapshot();
+    assert_eq!(pending.scan_calls, 1);
+    assert_eq!(pending.promotions, 0);
+    assert_eq!(pending.active, 1);
+
+    assert_eq!(
+        first_service.stop().await.unwrap(),
+        FolderSyncLifecycle::Stopped
+    );
+    let stopped = first_backend.snapshot();
+    assert_eq!(stopped.promotions, 0);
+    assert_eq!(stopped.active, 0);
+    assert_eq!(stopped.close_calls, 1);
+    assert_eq!(stopped.stop_calls, 1);
+    drop(scan_gate);
+}
+
+#[tokio::test]
+async fn desired_state_change_reaps_pending_scan_and_rescans_before_promotion() {
+    let first = Device::new("Mac", 44235);
+    let second = Device::new("Docker", 44236);
+    pair(&first, &second);
+    let first_backend = Arc::new(TestBackend::default());
+    let second_backend = Arc::new(TestBackend::default());
+    let scan_gate = Arc::new(Notify::new());
+    first_backend.push_scan(TestScanBehavior::Wait(Arc::clone(&scan_gate)));
+    let first_service = first.service(first.journal(), Arc::clone(&first_backend));
+    let second_service = second.service(second.journal(), second_backend);
+
+    let first_other = first.root.join("other-files");
+    let second_other = second.root.join("other-files");
+    std::fs::create_dir(&first_other).unwrap();
+    std::fs::create_dir(&second_other).unwrap();
+    let offer = first_service
+        .offer(
+            second.engine.device_id(),
+            Uuid::new_v4(),
+            "Other documents",
+            &first_other,
+            4000,
+        )
+        .await
+        .unwrap()
+        .into_value();
+    second_service
+        .receive_offer(offer.clone(), 4001)
+        .await
+        .unwrap();
+    let acceptance = second_service
+        .accept(offer.offer_id, &second_other, 4002)
+        .await
+        .unwrap()
+        .into_value();
+    let commit = first_service
+        .receive_acceptance(offer.offer_id, acceptance, 4003)
+        .await
+        .unwrap()
+        .into_value();
+    second_service
+        .receive_commit(offer.offer_id, commit)
+        .await
+        .unwrap();
+    assert_eq!(
+        first_service.status().await.unwrap().lifecycle(),
+        FolderSyncLifecycle::InitialScanning
+    );
+
+    make_ready(&first, &second, &first_service, &second_service).await;
+    assert_eq!(
+        first_service.status().await.unwrap().lifecycle(),
+        FolderSyncLifecycle::Running
+    );
+    let restarted = first_backend.snapshot();
+    assert_eq!(restarted.launches, 2);
+    assert_eq!(restarted.scan_calls, 2);
+    assert_eq!(restarted.promotions, 1);
+    assert_eq!(restarted.close_calls, 1);
+    assert_eq!(restarted.stop_calls, 1);
+    assert_eq!(restarted.active, 1);
+    assert_eq!(restarted.launched_folder_counts, vec![1, 2]);
+    drop(scan_gate);
+}
+
+#[tokio::test]
+async fn failed_initial_scan_never_promotes_and_needs_attention() {
+    let first = Device::new("Mac", 44225);
+    let second = Device::new("Docker", 44226);
+    pair(&first, &second);
+    let first_backend = Arc::new(TestBackend::default());
+    let second_backend = Arc::new(TestBackend::default());
+    first_backend.push_scan(TestScanBehavior::Fail);
+    let first_service = first.service(first.journal(), Arc::clone(&first_backend));
+    let second_service = second.service(second.journal(), second_backend);
+
+    make_ready(&first, &second, &first_service, &second_service).await;
+    assert_eq!(
+        first_service.status().await.unwrap().lifecycle(),
+        FolderSyncLifecycle::NeedsAttention(FolderSyncIssue::InitialScan)
+    );
+    let failed = first_backend.snapshot();
+    assert_eq!(failed.scan_calls, 1);
+    assert_eq!(failed.promotions, 0);
+    assert_eq!(failed.active, 0);
+    assert_eq!(failed.close_calls, 1);
+    assert_eq!(failed.stop_calls, 1);
+}
+
+#[tokio::test]
+async fn failed_promotion_closes_scanned_worker_before_attention() {
+    let first = Device::new("Mac", 44233);
+    let second = Device::new("Docker", 44234);
+    pair(&first, &second);
+    let first_backend = Arc::new(TestBackend::default());
+    let second_backend = Arc::new(TestBackend::default());
+    first_backend.fail_next_promotion();
+    let first_service = first.service(first.journal(), Arc::clone(&first_backend));
+    let second_service = second.service(second.journal(), second_backend);
+
+    make_ready(&first, &second, &first_service, &second_service).await;
+    assert_eq!(
+        first_service.status().await.unwrap().lifecycle(),
+        FolderSyncLifecycle::NeedsAttention(FolderSyncIssue::InitialScan)
+    );
+    let failed = first_backend.snapshot();
+    assert_eq!(failed.scan_calls, 1);
+    assert_eq!(failed.promotions, 1);
+    assert_eq!(failed.active, 0);
+    assert_eq!(failed.close_calls, 1);
+    assert_eq!(failed.stop_calls, 1);
+}
+
+#[tokio::test]
+async fn every_restart_scans_before_one_exact_promotion() {
+    let first = Device::new("Mac", 44227);
+    let second = Device::new("Docker", 44228);
+    pair(&first, &second);
+    let first_backend = Arc::new(TestBackend::default());
+    let second_backend = Arc::new(TestBackend::default());
+    let first_service = first.service(first.journal(), Arc::clone(&first_backend));
+    let second_service = second.service(second.journal(), second_backend);
+
+    make_ready(&first, &second, &first_service, &second_service).await;
+    let first_run = first_backend.snapshot();
+    assert_eq!(first_run.scan_calls, 1);
+    assert_eq!(first_run.promotions, 1);
+    assert_eq!(
+        first_service.stop().await.unwrap(),
+        FolderSyncLifecycle::Stopped
+    );
+    assert_eq!(
+        first_service.start().await.unwrap(),
+        FolderSyncLifecycle::Running
+    );
+    let restarted = first_backend.snapshot();
+    assert_eq!(restarted.scan_calls, 2);
+    assert_eq!(restarted.promotions, 2);
+    assert_eq!(restarted.maximum_active, 1);
+}
+
+#[tokio::test]
+async fn dropping_service_aborts_pending_scan_and_closes_owned_worker() {
+    let first = Device::new("Mac", 44229);
+    let second = Device::new("Docker", 44230);
+    pair(&first, &second);
+    let first_backend = Arc::new(TestBackend::default());
+    let second_backend = Arc::new(TestBackend::default());
+    first_backend.push_scan(TestScanBehavior::Wait(Arc::new(Notify::new())));
+    let first_service = first.service(first.journal(), Arc::clone(&first_backend));
+    let second_service = second.service(second.journal(), second_backend);
+
+    make_ready(&first, &second, &first_service, &second_service).await;
+    assert_eq!(first_backend.snapshot().promotions, 0);
+    drop(first_service);
+    let dropped = first_backend.snapshot();
+    assert_eq!(dropped.active, 0);
+    assert_eq!(dropped.close_calls, 1);
+    assert_eq!(dropped.promotions, 0);
 }
 
 #[tokio::test]

@@ -211,6 +211,7 @@ fn lifecycle_fields(
     use crate::sync_engine::{FolderSyncIssue, FolderSyncLifecycle};
     match lifecycle {
         FolderSyncLifecycle::Stopped => ("stopped", None),
+        FolderSyncLifecycle::InitialScanning => ("initialScanning", None),
         FolderSyncLifecycle::Running => ("running", None),
         FolderSyncLifecycle::StillStopping => ("stillStopping", None),
         FolderSyncLifecycle::NeedsAttention(issue) => (
@@ -218,11 +219,32 @@ fn lifecycle_fields(
             Some(match issue {
                 FolderSyncIssue::Journal => "journal",
                 FolderSyncIssue::WorkerLaunch => "workerLaunch",
+                FolderSyncIssue::InitialScan => "initialScan",
                 FolderSyncIssue::WorkerHealth => "workerHealth",
                 FolderSyncIssue::WorkerStop => "workerStop",
                 FolderSyncIssue::PeerRevocation => "peerRevocation",
             }),
         ),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod lifecycle_tests {
+    use super::lifecycle_fields;
+    use crate::sync_engine::{FolderSyncIssue, FolderSyncLifecycle};
+
+    #[test]
+    fn initial_scan_states_have_distinct_stable_wire_values() {
+        assert_eq!(
+            lifecycle_fields(FolderSyncLifecycle::InitialScanning),
+            ("initialScanning", None)
+        );
+        assert_eq!(
+            lifecycle_fields(FolderSyncLifecycle::NeedsAttention(
+                FolderSyncIssue::InitialScan
+            )),
+            ("needsAttention", Some("initialScan"))
+        );
     }
 }
 

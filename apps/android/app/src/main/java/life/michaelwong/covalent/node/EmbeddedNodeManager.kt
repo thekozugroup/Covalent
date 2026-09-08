@@ -15,8 +15,9 @@ import java.security.SecureRandom
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import life.michaelwong.covalent.model.NodeConnection
 import life.michaelwong.covalent.data.RecoveryBootstrapMaterial
+import life.michaelwong.covalent.model.NodeConnection
+import life.michaelwong.covalent.sync.FolderSyncSpecialAccess
 
 /** Visible provider state for a future explicit Android-device storage toggle. */
 data class EmbeddedProviderState(
@@ -33,6 +34,18 @@ data class EmbeddedProviderState(
     val keepFreeBytes: Long,
     val lanDiscoveryRequested: Boolean,
 )
+
+internal data class NodeServiceDemand(val backupEnabled: Boolean, val folderSyncRequested: Boolean) {
+    val needsService: Boolean get() = backupEnabled || folderSyncRequested
+    fun backupIsRunning(nativeRunning: Boolean): Boolean = backupEnabled && nativeRunning
+}
+
+internal fun nodeServiceConfigurationChanged(
+    launchedAccessUnavailable: Boolean,
+    launchedDemand: NodeServiceDemand,
+    currentAccessUnavailable: Boolean,
+    currentDemand: NodeServiceDemand,
+): Boolean = launchedAccessUnavailable != currentAccessUnavailable || launchedDemand != currentDemand
 
 /**
  * Explicit opt-in local-node owner. It never replaces a configured external node.
@@ -153,8 +166,11 @@ class EmbeddedNodeManager(context: Context) {
         if (!keyProtectionAvailable()) {
             return@synchronized reject("This phone cannot protect a recovered Covalent identity.")
         }
-        if (preferences.getBoolean(KEY_ENABLED, false) || preferences.getBoolean(KEY_RUNNING, false)) {
-            return@synchronized reject("Stop storing backups on this phone before recovering another identity.")
+        if (
+            preferences.getBoolean(KEY_ENABLED, false) || preferences.getBoolean(KEY_RUNNING, false) ||
+            folderSyncRequested()
+        ) {
+            return@synchronized reject("Stop this phone's on-phone node before recovering another identity.")
         }
         capacityValidationMessage(maxBytes, keepFreeBytes)?.let {
             return@synchronized reject(it)
@@ -206,8 +222,10 @@ class EmbeddedNodeManager(context: Context) {
             }
             releaseMulticastLock()
             applicationContext.startService(
-                Intent(applicationContext, NodeProviderService::class.java)
-                    .setAction(NodeProviderService.ACTION_STOP),
+                Intent(applicationContext, NodeProviderService::class.java).setAction(
+                    if (folderSyncRequested()) NodeProviderService.ACTION_REFRESH_ACCESS
+                    else NodeProviderService.ACTION_STOP,
+                ),
             )
             publish(
                 enabled = false,
@@ -229,7 +247,46 @@ class EmbeddedNodeManager(context: Context) {
      */
     fun reconnectIfEnabled() {
         if (!preferences.readable) return
-        if (preferences.getBoolean(KEY_ENABLED, false)) startService()
+        if (serviceNeeded()) startService()
+    }
+
+    /** Records the explicit personal/debug folder-sync opt-in and starts the private node. */
+    fun enableFolderSyncHost(): Boolean {
+        if (!preferences.readable || !FolderSyncSpecialAccess.supported()) return false
+        if (!preferences.commit { putBoolean(KEY_FOLDER_SYNC_REQUESTED, true) }) return false
+        startService()
+        return true
+    }
+
+    fun folderSyncRequested(): Boolean =
+        preferences.readable && FolderSyncSpecialAccess.supported() &&
+            preferences.getBoolean(KEY_FOLDER_SYNC_REQUESTED, false)
+
+    internal fun serviceNeeded(): Boolean =
+        preferences.readable && nodeServiceDemand().needsService
+
+    internal fun nodeServiceDemand(): NodeServiceDemand = NodeServiceDemand(
+        backupEnabled = preferences.getBoolean(KEY_ENABLED, false),
+        folderSyncRequested = folderSyncRequested(),
+    )
+
+    internal fun folderSyncAccessUnavailable(): Boolean =
+        folderSyncRequested() && !FolderSyncSpecialAccess.granted()
+
+    /** Local credentials stay private and are usable by the in-process Folders screen only. */
+    fun localConnectionForFolderSync(): NodeConnection? =
+        if (folderSyncRequested() && localStore.baseUrl.isNotBlank() && localStore.token.isNotBlank()) {
+            NodeConnection(localStore.baseUrl, localStore.token)
+        } else {
+            null
+        }
+
+    /** Re-evaluates permission state by stopping/reaping the old native runtime first. */
+    fun refreshFolderSyncAccess() {
+        if (!serviceNeeded()) return
+        val intent = Intent(applicationContext, NodeProviderService::class.java)
+            .setAction(NodeProviderService.ACTION_REFRESH_ACCESS)
+        ContextCompat.startForegroundService(applicationContext, intent)
     }
 
     /** The selected controller mode; external remains the default and fallback. */
@@ -307,7 +364,10 @@ class EmbeddedNodeManager(context: Context) {
 
     private fun serviceRecoverSafely(request: EmbeddedRecoveryRequest): NativeNodeResponse {
         if (!preferences.readable) return unavailable(LOCKED_STORAGE_MESSAGE)
-        if (preferences.getBoolean(KEY_ENABLED, false) || preferences.getBoolean(KEY_RUNNING, false)) {
+        if (
+            preferences.getBoolean(KEY_ENABLED, false) || preferences.getBoolean(KEY_RUNNING, false) ||
+            folderSyncRequested()
+        ) {
             return unavailable("This phone already has an active Covalent identity.")
         }
         capacityValidationMessage(request.maximumTotalBytes, request.freeSpaceReserveBytes)?.let {
@@ -343,6 +403,8 @@ class EmbeddedNodeManager(context: Context) {
                 recoveryKit = request.material.kit,
                 recoveryKey = request.material.key,
                 syncEngine = syncEngine,
+                backupProviderEnabled = true,
+                folderSyncAccessUnavailable = folderSyncAccessUnavailable(),
             ).let { response ->
                 if (!response.ok || response.apiBaseUrl == null || response.handle == null) {
                     releaseMulticastLock()
@@ -375,7 +437,9 @@ class EmbeddedNodeManager(context: Context) {
     private fun serviceStartSafely(): NativeNodeResponse {
         // First, so a sealed volume is never mistaken for "the user turned this off".
         if (!preferences.readable) return unavailable(LOCKED_STORAGE_MESSAGE)
-        if (!preferences.getBoolean(KEY_ENABLED, false)) {
+        val backupEnabled = preferences.getBoolean(KEY_ENABLED, false)
+        val syncRequested = folderSyncRequested()
+        if (!backupEnabled && !syncRequested) {
             return NativeNodeResponse(
                 ok = true,
                 code = "disabled",
@@ -388,13 +452,15 @@ class EmbeddedNodeManager(context: Context) {
         }
         val maxBytes = preferences.getLong(KEY_MAX_BYTES, DEFAULT_MAX_BYTES)
         val keepFreeBytes = preferences.getLong(KEY_KEEP_FREE_BYTES, DEFAULT_KEEP_FREE_BYTES)
-        capacityValidationMessage(maxBytes, keepFreeBytes)?.let { return unavailable(it) }
+        if (backupEnabled) {
+            capacityValidationMessage(maxBytes, keepFreeBytes)?.let { return unavailable(it) }
+        }
         if (!hasPeerNetworkPermission()) {
-            return unavailable("Allow local network access before this phone can start storing backups.")
+            return unavailable("Allow local network access before the on-phone node can start.")
         }
         val protection = keyProtectionLevel()
         if (protection == KeyProtectionLevel.UNAVAILABLE) {
-            return unavailable("This phone cannot protect its Covalent identity, so it cannot store backups.")
+            return unavailable("This phone cannot protect its Covalent identity, so the on-phone node stayed stopped.")
         }
         val token = protectedTokenBytes()
             ?: return unavailable("Covalent could not open this phone's protected server credential, so it stayed locked.")
@@ -404,7 +470,9 @@ class EmbeddedNodeManager(context: Context) {
                 return unavailable("Covalent could not open this phone's protected storage key, so it stayed locked.")
             }
         return try {
-            val lanEnabled = acquireLanDiscoveryPermission()
+            val lanEnabled = acquireLanDiscoveryPermission(
+                backupEnabled && preferences.getBoolean(KEY_LAN_REQUESTED, false),
+            )
             val syncEngine = PackagedSyncEngine.load(applicationContext)
             CovalentNative.start(
                 dataDirectory = privateNodeDirectory().path,
@@ -417,10 +485,14 @@ class EmbeddedNodeManager(context: Context) {
                 freeSpaceReserveBytes = keepFreeBytes,
                 keyProtectionLevel = protection,
                 syncEngine = syncEngine,
+                backupProviderEnabled = backupEnabled,
+                folderSyncAccessUnavailable = folderSyncAccessUnavailable(),
             ).also { response ->
                 if (response.ok && response.apiBaseUrl != null) {
                     localStore.baseUrl = response.apiBaseUrl
-                    preferences.edit { putString(KEY_ACTIVE_MODE, NodeMode.LOCAL.wireValue) }
+                    if (backupEnabled) {
+                        preferences.edit { putString(KEY_ACTIVE_MODE, NodeMode.LOCAL.wireValue) }
+                    }
                 } else {
                     releaseMulticastLock()
                 }
@@ -448,7 +520,21 @@ class EmbeddedNodeManager(context: Context) {
         val enabled = preferences.getBoolean(KEY_ENABLED, false)
         publish(
             enabled = enabled,
-            running = response.ok && response.state == "running",
+            running = NodeServiceDemand(enabled, folderSyncRequested())
+                .backupIsRunning(response.ok && response.state == "running"),
+            message = response.message,
+            reservedBytes = if (enabled) preferences.getLong(KEY_MAX_BYTES, DEFAULT_MAX_BYTES) else 0L,
+            availableBytes = availableBytes(),
+        )
+    }
+
+    /** Reports an uncertain stop without rewriting the prior running bit as a confirmed exit. */
+    internal fun reportStopFailure(response: NativeNodeResponse) {
+        val enabled = preferences.getBoolean(KEY_ENABLED, false)
+        val priorRunning = preferences.getBoolean(KEY_RUNNING, false)
+        publish(
+            enabled = enabled,
+            running = enabled && priorRunning,
             message = response.message,
             reservedBytes = if (enabled) preferences.getLong(KEY_MAX_BYTES, DEFAULT_MAX_BYTES) else 0L,
             availableBytes = availableBytes(),
@@ -625,6 +711,7 @@ class EmbeddedNodeManager(context: Context) {
         const val KEY_ACTIVE_MODE = "active_mode"
         const val KEY_RUNNING = "running"
         const val KEY_STATUS = "status"
+        const val KEY_FOLDER_SYNC_REQUESTED = "folder_sync_requested"
 
         /**
          * Said whenever credential-encrypted storage is still sealed.

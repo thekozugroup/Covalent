@@ -132,6 +132,12 @@ grep -Fq 'mustRunAfter(buildAndroidSyncEngine)' "$gradle_build"
 grep -Fq 'COVALENT_SYNC_ENGINE_PACKAGED' "$gradle_build"
 grep -Fq 'PackagedSyncEnginePackage.Invalid' "$packaged_sync"
 grep -Fq 'folder_sync_package_invalid' "$crate/src/lib.rs"
+grep -Fq 'folder_sync_access_unavailable' "$crate/src/lib.rs"
+grep -Fq 'backup_provider_enabled' "$crate/src/lib.rs"
+grep -Fq 'configuration.local_provider_enabled = backup_provider_enabled' "$crate/src/lib.rs"
+grep -Fq 'folderSyncAccessUnavailable' "$native"
+grep -Fq 'backupProviderEnabled' "$native"
+grep -Fq 'folderSyncAccessUnavailable()' "$manager"
 if git -C "$repo_root" ls-files '*.so' | \
   grep -E '(^|/)(libsyncthing|libengineguardian)\.so$' >/dev/null; then
   echo "Prebuilt folder-engine executables must not be committed to the product source" >&2

@@ -23,6 +23,7 @@ use zeroize::Zeroizing;
 const MAX_CONFIGURATION_BYTES: usize = 8 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_SCAN_REQUEST_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Fixed redacted errors. Upstream bodies, paths and credentials are never
 /// included, even when a broken or hostile local server returns them.
@@ -262,6 +263,28 @@ impl EngineApiClient {
         .map(|_| ())
     }
 
+    /// Run the one synchronous full-folder scan endpoint with a caller-owned
+    /// bounded deadline. Ordinary API methods retain the five-second limit.
+    pub(super) async fn scan_folder(
+        &self,
+        folder: Uuid,
+        timeout: Duration,
+    ) -> Result<(), EngineApiError> {
+        if timeout.is_zero() || timeout > MAX_SCAN_REQUEST_TIMEOUT {
+            return Err(EngineApiError::InvalidConfiguration);
+        }
+        let endpoint = EngineEndpoint::ScanFolder(folder);
+        self.exchange_with_timeout(
+            endpoint.method(),
+            endpoint.path(),
+            Bytes::new(),
+            endpoint.response_limit(),
+            timeout,
+        )
+        .await
+        .map(|_| ())
+    }
+
     /// Apply the controller's complete desired config. Callers must serialize
     /// this with reconciliation and verify the resulting effective config.
     /// Neither this value nor returned configuration may be logged or sent to a
@@ -318,7 +341,19 @@ impl EngineApiClient {
         body: Bytes,
         response_limit: usize,
     ) -> Result<Vec<u8>, EngineApiError> {
-        tokio::time::timeout(self.timeout, async {
+        self.exchange_with_timeout(method, path, body, response_limit, self.timeout)
+            .await
+    }
+
+    async fn exchange_with_timeout(
+        &self,
+        method: Method,
+        path: String,
+        body: Bytes,
+        response_limit: usize,
+        timeout: Duration,
+    ) -> Result<Vec<u8>, EngineApiError> {
+        tokio::time::timeout(timeout, async {
             let io = match &self.transport {
                 EngineTransport::Unix(socket_path) => {
                     let endpoint_identity = self.verify_endpoint(socket_path)?;

@@ -86,14 +86,45 @@ MPL license and source provenance.
 
 Compose deliberately fixes the runtime UID/GID at `65532:65532`: Docker Compose mounts file-backed secrets with host ownership, so a configurable `PUID` would make an owner-only KEK unreadable or tempt an unsafe permission change. Create `/config`, `/data`, and the KEK as `65532:65532`; keep the key file `0600` on the host. The secret declaration requests `0400`, but local Compose bind mounts can retain the host's `0600` mode; the read-only mount still prevents writes. `PUID` and `PGID` overrides are explicitly rejected at startup. `UMASK` accepts a three-digit octal value and defaults to `027`. For a different identity, use an explicit `docker run --user UID:GID` provisioning and runtime contract with a separately owner-readable KEK; do not override the supplied Compose service.
 
-`COVALENT_BACKUP_SOURCE` mounts one selected directory at `/source` read-only. Set it to a specific share, never `/mnt/user`. `COVALENT_RESTORE_TARGET` is the only writable example bind mount and appears at `/restore`. Preview first, choose a conflict policy, then explicitly authorize the signed plan in the console or API.
+`COVALENT_BACKUP_SOURCE` mounts one selected directory at `/source` read-only. Set it to a specific share, never `/mnt/user`. `COVALENT_RESTORE_TARGET` is the writable restore bind mount and appears at `/restore`. Preview first, choose a conflict policy, then explicitly authorize the signed plan in the console or API.
+
+## Choose a folder to sync
+
+Add one existing folder using the optional sync overlay. Covalent needs read,
+write and directory-traverse access as UID/GID `65532:65532`. Choose only the
+folder you intend to share, outside Covalent's private state and key folders.
+Changes and deletions from explicitly paired devices can reach this folder.
+
+```sh
+export COVALENT_SYNC_FOLDER=/absolute/path/to/your/folder
+docker compose -f packaging/docker/compose.yaml \
+  -f packaging/docker/compose.sync.yaml up -d --no-build
+```
+
+The overlay refuses a missing host folder instead of silently creating one.
+It exposes the selected folder as `/sync` inside the container. Open **Folders**
+in the console, keep `/sync` as the server folder, choose a paired device and
+send an invitation. Accept that invitation on the other device and choose its
+local folder. The browser's own file picker cannot grant the server access to
+a folder on your computer.
+
+For an empty test folder, create a new directory owned by the container user;
+do not recursively change ownership or permissions on an existing share just
+to try the app. On Unraid, choose a specific folder in **Folder to sync** in
+the Docker template and grant the configured container user access. Leave the
+optional mapping empty to use backup/recovery without folder sync. Never map
+all of `/mnt/user`, `appdata`, `system`, `/boot`, or a directory containing keys.
+
+After stopping all shares using this mount in **Folders**, remove the overlay
+from the Compose command to withdraw container access. Stopping sharing keeps
+local files; it does not serve as a backup of changes made before stopping.
 
 ## Console and local API
 
 A same-container Caddy proxy serves `https://localhost:8443` and can reach the
 daemon only over its loopback socket. Claim and enroll the CA before opening
 that address; never click through the browser's certificate warning. The
-responsive no-framework console implements Pair, Backup, Restore, and Settings
+responsive no-framework console implements Folders, Pair, Backup, Restore, and Settings
 against the daemon's real `/api/v1/*` routes. Status is public; changes require
 a token.
 
@@ -248,7 +279,15 @@ phone before claiming `https://covalent.home.arpa:8443`; the claim output is
 bound to that exact CA and hostname. Permit TCP 8443, UDP 8787, and TCP 8789
 only from the intended private LAN devices.
 
-For a Tailnet-only host, bind both published ports to that host's numeric
+Folder offers use the advertised host IP and TCP port 8789. If you change the
+Compose host port, set `COVALENT_SYNC_PORT` before recreating the container;
+Covalent includes that port in new folder offers automatically. For a separate
+sync address, set `COVALENT_SYNC_ADVERTISED_ADDRESS` to a numeric `IP:port`
+(or `[IPv6]:port`). Existing offers retain their signed address; create a new
+offer after a port change. In Unraid, changing the transport host port also
+requires the advanced **Folder sync address** field.
+
+For a Tailnet-only host, bind all three published ports to that host's numeric
 Tailscale IPv4 address. Keep the HTTPS certificate name as MagicDNS. Leave the
 advertised peer override unset when the container can resolve that name, or set
 it to a numeric `IP:port`; the node's `SocketAddr` contract does not accept a
@@ -289,7 +328,7 @@ docker buildx build --platform linux/amd64,linux/arm64 \
   --output type=oci,dest=covalent-local.oci .
 ```
 
-The release workflow builds the same pinned Rust toolchain and Alpine runtime independently for `linux/amd64` and `linux/arm64`, enforces the 96 MiB budget on both images, then assembles one manifest. It scans each private architecture image, emits a distinct SPDX SBOM for each, and keylessly signs the release index plus both child image digests with Cosign OIDC. Each SBOM is attested only to its matching child digest. Verification commands are recorded with the release artifact; a signature is not implied for local developer tags.
+The release workflow builds the same pinned Rust toolchain and Alpine runtime independently for `linux/amd64` and `linux/arm64`, enforces the 128 MiB budget on both images, then assembles one manifest. It scans each private architecture image, emits a distinct SPDX SBOM for each, and keylessly signs the release index plus both child image digests with Cosign OIDC. Each SBOM is attested only to its matching child digest. Verification commands are recorded with the release artifact; a signature is not implied for local developer tags.
 
 Run deterministic container checks locally:
 

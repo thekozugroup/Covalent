@@ -155,6 +155,22 @@ if [ -n "${COVALENT_ADVERTISED_PEER_ADDRESS:-}" ]; then
   fi
 fi
 
+# The engine always listens on container port 8789. Offers must name the host's
+# published port, including a Compose override, rather than the container port.
+if [ -z "${COVALENT_SYNC_ADVERTISED_ADDRESS:-}" ] \
+  && [ -n "${COVALENT_ADVERTISED_PEER_ADDRESS:-}" ]; then
+  sync_port=${COVALENT_SYNC_PORT:-8789}
+  case "$sync_port" in
+    ''|*[!0-9]*|??????*) sync_port=invalid ;;
+  esac
+  if [ "$sync_port" = invalid ] || [ "$sync_port" -lt 1 ] || [ "$sync_port" -gt 65535 ]; then
+    echo "COVALENT_SYNC_PORT must be a host port between 1 and 65535" >&2
+    exit 64
+  fi
+  COVALENT_SYNC_ADVERTISED_ADDRESS="${COVALENT_ADVERTISED_PEER_ADDRESS%:*}:$sync_port"
+  export COVALENT_SYNC_ADVERTISED_ADDRESS
+fi
+
 covalent-node "$@" &
 node_pid=$!
 caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &

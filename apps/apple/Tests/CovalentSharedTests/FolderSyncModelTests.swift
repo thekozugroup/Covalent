@@ -86,7 +86,15 @@ private enum FolderGrantTestError: Error { case restartFailed }
         configuration: configuration,
         localNodeBootstrapper: bootstrapper
     )
-    let grant = try SelectedDirectoryGrant.capture(url: source, purpose: .folderSync)
+    let captured = try SelectedDirectoryGrant.capture(url: source, purpose: .folderSync)
+    // The durable format intentionally uses ISO-8601 second precision.
+    let grant = SelectedDirectoryGrant(
+        id: captured.id,
+        displayName: captured.displayName,
+        purpose: captured.purpose,
+        bookmarkData: captured.bookmarkData,
+        capturedAt: Date(timeIntervalSince1970: 1_788_883_288)
+    )
 
     let firstOffer = await model.offerFolder(peerId: peer, folderId: folder, label: "Plans", grant: grant)
     #expect(!firstOffer)

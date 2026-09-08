@@ -71,6 +71,12 @@ struct MacFoldersView: View {
               Task { await model.refreshFolders() }
             }
           }
+        } else if status.isInitialScanning && visibleShares(in: status).isEmpty {
+          ContentUnavailableView(
+            "Checking folders",
+            systemImage: "folder.badge.gearshape",
+            description: Text("Covalent is checking local folder contents before sync starts.")
+          )
         } else if visibleShares(in: status).isEmpty {
           ContentUnavailableView(
             "Keep a folder in sync",

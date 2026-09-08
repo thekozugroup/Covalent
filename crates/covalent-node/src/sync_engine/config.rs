@@ -613,7 +613,14 @@ impl DesiredEngineConfig {
     /// identity and private API but has no peer, folder or sync listener. A
     /// later desired-state replacement is required before sharing can begin.
     pub fn render_initial_xml(&self) -> Result<Zeroizing<String>, EngineConfigError> {
-        self.render(false)
+        self.render(RenderMode::Initial)
+    }
+
+    /// Render all authorized folders while keeping every remote device paused
+    /// and every sync listener disabled. This lets the controller positively
+    /// scan local roots before the worker can exchange indexes or content.
+    pub fn render_scan_gate_xml(&self) -> Result<Zeroizing<String>, EngineConfigError> {
+        self.render(RenderMode::ScanGate)
     }
 
     /// Render the complete desired configuration. Folders are active only when
@@ -621,7 +628,7 @@ impl DesiredEngineConfig {
     /// `ignorePerms=true` avoids propagating Unix permission bits across
     /// platforms. Callers must not infer executable-mode synchronization.
     pub fn render_desired_xml(&self) -> Result<Zeroizing<String>, EngineConfigError> {
-        self.render(true)
+        self.render(RenderMode::Desired)
     }
 
     /// Verify the effective configuration returned by the pinned engine after
@@ -638,6 +645,60 @@ impl DesiredEngineConfig {
         self.verify_effective_mode(effective, EffectiveMode::Initial)
     }
 
+    /// Verify the exact network-inert folder configuration used for the
+    /// mandatory initial scan.
+    pub fn verify_scan_gate_effective(&self, effective: &Value) -> Result<(), EngineConfigError> {
+        self.verify_effective_mode(effective, EffectiveMode::ScanGate)
+    }
+
+    /// Derive the desired configuration payload only from a freshly fetched
+    /// and exactly verified scan-gate configuration. The pinned worker accepts
+    /// this complete JSON object through its private configuration endpoint.
+    pub(super) fn promotion_payload(
+        &self,
+        mut effective: Value,
+    ) -> Result<Value, EngineConfigError> {
+        self.verify_scan_gate_effective(&effective)?;
+        let options = effective
+            .get_mut("options")
+            .and_then(Value::as_object_mut)
+            .ok_or(EngineConfigError::EffectiveConfigMismatch)?;
+        let listener = self
+            .listener
+            .map(|address| format!("tcp://{address}"))
+            .unwrap_or_default();
+        options.insert("listenAddresses".to_owned(), serde_json::json!([listener]));
+        let devices = effective
+            .get_mut("devices")
+            .and_then(Value::as_array_mut)
+            .ok_or(EngineConfigError::EffectiveConfigMismatch)?;
+        for peer in &self.peers {
+            let device = devices
+                .iter_mut()
+                .find(|candidate| {
+                    candidate.get("deviceID").and_then(Value::as_str) == Some(peer.id.as_str())
+                })
+                .and_then(Value::as_object_mut)
+                .ok_or(EngineConfigError::EffectiveConfigMismatch)?;
+            device.insert("paused".to_owned(), Value::Bool(peer.paused));
+        }
+        let folders = effective
+            .get_mut("folders")
+            .and_then(Value::as_array_mut)
+            .ok_or(EngineConfigError::EffectiveConfigMismatch)?;
+        for folder in &self.folders {
+            let id = folder.id.to_string();
+            let effective_folder = folders
+                .iter_mut()
+                .find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(&id))
+                .and_then(Value::as_object_mut)
+                .ok_or(EngineConfigError::EffectiveConfigMismatch)?;
+            effective_folder.insert("paused".to_owned(), Value::Bool(folder.paused));
+        }
+        self.verify_effective(&effective)?;
+        Ok(effective)
+    }
+
     fn verify_effective_mode(
         &self,
         effective: &Value,
@@ -649,32 +710,41 @@ impl DesiredEngineConfig {
         verify_folders(effective_field(effective, "folders")?, self, mode)
     }
 
-    fn render(&self, desired: bool) -> Result<Zeroizing<String>, EngineConfigError> {
+    fn render(&self, mode: RenderMode) -> Result<Zeroizing<String>, EngineConfigError> {
         let mut xml = XmlWriter::new();
         writeln!(xml, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
             .map_err(|_| EngineConfigError::RenderFailed)?;
         writeln!(xml, "<configuration version=\"{PINNED_CONFIG_VERSION}\">")
             .map_err(|_| EngineConfigError::RenderFailed)?;
-        if desired {
+        if mode.includes_shares() {
             for folder in &self.folders {
-                write_folder(&mut xml, folder)?;
+                write_folder(
+                    &mut xml,
+                    folder,
+                    mode == RenderMode::Desired && folder.paused,
+                )?;
             }
         }
         write_device(&mut xml, &self.own_id, &self.own_name, None, false)?;
-        if desired {
+        if mode.includes_shares() {
             for peer in &self.peers {
                 write_device(
                     &mut xml,
                     &peer.id,
                     &peer.name,
                     Some(peer.address),
-                    peer.paused,
+                    mode == RenderMode::ScanGate || peer.paused,
                 )?;
             }
         }
         write_gui(&mut xml, &self.gui, &self.api_key)?;
         xml.push("  <ldap></ldap>\n")?;
-        write_options(&mut xml, desired.then_some(self.listener).flatten())?;
+        write_options(
+            &mut xml,
+            (mode == RenderMode::Desired)
+                .then_some(self.listener)
+                .flatten(),
+        )?;
         xml.push("  <defaults></defaults>\n")?;
         xml.push("</configuration>\n")?;
         Ok(Zeroizing::new(xml.finish()))
@@ -764,8 +834,22 @@ fn validate_root(path: &Path) -> Result<PathBuf, EngineConfigError> {
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
+enum RenderMode {
+    Initial,
+    ScanGate,
+    Desired,
+}
+
+impl RenderMode {
+    const fn includes_shares(self) -> bool {
+        !matches!(self, Self::Initial)
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
 enum EffectiveMode {
     Initial,
+    ScanGate,
     Desired,
 }
 
@@ -861,7 +945,7 @@ fn verify_options(
     mode: EffectiveMode,
 ) -> Result<(), EngineConfigError> {
     let listener = match mode {
-        EffectiveMode::Initial => String::new(),
+        EffectiveMode::Initial | EffectiveMode::ScanGate => String::new(),
         EffectiveMode::Desired => expected
             .listener
             .map(|address| format!("tcp://{address}"))
@@ -897,7 +981,7 @@ fn verify_devices(
     let actual = value
         .as_array()
         .ok_or(EngineConfigError::EffectiveConfigMismatch)?;
-    let expected_count = 1 + usize::from(mode == EffectiveMode::Desired) * expected.peers.len();
+    let expected_count = 1 + usize::from(mode != EffectiveMode::Initial) * expected.peers.len();
     if actual.len() != expected_count {
         return effective_mismatch();
     }
@@ -908,7 +992,7 @@ fn verify_devices(
         &["dynamic"],
         false,
     )?;
-    if mode == EffectiveMode::Desired {
+    if mode != EffectiveMode::Initial {
         for peer in &expected.peers {
             let address = format!("tcp://{}", peer.address);
             verify_device(
@@ -916,7 +1000,7 @@ fn verify_devices(
                 &peer.id,
                 &peer.name,
                 &[&address],
-                peer.paused,
+                mode == EffectiveMode::ScanGate || peer.paused,
             )?;
         }
     }
@@ -985,12 +1069,20 @@ fn verify_folders(
         if matching.next().is_some() {
             return effective_mismatch();
         }
-        verify_folder(actual_folder, folder)?;
+        verify_folder(
+            actual_folder,
+            folder,
+            mode == EffectiveMode::Desired && folder.paused,
+        )?;
     }
     Ok(())
 }
 
-fn verify_folder(value: &Value, expected: &EngineFolderConfig) -> Result<(), EngineConfigError> {
+fn verify_folder(
+    value: &Value,
+    expected: &EngineFolderConfig,
+    paused: bool,
+) -> Result<(), EngineConfigError> {
     require_string(value, "id", &expected.id.to_string())?;
     require_string(value, "label", &expected.label)?;
     require_string(
@@ -1011,7 +1103,7 @@ fn verify_folder(value: &Value, expected: &EngineFolderConfig) -> Result<(), Eng
     require_bool(value, "autoNormalize", true)?;
     require_bool(value, "ignoreDelete", false)?;
     require_i64(value, "maxConflicts", -1)?;
-    require_bool(value, "paused", expected.paused)?;
+    require_bool(value, "paused", paused)?;
     require_string(value, "markerName", ".stfolder")?;
     require_bool(value, "disableFsync", false)?;
     require_string(value, "copyRangeMethod", "standard")?;
@@ -1069,7 +1161,7 @@ fn has_unsafe_path_text(value: &str) -> bool {
         .any(|character| character.is_control() || matches!(character, '\u{fffe}' | '\u{ffff}'))
 }
 
-fn validate_peer_address(address: SocketAddr) -> Result<(), EngineConfigError> {
+pub(super) fn validate_peer_address(address: SocketAddr) -> Result<(), EngineConfigError> {
     if address.port() == 0 || unacceptable_ip(address.ip()) {
         return Err(EngineConfigError::InvalidAddress);
     }
@@ -1146,7 +1238,11 @@ impl fmt::Write for XmlWriter {
     }
 }
 
-fn write_folder(xml: &mut XmlWriter, folder: &EngineFolderConfig) -> Result<(), EngineConfigError> {
+fn write_folder(
+    xml: &mut XmlWriter,
+    folder: &EngineFolderConfig,
+    paused: bool,
+) -> Result<(), EngineConfigError> {
     xml.push("  <folder id=\"")?;
     xml.escaped(&folder.id.to_string())?;
     xml.push("\" label=\"")?;
@@ -1175,8 +1271,7 @@ fn write_folder(xml: &mut XmlWriter, folder: &EngineFolderConfig) -> Result<(), 
     xml.push("    </versioning>\n")?;
     xml.push("    <ignoreDelete>false</ignoreDelete>\n")?;
     xml.push("    <maxConflicts>-1</maxConflicts>\n")?;
-    writeln!(xml, "    <paused>{}</paused>", folder.paused)
-        .map_err(|_| EngineConfigError::RenderFailed)?;
+    writeln!(xml, "    <paused>{paused}</paused>").map_err(|_| EngineConfigError::RenderFailed)?;
     xml.push("    <markerName>.stfolder</markerName>\n")?;
     xml.push("    <disableFsync>false</disableFsync>\n")?;
     xml.push("    <copyRangeMethod>standard</copyRangeMethod>\n")?;

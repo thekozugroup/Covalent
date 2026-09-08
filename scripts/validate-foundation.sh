@@ -59,6 +59,7 @@ crates/covalent-cli/Cargo.toml
 apps/apple/Project.yml
 apps/android/app/build.gradle.kts
 packaging/docker/Dockerfile
+packaging/docker/compose.sync.yaml
 packaging/unraid/covalent.xml
 .github/workflows/ci.yml
 .github/workflows/apple-unsigned-release.yml
@@ -76,6 +77,7 @@ scripts/test-macos-sync-engine-packaging.sh
 scripts/build-android-sync-engine.sh
 scripts/build-linux-sync-engine.sh
 scripts/collect-sync-engine-notices.py
+scripts/container-folder-sync-e2e.py
 scripts/test-collect-sync-engine-notices.py
 docs/security/syncthing-target-license-inventory.md
 docs/licenses/sync-engine/Go-1.26.7-LICENSE.txt
@@ -149,7 +151,7 @@ node ./scripts/test-setup-guidance.mjs
 ./scripts/test-personal-macos-app-builder.sh
 ./scripts/test-macos-sync-engine-packaging.sh
 ./scripts/test-android-native-package.sh
-python3 ./scripts/test-collect-sync-engine-notices.py
+python3 -B ./scripts/test-collect-sync-engine-notices.py
 ./scripts/test-personal-android-apk-builder.sh
 ./scripts/test-android-jni-build-command.sh
 ./scripts/test-remote-drill-owner-loss.sh
