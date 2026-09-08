@@ -79,6 +79,19 @@ grep -Fq 'local:' "$crate/exports.map"
 grep -Fq -e '--version-script' "$repo_root/scripts/build-android-jni.sh"
 grep -Fq -- '--pack-dyn-relocs=android' "$repo_root/scripts/build-android-jni.sh"
 grep -Fq 'SHT_ANDROID_RELA' "$repo_root/scripts/build-android-jni.sh"
+# Android release builds may optimise the node orchestration and JNI adapter
+# for size, but a global release override would also slow crypto and streaming
+# dependencies. Pin the exact package-scoped Cargo overrides and their position
+# after cargo-ndk's `--`, where they are forwarded to `cargo build`.
+build_jni="$repo_root/scripts/build-android-jni.sh"
+grep -Fq 'node_release_override='\''profile.release.package.covalent-node.opt-level="s"'\''' "$build_jni"
+grep -Fq 'jni_release_override='\''profile.release.package.covalent-android-jni.opt-level="s"'\''' "$build_jni"
+grep -Fq -- '--config "$node_release_override"' "$build_jni"
+grep -Fq -- '--config "$jni_release_override"' "$build_jni"
+if grep -Eq 'profile\.release\.opt-level|profile\.release\.package\."\*"\.opt-level' "$build_jni"; then
+  echo "Android JNI size optimisation must remain scoped to the node and JNI packages" >&2
+  exit 1
+fi
 grep -Fq 'JNI_OnLoad' "$crate/src/lib.rs"
 grep -Fq 'register_native_methods' "$crate/src/lib.rs"
 grep -Fq 'MAX_LIVE_NODES' "$crate/src/lib.rs"

@@ -532,16 +532,22 @@ impl NodeRuntime {
 
     /// Requests graceful HTTP shutdown and waits for all owned tasks to exit.
     ///
-    /// Repeated calls are safe.  The first caller owns the completion result;
-    /// later calls observe that shutdown has already been requested.
+    /// Repeated and concurrent calls are safe. The first waiter receives the
+    /// supervisor's completion result; every other waiter returns only after
+    /// that shutdown and its endpoint cleanup have completed.
     pub async fn stop(&self) -> Result<()> {
         self.control.recovery.cancel();
         let _ = self.control.shutdown.send(true);
-        let completion = self.control.completion.lock().await.take();
-        match completion {
-            Some(completion) => completion.await.context("join node runtime")?,
+        let mut completion = self.control.completion.lock().await;
+        let result = match completion.as_mut() {
+            Some(completion) => completion
+                .await
+                .context("join node runtime")
+                .and_then(|result| result),
             None => Ok(()),
-        }
+        };
+        *completion = None;
+        result
     }
 }
 
@@ -595,6 +601,13 @@ async fn supervise_runtime(
             quic_result.and(http_result)
         }
     };
+    // The serving task can also finish because it was cancelled or panicked.
+    // Close is idempotent and must precede wait_idle in every exit path.
+    quic_shutdown.close();
+    let quic_release_result = quic_shutdown
+        .wait_for_release()
+        .await
+        .context("release QUIC peer endpoint");
 
     let discovery_result = discovery.set_enabled(false).context("stop LAN discovery");
     if let Some(task) = recovery_task {
@@ -612,6 +625,7 @@ async fn supervise_runtime(
     };
 
     result?;
+    quic_release_result?;
     discovery_result?;
     readiness_result
 }
@@ -887,6 +901,22 @@ mod tests {
         let reopened = start_runtime(&directory).await;
         assert_eq!(reopened.ready_info().api_token().expose(), initial_token);
         reopened.stop().await.expect("stop reopened runtime");
+    }
+
+    #[tokio::test]
+    async fn stop_releases_quic_port_before_fixed_address_restart() {
+        let directory = TempDir::new().expect("temp directory");
+        let runtime = start_runtime(&directory).await;
+        let peer_address = runtime.ready_info().peer_address();
+        runtime.stop().await.expect("stop first runtime");
+
+        let mut configuration = test_configuration(&directory);
+        configuration.peer_address = peer_address;
+        let restarted = NodeRuntime::start(configuration)
+            .await
+            .expect("restart immediately on released QUIC address");
+        assert_eq!(restarted.ready_info().peer_address(), peer_address);
+        restarted.stop().await.expect("stop restarted runtime");
     }
 
     #[tokio::test]

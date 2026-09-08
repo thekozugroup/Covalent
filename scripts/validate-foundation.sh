@@ -73,6 +73,7 @@ scripts/build-personal-macos-app.sh
 scripts/build-personal-android-apk.sh
 scripts/test-personal-macos-app-builder.sh
 scripts/test-personal-android-apk-builder.sh
+scripts/test-android-jni-build-command.sh
 scripts/test-openapi-routes.sh
 scripts/test-setup-guidance.mjs
 scripts/test-setup-paths.sh
@@ -136,6 +137,7 @@ node ./scripts/test-setup-guidance.mjs
 ./scripts/test-setup-paths.sh
 ./scripts/test-personal-macos-app-builder.sh
 ./scripts/test-personal-android-apk-builder.sh
+./scripts/test-android-jni-build-command.sh
 ./scripts/test-openapi-routes.sh
 
 # The contract fixtures are a gate, not a nicety: `if command -v jq` silently

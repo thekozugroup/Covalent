@@ -12,8 +12,10 @@ import Testing
     try RecoveryFilePair.write(export, kitURL: kit, keyURL: code)
     #expect(try Data(contentsOf: kit) == Data("kit".utf8))
     #expect(try Data(contentsOf: code) == Data(String(repeating: "A", count: 43).utf8))
-    let mode = try FileManager.default.attributesOfItem(atPath: kit.path)[.posixPermissions] as? NSNumber
-    #expect(mode?.uint16Value & 0o077 == 0)
+    let mode = try #require(
+        FileManager.default.attributesOfItem(atPath: kit.path)[.posixPermissions] as? NSNumber
+    )
+    #expect(mode.uint16Value & 0o077 == 0)
     #expect(throws: RecoveryFilePairError.destinationExists) {
         try RecoveryFilePair.write(export, kitURL: kit, keyURL: code)
     }

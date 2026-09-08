@@ -3,9 +3,11 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::fs;
-use std::io::{BufReader, Read, Seek, SeekFrom, Write};
+use std::future::Future;
+use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -20,8 +22,8 @@ use covalent_core::{
 };
 use covalent_protocol::{BackupId, DeviceId, PeerRole, SignedRoster, StorageLease};
 use quinn::{
-    ClientConfig, ConnectionError, Endpoint, ServerConfig, TransportConfig, TransportErrorCode,
-    VarInt,
+    AsyncTimer, AsyncUdpSocket, ClientConfig, ConnectionError, Endpoint, EndpointConfig, Runtime,
+    ServerConfig, TokioRuntime, TransportConfig, TransportErrorCode, VarInt,
 };
 use rand_core::{OsRng, RngCore};
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
@@ -465,6 +467,7 @@ impl fmt::Debug for TlsIdentity {
 /// Running QUIC storage endpoint.
 pub struct QuicNode {
     endpoint: Endpoint,
+    runtime: Arc<OwnedQuinnRuntime>,
     engine: Arc<Engine>,
     certificate_fingerprint: String,
     replay_window: Arc<Mutex<ReplayWindow>>,
@@ -480,12 +483,90 @@ pub struct QuicNode {
 /// Close capability retained after a node enters its serving task.
 pub(crate) struct QuicNodeShutdown {
     endpoint: Endpoint,
+    runtime: Arc<OwnedQuinnRuntime>,
 }
 
 impl QuicNodeShutdown {
     pub(crate) fn close(&self) {
         self.endpoint
             .close(VarInt::from_u32(0), b"node shutting down");
+    }
+
+    /// Waits until Quinn has drained every connection driver and dropped the
+    /// endpoint driver that owns the bound UDP socket.
+    ///
+    /// `Endpoint::wait_idle` alone only observes Quinn's connection map. The
+    /// endpoint driver is a detached runtime task and can retain the socket for
+    /// another scheduling turn after the final public endpoint handle drops.
+    /// Call this only after the `QuicNode::run` task has exited, so this handle
+    /// is the final application-owned endpoint reference.
+    pub(crate) async fn wait_for_release(self) -> Result<(), CoreError> {
+        let Self { endpoint, runtime } = self;
+        endpoint.wait_idle().await;
+        drop(endpoint);
+        runtime.join().await
+    }
+}
+
+/// Tokio runtime scoped to one server endpoint.
+///
+/// Quinn intentionally detaches its internal endpoint and connection drivers.
+/// Retaining their join handles lets graceful shutdown wait for the endpoint
+/// driver's future to be dropped, which is the point at which its UDP socket is
+/// actually released by Quinn.
+#[derive(Debug, Default)]
+struct OwnedQuinnRuntime {
+    tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+}
+
+impl OwnedQuinnRuntime {
+    async fn join(&self) -> Result<(), CoreError> {
+        let mut first_failure = None;
+        loop {
+            let tasks = {
+                let mut tasks = self
+                    .tasks
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                std::mem::take(&mut *tasks)
+            };
+            if tasks.is_empty() {
+                return match first_failure {
+                    Some(error) => Err(CoreError::InvalidState(error)),
+                    None => Ok(()),
+                };
+            }
+            for task in tasks {
+                if let Err(error) = task.await
+                    && first_failure.is_none()
+                {
+                    first_failure = Some(format!("join QUIC runtime task: {error}"));
+                }
+            }
+        }
+    }
+}
+
+impl Runtime for OwnedQuinnRuntime {
+    fn new_timer(&self, instant: Instant) -> Pin<Box<dyn AsyncTimer>> {
+        TokioRuntime.new_timer(instant)
+    }
+
+    fn spawn(&self, future: Pin<Box<dyn Future<Output = ()> + Send>>) {
+        let mut tasks = self
+            .tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        tasks.retain(|task| !task.is_finished());
+        tasks.push(tokio::spawn(future));
+    }
+
+    fn wrap_udp_socket(&self, socket: std::net::UdpSocket) -> io::Result<Arc<dyn AsyncUdpSocket>> {
+        TokioRuntime.wrap_udp_socket(socket)
+    }
+
+    fn now(&self) -> Instant {
+        TokioRuntime.now()
     }
 }
 
@@ -496,16 +577,26 @@ impl QuicNode {
         engine: Arc<Engine>,
         tls_identity: &TlsIdentity,
     ) -> Result<Self, CoreError> {
-        let endpoint =
-            Endpoint::server(tls_identity.server_config()?, address).map_err(|source| {
-                CoreError::Io {
-                    operation: "bind QUIC peer endpoint",
-                    path: PathBuf::from(address.to_string()),
-                    source,
-                }
-            })?;
+        let socket = std::net::UdpSocket::bind(address).map_err(|source| CoreError::Io {
+            operation: "bind QUIC peer endpoint",
+            path: PathBuf::from(address.to_string()),
+            source,
+        })?;
+        let runtime = Arc::new(OwnedQuinnRuntime::default());
+        let endpoint = Endpoint::new(
+            EndpointConfig::default(),
+            Some(tls_identity.server_config()?),
+            socket,
+            Arc::clone(&runtime) as Arc<dyn Runtime>,
+        )
+        .map_err(|source| CoreError::Io {
+            operation: "bind QUIC peer endpoint",
+            path: PathBuf::from(address.to_string()),
+            source,
+        })?;
         Ok(Self {
             endpoint,
+            runtime,
             engine,
             certificate_fingerprint: tls_identity.certificate_fingerprint(),
             replay_window: Arc::new(Mutex::new(ReplayWindow::default())),
@@ -540,6 +631,7 @@ impl QuicNode {
     pub(crate) fn shutdown_handle(&self) -> QuicNodeShutdown {
         QuicNodeShutdown {
             endpoint: self.endpoint.clone(),
+            runtime: Arc::clone(&self.runtime),
         }
     }
 
@@ -3779,6 +3871,129 @@ mod tests {
             Ok(_) => 0,
             Err(error) => panic!("inspect test directory: {error}"),
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn graceful_shutdown_releases_udp_socket_after_live_connection() {
+        let owner_data = tempdir().expect("owner");
+        let provider_data = tempdir().expect("provider");
+        let owner = Arc::new(Engine::open(test_options(owner_data.path())).expect("owner"));
+        let provider_engine =
+            Arc::new(Engine::open(test_options(provider_data.path())).expect("provider"));
+        let tls = test_tls(provider_data.path(), "tls");
+        let node = QuicNode::bind(
+            "127.0.0.1:0".parse().expect("address"),
+            Arc::clone(&provider_engine),
+            &tls,
+        )
+        .expect("node");
+        let address = node.local_addr().expect("local address");
+        let shutdown = node.shutdown_handle();
+        let task = tokio::spawn(node.run());
+        let provider = QuicProvider::new(
+            address,
+            provider_engine.public_identity(),
+            tls.certificate_der().to_vec(),
+            owner,
+        )
+        .expect("provider client");
+        let connection = provider.connection().await.expect("live QUIC connection");
+        assert!(connection.close_reason().is_none());
+
+        shutdown.close();
+        tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .expect("serving task must stop")
+            .expect("join serving task");
+        tokio::time::timeout(Duration::from_secs(3), shutdown.wait_for_release())
+            .await
+            .expect("Quinn drivers must stop")
+            .expect("release server endpoint");
+
+        let rebound = std::net::UdpSocket::bind(address)
+            .expect("graceful completion must release the exact UDP address");
+        assert_eq!(rebound.local_addr().expect("rebound address"), address);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn aborted_serving_task_releases_udp_socket_after_explicit_close() {
+        let owner_data = tempdir().expect("owner");
+        let provider_data = tempdir().expect("provider");
+        let owner = Arc::new(Engine::open(test_options(owner_data.path())).expect("owner"));
+        let provider_engine =
+            Arc::new(Engine::open(test_options(provider_data.path())).expect("provider"));
+        let tls = test_tls(provider_data.path(), "tls");
+        let node = QuicNode::bind(
+            "127.0.0.1:0".parse().expect("address"),
+            Arc::clone(&provider_engine),
+            &tls,
+        )
+        .expect("node");
+        let address = node.local_addr().expect("local address");
+        let shutdown = node.shutdown_handle();
+        let task = tokio::spawn(node.run());
+        let provider = QuicProvider::new(
+            address,
+            provider_engine.public_identity(),
+            tls.certificate_der().to_vec(),
+            owner,
+        )
+        .expect("provider client");
+        let connection = provider.connection().await.expect("live QUIC connection");
+        assert!(connection.close_reason().is_none());
+
+        task.abort();
+        assert!(
+            task.await
+                .expect_err("serving task must be cancelled")
+                .is_cancelled(),
+            "serving task must end through cancellation"
+        );
+        shutdown.close();
+        tokio::time::timeout(Duration::from_secs(3), shutdown.wait_for_release())
+            .await
+            .expect("Quinn drivers must stop after explicit close")
+            .expect("release cancelled server endpoint");
+
+        let rebound = std::net::UdpSocket::bind(address)
+            .expect("cancel cleanup must release the exact UDP address");
+        assert_eq!(rebound.local_addr().expect("rebound address"), address);
+    }
+
+    #[tokio::test]
+    async fn owned_quinn_runtime_prunes_completed_driver_handles_during_churn() {
+        const COMPLETED_TASKS: usize = 1_024;
+        let runtime = OwnedQuinnRuntime::default();
+        let (completed, mut completions) = tokio::sync::mpsc::unbounded_channel();
+        for _ in 0..COMPLETED_TASKS {
+            let completed = completed.clone();
+            runtime.spawn(Box::pin(async move {
+                completed.send(()).expect("observe completion");
+            }));
+        }
+        drop(completed);
+        while completions.recv().await.is_some() {}
+        while runtime
+            .tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .any(|task| !task.is_finished())
+        {
+            tokio::task::yield_now().await;
+        }
+
+        runtime.spawn(Box::pin(async {}));
+        assert_eq!(
+            runtime
+                .tasks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
+            1,
+            "completed Quinn driver handles must not accumulate for the endpoint lifetime"
+        );
+        runtime.join().await.expect("join final driver");
     }
 
     #[test]

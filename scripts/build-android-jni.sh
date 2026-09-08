@@ -73,6 +73,13 @@ cd "$repo_root"
 android_api=26  # must match minSdk in apps/android/app/build.gradle.kts
 version_script="$repo_root/crates/covalent-android-jni/exports.map"
 target_dir=${CARGO_TARGET_DIR:-"$repo_root/target"}
+# Keep crypto, storage, protocol, and networking dependencies at the workspace's
+# release opt-level. Only the node's Android-facing orchestration and the thin
+# JNI adapter trade a little instruction-level optimisation for code size. The
+# overrides cannot change the inherited fat LTO, single codegen unit, stripping,
+# or unwind panic strategy; JNI entry points therefore retain catch_unwind.
+node_release_override='profile.release.package.covalent-node.opt-level="s"'
+jni_release_override='profile.release.package.covalent-android-jni.opt-level="s"'
 test -f "$version_script" || {
   echo "Missing JNI export version script at $version_script" >&2
   exit 1
@@ -85,7 +92,10 @@ for abi in arm64-v8a x86_64; do
     *) echo "Unsupported ABI $abi" >&2; exit 1 ;;
   esac
 
-  "$cargo_bin" ndk -t "$abi" -- build --release -p covalent-android-jni
+  "$cargo_bin" ndk -t "$abi" -- build --release \
+    --config "$node_release_override" \
+    --config "$jni_release_override" \
+    -p covalent-android-jni
 
   archive="$target_dir/$triple/release/libcovalent_android_jni.a"
   test -f "$archive" || {
