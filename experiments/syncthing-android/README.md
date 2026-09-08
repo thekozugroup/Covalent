@@ -12,6 +12,14 @@ repository's pinned Gradle 9.7.1 wrapper, AGP 9.2.1, SDK 37, and dependency-veri
 metadata. Legacy native packaging is deliberate: the test needs a package-manager-extracted
 immutable executable, because Android forbids executing a writable app-data copy.
 
+The pinned Android dependency `github.com/wlynxg/anet` v0.0.5 uses Go's internal
+network-interface zone cache. Its [upstream build instructions](https://github.com/wlynxg/anet#how-to-build-with-go-1230-or-later)
+require `-checklinkname=0` with Go 1.23 and later. The experiment uses that flag:
+the initial cross-link without it failed at `net.zoneCache` on Go 1.26.7. This is
+an explicit dependency on a private Go API, not proof of compatibility with a
+future compiler. The source/compiler pins and actual Android runtime gate stay
+required; no older compiler is substituted.
+
 ## What the API-37 test proves
 
 The one x86_64 instrumentation test checks:

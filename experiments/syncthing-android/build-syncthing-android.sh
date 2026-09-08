@@ -90,7 +90,7 @@ build_one() {
       GOFLAGS=-mod=readonly \
       GOTOOLCHAIN=local \
       SOURCE_DATE_EPOCH=1785792965 \
-      EXTRA_LDFLAGS='-linkmode=external -extldflags=-Wl,-z,max-page-size=16384' \
+      EXTRA_LDFLAGS='-checklinkname=0 -linkmode=external -extldflags=-Wl,-z,max-page-size=16384' \
       go run build.go \
         -goos android \
         -goarch "$goarch" \
