@@ -123,6 +123,32 @@ next build asks LLD to retain dynamic libraries only when needed and publishes t
 dynamic/symbol reports before applying the same `libc.so`-only gate. Whether this removes
 `libdl.so` for both ABIs remains a hosted NDK result, not a local claim.
 
+The revised linker build passed in [run 34231375345](https://github.com/thekozugroup/Covalent/actions/runs/34231375345)
+at commit `0dc152d3e4db9dab005cef26330658e6699416d6`. Both guardians retained only
+`libc.so`. The x86_64/API-37 invocation passed both exact instrumentation methods,
+reported `OK (2 tests)` and final code `-1`, and retained unchanged framework PIDs.
+This includes guardian EOF, guardian death, worker exit, and identity-preserving
+restart. Arm64 remains build evidence; final production storage, Unix API,
+foreground-service, and app lifecycle integration remain separate gates.
+
+## Android target dependency and vulnerability evidence
+
+`collect-target-supply-chain.sh` collects both Android arm64 and amd64 package
+graphs with the same Go 1.26.7, CGO, NDK API-26 compiler, and `noupgrade` build tag.
+It provisions a checksum-pinned host-native govulncheck v1.7.0 in a new private
+output directory and preserves the complete source-symbol scans from the official
+Go vulnerability database. The workflow runs this independently of instrumentation
+and uploads reports even when collection fails.
+
+The four previously reviewed x/crypto module findings are retained. A disposition
+passes only when the current reviewed official record matches the scan record,
+its affected packages exactly match the reviewed set, the actual Android package
+graph excludes all those packages, and the finding is the exact module-only
+trace. Called symbols, target-package findings, new findings, incomplete scans,
+or changed record predicates fail. This is target source analysis; it makes no
+runtime coverage or general dependency-safety claim. The first hosted collection
+is pending, and target license/source distribution remains a release gate.
+
 The first prepared run timed out before instrumentation because the shared
 readiness helper still targeted the production app's Compose activity. The
 workflow now supplies its supported package/component overrides for this
