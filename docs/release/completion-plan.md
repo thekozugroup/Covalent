@@ -37,15 +37,15 @@ Close every known release-blocking finding; do not remove a gate to raise a scor
 | Area | Required evidence | Current state |
 | --- | --- | --- |
 | Product scope | Explicit backup/sync semantics and a matching acceptance scenario | Automatic two-way sync is required by the working interpretation of this goal; implementation and acceptance evidence remain outstanding. |
-| Core correctness | Unit, property, adversarial, migration, concurrency, corruption, interrupted-job and source-loss tests; strict lint | At `6d6ef05`, hosted Rust/contracts passed: 311 Rust tests across 22 suites, zero failed/ignored. Strict workspace Clippy and 89 web tests pass. Final native and artifact checks remain required. |
+| Core correctness | Unit, property, adversarial, migration, concurrency, corruption, interrupted-job and source-loss tests; strict lint | At `45e579d`, hosted Rust/contracts passed: 311 Rust tests across 22 suites, zero failed/ignored. Strict workspace Clippy and 89 web tests pass. Final revision and artifact checks remain required. |
 | Owner-device loss | A user can export a protected recovery kit, replace a lost owner device, discover its authenticated catalogs, see partial availability, and restore | API, CLI/runtime, web and native recovery flows published at `9e52876`. Real owner-loss HTTP/QUIC restore and web-downloaded kit roundtrip pass locally. The QUIC socket-release fix and immediate-restart recovery tests passed Linux CI at `6d6ef05`. Native UI, final artifacts and large-catalog memory evidence remain required. |
 | Beginner workflow | Install → connect → choose folder → protect → verify → restore through real UI; clear errors and recovery; no manual IDs in ordinary flows | Real browser unlock, automatic snapshot/name defaults, named backup selection, preview invalidation, restore and Verify passed with disposable files. Preview now explains individual file actions and renamed conflict destinations instead of raw JSON. Full cross-device onboarding pending. |
-| macOS | Shared tests, live helper integration, native UI/accessibility, verified arm64 app package, install and upgrade | At `4fa2a6a`, the app bundle, all 105 shared tests, and the live helper integration passed. Native UI passed three of four tests; file-picker cancellation now passes, but the first-launch fixture loaded its credential from the wrong directory. It now uses the same bounded, owner-only loader as the other UI tests; local shared build passes and a hosted UI rerun remains required. Local Xcode license and CLT Testing limitations remain. |
-| Android | JVM, instrumented SAF and process-death tests, TalkBack/large text, install and upgrade of stable personal artifact | At `e5a622c`, arm64 JNI is 8,384,224 bytes and x86_64 is 9,918,032 bytes; both pass the unchanged budget. At `4fa2a6a`, Android foundation and API 37 device gates passed: 103 JVM tests and all 65 named instrumentation tests, with no skipped device tests. Recovery plural resources pass lint. Final-revision and personal-artifact validation remain required. |
-| Docker | Both CPU architectures; TLS and key-protection contracts; rootless/read-only runtime; bounded storage/memory; three-node recovery | Both image architectures and container runtime/e2e passed on checkpoint `4fa2a6a`; repeat on final revision. |
+| macOS | Shared tests, live helper integration, native UI/accessibility, verified arm64 app package, install and upgrade | At `45e579d`, the app bundle, all 105 shared tests, live helper integration, and all four native UI tests passed. The digest-verified xcresult confirms four passed, zero failed/skipped, including first-launch setup/recovery cancellation and the system accessibility audit. Final artifact install/upgrade remains required. Local Xcode license and CLT Testing limitations remain. |
+| Android | JVM, instrumented SAF and process-death tests, TalkBack/large text, install and upgrade of stable personal artifact | At `e5a622c`, arm64 JNI is 8,384,224 bytes and x86_64 is 9,918,032 bytes; both pass the unchanged budget. At `45e579d`, Android foundation and API 37 device gates passed: 103 JVM tests and all 65 named instrumentation tests, with no skipped device tests. Recovery plural resources pass lint. Final-revision and personal-artifact validation remain required. |
+| Docker | Both CPU architectures; TLS and key-protection contracts; rootless/read-only runtime; bounded storage/memory; three-node recovery | Both image architectures and container runtime/e2e passed on checkpoint `45e579d`; repeat on final revision. |
 | Atmos network drill | Mac ↔ Ubuntu pairing, explicitly selected replica, interrupted/restarted operation, source-loss restore, exact hashes, cleanup | Passed with a 64 MiB incompressible payload: same-job pause/resume, provider container restart preserving identity, local source/cache loss, provider-only restore and exact content checks. Dedicated resources removed; pre-existing container/image IDs survived. See [drill evidence](atmos-drill-2026-09-07.md). |
 | Atlas/Unraid | Docker deployment, Unraid template/mount contracts, exact-image install/upgrade and backup/restore; on-host Atlas check deferred by the user | Atlas is offline. The user accepted Docker validation in its place on 2026-09-07. Preflight fixtures and both Docker architectures pass; final-image and full owner-loss Docker validation remain required. No physical Atlas install is claimed. |
-| Security and supply chain | Dependency audits, CodeQL, immutable image scans/signatures/SBOMs, safe secret storage, exact release commit provenance | cargo-audit (289 dependencies, warnings denied) and cargo-deny advisories/bans/licenses/sources passed. CodeQL Java/Kotlin, Swift and the repository-wide zero-open-alert policy passed at `6d6ef05`. Final artifact evidence is pending; current main signature is unknown_key and account has no registered signing key. |
+| Security and supply chain | Dependency audits, CodeQL, immutable image scans/signatures/SBOMs, safe secret storage, exact release commit provenance | cargo-audit (289 dependencies, warnings denied) and cargo-deny advisories/bans/licenses/sources passed. CodeQL Java/Kotlin, Swift and the repository-wide zero-open-alert policy passed at `45e579d`. Final artifact evidence is pending; current main signature is unknown_key and account has no registered signing key. |
 | Performance | Crypto ≥20 MiB/s; default 10k-entry interrupted/resumed scan and restore ≤45 s; provider restore ≥4 MiB/s and scaling gate; node ≤16 MiB, CLI ≤8 MiB, image ≤96 MiB | Baseline crypto 185.04 MiB/s, 10k-entry recovery 5.10 s, local provider restore 222–242 MiB/s; intermediate release node 10,304,896 bytes and CLI 4,079,664 bytes. Final artifacts pending. |
 | Release delivery | Green exact-revision CI, verified signed tag, complete downloadable artifacts and checksums, replacement immutable Unraid digest, working beginner instructions | v0.2.0 remains unpublished |
 
@@ -113,12 +113,23 @@ packages, credentials, private server inventories, or raw diagnostic bundles.
   103 JVM tests and lint. The native macOS first-launch test now passes file
   picker cancellation; its later setup assertion exposed a wrong-directory
   credential read in the debug fixture, now replaced by the existing protected
-  UI-test loader. Local shared Swift build passes; hosted UI evidence is pending.
+  UI-test loader. The next checkpoint `45e579d` passed all four native UI tests,
+  all 105 shared Swift tests, and live helper integration. Its complete CI run
+  [34181412825](https://github.com/thekozugroup/Covalent/actions/runs/34181412825)
+  passed every release-candidate software gate, including both Docker
+  architectures and all 65 named Android device tests. Swift/Java/Kotlin
+  CodeQL and the zero-open-alert policy also passed. This is software-gate
+  evidence, not completion of two-way sync or final artifact acceptance.
 - The opt-in Atmos drill now supports complete owner-state loss and automatic
   catalog import from protected exported recovery files. Local fixtures prove
   bounded shutdown, unrelated-process survival, private-file handling, response
   bounds and error redaction, and retention of unowned Docker resources. The
-  full cross-machine owner-loss run is in progress; it is not yet a pass.
+  first full cross-machine owner-loss attempt failed during replication after
+  same-job pause/resume, before recovery-file export or owner-state loss.
+  The aggregate failure count did not distinguish chunk replication from
+  recovery-catalog publication. Bounded redacted diagnostics and a new run are
+  required. Cleanup completed and pre-existing resource checks passed; this
+  attempt does not prove owner-loss recovery.
 - [Android size and host transfer evidence](android-size-profile-2026-09-07.md)
   records measured native reductions with the unchanged size ceiling and the
   four alternating host QUIC correctness/resource runs.

@@ -543,7 +543,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
 import concurrent.futures,hashlib,json,os,ssl,subprocess,sys,time,urllib.error,uuid
 from pathlib import Path
 sys.path.insert(0,os.environ["SCRIPT_ROOT"])
-from remote_drill_api import DrillClient,NodeError,RECOVERY_MAXIMUM_BYTES,decode_recovery_export,write_private
+from remote_drill_api import DrillClient,NodeError,RECOVERY_MAXIMUM_BYTES,backup_failure_diagnostics,decode_recovery_export,write_private
 client=DrillClient({
  "local":("http://127.0.0.1:"+os.environ["LOCAL_API"],os.environ["LOCAL_TOKEN"],None),
  "remote":("https://localhost:"+os.environ["REMOTE_API"],os.environ["REMOTE_TOKEN"],ssl.create_default_context(cafile=os.environ["REMOTE_CA"])),
@@ -588,7 +588,15 @@ backup=call("local","/api/v1/backups",request)
 backup_seconds=time.monotonic()-started
 if backup["backupId"]!=request["backupId"]:raise SystemExit("resumed backup identity changed")
 print("remote drill: paused and resumed the same backup job: ok")
-if backup["selectedProviders"]!=1 or backup["degradedFailures"]!=0:raise SystemExit("replication failed")
+if backup["selectedProviders"]!=1 or backup["degradedFailures"]!=0:
+ diagnostics=backup_failure_diagnostics(
+  client,
+  Path(os.environ["LOCAL_ROOT"])/"state"/"backup-results"/"remote-drill-backup.json",
+  backup,
+  request["jobId"],
+ )
+ print("remote drill: backup failure diagnostics "+json.dumps(diagnostics,sort_keys=True,separators=(",",":")))
+ raise SystemExit("replication failed")
 check=call("local","/api/v1/backups/verify",{"backupId":backup["backupId"],"snapshotId":"remote-drill-0001","verifyProviders":True})
 if not check["intact"] or check["providerAvailability"]!={transport["peerId"]:"complete"}:raise SystemExit("provider availability is not exactly complete for the selected Atmos peer")
 call("local","/api/v1/jobs/acknowledge",{"jobId":"remote-drill-backup"})

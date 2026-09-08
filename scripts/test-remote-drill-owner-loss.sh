@@ -159,11 +159,11 @@ if grep -Eq '(^| )(rm|prune)( |$)' "$docker_log"; then
 fi
 
 SCRIPT_ROOT="$repo_root/scripts" FIXTURE_ROOT="$fixture_root" PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
-import base64,json,os,stat,sys,threading,traceback
+import base64,contextlib,io,json,os,stat,subprocess,sys,threading,traceback,types
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from pathlib import Path
 sys.path.insert(0,os.environ["SCRIPT_ROOT"])
-from remote_drill_api import DrillClient,NodeError,PROTOCOL_VERSION,ResponseTooLarge,decode_recovery_export,write_private
+from remote_drill_api import BACKUP_TERMINAL_RECEIPT_MAXIMUM_BYTES,DiagnosticUnavailable,DrillClient,NodeError,PROTOCOL_VERSION,ResponseTooLarge,backup_failure_diagnostics,decode_recovery_export,summarize_backup_terminal_receipt,write_private
 
 root=Path(os.environ["FIXTURE_ROOT"])
 token=root/"token"
@@ -208,6 +208,85 @@ except NodeError as error:assert "HTTP 302 code=unknown" in str(error)
 else:raise AssertionError("HTTP redirect was accepted")
 assert not Handler.redirect_followed
 server.shutdown();server.server_close();thread.join()
+
+receipt_dir=root/"receipt-fixture"/"state"/"backup-results";receipt_dir.mkdir(parents=True)
+receipt=receipt_dir/"remote-drill-backup.json"
+secret="SECRET-RECEIPT-CANARY"
+receipt.write_text(json.dumps({
+ "schemaVersion":1,"jobId":"remote-drill-backup","optionsDigest":secret,"sourceRootDigest":secret,"signature":secret,
+ "result":{"manifest":{"sourcePath":secret},"storedSnapshot":{"ciphertext":secret},"progress":{"currentPath":secret},"replication":{
+  "acknowledgements":{secret:[secret,secret]},"recoveryCatalogAcknowledgements":[secret],"providerHealth":{secret:"online"},
+  "failures":[{"providerId":secret,"locator":secret,"reason":"provider_error"},{"providerId":secret,"reason":"recovery_catalog_resource_limit"}]
+ }}
+}))
+receipt.chmod(0o600)
+class VerificationClient:
+ def call(self,node,path,body,**kwargs):
+  assert node=="local" and path=="/api/v1/backups/verify"
+  assert body=={"backupId":"SECRET-BACKUP-ID","snapshotId":"SECRET-SNAPSHOT-ID","verifyProviders":True}
+  assert kwargs=={"timeout":30}
+  return {"intact":False,"providerAvailability":{secret:"degraded","SECRET-SECOND-PEER":"offline"}}
+diagnostics=backup_failure_diagnostics(VerificationClient(),receipt,{"backupId":"SECRET-BACKUP-ID","snapshotId":"SECRET-SNAPSHOT-ID","entries":3,"bytesRead":7,"chunksStored":2,"chunksDeduplicated":1,"selectedProviders":1,"degradedFailures":2},"remote-drill-backup")
+rendered=json.dumps(diagnostics,sort_keys=True)
+assert secret not in rendered and "SECRET-BACKUP-ID" not in rendered and "SECRET-SNAPSHOT-ID" not in rendered
+assert diagnostics["terminalReceipt"]["acknowledgementProviders"]==1
+assert diagnostics["terminalReceipt"]["acknowledgedObjects"]==2
+assert diagnostics["terminalReceipt"]["catalogAcknowledgements"]==1
+assert diagnostics["terminalReceipt"]["providerHealth"]=={"online":1,"offline":0,"corrupt":0}
+assert diagnostics["terminalReceipt"]["failureCategories"]["provider_error"]==1
+assert diagnostics["terminalReceipt"]["failureCategories"]["recovery_catalog_resource_limit"]==1
+assert diagnostics["providerVerification"]=={"intact":False,"providerAvailability":{"complete":0,"degraded":1,"offline":1,"corrupt":0,"revoked":0}}
+malformed=backup_failure_diagnostics(VerificationClient(),receipt,{"backupId":"SECRET-MALFORMED-ID","snapshotId":"SECRET-MALFORMED-SNAPSHOT","entries":1<<65,"bytesRead":0,"chunksStored":0,"chunksDeduplicated":0,"selectedProviders":1,"degradedFailures":1},"remote-drill-backup")
+assert malformed=={"backupResponse":{"status":"diagnostic_unavailable"}}
+assert "SECRET-MALFORMED" not in json.dumps(malformed,sort_keys=True)
+
+receipt.chmod(0o644)
+try:summarize_backup_terminal_receipt(receipt,"remote-drill-backup")
+except DiagnosticUnavailable:pass
+else:raise AssertionError("world-readable receipt was accepted")
+receipt.chmod(0o600)
+symlink=receipt_dir/"receipt-link.json";symlink.symlink_to(receipt)
+try:summarize_backup_terminal_receipt(symlink,"remote-drill-backup")
+except DiagnosticUnavailable:pass
+else:raise AssertionError("receipt symlink was accepted")
+fifo=receipt_dir/"receipt-fifo"
+os.mkfifo(fifo,0o600)
+fifo_check='''from remote_drill_api import DiagnosticUnavailable,summarize_backup_terminal_receipt
+import sys
+try:summarize_backup_terminal_receipt(sys.argv[1],"remote-drill-backup")
+except DiagnosticUnavailable:raise SystemExit(0)
+raise SystemExit(1)
+'''
+fifo_result=subprocess.run([sys.executable,"-c",fifo_check,str(fifo)],env={**os.environ,"PYTHONPATH":os.environ["SCRIPT_ROOT"]},capture_output=True,timeout=2)
+assert fifo_result.returncode==0 and not fifo_result.stdout and not fifo_result.stderr
+oversized=receipt_dir/"oversized.json";oversized.write_bytes(b"x"*(BACKUP_TERMINAL_RECEIPT_MAXIMUM_BYTES+1));oversized.chmod(0o600)
+try:summarize_backup_terminal_receipt(oversized,"remote-drill-backup")
+except DiagnosticUnavailable:pass
+else:raise AssertionError("oversized receipt was accepted")
+bad=receipt_dir/"bad-category.json";bad.write_text(json.dumps({"schemaVersion":1,"jobId":"remote-drill-backup","result":{"replication":{"acknowledgements":{},"recoveryCatalogAcknowledgements":[],"providerHealth":{},"failures":[{"reason":secret}]}}}));bad.chmod(0o600)
+try:summarize_backup_terminal_receipt(bad,"remote-drill-backup")
+except DiagnosticUnavailable:pass
+else:raise AssertionError("unallowlisted failure category was accepted")
+drill_text=(Path(os.environ["SCRIPT_ROOT"])/"test-remote-drill.sh").read_text()
+failure_start=drill_text.index('if backup["selectedProviders"]!=1 or backup["degradedFailures"]!=0:')
+assert drill_text.index('raise SystemExit("replication failed")',failure_start)>failure_start
+assert drill_text.index('backup_failure_diagnostics(',failure_start)<drill_text.index('raise SystemExit("replication failed")',failure_start)
+failure_end=drill_text.index('\ncheck=call("local","/api/v1/backups/verify"',failure_start)
+failure_branch=drill_text[failure_start:failure_end]
+class RaisingDiagnosticClient:
+ def call(self,*args,**kwargs):raise RuntimeError("SECRET-DIAGNOSTIC-ERROR")
+branch_context={
+ "Path":Path,"backup":{"backupId":"SECRET-BRANCH-BACKUP","snapshotId":"SECRET-BRANCH-SNAPSHOT","entries":1,"bytesRead":1,"chunksStored":1,"chunksDeduplicated":0,"selectedProviders":1,"degradedFailures":1},
+ "request":{"jobId":"remote-drill-backup"},"client":RaisingDiagnosticClient(),"backup_failure_diagnostics":backup_failure_diagnostics,
+ "json":json,"os":types.SimpleNamespace(environ={"LOCAL_ROOT":str(root/"missing-branch-receipt")}),
+}
+branch_output=io.StringIO()
+try:
+ with contextlib.redirect_stdout(branch_output):exec(failure_branch,branch_context)
+except SystemExit as error:assert str(error)=="replication failed"
+else:raise AssertionError("diagnostic failure masked replication failure")
+assert "SECRET-" not in branch_output.getvalue()
+
 encoded=base64.urlsafe_b64encode(b"private kit").decode().rstrip("=")
 encoded_key=base64.urlsafe_b64encode(b"B"*32).decode().rstrip("=")
 kit,key=decode_recovery_export({"protocolVersion":PROTOCOL_VERSION,"recoveryKit":encoded,"recoveryKey":encoded_key})
