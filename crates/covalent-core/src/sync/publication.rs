@@ -19,9 +19,10 @@ use super::event_log::{
     DurableEventLog, EventAppendOutcome, EventLogCursor, EventLogError, EventLogPage,
     EventLogPageLimits,
 };
+use super::freeze::encode_signed_freeze_receipt;
 use super::ids::WriterId;
 use super::log_frame::{LogBinding, LogFileKind};
-use super::machine::FolderEventMachine;
+use super::machine::{FolderEventMachine, LocalFreezeReceiptContext};
 use super::operation::encode_signed_operation;
 use super::register::OpId;
 
@@ -32,6 +33,8 @@ pub enum PublicationError {
     WrongLogBinding,
     #[error("local writer cannot publish in the current folder state")]
     NotWritable,
+    #[error("local writer cannot sign the requested freeze receipt")]
+    FreezeReceiptDenied,
     #[error("file publication requires verified retained content")]
     RetentionRequired,
     #[error("retained publication requires a file operation")]
@@ -54,6 +57,48 @@ pub struct PublishedOperation {
     id: OpId,
     ordinal: u64,
     event: EncodedEventEnvelope,
+}
+
+/// An exact local freeze receipt whose event bytes are already durable.
+///
+/// This proves only immutable signed history in this folder log. It is not an
+/// applied-content, retained-content, runtime-drain, reconciliation, or peer
+/// acknowledgement result.
+pub struct PublishedFreezeReceipt {
+    proposal_digest: [u8; 32],
+    ordinal: Option<u64>,
+    event: EncodedEventEnvelope,
+}
+
+impl PublishedFreezeReceipt {
+    /// Returns the exact pending proposal commitment.
+    #[must_use]
+    pub const fn proposal_digest(&self) -> [u8; 32] {
+        self.proposal_digest
+    }
+
+    /// Returns the new local log ordinal, or `None` for an immutable replayed retry.
+    #[must_use]
+    pub const fn ordinal(&self) -> Option<u64> {
+        self.ordinal
+    }
+
+    /// Returns the exact already-durable freeze-receipt event bytes.
+    #[must_use]
+    pub fn event_bytes(&self) -> &[u8] {
+        self.event.as_bytes()
+    }
+}
+
+impl fmt::Debug for PublishedFreezeReceipt {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PublishedFreezeReceipt")
+            .field("proposal_digest", &self.proposal_digest)
+            .field("ordinal", &self.ordinal)
+            .field("event_length", &self.event.as_bytes().len())
+            .finish()
+    }
 }
 
 impl PublishedOperation {
@@ -204,6 +249,65 @@ impl DurableFolderLog {
         self.publish_checked(body)
     }
 
+    /// Signs and durably appends this installation's immutable freeze receipt.
+    ///
+    /// The expected proposal digest prevents a caller from signing a different
+    /// pending proposal accidentally. Every frontier component and losing tip
+    /// comes from exact admitted machine history; callers supply none of them.
+    /// A coordinator must serialize losing-writer ingress and drain accepted
+    /// work before calling. A retry returns the exact retained receipt only
+    /// while the same proposal and base remain pending, including after reopen.
+    pub fn publish_local_freeze_receipt(
+        &mut self,
+        expected_proposal: [u8; 32],
+    ) -> Result<PublishedFreezeReceipt, PublicationError> {
+        self.ensure_usable()?;
+        let context = self
+            .log
+            .machine()?
+            .local_freeze_receipt_context(self.writer, &self.key.verifying_key(), expected_proposal)
+            .map_err(|_| PublicationError::FreezeReceiptDenied)?;
+        match context {
+            LocalFreezeReceiptContext::Existing { canonical_record } => {
+                let event =
+                    EventEnvelope::from_signed_record(EventKind::FreezeReceipt, &canonical_record)
+                        .and_then(|envelope| envelope.encode())
+                        .map_err(|_| PublicationError::Invariant)?;
+                Ok(PublishedFreezeReceipt {
+                    proposal_digest: expected_proposal,
+                    ordinal: None,
+                    event,
+                })
+            }
+            LocalFreezeReceiptContext::Sign(inputs) => {
+                let record = Zeroizing::new(
+                    encode_signed_freeze_receipt(
+                        &self.key,
+                        inputs.proposal(),
+                        inputs.historical_grant(),
+                        inputs.frontier_entries(),
+                        inputs.losing_tips(),
+                    )
+                    .map_err(|_| PublicationError::Encoding)?,
+                );
+                let event = EventEnvelope::from_signed_record(EventKind::FreezeReceipt, &record)
+                    .and_then(|envelope| envelope.encode())
+                    .map_err(|_| PublicationError::Encoding)?;
+                match self.log.append(event.as_bytes())? {
+                    EventAppendOutcome::Committed { ordinal } => Ok(PublishedFreezeReceipt {
+                        proposal_digest: expected_proposal,
+                        ordinal: Some(ordinal),
+                        event,
+                    }),
+                    EventAppendOutcome::Duplicate => {
+                        self.invariant_failed = true;
+                        Err(PublicationError::Invariant)
+                    }
+                }
+            }
+        }
+    }
+
     fn publish_checked(
         &mut self,
         body: &OperationBody,
@@ -253,6 +357,10 @@ impl DurableFolderLog {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "publication_freeze_tests.rs"]
+mod freeze_tests;
 
 #[cfg(test)]
 mod tests {

@@ -21,6 +21,7 @@ use super::content_store::{ContentStoreError, ContentStoreLimits, SyncContentSto
 use super::event::{EventEnvelope, EventKind};
 use super::event_log::{DurableEventLog, EventLogError, EventLogLimits};
 use super::installation::{InstallationError, SyncInstallation, SyncInstallationParts};
+use super::local_cycle::{LocalCycleError, LocalCycleLimits, LocalCycleReport, run_local_cycle};
 use super::log_frame::{LogBinding, LogFileKind};
 use super::machine::{FolderEventMachine, FolderMachineLimits};
 use super::membership::{MemberGrant, MemberRole, encode_signed_epoch};
@@ -106,6 +107,7 @@ pub struct FolderCoordinator {
     applier: DurableFolderApplier,
     content: SyncContentStore,
     events: DurableFolderLog,
+    source_root: AuthorizedRoot,
     authority: FolderAuthorityConfig,
     outer: Arc<PrivateStateDir>,
     outer_lock: Arc<PrivateStateLock>,
@@ -242,6 +244,26 @@ impl FolderCoordinator {
         self.applier.validate_ready(&self.events, control)?;
         let _ = self.content.usage()?;
         Ok(())
+    }
+
+    /// Captures one complete local-only inventory before any future peer ingress.
+    ///
+    /// The cycle retains and publishes safe new values only after every known
+    /// applied target is still valid. Dirty or missing known paths return a
+    /// complete observation-only report and defer all mutations.
+    pub fn capture_local_cycle(
+        &mut self,
+        limits: LocalCycleLimits,
+        control: &JobControl,
+    ) -> Result<LocalCycleReport, LocalCycleError> {
+        run_local_cycle(
+            &mut self.events,
+            &mut self.content,
+            &mut self.applier,
+            &self.source_root,
+            limits,
+            control,
+        )
     }
 }
 
@@ -427,7 +449,7 @@ fn assemble(
             control,
         )?
     } else {
-        match DurableFolderApplier::open_initialization(
+        match DurableFolderApplier::open_initialization_observing(
             Arc::clone(&outer),
             Arc::clone(&outer_lock),
             &key(APPLY_DIR)?,
@@ -458,6 +480,7 @@ fn assemble(
         applier,
         content,
         events,
+        source_root: root.clone(),
         authority,
         outer,
         outer_lock,

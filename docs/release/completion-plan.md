@@ -38,7 +38,7 @@ Close every known release-blocking finding; do not remove a gate to raise a scor
 | Area | Required evidence | Current state |
 | --- | --- | --- |
 | Product scope | Explicit backup/sync semantics and a matching acceptance scenario | Automatic two-way sync is required. Signed records, causal/conflict checks, protected installation keys, private storage, read-only Unix inventories, bootstrap-backed membership replay and content-gated durable publication, protected authority pins, journaled Unix creation and verified incumbent adoption, bounded Android metadata observation, durable coordinator readiness, and signed write-loss freeze/receipt/abort admission are implemented. Write-loss reconciliation, the serialized sync runtime, peer exchange, replacement/deletion, native setup and multi-device acceptance remain outstanding. |
-| Core correctness | Unit, property, adversarial, migration, concurrency, corruption, interrupted-job and source-loss tests; strict lint | At `f80c375`, hosted Rust/contracts passed 610 tests across 22 suites with zero failed/ignored, strict workspace Clippy and 89 web tests. All release-candidate software and CodeQL gates passed on that checkpoint. Checkpoint `d13955a` exposed a Linux adoption inode-reuse failure despite 640 local passing tests. The descriptor-lifetime and retry fixes at `4a6d1ba` subsequently passed all 643 hosted Linux Rust tests across 22 suites with zero failed/ignored, plus 89 web tests. The next combined readiness/freeze/Unicode slice passes 467 local core tests and strict workspace Clippy; fresh platform and final release confirmation remain required. |
+| Core correctness | Unit, property, adversarial, migration, concurrency, corruption, interrupted-job and source-loss tests; strict lint | At `f80c375`, hosted Rust/contracts passed 610 tests across 22 suites with zero failed/ignored, strict workspace Clippy and 89 web tests. All release-candidate software and CodeQL gates passed on that checkpoint. Checkpoint `d13955a` exposed a Linux adoption inode-reuse failure despite 640 local passing tests. The descriptor-lifetime and retry fixes at `4a6d1ba` subsequently passed all 643 hosted Linux Rust tests across 22 suites with zero failed/ignored, plus 89 web tests. The combined readiness/freeze/Unicode checkpoint `e561df6` passes all 661 hosted Rust tests across 22 suites with zero failed/ignored, 89 web tests and every software/CodeQL gate. Final runtime and release confirmation remain required. |
 | Owner-device loss | A user can export a protected recovery kit, replace a lost owner device, discover its authenticated catalogs, see partial availability, and restore | API, CLI/runtime, web and native recovery flows pass. At source content matching `1839796`, the real Mac–Atmos Docker drill passed protected export, deletion of the entire original owner state, automatic catalog import and exact provider-only restore. Native UI also passes. Final artifacts and large-catalog memory evidence remain required. |
 | Beginner workflow | Install → connect → choose folder → protect → verify → restore through real UI; clear errors and recovery; no manual IDs in ordinary flows | Real browser unlock, automatic snapshot/name defaults, named backup selection, preview invalidation, restore and Verify passed with disposable files. Preview now explains individual file actions and renamed conflict destinations instead of raw JSON. Full cross-device onboarding pending. |
 | macOS | Shared tests, live helper integration, native UI/accessibility, verified arm64 app package, install and upgrade | At `1839796`, the app bundle, all 105 shared tests, live helper integration, and all four native UI tests passed. The native gate requires exactly four passed, zero failed/skipped, including first-launch setup/recovery cancellation and the system accessibility audit. Final artifact install/upgrade remains required. Local Xcode license and CLT Testing limitations remain. |
@@ -470,6 +470,69 @@ packages, credentials, private server inventories, or raw diagnostic bundles.
   workspace tests across 22 suites, zero failed/ignored, including 467 core
   tests. Strict workspace Clippy, formatting and foundation checks pass.
   The iOS color change and all other changes still require fresh hosted gates.
+
+- Checkpoint `e561df68c1bbf3aca037029cfe1f911b958c35e6` subsequently passed
+  every [hosted software gate](https://github.com/thekozugroup/Covalent/actions/runs/34211315483)
+  and [CodeQL gate](https://github.com/thekozugroup/Covalent/actions/runs/34211315257).
+  Linux ran all 661 Rust tests across 22 suites, zero failed/ignored, including
+  the Unicode and strict coordinator regressions; web ran 89 passing tests.
+  Both Docker architectures/runtime/e2e, macOS integration/UI/bundle and Android
+  foundation passed. API 37 proved all 71 expected tests passed by name at
+  10:02:29 UTC. The unchanged iOS gate proved both named tests passed with zero
+  failures/skips, including the system accessibility audit after the tab-color
+  correction. This closes the preceding iOS finding for this checkpoint.
+- The next uncommitted local slice adds a replay-derived last-Applied baseline
+  per canonical path, updated by durable application order across writers.
+  Pending, duplicate, stale and conflict records cannot advance it; old receipts
+  remain retained. First path keys and map overhead are quota-charged before
+  append. Baselines are explicitly historical, requiring current file validation
+  before status or mutation. Nine focused tests pass, including encrypted
+  reopen, inverse writer-ID ordering, exact long-path quota boundaries,
+  create/adopt/directory handling and canonical multi-path visitation.
+  Independent review found no actionable defect; its coverage suggestions were
+  added. Replacement/deletion remains unfinished.
+- Durable local freeze-receipt signing now derives the exact current closed
+  frontier and losing-writer tips internally, under the configured writer/key
+  and exact pending proposal/base/survivor gates. Signed bytes escape only after
+  durable append/commit; retries return the immutable existing receipt even
+  after newer survivor history or reopen. Three focused tests cover RW/Read/
+  downgraded survivors, denial, exact claims, immutable retries and storage
+  quota failures. Independent review found no concrete defect. The caller still
+  must serialize ingress/drain; this is not applied/retained-content evidence,
+  full reconciliation or membership activation. Combined with the baseline,
+  the source passes 474 core tests and strict all-target/all-feature core Clippy.
+  These are intermediate checks; the later combined source requires its own
+  workspace and hosted gates.
+- The serialized local capture cycle now performs a complete bounded scan,
+  classification and historical apply check before retaining, publishing and
+  adopting new files or directories. An unchanged second cycle does not append
+  another operation. Reopen can observe offline edits/deletions without treating
+  user-file drift as private-journal corruption. Dirty known paths, pending
+  stages and conflicts defer mutation; a conflict during adoption stops later
+  paths in that cycle. Historical lookup uses the per-path index. Nineteen
+  focused coordinator tests passed in isolation and independent final review
+  reported no remaining findings. This is local capture, not automatic network
+  sync or implementation of replacement/deletion.
+- The bounded backward writer-chain verifier authenticates exact signed records
+  from a freeze receipt tip to an admitted anchor. Gaps, forks, wrong bindings,
+  unused records and caller-limit failures reject the proof without mutating
+  history. Older exact tips and zero tips require empty proofs. All ten focused
+  tests pass on the combined source. The output is explicitly nonauthorizing;
+  causal closure, durable quarantine and membership activation remain separate.
+- A [maintained-engine evaluation](sync-engine-evaluation-2026-09-08.md) passed
+  real two-way create/edit/delete, retained versions, offline restart and
+  concurrent-edit preservation using official Syncthing v2.1.3. The separate
+  Mac-to-Atmos Docker test also verified a 64 MiB random payload byte-for-byte
+  at an observed 3.52 MiB/s. Every owned remote resource was removed and all
+  21 pre-existing containers and 35 images remained. This evaluates an upstream
+  engine; no production pivot, Android execution or Covalent sync UI is claimed.
+  Android packaging and the security-model comparison are being evaluated
+  before choosing the product integration.
+- The combined local capture/baseline/freeze-signing/backward-chain source
+  passes **686 Rust workspace tests across 22 suites**, including 492 core
+  tests, with zero failures or ignored tests. Strict workspace Clippy,
+  formatting, foundation validation and diff checks pass. Fresh hosted native,
+  Linux/container and security gates are still required for this checkpoint.
 
 ## Work order
 

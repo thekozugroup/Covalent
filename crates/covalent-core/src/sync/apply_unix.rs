@@ -67,6 +67,20 @@ pub enum ApplyOutcome {
     Pending,
 }
 
+/// Replay-derived apply state before any current filesystem verification.
+///
+/// This crate-local classification supports a complete observation pass. An
+/// `Applied` value is historical journal evidence only until the applier checks
+/// the recorded target identity, mode, and content against the current root.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HistoricalApplicationState {
+    Untracked,
+    Pending,
+    Applied,
+    Conflict,
+    Unsupported,
+}
+
 /// Fixed apply errors retain no path, key, content, or server-controlled text.
 #[derive(Debug, Error)]
 pub enum ApplyError {
@@ -292,6 +306,7 @@ impl DurableFolderApplier {
         }
     }
 
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn open_initialization(
         outer: Arc<PrivateStateDir>,
@@ -308,6 +323,78 @@ impl DurableFolderApplier {
         events: &DurableFolderLog,
         control: &JobControl,
     ) -> Result<ApplyInitializationState, ApplyError> {
+        Self::open_initialization_with_policy(
+            outer,
+            outer_lock,
+            apply_dir,
+            log_file,
+            binding,
+            key,
+            log_limits,
+            limits,
+            setup_binding,
+            initialization,
+            root,
+            events,
+            control,
+            true,
+        )
+    }
+
+    /// Opens authenticated ready/private state while leaving current user-file
+    /// drift for a complete coordinator inventory pass. No mutation API skips
+    /// its ordinary strong filesystem revalidation after this open.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn open_initialization_observing(
+        outer: Arc<PrivateStateDir>,
+        outer_lock: Arc<PrivateStateLock>,
+        apply_dir: &StateKey,
+        log_file: &StateKey,
+        binding: LogBinding,
+        key: LogFrameKey,
+        log_limits: EventLogLimits,
+        limits: ApplyLimits,
+        setup_binding: [u8; 32],
+        initialization: ApplyInitialization,
+        root: &AuthorizedRoot,
+        events: &DurableFolderLog,
+        control: &JobControl,
+    ) -> Result<ApplyInitializationState, ApplyError> {
+        Self::open_initialization_with_policy(
+            outer,
+            outer_lock,
+            apply_dir,
+            log_file,
+            binding,
+            key,
+            log_limits,
+            limits,
+            setup_binding,
+            initialization,
+            root,
+            events,
+            control,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn open_initialization_with_policy(
+        outer: Arc<PrivateStateDir>,
+        outer_lock: Arc<PrivateStateLock>,
+        apply_dir: &StateKey,
+        log_file: &StateKey,
+        binding: LogBinding,
+        key: LogFrameKey,
+        log_limits: EventLogLimits,
+        limits: ApplyLimits,
+        setup_binding: [u8; 32],
+        initialization: ApplyInitialization,
+        root: &AuthorizedRoot,
+        events: &DurableFolderLog,
+        control: &JobControl,
+        validate_user_files: bool,
+    ) -> Result<ApplyInitializationState, ApplyError> {
         let expected = ApplyRootReady::new(EntryIdentity::new(0, 0), setup_binding, initialization);
         let mut applier = Self::open_unvalidated(
             outer, outer_lock, apply_dir, log_file, binding, key, log_limits, limits, expected,
@@ -321,7 +408,9 @@ impl DurableFolderApplier {
             {
                 applier.ready = retained;
                 applier.validate_replayed_history(events, control)?;
-                applier.validate_replayed_filesystem(events, control)?;
+                if validate_user_files {
+                    applier.validate_replayed_filesystem(events, control)?;
+                }
                 Ok(ApplyInitializationState::Ready(applier))
             }
             Some(_) => Err(ApplyError::ReadyMismatch),
@@ -449,6 +538,122 @@ impl DurableFolderApplier {
     ) -> Result<(), ApplyError> {
         check_control(control)?;
         self.require_usable(events, control)
+    }
+
+    /// Returns journal state only; `Applied` is not a current filesystem fact.
+    pub(crate) fn historical_application_state(
+        &self,
+        id: OpId,
+    ) -> Result<HistoricalApplicationState, ApplyError> {
+        Ok(match self.log.machine()?.operation_terminal(id) {
+            Some(ApplyTerminal::Applied(_)) => HistoricalApplicationState::Applied,
+            Some(ApplyTerminal::Conflict(_)) => HistoricalApplicationState::Conflict,
+            Some(ApplyTerminal::Unsupported(_)) => HistoricalApplicationState::Unsupported,
+            None if self.log.machine()?.pending_operation(id).is_some() => {
+                HistoricalApplicationState::Pending
+            }
+            None => HistoricalApplicationState::Untracked,
+        })
+    }
+
+    /// Reports whether replay contains an unfinished create that may own an
+    /// otherwise ordinary-looking sibling stage in the user folder.
+    pub(crate) fn has_pending_create(&self, control: &JobControl) -> Result<bool, ApplyError> {
+        let mut found = false;
+        for transaction in self.log.machine()?.pending_transactions() {
+            check_control(control)?;
+            let retained = self
+                .log
+                .machine()?
+                .transaction(transaction)
+                .ok_or(ApplyError::Changed)?;
+            if retained.intent().action() == ApplyAction::Create {
+                found = true;
+                break;
+            }
+        }
+        Ok(found)
+    }
+
+    /// Detects an exact journal-selected create stage that remains visible
+    /// after a non-Applied transaction. Unknown stage-like names are never
+    /// classified or hidden by this check.
+    pub(crate) fn has_visible_unapplied_stage(
+        &self,
+        control: &JobControl,
+    ) -> Result<bool, ApplyError> {
+        let mut visible = false;
+        self.log
+            .machine()?
+            .visit_transactions(|transaction| -> Result<(), ApplyError> {
+                check_control(control)?;
+                let intent = transaction.intent();
+                if intent.action() != ApplyAction::Create
+                    || matches!(transaction.terminal(), Some(ApplyTerminal::Applied(_)))
+                {
+                    return Ok(());
+                }
+                let Some(stage) = intent.stage_name() else {
+                    return Err(ApplyError::Changed);
+                };
+                let parent = match self.root.open_parent(intent.path(), self.limits, control) {
+                    Ok(parent) => parent,
+                    Err(ApplyError::UnsafeParent | ApplyError::Changed) => return Ok(()),
+                    Err(error) => return Err(error),
+                };
+                if parent.named_identity(stage.as_str())?.is_some() {
+                    visible = true;
+                }
+                Ok(())
+            })?;
+        Ok(visible)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn interrupt_after_stage_durable_for_test(&mut self) {
+        self.failpoint = Some(ApplyFailpoint::StageDurable);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mutate_before_adoption_receipt_for_test(
+        &mut self,
+        hook: impl FnOnce() + 'static,
+    ) {
+        self.mutation_hook = Some((ApplyMutationPoint::BeforeAdoptionReceipt, Box::new(hook)));
+    }
+
+    /// Checks one historical `Applied` receipt against the exact current target.
+    /// This does not weaken the global validation performed before mutations.
+    pub(crate) fn revalidate_historical_application(
+        &self,
+        id: OpId,
+        path: &SyncPath,
+        control: &JobControl,
+    ) -> Result<(), ApplyError> {
+        check_control(control)?;
+        let baseline = self
+            .log
+            .machine()?
+            .last_applied(path)
+            .filter(|baseline| baseline.applied().operation().id() == id)
+            .ok_or(ApplyError::Changed)?;
+        let intent = baseline.intent();
+        let applied = baseline.applied();
+        let parent = self.root.open_parent(intent.path(), self.limits, control)?;
+        match (intent.action(), intent.expected_target()) {
+            (
+                ApplyAction::AdoptExisting,
+                ExpectedTarget::File {
+                    permission_bits, ..
+                },
+            ) => parent.validate_adopted_target(
+                applied.target_identity(),
+                applied.desired(),
+                permission_bits,
+                control,
+            ),
+            _ => parent.validate_target(applied.target_identity(), applied.desired(), control),
+        }
     }
 
     /// Durably adopts a matching incumbent file or directory without creating,

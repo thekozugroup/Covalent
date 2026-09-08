@@ -18,16 +18,20 @@ use super::apply_record::{
 };
 use super::body::EntryValue;
 use super::event_log::{EventMachine, EventValidationError, PreparedEvent};
+use super::path::SyncPath;
 use super::register::OpId;
 
 const MAX_APPLY_RECORDS: u64 = 1_000_000;
-// Reserve slack for the first sparsely populated nodes in all four indexes;
+// Reserve slack for the first sparsely populated nodes in all five indexes;
 // a single inserted value can allocate a complete multi-slot B-tree node.
 const BASE_INDEX_CHARGE_BYTES: u64 = 32 * 1_024;
 // Covers the retained canonical bytes plus map nodes, keys, phase structs and
 // allocator/container slack. It is a conservative logical retained-state cap,
 // not a process-RSS measurement.
 const RECORD_INDEX_CHARGE_BYTES: u64 = 4 * 1_024;
+// Each first Applied path retains a separate key and B-tree entry. Replacing
+// its transaction pointer does not allocate another retained path key.
+const BASELINE_INDEX_CHARGE_BYTES: u64 = 4 * 1_024;
 
 /// Finite replay-state limits independent of the encrypted file quota.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -64,6 +68,36 @@ pub enum ApplyTerminal<'a> {
     Applied(&'a ApplyApplied),
     Conflict(&'a ApplyConflict),
     Unsupported(&'a ApplyUnsupported),
+}
+
+/// The last physical application recorded at a path, in journal commit order.
+///
+/// This is historical evidence only. User files may have changed afterward,
+/// and a newer accepted operation may supersede this value. Callers must
+/// revalidate both before using the baseline for status or a mutation.
+pub struct HistoricalAppliedBaseline<'a> {
+    intent: &'a ApplyIntent,
+    applied: &'a ApplyApplied,
+}
+
+impl<'a> HistoricalAppliedBaseline<'a> {
+    #[must_use]
+    pub const fn intent(&self) -> &'a ApplyIntent {
+        self.intent
+    }
+
+    #[must_use]
+    pub const fn applied(&self) -> &'a ApplyApplied {
+        self.applied
+    }
+}
+
+impl fmt::Debug for HistoricalAppliedBaseline<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HistoricalAppliedBaseline")
+            .finish_non_exhaustive()
+    }
 }
 
 /// Replay-derived state for one transaction, before filesystem revalidation.
@@ -144,6 +178,7 @@ pub struct ApplyMachine {
     transactions: BTreeMap<ApplyTransactionId, RetainedTransaction>,
     attempts: BTreeMap<ApplyTransactionId, OpId>,
     operations: BTreeMap<OpId, OperationState>,
+    latest_applied: BTreeMap<SyncPath, ApplyTransactionId>,
 }
 
 impl fmt::Debug for ApplyMachine {
@@ -175,6 +210,7 @@ impl ApplyMachine {
             transactions: BTreeMap::new(),
             attempts: BTreeMap::new(),
             operations: BTreeMap::new(),
+            latest_applied: BTreeMap::new(),
         })
     }
 
@@ -187,6 +223,36 @@ impl ApplyMachine {
     #[must_use]
     pub const fn ready(&self) -> Option<&ApplyRootReady> {
         self.ready.as_ref()
+    }
+
+    /// Returns the latest durable Applied receipt, never a pending/conflict
+    /// outcome and never inferred from the ordering of writer operation IDs.
+    #[must_use]
+    pub fn last_applied(&self, path: &SyncPath) -> Option<HistoricalAppliedBaseline<'_>> {
+        let transaction = self.latest_applied.get(path)?;
+        let retained = self.transactions.get(transaction)?;
+        let Some(RetainedTerminal::Applied(applied)) = retained.terminal.as_ref() else {
+            return None;
+        };
+        Some(HistoricalAppliedBaseline {
+            intent: &retained.intent,
+            applied,
+        })
+    }
+
+    /// Visits historical baselines in canonical path order without collecting
+    /// another index. The callback can stop early, including for cancellation.
+    pub fn visit_applied_baselines<E>(
+        &self,
+        mut visit: impl FnMut(HistoricalAppliedBaseline<'_>) -> Result<(), E>,
+    ) -> Result<(), E> {
+        for path in self.latest_applied.keys() {
+            visit(
+                self.last_applied(path)
+                    .expect("indexed applied transaction"),
+            )?;
+        }
+        Ok(())
     }
 
     pub fn transaction(&self, transaction: ApplyTransactionId) -> Option<ApplyTransaction<'_>> {
@@ -296,6 +362,7 @@ impl ApplyMachine {
         let charge = RECORD_INDEX_CHARGE_BYTES
             .checked_add(encoded_len)
             .and_then(|total| total.checked_add(dynamic_charge))
+            .and_then(|total| total.checked_add(self.baseline_charge(&record)?))
             .ok_or(ApplyMachineError::QuotaExceeded)?;
         if self
             .retained_bytes
@@ -354,10 +421,13 @@ impl ApplyMachine {
             }
             Transition::Applied(applied) => {
                 let transaction = applied.transaction();
-                self.transactions
+                let retained = self
+                    .transactions
                     .get_mut(&transaction)
-                    .ok_or(ApplyMachineError::MissingPhase)?
-                    .terminal = Some(RetainedTerminal::Applied(applied));
+                    .ok_or(ApplyMachineError::MissingPhase)?;
+                self.latest_applied
+                    .insert(retained.intent.path().clone(), transaction);
+                retained.terminal = Some(RetainedTerminal::Applied(applied));
             }
             Transition::Conflict(conflict) => {
                 if let Some(intent_digest) = conflict.intent_digest() {
@@ -399,6 +469,23 @@ impl ApplyMachine {
         Ok(())
     }
 
+    fn baseline_charge(&self, record: &ApplyRecord) -> Option<u64> {
+        let ApplyRecord::Applied(applied) = record else {
+            return Some(0);
+        };
+        // A missing phase is rejected by transition validation. It cannot
+        // allocate a baseline, so it contributes no additional retained charge.
+        let Some(retained) = self.transactions.get(&applied.transaction()) else {
+            return Some(0);
+        };
+        if self.latest_applied.contains_key(retained.intent.path()) {
+            Some(0)
+        } else {
+            BASELINE_INDEX_CHARGE_BYTES
+                .checked_add(u64::try_from(retained.intent.path().as_str().len()).ok()?)
+        }
+    }
+
     fn validate_transition(&self, record: ApplyRecord) -> Result<Transition, ApplyMachineError> {
         if !matches!(&record, ApplyRecord::RootReady(_)) && self.ready.is_none() {
             return Err(ApplyMachineError::NotReady);
@@ -410,6 +497,7 @@ impl ApplyMachine {
                     || !self.transactions.is_empty()
                     || !self.attempts.is_empty()
                     || !self.operations.is_empty()
+                    || !self.latest_applied.is_empty()
                 {
                     return Err(ApplyMachineError::InvalidTransition);
                 }
@@ -604,10 +692,18 @@ mod tests {
     }
 
     fn operation_at(path: &SyncPath, counter: u64) -> OperationBinding {
-        let writer_uuid = Uuid::from_u128(0xb1);
+        operation_with_writer(path, counter, Uuid::from_u128(0xb1), EntryValue::Directory)
+    }
+
+    fn operation_with_writer(
+        path: &SyncPath,
+        counter: u64,
+        writer_uuid: Uuid,
+        desired: EntryValue,
+    ) -> OperationBinding {
         let writer = WriterId::from_uuid(writer_uuid);
         let key = SigningKey::from_bytes(&[0xb2; 32]);
-        let body = OperationBody::new(path.clone(), EntryValue::Directory).encode();
+        let body = OperationBody::new(path.clone(), desired).encode();
         let record = encode_signed_operation(
             &key,
             FolderId::from_uuid(Uuid::from_u128(0xb3)),
@@ -672,6 +768,345 @@ mod tests {
         };
         machine.commit_record(prepared).unwrap();
         machine
+    }
+
+    fn adoption_records(path: &SyncPath, tag: u8, writer: u128, mode: u16) -> [ApplyRecord; 2] {
+        let desired = EntryValue::File(
+            FileContent::new(ContentDigest::from_bytes([tag; 32]), u64::from(tag), false).unwrap(),
+        );
+        let operation = operation_with_writer(path, 1, Uuid::from_u128(writer), desired);
+        let transaction = ApplyTransactionId::from_bytes([tag; 32]).unwrap();
+        let identity = EntryIdentity::new(1, u64::from(tag));
+        let intent = ApplyRecord::Intent(
+            ApplyIntent::new(
+                transaction,
+                operation,
+                EntryIdentity::new(91, 92),
+                path.clone(),
+                desired,
+                ApplyAction::AdoptExisting,
+                ExpectedTarget::File {
+                    identity,
+                    permission_bits: mode,
+                },
+                None,
+            )
+            .unwrap(),
+        );
+        let applied = ApplyRecord::Applied(
+            ApplyApplied::new(transaction, intent.digest(), operation, identity, desired).unwrap(),
+        );
+        [intent, applied]
+    }
+
+    fn commit(machine: &mut ApplyMachine, record: &ApplyRecord) {
+        let PreparedEvent::Append(prepared) =
+            machine.prepare_record(record.encode().as_bytes()).unwrap()
+        else {
+            panic!("new record must append")
+        };
+        machine.commit_record(prepared).unwrap();
+    }
+
+    #[test]
+    fn applied_baseline_uses_durable_commit_order_across_writers_and_reopen() {
+        use crate::sync::event_log::{DurableEventLog, EventAppendOutcome, EventLogLimits};
+        use crate::sync::log_frame::{LogBinding, LogFileKind, LogFrameKey};
+        use crate::sync::state_dir::{PrivateStateDir, StateKey};
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let directory = PrivateStateDir::open_root(temp.path()).unwrap();
+        let name = StateKey::new("baseline.v1").unwrap();
+        let binding = LogBinding::new(
+            FolderId::from_uuid(Uuid::from_u128(301)),
+            Uuid::from_u128(302),
+            Uuid::from_u128(303),
+            LogFileKind::Apply,
+        );
+        let log_limits = EventLogLimits {
+            maximum_bytes: 1 << 20,
+            maximum_records: 16,
+        };
+        let mut log = DurableEventLog::create(
+            &directory,
+            &name,
+            binding,
+            LogFrameKey::from_bytes([44; 32]),
+            log_limits,
+            ApplyMachine::new(limits(1 << 20)).unwrap(),
+        )
+        .unwrap();
+        log.append(ready_record().encode().as_bytes()).unwrap();
+        let path = SyncPath::from_wire("baseline-name-canary").unwrap();
+        let first = adoption_records(&path, 41, 0x900, 0o640);
+        let second = adoption_records(&path, 42, 0x100, 0o444);
+        for record in &first {
+            log.append(record.encode().as_bytes()).unwrap();
+        }
+        let first_id = log
+            .machine()
+            .unwrap()
+            .last_applied(&path)
+            .unwrap()
+            .applied()
+            .operation()
+            .id();
+        log.append(second[0].encode().as_bytes()).unwrap();
+        assert_eq!(
+            log.machine()
+                .unwrap()
+                .last_applied(&path)
+                .unwrap()
+                .applied()
+                .operation()
+                .id(),
+            first_id
+        );
+        log.append(second[1].encode().as_bytes()).unwrap();
+        let baseline = log.machine().unwrap().last_applied(&path).unwrap();
+        let second_id = baseline.applied().operation().id();
+        assert!(
+            second_id < first_id,
+            "OpId ordering must differ from commit ordering"
+        );
+        assert_eq!(
+            baseline.intent().expected_target(),
+            ExpectedTarget::File {
+                identity: EntryIdentity::new(1, 42),
+                permission_bits: 0o444,
+            }
+        );
+        assert_eq!(
+            baseline.applied().target_identity(),
+            EntryIdentity::new(1, 42)
+        );
+        assert!(!format!("{baseline:?}").contains("baseline-name-canary"));
+        assert_eq!(
+            log.append(first[1].encode().as_bytes()).unwrap(),
+            EventAppendOutcome::Duplicate
+        );
+        let before = log.committed_records().unwrap();
+        drop(log);
+        let reopened = DurableEventLog::open(
+            &directory,
+            &name,
+            binding,
+            LogFrameKey::from_bytes([44; 32]),
+            log_limits,
+            ApplyMachine::new(limits(1 << 20)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(reopened.committed_records().unwrap(), before);
+        let machine = reopened.machine().unwrap();
+        assert_eq!(
+            machine
+                .last_applied(&path)
+                .unwrap()
+                .applied()
+                .operation()
+                .id(),
+            second_id
+        );
+        assert!(
+            machine.operation_terminal(first_id).is_some(),
+            "older evidence is retained"
+        );
+        let mut visited = 0;
+        machine
+            .visit_applied_baselines::<()>(|baseline| {
+                visited += 1;
+                assert_eq!(baseline.intent().path(), &path);
+                assert_eq!(baseline.applied().operation().id(), second_id);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(visited, 1);
+        assert_eq!(
+            machine.visit_applied_baselines(|_| Err("stop")),
+            Err("stop")
+        );
+    }
+
+    #[test]
+    fn created_and_ensured_directory_baselines_visit_each_path_in_canonical_order() {
+        let later = SyncPath::from_wire("z-directory").unwrap();
+        let earlier = SyncPath::from_wire("a-directory").unwrap();
+        let mut machine = ready_machine(1 << 20);
+        let create = intent_at(
+            ApplyTransactionId::from_bytes([55; 32]).unwrap(),
+            later.clone(),
+        );
+        let ApplyRecord::Intent(intent) = &create else {
+            unreachable!()
+        };
+        let identity = EntryIdentity::new(1, 55);
+        let stage = ApplyRecord::StageReady(
+            ApplyStageReady::new(
+                intent.transaction(),
+                create.digest(),
+                intent.operation(),
+                identity,
+                EntryValue::Directory,
+            )
+            .unwrap(),
+        );
+        let applied = ApplyRecord::Applied(
+            ApplyApplied::new(
+                intent.transaction(),
+                create.digest(),
+                intent.operation(),
+                identity,
+                EntryValue::Directory,
+            )
+            .unwrap(),
+        );
+        commit(&mut machine, &create);
+        commit(&mut machine, &stage);
+        assert!(machine.last_applied(&later).is_none());
+        commit(&mut machine, &applied);
+        assert_eq!(
+            machine.last_applied(&later).unwrap().intent().action(),
+            ApplyAction::Create
+        );
+
+        for (path, tag) in [(&earlier, 56_u8), (&later, 57_u8)] {
+            let transaction = ApplyTransactionId::from_bytes([tag; 32]).unwrap();
+            let operation = operation_with_writer(
+                path,
+                1,
+                Uuid::from_u128(u128::from(tag)),
+                EntryValue::Directory,
+            );
+            let identity = EntryIdentity::new(1, u64::from(tag));
+            let ensure = ApplyRecord::Intent(
+                ApplyIntent::new(
+                    transaction,
+                    operation,
+                    EntryIdentity::new(91, 92),
+                    path.clone(),
+                    EntryValue::Directory,
+                    ApplyAction::EnsureExisting,
+                    ExpectedTarget::Directory(identity),
+                    None,
+                )
+                .unwrap(),
+            );
+            let applied = ApplyRecord::Applied(
+                ApplyApplied::new(
+                    transaction,
+                    ensure.digest(),
+                    operation,
+                    identity,
+                    EntryValue::Directory,
+                )
+                .unwrap(),
+            );
+            commit(&mut machine, &ensure);
+            commit(&mut machine, &applied);
+        }
+        assert_eq!(machine.latest_applied.len(), 2);
+        let mut paths = Vec::new();
+        machine
+            .visit_applied_baselines::<()>(|baseline| {
+                assert_eq!(baseline.intent().action(), ApplyAction::EnsureExisting);
+                assert_eq!(baseline.applied().desired(), EntryValue::Directory);
+                paths.push((
+                    baseline.intent().path().clone(),
+                    baseline.applied().target_identity().inode(),
+                ));
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(paths, vec![(earlier, 56), (later, 57)]);
+    }
+
+    #[test]
+    fn applied_baseline_reserves_new_path_charge_before_commit() {
+        let path = SyncPath::from_wire(vec!["x".repeat(250); 16].join("/")).unwrap();
+        let records = adoption_records(&path, 45, 0x110, 0o644);
+        let mut machine = ready_machine(1 << 20);
+        commit(&mut machine, &records[0]);
+        let encoded = records[1].encode();
+        let extra = BASELINE_INDEX_CHARGE_BYTES + path.as_str().len() as u64;
+        let exact = machine.retained_bytes
+            + RECORD_INDEX_CHARGE_BYTES
+            + encoded.as_bytes().len() as u64
+            + extra;
+        machine.limits.maximum_retained_bytes = exact - 1;
+        let revision = machine.revision();
+        assert_eq!(
+            machine.prepare_record(encoded.as_bytes()).err(),
+            Some(ApplyMachineError::QuotaExceeded)
+        );
+        assert_eq!(machine.revision(), revision);
+        assert!(machine.last_applied(&path).is_none());
+        machine.limits.maximum_retained_bytes = exact;
+        commit(&mut machine, &records[1]);
+        assert_eq!(machine.retained_bytes, exact);
+
+        let next = adoption_records(&path, 46, 0x120, 0o644);
+        machine.limits.maximum_retained_bytes = 1 << 20;
+        commit(&mut machine, &next[0]);
+        assert_eq!(machine.baseline_charge(&next[1]), Some(0));
+        machine.limits.maximum_retained_bytes = machine.retained_bytes
+            + RECORD_INDEX_CHARGE_BYTES
+            + next[1].encode().as_bytes().len() as u64;
+        commit(&mut machine, &next[1]);
+        assert_eq!(machine.latest_applied.len(), 1);
+        assert_eq!(
+            machine.retained_bytes,
+            machine.limits.maximum_retained_bytes
+        );
+    }
+
+    #[test]
+    fn rejected_stale_and_conflict_records_cannot_advance_applied_baseline() {
+        use crate::sync::apply_record::ApplyConflictReason;
+        let path = SyncPath::from_wire("preserve-last-applied").unwrap();
+        let first = adoption_records(&path, 47, 0x140, 0o644);
+        let next = adoption_records(&path, 48, 0x150, 0o644);
+        let mut machine = ready_machine(1 << 20);
+        for record in &first {
+            commit(&mut machine, record);
+        }
+        let expected = machine.last_applied(&path).unwrap().applied().operation();
+        commit(&mut machine, &next[0]);
+        let PreparedEvent::Append(stale) =
+            machine.prepare_record(next[1].encode().as_bytes()).unwrap()
+        else {
+            panic!("applied must prepare")
+        };
+        let ApplyRecord::Intent(intent) = &next[0] else {
+            unreachable!()
+        };
+        let conflict = ApplyRecord::Conflict(ApplyConflict::new(
+            intent.transaction(),
+            Some(next[0].digest()),
+            intent.operation(),
+            path.clone(),
+            ApplyConflictReason::TargetChanged,
+            Some(EntryIdentity::new(1, 99)),
+        ));
+        commit(&mut machine, &conflict);
+        assert_eq!(
+            machine.commit_record(stale),
+            Err(ApplyMachineError::StalePrepared)
+        );
+        assert_eq!(
+            machine.prepare_record(next[1].encode().as_bytes()).err(),
+            Some(ApplyMachineError::InvalidTransition)
+        );
+        assert_eq!(
+            machine.last_applied(&path).unwrap().applied().operation(),
+            expected
+        );
+        assert!(matches!(
+            machine.operation_terminal(intent.operation().id()),
+            Some(ApplyTerminal::Conflict(_))
+        ));
+        assert_eq!(machine.latest_applied.len(), 1);
     }
 
     #[test]

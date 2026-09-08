@@ -55,6 +55,9 @@ pub mod ids;
 pub mod installation;
 #[cfg(all(test, unix))]
 mod installation_handoff_tests;
+/// Serialized complete local inventory, retention, publication, and adoption.
+#[cfg(unix)]
+pub mod local_cycle;
 /// Bounded authenticated frames for future private synchronization logs.
 pub mod log_frame;
 /// Replay-derived membership and operation admission with bounded indexes.
@@ -73,6 +76,8 @@ pub mod projection;
 /// Durable local operation signing from accepted folder-global history.
 #[cfg(unix)]
 pub mod publication;
+/// Exact bounded backward writer-chain proofs for future quarantine handling.
+pub mod quarantine_chain;
 /// Pure multi-value causal register math for a future synchronized path.
 pub mod register;
 /// Read-only descriptor-anchored local source inventory for future sync.

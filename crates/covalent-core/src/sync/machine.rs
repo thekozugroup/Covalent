@@ -31,7 +31,8 @@ use super::freeze::{
 use super::frontier::{FrontierError, check_closed_frontier};
 use super::ids::{FolderId, WriterId};
 use super::membership::{
-    EpochDigest, MemberGrant, MemberRole, SignatureCheckedEpoch, decode_signature_checked_epoch,
+    EpochDigest, MemberGrant, MemberRole, SignatureCheckedEpoch, WriterCutoff,
+    decode_signature_checked_epoch,
 };
 use super::membership_transition::{
     BootstrapTransitionEvidence, HistoricalWriterKeyAssignment, MembershipArchive,
@@ -211,6 +212,44 @@ pub struct PublicationContext {
     counter: u64,
     predecessor: Option<[u8; 32]>,
     clock_entries: Vec<ClockEntry>,
+}
+
+/// Crate-private, immutable inputs for one locally signed freeze receipt.
+///
+/// Construction proves only current machine history and membership bindings.
+/// Runtime drain, physical apply, retained content, and peer acknowledgement
+/// remain coordinator responsibilities.
+pub(crate) struct LocalFreezeReceiptSigningInputs {
+    proposal: SignatureCheckedWriteLossProposal,
+    historical_grant: MemberGrant,
+    frontier_entries: Vec<ClockEntry>,
+    losing_tips: Vec<WriterCutoff>,
+}
+
+impl LocalFreezeReceiptSigningInputs {
+    pub(crate) const fn proposal(&self) -> &SignatureCheckedWriteLossProposal {
+        &self.proposal
+    }
+
+    pub(crate) const fn historical_grant(&self) -> &MemberGrant {
+        &self.historical_grant
+    }
+
+    pub(crate) fn frontier_entries(&self) -> &[ClockEntry] {
+        &self.frontier_entries
+    }
+
+    pub(crate) fn losing_tips(&self) -> &[WriterCutoff] {
+        &self.losing_tips
+    }
+}
+
+/// Crate-private result of checking one exact pending local freeze receipt.
+pub(crate) enum LocalFreezeReceiptContext {
+    /// This exact local receipt was already admitted and durably replayed.
+    Existing { canonical_record: Vec<u8> },
+    /// A new receipt may be signed from these machine-derived claims.
+    Sign(Box<LocalFreezeReceiptSigningInputs>),
 }
 
 impl PublicationContext {
@@ -712,6 +751,21 @@ impl FolderEventMachine {
         self.registers.get(path)
     }
 
+    /// Visits every current path register in canonical path order.
+    ///
+    /// Values come only from fully admitted retained history. This crate-local
+    /// view supports complete local-inventory comparison without exposing the
+    /// mutable index or treating a register value as filesystem application.
+    pub(crate) fn visit_current_registers<E>(
+        &self,
+        mut visit: impl FnMut(&SyncPath, &CausalRegister<EntryValue>) -> Result<(), E>,
+    ) -> Result<(), E> {
+        for (path, register) in &self.registers {
+            visit(path, register)?;
+        }
+        Ok(())
+    }
+
     /// Reports live accepted values strictly below a component boundary.
     /// Apply uses this to reject a file that would obstruct retained children.
     /// The ordered range visits only descendants and does not clone the index.
@@ -771,6 +825,22 @@ impl FolderEventMachine {
         if retained.header.digest() != expected_digest {
             return Err(FolderEventError::InvalidEvent);
         }
+        self.admitted_view(id, retained)
+    }
+
+    /// Resolves an operation identity only from fully admitted retained history.
+    ///
+    /// Local replay uses this to reconstruct the exact accepted event after an
+    /// uncertain process boundary. It does not admit supplied bytes or prove
+    /// that the operation remains active or has been applied to the filesystem.
+    pub(crate) fn accepted_operation_by_id(
+        &self,
+        id: OpId,
+    ) -> Result<AcceptedOperationRef<'_>, FolderEventError> {
+        let retained = self
+            .operations
+            .get(&id)
+            .ok_or(FolderEventError::MissingHistory)?;
         self.admitted_view(id, retained)
     }
 
@@ -877,6 +947,88 @@ impl FolderEventMachine {
             predecessor: prior_tip.map(AuthorTip::digest),
             clock_entries,
         })
+    }
+
+    /// Derives or resolves one immutable local freeze receipt.
+    ///
+    /// Callers must hold the exclusive durable folder-log transaction and must
+    /// append a newly signed result before exposing its bytes. A retry is valid
+    /// only while the same proposal remains pending at its exact base. Existing
+    /// retained bytes are returned without rewriting claims after the frontier
+    /// advances. This proves no runtime drain or filesystem/content state.
+    pub(crate) fn local_freeze_receipt_context(
+        &self,
+        writer: WriterId,
+        key: &VerifyingKey,
+        expected_proposal: [u8; 32],
+    ) -> Result<LocalFreezeReceiptContext, FolderEventError> {
+        if writer != self.config.local_writer_id {
+            return Err(FolderEventError::PublicationDenied);
+        }
+        let pending = self
+            .pending_freeze
+            .as_ref()
+            .filter(|pending| pending.proposal == expected_proposal)
+            .ok_or(FolderEventError::PublicationDenied)?;
+        let proposal = self
+            .freeze_proposals
+            .get(&pending.proposal)
+            .ok_or(FolderEventError::InvalidEvent)?;
+        let current = self
+            .current_epoch()
+            .filter(|epoch| {
+                epoch.epoch() == proposal.checked.base_epoch()
+                    && epoch.digest() == proposal.checked.base_epoch_digest()
+            })
+            .ok_or(FolderEventError::PublicationDenied)?;
+        let grant = member_by_writer(current.roster(), writer)
+            .filter(|grant| grant.writer_key() == key)
+            .filter(|_| proposal.checked.survivor_writer_ids().contains(&writer))
+            .ok_or(FolderEventError::PublicationDenied)?;
+
+        if let Some(receipt_digest) = pending.receipts.get(&writer) {
+            let receipt = self
+                .freeze_receipts
+                .get(receipt_digest)
+                .ok_or(FolderEventError::InvalidEvent)?;
+            return Ok(LocalFreezeReceiptContext::Existing {
+                canonical_record: receipt.checked.canonical_record().to_vec(),
+            });
+        }
+
+        map_frontier_result(check_closed_frontier(self, &self.frontier))?;
+        let frontier_entries = self
+            .tips
+            .iter()
+            .map(|(writer, tip)| {
+                ClockEntry::new(*writer, tip.counter()).map_err(|_| FolderEventError::InvalidEvent)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if frontier_entries.len() != self.frontier.actor_count()
+            || frontier_entries.iter().any(|entry| {
+                self.frontier.counter(entry.writer_id().into_vector_actor()) != entry.counter()
+            })
+        {
+            return Err(FolderEventError::InvalidEvent);
+        }
+        let losing_tips = proposal
+            .checked
+            .losing_writer_ids()
+            .iter()
+            .map(|writer| match self.tips.get(writer).copied() {
+                Some(tip) => WriterCutoff::new(*writer, tip.counter(), tip.digest()),
+                None => WriterCutoff::new(*writer, 0, [0; 32]),
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| FolderEventError::InvalidEvent)?;
+        Ok(LocalFreezeReceiptContext::Sign(Box::new(
+            LocalFreezeReceiptSigningInputs {
+                proposal: proposal.checked.clone(),
+                historical_grant: grant.clone(),
+                frontier_entries,
+                losing_tips,
+            },
+        )))
     }
 
     /// Performs a non-mutating preflight while preserving a concrete fixed
