@@ -64,8 +64,12 @@ The second test keeps the original test intact and adds the reviewed guardian bo
 The native build rejects a dirty/wrong upstream checkout, wrong Go or NDK, a helper outside
 5-64 MiB, a guardian outside 8-256 KiB, non-PIE ELF, PT_LOAD alignment below 16 KiB,
 text relocations, missing guardian RELRO/NOW/non-executable-stack hardening, and unexpected
-dynamic libraries. Instrumentation bodies and logs are capped at 128 KiB, startup at 30
-seconds, shutdown at 20 seconds, and the entire device invocation at 180 seconds.
+dynamic libraries. The guardian link uses `--as-needed`, retains bounded per-ABI dynamic and
+symbol-table reports, and still permits only `libc.so`. Android documents `libdl.so` as a
+[separate NDK platform library](https://developer.android.com/ndk/guides/stable_apis#c_library),
+but the guardian source calls no dynamic-linker API, so the audit does not admit it without
+link evidence that it is required. Instrumentation bodies and logs are capped at 128 KiB,
+startup at 30 seconds, shutdown at 20 seconds, and the entire device invocation at 180 seconds.
 
 ## Build
 
@@ -112,6 +116,12 @@ run `34224544802` before the guardian test was added. The runner now requires th
 method names, one start and one success status for each, `numtests=2`, `OK (2 tests)`, the
 successful final instrumentation code, and stable framework PIDs; the guardian path remains
 unproven until that expanded hosted run passes.
+
+The first expanded build run (`34229120120`) stopped at the unchanged guardian dependency
+allowlist because the arm64 link retained `libdl.so`; no expanded instrumentation ran. The
+next build asks LLD to retain dynamic libraries only when needed and publishes the bounded
+dynamic/symbol reports before applying the same `libc.so`-only gate. Whether this removes
+`libdl.so` for both ABIs remains a hosted NDK result, not a local claim.
 
 The first prepared run timed out before instrumentation because the shared
 readiness helper still targeted the production app's Compose activity. The

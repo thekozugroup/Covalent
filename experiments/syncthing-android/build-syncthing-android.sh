@@ -172,12 +172,14 @@ build_guardian() {
   output="$jni_root/$abi/libengineguardian.so"
   cc="$toolchain/bin/$compiler"
   readelf="$toolchain/bin/llvm-readelf"
+  dynamic_report="$assets_root/guardian-dynamic-$abi.txt"
+  symbol_report="$assets_root/guardian-symbols-$abi.txt"
   test -x "$cc" || { echo "Missing NDK compiler: $cc" >&2; exit 1; }
 
   "$cc" \
     -std=c11 -Wall -Wextra -Werror -O2 \
     -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE -pie \
-    -Wl,-z,relro,-z,now,-z,noexecstack,-z,max-page-size=16384 \
+    -Wl,--as-needed,-z,relro,-z,now,-z,noexecstack,-z,max-page-size=16384 \
     "$guardian_source" -o "$output"
 
   size=$(wc -c < "$output" | tr -d '[:space:]')
@@ -185,6 +187,18 @@ build_guardian() {
     echo "$abi guardian size $size is outside [$guardian_min_bytes, $guardian_max_bytes]" >&2
     exit 1
   }
+  "$readelf" -dW "$output" > "$dynamic_report"
+  "$readelf" -Ws "$output" > "$symbol_report"
+  test "$(wc -c < "$dynamic_report" | tr -d '[:space:]')" -le 131072 || {
+    echo "$abi guardian dynamic report exceeded 128 KiB" >&2
+    exit 1
+  }
+  test "$(wc -c < "$symbol_report" | tr -d '[:space:]')" -le 131072 || {
+    echo "$abi guardian symbol report exceeded 128 KiB" >&2
+    exit 1
+  }
+  needed=$(sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p' "$dynamic_report" | sort -u)
+  printf '  %s guardian dynamic dependencies: %s\n' "$abi" "${needed:-none}"
   "$readelf" -h "$output" | grep -Eq 'Type:[[:space:]]+DYN' || {
     echo "$abi guardian is not a position-independent ET_DYN ELF" >&2
     exit 1
@@ -212,15 +226,14 @@ PY
     echo "$abi guardian failed its PT_LOAD/RELRO/non-executable-stack audit" >&2
     exit 1
   }
-  "$readelf" -dW "$output" | grep -Eq 'BIND_NOW|FLAGS.*NOW' || {
+  grep -Eq 'BIND_NOW|FLAGS.*NOW' "$dynamic_report" || {
     echo "$abi guardian is missing immediate relocation binding" >&2
     exit 1
   }
-  "$readelf" -dW "$output" | grep -Eq 'TEXTREL|DT_TEXTREL' && {
+  grep -Eq 'TEXTREL|DT_TEXTREL' "$dynamic_report" && {
     echo "$abi guardian contains a text relocation" >&2
     exit 1
   }
-  needed=$("$readelf" -dW "$output" | sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p' | sort -u)
   unexpected=$(printf '%s\n' "$needed" | sed '/^$/d' | grep -Ev '^libc\.so$' || true)
   test -z "$unexpected" || {
     echo "$abi guardian has unexpected runtime dependencies: $unexpected" >&2
