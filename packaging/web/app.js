@@ -562,6 +562,16 @@ async function loadStatus() {
   }
 }
 
+function backupSummaryCopy(backup) {
+  const snapshots = `${backup.snapshotCount} retained snapshot${backup.snapshotCount === 1 ? "" : "s"}`;
+  if (!backup.latestSnapshotId) return `${backup.name} — no completed snapshots yet.`;
+  const selected = backup.selectedProviderIds.length;
+  const protection = selected === 0
+    ? "Local only; it will not protect against losing this device."
+    : `${selected} selected extra backup device${selected === 1 ? "" : "s"}.`;
+  return `${backup.name} — ${snapshots}; ${protection}`;
+}
+
 async function loadBackups() {
   if (!token) return;
   const [backups, receipt] = await Promise.all([
@@ -574,8 +584,7 @@ async function loadBackups() {
   list.replaceChildren();
   backups.forEach((backup) => {
     const item = document.createElement("li");
-    const latest = backup.latestSnapshotId ? `latest ${backup.latestSnapshotId}` : "no local snapshot";
-    item.textContent = `${backup.name} — ${latest}; ${backup.snapshotCount} retained; ${backup.selectedProviderIds.length} explicitly selected providers`;
+    item.textContent = backupSummaryCopy(backup);
     if (backup.latestSnapshotId) {
       const actions = document.createElement("div");
       actions.className = "button-row";
@@ -763,14 +772,33 @@ function clearGeneratedSnapshotId() {
   }
 }
 
-function renderRestorePage(page) {
+function renderRestorePage(page, entries) {
   restorePage = page;
   const first = page.entries.length === 0 ? 0 : page.entryOffset + 1;
   const last = page.entryOffset + page.entries.length;
   $("[data-restore-summary]").textContent = restorePlan.totalEntries
-    + " entries are signed for " + restorePlan.authorizedRoot
+    + " items will be handled in " + restorePlan.authorizedRoot
     + ". Showing " + first + "–" + last + ".";
-  $("[data-restore-plan]").textContent = display(page.entries);
+  const list = $("[data-restore-plan]");
+  list.replaceChildren();
+  entries.forEach((entry) => {
+    const item = document.createElement("li");
+    const action = document.createElement("strong");
+    action.textContent = entry.action;
+    const destinationLabel = document.createElement("span");
+    destinationLabel.textContent = " Destination: ";
+    const destination = document.createElement("code");
+    destination.textContent = entry.destination;
+    item.append(action, destinationLabel, destination);
+    if (entry.renamed) {
+      const sourceLabel = document.createElement("span");
+      sourceLabel.textContent = " Original backup path: ";
+      const source = document.createElement("code");
+      source.textContent = entry.source;
+      item.append(sourceLabel, source);
+    }
+    list.append(item);
+  });
   $("[data-restore-previous]").disabled = restoreCursorHistory.length === 0;
   $("[data-restore-next]").disabled = page.nextCursor === null;
 }
@@ -787,9 +815,17 @@ async function loadRestorePage(cursor, rememberCurrent = false) {
     return;
   }
   if (!restorePreview.isCurrentPlan(revision, plan, restorePlan)) return;
+  let entries;
+  try {
+    entries = restore.describePage(page, plan.authorizedRoot);
+  } catch (error) {
+    const previous = invalidateRestorePreview();
+    if (previous) void restore.discard(api, previous).catch((discardError) => fail(discardError));
+    throw error;
+  }
   if (rememberCurrent) restoreCursorHistory.push(restoreCursor);
   restoreCursor = cursor;
-  renderRestorePage(page);
+  renderRestorePage(page, entries);
 }
 
 function clearRestorePreview() {
@@ -1109,8 +1145,15 @@ function newBackupAttempt(form) {
   });
 }
 
-function backupCompletionCopy(result) {
-  return `Backup complete: ${result.backupId}, ${result.entries} entries, ${result.selectedProviders} explicitly selected providers.`;
+function backupCompletionCopy(result, attempt) {
+  const name = typeof attempt?.displayName === "string" && attempt.displayName.length > 0
+    ? attempt.displayName
+    : "Backup";
+  const items = `${result.entries} item${result.entries === 1 ? "" : "s"}`;
+  const protection = result.selectedProviders === 0
+    ? "This is a local-only backup, so it does not protect against losing this device."
+    : `${result.selectedProviders} selected extra backup device${result.selectedProviders === 1 ? "" : "s"} received a copy.`;
+  return `Backup complete: ${name} — ${items}. ${protection}`;
 }
 
 async function requestBackupTerminalResult(attempt) {
@@ -1140,7 +1183,7 @@ async function acknowledgeBackupTerminalReceipt(receipt = null) {
     receipt = await backupTerminal.load(globalThis.localStorage, backupServerContext);
   }
   if (receipt === null || receipt.phase !== "receipt") return false;
-  const complete = backupCompletionCopy(receipt.result);
+  const complete = backupCompletionCopy(receipt.result, receipt.attempt);
   // The decoded result is already rendered below before this function is
   // called. Only now may the terminal server result be acknowledged.
   setBackupSubmissionState("acknowledging", `${complete} Confirming this receipt with the backup server…`);
@@ -1179,7 +1222,7 @@ async function resumeBackupTerminalReceipt() {
         return true;
       }
       failedBackupAttempt = null;
-      const complete = backupCompletionCopy(pending.result);
+      const complete = backupCompletionCopy(pending.result, pending.attempt);
       setBackupSubmissionState("complete", `${complete} Resuming receipt confirmation…`);
       say(`${complete} Resuming receipt confirmation.`);
       await acknowledgeBackupTerminalReceipt(pending);
@@ -1206,7 +1249,7 @@ async function submitBackupLocked(attempt) {
     attempt,
     requestBackupTerminalResult,
   );
-  const complete = backupCompletionCopy(receipt.result);
+  const complete = backupCompletionCopy(receipt.result, receipt.attempt);
   setBackupSubmissionState("complete", complete);
   say(complete);
   // The exclusive same-origin lock remains held while the checked result is
@@ -1301,12 +1344,13 @@ $("[data-restore-preview]").addEventListener("submit", async (event) => {
     if (await restorePreview.discardIfStale(previewRevision, candidate, (plan) => restore.discard(api, plan))) return;
     const firstPage = await restore.page(api, candidate, null, 100);
     if (await restorePreview.discardIfStale(previewRevision, candidate, (plan) => restore.discard(api, plan))) return;
+    const firstEntries = restore.describePage(firstPage, candidate.authorizedRoot);
     if (previous) await restore.discard(api, previous).catch(() => {});
     if (await restorePreview.discardIfStale(previewRevision, candidate, (plan) => restore.discard(api, plan))) return;
     restorePlan = candidate;
     activeRestorePreviewRevision = previewRevision;
     restoreCursor = null; restoreCursorHistory = [];
-    renderRestorePage(firstPage);
+    renderRestorePage(firstPage, firstEntries);
     $("[data-restore-result]").hidden = false; $("[data-restore-confirm]").checked = false; $("[data-restore-execute]").disabled = true;
     say("Preview complete. Review the target and conflict actions before authorizing the write.");
   } catch (error) { if (candidate) await restore.discard(api, candidate).catch(() => {}); fail(error); }
@@ -1344,7 +1388,14 @@ $("[data-restore-execute]").addEventListener("click", async () => {
   const plan = restorePlan;
   restoreExecutionInFlight = true;
   button.disabled = true;
-  try { restorePreview.invalidate(); activeRestorePreviewRevision = 0; const result = await restore.execute(api, plan); await restore.discard(api, plan).catch(() => {}); if (restorePlan === plan) clearRestorePreview(); say(`Restore complete: ${result.filesRestored} files, ${result.directoriesCreated} directories.`); }
+  try {
+    restorePreview.invalidate();
+    activeRestorePreviewRevision = 0;
+    const result = await restore.execute(api, plan);
+    await restore.discard(api, plan).catch(() => {});
+    if (restorePlan === plan) clearRestorePreview();
+    say(`Restore complete: ${result.filesRestored} file${result.filesRestored === 1 ? "" : "s"} restored, ${result.directoriesCreated} folder${result.directoriesCreated === 1 ? "" : "s"} created.`);
+  }
   catch (error) { fail(error); }
   finally {
     restoreExecutionInFlight = false;

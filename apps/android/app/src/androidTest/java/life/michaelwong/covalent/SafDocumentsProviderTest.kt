@@ -3,6 +3,7 @@ package life.michaelwong.covalent
 import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
+import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
 import androidx.test.platform.app.InstrumentationRegistry
 import life.michaelwong.covalent.data.SafSourceAccessException
@@ -145,7 +146,7 @@ class SafDocumentsProviderTest {
     }
 
     private companion object {
-        val FIXTURE_URI: Uri = Uri.parse("content://${TestDocumentsProvider.AUTHORITY}")
+        val FIXTURE_URI: Uri = "content://${TestDocumentsProvider.AUTHORITY}".toUri()
         const val ACCESS_FLAGS: Int =
             Intent.FLAG_GRANT_READ_URI_PERMISSION or
                 Intent.FLAG_GRANT_WRITE_URI_PERMISSION or

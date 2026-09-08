@@ -52,3 +52,28 @@ test("restore execution sends only the durable plan ID and discards by job ID", 
     { path: "/api/v1/jobs/discard", body: { jobId: reference.jobId } },
   ]);
 });
+
+test("preview entries use complete plain-language actions and reject unknown actions", () => {
+  const entries = restore.describePage({ entries: [
+    { sourcePath: "new-folder", destinationPath: "new-folder", kind: "directory", action: "create_directory" },
+    { sourcePath: "kept-folder", destinationPath: "kept-folder", kind: "directory", action: "keep_directory" },
+    { sourcePath: "new.txt", destinationPath: "new.txt", kind: "file", action: "create_file" },
+    { sourcePath: "skip.txt", destinationPath: "skip.txt", kind: "file", action: "skip_file" },
+    { sourcePath: "replace.txt", destinationPath: "replace.txt", kind: "file", action: "replace_file" },
+    { sourcePath: "photo.jpg", destinationPath: "photo.jpg.covalent-restored-1", kind: "file", action: "rename_file" },
+  ] }, "/restore");
+  assert.deepEqual(entries.map((entry) => entry.action), [
+    "Create this folder.",
+    "Use the existing folder.",
+    "Restore this file.",
+    "Conflict: skip this file and keep the existing file.",
+    "Conflict: replace the existing file.",
+    "Conflict: restore a renamed copy.",
+  ]);
+  assert.equal(entries[5].destination, "/restore/photo.jpg.covalent-restored-1");
+  assert.equal(entries[5].renamed, true);
+  assert.throws(
+    () => restore.describePage({ entries: [{ sourcePath: "file", destinationPath: "file", kind: "file", action: "remove_file" }] }, "/restore"),
+    /cannot safely explain/,
+  );
+});

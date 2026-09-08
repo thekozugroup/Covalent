@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.util.Base64
+import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
@@ -627,7 +628,7 @@ class SafTransferBridge(private val node: CovalentNodeClient = CovalentNodeClien
                 throw failure(null)
             }
             queriedAfter.map { childUri ->
-                DocumentFile.fromTreeUri(context, Uri.parse(childUri)) ?: throw failure(null)
+                DocumentFile.fromTreeUri(context, childUri.toUri()) ?: throw failure(null)
             }
         } catch (error: InterruptedIOException) {
             throw error

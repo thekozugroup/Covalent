@@ -60,6 +60,20 @@ test("ordinary restore selects a completed remembered backup and keeps manual id
   assert.match(selection, /remembered backup is no longer available/);
 });
 
+test("restore preview and backup completion copy avoid raw implementation identifiers", async () => {
+  const [html, app, restore] = await Promise.all([
+    source("index.html"), source("app.js"), source("restore-plan-flow.js"),
+  ]);
+  assert.match(html, /<ol class="restore-preview-list" data-restore-plan><\/ol>/);
+  assert.doesNotMatch(app, /textContent = display\(page\.entries\)/);
+  assert.match(app, /restore\.describePage\(firstPage, candidate\.authorizedRoot\)/);
+  assert.match(app, /textContent = entry\.destination/);
+  assert.match(app, /function backupCompletionCopy\(result, attempt\)/);
+  assert.doesNotMatch(app, /Backup complete: \$\{result\.backupId\}/);
+  assert.match(app, /local-only backup/);
+  assert.match(restore, /cannot safely explain/);
+});
+
 test("normal backup results are decoded before their terminal job receipt is acknowledged", async () => {
   const [html, app, terminal] = await Promise.all([
     source("index.html"), source("app.js"), source("backup-terminal-flow.js"),

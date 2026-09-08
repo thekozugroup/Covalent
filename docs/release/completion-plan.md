@@ -34,11 +34,11 @@ Close every known release-blocking finding; do not remove a gate to raise a scor
 | Product scope | Explicit backup/sync semantics and a matching acceptance scenario | Two-way sync decision pending |
 | Core correctness | Unit, property, adversarial, migration, concurrency, corruption, interrupted-job and source-loss tests; strict lint | Revised stability patch: 275 Rust tests passed, zero failed/ignored; format and strict Clippy passed. |
 | Owner-device loss | A user can export a protected recovery kit, replace a lost owner device, discover its authenticated catalogs, see partial availability, and restore | Release blocker: core recovery primitives exist, but no production CLI/API/native workflow invokes recovery bootstrap and catalog import. |
-| Beginner workflow | Install → connect → choose folder → protect → verify → restore through real UI; clear errors and recovery; no manual IDs in ordinary flows | Real browser unlock, automatic snapshot/name defaults, named backup selection, preview invalidation, restore and Verify passed with disposable files. Raw identifier/JSON presentation still needs simplification. Full cross-device onboarding pending. |
+| Beginner workflow | Install → connect → choose folder → protect → verify → restore through real UI; clear errors and recovery; no manual IDs in ordinary flows | Real browser unlock, automatic snapshot/name defaults, named backup selection, preview invalidation, restore and Verify passed with disposable files. Preview now explains individual file actions and renamed conflict destinations instead of raw JSON. Full cross-device onboarding pending. |
 | macOS | Shared tests, live helper integration, native UI/accessibility, verified arm64 app package, install and upgrade | Full Xcode blocked on license acceptance; CLT-only tests lack the Testing module |
 | Android | JVM, instrumented SAF and process-death tests, TalkBack/large text, install and upgrade of stable personal artifact | Fresh SDK/JDK setup and device evidence pending |
-| Docker | Both CPU architectures; TLS and key-protection contracts; rootless/read-only runtime; bounded storage/memory; three-node recovery | Fresh build and runtime evidence pending |
-| Atmos network drill | Mac ↔ Ubuntu pairing, explicitly selected replica, interrupted/restarted operation, source-loss restore, exact hashes, cleanup | First build passed; node correctly rejected an SFTP-copied token with mode 0644. Explicit 0600 staging added. All first-run resources cleaned. Second drill building at 1 CPU/4 GiB without swap, with at least 8 GiB host memory headroom. |
+| Docker | Both CPU architectures; TLS and key-protection contracts; rootless/read-only runtime; bounded storage/memory; three-node recovery | Both image architectures and container runtime/e2e passed on checkpoint `1eaaae8`; repeat on final revision. |
+| Atmos network drill | Mac ↔ Ubuntu pairing, explicitly selected replica, interrupted/restarted operation, source-loss restore, exact hashes, cleanup | Passed with a 64 MiB incompressible payload: same-job pause/resume, provider container restart preserving identity, local source/cache loss, provider-only restore and exact content checks. Dedicated resources removed; pre-existing container/image IDs survived. See [drill evidence](atmos-drill-2026-09-07.md). |
 | Atlas/Unraid | Trusted preflight, exact-image install/upgrade, selected-share permissions, real backup/restore | Preflight strengthened and fixtures pass. A trusted-key read-only SSH attempt to Atlas timed out; actual host evidence pending. |
 | Security and supply chain | Dependency audits, CodeQL, immutable image scans/signatures/SBOMs, safe secret storage, exact release commit provenance | cargo-audit (289 dependencies, warnings denied) and cargo-deny advisories/bans/licenses/sources passed. Hosted and artifact evidence pending; current main signature is unknown_key and account has no registered signing key. |
 | Performance | Crypto ≥20 MiB/s; default 10k-entry interrupted/resumed scan and restore ≤45 s; provider restore ≥4 MiB/s and scaling gate; node ≤16 MiB, CLI ≤8 MiB, image ≤96 MiB | Baseline crypto 185.04 MiB/s, 10k-entry recovery 5.10 s, local provider restore 222–242 MiB/s; intermediate release node 10,304,896 bytes and CLI 4,079,664 bytes. Final artifacts pending. |
@@ -62,8 +62,9 @@ packages, credentials, private server inventories, or raw diagnostic bundles.
   added for exact snapshot selection, local-only results, offline/missing/
   revoked/corrupt replicas, contradictory reports, retryable errors, and
   concurrent selection changes.
-- Revised web suite: 79 passed, including first-run provider-roster,
-  completed-backup selection and delayed preview/page regressions.
+- Revised web suite: 81 passed, including first-run provider-roster,
+  completed-backup selection, delayed preview/page regressions, and readable
+  file/conflict actions that refuse unknown action kinds.
   Runtime/OpenAPI method-path coverage still passes.
 - Atlas preflight now checks Tailnet ownership of every resolved address and
   read access as the container's UID/GID without launching a container.
@@ -85,6 +86,14 @@ packages, credentials, private server inventories, or raw diagnostic bundles.
   bytes and the empty directory matched the source; a new backup using an
   automatically generated snapshot then verified intact. Its fixture is
   temporary and contains generated test content only.
+- The second checkpoint `1eaaae891d2ac33d8a1af46b9735d9a2fc913657`
+  passed Rust/contracts, macOS integration/UI and packaging, both container
+  architectures, and dependency checks. Both Android lanes stopped on one
+  remaining `UseKtx` lint finding before instrumented execution. The call now
+  uses the AndroidX `toUri` extension; a fresh run is required.
+- Browser testing of the readable preview passed normal restore and renamed
+  conflict explanations. It also reproduced a missing target folder reporting
+  a generic server error; the root error mapping is being corrected before release.
 
 ## Work order
 
