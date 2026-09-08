@@ -251,8 +251,28 @@ each transmission; these local cursors and page ordinals are neither wire
 tokens nor peer acknowledgements. Future write-loss replay must retain exact
 historical duplicate classification even after changing a writer's live grant.
 
+The first Unix applier now creates absent files/directories from a current,
+fully admitted operation and durably verifies an existing directory. Encrypted
+Intent, StageReady and Applied records bind the operation, root and staged inode.
+No-follow parent traversal, bounded portable-name checks, verified retained
+content, file/parent sync and no-replace promotion precede success. Interrupted
+retries reuse the same intent; reopening against a different root fails before
+restaging. Unproven stages are preserved as pending rather than guessed safe.
+Current applied files are revalidated with bounded, cancellable hashing. Machine
+quotas include a fixed initial index allowance and per-record owned storage.
+These are logical accounting bounds, not measured RSS guarantees.
+
+This create-only slice preserves incumbents, records supported conflict outcomes,
+and reports tombstones as unsupported. Missing/unsafe parents and portable-name
+collisions discovered before an intent are visible errors, not durable conflict
+records. Generic encrypted-log replay is bounded but not yet cancellable; the
+subsequent filesystem reconciliation is cancellable. Rechecking every current
+applied file is a conservative correctness barrier that still needs performance
+measurement. It does not implement an applied acknowledgement frontier.
+
 Network folder sync remains unshipped. Write-loss/freeze transitions and their
 history reconciliation still fail closed. Authority configuration and the full
-folder coordinator, peer exchange, safe user-folder apply, native setup, SAF
-scanning/apply and the multi-device acceptance gates above remain outstanding.
+folder coordinator, peer exchange, existing-file adoption, safe replacement and
+deletion, conflict materialization, native setup, SAF scanning/apply and the
+multi-device acceptance gates above remain outstanding.
 Existing Backup and Restore behavior remains independently tested.

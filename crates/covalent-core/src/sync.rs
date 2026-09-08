@@ -5,11 +5,20 @@
 //! storage and immutable encrypted content retention. The replay engine accepts
 //! bootstrap-backed membership additions/upgrades and read-only removals;
 //! write-loss changes still fail closed. Local file publication requires exact
-//! durable content receipts. No network sync runtime or user-folder apply is
-//! shipped; live authorization and applied/acknowledged state remain separate.
+//! durable content receipts. A Unix applier can journal and verify create-only
+//! file/directory placement. No network sync runtime is shipped; replacement,
+//! deletion, live authorization and applied/acknowledged frontiers remain open.
 
 /// Read-only causal-history admission checks for a future synchronized path.
 pub mod admission;
+/// Structural replay state for private filesystem-apply transactions.
+#[cfg(unix)]
+pub mod apply_machine;
+/// Canonical bounded plaintext records for the encrypted apply journal.
+pub mod apply_record;
+/// Descriptor-relative create-only filesystem application.
+#[cfg(unix)]
+pub mod apply_unix;
 /// Canonical bounded operation bodies for future folder mutations.
 pub mod body;
 /// Canonical signed read-only bootstrap permits and candidate receipts.
