@@ -471,6 +471,15 @@ async fn serve(configuration: ServeConfiguration) -> Result<()> {
             tracing::warn!(?error, "packaged folder sync needs attention");
         }
     }
+    #[cfg(target_os = "linux")]
+    match covalent_node::sync_engine::discover_packaged_linux_engine() {
+        Ok(Some(package)) => runtime_configuration.folder_sync = Some(package),
+        Ok(None) => {}
+        Err(error) => {
+            runtime_configuration.folder_sync_package_invalid = true;
+            tracing::warn!(?error, "packaged folder sync needs attention");
+        }
+    }
     let runtime = NodeRuntime::start(runtime_configuration).await?;
     shutdown_signal().await;
     runtime.stop().await

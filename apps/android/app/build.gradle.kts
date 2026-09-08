@@ -266,6 +266,13 @@ tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.con
     mustRunAfter(buildAndroidSyncEngine)
 }
 
+// Lint model writers also consume the generated assets/JNI source roots.
+// Ordering is conditional on the producers already being in the graph, so
+// ordinary source-only debug lint does not require native build toolchains.
+tasks.matching { it.name.contains("lint", ignoreCase = true) }.configureEach {
+    mustRunAfter(buildAndroidJni, buildAndroidSyncEngine)
+}
+
 tasks.matching { it.name == "assembleRelease" || it.name == "bundleRelease" }.configureEach {
     dependsOn(buildAndroidJni, buildAndroidSyncEngine)
 }

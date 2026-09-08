@@ -1,10 +1,29 @@
+FROM golang:1.26.7-alpine3.23@sha256:b17af760035fc2f338eed92d448a6c67f2d45438844fc6c60678fa5f99e44b57 AS sync-engine-worker
+ARG TARGETARCH
+ENV CGO_ENABLED=0 \
+    GOTOOLCHAIN=local \
+    GOFLAGS=-mod=readonly
+ADD --checksum=sha256:dbcc9498602286a843f29a7104833bd1422082999aa51ff92eef493172d47959 \
+    https://github.com/syncthing/syncthing/archive/946e2b83a1f6c6ae119427c09e0a5802940b82ff.tar.gz \
+    /tmp/syncthing-source.tar.gz
+RUN mkdir -m 0700 /tmp/syncthing-source \
+    && tar -xzf /tmp/syncthing-source.tar.gz --strip-components=1 -C /tmp/syncthing-source
+COPY --chmod=0555 scripts/build-linux-sync-engine.sh /usr/local/bin/build-linux-sync-engine
+RUN build-linux-sync-engine worker /tmp/syncthing-source /engine-worker "$TARGETARCH"
+
 FROM rust:1.97.1-alpine3.23@sha256:c4a364ddbf684fe038e6fa6a4f25b30c8dc85247423e0e660676ece0d17be4a2 AS builder
+ARG TARGETARCH
 WORKDIR /source
 ENV CARGO_INCREMENTAL=0
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
 COPY packaging/web ./packaging/web
 RUN cargo build --locked --release -p covalent-node -p covalent-cli
+COPY --chmod=0444 packaging/sync-engine/engine-guardian.c /tmp/engine-guardian.c
+COPY --chmod=0555 scripts/build-linux-sync-engine.sh /usr/local/bin/build-linux-sync-engine
+COPY --from=sync-engine-worker /engine-worker /engine-worker
+RUN build-linux-sync-engine package \
+      /engine-worker /tmp/engine-guardian.c /sync-engine "$TARGETARCH"
 
 # Caddy is compiled here rather than lifted out of caddy:2.11.4-alpine, whose
 # published binary is linked against go1.26.3. That toolchain accounted for ten
@@ -86,6 +105,9 @@ LABEL org.opencontainers.image.title="Covalent" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.base.name="docker.io/library/alpine:3.23" \
       org.opencontainers.image.base.digest="sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40" \
+      io.covalent.sync-engine.version="v2.1.3" \
+      io.covalent.sync-engine.commit="946e2b83a1f6c6ae119427c09e0a5802940b82ff" \
+      io.covalent.sync-engine.source-sha256="dbcc9498602286a843f29a7104833bd1422082999aa51ff92eef493172d47959" \
       io.covalent.runtime.openssl.version="3.5.8-r0"
 
 # Alpine published the fixed OpenSSL security revision after the pinned 3.23.5
@@ -105,6 +127,8 @@ RUN apk add --no-cache --upgrade \
 COPY --from=builder /source/target/release/covalent-node /usr/local/bin/covalent-node
 COPY --from=builder /source/target/release/covalent /usr/local/bin/covalent
 COPY --from=caddy /caddy.unprivileged /usr/local/bin/caddy
+COPY --from=builder /sync-engine/bin/ /usr/local/libexec/covalent-sync-engine/
+COPY --from=builder /sync-engine/share/ /usr/local/share/covalent/sync-engine/
 COPY --from=caddy /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --chmod=0555 packaging/docker/entrypoint.sh /usr/local/bin/covalent-entrypoint
 COPY packaging/docker/Caddyfile /etc/caddy/Caddyfile
@@ -119,7 +143,7 @@ ENV COVALENT_LISTEN=127.0.0.1:8787 \
     XDG_CONFIG_HOME=/config/caddy/config \
     UMASK=027 \
     RUST_LOG=info
-EXPOSE 8787/udp 8443/tcp
+EXPOSE 8787/udp 8789/tcp 8443/tcp
 VOLUME ["/config", "/data"]
 USER 65532:65532
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

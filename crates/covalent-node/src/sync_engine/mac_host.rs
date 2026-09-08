@@ -13,9 +13,9 @@ use serde::Deserialize;
 use super::{FolderSyncRuntimeConfig, VerifiedEngineExecutable};
 
 const MAX_MANIFEST_BYTES: u64 = 16 * 1024;
-// One slash, `cv-engine-`, six random characters, and `/api.sock` add 26
-// bytes. The private endpoint contract permits at most 100 bytes in total.
-const MAX_RUNTIME_PARENT_BYTES: usize = 74;
+// macOS uses numeric loopback TLS; leave space for generated filenames
+// beneath Darwin's filesystem path bound without imposing a Unix socket limit.
+const MAX_RUNTIME_PARENT_BYTES: usize = 900;
 const RUNTIME_DIRECTORY_NAME: &str = "cvs";
 const MANIFEST_RELATIVE_PATH: &str = "../Resources/CovalentSyncEngine/manifest.json";
 const GUARDIAN_NAME: &str = "covalent-engine-guardian";
@@ -35,7 +35,7 @@ const GUARDIAN_SOURCE_SHA256: &str =
 pub enum MacHostError {
     /// The app bundle contains incomplete, unsafe, or incorrectly pinned files.
     InvalidPackage,
-    /// The private socket parent is unavailable, unsafe, or too long.
+    /// The private runtime parent is unavailable, unsafe, or too long.
     InvalidRuntimeDirectory,
 }
 
@@ -439,6 +439,17 @@ mod tests {
             discover_at(&executable, Some(long.into_os_string())),
             MacHostError::InvalidRuntimeDirectory,
         );
+    }
+
+    #[test]
+    fn runtime_parent_accepts_app_sandbox_paths_longer_than_unix_socket_limit() {
+        let (root, executable, _) = fixture();
+        let long = root.path().join("sandbox-temporary-directory-".repeat(5));
+        assert!(long.as_os_str().as_bytes().len() > 100);
+        let config = discover_at(&executable, Some(long.clone().into_os_string()))
+            .expect("valid TLS runtime parent")
+            .expect("packaged engine");
+        assert_eq!(config.runtime_parent, fs::canonicalize(long).unwrap());
     }
 
     #[test]

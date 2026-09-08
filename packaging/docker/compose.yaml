@@ -27,6 +27,7 @@ services:
     ports:
       - "${COVALENT_HTTPS_BIND_IP:-127.0.0.1}:${COVALENT_HTTPS_PORT:-8443}:8443/tcp"
       - "${COVALENT_PEER_BIND_IP:-0.0.0.0}:${COVALENT_PEER_PORT:-8787}:8787/udp"
+      - "${COVALENT_SYNC_BIND_IP:-0.0.0.0}:${COVALENT_SYNC_PORT:-8789}:8789/tcp"
     tmpfs:
       - /tmp:size=64m,mode=1777,noexec,nosuid,nodev
     volumes:

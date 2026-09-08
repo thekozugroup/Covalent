@@ -466,7 +466,7 @@ grep -Fq 'sudo ./scripts/validate-setup-paths.sh \' packaging/docker/README.md
 grep -Fq 'export COVALENT_HTTPS_BIND_IP=100.64.0.10' packaging/docker/README.md
 grep -Fq 'export COVALENT_PEER_BIND_IP=100.64.0.10' packaging/docker/README.md
 grep -Fq 'export COVALENT_ADVERTISED_PEER_ADDRESS=100.64.0.10:8787' packaging/docker/README.md
-grep -Fq '"ip": ["tcp:8443", "udp:8787"]' packaging/docker/README.md
+grep -Fq '"ip": ["tcp:8443", "udp:8787", "tcp:8789"]' packaging/docker/README.md
 
 # Atlas must either let the entrypoint resolve HTTPS MagicDNS or use a numeric
 # SocketAddr. It also pins the SSH host key out of band before remote preflight.
@@ -482,7 +482,7 @@ grep -Fq 'ssh-keyscan -H -t ed25519 atlas.example-tailnet.ts.net' docs/platform/
 grep -Fq 'if [ "$scanned_fingerprint" != "$trusted_fingerprint" ]; then' docs/platform/atlas-tailscale.md
 grep -Fq 'Atlas SSH host-key fingerprint mismatch; refusing to trust it' docs/platform/atlas-tailscale.md
 grep -Fq 'StrictHostKeyChecking=yes' docs/platform/atlas-tailscale.md
-grep -Fq '"ip": ["tcp:8443", "udp:8787"]' docs/platform/atlas-tailscale.md
+grep -Fq '"ip": ["tcp:8443", "udp:8787", "tcp:8789"]' docs/platform/atlas-tailscale.md
 # The install flow must name an explicit Tailnet peer endpoint; searching for
 # the product contract rather than a whole sentence keeps this static gate from
 # drifting when the human-facing explanation changes.

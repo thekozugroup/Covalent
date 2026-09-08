@@ -577,6 +577,16 @@ packages, credentials, private server inventories, or raw diagnostic bundles.
   engine can run. Backup remains independent. These are intermediate checks,
   not a completed release.
 
+- Checkpoint `68bf16d` published the durable folder control/service and native
+  packages. Its hosted macOS bundle and dependency-delta jobs passed, but Linux,
+  Android build wiring and Swift test/iOS compilation exposed concrete defects;
+  its aggregate software gate failed. The next snapshot fixes those findings,
+  adds production macOS loopback TLS and the Linux engine package, and passes
+  825 workspace Rust tests plus explicit TLS cancellation coverage. The real
+  two-node proof passes with TLS. Signed-app sandbox execution, fresh hosted
+  checks and the remaining platform/usability/release gates are still open;
+  the goal remains active. See [exact evidence](engine-adapter-validation-2026-09-08.md).
+
 ## Work order
 
 1. Close reproducible reliability and recovery defects; preserve old snapshots.

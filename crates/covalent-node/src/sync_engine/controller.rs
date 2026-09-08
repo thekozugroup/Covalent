@@ -16,7 +16,9 @@ use rand_core::{OsRng, RngCore as _};
 use serde_json::Value;
 use zeroize::Zeroizing;
 
-use super::config::{DesiredEngineConfig, EngineApiKey, EngineFolderConfig, EnginePeerConfig};
+use super::config::{
+    DesiredEngineConfig, EngineApiKey, EngineFolderConfig, EngineGuiEndpoint, EnginePeerConfig,
+};
 use super::installation::EngineInstallation;
 use super::{
     EngineApiClient, EngineApiError, EngineEndpoint, OwnedEngineWorker, StopOutcome,
@@ -105,11 +107,53 @@ struct FolderRootLease {
     identity: (u64, u64),
 }
 
+#[cfg(target_os = "macos")]
+struct EphemeralGuiTls {
+    address: SocketAddr,
+    reservation: std::net::TcpListener,
+    certificate_der: Vec<u8>,
+    certificate_pem: String,
+    private_key_pem: Zeroizing<String>,
+}
+
+#[cfg(target_os = "macos")]
+impl EphemeralGuiTls {
+    fn prepare() -> Result<Self, EngineSessionError> {
+        let failed = || EngineSessionError::RuntimeUnavailable;
+        let reservation = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .map_err(|_| failed())?;
+        let address = reservation.local_addr().map_err(|_| failed())?;
+        let key = rcgen::KeyPair::generate().map_err(|_| failed())?;
+        let mut params =
+            rcgen::CertificateParams::new(vec!["localhost".to_owned(), "127.0.0.1".to_owned()])
+                .map_err(|_| failed())?;
+        let now = time::OffsetDateTime::now_utc();
+        params.not_before = now
+            .checked_sub(time::Duration::days(1))
+            .ok_or_else(failed)?;
+        // Validity must not strand a continuously running home server. Trust
+        // is restricted to this fresh session's exact leaf, not its issuer.
+        params.not_after = now
+            .checked_add(time::Duration::days(20 * 365))
+            .ok_or_else(failed)?;
+        params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
+        let certificate = params.self_signed(&key).map_err(|_| failed())?;
+        Ok(Self {
+            address,
+            reservation,
+            certificate_der: certificate.der().to_vec(),
+            certificate_pem: certificate.pem(),
+            private_key_pem: Zeroizing::new(key.serialize_pem()),
+        })
+    }
+}
+
 impl ManagedEngineSession {
     /// Create fresh per-run private configuration, launch the exact pinned
     /// worker, and verify its version, identity and effective desired state.
     /// `runtime_parent` is the native host's authorized temporary location; a
-    /// short path is required by Unix socket limits. It is separate from the
+    /// short path is required on hosts using Unix control. macOS uses pinned
+    /// loopback TLS within its app sandbox. This location is separate from the
     /// durable database root and contains no inherited engine configuration.
     pub async fn start(
         installation: Arc<EngineInstallation>,
@@ -146,11 +190,19 @@ impl ManagedEngineSession {
             api_key.push(char::from(HEX[usize::from(byte >> 4)]));
             api_key.push(char::from(HEX[usize::from(byte & 15)]));
         }
-        let socket = config_dir.join("api.sock");
-        let configuration = DesiredEngineConfig::new(
+        #[cfg(target_os = "macos")]
+        let tls = EphemeralGuiTls::prepare()?;
+        #[cfg(target_os = "macos")]
+        let control = EngineGuiEndpoint::LoopbackTls {
+            address: tls.address,
+            private_root: config_dir.clone(),
+        };
+        #[cfg(not(target_os = "macos"))]
+        let control = EngineGuiEndpoint::Unix(config_dir.join("api.sock"));
+        let configuration = DesiredEngineConfig::with_control(
             installation.device_id().clone(),
             &settings.device_name,
-            socket.clone(),
+            control,
             EngineApiKey::parse(api_key).map_err(|_| EngineSessionError::InvalidConfiguration)?,
             settings.listener,
             settings.peers,
@@ -182,17 +234,42 @@ impl ManagedEngineSession {
                 .create_new_file(&lock, &key, bytes, maximum)
                 .map_err(|_| EngineSessionError::RuntimeUnavailable)?;
         }
+        #[cfg(target_os = "macos")]
+        for (name, bytes) in [
+            ("https-cert.pem", tls.certificate_pem.as_bytes()),
+            ("https-key.pem", tls.private_key_pem.as_bytes()),
+        ] {
+            let key = StateKey::new(name).map_err(|_| EngineSessionError::RuntimeUnavailable)?;
+            private
+                .create_new_file(&lock, &key, bytes, 24 * 1024)
+                .map_err(|_| EngineSessionError::RuntimeUnavailable)?;
+        }
         let database = installation
             .database_directory()
             .map_err(|_| EngineSessionError::RuntimeUnavailable)?;
-        let client = EngineApiClient::new(socket, configuration.api_key_copy())
-            .map_err(|_| EngineSessionError::InvalidConfiguration)?;
+        #[cfg(target_os = "macos")]
+        let client = EngineApiClient::new_loopback_tls(
+            tls.address,
+            configuration.api_key_copy(),
+            tls.certificate_der,
+        )
+        .map_err(|_| EngineSessionError::InvalidConfiguration)?;
+        #[cfg(not(target_os = "macos"))]
+        let client =
+            EngineApiClient::new(config_dir.join("api.sock"), configuration.api_key_copy())
+                .map_err(|_| EngineSessionError::InvalidConfiguration)?;
         let resources = WorkerResources {
             _runtime: runtime,
             _installation: Arc::clone(&installation),
             _roots: Arc::clone(&roots),
             _worker_lease: worker_lease,
         };
+        // The worker cannot inherit a pre-bound GUI descriptor. Release the
+        // reserved port only immediately before launch. A port race can deny
+        // this startup, but certificate verification precedes every request,
+        // so an unrelated listener never receives the session API key.
+        #[cfg(target_os = "macos")]
+        drop(tls.reservation);
         let worker =
             OwnedEngineWorker::launch(guardian, engine, config_dir, database, Box::new(resources))
                 .map_err(|_| EngineSessionError::LaunchFailed)?;

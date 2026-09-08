@@ -196,7 +196,7 @@ struct ObjectIdentity {
     inode: u64,
     size: i64,
     modified_seconds: i64,
-    modified_nanoseconds: i64,
+    modified_nanoseconds: i128,
     links: u64,
 }
 
@@ -207,7 +207,7 @@ impl ObjectIdentity {
             inode: stat.st_ino,
             size: stat.st_size,
             modified_seconds: stat.st_mtime,
-            modified_nanoseconds: stat.st_mtime_nsec,
+            modified_nanoseconds: i128::from(stat.st_mtime_nsec),
             links: stat.st_nlink as u64,
         }
     }

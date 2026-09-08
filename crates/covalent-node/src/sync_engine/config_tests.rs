@@ -158,9 +158,9 @@ fn effective_fixture(config: &DesiredEngineConfig, desired: bool) -> Value {
     json!({
         "gui": {
             "enabled": true,
-            "useTLS": false,
+            "useTLS": config.gui.uses_tls(),
             "sendBasicAuthPrompt": false,
-            "address": config.gui_socket.to_str().expect("UTF-8 socket"),
+            "address": config.gui.address().expect("GUI address"),
             "unixSocketPermissions": "0600",
             "apiKey": config.api_key.expose(),
             "metricsWithoutAuth": false,
@@ -504,6 +504,85 @@ fn effective_verification_rejects_security_membership_and_retention_drift() {
 }
 
 #[test]
+fn loopback_tls_accepts_long_runtime_paths_and_rejects_control_drift() {
+    let fixture = TempDir::new().expect("fixture");
+    let private_root = fixture.path().join("private-runtime-".repeat(8));
+    std::fs::create_dir(&private_root).expect("runtime");
+    let config = DesiredEngineConfig::with_control(
+        id(OWN_ID),
+        "This Mac",
+        EngineGuiEndpoint::LoopbackTls {
+            address: address(42424),
+            private_root,
+        },
+        key(),
+        None,
+        vec![],
+        vec![],
+    )
+    .expect("TLS configuration supports sandbox paths beyond the Unix socket limit");
+    assert!(config.gui_socket().is_none());
+    let xml = config.render_desired_xml().expect("render");
+    assert!(xml.contains("tls=\"true\""));
+    assert!(xml.contains("<address>127.0.0.1:42424</address>"));
+    let valid = effective_fixture(&config, true);
+    config.verify_effective(&valid).expect("exact TLS settings");
+    for (path, value) in [
+        ("/gui/useTLS", json!(false)),
+        ("/gui/address", json!("0.0.0.0:42424")),
+        ("/gui/address", json!("127.0.0.1:42425")),
+        ("/gui/insecureSkipHostcheck", json!(true)),
+    ] {
+        let mut altered = valid.clone();
+        *altered.pointer_mut(path).unwrap() = value;
+        assert_eq!(
+            config.verify_effective(&altered),
+            Err(EngineConfigError::EffectiveConfigMismatch)
+        );
+    }
+}
+
+#[test]
+fn loopback_tls_excludes_private_runtime_and_non_loopback_addresses() {
+    let fixture = TempDir::new().expect("fixture");
+    let private_root = fixture.path().join("runtime");
+    std::fs::create_dir(&private_root).expect("runtime");
+    for remote in [
+        "0.0.0.0:4444",
+        "192.0.2.1:4444",
+        "127.0.0.1:0",
+        "[::1%4]:4444",
+    ] {
+        let result = DesiredEngineConfig::with_control(
+            id(OWN_ID),
+            "This Mac",
+            EngineGuiEndpoint::LoopbackTls {
+                address: remote.parse().unwrap(),
+                private_root: private_root.clone(),
+            },
+            key(),
+            None,
+            vec![],
+            vec![],
+        );
+        assert_eq!(result.unwrap_err(), EngineConfigError::InvalidAddress);
+    }
+    let result = DesiredEngineConfig::with_control(
+        id(OWN_ID),
+        "This Mac",
+        EngineGuiEndpoint::LoopbackTls {
+            address: address(42424),
+            private_root: private_root.clone(),
+        },
+        key(),
+        Some(address(22000)),
+        vec![peer()],
+        vec![folder(private_root, vec![id(OWN_ID), id(PEER_ID)])],
+    );
+    assert_eq!(result.unwrap_err(), EngineConfigError::UnsafeFolderRoot);
+}
+
+#[test]
 fn initial_effective_verification_rejects_any_network_or_folder_activation() {
     let fixture = TempDir::new().expect("temporary directory");
     let root = fixture.path().join("shared");
@@ -839,7 +918,7 @@ fn getters_return_only_validated_nonsecret_state() {
 
     assert_eq!(config.own_id().as_str(), OWN_ID);
     assert_eq!(config.own_name(), "Local device");
-    assert_eq!(config.gui_socket(), socket_path(&fixture));
+    assert_eq!(config.gui_socket(), Some(socket_path(&fixture).as_path()));
     assert_eq!(config.listener(), Some(address(22000)));
     assert_eq!(config.peers()[0].id().as_str(), PEER_ID);
     assert_eq!(config.peers()[0].name(), "Peer");

@@ -74,6 +74,7 @@ scripts/build-personal-android-apk.sh
 scripts/test-personal-macos-app-builder.sh
 scripts/test-macos-sync-engine-packaging.sh
 scripts/build-android-sync-engine.sh
+scripts/build-linux-sync-engine.sh
 scripts/prepare-sync-engine-source.sh
 scripts/test-android-native-package.sh
 scripts/test-personal-android-apk-builder.sh

@@ -1,7 +1,9 @@
 use std::fmt;
+use std::net::SocketAddr;
 use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use http_body_util::{BodyExt as _, Full};
@@ -9,9 +11,12 @@ use hyper::body::Bytes;
 use hyper::client::conn::http1;
 use hyper::http::{HeaderValue, Method, Request, header};
 use hyper_util::rt::TokioIo;
+use rustls::pki_types::{CertificateDer, ServerName};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use tokio::net::UnixStream;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::{TcpStream, UnixStream};
+use tokio_rustls::TlsConnector;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -121,8 +126,22 @@ impl EngineEndpoint {
 /// An owning-process-only REST client. It opens a fresh bounded HTTP/1
 /// connection for each request. No driver tasks survive completion, timeout or
 /// cancellation; no DNS, proxy, TCP fallback or redirect handler is involved.
+trait ClientIo: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> ClientIo for T {}
+
+enum EngineTransport {
+    Unix(PathBuf),
+    LoopbackTls {
+        address: SocketAddr,
+        expected_leaf: Vec<u8>,
+        config: Arc<rustls::ClientConfig>,
+    },
+}
+
 pub struct EngineApiClient {
+    #[cfg(test)]
     socket_path: PathBuf,
+    transport: EngineTransport,
     api_key: Zeroizing<String>,
     timeout: Duration,
 }
@@ -160,7 +179,48 @@ impl EngineApiClient {
             return Err(EngineApiError::UnsafeEndpoint);
         }
         Ok(Self {
-            socket_path,
+            #[cfg(test)]
+            socket_path: socket_path.clone(),
+            transport: EngineTransport::Unix(socket_path),
+            api_key,
+            timeout: REQUEST_TIMEOUT,
+        })
+    }
+
+    /// Connects only to a numeric loopback GUI endpoint, with ordinary
+    /// localhost certificate verification and an exact leaf DER pin before an
+    /// HTTP request can be constructed.
+    pub fn new_loopback_tls(
+        address: SocketAddr,
+        api_key: Zeroizing<String>,
+        expected_leaf: Vec<u8>,
+    ) -> Result<Self, EngineApiError> {
+        if !address.ip().is_loopback()
+            || address.port() == 0
+            || matches!(address, SocketAddr::V6(value) if value.scope_id() != 0 || value.flowinfo() != 0)
+            || expected_leaf.is_empty()
+            || expected_leaf.len() > 16 * 1024
+            || api_key.len() != 64
+            || !api_key.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(EngineApiError::InvalidConfiguration);
+        }
+        let certificate = CertificateDer::from(expected_leaf.clone());
+        let mut roots = rustls::RootCertStore::empty();
+        roots
+            .add(certificate)
+            .map_err(|_| EngineApiError::InvalidConfiguration)?;
+        let config = rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        Ok(Self {
+            #[cfg(test)]
+            socket_path: PathBuf::new(),
+            transport: EngineTransport::LoopbackTls {
+                address,
+                expected_leaf,
+                config: Arc::new(config),
+            },
             api_key,
             timeout: REQUEST_TIMEOUT,
         })
@@ -227,9 +287,8 @@ impl EngineApiClient {
         .map(|_| ())
     }
 
-    fn verify_endpoint(&self) -> Result<(u64, u64, u64, u64), EngineApiError> {
-        let parent = self
-            .socket_path
+    fn verify_endpoint(&self, socket_path: &Path) -> Result<(u64, u64, u64, u64), EngineApiError> {
+        let parent = socket_path
             .parent()
             .ok_or(EngineApiError::InvalidConfiguration)?;
         if std::fs::canonicalize(parent).map_err(|_| EngineApiError::Unavailable)? != parent {
@@ -237,8 +296,8 @@ impl EngineApiClient {
         }
         let directory =
             std::fs::symlink_metadata(parent).map_err(|_| EngineApiError::Unavailable)?;
-        let socket = std::fs::symlink_metadata(&self.socket_path)
-            .map_err(|_| EngineApiError::Unavailable)?;
+        let socket =
+            std::fs::symlink_metadata(socket_path).map_err(|_| EngineApiError::Unavailable)?;
         let uid = rustix::process::geteuid().as_raw();
         if !directory.is_dir()
             || directory.uid() != uid
@@ -260,23 +319,52 @@ impl EngineApiClient {
         response_limit: usize,
     ) -> Result<Vec<u8>, EngineApiError> {
         tokio::time::timeout(self.timeout, async {
-            let endpoint_identity = self.verify_endpoint()?;
-            let stream = UnixStream::connect(&self.socket_path)
-                .await
-                .map_err(|_| EngineApiError::Unavailable)?;
-            if self.verify_endpoint()? != endpoint_identity {
-                return Err(EngineApiError::UnsafeEndpoint);
-            }
-            let credential = stream
-                .peer_cred()
-                .map_err(|_| EngineApiError::UnsafeEndpoint)?;
-            if credential.uid() != rustix::process::geteuid().as_raw() {
-                return Err(EngineApiError::UnsafeEndpoint);
-            }
+            let io = match &self.transport {
+                EngineTransport::Unix(socket_path) => {
+                    let endpoint_identity = self.verify_endpoint(socket_path)?;
+                    let stream = UnixStream::connect(socket_path)
+                        .await
+                        .map_err(|_| EngineApiError::Unavailable)?;
+                    if self.verify_endpoint(socket_path)? != endpoint_identity {
+                        return Err(EngineApiError::UnsafeEndpoint);
+                    }
+                    let credential = stream
+                        .peer_cred()
+                        .map_err(|_| EngineApiError::UnsafeEndpoint)?;
+                    if credential.uid() != rustix::process::geteuid().as_raw() {
+                        return Err(EngineApiError::UnsafeEndpoint);
+                    }
+                    TokioIo::new(Box::new(stream) as Box<dyn ClientIo>)
+                }
+                EngineTransport::LoopbackTls {
+                    address,
+                    expected_leaf,
+                    config,
+                } => {
+                    let stream = TcpStream::connect(*address)
+                        .await
+                        .map_err(|_| EngineApiError::Unavailable)?;
+                    let name = ServerName::try_from("localhost")
+                        .map_err(|_| EngineApiError::InvalidConfiguration)?;
+                    let tls = TlsConnector::from(config.clone())
+                        .connect(name, stream)
+                        .await
+                        .map_err(|_| EngineApiError::Unavailable)?;
+                    let certs = tls
+                        .get_ref()
+                        .1
+                        .peer_certificates()
+                        .ok_or(EngineApiError::Unavailable)?;
+                    if certs.len() != 1 || certs[0].as_ref() != expected_leaf.as_slice() {
+                        return Err(EngineApiError::Unavailable);
+                    }
+                    TokioIo::new(Box::new(tls) as Box<dyn ClientIo>)
+                }
+            };
             let (mut sender, connection) = http1::Builder::new()
                 .max_headers(32)
                 .max_buf_size(16 * 1024)
-                .handshake(TokioIo::new(stream))
+                .handshake(io)
                 .await
                 .map_err(|_| EngineApiError::Unavailable)?;
             let mut key = HeaderValue::from_str(self.api_key.as_str())

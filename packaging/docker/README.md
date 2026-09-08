@@ -71,7 +71,18 @@ The image never generates a missing KEK.
 
 The published v0.1.0 immutable GHCR digest predates this KEK contract and does not contain `provision-key`; it is not an installable release for this workflow. Do not substitute it for `covalent:local`. Production installation stays blocked until a newly signed immutable digest containing this code is published and the Unraid template is updated atomically.
 
-The image is rootless (`65532:65532`), has a read-only root filesystem, drops every Linux capability, enables `no-new-privileges`, and uses a `noexec,nosuid` temporary filesystem. `/data` is the durable encrypted engine state, identity, keys, and local API token. `/config` is sensitive Caddy state: it contains the local CA certificate and its signing key. Back it up with `/data`, but never treat the directory itself as a settings export or a source share.
+The image is rootless (`65532:65532`), has a read-only root filesystem, drops every Linux capability, enables `no-new-privileges`, and uses a `noexec,nosuid` temporary filesystem. `/data` is the durable encrypted engine state, identity, keys, local API token, and maintained folder-engine database. `/config` is sensitive Caddy state: it contains the local CA certificate and its signing key. Back it up with `/data`, but never treat the directory itself as a settings export or a source share.
+
+The maintained folder engine is built from the exact Syncthing `v2.1.3`
+source commit recorded in the image labels and its installed manifest. Its
+guardian and worker are immutable image files; only an owner-private short
+control directory lives under `/tmp`, while durable engine state stays under
+`/data`. Covalent disables the engine GUI, public discovery, relays, and
+upgrades when it creates the private configuration. No management port is
+published. TCP `8789` carries authenticated folder traffic between paired
+devices. Release promotion remains blocked until the generated target-specific
+third-party notice inventory is reviewed and installed alongside the upstream
+MPL license and source provenance.
 
 Compose deliberately fixes the runtime UID/GID at `65532:65532`: Docker Compose mounts file-backed secrets with host ownership, so a configurable `PUID` would make an owner-only KEK unreadable or tempt an unsafe permission change. Create `/config`, `/data`, and the KEK as `65532:65532`; keep the key file `0600` on the host. The secret declaration requests `0400`, but local Compose bind mounts can retain the host's `0600` mode; the read-only mount still prevents writes. `PUID` and `PGID` overrides are explicitly rejected at startup. `UMASK` accepts a three-digit octal value and defaults to `027`. For a different identity, use an explicit `docker run --user UID:GID` provisioning and runtime contract with a separately owner-readable KEK; do not override the supplied Compose service.
 
@@ -217,7 +228,7 @@ release and Atlas/Unraid hardware gates remain listed in the
 
 ## LAN and Tailscale
 
-LAN discovery defaults to `false`. It is multicast discovery on one local network; it does not discover Tailnet devices. The Compose default keeps TCP 8443 on host loopback and publishes authenticated QUIC UDP 8787 on all host interfaces.
+LAN discovery defaults to `false`. It is multicast discovery on one local network; it does not discover Tailnet devices. The Compose default keeps TCP 8443 on host loopback and publishes authenticated QUIC UDP 8787 and authenticated folder synchronization TCP 8789 on all host interfaces.
 
 To connect an Android phone on an ordinary trusted LAN, first reserve a DNS name
 that resolves to this host from both the host and phone. Then restart with the
@@ -226,6 +237,7 @@ host's exact LAN IPv4 address and that certificate name:
 ```sh
 export COVALENT_HTTPS_BIND_IP=192.168.1.50
 export COVALENT_PEER_BIND_IP=192.168.1.50
+export COVALENT_SYNC_BIND_IP=192.168.1.50
 export COVALENT_HTTPS_HOST=covalent.home.arpa
 export COVALENT_ADVERTISED_PEER_ADDRESS=192.168.1.50:8787
 docker compose -f packaging/docker/compose.yaml up -d --no-build
@@ -233,8 +245,8 @@ docker compose -f packaging/docker/compose.yaml up -d --no-build
 
 Replace both examples. Confirm `covalent.home.arpa` resolves to this host on the
 phone before claiming `https://covalent.home.arpa:8443`; the claim output is
-bound to that exact CA and hostname. Permit TCP 8443 and UDP 8787 only from the
-intended private LAN devices.
+bound to that exact CA and hostname. Permit TCP 8443, UDP 8787, and TCP 8789
+only from the intended private LAN devices.
 
 For a Tailnet-only host, bind both published ports to that host's numeric
 Tailscale IPv4 address. Keep the HTTPS certificate name as MagicDNS. Leave the
@@ -245,15 +257,17 @@ hostname there:
 ```sh
 export COVALENT_HTTPS_BIND_IP=100.64.0.10
 export COVALENT_PEER_BIND_IP=100.64.0.10
+export COVALENT_SYNC_BIND_IP=100.64.0.10
+export COVALENT_SYNC_BIND_IP=100.64.0.10
 export COVALENT_HTTPS_HOST=atlas.example-tailnet.ts.net
 export COVALENT_ADVERTISED_PEER_ADDRESS=100.64.0.10:8787
 docker compose -f packaging/docker/compose.yaml up -d --build
 ```
 
 Confirm `100.64.0.10` is this host's current `tailscale ip -4` result before
-using the example. In the Tailnet policy, grant only intended devices TCP 8443
-and UDP 8787 to this host; do not use an allow-all rule. Current Tailscale
-policy uses a grant such as `"ip": ["tcp:8443", "udp:8787"]` with your own
+using the example. In the Tailnet policy, grant only intended devices TCP 8443,
+UDP 8787, and TCP 8789 to this host; do not use an allow-all rule. Current Tailscale
+policy uses a grant such as `"ip": ["tcp:8443", "udp:8787", "tcp:8789"]` with your own
 restricted `src` and Atlas `dst` selectors. The stock container does not run
 `tailscaled` or mount its LocalAPI socket, so it does not enumerate Tailnet
 peers; Tailscale supplies routing and Covalent still requires confirmed pairing
@@ -263,7 +277,7 @@ CA, access-policy, and reachability sequence.
 
 ## Multi-architecture, reproducibility, and supply chain
 
-The image supports exactly `linux/amd64` and `linux/arm64`. It uses a pinned Rust Alpine builder, a throwaway pinned Go Alpine stage that compiles Caddy from source, and a pinned Alpine 3.23 runtime base. The OpenSSL libraries are upgraded to the exact signed Alpine security revision `3.5.8-r0`, published after the base image was assembled; exact package pins make repository drift fail the build instead of selecting an unreviewed version. The OCI labels record the Covalent release version, runtime base name and digest, and OpenSSL security revision so CI can reject version, documentation, or image-metadata drift. The release index repeats the exact version as `org.opencontainers.image.version`; promotion refuses to move `latest` to an older version or to an equal version with a different digest.
+The image supports exactly `linux/amd64` and `linux/arm64`. It uses a pinned Rust Alpine builder, a throwaway pinned Go Alpine stage that compiles Syncthing from a checksum-pinned source archive, a separate pinned Go Alpine stage that compiles Caddy from source, and a pinned Alpine 3.23 runtime base. The engine worker is built with `CGO_ENABLED=0`, module updates disabled, and the exact Go 1.26.7 compiler; the guardian is a static PIE compiled from the byte-pinned shared source. The package gate rejects unexpected interpreter or dynamic-library dependencies and records executable hashes, sizes, architecture, notices, and source provenance in its fixed manifest. The OpenSSL libraries are upgraded to the exact signed Alpine security revision `3.5.8-r0`, published after the base image was assembled; exact package pins make repository drift fail the build instead of selecting an unreviewed version. The OCI labels record the Covalent release version, runtime base name and digest, OpenSSL security revision, and engine source identity so CI can reject version, documentation, or image-metadata drift. The release index repeats the exact version as `org.opencontainers.image.version`; promotion refuses to move `latest` to an older version or to an equal version with a different digest.
 
 Caddy is compiled rather than copied out of `caddy:2.11.4-alpine`, because that published binary is linked against `go1.26.3` and no official patched Caddy tag exists yet. `packaging/docker/caddy` is the same three-line consumer module `xcaddy` generates — it imports Caddy's standard module set and adds nothing — and pins upstream snapshot `v2.11.5-0.20260711231708-b2693fb63a30` (commit `b2693fb6`), which adapts Caddy's CEL matcher to the post-v0.28 API. This snapshot is 33 commits after v2.11.4; it is not relabeled as v2.11.4. The consumer module selects patched `cel-go` `v0.30.0` for GO-2026-6094, OpenTelemetry `v1.44.0` for GO-2026-5158, `go-chi` `v5.3.0` for the RealIP advisories, and `klauspost/compress` `v1.18.7` for GO-2026-5841. The full intervening delta and review evidence are recorded in `docs/security/container-image-vulnerabilities.md`. The unchanged `Caddyfile` validates against the resulting binary. The Caddy source version, the whole module graph (`go.mod` + `go.sum`, built `-mod=readonly`) and the toolchain image digest are all pinned, and `GOTOOLCHAIN=local` keeps the build from reaching the network for a different compiler.
 

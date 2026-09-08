@@ -389,11 +389,70 @@ impl EngineFolderConfig {
 pub struct DesiredEngineConfig {
     own_id: EngineDeviceId,
     own_name: Box<str>,
-    gui_socket: PathBuf,
+    gui: EngineGuiEndpoint,
     api_key: EngineApiKey,
     listener: Option<SocketAddr>,
     peers: Vec<EnginePeerConfig>,
     folders: Vec<EngineFolderConfig>,
+}
+
+/// Private engine control transport. TLS is used when the native sandbox's
+/// authorized temporary directory cannot fit a Unix-domain socket.
+pub enum EngineGuiEndpoint {
+    /// An owner-only Unix socket beneath the private runtime directory.
+    Unix(PathBuf),
+    /// Numeric loopback TLS with a separately pinned per-session certificate.
+    LoopbackTls {
+        /// Exact numeric loopback listener; no hostname or proxy resolution.
+        address: SocketAddr,
+        /// Private runtime directory, excluded from every shared folder.
+        private_root: PathBuf,
+    },
+}
+
+impl EngineGuiEndpoint {
+    fn validate(self) -> Result<Self, EngineConfigError> {
+        match self {
+            Self::Unix(path) => Ok(Self::Unix(validate_socket_path(&path)?)),
+            Self::LoopbackTls {
+                address,
+                private_root,
+            } => {
+                if !address.ip().is_loopback() || address.port() == 0 {
+                    return Err(EngineConfigError::InvalidAddress);
+                }
+                if matches!(address, SocketAddr::V6(value) if value.scope_id() != 0 || value.flowinfo() != 0)
+                {
+                    return Err(EngineConfigError::InvalidAddress);
+                }
+                Ok(Self::LoopbackTls {
+                    address,
+                    private_root: validate_root(&private_root)?,
+                })
+            }
+        }
+    }
+
+    fn private_root(&self) -> Result<&Path, EngineConfigError> {
+        match self {
+            Self::Unix(path) => path.parent().ok_or(EngineConfigError::InvalidSocketPath),
+            Self::LoopbackTls { private_root, .. } => Ok(private_root),
+        }
+    }
+
+    fn address(&self) -> Result<String, EngineConfigError> {
+        match self {
+            Self::Unix(path) => path
+                .to_str()
+                .map(str::to_owned)
+                .ok_or(EngineConfigError::InvalidSocketPath),
+            Self::LoopbackTls { address, .. } => Ok(address.to_string()),
+        }
+    }
+
+    const fn uses_tls(&self) -> bool {
+        matches!(self, Self::LoopbackTls { .. })
+    }
 }
 
 impl fmt::Debug for DesiredEngineConfig {
@@ -402,7 +461,7 @@ impl fmt::Debug for DesiredEngineConfig {
             .debug_struct("DesiredEngineConfig")
             .field("own_id", &self.own_id)
             .field("own_name", &self.own_name)
-            .field("gui_socket", &"[PRIVATE]")
+            .field("gui", &"[PRIVATE]")
             .field("api_key", &self.api_key)
             .field("listener", &self.listener)
             .field("peers", &self.peers)
@@ -420,11 +479,32 @@ impl DesiredEngineConfig {
         gui_socket: PathBuf,
         api_key: EngineApiKey,
         listener: Option<SocketAddr>,
+        peers: Vec<EnginePeerConfig>,
+        folders: Vec<EngineFolderConfig>,
+    ) -> Result<Self, EngineConfigError> {
+        Self::with_control(
+            own_id,
+            own_name,
+            EngineGuiEndpoint::Unix(gui_socket),
+            api_key,
+            listener,
+            peers,
+            folders,
+        )
+    }
+
+    /// Validate a complete configuration with an explicit private transport.
+    pub fn with_control(
+        own_id: EngineDeviceId,
+        own_name: &str,
+        gui: EngineGuiEndpoint,
+        api_key: EngineApiKey,
+        listener: Option<SocketAddr>,
         mut peers: Vec<EnginePeerConfig>,
         mut folders: Vec<EngineFolderConfig>,
     ) -> Result<Self, EngineConfigError> {
         validate_text(own_name, MAX_NAME_BYTES)?;
-        let gui_socket = validate_socket_path(&gui_socket)?;
+        let gui = gui.validate()?;
         if peers.len() > MAX_PEERS || folders.len() > MAX_FOLDERS {
             return Err(EngineConfigError::LimitExceeded);
         }
@@ -473,9 +553,7 @@ impl DesiredEngineConfig {
                 return Err(EngineConfigError::OverlappingRoots);
             }
         }
-        let gui_parent = gui_socket
-            .parent()
-            .ok_or(EngineConfigError::InvalidSocketPath)?;
+        let gui_parent = gui.private_root()?;
         if folders
             .iter()
             .any(|folder| roots_overlap(&folder.root, gui_parent))
@@ -485,7 +563,7 @@ impl DesiredEngineConfig {
         Ok(Self {
             own_id,
             own_name: own_name.into(),
-            gui_socket,
+            gui,
             api_key,
             listener,
             peers,
@@ -503,9 +581,12 @@ impl DesiredEngineConfig {
         &self.own_name
     }
 
-    /// Return the private Unix GUI/API socket path.
-    pub fn gui_socket(&self) -> &Path {
-        &self.gui_socket
+    /// Return the private Unix socket path, if this session uses Unix control.
+    pub fn gui_socket(&self) -> Option<&Path> {
+        match &self.gui {
+            EngineGuiEndpoint::Unix(path) => Some(path),
+            EngineGuiEndpoint::LoopbackTls { .. } => None,
+        }
     }
 
     /// Return the explicit TCP listener, if sharing is enabled.
@@ -591,7 +672,7 @@ impl DesiredEngineConfig {
                 )?;
             }
         }
-        write_gui(&mut xml, &self.gui_socket, &self.api_key)?;
+        write_gui(&mut xml, &self.gui, &self.api_key)?;
         xml.push("  <ldap></ldap>\n")?;
         write_options(&mut xml, desired.then_some(self.listener).flatten())?;
         xml.push("  <defaults></defaults>\n")?;
@@ -763,16 +844,9 @@ fn require_string_array(
 
 fn verify_gui(value: &Value, expected: &DesiredEngineConfig) -> Result<(), EngineConfigError> {
     require_bool(value, "enabled", true)?;
-    require_bool(value, "useTLS", false)?;
+    require_bool(value, "useTLS", expected.gui.uses_tls())?;
     require_bool(value, "sendBasicAuthPrompt", false)?;
-    require_string(
-        value,
-        "address",
-        expected
-            .gui_socket
-            .to_str()
-            .ok_or(EngineConfigError::EffectiveConfigMismatch)?,
-    )?;
+    require_string(value, "address", &expected.gui.address()?)?;
     require_string(value, "unixSocketPermissions", "0600")?;
     require_string(value, "apiKey", expected.api_key.expose())?;
     require_bool(value, "metricsWithoutAuth", false)?;
@@ -1141,16 +1215,16 @@ fn write_device(
 
 fn write_gui(
     xml: &mut XmlWriter,
-    socket: &Path,
+    endpoint: &EngineGuiEndpoint,
     key: &EngineApiKey,
 ) -> Result<(), EngineConfigError> {
-    xml.push("  <gui enabled=\"true\" tls=\"false\" sendBasicAuthPrompt=\"false\">\n")?;
+    xml.push(if endpoint.uses_tls() {
+        "  <gui enabled=\"true\" tls=\"true\" sendBasicAuthPrompt=\"false\">\n"
+    } else {
+        "  <gui enabled=\"true\" tls=\"false\" sendBasicAuthPrompt=\"false\">\n"
+    })?;
     xml.push("    <address>")?;
-    xml.escaped(
-        socket
-            .to_str()
-            .ok_or(EngineConfigError::InvalidSocketPath)?,
-    )?;
+    xml.escaped(&endpoint.address()?)?;
     xml.push("</address>\n")?;
     xml.push("    <unixSocketPermissions>0600</unixSocketPermissions>\n")?;
     xml.push("    <metricsWithoutAuth>false</metricsWithoutAuth>\n")?;

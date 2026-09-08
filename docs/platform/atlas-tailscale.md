@@ -151,7 +151,7 @@ group narrower than the client group:
     {
       "src": ["group:covalent-clients"],
       "dst": ["tag:covalent-atlas"],
-      "ip": ["tcp:8443", "udp:8787"]
+      "ip": ["tcp:8443", "udp:8787", "tcp:8789"]
     },
     {
       "src": ["group:covalent-operators"],

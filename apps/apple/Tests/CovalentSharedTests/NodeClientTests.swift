@@ -2264,7 +2264,7 @@ private func requestBody(_ request: URLRequest) -> Data? {
     return data
 }
 
-private struct RequestRecorder: @unchecked Sendable {
+struct RequestRecorder: @unchecked Sendable {
     let removeAfterRequest: Bool
     let streamChunkBytes: Int?
     let onStop: (@Sendable () -> Void)?
@@ -2283,7 +2283,7 @@ private struct RequestRecorder: @unchecked Sendable {
     }
 }
 
-private final class RequestSequence: @unchecked Sendable {
+final class RequestSequence: @unchecked Sendable {
     private let lock = NSLock()
     private var value = 0
 
@@ -2328,7 +2328,7 @@ private final class RecorderBox: @unchecked Sendable {
     }
 }
 
-private final class RecordingURLProtocol: URLProtocol, @unchecked Sendable {
+final class RecordingURLProtocol: URLProtocol, @unchecked Sendable {
     static let recorder = RecorderBox()
     private let stateLock = NSLock()
     private var stopped = false
@@ -2382,7 +2382,7 @@ private final class RecordingURLProtocol: URLProtocol, @unchecked Sendable {
     }
 }
 
-private enum TestResponse {
+enum TestResponse {
     static func response(
         _ request: URLRequest,
         status: Int,

@@ -143,7 +143,7 @@ The executable tests ran on x86_64 API 37. arm64 execution, production JNI
 controller integration, folder access and foreground-service survival remain
 separate acceptance gates.
 
-## Packaged macOS sandbox blocker
+## macOS sandbox transport
 
 The signed app-sandbox socket experiment found that both `NSTemporaryDirectory`
 and Darwin's per-user temp function resolve inside the app's container. In the
@@ -153,12 +153,14 @@ Darwin's Unix socket bound cannot accommodate the final socket. A unique short
 `a173bd10a4c1d597be75100de8142805a058caa18b3cc7a711b70bd4db61fe50`.
 Owned app bundles, data and processes were cleaned up.
 
-This is a real launch blocker for the packaged macOS folder engine at this
-checkpoint. Native host failures preserve backup startup and show sync needing
-attention. The accepted follow-up is a numeric loopback TLS control connection
-with a fresh per-session certificate pinned before transmitting the API key.
-The existing Unix control remains appropriate where a private short path is
-available. No unencrypted TCP fallback or TLS-verification bypass is accepted.
+This blocked the packaged macOS folder engine at checkpoint `68bf16d`. Native
+host failures preserved backup startup and showed sync needing attention. The
+following integration replaces macOS Unix control with numeric loopback TLS.
+Each worker session receives a fresh API key and a separate fresh GUI
+certificate; the client verifies localhost and the exact leaf before sending
+HTTP. Private files stay in the authorized container directory. Linux and
+Android retain Unix control. There is no unencrypted fallback or certificate
+verification bypass.
 
 The actual pinned worker accepted preseeded, per-run `https-cert.pem` and
 `https-key.pem`: authenticated status, version and config reads returned 200;
@@ -166,7 +168,40 @@ missing authentication returned 403. A separate wrong-certificate loopback
 listener failed certificate verification before receiving application bytes.
 The proof removed its worker, secrets and owned fixtures. Result SHA-256:
 `3c1c4c10ae381e8bff7eaa9c81f10e3337b98a27665e54e0cab136e49dd9d8f3`.
-This proves transport feasibility; the production Rust transport is still open.
+The production Rust client now has real matching-certificate, wrong-certificate,
+CA-trusted/different-leaf, stalled-handshake and cancellation tests. Rejection
+tests await their server and verify zero application bytes; the different-leaf
+case also proves ordinary CA/hostname TLS succeeded before the pin rejected it.
+The exact-key test checks the authenticated header. The production two-node
+proof passed again using this transport, including bidirectional convergence,
+pause/resume, cold restart, revocation and cleanup; result SHA-256
+`a08b8c930f964f711cb232cea54efeba75bc48339a4eb93caed845d62d5be790`.
+Actual execution inside the signed app sandbox is still a separate gate.
+
+## Native and container integration checkpoint
+
+Checkpoint `68bf16d` passed its hosted macOS app bundle and dependency-delta
+jobs, but failed the aggregate software gate. Linux exposed the unsigned
+`stat.st_mtime_nsec` type; Swift tests referenced file-private shared helpers;
+iOS had a misplaced view modifier; Android lint consumed generated engine
+assets without an ordering edge. The next snapshot fixes these exact findings.
+Fresh hosted success is required before treating them as resolved platform
+acceptance evidence.
+
+The snapshot passes 825 workspace Rust tests across 22 top-level suites, then
+adds an independently passing explicit TLS cancellation case. Strict Clippy,
+formatting, foundation contracts, cargo-audit and cargo-deny pass. The new
+Linux host discovery has three executable/manifest/runtime tests and the macOS
+host has six, including long sandbox runtime paths.
+
+The Dockerfile now builds the pinned engine with the existing pinned Go 1.26.7
+image and packages the canonical guardian, immutable manifest and upstream
+notices. Linux discovery uses owner-private `/tmp/cvs` and durable
+`/data/folder-sync`; Compose and Unraid declare TCP 8789. The image fingerprint
+now covers the engine build script and guardian source, with mutation tests.
+Both actual architecture builds, image vulnerability scans, rootless runtime
+and the unchanged 96 MiB image budget still need hosted evidence. Compiled
+third-party notice aggregation remains a release gate.
 
 ## Remaining integration and release work
 

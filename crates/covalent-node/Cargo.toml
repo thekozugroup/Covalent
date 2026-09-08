@@ -55,6 +55,7 @@ tempfile.workspace = true
 time.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+tokio-rustls.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, optional = true }
 uuid.workspace = true

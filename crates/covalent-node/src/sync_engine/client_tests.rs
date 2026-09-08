@@ -418,3 +418,220 @@ async fn larger_configuration_cap_does_not_expand_status_responses() {
     );
     assert_eq!(result.unwrap_err(), EngineApiError::BodyTooLarge);
 }
+
+#[test]
+fn loopback_tls_constructor_rejects_unsafe_addresses_and_der() {
+    let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+    for address in ["0.0.0.0:8384", "127.0.0.1:0", "[::1%4]:8384"] {
+        assert!(matches!(
+            EngineApiClient::new_loopback_tls(
+                address.parse().unwrap(),
+                Zeroizing::new(KEY.to_owned()),
+                cert.cert.der().to_vec(),
+            ),
+            Err(EngineApiError::InvalidConfiguration)
+        ));
+    }
+    let key = Zeroizing::new(KEY.to_owned());
+    assert!(matches!(
+        EngineApiClient::new_loopback_tls("192.0.2.1:8384".parse().unwrap(), key.clone(), vec![1]),
+        Err(EngineApiError::InvalidConfiguration)
+    ));
+    assert!(matches!(
+        EngineApiClient::new_loopback_tls("127.0.0.1:0".parse().unwrap(), key.clone(), vec![1]),
+        Err(EngineApiError::InvalidConfiguration)
+    ));
+    assert!(matches!(
+        EngineApiClient::new_loopback_tls("[::1]:8384".parse().unwrap(), key, Vec::new()),
+        Err(EngineApiError::InvalidConfiguration)
+    ));
+}
+
+#[derive(Debug, Default)]
+struct TlsObservation {
+    handshake_completed: bool,
+    application_bytes: usize,
+    api_key_matched: bool,
+}
+
+async fn tls_server(
+    certificate_der: Vec<u8>,
+    private_key_der: Vec<u8>,
+) -> (
+    std::net::SocketAddr,
+    tokio::task::JoinHandle<TlsObservation>,
+) {
+    use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
+    use std::sync::Arc;
+    use tokio::net::TcpListener;
+    use tokio_rustls::TlsAcceptor;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![CertificateDer::from(certificate_der)],
+            PrivatePkcs8KeyDer::from(private_key_der).into(),
+        )
+        .unwrap();
+    let task = tokio::spawn(async move {
+        tokio::time::timeout(Duration::from_secs(3), async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let Ok(mut stream) = TlsAcceptor::from(Arc::new(config)).accept(stream).await else {
+                return TlsObservation::default();
+            };
+            let mut request = Vec::new();
+            let mut chunk = [0; 4096];
+            while request.len() < 16 * 1024 && !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                match stream.read(&mut chunk).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(count) => request.extend_from_slice(&chunk[..count]),
+                }
+            }
+            let api_key_matched = String::from_utf8_lossy(&request).lines().any(|line| {
+                line.split_once(':').is_some_and(|(name, value)| {
+                    name.eq_ignore_ascii_case("x-api-key") && value.trim() == KEY
+                })
+            });
+            if !request.is_empty() {
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{}").await;
+            }
+            TlsObservation { handshake_completed: true, application_bytes: request.len(), api_key_matched }
+        }).await.expect("bounded TLS test server")
+    });
+    (address, task)
+}
+
+#[tokio::test]
+async fn loopback_tls_exact_leaf_authenticates_before_http() {
+    let cert =
+        rcgen::generate_simple_self_signed(vec!["localhost".into(), "127.0.0.1".into()]).unwrap();
+    let expected = cert.cert.der().to_vec();
+    let (address, server) =
+        tls_server(cert.cert.der().to_vec(), cert.signing_key.serialize_der()).await;
+    let client =
+        EngineApiClient::new_loopback_tls(address, Zeroizing::new(KEY.into()), expected).unwrap();
+    let _: serde_json::Value = client.json(EngineEndpoint::SystemStatus).await.unwrap();
+    let observed = server.await.unwrap();
+    assert!(observed.handshake_completed);
+    assert!(observed.application_bytes > 0);
+    assert!(observed.api_key_matched);
+}
+
+#[tokio::test]
+async fn loopback_tls_wrong_certificate_receives_no_http() {
+    let expected =
+        rcgen::generate_simple_self_signed(vec!["localhost".into(), "127.0.0.1".into()]).unwrap();
+    let wrong =
+        rcgen::generate_simple_self_signed(vec!["localhost".into(), "127.0.0.1".into()]).unwrap();
+    let (address, server) =
+        tls_server(wrong.cert.der().to_vec(), wrong.signing_key.serialize_der()).await;
+    let client = EngineApiClient::new_loopback_tls(
+        address,
+        Zeroizing::new(KEY.into()),
+        expected.cert.der().to_vec(),
+    )
+    .unwrap();
+    assert_eq!(
+        client.command(EngineEndpoint::Shutdown).await,
+        Err(EngineApiError::Unavailable)
+    );
+    let observed = server.await.unwrap();
+    assert!(!observed.handshake_completed);
+    assert_eq!(observed.application_bytes, 0);
+}
+
+#[tokio::test]
+async fn loopback_tls_trusted_ca_different_leaf_is_pinned_before_http() {
+    use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
+    let mut ca_params = CertificateParams::new(Vec::<String>::new()).unwrap();
+    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    let ca_key = KeyPair::generate().unwrap();
+    let issuer = rcgen::Issuer::from_params(&ca_params, &ca_key);
+    let ca = ca_params.self_signed(&ca_key).unwrap();
+    let leaf_key = KeyPair::generate().unwrap();
+    let leaf_params = CertificateParams::new(vec!["localhost".into(), "127.0.0.1".into()]).unwrap();
+    let leaf = leaf_params.signed_by(&leaf_key, &issuer).unwrap();
+    let (address, server) = tls_server(leaf.der().to_vec(), leaf_key.serialize_der()).await;
+    let client =
+        EngineApiClient::new_loopback_tls(address, Zeroizing::new(KEY.into()), ca.der().to_vec())
+            .unwrap();
+    assert_eq!(
+        client.command(EngineEndpoint::Shutdown).await,
+        Err(EngineApiError::Unavailable)
+    );
+    let observed = server.await.unwrap();
+    // Prove rejection happened after ordinary CA/hostname verification.
+    assert!(observed.handshake_completed);
+    assert_eq!(observed.application_bytes, 0);
+}
+
+#[tokio::test]
+async fn loopback_tls_handshake_timeout_closes_accepted_socket() {
+    let cert =
+        rcgen::generate_simple_self_signed(vec!["localhost".into(), "127.0.0.1".into()]).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let peer = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut byte = [0; 1024];
+        loop {
+            let count = tokio::time::timeout(Duration::from_secs(1), socket.read(&mut byte))
+                .await
+                .unwrap()
+                .unwrap();
+            if count == 0 {
+                return 0;
+            }
+        }
+    });
+    let mut client = EngineApiClient::new_loopback_tls(
+        address,
+        Zeroizing::new(KEY.into()),
+        cert.cert.der().to_vec(),
+    )
+    .unwrap();
+    client.timeout = Duration::from_millis(40);
+    assert_eq!(
+        client.command(EngineEndpoint::Shutdown).await,
+        Err(EngineApiError::Timeout)
+    );
+    assert_eq!(peer.await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn loopback_tls_cancellation_closes_handshake_socket() {
+    let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (hello_sent, hello_received) = tokio::sync::oneshot::channel();
+    let client = EngineApiClient::new_loopback_tls(
+        listener.local_addr().unwrap(),
+        Zeroizing::new(KEY.into()),
+        cert.cert.der().to_vec(),
+    )
+    .unwrap();
+    let peer = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut chunk = [0; 4096];
+        let count = socket.read(&mut chunk).await.unwrap();
+        assert!(count > 0);
+        hello_sent.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if socket.read(&mut chunk).await.unwrap() == 0 {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("cancelled handshake must close the socket");
+    });
+    let request = tokio::spawn(async move { client.command(EngineEndpoint::Shutdown).await });
+    tokio::time::timeout(Duration::from_secs(1), hello_received)
+        .await
+        .unwrap()
+        .unwrap();
+    request.abort();
+    assert!(request.await.unwrap_err().is_cancelled());
+    peer.await.unwrap();
+}

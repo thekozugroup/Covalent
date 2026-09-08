@@ -1,7 +1,7 @@
 //! Private-process adapter for the pinned maintained folder-sync engine.
 //!
 //! Verified native/container packages opt in through `NodeRuntimeConfig`.
-//! Engine control stays on an authenticated, owner-only Unix socket; native
+//! Engine control uses an owner-only Unix socket or pinned loopback TLS; native
 //! clients must use Covalent's own authorization and folder-sharing workflow.
 
 mod client;
@@ -11,6 +11,8 @@ mod health;
 mod host;
 mod identity;
 mod installation;
+#[cfg(any(target_os = "linux", test))]
+mod linux_host;
 #[cfg(target_os = "macos")]
 mod mac_host;
 mod recovery;
@@ -33,6 +35,8 @@ pub use supervisor::{
 
 pub use controller::{EngineSessionError, EngineSessionSettings, ManagedEngineSession};
 pub use installation::{EngineInstallation, EngineInstallationError};
+#[cfg(any(target_os = "linux", test))]
+pub use linux_host::{LinuxHostError, discover_packaged_engine as discover_packaged_linux_engine};
 #[cfg(target_os = "macos")]
 pub use mac_host::{MacHostError, discover_packaged_engine};
 pub use recovery::{

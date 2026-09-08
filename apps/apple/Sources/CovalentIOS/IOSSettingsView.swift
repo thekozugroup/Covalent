@@ -71,8 +71,8 @@ struct IOSSettingsView: View {
                                     .foregroundStyle(.secondary)
                             } else {
                                 Button("Remove", role: .destructive) { grantToRemove = grant }
+                                    .font(.subheadline)
                             }
-                                .font(.subheadline)
                         }
                     }
                 }

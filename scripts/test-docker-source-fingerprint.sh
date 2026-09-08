@@ -18,6 +18,8 @@ mkdir -p \
   "$fixture/crates/example/src" \
   "$fixture/packaging/web" \
   "$fixture/packaging/docker/caddy" \
+  "$fixture/packaging/sync-engine" \
+  "$fixture/scripts" \
   "$fixture/target"
 printf 'target\n' > "$fixture/.dockerignore"
 printf '[workspace]\nmembers = []\n' > "$fixture/Cargo.toml"
@@ -30,6 +32,8 @@ printf '{}\n' > "$fixture/packaging/docker/Caddyfile"
 printf '#!/bin/sh\n' > "$fixture/packaging/docker/entrypoint.sh"
 printf 'module caddy\n' > "$fixture/packaging/docker/caddy/go.mod"
 printf 'package main\n' > "$fixture/packaging/docker/caddy/main.go"
+printf 'int main(void) { return 0; }\n' > "$fixture/packaging/sync-engine/engine-guardian.c"
+printf '#!/bin/sh\n' > "$fixture/scripts/build-linux-sync-engine.sh"
 git -C "$fixture" add .
 git -C "$fixture" -c user.name=Covalent -c user.email=release@covalent.invalid \
   commit -qm fixture
@@ -85,6 +89,17 @@ if cmp -s "$fixture/web-before" "$fixture/web-after"; then
   echo "Docker fingerprint missed an untracked nonignored web build input" >&2
   exit 1
 fi
+
+# Every new native producer input must invalidate a cached image.
+for input in packaging/sync-engine/engine-guardian.c scripts/build-linux-sync-engine.sh; do
+  fingerprint > "$fixture/engine-before"
+  printf '# changed\n' >> "$fixture/$input"
+  fingerprint > "$fixture/engine-after"
+  if cmp -s "$fixture/engine-before" "$fixture/engine-after"; then
+    echo "Docker fingerprint missed a maintained engine build input" >&2
+    exit 1
+  fi
+done
 
 # Ignored build/cache output must not make an image stale.
 printf 'one\n' > "$fixture/target/cache"

@@ -587,7 +587,7 @@ final class LocalNodeManager: LocalNodeBootstrapping {
         // Rust performs the no-follow owner/mode/path-bound admission. A bad
         // native hint disables only folder sync; it must never block the
         // backup and recovery service from launching.
-        if runtimeDirectory.path.utf8.count <= 74 {
+        if runtimeDirectory.path.utf8.count <= 900 {
             environment["COVALENT_SYNC_RUNTIME_DIR"] = runtimeDirectory.path
         } else {
             environment.removeValue(forKey: "COVALENT_SYNC_RUNTIME_DIR")

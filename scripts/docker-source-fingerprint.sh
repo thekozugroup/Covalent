@@ -22,4 +22,6 @@ exec "$script_dir/android-source-fingerprint.sh" "$repo_root" \
   packaging/docker/Dockerfile \
   packaging/docker/Caddyfile \
   packaging/docker/entrypoint.sh \
-  packaging/docker/caddy
+  packaging/docker/caddy \
+  packaging/sync-engine \
+  scripts/build-linux-sync-engine.sh
