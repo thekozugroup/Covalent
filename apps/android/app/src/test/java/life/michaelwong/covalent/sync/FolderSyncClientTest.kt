@@ -9,6 +9,7 @@ import life.michaelwong.covalent.model.PeerConnectionFreshness
 import life.michaelwong.covalent.model.PeerConnectionState
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -44,10 +45,12 @@ class FolderSyncClientTest {
             assertEquals("/api/v1/sync/pause", server.takeRequest().path)
             val repair = server.takeRequest()
             assertEquals("/api/v1/sync/repair", repair.path)
-            assertEquals(
-                """{"offerId":"$OFFER","selectedRoot":"/storage/emulated/0/Repaired"}""",
-                repair.body.readUtf8(),
-            )
+            assertEquals("POST", repair.method)
+            assertEquals("Bearer token", repair.getHeader("Authorization"))
+            val repairBody = JSONObject(repair.body.readUtf8())
+            assertEquals(setOf("offerId", "selectedRoot"), repairBody.keys().asSequence().toSet())
+            assertEquals(OFFER, repairBody.getString("offerId"))
+            assertEquals("/storage/emulated/0/Repaired", repairBody.getString("selectedRoot"))
             assertEquals("/api/v1/sync/remove", server.takeRequest().path)
             assertEquals("/api/v1/sync/retry", server.takeRequest().path)
         } finally {

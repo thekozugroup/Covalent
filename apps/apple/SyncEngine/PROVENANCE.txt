@@ -1,24 +1,18 @@
-Covalent bundled sync engine provenance
-=======================================
+Covalent maintained folder engine
 
-Syncthing version: v2.1.3
-Upstream commit: 946e2b83a1f6c6ae119427c09e0a5802940b82ff
-Official release: https://github.com/syncthing/syncthing/releases/tag/v2.1.3
-Official macOS arm64 archive:
-https://github.com/syncthing/syncthing/releases/download/v2.1.3/syncthing-macos-arm64-v2.1.3.zip
-Archive SHA-256: e0f0d8df05bf0118c48c6515214a96bf3a3f11dbd115f56c3c0b52251b3f71aa
-Executable SHA-256 before code signing: 6743a0efbf9d39784c7fe2e925505cd0a839458346444aa28620341e47ba12b8
+Engine: Syncthing v2.1.3
+Source commit: 946e2b83a1f6c6ae119427c09e0a5802940b82ff
+Build toolchain: Go 1.26.7, darwin/arm64, CGO enabled
+Minimum macOS deployment target: 15.0
+Build tags: noupgrade
 License: Mozilla Public License 2.0
 Corresponding source: https://github.com/syncthing/syncthing/tree/946e2b83a1f6c6ae119427c09e0a5802940b82ff
 
-The unmodified official executable is code signed for its containing Covalent
-application. Code signing changes executable bytes, so the generated bundle
-manifest records a separate SHA-256 after signing. The upstream LICENSE.txt
-and AUTHORS.txt from the checksum-pinned official archive are copied into the
-application resources.
+The executable is built from an archive of that exact commit with a private
+module cache. The bundled target manifest and Open Source Notices contain
+byte-exact license and notice evidence for the compiled macOS arm64 package
+graph. That inventory records evidence for review; it is not legal approval.
 
-Covalent engine guardian source SHA-256:
-c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579
-The guardian is built from packaging/sync-engine/engine-guardian.c with the
-Apple Command Line Tools and is distributed under Covalent's repository
-license.
+The guardian source and its Covalent license are included in the notice bundle.
+Syncthing's updater, public discovery, relays, and browser UI are disabled by
+the Covalent-owned runtime configuration rather than by this packaging file.

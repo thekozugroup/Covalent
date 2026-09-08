@@ -808,8 +808,17 @@ fn root_reset_intent_is_revision_bound_durable_and_revalidates_selection() {
     );
     assert_eq!(reopened.revision(), pending_revision);
 
-    std::fs::remove_dir(&replacement).unwrap();
+    // Retain the original directory so Linux cannot recycle its inode for
+    // the replacement; this test requires a genuinely different identity.
+    let retained = a.root.join("retained-reset-selection");
+    std::fs::rename(&replacement, &retained).unwrap();
     std::fs::create_dir(&replacement).unwrap();
+    let old_metadata = std::fs::symlink_metadata(&retained).unwrap();
+    let new_metadata = std::fs::symlink_metadata(&replacement).unwrap();
+    assert_ne!(
+        (old_metadata.dev(), old_metadata.ino()),
+        (new_metadata.dev(), new_metadata.ino())
+    );
     assert_eq!(
         reopened.complete_root_reset(offer.folder_id).unwrap_err(),
         SharingError::FolderUnavailable

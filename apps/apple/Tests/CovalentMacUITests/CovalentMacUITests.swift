@@ -88,6 +88,14 @@ final class CovalentMacUITests: XCTestCase {
         app.staticTexts["Settings"].click()
         XCTAssertTrue(app.staticTexts["Settings transfer"].waitForExistence(timeout: uiTransitionTimeout))
         XCTAssertTrue(app.staticTexts["Private identity keys and folder permissions never leave this device."].exists)
+        let notices = app.buttons["settings.openSourceNotices"]
+        scrollTo(notices, in: app)
+        XCTAssertTrue(notices.waitForExistence(timeout: uiTransitionTimeout))
+        notices.click()
+        XCTAssertTrue(app.staticTexts["Open Source Notices"].waitForExistence(timeout: uiTransitionTimeout))
+        let noticeText = app.descendants(matching: .any)["settings.openSourceNotices.text"]
+        XCTAssertTrue(noticeText.waitForExistence(timeout: uiTransitionTimeout))
+        app.buttons["Done"].click()
     }
 
     func testOverviewPassesSystemAccessibilityAudit() throws {

@@ -29,6 +29,10 @@ manifest="$resource_directory/manifest.json"
 license="$resource_directory/Syncthing-LICENSE.txt"
 authors="$resource_directory/Syncthing-AUTHORS.txt"
 provenance="$resource_directory/PROVENANCE.txt"
+source_build="$resource_directory/source-build.json"
+notice_index="$resource_directory/notices-index.txt"
+target_notice_manifest="$resource_directory/notices/manifest.json"
+combined_notices="$resource_directory/notices/THIRD-PARTY-NOTICES.txt"
 
 if [ -L "$manifest" ] || { [ -e "$manifest" ] && [ ! -f "$manifest" ]; }; then
   echo "sync-engine manifest is unsafe" >&2
@@ -56,9 +60,13 @@ verify_notice() {
     exit 1
   fi
 }
-verify_notice "$license" 9221c2f936159b8446d329249fb4c0f25be510f447383a0f13336ac7985668a3
-verify_notice "$authors" 2c197afd6113ec13ae134a20ce8f101d9812b078c3ef32c42c3bb4cdaf2b96a2
-verify_notice "$provenance" dd8b63bb770c8fc9e6d0c151e575def944e1502f81a651e7ec72588951ebacd9
+verify_notice "$license" 3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04
+verify_notice "$authors" 5a0044d13ddf6f013bdd5c2bc419bf45d6123c356567510237e82f304d113d48
+verify_notice "$provenance" 94f3b2bd71120d3dc6f3bdc400a0b538ca8e6be04e740144e140bda4439decc9
+verify_notice "$source_build" 211b7847de85f74cdf7a9ef4cc19cfd9a6e5a09b8bb68a19307162c8b11f256e
+verify_notice "$notice_index" 872e47f2495dfaebe7b150f96fbb77d8e8ed5ed7958234f69f566a8daa975dd6
+verify_notice "$target_notice_manifest" 3624dee064d0ce242d94012c60ffb5aa89b946448166aaf0a613f837bfa3bf5b
+verify_notice "$combined_notices" 231a9ded1c9e9f09182187ed2372de5fc2a37c718c4ba67091eac3b9d0bd7a87
 
 sign_one() {
   identifier=$1
@@ -106,16 +114,22 @@ value = {
         "name": "Syncthing",
         "version": "v2.1.3",
         "commit": "946e2b83a1f6c6ae119427c09e0a5802940b82ff",
-        "archiveSha256": "e0f0d8df05bf0118c48c6515214a96bf3a3f11dbd115f56c3c0b52251b3f71aa",
-        "unsignedExecutableSha256": "6743a0efbf9d39784c7fe2e925505cd0a839458346444aa28620341e47ba12b8",
+        "upstreamArchiveSha256": "dbcc9498602286a843f29a7104833bd1422082999aa51ff92eef493172d47959",
+        "sourceExportSha256": "eb60efd57d1662af75ffb2f7b89abab7200362c654838486138a34bee00fed29",
+        "goVersion": "go1.26.7",
+        "unsignedExecutableSha256": "4df1dea892fac3c9d1c0e822827c9a4c57711dcddaaf56a61edaab41d5337bbb",
     },
     "guardian": {
         "sourceSha256": "c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579",
     },
     "notices": {
-        "PROVENANCE.txt": "dd8b63bb770c8fc9e6d0c151e575def944e1502f81a651e7ec72588951ebacd9",
-        "Syncthing-AUTHORS.txt": "2c197afd6113ec13ae134a20ce8f101d9812b078c3ef32c42c3bb4cdaf2b96a2",
-        "Syncthing-LICENSE.txt": "9221c2f936159b8446d329249fb4c0f25be510f447383a0f13336ac7985668a3",
+        "PROVENANCE.txt": "94f3b2bd71120d3dc6f3bdc400a0b538ca8e6be04e740144e140bda4439decc9",
+        "Syncthing-AUTHORS.txt": "5a0044d13ddf6f013bdd5c2bc419bf45d6123c356567510237e82f304d113d48",
+        "Syncthing-LICENSE.txt": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+        "source-build.json": "211b7847de85f74cdf7a9ef4cc19cfd9a6e5a09b8bb68a19307162c8b11f256e",
+        "notices-index.txt": "872e47f2495dfaebe7b150f96fbb77d8e8ed5ed7958234f69f566a8daa975dd6",
+        "notices/manifest.json": "3624dee064d0ce242d94012c60ffb5aa89b946448166aaf0a613f837bfa3bf5b",
+        "notices/THIRD-PARTY-NOTICES.txt": "231a9ded1c9e9f09182187ed2372de5fc2a37c718c4ba67091eac3b9d0bd7a87",
     },
     "executables": {
         "covalent-engine-guardian": {

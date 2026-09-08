@@ -77,6 +77,30 @@ if [ ! -s "$repo_root/apps/apple/Package.resolved" ]; then
   fail "Locked Swift package data is missing: apps/apple/Package.resolved"
 fi
 
+printf '%s\n' "Preparing the pinned folder-sync source and private Go toolchain..."
+syncthing_source="$build_dir/syncthing"
+syncthing_revision=946e2b83a1f6c6ae119427c09e0a5802940b82ff
+git init --quiet "$syncthing_source"
+git -C "$syncthing_source" remote add origin https://github.com/syncthing/syncthing.git
+git -C "$syncthing_source" fetch --quiet --depth=1 origin "$syncthing_revision"
+git -C "$syncthing_source" checkout --quiet --detach FETCH_HEAD
+if [ "$(git -C "$syncthing_source" rev-parse HEAD)" != "$syncthing_revision" ]; then
+  fail "The folder-sync source does not match its pinned revision."
+fi
+
+go_archive="$build_dir/go1.26.7.darwin-arm64.tar.gz"
+curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+  --connect-timeout 15 --max-time 300 --max-filesize 67108864 \
+  --output "$go_archive" https://go.dev/dl/go1.26.7.darwin-arm64.tar.gz
+if [ "$(shasum -a 256 "$go_archive" | awk '{print $1}')" != \
+  020a1e8224811be75163e920bc77e0926a1390a6aeea19bdcf23f74b9d749f6d ] || \
+  [ "$(wc -c < "$go_archive" | tr -d '[:space:]')" -ne 64772572 ]; then
+  fail "The private Go toolchain did not match its pinned checksum and size."
+fi
+SYNCTHING_SOURCE_DIR="$syncthing_source"
+COVALENT_GO_ARCHIVE="$go_archive"
+export SYNCTHING_SOURCE_DIR COVALENT_GO_ARCHIVE
+
 archive_path="$build_dir/CovalentMac.xcarchive"
 swift_packages="$build_dir/swift-packages"
 derived_data="$build_dir/DerivedData"

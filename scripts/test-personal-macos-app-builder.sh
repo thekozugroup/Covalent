@@ -23,6 +23,10 @@ for contract in \
   '"$(uname -m)" != arm64' \
   'scripts/install-xcodegen.sh' \
   'scripts/setup-doctor.sh' \
+  'SYNCTHING_SOURCE_DIR' \
+  'COVALENT_GO_ARCHIVE' \
+  '946e2b83a1f6c6ae119427c09e0a5802940b82ff' \
+  '020a1e8224811be75163e920bc77e0926a1390a6aeea19bdcf23f74b9d749f6d' \
   'scripts/release-version.sh' \
   'xcodegen generate --quiet' \
   '-disableAutomaticPackageResolution' \

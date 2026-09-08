@@ -14,6 +14,7 @@ struct MacSettingsView: View {
     @State private var recoveryExportNotice: String?
     @State private var confirmRecoveryRetry = false
     @State private var recoveryExportSession: RecoveryKitExport?
+    @State private var showOpenSourceNotices = false
 
     var body: some View {
         ScrollView {
@@ -29,6 +30,7 @@ struct MacSettingsView: View {
                 folderAccess
                 connection
                 platformLimits
+                about
             }
             .frame(maxWidth: compact ? 560 : 760, alignment: .leading)
             .padding(compact ? 24 : 32)
@@ -79,6 +81,9 @@ struct MacSettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Covalent will check your backup devices again. Keep them online while the check runs.")
+        }
+        .sheet(isPresented: $showOpenSourceNotices) {
+            MacOpenSourceNoticesView()
         }
     }
 
@@ -220,6 +225,15 @@ struct MacSettingsView: View {
         settingsSection("Background work", systemImage: "clock.arrow.circlepath") {
             Text("Your backup server saves its progress and picks up interrupted work where it left off. Keep this Mac awake for long folder operations; Covalent does not run unrestricted in the background, only within what macOS allows.")
                 .secondaryLabelStyle()
+        }
+    }
+
+    private var about: some View {
+        settingsSection("About", systemImage: "info.circle") {
+            Button("Open Source Notices…") {
+                showOpenSourceNotices = true
+            }
+            .accessibilityIdentifier("settings.openSourceNotices")
         }
     }
 

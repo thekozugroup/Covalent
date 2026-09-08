@@ -717,3 +717,86 @@ of its own completed build caches and temporary outputs. iOS diagnosis removed
 the failure image and bounded test evidence. Proof artifacts,
 source manifests and current build inputs remain. Existing Atmos services were
 not changed. Logical bytes are not a claim of physical APFS space recovered.
+
+## Checkpoint 32: source-built Mac worker and corrected platform test fixtures
+
+Checkpoint 31 (`04a7137cf8b162f0a063280c06e74999a6d04789`) ran as merge
+`18800b6dd6a0477e0b857a8b2706e1dc82a664ce` in CI `34276509487`.
+Both complete Docker jobs, the Mac app bundle, Mac integration/UI, dependency
+review and iOS Tier 2 pass. The unchanged iOS Home accessibility audit now passes
+with the Refresh-only tint correction.
+
+Two test assumptions prevented an all-green result. Linux passed 270 node tests
+but recycled the inode in a remove-and-recreate fixture; the test now retains
+the original directory by renaming it and verifies that the replacement has a
+different identity. The corrected focused Rust test passes locally. An isolated
+Atmos fixture verified this Linux identity precondition 100 times and removed
+its temporary directory; it did not change existing services. The production
+path/device/inode checks are unchanged. Arbitrary same-UID inode replacement
+remains outside the documented portable boundary.
+
+Android compiled and ran 145 JVM tests, with 144 passing. The repair-route test
+compared JSON member ordering rather than its fields: the actual request had
+exactly the intended fields and values in another order. It now compares the
+parsed exact key set and values and checks POST plus bearer authentication.
+This failure stopped the API 37 job before any of the expanded 76 device tests
+ran. Fresh hosted JVM, lint and device results remain required.
+
+### Real production Mac folder repair
+
+The sealed checkpoint-31 manager proof completed four actual LaunchServices
+sandbox launches using the production default Keychain store, app model,
+manager, guardian and existing pinned worker. It paired two nodes and synced,
+restored a paused folder after an injected invalid bookmark, kept the share
+paused until explicit resume, repaired a new replacement root through durable
+reset/full scan, and restored that grant after another cold launch. Final
+removal retained both copies. Peer port 8787 and the exact TLS certificate were
+stable throughout. Result SHA-256 is
+`1b94db139938aaf56dc1a9622f1c98ed71b059ddc4391320c0ee313b2d991c1d`;
+sealed app SHA-256 is
+`d5b50a8368914df32f3b1381082db6cab6a56e6914e1dc0e9dd4549e62ac81ae`.
+
+Each launch reaped its manager-owned local processes. The final sandbox could
+not signal the fixture peer inherited from the first launch; the outer harness
+reaped that exact three-process fixture tree. Cleanup confirms zero remaining
+owned processes, exact fixture Keychain deletion, and 375,980,032 logical bytes
+removed from owned app/build/container/temp files. This is recorded as a fixture
+limitation, not a successful in-sandbox cross-launch signal operation. Evidence
+and the sealed app remain; no production Keychain item was read or removed.
+
+### Mac source package and notices
+
+The Mac worker now builds from exact Syncthing v2.1.3 commit
+`946e2b83a1f6c6ae119427c09e0a5802940b82ff` with a checksum- and size-verified
+private Go 1.26.7 archive. The personal builder obtains those exact inputs.
+The result is arm64-only, targets macOS 15.0, retains its content UUID and has
+28,141,682 bytes with SHA-256
+`4df1dea892fac3c9d1c0e822827c9a4c57711dcddaaf56a61edaab41d5337bbb`.
+Two real source-package runs reproduce its exact executable and notices.
+An early-invalid-archive regression verifies private build state is cleaned.
+Package copying rechecks the unsigned executable before signing; the runtime
+verifier binds the source descriptor, target manifest and notice index.
+Settings now exposes a bounded, verified Open Source Notices reader.
+
+The frozen 16-file integration manifest is
+`162017fb684b0828a6a32fa6f19d99b5e9d5069e5a53e5d52d37fe0061166b17`.
+The integrated Mac-host suite passes 7 tests, strict workspace Clippy passes,
+and foundation/package/notice-reader contracts pass. The new exact worker also
+passes the real 43-check two-runtime proof, including two folders, bidirectional
+transfer, access repair, scoped reset, unrelated-folder continuity and cleanup.
+That proof is outside App Sandbox; result SHA-256 is
+`42b041366029d791c24abbb8bc391468d678fd5a76a7f3a4b787d48961979a42`.
+New-worker sandbox execution and hosted source-build byte equality remain
+separate gates.
+
+A target audit reconciles 465 packages, 58 compiled modules and 105 notice files,
+with every module evidence hash verified. Fresh source and exact-binary
+`govulncheck v1.7.0` scans report four module-level x/crypto advisories; their
+openpgp/ssh packages are absent from the exact target graph, and neither scan
+has package or symbol traces. This supports package-absence disposition for
+this target, not a blanket no-vulnerability or complete reachability claim.
+Four compiled MPL dependencies still need explicit recipient-facing exact
+source access; that packaging work remains open. Audit manifest SHA-256 is
+`68a44946d3c32bd93050b43c0266ae6fdfca867818bf97df36529eaf67fb73a0`.
+Its owned caches/source cleanup removed 417,380,299 logical bytes after retaining
+compact evidence. The acceptance ledger remains **70%: 14 of 20 milestones**.
