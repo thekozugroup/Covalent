@@ -38,7 +38,9 @@ android {
         getByName("main").jniLibs.directories.add(
             generatedRoot.get().dir("jniLibs").asFile.absolutePath,
         )
-        getByName("main").assets.srcDir(generatedRoot.map { it.dir("assets") })
+        getByName("main").assets.directories.add(
+            generatedRoot.get().dir("assets").asFile.absolutePath,
+        )
     }
 
     compileOptions {
