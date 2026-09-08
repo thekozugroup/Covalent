@@ -37,7 +37,7 @@ jobs:
       - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
       - run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "ndk;27.1.12297006"
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
-      - name: Build both helpers and proof APKs before emulator boot
+      - name: Build engine and guardian for both ABIs before emulator boot
         env:
           SYNCTHING_SOURCE_DIR: ${{ github.workspace }}/.proof-syncthing
         run: |
@@ -77,6 +77,7 @@ jobs:
           name: syncthing-android-engine-proof-${{ github.sha }}
           path: |
             experiments/syncthing-android/app/build/generated/syncthingProof/assets/syncthing-sha256.txt
+            experiments/syncthing-android/app/build/generated/syncthingProof/assets/engine-guardian-sha256.txt
             experiments/syncthing-android/app/build/outputs/apk/debug/app-debug.apk
             experiments/syncthing-android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
           if-no-files-found: error

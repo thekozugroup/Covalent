@@ -31,6 +31,7 @@ android {
             // package installer. It may not be copied into writable app storage.
             useLegacyPackaging = true
             keepDebugSymbols += "**/libsyncthing.so"
+            keepDebugSymbols += "**/libengineguardian.so"
         }
     }
 
@@ -62,6 +63,7 @@ val buildSyncthingHelpers = tasks.register<Exec>("buildSyncthingHelpers") {
         checkedSource.canonicalPath,
         generatedRoot.get().asFile.canonicalPath,
     )
+    inputs.file(rootProject.projectDir.resolve("engine-guardian.c"))
     inputs.files(
         rootProject.projectDir.resolve("build-syncthing-android.sh"),
         checkedSource.resolve("build.go"),

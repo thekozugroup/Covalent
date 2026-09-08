@@ -102,8 +102,43 @@ try:
         raise RuntimeError("instrumentation output exceeded the 1 MiB bound")
     text = output.decode("utf-8", errors="replace")
     print(redact(text))
-    if (completed.returncode != 0 or "FAILURES!!!" in text or "OK (1 test)" not in text
-            or "INSTRUMENTATION_CODE: -1" not in text):
+    expected_tests = {
+        "extractedHelperRunsPrivateOfflineApiAndRetainsIdentityAfterColdRestart",
+        "guardianOwnsDirectWorkerAndStopsItOnOwnerOrGuardianDeathThenRestarts",
+    }
+    expected_class = (
+        "life.michaelwong.covalent.engineproof.SyncthingExecutableProofTest")
+    records = []
+    fields = {}
+    for raw_line in text.splitlines():
+        if raw_line.startswith("INSTRUMENTATION_STATUS: "):
+            pair = raw_line[len("INSTRUMENTATION_STATUS: "):].split("=", 1)
+            if len(pair) == 2 and pair[0] in {"class", "numtests", "test"}:
+                if pair[0] in fields:
+                    raise RuntimeError("Duplicate instrumentation status field")
+                fields[pair[0]] = pair[1]
+        elif raw_line.startswith("INSTRUMENTATION_STATUS_CODE: "):
+            try:
+                status_code = int(raw_line.split(":", 1)[1].strip())
+            except ValueError as error:
+                raise RuntimeError("Malformed instrumentation status code") from error
+            if "test" in fields:
+                records.append((fields, status_code))
+            fields = {}
+
+    by_test = {name: [] for name in expected_tests}
+    for record, status_code in records:
+        name = record.get("test")
+        if name not in expected_tests:
+            raise RuntimeError("Instrumentation ran an unexpected test method")
+        if record.get("class") != expected_class or record.get("numtests") != "2":
+            raise RuntimeError("Instrumentation reported an unexpected class or test count")
+        by_test[name].append(status_code)
+
+    exact_method_results = all(codes == [1, 0] for codes in by_test.values())
+    final_codes = re.findall(r"(?m)^INSTRUMENTATION_CODE: (-?\d+)\r?$", text)
+    if (completed.returncode != 0 or "FAILURES!!!" in text or "OK (2 tests)" not in text
+            or final_codes != ["-1"] or not exact_method_results):
         raise RuntimeError("Syncthing executable proof failed")
     after = framework_pids()
     if before != after:

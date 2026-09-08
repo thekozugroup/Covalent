@@ -7,7 +7,9 @@ product package, JNI bridge, release, or synchronization protocol. Its applicati
 It cross-builds the exact official Syncthing v2.1.3 commit
 `946e2b83a1f6c6ae119427c09e0a5802940b82ff` with Go 1.26.7, NDK
 27.1.12297006, API 26, CGO, `-mod=readonly`, and `noupgrade`. Both `arm64-v8a`
-and `x86_64` helpers are packaged as `libsyncthing.so`. The Gradle project copies the
+and `x86_64` helpers are packaged as `libsyncthing.so`. The reviewed guardian is
+cross-compiled for the same ABIs as `libengineguardian.so`, pinned by its source hash,
+and limited to 8-256 KiB. The Gradle project copies the
 repository's pinned Gradle 9.7.1 wrapper, AGP 9.2.1, SDK 37, and dependency-verification
 metadata. Legacy native packaging is deliberate: the test needs a package-manager-extracted
 immutable executable, because Android forbids executing a writable app-data copy.
@@ -20,9 +22,9 @@ an explicit dependency on a private Go API, not proof of compatibility with a
 future compiler. The source/compiler pins and actual Android runtime gate stay
 required; no older compiler is substituted.
 
-## What the API-37 test proves
+## What the API-37 tests prove
 
-The one x86_64 instrumentation test checks:
+The original x86_64 instrumentation test checks:
 
 * the installed helper is an executable, app-nonwritable file under `nativeLibraryDir`,
   outside writable `dataDir`, with the exact hash and size emitted by the pinned build;
@@ -42,8 +44,26 @@ The one x86_64 instrumentation test checks:
 * a cold restart retains the same Syncthing device identity/certificate and the offline
   config, then shuts down cleanly again.
 
+The second test keeps the original test intact and adds the reviewed guardian boundary:
+
+* the installed guardian is a separately hashed, executable, app-nonwritable file under
+  `nativeLibraryDir`;
+* a bounded `/proc` observation requires exactly one installed guardian child and exactly
+  one direct installed Syncthing worker beneath it while the authenticated API is live;
+* closing the guardian's Java-owned stdin lifeline stops and reaps the worker, releases the
+  API socket/data lock, and permits a same-identity restart;
+* forcibly terminating the exact Java-owned guardian `Process` requires Linux
+  `PR_SET_PDEATHSIG` to terminate that exact worker; assertion cleanup closes the owned
+  lifeline first, uses the private authenticated API if the worker remains, and signals the
+  owned guardian handle only after the API endpoint is released, never an observed numeric
+  PID; bounded `/proc` observation must find no process using the exact installed helper
+  executable before private fixture deletion; and
+* the database, socket, certificate and engine identity reopen after both owner-lifeline
+  and guardian-death paths before a final authenticated shutdown.
+
 The native build rejects a dirty/wrong upstream checkout, wrong Go or NDK, a helper outside
-5-64 MiB, non-PIE ELF, PT_LOAD alignment below 16 KiB, text relocations, and unexpected
+5-64 MiB, a guardian outside 8-256 KiB, non-PIE ELF, PT_LOAD alignment below 16 KiB,
+text relocations, missing guardian RELRO/NOW/non-executable-stack hardening, and unexpected
 dynamic libraries. Instrumentation bodies and logs are capped at 128 KiB, startup at 30
 seconds, shutdown at 20 seconds, and the entire device invocation at 180 seconds.
 
@@ -63,8 +83,9 @@ go version  # must say go1.26.7
   :app:assembleDebug :app:assembleDebugAndroidTest
 ```
 
-The build emits per-ABI hashes and sizes in
-`app/build/generated/syncthingProof/assets/syncthing-sha256.txt`.
+The build emits separate per-ABI hashes and sizes in
+`app/build/generated/syncthingProof/assets/syncthing-sha256.txt` and
+`engine-guardian-sha256.txt`.
 
 ## API-37 run
 
@@ -86,6 +107,12 @@ test result. The runner now requires unchanged `surfaceflinger` and
 guest diagnostics on failure. Guest graphics preparation is emulator-specific;
 this proof neither exercises a launcher nor validates screen capture.
 
+The corrected original one-test gate passed independently at commit `5716068` in hosted
+run `34224544802` before the guardian test was added. The runner now requires the exact two
+method names, one start and one success status for each, `numtests=2`, `OK (2 tests)`, the
+successful final instrumentation code, and stable framework PIDs; the guardian path remains
+unproven until that expanded hosted run passes.
+
 The first prepared run timed out before instrumentation because the shared
 readiness helper still targeted the production app's Compose activity. The
 workflow now supplies its supported package/component overrides for this
@@ -100,6 +127,11 @@ reboot, managed `DocumentsProvider`, editor races, existing Pictures/Downloads a
 two-device convergence, Syncthing release licensing, or compatibility with Covalent's
 signed history/retention/freeze/apply contracts. The arm64 and API-26 evidence here is a
 cross-build and ELF audit only.
+
+The guardian enumerates `/proc/self/fd` before fork and applies a 16,384-open-descriptor
+bound. The API-37 test is required to prove that enumeration, child `fork`/`exec`, and
+`PR_SET_PDEATHSIG` are permitted by the actual Android guest. Numeric PIDs from `/proc` are
+observational bindings only and are never used for cleanup.
 
 Syncthing also supports an absolute filesystem Unix-domain GUI/API socket. A private socket
 under a mode-0700 directory may reduce local TCP exposure, but Android client compatibility,

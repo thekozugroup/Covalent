@@ -9,6 +9,7 @@ import static org.junit.Assert.fail;
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.system.ErrnoException;
 import android.system.Os;
 import android.system.StructStat;
 
@@ -36,17 +37,21 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -76,8 +81,8 @@ public final class SyncthingExecutableProofTest {
     public void extractedHelperRunsPrivateOfflineApiAndRetainsIdentityAfterColdRestart()
             throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
-        File helper = extractedHelper(context);
-        assertInstalledHash(context, helper);
+        File helper = extractedHelper(context, "libsyncthing.so");
+        assertInstalledHash(context, helper, "syncthing-sha256.txt");
         assertProofManifestIsOffline(context);
 
         String versionOutput = runToCompletion(
@@ -148,13 +153,92 @@ public final class SyncthingExecutableProofTest {
         }
     }
 
-    private static File extractedHelper(Context context) throws Exception {
+    @Test
+    public void guardianOwnsDirectWorkerAndStopsItOnOwnerOrGuardianDeathThenRestarts()
+            throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File helper = extractedHelper(context, "libsyncthing.so");
+        File guardian = extractedHelper(context, "libengineguardian.so");
+        assertInstalledHash(context, helper, "syncthing-sha256.txt");
+        assertInstalledHash(context, guardian, "engine-guardian-sha256.txt");
+
+        File proofRoot = new File(context.getNoBackupFilesDir(), "syncthing-guardian-proof");
+        deleteRecursively(proofRoot);
+        assertTrue(proofRoot.mkdirs());
+        Os.chmod(proofRoot.getCanonicalPath(), 0700);
+        File configDir = new File(proofRoot, "config");
+        File dataDir = new File(proofRoot, "data");
+        assertTrue(configDir.mkdir());
+        assertTrue(dataDir.mkdir());
+        Os.chmod(configDir.getCanonicalPath(), 0700);
+        Os.chmod(dataDir.getCanonicalPath(), 0700);
+
+        runToCompletion(
+                Arrays.asList(
+                        helper.getCanonicalPath(),
+                        "--config", configDir.getCanonicalPath(),
+                        "--data", dataDir.getCanonicalPath(),
+                        "generate", "--no-port-probing"),
+                PROCESS_TIMEOUT_MS);
+        File configFile = new File(configDir, "config.xml");
+        File certFile = new File(configDir, "cert.pem");
+        assertTrue(configFile.isFile());
+        assertTrue(certFile.isFile());
+        String certificateHash = sha256(certFile);
+        int port = reserveLoopbackPort();
+        String apiKey = randomHex(32);
+        writeOfflineConfig(configFile, port, apiKey);
+
+        RunningProcess ownerLoss = null;
+        RunningProcess guardianLoss = null;
+        RunningProcess restarted = null;
+        try {
+            ownerLoss = startGuardedServer(guardian, helper, configDir, dataDir, apiKey);
+            JSONObject firstStatus = awaitAuthenticatedStatus(ownerLoss, port, apiKey);
+            String deviceId = firstStatus.getString("myID");
+            assertFalse(deviceId.isEmpty());
+            ProcessTopology firstTopology = assertDirectGuardianWorker(guardian, helper);
+            ownerLoss.process.getOutputStream().close();
+            assertGuardianOwnerLossExit(ownerLoss, apiKey);
+            awaitObservedProcessGoneOrChanged(firstTopology.guardianPid, guardian);
+            awaitObservedProcessGoneOrChanged(firstTopology.workerPid, helper);
+            assertLoopbackPortReleased(port);
+            ownerLoss = null;
+
+            guardianLoss = startGuardedServer(guardian, helper, configDir, dataDir, apiKey);
+            assertEquals(
+                    deviceId,
+                    awaitAuthenticatedStatus(guardianLoss, port, apiKey).getString("myID"));
+            ProcessTopology secondTopology = assertDirectGuardianWorker(guardian, helper);
+            stopGuardianForciblyAndRequireWorkerDeath(
+                    guardianLoss, secondTopology, guardian, helper, port, apiKey);
+            guardianLoss = null;
+            assertLoopbackPortReleased(port);
+
+            restarted = startGuardedServer(guardian, helper, configDir, dataDir, apiKey);
+            assertEquals(
+                    deviceId,
+                    awaitAuthenticatedStatus(restarted, port, apiKey).getString("myID"));
+            assertEquals(certificateHash, sha256(certFile));
+            assertDirectGuardianWorker(guardian, helper);
+            gracefulShutdown(restarted, port, apiKey);
+            assertLoopbackPortReleased(port);
+            assertOfflineConfig(configFile, port, apiKey);
+            restarted = null;
+        } finally {
+            cleanupGuardedProcessesBeforeFixtureDeletion(
+                    helper, port, apiKey, ownerLoss, guardianLoss, restarted);
+            deleteRecursively(proofRoot);
+        }
+    }
+
+    private static File extractedHelper(Context context, String name) throws Exception {
         ApplicationInfo info = context.getApplicationInfo();
         assertTrue(
                 "APK must request package-manager native-library extraction",
                 (info.flags & ApplicationInfo.FLAG_EXTRACT_NATIVE_LIBS) != 0);
         File nativeDir = new File(info.nativeLibraryDir).getCanonicalFile();
-        File helper = new File(nativeDir, "libsyncthing.so").getCanonicalFile();
+        File helper = new File(nativeDir, name).getCanonicalFile();
         assertTrue(helper.isFile());
         assertTrue(helper.canExecute());
         assertFalse("Installed helper must be immutable to the app UID", helper.canWrite());
@@ -165,9 +249,10 @@ public final class SyncthingExecutableProofTest {
         return helper;
     }
 
-    private static void assertInstalledHash(Context context, File helper) throws Exception {
+    private static void assertInstalledHash(Context context, File helper, String asset)
+            throws Exception {
         Map<String, BuildRecord> records = new HashMap<>();
-        try (InputStream input = context.getAssets().open("syncthing-sha256.txt")) {
+        try (InputStream input = context.getAssets().open(asset)) {
             String text = new String(readBounded(input, 4096), StandardCharsets.US_ASCII);
             for (String line : text.split("\\n")) {
                 if (line.trim().isEmpty()) continue;
@@ -219,6 +304,147 @@ public final class SyncthingExecutableProofTest {
         builder.environment().put("STMONITORED", "1");
         assertEquals("1", builder.environment().get("STMONITORED"));
         return new RunningProcess(builder.start(), apiKey);
+    }
+
+    private static RunningProcess startGuardedServer(
+            File guardian,
+            File helper,
+            File configDir,
+            File dataDir,
+            String apiKey) throws Exception {
+        List<String> command = Arrays.asList(
+                guardian.getCanonicalPath(),
+                "--grace-ms", "5000",
+                "--",
+                helper.getCanonicalPath(),
+                "--config", configDir.getCanonicalPath(),
+                "--data", dataDir.getCanonicalPath(),
+                "serve",
+                "--no-browser",
+                "--no-port-probing",
+                "--no-restart",
+                "--no-upgrade",
+                "--log-file=-",
+                "--log-max-size=0");
+        for (String argument : command) assertFalse(argument.contains(apiKey));
+        ProcessBuilder builder = new ProcessBuilder(command).redirectErrorStream(true);
+        scrubSyncthingEnvironment(builder.environment(), apiKey);
+        builder.environment().put("STMONITORED", "1");
+        return new RunningProcess(builder.start(), apiKey);
+    }
+
+    private static void assertGuardianOwnerLossExit(RunningProcess guardian, String apiKey)
+            throws Exception {
+        if (!guardian.process.waitFor(SHUTDOWN_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+            fail("Guardian did not stop after owner EOF: " + guardian.safeLog(apiKey));
+        }
+        assertEquals("Guardian owner-loss exit code", 70, guardian.process.exitValue());
+        guardian.finishCollector();
+        assertFalse("Guardian/engine log exposed the API credential", guardian.containsRaw(apiKey));
+    }
+
+    private static void stopGuardianForciblyAndRequireWorkerDeath(
+            RunningProcess guardian,
+            ProcessTopology topology,
+            File guardianFile,
+            File helper,
+            int port,
+            String apiKey) throws Exception {
+        Throwable failure = null;
+        guardian.process.destroyForcibly();
+        if (!guardian.process.waitFor(5, TimeUnit.SECONDS)) {
+            failure = new AssertionError("Owned guardian Process handle did not terminate");
+        }
+        try {
+            awaitObservedProcessGoneOrChanged(topology.guardianPid, guardianFile);
+            awaitObservedProcessGoneOrChanged(topology.workerPid, helper);
+            awaitLoopbackPortReleased(port);
+            guardian.finishCollector();
+            assertFalse("Guardian/engine log exposed the API credential", guardian.containsRaw(apiKey));
+        } catch (Throwable error) {
+            if (failure == null) failure = error;
+            else failure.addSuppressed(error);
+        }
+        if (failure != null) {
+            try {
+                authenticatedShutdownFallback(port, apiKey);
+                awaitLoopbackPortReleased(port);
+                guardian.finishCollector();
+            } catch (Throwable cleanup) {
+                failure.addSuppressed(cleanup);
+            }
+            throw new AssertionError("Guardian death did not stop its exact direct worker", failure);
+        }
+    }
+
+    private static void authenticatedShutdownFallback(int port, String apiKey) throws Exception {
+        HttpResult result = request(port, "/rest/system/shutdown", apiKey, "POST");
+        assertEquals("Authenticated cleanup shutdown", 200, result.code);
+    }
+
+    private static void cleanupGuardedProcessesBeforeFixtureDeletion(
+            File helper, int port, String apiKey, RunningProcess... processes) throws Exception {
+        Throwable failure = null;
+        for (RunningProcess process : processes) {
+            if (process == null) continue;
+            try {
+                cleanupGuardedProcess(process, helper, port, apiKey);
+            } catch (Throwable error) {
+                if (failure == null) failure = error;
+                else failure.addSuppressed(error);
+            }
+        }
+        try {
+            awaitLoopbackPortReleased(port);
+        } catch (Throwable error) {
+            if (failure == null) failure = error;
+            else failure.addSuppressed(error);
+        }
+        try {
+            awaitNoExactExecutableProcess(helper);
+        } catch (Throwable error) {
+            if (failure == null) failure = error;
+            else failure.addSuppressed(error);
+        }
+        if (failure != null) {
+            // Do not delete the private fixture while its database owner may still be alive.
+            throw new AssertionError("Could not safely reap guarded proof process", failure);
+        }
+    }
+
+    private static void cleanupGuardedProcess(
+            RunningProcess guarded, File helper, int port, String apiKey) throws Exception {
+        try {
+            guarded.process.getOutputStream().close();
+        } catch (IOException ignored) {
+            // A dead guardian has already closed its lifeline endpoint.
+        }
+
+        guarded.process.waitFor(SHUTDOWN_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        if (!isLoopbackPortReleased(port)) {
+            // If the guardian died before its direct worker, retain the fixture and ask that
+            // exact private API to stop. No observed numeric PID is ever used as a signal target.
+            authenticatedShutdownFallback(port, apiKey);
+            awaitLoopbackPortReleased(port);
+            guarded.process.waitFor(5, TimeUnit.SECONDS);
+        }
+
+        if (guarded.process.isAlive()) {
+            // This is the exact Java-owned guardian handle. Linux/Android PDEATHSIG covers a
+            // worker still exiting; the exact installed helper is observed gone below.
+            guarded.process.destroy();
+            if (!guarded.process.waitFor(2, TimeUnit.SECONDS)) {
+                guarded.process.destroyForcibly();
+                assertTrue(
+                        "Owned guardian Process handle was not reaped",
+                        guarded.process.waitFor(5, TimeUnit.SECONDS));
+            }
+        }
+        awaitLoopbackPortReleased(port);
+        awaitNoExactExecutableProcess(helper);
+        guarded.finishCollector();
+        assertFalse("Guarded proof process was not reaped", guarded.process.isAlive());
+        assertFalse("Guardian/engine log exposed the API credential", guarded.containsRaw(apiKey));
     }
 
     private static void scrubSyncthingEnvironment(Map<String, String> environment, String apiKey) {
@@ -464,6 +690,177 @@ public final class SyncthingExecutableProofTest {
         }
     }
 
+    private static ProcessTopology assertDirectGuardianWorker(File guardian, File helper)
+            throws Exception {
+        List<ObservedProcess> guardianMatches = directChildrenMatching(
+                android.os.Process.myPid(), guardian);
+        assertEquals(
+                "Expected one exact guardian child of the test process",
+                1,
+                guardianMatches.size());
+        ObservedProcess guardianProcess = guardianMatches.get(0);
+        List<ObservedProcess> guardianChildren = directChildren(guardianProcess.pid);
+        assertEquals("Guardian must own exactly one direct process", 1, guardianChildren.size());
+        ObservedProcess worker = guardianChildren.get(0);
+        assertEquals(
+                "Guardian child must be the exact installed Syncthing helper",
+                helper.getCanonicalPath(),
+                worker.executable.getCanonicalPath());
+        return new ProcessTopology(guardianProcess.pid, worker.pid);
+    }
+
+    private static List<ObservedProcess> directChildrenMatching(int parentPid, File executable)
+            throws Exception {
+        String expected = executable.getCanonicalPath();
+        List<ObservedProcess> matches = new ArrayList<>();
+        for (ObservedProcess process : directChildren(parentPid)) {
+            if (expected.equals(process.executable.getCanonicalPath())) matches.add(process);
+        }
+        return matches;
+    }
+
+    private static List<ObservedProcess> directChildren(int parentPid) throws Exception {
+        final int maxProcEntries = 4096;
+        final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        Set<Integer> seen = new HashSet<>();
+        List<ObservedProcess> result = new ArrayList<>();
+        int entries = 0;
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(new File("/proc").toPath())) {
+            for (Path path : stream) {
+                if (++entries > maxProcEntries || System.nanoTime() >= deadline) {
+                    throw new IOException("Bounded process topology scan exceeded its limit");
+                }
+                String name = path.getFileName().toString();
+                if (!isAsciiPid(name)) continue;
+                int pid;
+                try {
+                    pid = Integer.parseInt(name);
+                } catch (NumberFormatException ignored) {
+                    continue;
+                }
+                if (!seen.add(pid) || readParentPid(pid) != parentPid) continue;
+                try {
+                    String linked = Os.readlink("/proc/" + pid + "/exe");
+                    File executable = new File(linked).getCanonicalFile();
+                    if (readParentPid(pid) == parentPid) {
+                        result.add(new ObservedProcess(pid, executable));
+                    }
+                } catch (ErrnoException | IOException ignored) {
+                    // Process exit during this read is not a topology match.
+                }
+            }
+        }
+        return result;
+    }
+
+    private static List<ObservedProcess> exactExecutableProcesses(File expectedFile)
+            throws Exception {
+        final int maxProcEntries = 4096;
+        final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        String expected = expectedFile.getCanonicalPath();
+        Set<Integer> seen = new HashSet<>();
+        List<ObservedProcess> result = new ArrayList<>();
+        int entries = 0;
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(new File("/proc").toPath())) {
+            for (Path path : stream) {
+                if (++entries > maxProcEntries || System.nanoTime() >= deadline) {
+                    throw new IOException("Bounded exact-executable scan exceeded its limit");
+                }
+                String name = path.getFileName().toString();
+                if (!isAsciiPid(name)) continue;
+                int pid;
+                try {
+                    pid = Integer.parseInt(name);
+                } catch (NumberFormatException ignored) {
+                    continue;
+                }
+                if (!seen.add(pid)) continue;
+                try {
+                    String firstLink = Os.readlink("/proc/" + pid + "/exe");
+                    File first = new File(firstLink).getCanonicalFile();
+                    if (!expected.equals(first.getPath())) continue;
+                    String secondLink = Os.readlink("/proc/" + pid + "/exe");
+                    File second = new File(secondLink).getCanonicalFile();
+                    if (expected.equals(second.getPath())) {
+                        result.add(new ObservedProcess(pid, second));
+                    }
+                } catch (ErrnoException | IOException ignored) {
+                    // Process exit during this read is not a live exact-executable match.
+                }
+            }
+        }
+        return result;
+    }
+
+    private static void awaitNoExactExecutableProcess(File expectedFile) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (System.nanoTime() < deadline) {
+            if (exactExecutableProcesses(expectedFile).isEmpty()) return;
+            Thread.sleep(20);
+        }
+        fail("Exact installed helper process remained after guarded lifecycle stop");
+    }
+
+    private static boolean isAsciiPid(String value) {
+        if (value.isEmpty() || value.length() > 10) return false;
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (character < '0' || character > '9') return false;
+        }
+        return true;
+    }
+
+    private static int readParentPid(int pid) {
+        File status = new File("/proc/" + pid + "/status");
+        try (InputStream input = new FileInputStream(status)) {
+            String text = new String(readBounded(input, 16 * 1024), StandardCharsets.US_ASCII);
+            for (String line : text.split("\n")) {
+                if (!line.startsWith("PPid:")) continue;
+                String value = line.substring("PPid:".length()).trim();
+                return isAsciiPid(value) ? Integer.parseInt(value) : -1;
+            }
+        } catch (IOException | NumberFormatException ignored) {
+            // A process can disappear during the bounded observation.
+        }
+        return -1;
+    }
+
+    private static void awaitObservedProcessGoneOrChanged(int pid, File expectedExecutable)
+            throws Exception {
+        String expected = expectedExecutable.getCanonicalPath();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (System.nanoTime() < deadline) {
+            try {
+                String linked = Os.readlink("/proc/" + pid + "/exe");
+                if (!expected.equals(new File(linked).getCanonicalPath())) return;
+            } catch (ErrnoException | IOException ignored) {
+                return;
+            }
+            Thread.sleep(20);
+        }
+        fail("Observed owned process executable remained after lifecycle stop");
+    }
+
+    private static void awaitLoopbackPortReleased(int port) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        IOException last = null;
+        while (System.nanoTime() < deadline) {
+            if (isLoopbackPortReleased(port)) return;
+            last = new IOException("Loopback API port remains occupied");
+            Thread.sleep(20);
+        }
+        throw new IOException("Loopback API port remained occupied", last);
+    }
+
+    private static boolean isLoopbackPortReleased(int port) {
+        try (ServerSocket ignored = new ServerSocket(
+                port, 1, InetAddress.getByName("127.0.0.1"))) {
+            return true;
+        } catch (IOException ignored) {
+            return false;
+        }
+    }
+
     private static void assertLoopbackPortReleased(int port) throws Exception {
         try (ServerSocket ignored = new ServerSocket(
                 port, 1, InetAddress.getByName("127.0.0.1"))) {
@@ -628,6 +1025,26 @@ public final class SyncthingExecutableProofTest {
         BuildRecord(String sha256, long size) {
             this.sha256 = sha256;
             this.size = size;
+        }
+    }
+
+    private static final class ObservedProcess {
+        final int pid;
+        final File executable;
+
+        ObservedProcess(int pid, File executable) {
+            this.pid = pid;
+            this.executable = executable;
+        }
+    }
+
+    private static final class ProcessTopology {
+        final int guardianPid;
+        final int workerPid;
+
+        ProcessTopology(int guardianPid, int workerPid) {
+            this.guardianPid = guardianPid;
+            this.workerPid = workerPid;
         }
     }
 }
