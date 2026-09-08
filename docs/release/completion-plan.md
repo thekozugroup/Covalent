@@ -37,7 +37,7 @@ Close every known release-blocking finding; do not remove a gate to raise a scor
 
 | Area | Required evidence | Current state |
 | --- | --- | --- |
-| Product scope | Explicit backup/sync semantics and a matching acceptance scenario | Automatic two-way sync is required. [ADR 0007](../adr/0007-maintained-folder-sync-engine.md) selects pinned Syncthing v2.1.3 after real Mac, Atmos Docker and immutable Android API-37 execution proofs. The private Rust client, protected identity/installation, effective-config verifier and managed session controller pass real macOS cold-restart and two-way session tests; see [adapter validation](engine-adapter-validation-2026-09-08.md). NodeRuntime/API wiring, durable authenticated folder invitations, native setup, lifecycle/revocation and final multi-device acceptance remain outstanding. Custom signed-history foundations remain isolated. |
+| Product scope | Explicit backup/sync semantics and a matching acceptance scenario | Automatic two-way sync is required. [ADR 0007](../adr/0007-maintained-folder-sync-engine.md) selects pinned Syncthing v2.1.3 after real Mac, Atmos Docker and immutable Android API-37 execution proofs. The private Rust client, protected identity/installation, effective-config verifier and managed session controller pass real macOS cold-restart and two-way session tests; see [adapter validation](engine-adapter-validation-2026-09-08.md). Durable invitations, NodeRuntime/API wiring and automatic authenticated delivery now pass a real two-node HTTP/QUIC proof including pause, restart, reverse sync and revocation. Native capability/UI/package integration, scan-before-exchange and final artifact acceptance remain outstanding. Custom signed-history foundations remain isolated. |
 | Core correctness | Unit, property, adversarial, migration, concurrency, corruption, interrupted-job and source-loss tests; strict lint | Checkpoint `a3acfc2` passes 686 local and hosted Rust tests across 22 suites, including 492 core tests, zero failed/ignored; strict workspace Clippy and 89 web tests pass. Every hosted software and CodeQL gate passes. Final automatic runtime and release confirmation remain required. |
 | Owner-device loss | A user can export a protected recovery kit, replace a lost owner device, discover its authenticated catalogs, see partial availability, and restore | API, CLI/runtime, web and native recovery flows pass. At source content matching `1839796`, the real Mac–Atmos Docker drill passed protected export, deletion of the entire original owner state, automatic catalog import and exact provider-only restore. Native UI also passes. Final artifacts and large-catalog memory evidence remain required. |
 | Beginner workflow | Install → connect → choose folder → protect → verify → restore through real UI; clear errors and recovery; no manual IDs in ordinary flows | Real browser unlock, automatic snapshot/name defaults, named backup selection, preview invalidation, restore and Verify passed with disposable files. Preview now explains individual file actions and renamed conflict destinations instead of raw JSON. Full cross-device onboarding pending. |
@@ -561,6 +561,21 @@ packages, credentials, private server inventories, or raw diagnostic bundles.
   repeated both engine hashes, then failed before instrumentation when the
   guardian dependency audit rejected `libdl.so`; NDK linkage review and an
   actual rerun remain required. See [adapter evidence](engine-adapter-validation-2026-09-08.md).
+
+- Checkpoint `92685a3` passed every hosted software and CodeQL gate. The later
+  maintained-engine integration snapshot passes 814 local Rust tests across
+  22 top-level suites, including 505 core, 228 node and nine JNI tests. The complete
+  production NodeRuntime proof passes automatic invitations, folder acceptance,
+  exact synchronization, pause/resume, cold recipient restart, reverse changes,
+  revocation and cleanup. Android proof `024afda` passes both exact API-37
+  guardian/executable tests and the target dependency scan with retained,
+  checked vulnerability dispositions. See the updated
+  [integration evidence](engine-adapter-validation-2026-09-08.md) for exact
+  hashes, separate artifact scopes and remaining gates. Native work remains
+  active. A signed macOS sandbox proof found no permitted short Unix socket
+  path; pinned loopback TLS integration is required before the packaged folder
+  engine can run. Backup remains independent. These are intermediate checks,
+  not a completed release.
 
 ## Work order
 

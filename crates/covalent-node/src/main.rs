@@ -457,6 +457,20 @@ async fn serve(configuration: ServeConfiguration) -> Result<()> {
     runtime_configuration.first_run_claim_enabled = ready_file.is_none() && !api_token_was_provided;
     runtime_configuration.tls_ca_certificate_file = tls_ca_file;
     runtime_configuration.ready_file = ready_file;
+    #[cfg(target_os = "macos")]
+    {
+        runtime_configuration.folder_sync_access_unavailable =
+            std::env::var_os("COVALENT_SYNC_ACCESS_UNAVAILABLE").is_some_and(|value| value == "1");
+    }
+    #[cfg(target_os = "macos")]
+    match covalent_node::sync_engine::discover_packaged_engine() {
+        Ok(Some(package)) => runtime_configuration.folder_sync = Some(package),
+        Ok(None) => {}
+        Err(error) => {
+            runtime_configuration.folder_sync_package_invalid = true;
+            tracing::warn!(?error, "packaged folder sync needs attention");
+        }
+    }
     let runtime = NodeRuntime::start(runtime_configuration).await?;
     shutdown_signal().await;
     runtime.stop().await

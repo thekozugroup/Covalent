@@ -55,6 +55,116 @@ paths:
                 $ref: "#/components/schemas/TransportIdentity"
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /api/v1/sync/status:
+    get:
+      summary: Read authenticated folder consent and observed worker health
+      operationId: folderSyncStatus
+      description: >-
+        Consent phases do not assert transfer completion. Folder errors are a bounded
+        first-page observation; idle does not prove a complete initial scan or peer convergence.
+        Local paths, engine IDs, credentials and raw engine errors are excluded.
+      responses:
+        "200":
+          description: Folder engine availability, consent and redacted observed health.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FolderSyncStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/sync/folders:
+    post:
+      summary: Choose a local folder and offer it to a paired device
+      operationId: offerFolder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FolderOfferRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/FolderSyncMutation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/sync/accept:
+    post:
+      summary: Choose a local destination and accept a folder invitation
+      operationId: acceptFolder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FolderAcceptRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/FolderSyncMutation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/sync/pause:
+    post:
+      summary: Pause or resume this device's participation in a shared folder
+      operationId: pauseFolder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FolderPauseRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/FolderSyncMutation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/sync/remove:
+    post:
+      summary: Stop sharing this folder while preserving local files
+      operationId: removeFolder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FolderReference"
+      responses:
+        "200":
+          $ref: "#/components/responses/FolderSyncMutation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/sync/retry:
+    post:
+      summary: Retry folder sync after resolving its reported problem
+      operationId: retryFolderSync
+      responses:
+        "200":
+          $ref: "#/components/responses/FolderSyncMutation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Conflict"
   /api/v1/discovery:
     get:
       summary: List untrusted discovery candidates
@@ -1306,6 +1416,14 @@ components:
               jobId:
                 $ref: "#/components/schemas/JobId"
   responses:
+    FolderSyncMutation:
+      description: >-
+        The local decision is durable. A needsAttention or stillStopping worker
+        lifecycle does not undo that decision; status reports further progress.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/FolderSyncMutationResult"
     ClientError:
       description: The route or HTTP method is not available.
       content:
@@ -1385,6 +1503,178 @@ components:
           schema:
             $ref: "#/components/schemas/PairingConfirmation"
   schemas:
+    FolderSyncMutationResult:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, offerId, lifecycle, issue]
+      properties:
+        schemaVersion:
+          const: 1
+        offerId:
+          type: [string, "null"]
+          format: uuid
+        lifecycle:
+          type: string
+          enum: [stopped, running, stillStopping, needsAttention]
+        issue:
+          type: [string, "null"]
+          enum: [null, journal, workerLaunch, workerHealth, workerStop, peerRevocation]
+    FolderReference:
+      type: object
+      additionalProperties: false
+      required: [offerId]
+      properties:
+        offerId:
+          type: string
+          format: uuid
+    FolderOfferRequest:
+      type: object
+      additionalProperties: false
+      required: [peerId, folderId, label, selectedRoot]
+      properties:
+        peerId:
+          $ref: "#/components/schemas/DeviceId"
+        folderId:
+          type: string
+          format: uuid
+        label:
+          type: string
+          minLength: 1
+          maxLength: 256
+        selectedRoot:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          description: Absolute folder selected by the local user; native hosts retain its OS access grant.
+    FolderAcceptRequest:
+      type: object
+      additionalProperties: false
+      required: [offerId, selectedRoot]
+      properties:
+        offerId:
+          type: string
+          format: uuid
+        selectedRoot:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          description: Absolute destination selected by the recipient; never sent to another peer.
+    FolderPauseRequest:
+      type: object
+      additionalProperties: false
+      required: [offerId, paused]
+      properties:
+        offerId:
+          type: string
+          format: uuid
+        paused:
+          type: boolean
+    FolderSyncStatus:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, availability, lifecycle, issue, healthFreshness, peers, shares, folders]
+      properties:
+        schemaVersion:
+          const: 1
+        availability:
+          type: string
+          enum: [notPackaged, needsAttention, available]
+        lifecycle:
+          type: string
+          enum: [stopped, running, stillStopping, needsAttention]
+        issue:
+          type: [string, "null"]
+          enum: [null, installation, folderAccess, journal, workerLaunch, workerHealth, workerStop, peerRevocation]
+        healthFreshness:
+          type: string
+          enum: [neverObserved, fresh, stale]
+        peers:
+          type: array
+          description: Paired devices with a current confirmed grant and retained transport pin, including devices without a backup storage role.
+          items:
+            $ref: "#/components/schemas/FolderSharingPeer"
+        shares:
+          type: array
+          maxItems: 4096
+          items:
+            $ref: "#/components/schemas/FolderShareSummary"
+        folders:
+          type: array
+          maxItems: 128
+          items:
+            $ref: "#/components/schemas/FolderHealthObservation"
+    FolderSharingPeer:
+      type: object
+      additionalProperties: false
+      required: [peerId, displayName]
+      properties:
+        peerId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+    FolderShareSummary:
+      type: object
+      additionalProperties: false
+      required: [offerId, folderId, label, peerId, incoming, phase, expiresAtUnixMs, expired]
+      properties:
+        offerId:
+          type: string
+          format: uuid
+        folderId:
+          type: string
+          format: uuid
+        label:
+          type: string
+          minLength: 1
+          maxLength: 256
+        peerId:
+          type: string
+          format: uuid
+        incoming:
+          type: boolean
+        phase:
+          type: string
+          enum: [offered, awaitingCommit, ready, paused, removed]
+        expiresAtUnixMs:
+          type: [integer, "null"]
+          minimum: 1
+          description: Deadline for an unaccepted invitation; null after a durable acceptance or removal.
+        expired:
+          type: boolean
+          description: The node's clock has reached the unaccepted invitation deadline.
+    FolderHealthObservation:
+      type: object
+      additionalProperties: false
+      required: [folderId, state, stateChanged, remainingFiles, remainingBytes, scanPullErrorCount, reportedErrorRows, statusError, watchError]
+      properties:
+        folderId:
+          type: string
+          format: uuid
+        state:
+          type: string
+          enum: [starting, idle, scanning, scan-waiting, sync-waiting, sync-preparing, syncing, cleaning, clean-waiting, error]
+        stateChanged:
+          type: string
+          format: date-time
+        remainingFiles:
+          type: integer
+          minimum: 0
+        remainingBytes:
+          type: integer
+          minimum: 0
+        scanPullErrorCount:
+          type: integer
+          minimum: 0
+        reportedErrorRows:
+          description: Rows in the first 128-row error page, not a total error count.
+          type: integer
+          minimum: 0
+          maximum: 128
+        statusError:
+          type: boolean
+        watchError:
+          type: boolean
     DeviceId:
       type: string
       format: uuid

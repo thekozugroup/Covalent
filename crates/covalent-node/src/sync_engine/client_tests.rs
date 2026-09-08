@@ -320,6 +320,39 @@ fn rejects_nonlocal_path_forms_and_header_injection() {
         EngineEndpoint::FolderStatus(id).path(),
         format!("/rest/db/status?folder={id}")
     );
+    assert_eq!(
+        EngineEndpoint::FolderErrors(id).path(),
+        format!("/rest/folder/errors?folder={id}&page=1&perpage=128")
+    );
+    assert_eq!(
+        EngineEndpoint::FolderVersions(id).path(),
+        format!("/rest/folder/versions?folder={id}")
+    );
+}
+
+#[test]
+fn folder_endpoints_use_canonical_uuid_query_values_only() {
+    let id = Uuid::parse_str("52f06d0f-8ff6-4c72-ae3a-d7817b34d853").unwrap();
+    for (endpoint, expected) in [
+        (
+            EngineEndpoint::FolderStatus(id),
+            "/rest/db/status?folder=52f06d0f-8ff6-4c72-ae3a-d7817b34d853",
+        ),
+        (
+            EngineEndpoint::FolderErrors(id),
+            "/rest/folder/errors?folder=52f06d0f-8ff6-4c72-ae3a-d7817b34d853&page=1&perpage=128",
+        ),
+        (
+            EngineEndpoint::FolderVersions(id),
+            "/rest/folder/versions?folder=52f06d0f-8ff6-4c72-ae3a-d7817b34d853",
+        ),
+    ] {
+        let path = endpoint.path();
+        assert_eq!(path, expected);
+        assert!(!path.contains('%'));
+        assert!(!path.contains('\n'));
+        assert_eq!(path.matches('?').count(), 1);
+    }
 }
 
 #[tokio::test]

@@ -78,7 +78,11 @@ class KeyProtectionContractTest {
         val rust = rustJniSource()
         assertTrue(
             "nativeStart's JNI descriptor must carry token, KEK, exact version, quotas, and protection",
-            rust.contains("\"(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJI)Ljava/lang/String;\""),
+            rust.contains(
+                "\"(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJIZLjava/lang/String;" +
+                    "Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)" +
+                    "Ljava/lang/String;\"",
+            ),
         )
         val kotlin = moduleFile("src/main/java/life/michaelwong/covalent/node/CovalentNative.kt")
             .readText()
@@ -90,15 +94,16 @@ class KeyProtectionContractTest {
             .map(String::trim)
             .filter(String::isNotEmpty)
         assertEquals(
-            "The descriptor (String, String, boolean, token[], KEK[], version, long, long, " +
-                "protection) has nine " +
-                "parameters; Kotlin declares ${parameters.size}: $parameters",
-            9,
+            "The descriptor has nine node parameters, one package-state boolean, and five " +
+                "verified sync-engine strings; " +
+                "Kotlin declares ${parameters.size}: $parameters",
+            15,
             parameters.size,
         )
+        assertTrue(parameters[9].endsWith(": Boolean"))
         assertTrue(
-            "The last parameter must be the Int protection level: ${parameters.last()}",
-            parameters.last().endsWith(": Int"),
+            "The final five parameters must be verified sync-engine strings: $parameters",
+            parameters.takeLast(5).all { it.endsWith(": String") },
         )
         assertTrue(
             "Native methods must stay registered from JNI_OnLoad, never exported by name",
@@ -111,7 +116,9 @@ class KeyProtectionContractTest {
         val rust = rustJniSource()
         assertTrue(
             rust.contains(
-                "\"(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJI[B[B)Ljava/lang/String;\"",
+                "\"(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJI[B[BZ" +
+                    "Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;" +
+                    "Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;\"",
             ),
         )
         val kotlin = moduleFile("src/main/java/life/michaelwong/covalent/node/CovalentNative.kt").readText()
@@ -123,8 +130,10 @@ class KeyProtectionContractTest {
             .split(",")
             .map(String::trim)
             .filter(String::isNotEmpty)
-        assertEquals(11, parameters.size)
-        assertTrue(parameters.takeLast(2).all { it.endsWith(": ByteArray") })
+        assertEquals(17, parameters.size)
+        assertTrue(parameters.slice(9..10).all { it.endsWith(": ByteArray") })
+        assertTrue(parameters[11].endsWith(": Boolean"))
+        assertTrue(parameters.takeLast(5).all { it.endsWith(": String") })
         assertTrue(rust.contains("take_java_secret(environment, &recovery_key)"))
         assertTrue(rust.contains("take_java_secret(environment, &recovery_kit)"))
         assertFalse(rust.contains("COVALENT_RECOVERY_KEY"))

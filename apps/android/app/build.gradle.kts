@@ -14,6 +14,10 @@ val releaseKeystorePath = releaseSecret("COVALENT_ANDROID_KEYSTORE_PATH")
 val releaseStorePassword = releaseSecret("COVALENT_ANDROID_STORE_PASSWORD")
 val releaseKeyAlias = releaseSecret("COVALENT_ANDROID_KEY_ALIAS")
 val releaseKeyPassword = releaseSecret("COVALENT_ANDROID_KEY_PASSWORD")
+val syncthingSourcePath = providers.gradleProperty("syncthingSourceDir")
+    .orElse(providers.environmentVariable("SYNCTHING_SOURCE_DIR"))
+val syncthingSourceDir = syncthingSourcePath.orNull?.let(::file)
+val syncEngineGeneratedRoot = layout.buildDirectory.dir("generated/syncEngine")
 val releaseSigningReady = listOf(
     releaseKeystorePath,
     releaseStorePassword,
@@ -69,6 +73,11 @@ android {
         targetSdk = 37
         versionCode = 2000
         versionName = "0.2.0"
+        buildConfigField(
+            "boolean",
+            "COVALENT_SYNC_ENGINE_PACKAGED",
+            (syncthingSourceDir != null).toString(),
+        )
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -117,11 +126,24 @@ android {
     packaging {
         // Preserve dependency license text in distributable artifacts.
         resources.merges += setOf("/META-INF/AL2.0", "/META-INF/LGPL2.1")
+        jniLibs {
+            // The maintained engine and its guardian execute directly from the
+            // installer-owned nativeLibraryDir. They are never copied to writable storage.
+            useLegacyPackaging = true
+            keepDebugSymbols += "**/libsyncthing.so"
+            keepDebugSymbols += "**/libengineguardian.so"
+        }
     }
 
     sourceSets {
         getByName("main").jniLibs.directories.add(
             layout.buildDirectory.dir("generated/jniLibs").get().asFile.absolutePath,
+        )
+        getByName("main").jniLibs.directories.add(
+            syncEngineGeneratedRoot.get().dir("jniLibs").asFile.absolutePath,
+        )
+        getByName("main").assets.directories.add(
+            syncEngineGeneratedRoot.get().dir("assets").asFile.absolutePath,
         )
     }
 
@@ -192,6 +214,39 @@ val buildAndroidJni = tasks.register<Exec>("buildAndroidJni") {
     outputs.dir(layout.buildDirectory.dir("generated/jniLibs"))
 }
 
+val buildAndroidSyncEngine = tasks.register<Exec>("buildAndroidSyncEngine") {
+    group = "build"
+    description = "Builds the exact Syncthing v2.1.3 worker and reviewed guardian for Android."
+    workingDir = covalentRepoRoot
+    val checkedSource = syncthingSourceDir
+    if (checkedSource == null) {
+        commandLine("false")
+        doFirst {
+            throw GradleException(
+                "Set -PsyncthingSourceDir=/absolute/path or SYNCTHING_SOURCE_DIR to the " +
+                    "exact official Syncthing v2.1.3 checkout.",
+            )
+        }
+    } else {
+        commandLine(
+            covalentRepoRoot.resolve("scripts/build-android-sync-engine.sh"),
+            checkedSource.canonicalPath,
+            syncEngineGeneratedRoot.get().asFile.canonicalPath,
+        )
+        inputs.files(
+            fileTree(checkedSource) {
+                exclude(".git/**", "**/gui.files.go")
+            },
+            covalentRepoRoot.resolve("scripts/build-android-sync-engine.sh"),
+            covalentRepoRoot.resolve("scripts/android-native-budgets.sh"),
+            covalentRepoRoot.resolve("packaging/sync-engine/engine-guardian.c"),
+        )
+    }
+    outputs.dir(syncEngineGeneratedRoot)
+    // Every requested packaging run must recheck source, toolchain, ELF policy and hashes.
+    outputs.upToDateWhen { false }
+}
+
 // `sourceSets.main.jniLibs.directories` above takes a plain path string, so
 // Gradle cannot infer that `buildAndroidJni` produces that directory and fails
 // validation with "uses this output ... without declaring an explicit or
@@ -201,12 +256,24 @@ val buildAndroidJni = tasks.register<Exec>("buildAndroidJni") {
 // every debug build, preserving the existing opt-in `covalentBuildNative`
 // behaviour and the unconditional `assembleRelease` dependency below.
 tasks.matching { it.name.endsWith("JniLibFolders") }.configureEach {
-    mustRunAfter(buildAndroidJni)
+    mustRunAfter(buildAndroidJni, buildAndroidSyncEngine)
+}
+// Assets use the same generated-root pattern. Keep every variant's merge after
+// the producer whenever the opt-in preBuild edge or a release task puts both
+// in the graph; this also makes Gradle's generated-directory relationship
+// explicit for AGP's validation.
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
+    mustRunAfter(buildAndroidSyncEngine)
 }
 
-tasks.matching { it.name == "assembleRelease" }.configureEach { dependsOn(buildAndroidJni) }
+tasks.matching { it.name == "assembleRelease" || it.name == "bundleRelease" }.configureEach {
+    dependsOn(buildAndroidJni, buildAndroidSyncEngine)
+}
 tasks.matching { it.name == "preBuild" }.configureEach {
     if (providers.gradleProperty("covalentBuildNative").orNull == "true") dependsOn(buildAndroidJni)
+    if (providers.gradleProperty("covalentBuildSyncEngine").orNull == "true") {
+        dependsOn(buildAndroidSyncEngine)
+    }
 }
 
 val generateAndroidSbom = tasks.register("generateAndroidSbom") {

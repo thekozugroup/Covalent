@@ -29,6 +29,7 @@ const PINNED_ENGINE_VERSION: &str = "v2.1.3";
 /// Already-authorized desired state for one engine session. The enclosing
 /// controller must persist and reconcile it with Covalent's current peer grants
 /// before launch; these values are never a substitute for pairing authority.
+#[derive(Clone, Eq, PartialEq)]
 pub struct EngineSessionSettings {
     /// Local device display name.
     pub device_name: String,
@@ -95,6 +96,7 @@ struct WorkerResources {
     _runtime: tempfile::TempDir,
     _installation: Arc<EngineInstallation>,
     _roots: Arc<Vec<FolderRootLease>>,
+    _worker_lease: super::installation::EngineWorkerLease,
 }
 
 struct FolderRootLease {
@@ -116,6 +118,9 @@ impl ManagedEngineSession {
         runtime_parent: &Path,
         settings: EngineSessionSettings,
     ) -> Result<Self, EngineSessionError> {
+        let worker_lease = installation
+            .claim_worker()
+            .map_err(|_| EngineSessionError::LaunchFailed)?;
         installation
             .revalidate()
             .map_err(|_| EngineSessionError::InvalidConfiguration)?;
@@ -186,6 +191,7 @@ impl ManagedEngineSession {
             _runtime: runtime,
             _installation: Arc::clone(&installation),
             _roots: Arc::clone(&roots),
+            _worker_lease: worker_lease,
         };
         let worker =
             OwnedEngineWorker::launch(guardian, engine, config_dir, database, Box::new(resources))
@@ -272,9 +278,39 @@ impl ManagedEngineSession {
             .map_err(|_| EngineSessionError::EngineUnavailable)
     }
 
+    /// Observe each authorized folder through the bounded private API. A
+    /// successful observation is not a promise that an initial scan is complete
+    /// or that every peer has received the same files.
+    pub async fn folder_health(&mut self) -> Result<Vec<super::FolderHealth>, EngineSessionError> {
+        if let Err(error) = self.revalidate_roots() {
+            self.worker.close_lifeline();
+            return Err(error);
+        }
+        let folders = self
+            .configuration
+            .folders()
+            .iter()
+            .map(|folder| folder.id())
+            .collect::<Vec<_>>();
+        let health = super::collect_folder_health(&self.client, &folders)
+            .await
+            .map_err(|_| EngineSessionError::EngineUnavailable)?;
+        if let Err(error) = self.revalidate_roots() {
+            self.worker.close_lifeline();
+            return Err(error);
+        }
+        Ok(health)
+    }
+
     /// Request stop through the owner lifeline and await bounded reaping.
     pub async fn stop(&mut self) -> Result<StopOutcome, super::EngineSupervisorError> {
         self.worker.stop().await
+    }
+
+    /// Close the owner lifeline synchronously before awaiting shutdown or
+    /// changing authority. This is idempotent; actual reaping still uses stop.
+    pub fn close_lifeline(&mut self) {
+        self.worker.close_lifeline();
     }
 
     fn revalidate_roots(&self) -> Result<(), EngineSessionError> {

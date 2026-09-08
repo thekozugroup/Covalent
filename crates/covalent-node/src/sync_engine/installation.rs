@@ -6,6 +6,8 @@
 use std::fmt;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use covalent_core::sync::state_dir::{
     PrivateStateDir, PrivateStateInventoryName, PrivateStateLock, StateKey,
@@ -55,6 +57,8 @@ pub struct EngineInstallation {
     directory_identity: (u64, u64),
     identity: EngineIdentity,
     device_id: EngineDeviceId,
+    state_writer: Mutex<()>,
+    worker_active: AtomicBool,
 }
 
 impl fmt::Debug for EngineInstallation {
@@ -138,6 +142,8 @@ impl EngineInstallation {
             directory_identity,
             identity,
             device_id,
+            state_writer: Mutex::new(()),
+            worker_active: AtomicBool::new(false),
         };
         installation.revalidate()?;
         Ok(installation)
@@ -179,6 +185,45 @@ impl EngineInstallation {
 
     pub(super) fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub(super) fn state_directory(&self) -> &PrivateStateDir {
+        &self.directory
+    }
+
+    pub(super) fn state_lock(&self) -> &PrivateStateLock {
+        &self.lock
+    }
+
+    pub(super) fn state_writer(&self) -> &Mutex<()> {
+        &self.state_writer
+    }
+
+    pub(super) fn claim_worker(
+        self: &Arc<Self>,
+    ) -> Result<EngineWorkerLease, EngineInstallationError> {
+        self.revalidate()?;
+        self.worker_active
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| EngineInstallationError::Unavailable)?;
+        Ok(EngineWorkerLease {
+            installation: Arc::clone(self),
+        })
+    }
+}
+
+// Held by WorkerResources through the dedicated reaper, including when the
+// async startup caller is cancelled. Cloning an installation does not permit
+// another in-process launch before the exact prior guardian has been reaped.
+pub(super) struct EngineWorkerLease {
+    installation: Arc<EngineInstallation>,
+}
+
+impl Drop for EngineWorkerLease {
+    fn drop(&mut self) {
+        self.installation
+            .worker_active
+            .store(false, Ordering::Release);
     }
 }
 

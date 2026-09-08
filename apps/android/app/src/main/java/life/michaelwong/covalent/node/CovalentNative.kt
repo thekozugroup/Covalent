@@ -21,6 +21,12 @@ internal object CovalentNative {
         maximumTotalBytes: Long,
         freeSpaceReserveBytes: Long,
         keyProtectionLevel: Int,
+        syncPackageInvalid: Boolean,
+        syncGuardianPath: String,
+        syncGuardianSha256: String,
+        syncWorkerPath: String,
+        syncWorkerSha256: String,
+        syncRuntimeDirectory: String,
     ): String
 
     @JvmStatic
@@ -36,6 +42,12 @@ internal object CovalentNative {
         keyProtectionLevel: Int,
         recoveryKit: ByteArray,
         recoveryKey: ByteArray,
+        syncPackageInvalid: Boolean,
+        syncGuardianPath: String,
+        syncGuardianSha256: String,
+        syncWorkerPath: String,
+        syncWorkerSha256: String,
+        syncRuntimeDirectory: String,
     ): String
 
     @JvmStatic
@@ -64,9 +76,11 @@ internal object CovalentNative {
         maximumTotalBytes: Long,
         freeSpaceReserveBytes: Long,
         keyProtectionLevel: KeyProtectionLevel,
+        syncEngine: PackagedSyncEnginePackage,
     ): NativeNodeResponse {
         if (!libraryLoaded) return NativeNodeResponse.unavailable()
         return parse(runCatching {
+            val packaged = syncEngine.verifiedOrNull()
             nativeStart(
                 dataDirectory,
                 deviceName,
@@ -77,6 +91,12 @@ internal object CovalentNative {
                 maximumTotalBytes,
                 freeSpaceReserveBytes,
                 keyProtectionLevel.wireValue,
+                syncEngine is PackagedSyncEnginePackage.Invalid,
+                packaged?.guardianPath.orEmpty(),
+                packaged?.guardianSha256.orEmpty(),
+                packaged?.workerPath.orEmpty(),
+                packaged?.workerSha256.orEmpty(),
+                packaged?.runtimeDirectory.orEmpty(),
             )
         }.getOrElse { NativeNodeResponse.unavailable().toJson() })
     }
@@ -98,9 +118,11 @@ internal object CovalentNative {
         keyProtectionLevel: KeyProtectionLevel,
         recoveryKit: ByteArray,
         recoveryKey: ByteArray,
+        syncEngine: PackagedSyncEnginePackage,
     ): NativeNodeResponse {
         if (!libraryLoaded) return NativeNodeResponse.unavailable()
         return parse(runCatching {
+            val packaged = syncEngine.verifiedOrNull()
             nativeRecoverStart(
                 dataDirectory,
                 deviceName,
@@ -113,6 +135,12 @@ internal object CovalentNative {
                 keyProtectionLevel.wireValue,
                 recoveryKit,
                 recoveryKey,
+                syncEngine is PackagedSyncEnginePackage.Invalid,
+                packaged?.guardianPath.orEmpty(),
+                packaged?.guardianSha256.orEmpty(),
+                packaged?.workerPath.orEmpty(),
+                packaged?.workerSha256.orEmpty(),
+                packaged?.runtimeDirectory.orEmpty(),
             )
         }.getOrElse { NativeNodeResponse.unavailable().toJson() })
     }
@@ -139,6 +167,9 @@ internal object CovalentNative {
         }
     }.getOrElse { NativeNodeResponse.unavailable() }
 }
+
+private fun PackagedSyncEnginePackage.verifiedOrNull(): VerifiedPackagedSyncEngine? =
+    (this as? PackagedSyncEnginePackage.Verified)?.engine
 
 internal data class NativeNodeResponse(
     val ok: Boolean,

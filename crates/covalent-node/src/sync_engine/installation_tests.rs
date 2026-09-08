@@ -111,3 +111,20 @@ fn replaced_root_and_symlink_database_are_rejected_without_repair() {
         EngineInstallationError::Unavailable
     );
 }
+
+#[test]
+fn worker_lease_survives_owner_drop_and_prevents_second_in_process_launch() {
+    let (_fixture, root) = fixture();
+    let installation = Arc::new(EngineInstallation::create(&root, &protector(1)).unwrap());
+    let lease = installation.claim_worker().unwrap();
+    assert!(installation.claim_worker().is_err());
+    let other_handle = Arc::clone(&installation);
+    drop(installation);
+    assert!(other_handle.claim_worker().is_err());
+    assert!(EngineInstallation::open(&root, &protector(1)).is_err());
+    drop(lease);
+    let next = other_handle.claim_worker().unwrap();
+    drop(next);
+    drop(other_handle);
+    assert!(EngineInstallation::open(&root, &protector(1)).is_ok());
+}

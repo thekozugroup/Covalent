@@ -1792,6 +1792,111 @@ func realDaemonBackupVerifyAndRestore() async throws {
     #expect(!FileManager.default.fileExists(atPath: target.appending(path: "z-after.txt").path))
 }
 
+@Test func folderStatusUsesCanonicalEndpointAndDecodesInvitationExpiry() async throws {
+    let peer = UUID()
+    let offer = UUID()
+    let folder = UUID()
+    let recorder = RequestRecorder { request in
+        #expect(request.url?.path == "/api/v1/sync/status")
+        #expect(request.httpMethod == "GET")
+        return TestResponse.response(
+            request,
+            status: 200,
+            json: """
+            {"schemaVersion":1,"availability":"available","lifecycle":"running","issue":null,"healthFreshness":"fresh","peers":[{"peerId":"\(peer.uuidString.lowercased())","displayName":"Kitchen Mac"}],"shares":[{"offerId":"\(offer.uuidString.lowercased())","folderId":"\(folder.uuidString.lowercased())","label":"Plans","peerId":"\(peer.uuidString.lowercased())","incoming":true,"phase":"offered","expiresAtUnixMs":1234,"expired":true}],"folders":[]}
+            """
+        )
+    }
+
+    let status = try await makeClient(recorder: recorder, token: String(repeating: "s", count: 32)).folderSyncStatus()
+    #expect(status.peers == [FolderSyncPeer(peerId: peer, displayName: "Kitchen Mac")])
+    #expect(status.shares[0].expired)
+    #expect(status.shares[0].expiresAtUnixMs == 1234)
+    #expect(status.displayState(for: status.shares[0]) == .invitationExpired)
+}
+
+@Test func folderMutationsUseBoundedCanonicalRoutesAndPayloads() async throws {
+    let peer = UUID()
+    let offer = UUID()
+    let folder = UUID()
+    let sequence = RequestSequence()
+    let recorder = RequestRecorder(removeAfterRequest: false) { request in
+        switch sequence.next() {
+        case 0:
+            #expect(request.url?.path == "/api/v1/sync/folders")
+            #expect(request.httpMethod == "POST")
+            let payload = try #require(requestBody(request))
+            let object = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+            #expect(object["peerId"] as? String == peer.uuidString.lowercased())
+            #expect(object["folderId"] as? String == folder.uuidString.lowercased())
+            #expect(object["label"] as? String == "Plans")
+            #expect(object["selectedRoot"] as? String == "/chosen/by/user")
+        case 1:
+            #expect(request.url?.path == "/api/v1/sync/accept")
+        case 2:
+            #expect(request.url?.path == "/api/v1/sync/pause")
+        case 3:
+            #expect(request.url?.path == "/api/v1/sync/remove")
+        case 4:
+            #expect(request.url?.path == "/api/v1/sync/retry")
+        default:
+            Issue.record("Unexpected folder mutation request")
+        }
+        return TestResponse.response(
+            request,
+            status: 200,
+            json: "{\"offerId\":\"\(offer.uuidString.lowercased())\",\"lifecycle\":\"running\",\"issue\":null}"
+        )
+    }
+    let client = try makeClient(recorder: recorder, token: String(repeating: "m", count: 32))
+    _ = try await client.offerFolder(FolderOfferRequest(peerId: peer, folderId: folder, label: "Plans", selectedRoot: "/chosen/by/user"))
+    _ = try await client.acceptFolder(FolderAcceptRequest(offerId: offer, selectedRoot: "/chosen/by/user"))
+    _ = try await client.pauseFolder(FolderPauseRequest(offerId: offer, paused: true))
+    _ = try await client.removeFolder(FolderReferenceRequest(offerId: offer))
+    _ = try await client.retryFolderSync()
+}
+
+@Test func folderStateDoesNotClaimRemoteConvergenceFromIdleHealth() {
+    let peer = UUID()
+    let offered = FolderShare(
+        offerId: UUID(), folderId: UUID(), label: "Plans", peerId: peer,
+        incoming: false, phase: .offered, expiresAtUnixMs: 10, expired: false
+    )
+    let ready = FolderShare(
+        offerId: UUID(), folderId: UUID(), label: "Plans", peerId: peer,
+        incoming: false, phase: .ready, expiresAtUnixMs: nil, expired: false
+    )
+    let healthy = FolderHealth(
+        folderId: ready.folderId, state: "idle", remainingFiles: 0, remainingBytes: 0,
+        scanPullErrorCount: 0, reportedErrorRows: 0, statusError: false, watchError: false
+    )
+    let status = FolderSyncStatus(
+        availability: "available", lifecycle: "running", issue: nil, healthFreshness: "fresh",
+        peers: [FolderSyncPeer(peerId: peer, displayName: "Kitchen Mac")],
+        shares: [offered, ready], folders: [healthy]
+    )
+    #expect(status.displayState(for: offered) == .waitingForOtherDevice)
+    #expect(status.displayState(for: ready) == .folderReady)
+    #expect(status.displayState(for: ready).label != "Up to date")
+
+    let scanning = FolderSyncStatus(
+        availability: "available", lifecycle: "running", issue: nil, healthFreshness: "fresh",
+        peers: [], shares: [ready], folders: [FolderHealth(
+            folderId: ready.folderId, state: "scanning", remainingFiles: 0, remainingBytes: 0,
+            scanPullErrorCount: 0, reportedErrorRows: 0, statusError: false, watchError: false
+        )]
+    )
+    let failed = FolderSyncStatus(
+        availability: "available", lifecycle: "running", issue: nil, healthFreshness: "fresh",
+        peers: [], shares: [ready], folders: [FolderHealth(
+            folderId: ready.folderId, state: "error", remainingFiles: 0, remainingBytes: 0,
+            scanPullErrorCount: 0, reportedErrorRows: 0, statusError: false, watchError: false
+        )]
+    )
+    #expect(scanning.displayState(for: ready) == .checkingFolder)
+    #expect(failed.displayState(for: ready) == .needsAttention)
+}
+
 private func policyRestorePlan(
     inventory: AppleArchiveTransfer.TargetInventoryDraft,
     policy: ConflictPolicy,

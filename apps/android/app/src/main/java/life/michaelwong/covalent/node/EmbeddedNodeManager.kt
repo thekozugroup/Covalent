@@ -329,6 +329,7 @@ class EmbeddedNodeManager(context: Context) {
             }
         return try {
             val lanEnabled = acquireLanDiscoveryPermission(request.lanDiscoveryRequested)
+            val syncEngine = PackagedSyncEngine.load(applicationContext)
             CovalentNative.recoverStart(
                 dataDirectory = privateNodeDirectory().path,
                 deviceName = "${Build.MODEL.take(64)} Android",
@@ -341,6 +342,7 @@ class EmbeddedNodeManager(context: Context) {
                 keyProtectionLevel = protection,
                 recoveryKit = request.material.kit,
                 recoveryKey = request.material.key,
+                syncEngine = syncEngine,
             ).let { response ->
                 if (!response.ok || response.apiBaseUrl == null || response.handle == null) {
                     releaseMulticastLock()
@@ -403,6 +405,7 @@ class EmbeddedNodeManager(context: Context) {
             }
         return try {
             val lanEnabled = acquireLanDiscoveryPermission()
+            val syncEngine = PackagedSyncEngine.load(applicationContext)
             CovalentNative.start(
                 dataDirectory = privateNodeDirectory().path,
                 deviceName = "${Build.MODEL.take(64)} Android",
@@ -413,6 +416,7 @@ class EmbeddedNodeManager(context: Context) {
                 maximumTotalBytes = maxBytes,
                 freeSpaceReserveBytes = keepFreeBytes,
                 keyProtectionLevel = protection,
+                syncEngine = syncEngine,
             ).also { response ->
                 if (response.ok && response.apiBaseUrl != null) {
                     localStore.baseUrl = response.apiBaseUrl

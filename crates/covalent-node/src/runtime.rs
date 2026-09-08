@@ -206,6 +206,17 @@ pub struct NodeRuntimeConfig {
     /// is the container deployment. Without it a claim still succeeds and simply
     /// carries no certificate, which is correct for a loopback-only node.
     pub tls_ca_certificate_file: Option<PathBuf>,
+    /// Optional host-verified maintained sync engine package. Backup/recovery
+    /// stays available if its separate installation needs repair.
+    #[cfg(unix)]
+    pub folder_sync: Option<crate::sync_engine::FolderSyncRuntimeConfig>,
+    /// The host found a sync package but could not verify it. Keep the local
+    /// API and backup runtime available with an actionable sync status.
+    #[cfg(unix)]
+    pub folder_sync_package_invalid: bool,
+    /// The native host could not restore all saved folder capabilities.
+    #[cfg(unix)]
+    pub folder_sync_access_unavailable: bool,
 }
 
 impl NodeRuntimeConfig {
@@ -232,6 +243,12 @@ impl NodeRuntimeConfig {
             ready_file: None,
             first_run_claim_enabled: false,
             tls_ca_certificate_file: None,
+            #[cfg(unix)]
+            folder_sync: None,
+            #[cfg(unix)]
+            folder_sync_package_invalid: false,
+            #[cfg(unix)]
+            folder_sync_access_unavailable: false,
         }
     }
 }
@@ -304,6 +321,12 @@ impl NodeRuntime {
             ready_file,
             first_run_claim_enabled,
             tls_ca_certificate_file,
+            #[cfg(unix)]
+            folder_sync,
+            #[cfg(unix)]
+            folder_sync_package_invalid,
+            #[cfg(unix)]
+            folder_sync_access_unavailable,
         } = configuration;
 
         let key_protector =
@@ -453,6 +476,26 @@ impl NodeRuntime {
             .context("inspect recovery progress")?
             .then(|| (Arc::clone(&recovery_state), Arc::clone(&engine)));
         state = state.with_recovery_state(Arc::clone(&recovery_state));
+        #[cfg(unix)]
+        if folder_sync_access_unavailable {
+            state = state.with_folder_sync(
+                crate::sync_engine::FolderSyncRuntimeState::FolderAccessUnavailable,
+            );
+        } else if folder_sync_package_invalid {
+            state =
+                state.with_folder_sync(crate::sync_engine::FolderSyncRuntimeState::NeedsAttention);
+        } else if let Some(folder_sync) = folder_sync {
+            state = state.with_folder_sync(
+                folder_sync
+                    .prepare(
+                        &data_directory,
+                        Arc::clone(&engine),
+                        Arc::clone(&key_protector),
+                        static_advertised_peer_address,
+                    )
+                    .await,
+            );
+        }
         if let Some(address) = static_advertised_peer_address {
             state = state.with_peer_address(address);
         }
@@ -469,6 +512,13 @@ impl NodeRuntime {
         )
         .context("open pairing Start admission state")?;
         let quic_node = quic_node.with_pairing_service(Arc::new(pairing_service));
+        #[cfg(unix)]
+        let quic_node = match &state.folder_sync {
+            crate::sync_engine::FolderSyncRuntimeState::Ready(service) => {
+                quic_node.with_folder_service(Arc::clone(service))
+            }
+            _ => quic_node,
+        };
 
         if let Some(path) = ready_file.as_deref()
             && let Err(error) = write_node_ready_file(
@@ -573,6 +623,19 @@ async fn supervise_runtime(
     shutdown_sender: watch::Sender<bool>,
     startup: SupervisorStartup,
 ) -> Result<()> {
+    #[cfg(unix)]
+    let folder_sync = state.folder_sync.clone();
+    #[cfg(unix)]
+    let delivery_task = match &folder_sync {
+        crate::sync_engine::FolderSyncRuntimeState::Ready(service) => {
+            Some(tokio::spawn(crate::sync_delivery::run(
+                Arc::clone(&state.engine),
+                Arc::clone(service),
+                shutdown.clone(),
+            )))
+        }
+        _ => None,
+    };
     let mut http_task = tokio::spawn(async move {
         axum::serve(listener, router(state))
             .with_graceful_shutdown(wait_for_shutdown(shutdown))
@@ -610,6 +673,18 @@ async fn supervise_runtime(
         .context("release QUIC peer endpoint");
 
     let discovery_result = discovery.set_enabled(false).context("stop LAN discovery");
+    #[cfg(unix)]
+    let delivery_result = match delivery_task {
+        Some(delivery_task) => {
+            let _ = shutdown_sender.send(true);
+            delivery_task
+                .await
+                .context("join folder invitation delivery")
+        }
+        None => Ok(()),
+    };
+    #[cfg(unix)]
+    let folder_sync_result = stop_folder_sync(folder_sync).await;
     if let Some(task) = recovery_task {
         match task.await {
             Ok(Ok(_)) => {}
@@ -627,7 +702,36 @@ async fn supervise_runtime(
     result?;
     quic_release_result?;
     discovery_result?;
+    #[cfg(unix)]
+    delivery_result?;
+    #[cfg(unix)]
+    folder_sync_result?;
     readiness_result
+}
+
+#[cfg(unix)]
+async fn stop_folder_sync(state: crate::sync_engine::FolderSyncRuntimeState) -> Result<()> {
+    use crate::sync_engine::{FolderSyncLifecycle, FolderSyncRuntimeState, FolderSyncServiceError};
+    let FolderSyncRuntimeState::Ready(service) = state else {
+        return Ok(());
+    };
+    let result = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        loop {
+            match service.stop().await {
+                Ok(FolderSyncLifecycle::Stopped) => return Ok(()),
+                Ok(FolderSyncLifecycle::StillStopping) | Err(FolderSyncServiceError::Busy) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+                _ => return Err(anyhow!("folder sync shutdown needs attention")),
+            }
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("folder sync worker is still stopping"))?;
+    // Drop closes the exact lifeline even when shutdown failed. The dedicated
+    // reaper retains installation/root leases until actual child exit.
+    drop(service);
+    result
 }
 
 async fn wait_for_shutdown(mut shutdown: watch::Receiver<bool>) {
@@ -804,6 +908,115 @@ mod tests {
             .await
             .expect("read response");
         response
+    }
+
+    #[cfg(unix)]
+    fn sync_configuration(directory: &TempDir) -> NodeRuntimeConfig {
+        use crate::sync_engine::{FolderSyncRuntimeConfig, VerifiedEngineExecutable};
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut configuration = test_configuration(directory);
+        let executable = directory.path().join("unused-folder-helper");
+        let bytes = b"#!/bin/sh\nexit 99\n";
+        fs::write(&executable, bytes).unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let executable = fs::canonicalize(executable).unwrap();
+        configuration.folder_sync = Some(FolderSyncRuntimeConfig {
+            guardian: VerifiedEngineExecutable::open(&executable, Sha256::digest(bytes).into())
+                .unwrap(),
+            worker: VerifiedEngineExecutable::open(&executable, Sha256::digest(bytes).into())
+                .unwrap(),
+            runtime_parent: fs::canonicalize(directory.path()).unwrap(),
+            listener: "127.0.0.1:43871".parse().unwrap(),
+            advertised_address: Some("127.0.0.1:43871".parse().unwrap()),
+        });
+        configuration
+    }
+
+    #[cfg(unix)]
+    async fn sync_status(runtime: &NodeRuntime) -> serde_json::Value {
+        let ready = runtime.ready_info();
+        let response = request(ready.api_address(), &format!(
+            "GET /api/v1/sync/status HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {}\r\nConnection: close\r\n\r\n",
+            ready.api_token().expose(),
+        )).await;
+        assert!(response.contains(" 200 "), "{response}");
+        serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unavailable_folder_engine_preserves_backup_and_never_creates_sync_state() {
+        for (access_unavailable, expected_issue) in
+            [(false, "installation"), (true, "folderAccess")]
+        {
+            let directory = TempDir::new().unwrap();
+            let mut configuration = sync_configuration(&directory);
+            // Host failures win even with a contradictory verified package.
+            configuration.folder_sync_package_invalid = true;
+            configuration.folder_sync_access_unavailable = access_unavailable;
+            let runtime = NodeRuntime::start(configuration).await.unwrap();
+            let status = sync_status(&runtime).await;
+            assert_eq!(status["availability"], "needsAttention");
+            assert_eq!(status["issue"], expected_issue);
+            assert!(!directory.path().join("folder-sync").exists());
+            let health = request(
+                runtime.ready_info().api_address(),
+                "GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            )
+            .await;
+            assert!(health.contains(" 200 "));
+            runtime.stop().await.unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn packaged_folder_sync_bootstraps_once_and_damage_preserves_backup_runtime() {
+        let directory = TempDir::new().unwrap();
+        let runtime = NodeRuntime::start(sync_configuration(&directory))
+            .await
+            .unwrap();
+        let denied = request(
+            runtime.ready_info().api_address(),
+            "GET /api/v1/sync/status HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert!(denied.contains(" 401 "));
+        let first = sync_status(&runtime).await;
+        assert_eq!(first["availability"], "available");
+        assert_eq!(first["lifecycle"], "stopped");
+        assert_eq!(first["healthFreshness"], "neverObserved");
+        assert_eq!(first["shares"], serde_json::json!([]));
+        let root = directory.path().join("folder-sync");
+        let identity = fs::read(root.join("engine-identity.v1")).unwrap();
+        runtime.stop().await.unwrap();
+        drop(runtime);
+
+        let runtime = NodeRuntime::start(sync_configuration(&directory))
+            .await
+            .unwrap();
+        assert_eq!(sync_status(&runtime).await, first);
+        runtime.stop().await.unwrap();
+        drop(runtime);
+        assert_eq!(fs::read(root.join("engine-identity.v1")).unwrap(), identity);
+
+        // Missing consent state must not turn into an empty writable default.
+        fs::remove_file(root.join("folder-sharing.v1")).unwrap();
+        let runtime = NodeRuntime::start(sync_configuration(&directory))
+            .await
+            .unwrap();
+        let unavailable = sync_status(&runtime).await;
+        assert_eq!(unavailable["availability"], "needsAttention");
+        assert_eq!(unavailable["issue"], "installation");
+        assert!(!root.join("folder-sharing.v1").exists());
+        assert_eq!(fs::read(root.join("engine-identity.v1")).unwrap(), identity);
+        let health = request(
+            runtime.ready_info().api_address(),
+            "GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert!(health.contains(" 200 "));
+        runtime.stop().await.unwrap();
     }
 
     #[tokio::test]

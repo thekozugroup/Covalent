@@ -195,8 +195,32 @@ import Testing
     #expect(manager.contains("hasProtectedLocalSecret"))
     #expect(manager.contains("keyStore.loadExisting()"))
     #expect(!manager.contains("local-api-token"))
-    #expect(!manager.contains("process.environment"))
+    #expect(manager.contains("process.environment = childEnvironment()"))
+    #expect(manager.contains("COVALENT_SYNC_RUNTIME_DIR"))
+    #expect(manager.contains("environment.removeValue(forKey: \"COVALENT_SYNC_ACCESS_UNAVAILABLE\")"))
     #expect(!manager.contains("COVALENT_KEY_ENCRYPTION_KEY="))
+    #expect(!manager.contains("COVALENT_API_TOKEN="))
+}
+
+@Test func managedNodeShutdownRetainsIdentityUntilConfirmedExit() throws {
+    let appleRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let manager = try String(
+        contentsOf: appleRoot.appending(path: "Sources/CovalentMac/LocalNodeManager.swift"),
+        encoding: .utf8
+    )
+    let stop = try #require(manager.range(of: "private func stopManagedNode()"))
+    let finish = try #require(manager.range(of: "private func finishManagedNodeStop("))
+    let stopBody = manager[stop.lowerBound..<finish.lowerBound]
+
+    #expect(stopBody.contains("guard !managedStopRequested else { return }"))
+    #expect(stopBody.contains("guard process.isRunning else"))
+    #expect(stopBody.contains("try await Task.sleep"))
+    #expect(!stopBody.contains("ownedProcess = nil"))
+    #expect(!stopBody.contains("managedProcessID = nil"))
+    #expect(manager.contains("guard ownedProcess === expectedProcess"))
 }
 
 @Test func appleHarnessesNeverExtractADaemonTokenOrPassItAsLaunchMetadata() throws {

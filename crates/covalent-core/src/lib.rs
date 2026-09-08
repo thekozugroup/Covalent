@@ -6,6 +6,9 @@ mod backup;
 mod chunker;
 mod crypto;
 mod engine;
+mod folder_sharing;
+#[cfg(test)]
+mod folder_sharing_tests;
 mod identity;
 mod key_envelope;
 mod manifest;
@@ -30,6 +33,13 @@ pub use engine::{
     Engine, EngineOptions, JobControl, JobState, MAX_UNACKNOWLEDGED_BACKUP_RESULTS, NodeConfig,
     RecoveredBackup, RecoveryImportReport, RecoverySnapshotCursor, RememberedBackupState,
     RosterCursor, SnapshotAvailabilityReport,
+};
+pub use folder_sharing::{
+    FolderSharingError, MAX_FOLDER_SHARE_LIFETIME_MS, accept_folder_share_offer,
+    commit_folder_share, create_folder_share_offer, folder_share_acceptance_digest,
+    folder_share_offer_digest, verify_folder_share_acceptance, verify_folder_share_commit,
+    verify_folder_share_offer, verify_fresh_folder_share_acceptance,
+    verify_fresh_folder_share_offer,
 };
 pub use identity::{DeviceIdentity, PublicIdentity};
 pub use key_envelope::{

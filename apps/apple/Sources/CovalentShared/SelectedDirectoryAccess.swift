@@ -3,6 +3,15 @@ import Foundation
 public enum DirectoryAccessPurpose: String, Codable, Sendable {
     case backupSource
     case restoreDestination
+    case folderSync
+
+    public var displayName: String {
+        switch self {
+        case .backupSource: "Backup source"
+        case .restoreDestination: "Restore destination"
+        case .folderSync: "Folder sync"
+        }
+    }
 }
 
 public struct SelectedDirectoryGrant: Codable, Equatable, Identifiable, Sendable {
@@ -169,6 +178,7 @@ public enum SelectedDirectoryError: Error, Equatable, Sendable {
     case permissionRevoked
     case accessDenied
     case coordinationFailed
+    case tooManyFolderSyncGrants
 }
 
 extension SelectedDirectoryError: LocalizedError {
@@ -180,6 +190,7 @@ extension SelectedDirectoryError: LocalizedError {
         case .permissionRevoked: "This folder is no longer available. Choose it again to restore access."
         case .accessDenied: "Covalent could not open this folder. Check its permission and try again."
         case .coordinationFailed: "The system could not coordinate safe access to this folder."
+        case .tooManyFolderSyncGrants: "Remove a shared folder before adding another one."
         }
     }
 }

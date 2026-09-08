@@ -16,6 +16,7 @@ use covalent_core::{ProviderQuotaPolicy, RecoveryUnlockKey, StaticKeyProtector};
 use covalent_node::runtime::{
     LocalApiTokenSource, NodeRuntime, NodeRuntimeConfig, RecoveryBootstrap,
 };
+use covalent_node::sync_engine::{FolderSyncRuntimeConfig, VerifiedEngineExecutable};
 use covalent_protocol::PlatformTier;
 use jni::EnvUnowned;
 use jni::objects::{JByteArray, JClass, JString};
@@ -30,6 +31,7 @@ const MAX_LIVE_NODES: usize = 2;
 const MIN_PROVIDER_BYTES: u64 = 256 * 1_024 * 1_024;
 const MAX_PROVIDER_BYTES: u64 = 8 * 1_024 * 1_024 * 1_024 * 1_024;
 const MAX_RECOVERY_KIT_BYTES: usize = 16 * 1_024 * 1_024;
+const FOLDER_SYNC_PORT: u16 = 8_789;
 // Android Keystore protection levels, mirroring
 // `life.michaelwong.covalent.node.KeyProtectionLevel`.  Kotlin owns the probe
 // because only the platform can answer it: it generates the AES-GCM protector
@@ -228,6 +230,8 @@ struct StartNodeRequest {
     free_space_reserve_bytes: u64,
     key_protection_level: i32,
     recovery: Option<RecoveryBootstrap>,
+    folder_sync: Option<FolderSyncRuntimeConfig>,
+    folder_sync_package_invalid: bool,
 }
 
 fn start_node(request: StartNodeRequest) -> NativeResponse<'static> {
@@ -242,6 +246,8 @@ fn start_node(request: StartNodeRequest) -> NativeResponse<'static> {
         free_space_reserve_bytes,
         key_protection_level,
         recovery,
+        folder_sync,
+        folder_sync_package_invalid,
     } = request;
     let recovering = recovery.is_some();
     let result = (|| {
@@ -292,6 +298,8 @@ fn start_node(request: StartNodeRequest) -> NativeResponse<'static> {
         configuration.api_token = LocalApiTokenSource::Provided(token);
         configuration.key_protector = Some(Arc::new(protector));
         configuration.recovery = recovery;
+        configuration.folder_sync = folder_sync;
+        configuration.folder_sync_package_invalid = folder_sync_package_invalid;
         let node = match runtime.block_on(NodeRuntime::start(configuration)) {
             Ok(node) => node,
             Err(_) => {
@@ -485,6 +493,60 @@ fn recovery_bootstrap(
     })
 }
 
+fn packaged_folder_sync(
+    package_invalid: bool,
+    guardian_path: String,
+    guardian_sha256: String,
+    worker_path: String,
+    worker_sha256: String,
+    runtime_directory: String,
+) -> (Option<FolderSyncRuntimeConfig>, bool) {
+    let values = [
+        guardian_path.as_str(),
+        guardian_sha256.as_str(),
+        worker_path.as_str(),
+        worker_sha256.as_str(),
+        runtime_directory.as_str(),
+    ];
+    if package_invalid {
+        return (None, true);
+    }
+    if values.iter().all(|value| value.is_empty()) {
+        return (None, false);
+    }
+    if values
+        .iter()
+        .any(|value| value.is_empty() || value.len() > 16_384)
+    {
+        return (None, true);
+    }
+    let Ok(guardian_digest) = VerifiedEngineExecutable::parse_sha256_hex(&guardian_sha256) else {
+        return (None, true);
+    };
+    let Ok(worker_digest) = VerifiedEngineExecutable::parse_sha256_hex(&worker_sha256) else {
+        return (None, true);
+    };
+    let Ok(guardian) =
+        VerifiedEngineExecutable::open(PathBuf::from(guardian_path), guardian_digest)
+    else {
+        return (None, true);
+    };
+    let Ok(worker) = VerifiedEngineExecutable::open(PathBuf::from(worker_path), worker_digest)
+    else {
+        return (None, true);
+    };
+    (
+        Some(FolderSyncRuntimeConfig {
+            guardian,
+            worker,
+            runtime_parent: PathBuf::from(runtime_directory),
+            listener: SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), FOLDER_SYNC_PORT),
+            advertised_address: None,
+        }),
+        false,
+    )
+}
+
 extern "system" fn native_start<'local>(
     unowned: EnvUnowned<'local>,
     _class: JClass<'local>,
@@ -497,12 +559,26 @@ extern "system" fn native_start<'local>(
     maximum_total_bytes: jlong,
     free_space_reserve_bytes: jlong,
     key_protection_level: jint,
+    sync_package_invalid: jboolean,
+    sync_guardian_path: JString<'local>,
+    sync_guardian_sha256: JString<'local>,
+    sync_worker_path: JString<'local>,
+    sync_worker_sha256: JString<'local>,
+    sync_runtime_directory: JString<'local>,
 ) -> jstring {
     with_java_response(unowned, |environment| {
         let data_directory = data_directory.to_string();
         let device_name = device_name.to_string();
         let token = take_java_secret(environment, &api_token);
         let key = take_java_secret(environment, &key_encryption_key);
+        let (folder_sync, folder_sync_package_invalid) = packaged_folder_sync(
+            sync_package_invalid,
+            sync_guardian_path.to_string(),
+            sync_guardian_sha256.to_string(),
+            sync_worker_path.to_string(),
+            sync_worker_sha256.to_string(),
+            sync_runtime_directory.to_string(),
+        );
         match (token, key) {
             (Ok(token), Ok(key)) if maximum_total_bytes > 0 && free_space_reserve_bytes >= 0 => {
                 start_node(StartNodeRequest {
@@ -516,6 +592,8 @@ extern "system" fn native_start<'local>(
                     free_space_reserve_bytes: free_space_reserve_bytes as u64,
                     key_protection_level,
                     recovery: None,
+                    folder_sync,
+                    folder_sync_package_invalid,
                 })
             }
             _ => NativeResponse::error(
@@ -540,6 +618,12 @@ extern "system" fn native_recover_start<'local>(
     key_protection_level: jint,
     recovery_kit: JByteArray<'local>,
     recovery_key: JByteArray<'local>,
+    sync_package_invalid: jboolean,
+    sync_guardian_path: JString<'local>,
+    sync_guardian_sha256: JString<'local>,
+    sync_worker_path: JString<'local>,
+    sync_worker_sha256: JString<'local>,
+    sync_runtime_directory: JString<'local>,
 ) -> jstring {
     with_java_response(unowned, |environment| {
         let data_directory = data_directory.to_string();
@@ -550,6 +634,14 @@ extern "system" fn native_recover_start<'local>(
         let key_encryption_key = take_java_secret(environment, &key_encryption_key);
         let recovery_kit = take_java_secret(environment, &recovery_kit);
         let recovery_key = take_java_secret(environment, &recovery_key);
+        let (folder_sync, folder_sync_package_invalid) = packaged_folder_sync(
+            sync_package_invalid,
+            sync_guardian_path.to_string(),
+            sync_guardian_sha256.to_string(),
+            sync_worker_path.to_string(),
+            sync_worker_sha256.to_string(),
+            sync_runtime_directory.to_string(),
+        );
         match (token, key_encryption_key, recovery_kit, recovery_key) {
             (Ok(token), Ok(key_encryption_key), Ok(recovery_kit), Ok(recovery_key))
                 if maximum_total_bytes > 0 && free_space_reserve_bytes >= 0 =>
@@ -574,6 +666,8 @@ extern "system" fn native_recover_start<'local>(
                     free_space_reserve_bytes: free_space_reserve_bytes as u64,
                     key_protection_level,
                     recovery: Some(recovery),
+                    folder_sync,
+                    folder_sync_package_invalid,
                 })
             }
             _ => NativeResponse::error(
@@ -636,11 +730,11 @@ pub unsafe extern "system" fn JNI_OnLoad(
             let class = environment.find_class(JNIString::from(NATIVE_CLASS))?;
             let native_start_name = JNIString::from("nativeStart");
             let native_start_signature = JNIString::from(
-                "(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJI)Ljava/lang/String;",
+                "(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJIZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
             );
             let native_recover_start_name = JNIString::from("nativeRecoverStart");
             let native_recover_start_signature = JNIString::from(
-                "(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJI[B[B)Ljava/lang/String;",
+                "(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJI[B[BZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
             );
             let native_stop_name = JNIString::from("nativeStop");
             let native_stop_signature = JNIString::from("(J)Ljava/lang/String;");
@@ -697,7 +791,7 @@ mod tests {
     use super::{
         IdentityProtection, MAX_RECOVERY_KIT_BYTES, NativeRegistry, PROTECTION_SOFTWARE,
         PROTECTION_STRONGBOX, PROTECTION_TRUSTED_ENVIRONMENT, PROTECTION_UNAVAILABLE,
-        identity_protection_accepted, provider_quota, recovery_bootstrap,
+        identity_protection_accepted, packaged_folder_sync, provider_quota, recovery_bootstrap,
     };
 
     #[test]
@@ -757,6 +851,8 @@ mod tests {
             free_space_reserve_bytes: 512 * 1_024 * 1_024,
             key_protection_level: PROTECTION_UNAVAILABLE,
             recovery: None,
+            folder_sync: None,
+            folder_sync_package_invalid: false,
         });
         assert!(!response.ok);
         assert_eq!(response.code, "secure_key_protector_required");
@@ -781,6 +877,8 @@ mod tests {
                 free_space_reserve_bytes: 512 * 1_024 * 1_024,
                 key_protection_level: PROTECTION_SOFTWARE,
                 recovery: None,
+                folder_sync: None,
+                folder_sync_package_invalid: false,
             });
             assert!(!response.ok);
             assert_eq!(response.code, "invalid_key_encryption_key");
@@ -799,6 +897,31 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn packaged_folder_sync_distinguishes_absent_from_invalid_input() {
+        let empty = || String::new();
+        let (absent, absent_invalid) =
+            packaged_folder_sync(false, empty(), empty(), empty(), empty(), empty());
+        assert!(absent.is_none());
+        assert!(!absent_invalid);
+
+        let (declared_invalid, invalid) =
+            packaged_folder_sync(true, empty(), empty(), empty(), empty(), empty());
+        assert!(declared_invalid.is_none());
+        assert!(invalid);
+
+        let (partial, partial_invalid) = packaged_folder_sync(
+            false,
+            "/installed/libengineguardian.so".to_owned(),
+            empty(),
+            empty(),
+            empty(),
+            empty(),
+        );
+        assert!(partial.is_none());
+        assert!(partial_invalid);
     }
 
     #[test]

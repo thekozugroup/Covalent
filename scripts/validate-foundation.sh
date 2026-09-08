@@ -72,6 +72,10 @@ scripts/validate-setup-paths.sh
 scripts/build-personal-macos-app.sh
 scripts/build-personal-android-apk.sh
 scripts/test-personal-macos-app-builder.sh
+scripts/test-macos-sync-engine-packaging.sh
+scripts/build-android-sync-engine.sh
+scripts/prepare-sync-engine-source.sh
+scripts/test-android-native-package.sh
 scripts/test-personal-android-apk-builder.sh
 scripts/test-android-jni-build-command.sh
 scripts/test-openapi-routes.sh
@@ -136,6 +140,8 @@ fi
 node ./scripts/test-setup-guidance.mjs
 ./scripts/test-setup-paths.sh
 ./scripts/test-personal-macos-app-builder.sh
+./scripts/test-macos-sync-engine-packaging.sh
+./scripts/test-android-native-package.sh
 ./scripts/test-personal-android-apk-builder.sh
 ./scripts/test-android-jni-build-command.sh
 ./scripts/test-remote-drill-owner-loss.sh

@@ -237,6 +237,7 @@ class EmbeddedNodeProviderManifestTest {
             keyProtectionLevel = KeyProtectionLevel.SOFTWARE,
             recoveryKit = kit,
             recoveryKey = recoveryKey,
+            syncEngine = PackagedSyncEnginePackage.Absent,
         )
         assertTrue(!response.ok)
         listOf(token, kek, kit, recoveryKey).forEach { bytes ->

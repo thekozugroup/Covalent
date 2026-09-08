@@ -208,6 +208,8 @@ struct MacRootView: View {
             MacOverviewView(model: model)
         case .backups:
             MacBackupsView(model: model)
+        case .folders:
+            MacFoldersView(model: model)
         case .devices:
             MacDevicesView(model: model)
         case .settings:

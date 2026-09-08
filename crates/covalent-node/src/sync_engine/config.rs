@@ -125,46 +125,9 @@ impl fmt::Debug for EngineDeviceId {
 impl EngineDeviceId {
     /// Validate and retain one exact canonical upstream identity string.
     pub fn parse(value: &str) -> Result<Self, EngineConfigError> {
-        if value.len() != DEVICE_ID_UNCHUNKED_BYTES + DEVICE_ID_CHUNKS - 1
-            || value
-                .split('-')
-                .any(|chunk| chunk.len() != DEVICE_ID_CHUNK_BYTES)
-        {
-            return Err(EngineConfigError::InvalidDeviceId);
-        }
-        let mut unchunked = [0_u8; DEVICE_ID_UNCHUNKED_BYTES];
-        let mut position = 0;
-        for byte in value.bytes() {
-            if byte == b'-' {
-                continue;
-            }
-            if !LUHN_ALPHABET.contains(&byte) {
-                return Err(EngineConfigError::InvalidDeviceId);
-            }
-            unchunked[position] = byte;
-            position += 1;
-        }
-        if position != unchunked.len() {
-            return Err(EngineConfigError::InvalidDeviceId);
-        }
-        for block in unchunked.chunks_exact(LUHN_BLOCK_BYTES) {
-            if luhn32(&block[..LUHN_DATA_BYTES]) != Some(block[LUHN_DATA_BYTES]) {
-                return Err(EngineConfigError::InvalidDeviceId);
-            }
-        }
-        let mut payload = [0_u8; 52];
-        for (destination, block) in payload
-            .chunks_exact_mut(LUHN_DATA_BYTES)
-            .zip(unchunked.chunks_exact(LUHN_BLOCK_BYTES))
-        {
-            destination.copy_from_slice(&block[..LUHN_DATA_BYTES]);
-        }
-        if payload.iter().all(|byte| *byte == b'A')
-            || !matches!(payload.last().copied(), Some(b'A' | b'Q'))
-        {
-            return Err(EngineConfigError::InvalidDeviceId);
-        }
-        Ok(Self(value.into()))
+        let canonical = covalent_protocol::SyncEngineDeviceId::parse(value)
+            .map_err(|_| EngineConfigError::InvalidDeviceId)?;
+        Ok(Self(canonical.as_str().into()))
     }
 
     /// Derive the upstream identity from certificate DER using SHA-256 and the
@@ -270,7 +233,7 @@ impl EngineApiKey {
 }
 
 /// One explicitly paired remote engine and its only direct address.
-#[derive(Clone)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct EnginePeerConfig {
     id: EngineDeviceId,
     name: Box<str>,
@@ -338,7 +301,7 @@ impl EnginePeerConfig {
 /// One exact local root and the explicit engine identities authorized to share
 /// it. Root admission here is provisional; the controller must retain and
 /// revalidate its no-follow descriptor capability before starting the engine.
-#[derive(Clone)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct EngineFolderConfig {
     id: Uuid,
     label: Box<str>,

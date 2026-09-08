@@ -1405,6 +1405,61 @@ impl Engine {
         self.identity.sign(domain, transcript)
     }
 
+    /// Sign a folder invitation for a currently trusted peer without exposing
+    /// the owner key. This alone does not authorize a local folder or launch sync.
+    #[allow(clippy::too_many_arguments)]
+    pub fn issue_folder_share_offer(
+        &self,
+        target: DeviceId,
+        folder_id: uuid::Uuid,
+        label: &str,
+        binding: covalent_protocol::SyncEngineBinding,
+        pairing_id: Option<&str>,
+        now_unix_ms: u64,
+        lifetime_ms: u64,
+    ) -> Result<covalent_protocol::FolderShareOffer, crate::FolderSharingError> {
+        self.trusted_peer_identity(target)
+            .map_err(|_| crate::FolderSharingError::WrongPeer)?;
+        crate::create_folder_share_offer(
+            &self.identity,
+            target,
+            folder_id,
+            label,
+            binding,
+            pairing_id,
+            now_unix_ms,
+            lifetime_ms,
+        )
+    }
+
+    /// Sign acceptance of a trusted peer's invitation. The node must durably
+    /// record the user's selected local folder before returning this signature.
+    pub fn accept_folder_share(
+        &self,
+        offer: &covalent_protocol::FolderShareOffer,
+        binding: covalent_protocol::SyncEngineBinding,
+        now_unix_ms: u64,
+    ) -> Result<covalent_protocol::FolderShareAcceptance, crate::FolderSharingError> {
+        let source = self
+            .trusted_peer_identity(offer.source_device_id)
+            .map_err(|_| crate::FolderSharingError::WrongPeer)?;
+        crate::accept_folder_share_offer(offer, &source, &self.identity, binding, now_unix_ms)
+    }
+
+    /// Sign the final record after both peers consent. Durable state and worker
+    /// reconciliation remain the enclosing node coordinator's responsibility.
+    pub fn commit_folder_share_offer(
+        &self,
+        offer: &covalent_protocol::FolderShareOffer,
+        acceptance: &covalent_protocol::FolderShareAcceptance,
+        now_unix_ms: u64,
+    ) -> Result<covalent_protocol::FolderShareCommit, crate::FolderSharingError> {
+        let target = self
+            .trusted_peer_identity(offer.target_device_id)
+            .map_err(|_| crate::FolderSharingError::WrongPeer)?;
+        crate::commit_folder_share(offer, acceptance, &self.identity, &target, now_unix_ms)
+    }
+
     /// Issues and durably reserves one backup-scoped remote storage lease.
     pub fn issue_storage_lease(
         &self,

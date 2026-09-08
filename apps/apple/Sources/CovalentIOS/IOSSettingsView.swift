@@ -60,12 +60,18 @@ struct IOSSettingsView: View {
                                 .frame(width: 25)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(grant.displayName)
-                                Text(grant.purpose == .backupSource ? "Backup source" : "Restore destination")
+                                Text(grant.purpose.displayName)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Button("Remove", role: .destructive) { grantToRemove = grant }
+                            if grant.purpose == .folderSync {
+                                Text("Manage in Folders")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Button("Remove", role: .destructive) { grantToRemove = grant }
+                            }
                                 .font(.subheadline)
                         }
                     }

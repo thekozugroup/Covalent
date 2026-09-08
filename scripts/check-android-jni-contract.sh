@@ -9,6 +9,10 @@ service="$repo_root/apps/android/app/src/main/java/life/michaelwong/covalent/nod
 manifest="$repo_root/apps/android/app/src/main/AndroidManifest.xml"
 package_gate="$repo_root/scripts/check-android-native-package.sh"
 verification_metadata="$repo_root/apps/android/gradle/verification-metadata.xml"
+sync_builder="$repo_root/scripts/build-android-sync-engine.sh"
+sync_guardian="$repo_root/packaging/sync-engine/engine-guardian.c"
+gradle_build="$repo_root/apps/android/app/build.gradle.kts"
+packaged_sync="$repo_root/apps/android/app/src/main/java/life/michaelwong/covalent/node/PackagedSyncEngine.kt"
 
 test -f "$crate/Cargo.toml"
 test -f "$crate/src/lib.rs"
@@ -16,6 +20,9 @@ test -f "$native"
 test -f "$manager"
 test -f "$service"
 test -f "$verification_metadata"
+test -x "$sync_builder"
+test -f "$sync_guardian"
+test -f "$packaged_sync"
 
 # AAPT2 resolves a host-specific executable JAR lazily during resource
 # processing. Dependency verification generated on macOS therefore sees only
@@ -102,6 +109,35 @@ grep -Fq 'FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE' "$service"
 grep -Fq 'FOREGROUND_SERVICE_CONNECTED_DEVICE' "$manifest"
 grep -Fq 'foregroundServiceType="connectedDevice"' "$manifest"
 grep -Fq 'nativeStart' "$native"
+
+# The maintained folder engine is built from a git archive of one exact
+# official source commit. Its executable guardian is the byte-identical source
+# reviewed for the macOS package, and no prebuilt ELF is tracked here.
+test "$(shasum -a 256 "$sync_guardian" | awk '{print $1}')" = \
+  c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579
+grep -Fq 'expected_commit=946e2b83a1f6c6ae119427c09e0a5802940b82ff' "$sync_builder"
+grep -Fq "expected_go='go version go1.26.7 '" "$sync_builder"
+grep -Fq 'expected_ndk=27.1.12297006' "$sync_builder"
+grep -Fq 'git -C "$source_dir" archive --format=tar "$expected_commit"' "$sync_builder"
+grep -Fq 'GOFLAGS=-mod=readonly' "$sync_builder"
+grep -Fq -- '-goos android' "$sync_builder"
+grep -Fq -- '-no-upgrade' "$sync_builder"
+grep -Fq -- '-version v2.1.3' "$sync_builder"
+grep -Fq 'max-page-size=16384' "$sync_builder"
+grep -Fq 'useLegacyPackaging = true' "$gradle_build"
+grep -Fq 'keepDebugSymbols += "**/libsyncthing.so"' "$gradle_build"
+grep -Fq 'keepDebugSymbols += "**/libengineguardian.so"' "$gradle_build"
+grep -Fq 'it.name.startsWith("merge") && it.name.endsWith("Assets")' "$gradle_build"
+grep -Fq 'mustRunAfter(buildAndroidSyncEngine)' "$gradle_build"
+grep -Fq 'COVALENT_SYNC_ENGINE_PACKAGED' "$gradle_build"
+grep -Fq 'PackagedSyncEnginePackage.Invalid' "$packaged_sync"
+grep -Fq 'folder_sync_package_invalid' "$crate/src/lib.rs"
+if git -C "$repo_root" ls-files '*.so' | \
+  grep -E '(^|/)(libsyncthing|libengineguardian)\.so$' >/dev/null; then
+  echo "Prebuilt folder-engine executables must not be committed to the product source" >&2
+  exit 1
+fi
+"$repo_root/scripts/test-android-native-package.sh"
 
 # The embedded on-device provider is an explicit opt-in that must never disturb
 # a separately configured external node. That contract used to be asserted by

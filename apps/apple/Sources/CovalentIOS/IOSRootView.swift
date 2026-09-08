@@ -23,6 +23,12 @@ struct IOSRootView: View {
             NavigationStack {
                 IOSDevicesView(model: model)
             }
+            .tabItem { Label("Folders", systemImage: "folder") }
+            .tag(AppSection.folders)
+
+            NavigationStack {
+                IOSDevicesView(model: model)
+            }
             .tabItem { Label("Devices", systemImage: "laptopcomputer.and.iphone") }
             .tag(AppSection.devices)
 

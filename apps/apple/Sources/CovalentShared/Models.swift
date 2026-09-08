@@ -890,3 +890,240 @@ public struct SnapshotRecord: Codable, Equatable, Identifiable, Sendable {
         self.integrity = integrity
     }
 }
+
+public enum FolderSharePhase: String, Codable, Sendable {
+    case offered
+    case awaitingCommit
+    case ready
+    case paused
+    case removed
+}
+
+public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
+    public let offerId: UUID
+    public let folderId: UUID
+    public let label: String
+    public let peerId: UUID
+    public let incoming: Bool
+    public let phase: FolderSharePhase
+    /// Present only for an unaccepted invitation. The node supplies this from
+    /// its own clock; the client never tries to decide expiry locally.
+    public let expiresAtUnixMs: UInt64?
+    public let expired: Bool
+
+    public var id: UUID { offerId }
+
+    public init(
+      offerId: UUID,
+      folderId: UUID,
+      label: String,
+      peerId: UUID,
+      incoming: Bool,
+      phase: FolderSharePhase,
+      expiresAtUnixMs: UInt64?,
+      expired: Bool
+    ) {
+      self.offerId = offerId
+      self.folderId = folderId
+      self.label = label
+      self.peerId = peerId
+      self.incoming = incoming
+      self.phase = phase
+      self.expiresAtUnixMs = expiresAtUnixMs
+      self.expired = expired
+    }
+}
+
+public struct FolderHealth: Codable, Equatable, Identifiable, Sendable {
+    public let folderId: UUID
+    public let state: String
+    public let remainingFiles: UInt64
+    public let remainingBytes: UInt64
+    public let scanPullErrorCount: UInt64
+    public let reportedErrorRows: UInt16
+    public let statusError: Bool
+    public let watchError: Bool
+
+    public var id: UUID { folderId }
+
+    public init(
+      folderId: UUID,
+      state: String,
+      remainingFiles: UInt64,
+      remainingBytes: UInt64,
+      scanPullErrorCount: UInt64,
+      reportedErrorRows: UInt16,
+      statusError: Bool,
+      watchError: Bool
+    ) {
+      self.folderId = folderId
+      self.state = state
+      self.remainingFiles = remainingFiles
+      self.remainingBytes = remainingBytes
+      self.scanPullErrorCount = scanPullErrorCount
+      self.reportedErrorRows = reportedErrorRows
+      self.statusError = statusError
+      self.watchError = watchError
+    }
+}
+
+public struct FolderSyncPeer: Codable, Equatable, Identifiable, Sendable {
+    public let peerId: UUID
+    public let displayName: String
+
+    public var id: UUID { peerId }
+
+    public init(peerId: UUID, displayName: String) {
+      self.peerId = peerId
+      self.displayName = displayName
+    }
+}
+
+public struct FolderSyncStatus: Codable, Equatable, Sendable {
+    public let availability: String
+    public let lifecycle: String
+    public let issue: String?
+    public let healthFreshness: String
+    public let peers: [FolderSyncPeer]
+    public let shares: [FolderShare]
+    public let folders: [FolderHealth]
+
+    public init(
+      availability: String,
+      lifecycle: String,
+      issue: String?,
+      healthFreshness: String,
+      peers: [FolderSyncPeer],
+      shares: [FolderShare],
+      folders: [FolderHealth]
+    ) {
+      self.availability = availability
+      self.lifecycle = lifecycle
+      self.issue = issue
+      self.healthFreshness = healthFreshness
+      self.peers = peers
+      self.shares = shares
+      self.folders = folders
+    }
+}
+
+public enum FolderShareDisplayState: Equatable, Sendable {
+    case invitationExpired
+    case waitingForOtherDevice
+    case waitingForConnection
+    case checkingFolder
+    case syncing
+    case folderReady
+    case paused
+    case needsAttention
+
+    public var label: String {
+      switch self {
+      case .invitationExpired: "Invitation expired"
+      case .waitingForOtherDevice: "Waiting for other device"
+      case .waitingForConnection: "Waiting for connection"
+      case .checkingFolder: "Checking folder"
+      case .syncing: "Syncing"
+      case .folderReady: "Folder ready"
+      case .paused: "Paused"
+      case .needsAttention: "Needs attention"
+      }
+    }
+}
+
+extension FolderSyncStatus {
+    /// This is deliberately local-engine health, not a remote-convergence
+    /// claim. The status endpoint currently has no connected-peer signal.
+    public func displayState(for share: FolderShare) -> FolderShareDisplayState {
+      if share.expired {
+        return .invitationExpired
+      }
+      if share.phase == .paused {
+        return .paused
+      }
+      if lifecycle == "needsAttention" || issue != nil {
+        return .needsAttention
+      }
+      if share.phase == .offered || share.phase == .awaitingCommit {
+        return .waitingForOtherDevice
+      }
+      guard healthFreshness == "fresh",
+        let health = folders.first(where: { $0.folderId == share.folderId })
+      else {
+        return .waitingForConnection
+      }
+      if health.statusError || health.watchError || health.scanPullErrorCount > 0
+        || health.reportedErrorRows > 0
+      {
+        return .needsAttention
+      }
+      switch health.state.lowercased() {
+      case "error":
+        return .needsAttention
+      case "starting", "scanning":
+        return .checkingFolder
+      case "syncing":
+        return .syncing
+      case "idle":
+        return health.remainingFiles > 0 || health.remainingBytes > 0 ? .syncing : .folderReady
+      default:
+        return .waitingForConnection
+      }
+    }
+}
+
+public struct FolderSyncMutation: Codable, Equatable, Sendable {
+    public let offerId: UUID?
+    public let lifecycle: String
+    public let issue: String?
+
+    public init(offerId: UUID?, lifecycle: String, issue: String?) {
+      self.offerId = offerId
+      self.lifecycle = lifecycle
+      self.issue = issue
+    }
+}
+
+public struct FolderOfferRequest: Codable, Equatable, Sendable {
+    public let peerId: UUID
+    public let folderId: UUID
+    public let label: String
+    /// A local, user-selected directory only. It is sent to the local node and
+    /// is never rendered by the client outside the user's own picker context.
+    public let selectedRoot: String
+
+    public init(peerId: UUID, folderId: UUID, label: String, selectedRoot: String) {
+      self.peerId = peerId
+      self.folderId = folderId
+      self.label = label
+      self.selectedRoot = selectedRoot
+    }
+}
+
+public struct FolderAcceptRequest: Codable, Equatable, Sendable {
+    public let offerId: UUID
+    public let selectedRoot: String
+
+    public init(offerId: UUID, selectedRoot: String) {
+      self.offerId = offerId
+      self.selectedRoot = selectedRoot
+    }
+}
+
+public struct FolderPauseRequest: Codable, Equatable, Sendable {
+    public let offerId: UUID
+    public let paused: Bool
+
+    public init(offerId: UUID, paused: Bool) {
+      self.offerId = offerId
+      self.paused = paused
+    }
+}
+
+public struct FolderReferenceRequest: Codable, Equatable, Sendable {
+    public let offerId: UUID
+
+    public init(offerId: UUID) {
+      self.offerId = offerId
+    }
+}

@@ -244,7 +244,7 @@ jobs:
             exit 1
           fi
           echo "COVALENT_SIGNING_IDENTITY=${identity}" >> "${GITHUB_ENV}"
-      - name: Sign fixed app and helper, then verify team and designated requirements
+      - name: Sign fixed app and helpers, then verify team and designated requirements
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
@@ -254,9 +254,17 @@ jobs:
           app_executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "${info_plist}")
           app_binary="${app}/Contents/MacOS/${app_executable}"
           helper="${app}/Contents/MacOS/covalent-node"
-          for target in "${app}" "${app_binary}" "${helper}"; do
+          guardian="${app}/Contents/MacOS/covalent-engine-guardian"
+          worker="${app}/Contents/MacOS/covalent-syncthing"
+          engine_resources="${app}/Contents/Resources/CovalentSyncEngine"
+          for target in "${app}" "${app_binary}" "${helper}" "${guardian}" "${worker}" "${engine_resources}"; do
             test -e "${target}" && test ! -L "${target}"
           done
+          "${GITHUB_WORKSPACE}/apps/apple/Scripts/sign-sync-engine-bundle.sh" \
+            "${app}/Contents/MacOS" \
+            "${engine_resources}" \
+            "${COVALENT_SIGNING_IDENTITY}" \
+            timestamp
           codesign \
             --force \
             --sign "${COVALENT_SIGNING_IDENTITY}" \
@@ -278,7 +286,7 @@ jobs:
           COVALENT_REQUIRE_HARDENED_RUNTIME=true \
             COVALENT_REQUIRE_DEVELOPER_ID=true \
             "${GITHUB_WORKSPACE}/scripts/verify-apple-silicon-bundle.sh" "${app}"
-          for target in "${app}" "${helper}"; do
+          for target in "${app}" "${helper}" "${guardian}" "${worker}"; do
             signature=$(codesign -d --verbose=4 "${target}" 2>&1)
             printf '%s\n' "${signature}" | grep -Fqx "TeamIdentifier=${APPLE_TEAM_ID}"
             printf '%s\n' "${signature}" | grep -Fq 'Authority=Developer ID Application:'
@@ -287,6 +295,10 @@ jobs:
           printf '%s\n' "${app_requirements}" | grep -Fq 'designated => identifier "life.michaelwong.covalent.macos"'
           helper_requirements=$(codesign -d -r- "${helper}" 2>&1)
           printf '%s\n' "${helper_requirements}" | grep -Fq 'designated => identifier "life.michaelwong.covalent.node"'
+          guardian_requirements=$(codesign -d -r- "${guardian}" 2>&1)
+          printf '%s\n' "${guardian_requirements}" | grep -Fq 'designated => identifier "life.michaelwong.covalent.engine-guardian"'
+          worker_requirements=$(codesign -d -r- "${worker}" 2>&1)
+          printf '%s\n' "${worker_requirements}" | grep -Fq 'designated => identifier "life.michaelwong.covalent.syncthing"'
       - name: Package verified signed handoff
         env:
           RELEASE_VERSION: ${{ needs.build-unsigned.outputs.version }}

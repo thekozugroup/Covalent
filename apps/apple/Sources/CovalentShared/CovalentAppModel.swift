@@ -6,7 +6,24 @@ import Foundation
 public protocol LocalNodeBootstrapping: AnyObject {
     /// Must not create a directory, Keychain item, process, or identity.
     func startupDisposition() throws -> LocalNodeStartupDisposition
+    /// Resolves and retains every persisted folder-sync scope before the helper
+    /// starts. A failed restoration must prevent launch.
+    func prepareFolderSyncDirectoryGrants(_ grants: [SelectedDirectoryGrant]) async throws
     func start(mode: LocalNodeStartupMode) async throws -> NodeConnectionConfiguration
+    /// Replaces the helper after a new folder-sync grant is durably saved so its
+    /// process inherits the complete retained security scopes.
+    func restartForFolderSyncDirectoryGrants(_ grants: [SelectedDirectoryGrant]) async throws
+      -> NodeConnectionConfiguration
+}
+
+extension LocalNodeBootstrapping {
+    public func prepareFolderSyncDirectoryGrants(_ grants: [SelectedDirectoryGrant]) async throws {}
+
+    public func restartForFolderSyncDirectoryGrants(_ grants: [SelectedDirectoryGrant]) async throws
+      -> NodeConnectionConfiguration
+    {
+      throw NodeClientError.invalidResponse
+    }
 }
 
 public enum ServicePhase: Equatable, Sendable {
@@ -19,6 +36,7 @@ public enum ServicePhase: Equatable, Sendable {
 public enum AppSection: String, CaseIterable, Identifiable, Sendable {
     case overview
     case backups
+    case folders
     case devices
     case settings
 
@@ -28,6 +46,7 @@ public enum AppSection: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .overview: "Overview"
         case .backups: "Backups"
+        case .folders: "Folders"
         case .devices: "Devices"
         case .settings: "Settings"
         }
@@ -37,6 +56,7 @@ public enum AppSection: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .overview: "square.grid.2x2"
         case .backups: "externaldrive"
+        case .folders: "folder"
         case .devices: "laptopcomputer.and.iphone"
         case .settings: "gearshape"
         }
@@ -170,6 +190,12 @@ public final class CovalentAppModel: ObservableObject {
     @Published public private(set) var status: NodeStatus?
     @Published public private(set) var settings: ExportedDeviceSettings?
     @Published public private(set) var providers: [ProviderConnection] = []
+    @Published public private(set) var folderSyncStatus: FolderSyncStatus?
+    @Published public private(set) var folderSyncLoading = false
+    /// A fixed, user-actionable message. Technical API errors stay in the
+    /// normal alert detail and are never shown in the folder list.
+    @Published public private(set) var folderSyncError: String?
+    @Published public private(set) var folderSyncMutationInFlight = false
     @Published public private(set) var backups: [BackupSummary] = []
     @Published public private(set) var discoveryCandidates: [DiscoveryCandidate] = []
     @Published public var backupDraftBackupId: UUID?
@@ -455,6 +481,7 @@ public final class CovalentAppModel: ObservableObject {
         phase = .starting
         do {
             if let localNodeBootstrapper {
+                try await localNodeBootstrapper.prepareFolderSyncDirectoryGrants(directoryGrants)
                 let managedConfiguration = try await localNodeBootstrapper.start(mode: mode)
                 if managedConfiguration != configuration {
                     configuration = managedConfiguration
@@ -466,6 +493,8 @@ public final class CovalentAppModel: ObservableObject {
             guard configuration.apiToken != nil else {
                 settings = nil
                 providers = []
+                folderSyncStatus = nil
+                folderSyncError = "Connect to this Mac's local service to manage folders."
                 backups = []
                 discoveryCandidates = []
                 phase = .needsAuthorization
@@ -474,9 +503,17 @@ public final class CovalentAppModel: ObservableObject {
             async let exportedSettings = client.exportSettings()
             async let providerConnections = client.providers()
             async let backupSummaries = client.backups()
+            async let folders = client.folderSyncStatus()
             settings = try await exportedSettings
             providers = try await providerConnections
             backups = try await backupSummaries
+            do {
+                folderSyncStatus = try await folders
+                folderSyncError = nil
+            } catch {
+                folderSyncStatus = nil
+                folderSyncError = "Folder sync status is unavailable."
+            }
             discoveryCandidates = (try? await client.discoveryCandidates()) ?? []
             lastRefreshedAt = Date()
             phase = .ready
@@ -501,6 +538,118 @@ public final class CovalentAppModel: ObservableObject {
             }
             return false
         }
+    }
+
+    public func refreshFolders() async {
+      guard !folderSyncLoading else { return }
+      guard configuration.apiToken != nil else {
+        folderSyncStatus = nil
+        folderSyncError = "Connect to this Mac's local service to manage folders."
+        return
+      }
+
+      folderSyncLoading = true
+      defer { folderSyncLoading = false }
+
+      do {
+        folderSyncStatus = try await client.folderSyncStatus()
+        folderSyncError = nil
+      } catch {
+        folderSyncStatus = nil
+        folderSyncError = "Folder sync status is unavailable. Try again."
+      }
+    }
+
+    @discardableResult
+    public func offerFolder(
+      peerId: UUID,
+      folderId: UUID,
+      label: String,
+      grant: SelectedDirectoryGrant
+    ) async -> Bool {
+      guard beginFolderMutation() else { return false }
+      defer { folderSyncMutationInFlight = false }
+
+      do {
+        _ = try await persistFolderSyncGrant(grant)
+        try await restartForFolderSyncDirectoryGrants()
+        let root = try grant.resolve()
+        let client = self.client
+        _ = try await root.withCoordinatedRead { url in
+          try await client.offerFolder(
+            FolderOfferRequest(
+              peerId: peerId,
+              folderId: folderId,
+              label: label,
+              selectedRoot: url.path
+            )
+          )
+        }
+        await refreshFolders()
+        return true
+      } catch {
+        report(error, title: "Folder couldn't be shared")
+        return false
+      }
+    }
+
+    @discardableResult
+    public func acceptFolder(offerId: UUID, grant: SelectedDirectoryGrant) async -> Bool {
+      guard beginFolderMutation() else { return false }
+      defer { folderSyncMutationInFlight = false }
+
+      do {
+        _ = try await persistFolderSyncGrant(grant)
+        try await restartForFolderSyncDirectoryGrants()
+        let root = try grant.resolve()
+        let client = self.client
+        _ = try await root.withCoordinatedWrite { url in
+          try await client.acceptFolder(
+            FolderAcceptRequest(offerId: offerId, selectedRoot: url.path)
+          )
+        }
+        await refreshFolders()
+        return true
+      } catch {
+        report(error, title: "Folder couldn't be accepted")
+        return false
+      }
+    }
+
+    public func setFolderPaused(_ offerId: UUID, paused: Bool) async {
+      guard beginFolderMutation() else { return }
+      defer { folderSyncMutationInFlight = false }
+
+      do {
+        _ = try await client.pauseFolder(FolderPauseRequest(offerId: offerId, paused: paused))
+        await refreshFolders()
+      } catch {
+        report(error, title: "Folder couldn't be updated")
+      }
+    }
+
+    public func removeFolder(_ offerId: UUID) async {
+      guard beginFolderMutation() else { return }
+      defer { folderSyncMutationInFlight = false }
+
+      do {
+        _ = try await client.removeFolder(FolderReferenceRequest(offerId: offerId))
+        await refreshFolders()
+      } catch {
+        report(error, title: "Folder couldn't be removed")
+      }
+    }
+
+    public func retryFolderSync() async {
+      guard beginFolderMutation() else { return }
+      defer { folderSyncMutationInFlight = false }
+
+      do {
+        _ = try await client.retryFolderSync()
+        await refreshFolders()
+      } catch {
+        report(error, title: "Folder sync needs attention")
+      }
     }
 
     public func beginNormalFirstLaunch() async {
@@ -655,6 +804,49 @@ public final class CovalentAppModel: ObservableObject {
         configuration.baseURL.absoluteString
     }
 
+    private func beginFolderMutation() -> Bool {
+      guard !folderSyncMutationInFlight else { return false }
+      folderSyncMutationInFlight = true
+      return true
+    }
+
+    /// Persist the sandbox bookmark before asking the local node to start a
+    /// worker. If the request outcome is uncertain, retaining the grant lets a
+    /// subsequent helper restart regain the same user-authorized folder.
+    private func persistFolderSyncGrant(_ grant: SelectedDirectoryGrant) async throws -> Bool {
+      guard grant.purpose == .folderSync else {
+        throw SelectedDirectoryError.notAFileURL
+      }
+      let selectedRoot = try grant.resolve().url.standardizedFileURL.resolvingSymlinksInPath()
+      let hasEquivalentRoot = directoryGrants.contains { existing in
+        guard existing.purpose == .folderSync,
+          let existingRoot = try? existing.resolve().url.standardizedFileURL.resolvingSymlinksInPath()
+        else {
+          return false
+        }
+        return existingRoot == selectedRoot
+      }
+      if hasEquivalentRoot {
+        return false
+      }
+      guard directoryGrants.filter({ $0.purpose == .folderSync }).count < 128 else {
+        throw SelectedDirectoryError.tooManyFolderSyncGrants
+      }
+      var updatedGrants = directoryGrants
+      updatedGrants.append(grant)
+      try await persistence.saveDirectoryGrants(updatedGrants)
+      directoryGrants = updatedGrants
+      return true
+    }
+
+    private func restartForFolderSyncDirectoryGrants() async throws {
+      guard let localNodeBootstrapper else { return }
+      let replacement = try await localNodeBootstrapper.restartForFolderSyncDirectoryGrants(
+        directoryGrants)
+      configuration = replacement
+      client = NodeClient(configuration: replacement)
+    }
+
     public func addDirectoryGrant(url: URL, purpose: DirectoryAccessPurpose) async -> SelectedDirectoryGrant? {
         do {
             let grant = try SelectedDirectoryGrant.capture(url: url, purpose: purpose)
@@ -671,6 +863,14 @@ public final class CovalentAppModel: ObservableObject {
     }
 
     public func removeDirectoryGrant(id: UUID) async {
+        guard let grant = directoryGrants.first(where: { $0.id == id }) else { return }
+        guard grant.purpose != .folderSync else {
+            alert = AppAlert(
+                title: "Manage this folder in Folders",
+                message: "Stop sharing the folder from Folders before removing its access."
+            )
+            return
+        }
         directoryGrants.removeAll { $0.id == id }
         do {
             try await persistence.saveDirectoryGrants(directoryGrants)

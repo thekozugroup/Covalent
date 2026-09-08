@@ -147,6 +147,30 @@ public actor NodeClient {
         )
     }
 
+      public func folderSyncStatus() async throws -> FolderSyncStatus {
+      try await send(path: "api/v1/sync/status")
+    }
+
+    public func offerFolder(_ request: FolderOfferRequest) async throws -> FolderSyncMutation {
+      try await send(path: "api/v1/sync/folders", method: "POST", body: request)
+    }
+
+    public func acceptFolder(_ request: FolderAcceptRequest) async throws -> FolderSyncMutation {
+      try await send(path: "api/v1/sync/accept", method: "POST", body: request)
+    }
+
+    public func pauseFolder(_ request: FolderPauseRequest) async throws -> FolderSyncMutation {
+      try await send(path: "api/v1/sync/pause", method: "POST", body: request)
+    }
+
+    public func removeFolder(_ request: FolderReferenceRequest) async throws -> FolderSyncMutation {
+      try await send(path: "api/v1/sync/remove", method: "POST", body: request)
+    }
+
+    public func retryFolderSync() async throws -> FolderSyncMutation {
+      try await send(path: "api/v1/sync/retry", method: "POST", body: FolderRetryRequest())
+    }
+
     public func exportSettings() async throws -> ExportedDeviceSettings {
         try await send(path: "api/v1/config/export", method: "POST")
     }
@@ -2717,3 +2741,5 @@ extension NodeClientError: LocalizedError {
         }
     }
 }
+
+private struct FolderRetryRequest: Codable, Sendable {}

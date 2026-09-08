@@ -430,7 +430,11 @@ impl TlsIdentity {
     }
 
     fn server_config(&self) -> Result<ServerConfig, CoreError> {
-        self.server_config_with_alpns(&[ALPN, PAIRING_ALPN])
+        #[cfg(unix)]
+        let alpns: &[&[u8]] = &[ALPN, PAIRING_ALPN, crate::sync_control::FOLDER_CONTROL_ALPN];
+        #[cfg(not(unix))]
+        let alpns: &[&[u8]] = &[ALPN, PAIRING_ALPN];
+        self.server_config_with_alpns(alpns)
     }
 
     #[cfg(test)]
@@ -438,7 +442,10 @@ impl TlsIdentity {
         self.server_config_with_alpns(&[alpn])
     }
 
-    fn server_config_with_alpns(&self, alpns: &[&[u8]]) -> Result<ServerConfig, CoreError> {
+    pub(crate) fn server_config_with_alpns(
+        &self,
+        alpns: &[&[u8]],
+    ) -> Result<ServerConfig, CoreError> {
         let certificate = CertificateDer::from(self.certificate_der.clone());
         let key = PrivatePkcs8KeyDer::from(self.private_key_der.to_vec());
         let mut crypto = rustls::ServerConfig::builder()
@@ -478,6 +485,10 @@ pub struct QuicNode {
     blocking_limit: Arc<Semaphore>,
     source_connections: Arc<Mutex<BTreeMap<IpAddr, usize>>>,
     pairing_service: Option<Arc<NetworkPairingService>>,
+    #[cfg(unix)]
+    folder_service: Option<Arc<crate::sync_engine::FolderSyncService>>,
+    #[cfg(unix)]
+    folder_admission: Arc<crate::sync_control::FolderControlAdmission>,
 }
 
 /// Close capability retained after a node enters its serving task.
@@ -607,6 +618,10 @@ impl QuicNode {
             blocking_limit: Arc::new(Semaphore::new(MAX_BLOCKING_OPERATIONS)),
             source_connections: Arc::new(Mutex::new(BTreeMap::new())),
             pairing_service: None,
+            #[cfg(unix)]
+            folder_service: None,
+            #[cfg(unix)]
+            folder_admission: Arc::new(crate::sync_control::FolderControlAdmission::default()),
         })
     }
 
@@ -615,6 +630,15 @@ impl QuicNode {
     #[must_use]
     pub fn with_pairing_service(mut self, service: Arc<NetworkPairingService>) -> Self {
         self.pairing_service = Some(service);
+        self
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn with_folder_service(
+        mut self,
+        service: Arc<crate::sync_engine::FolderSyncService>,
+    ) -> Self {
+        self.folder_service = Some(service);
         self
     }
 
@@ -671,6 +695,10 @@ impl QuicNode {
             let pairing_stream_limit = Arc::clone(&self.pairing_stream_limit);
             let blocking_limit = Arc::clone(&self.blocking_limit);
             let pairing_service = self.pairing_service.clone();
+            #[cfg(unix)]
+            let folder_service = self.folder_service.clone();
+            #[cfg(unix)]
+            let folder_admission = Arc::clone(&self.folder_admission);
             connections.spawn(async move {
                 let _connection_permit = connection_permit;
                 let _source_permit = source_permit;
@@ -682,6 +710,24 @@ impl QuicNode {
                 if negotiated_alpn(&connection).as_deref() == Some(PAIRING_ALPN) {
                     if let Some(service) = pairing_service {
                         serve_pairing_connection(connection, service, pairing_stream_limit).await;
+                    }
+                    return;
+                }
+                #[cfg(unix)]
+                if negotiated_alpn(&connection).as_deref()
+                    == Some(crate::sync_control::FOLDER_CONTROL_ALPN)
+                {
+                    if let Some(service) = folder_service {
+                        let _ = crate::sync_control::serve_folder_control_connection(
+                            connection,
+                            engine,
+                            service,
+                            fingerprint,
+                            folder_admission,
+                        )
+                        .await;
+                    } else {
+                        connection.close(VarInt::from_u32(1), b"folder sync unavailable");
                     }
                     return;
                 }

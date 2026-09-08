@@ -7,6 +7,11 @@ pub mod network_pairing;
 pub mod pairing_transport;
 mod recovery_state;
 pub mod runtime;
+mod sync_api;
+#[cfg(unix)]
+mod sync_control;
+#[cfg(unix)]
+mod sync_delivery;
 #[cfg(unix)]
 pub mod sync_engine;
 pub mod transport;
@@ -545,6 +550,8 @@ pub struct AppState {
     restore_plan_lock: Arc<Mutex<()>>,
     engine_job_permits: Arc<Semaphore>,
     recovery_state: Option<Arc<RecoveryStateStore>>,
+    #[cfg(unix)]
+    folder_sync: sync_engine::FolderSyncRuntimeState,
 }
 
 impl AppState {
@@ -600,6 +607,8 @@ impl AppState {
             restore_plan_lock: Arc::new(Mutex::new(())),
             engine_job_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_ENGINE_JOBS)),
             recovery_state: None,
+            #[cfg(unix)]
+            folder_sync: sync_engine::FolderSyncRuntimeState::default(),
         })
     }
 
@@ -607,6 +616,15 @@ impl AppState {
     #[must_use]
     pub(crate) fn with_recovery_state(mut self, recovery_state: Arc<RecoveryStateStore>) -> Self {
         self.recovery_state = Some(recovery_state);
+        self
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn with_folder_sync(
+        mut self,
+        folder_sync: sync_engine::FolderSyncRuntimeState,
+    ) -> Self {
+        self.folder_sync = folder_sync;
         self
     }
 
@@ -1276,6 +1294,12 @@ pub fn router(state: AppState) -> Router {
         .route("/assets/tab-flow.js", get(tab_flow_javascript))
         .route("/healthz", get(health))
         .route("/api/v1/status", get(status))
+        .route("/api/v1/sync/status", get(sync_api::status))
+        .route("/api/v1/sync/folders", post(sync_api::offer))
+        .route("/api/v1/sync/accept", post(sync_api::accept))
+        .route("/api/v1/sync/pause", post(sync_api::pause))
+        .route("/api/v1/sync/remove", post(sync_api::remove))
+        .route("/api/v1/sync/retry", post(sync_api::retry))
         .route("/api/v1/transport/identity", get(transport_identity))
         .route("/api/v1/discovery", get(discovery_candidates))
         .route("/api/v1/config/export", post(config_export))
@@ -2830,10 +2854,29 @@ async fn revoke_peer(
     ContractJson(request): ContractJson<RevokePeerRequest>,
 ) -> Result<StatusCode, ApiError> {
     authorize(&state, &headers)?;
-    state
-        .engine
-        .revoke_peer(request.peer_id)
-        .map_err(ApiError::from_core)?;
+    #[cfg(unix)]
+    let managed = if let sync_engine::FolderSyncRuntimeState::Ready(service) = &state.folder_sync {
+        let committed = service
+            .revoke_peer(request.peer_id)
+            .await
+            .map_err(sync_api::service_error)?;
+        if committed.value().is_none() {
+            return Err(sync_api::service_error(
+                sync_engine::FolderSyncServiceError::Journal,
+            ));
+        }
+        true
+    } else {
+        false
+    };
+    #[cfg(not(unix))]
+    let managed = false;
+    if !managed {
+        state
+            .engine
+            .revoke_peer(request.peer_id)
+            .map_err(ApiError::from_core)?;
+    }
     state
         .disconnect_provider(request.peer_id)
         .map_err(ApiError::from_core)?;
