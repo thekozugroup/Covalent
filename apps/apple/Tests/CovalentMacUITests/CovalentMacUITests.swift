@@ -31,9 +31,14 @@ final class CovalentMacUITests: XCTestCase {
         // Cancelling before selection must not start a service or create an
         // identity; the choice remains the only visible path.
         app.buttons["firstLaunch.chooseKit"].click()
-        let cancel = app.buttons["Cancel"]
+        // AppKit also exposes a Cancel button in the system Touch Bar. Target
+        // the open panel so the test exercises the file chooser's cancellation.
+        let openPanel = app.dialogs["open-panel"]
+        XCTAssertTrue(openPanel.waitForExistence(timeout: uiTransitionTimeout))
+        let cancel = openPanel.buttons["CancelButton"]
         XCTAssertTrue(cancel.waitForExistence(timeout: uiTransitionTimeout))
         cancel.click()
+        XCTAssertTrue(waitForDisappearance(of: openPanel, timeout: uiTransitionTimeout))
         XCTAssertTrue(app.staticTexts["Set up this Mac"].exists)
 
         app.buttons["firstLaunch.setup"].click()

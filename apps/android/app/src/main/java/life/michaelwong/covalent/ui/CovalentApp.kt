@@ -3327,9 +3327,16 @@ private fun RecoveryStatusPanel(
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(phase, fontWeight = FontWeight.SemiBold)
             Text(
-                stringResource(
-                    R.string.recovery_status_counts,
+                pluralStringResource(
+                    R.plurals.recovery_backup_count,
                     status.recoveredBackups.size,
+                    status.recoveredBackups.size,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                stringResource(
+                    R.string.recovery_devices_checked,
                     status.queriedProviderIds.size,
                     status.configuredProviderIds.size,
                 ),
@@ -3361,7 +3368,11 @@ private fun RecoveryStatusPanel(
                 }
                 if (status.failures.size > 3) {
                     Text(
-                        stringResource(R.string.recovery_more_failures, status.failures.size - 3),
+                        pluralStringResource(
+                            R.plurals.recovery_more_failures,
+                            status.failures.size - 3,
+                            status.failures.size - 3,
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }

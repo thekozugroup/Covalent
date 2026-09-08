@@ -329,10 +329,9 @@
     <string name="recovery_phase_partial">Some backups were recovered, but other copies could not be checked safely.</string>
     <string name="recovery_phase_blocked">Covalent could not safely recover a backup yet. Bring your backup devices online and try again.</string>
     <string name="recovery_phase_no_catalogs">All your backup devices were checked, but no backups were found.</string>
-    <string name="recovery_status_counts">%1$d backups recovered · %2$d of %3$d backup devices checked</string>
+    <string name="recovery_devices_checked">Backup devices checked: %1$d of %2$d</string>
     <string name="recovery_newer_snapshot_warning">A newer backup may still exist on another device.</string>
     <string name="recovery_provider_failure">Backup device %1$s could not be checked: %2$s</string>
-    <string name="recovery_more_failures">%1$d more device problems</string>
     <string name="action_retry_recovery">Check again</string>
     <string name="recovery_retry_confirm_title">Check your backup devices again?</string>
     <string name="recovery_retry_confirm_detail">Keep your backup devices online while Covalent checks them again.</string>
@@ -471,6 +470,14 @@
     <plurals name="restore_change_count">
         <item quantity="one">%1$d exact path change</item>
         <item quantity="other">%1$d exact path changes</item>
+    </plurals>
+    <plurals name="recovery_backup_count">
+        <item quantity="one">%1$d backup recovered</item>
+        <item quantity="other">%1$d backups recovered</item>
+    </plurals>
+    <plurals name="recovery_more_failures">
+        <item quantity="one">%1$d more device problem</item>
+        <item quantity="other">%1$d more device problems</item>
     </plurals>
     <plurals name="settings_removed_backup_count">
         <item quantity="one">%1$d remembered backup</item>
