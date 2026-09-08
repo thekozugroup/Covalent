@@ -31,6 +31,7 @@ const MAX_SHARES: usize = 512;
 const MAX_RETAINED_OFFERS: usize = 4096;
 const MAX_PENDING_OFFERS: usize = 128;
 const MAX_PEER_PENDING_OFFERS: usize = 16;
+const MAX_RENEWALS_PER_SHARE: usize = 128;
 const INVITATION_LIFETIME_MS: u64 = covalent_core::MAX_FOLDER_SHARE_LIFETIME_MS;
 
 /// A local sharing decision failure, without keys, paths, or peer-supplied text.
@@ -79,6 +80,10 @@ pub enum SharingPhase {
 #[serde(rename_all = "camelCase")]
 pub struct ShareSummary {
     pub offer_id: Uuid,
+    /// Older invitation identifiers replaced by this authenticated journal
+    /// row. Clients can retire stale local grant bindings without inferring a
+    /// relationship from user-visible labels or folder identifiers.
+    pub superseded_offer_ids: Vec<Uuid>,
     pub folder_id: Uuid,
     pub label: String,
     pub peer_id: DeviceId,
@@ -130,6 +135,17 @@ struct Share {
     root: Option<LocalRoot>,
     paused: bool,
     removed: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    superseded_offers: Vec<SupersededOffer>,
+}
+
+/// Minimal durable refusal metadata for offers replaced by an explicit renewal.
+/// The old signed record and local path are deliberately not duplicated.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SupersededOffer {
+    offer_id: Uuid,
+    issued_at_unix_ms: u64,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -340,6 +356,11 @@ impl FolderSharingJournal {
             .iter()
             .map(|share| ShareSummary {
                 offer_id: share.offer.offer_id,
+                superseded_offer_ids: share
+                    .superseded_offers
+                    .iter()
+                    .map(|superseded| superseded.offer_id)
+                    .collect(),
                 folder_id: share.offer.folder_id,
                 label: share.offer.label.clone(),
                 peer_id: share.peer_identity.device_id,
@@ -361,6 +382,7 @@ impl FolderSharingJournal {
             .collect();
         summaries.extend(self.snapshot.tombstones.iter().map(|removed| ShareSummary {
             offer_id: removed.offer_id,
+            superseded_offer_ids: Vec::new(),
             folder_id: removed.folder_id,
             label: removed.label.clone(),
             peer_id: removed.peer_id,
@@ -473,6 +495,7 @@ impl FolderSharingJournal {
             root: Some(root),
             paused: false,
             removed: false,
+            superseded_offers: Vec::new(),
         });
         self.persist(next)?;
         Ok(offer)
@@ -508,11 +531,63 @@ impl FolderSharingJournal {
             }
             return Err(SharingError::InvalidRecord);
         }
+        if self.snapshot.shares.iter().any(|share| {
+            share
+                .superseded_offers
+                .iter()
+                .any(|superseded| superseded.offer_id == offer.offer_id)
+        }) {
+            return Err(SharingError::Removed);
+        }
         verify_fresh_folder_share_offer(&offer, &peer.identity, self.engine.device_id(), now)
             .map_err(|_| SharingError::InvalidRecord)?;
+        if self.snapshot.tombstones.iter().any(|removed| {
+            removed.folder_id == offer.folder_id
+                && removed.peer_id == peer.identity.device_id
+                && removed.incoming
+        }) {
+            return Err(SharingError::Removed);
+        }
         self.advance_freshness_floor(now)?;
         if offer.issued_at_unix_ms < self.snapshot.freshness_floor_unix_ms {
             return Err(SharingError::Removed);
+        }
+        if let Some(index) = self.snapshot.shares.iter().position(|share| {
+            !share.removed
+                && share.offer.folder_id == offer.folder_id
+                && share.peer_identity.device_id == peer.identity.device_id
+        }) {
+            let previous = &self.snapshot.shares[index];
+            if previous.offer.target_device_id != self.engine.device_id()
+                || previous.commit.is_some()
+                || now < previous.offer.expires_at_unix_ms
+                || offer.issued_at_unix_ms <= previous.offer.issued_at_unix_ms
+                || offer.expires_at_unix_ms <= previous.offer.expires_at_unix_ms
+                || offer.label != previous.offer.label
+                || offer.source_engine != previous.offer.source_engine
+                || offer.pairing_id != previous.offer.pairing_id
+                || !peer.matches(previous)
+            {
+                return Err(SharingError::AlreadyShared);
+            }
+            self.check_renewal_capacity(previous)?;
+            let mut next = self.snapshot.clone();
+            let replacement = &mut next.shares[index];
+            replacement.superseded_offers.push(SupersededOffer {
+                offer_id: replacement.offer.offer_id,
+                issued_at_unix_ms: replacement.offer.issued_at_unix_ms,
+            });
+            replacement.offer = offer;
+            // A target acceptance that expired before reaching the source can
+            // never be committed. Do not transfer that consent to the fresh
+            // invitation: the recipient must choose a destination and sign it
+            // again. Keeping the share row only preserves refusal history.
+            replacement.acceptance = None;
+            replacement.commit = None;
+            replacement.root = None;
+            replacement.paused = false;
+            self.persist(next)?;
+            return Ok(());
         }
         let pending = self
             .snapshot
@@ -544,8 +619,88 @@ impl FolderSharingJournal {
             root: None,
             paused: false,
             removed: false,
+            superseded_offers: Vec::new(),
         });
         self.persist(next)
+    }
+
+    /// Replace one expired outgoing invitation with a newly signed invitation.
+    ///
+    /// This is an explicit local action. It never changes an accepted or removed
+    /// consent record. Retrying with a superseded identifier returns the current
+    /// durable replacement without signing or persisting another offer.
+    pub fn renew_offer(
+        &mut self,
+        offer_id: Uuid,
+        now: u64,
+    ) -> Result<FolderShareOffer, SharingError> {
+        self.reconcile_trust()?;
+        if self
+            .snapshot
+            .tombstones
+            .iter()
+            .any(|removed| removed.offer_id == offer_id)
+        {
+            return Err(SharingError::Removed);
+        }
+        if let Some(share) = self.snapshot.shares.iter().find(|share| {
+            share
+                .superseded_offers
+                .iter()
+                .any(|superseded| superseded.offer_id == offer_id)
+        }) {
+            return if share.offer.source_device_id == self.engine.device_id() {
+                Ok(share.offer.clone())
+            } else {
+                Err(SharingError::InvalidRecord)
+            };
+        }
+        let index = self.index(offer_id)?;
+        let share = &self.snapshot.shares[index];
+        if share.offer.source_device_id != self.engine.device_id()
+            || share.acceptance.is_some()
+            || share.commit.is_some()
+            || now < share.offer.expires_at_unix_ms
+        {
+            return Err(SharingError::InvalidRecord);
+        }
+        let peer = self.trusted_peer(share.peer_identity.device_id)?;
+        if !peer.matches(share) {
+            return Err(SharingError::UntrustedPeer);
+        }
+        let root = share.root.as_ref().ok_or(SharingError::InvalidState)?;
+        validate_current_root(root)?;
+        self.check_renewal_capacity(share)?;
+        if now < self.snapshot.freshness_floor_unix_ms {
+            return Err(SharingError::InvalidRecord);
+        }
+        let replacement = self
+            .engine
+            .issue_folder_share_offer(
+                share.peer_identity.device_id,
+                share.offer.folder_id,
+                &share.offer.label,
+                self.snapshot.binding.clone(),
+                share.offer.pairing_id.as_deref(),
+                now,
+                INVITATION_LIFETIME_MS,
+            )
+            .map_err(|_| SharingError::InvalidRecord)?;
+        if replacement.issued_at_unix_ms <= share.offer.issued_at_unix_ms
+            || replacement.expires_at_unix_ms <= share.offer.expires_at_unix_ms
+        {
+            return Err(SharingError::InvalidRecord);
+        }
+        let mut next = self.snapshot.clone();
+        advance_freshness_floor_candidate(&mut next, now);
+        let renewed = &mut next.shares[index];
+        renewed.superseded_offers.push(SupersededOffer {
+            offer_id: renewed.offer.offer_id,
+            issued_at_unix_ms: renewed.offer.issued_at_unix_ms,
+        });
+        renewed.offer = replacement.clone();
+        self.persist(next)?;
+        Ok(replacement)
     }
 
     /// One user confirmation chooses the destination and accepts. The signature
@@ -973,7 +1128,17 @@ impl FolderSharingJournal {
 
     fn check_capacity(&self) -> Result<(), SharingError> {
         if self.snapshot.shares.len() >= MAX_SHARES
-            || self.snapshot.shares.len() + self.snapshot.tombstones.len() >= MAX_RETAINED_OFFERS
+            || retained_offer_count(&self.snapshot)? >= MAX_RETAINED_OFFERS
+        {
+            Err(SharingError::LimitExceeded)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_renewal_capacity(&self, share: &Share) -> Result<(), SharingError> {
+        if share.superseded_offers.len() >= MAX_RENEWALS_PER_SHARE
+            || retained_offer_count(&self.snapshot)? >= MAX_RETAINED_OFFERS
         {
             Err(SharingError::LimitExceeded)
         } else {
@@ -998,6 +1163,14 @@ impl FolderSharingJournal {
             .iter()
             .any(|removed| removed.offer_id == offer)
         {
+            return Err(SharingError::Removed);
+        }
+        if self.snapshot.shares.iter().any(|share| {
+            share
+                .superseded_offers
+                .iter()
+                .any(|superseded| superseded.offer_id == offer)
+        }) {
             return Err(SharingError::Removed);
         }
         let index = self
@@ -1039,12 +1212,10 @@ impl FolderSharingJournal {
     fn advance_freshness_floor(&mut self, now: u64) -> Result<(), SharingError> {
         // A nondecreasing cutoff blocks old fresh intake even after wall-clock
         // rollback. Existing accepted records may still replay by exact match.
-        let floor = now.saturating_sub(INVITATION_LIFETIME_MS + 5 * 60 * 1000);
+        let floor = freshness_floor(now);
         if floor > self.snapshot.freshness_floor_unix_ms {
             let mut next = self.snapshot.clone();
-            next.freshness_floor_unix_ms = floor;
-            next.tombstones
-                .retain(|removed| removed.issued_at_unix_ms >= floor);
+            advance_freshness_floor_candidate(&mut next, now);
             self.persist(next)?;
         }
         Ok(())
@@ -1069,7 +1240,7 @@ fn validate_snapshot(
         || snapshot.listener.is_ipv4() != advertised.is_ipv4()
         || (!snapshot.listener.ip().is_unspecified() && snapshot.listener.ip() != advertised.ip())
         || snapshot.shares.len() > MAX_SHARES
-        || snapshot.shares.len() + snapshot.tombstones.len() > MAX_RETAINED_OFFERS
+        || retained_offer_count(snapshot)? > MAX_RETAINED_OFFERS
     {
         return Err(SharingError::InvalidState);
     }
@@ -1110,6 +1281,22 @@ fn validate_snapshot(
         };
         verify_folder_share_offer(&share.offer, source, target.device_id)
             .map_err(|_| SharingError::InvalidRecord)?;
+        if share.superseded_offers.len() > MAX_RENEWALS_PER_SHARE {
+            return Err(SharingError::LimitExceeded);
+        }
+        let mut previous_issued_at = 0;
+        for superseded in &share.superseded_offers {
+            if superseded.offer_id.is_nil()
+                || superseded.offer_id == share.offer.offer_id
+                || superseded.issued_at_unix_ms == 0
+                || superseded.issued_at_unix_ms <= previous_issued_at
+                || superseded.issued_at_unix_ms >= share.offer.issued_at_unix_ms
+                || !offers.insert(superseded.offer_id)
+            {
+                return Err(SharingError::InvalidState);
+            }
+            previous_issued_at = superseded.issued_at_unix_ms;
+        }
         if source_is_owner && share.offer.source_engine != snapshot.binding {
             return Err(SharingError::InvalidRecord);
         }
@@ -1315,6 +1502,18 @@ fn compact_removed(snapshot: &mut Snapshot) {
     let mut retained = Vec::with_capacity(snapshot.shares.len());
     for share in snapshot.shares.drain(..) {
         if share.removed {
+            for superseded in share.superseded_offers {
+                if superseded.issued_at_unix_ms >= snapshot.freshness_floor_unix_ms {
+                    snapshot.tombstones.push(Tombstone {
+                        offer_id: superseded.offer_id,
+                        folder_id: share.offer.folder_id,
+                        label: share.offer.label.clone(),
+                        peer_id: share.peer_identity.device_id,
+                        incoming: share.offer.target_device_id == owner,
+                        issued_at_unix_ms: superseded.issued_at_unix_ms,
+                    });
+                }
+            }
             if share.offer.issued_at_unix_ms >= snapshot.freshness_floor_unix_ms {
                 snapshot.tombstones.push(Tombstone {
                     offer_id: share.offer.offer_id,
@@ -1330,6 +1529,35 @@ fn compact_removed(snapshot: &mut Snapshot) {
         }
     }
     snapshot.shares = retained;
+}
+
+fn freshness_floor(now: u64) -> u64 {
+    now.saturating_sub(INVITATION_LIFETIME_MS + 5 * 60 * 1000)
+}
+
+fn advance_freshness_floor_candidate(snapshot: &mut Snapshot, now: u64) {
+    let floor = freshness_floor(now);
+    if floor > snapshot.freshness_floor_unix_ms {
+        snapshot.freshness_floor_unix_ms = floor;
+        snapshot
+            .tombstones
+            .retain(|removed| removed.issued_at_unix_ms >= floor);
+    }
+}
+
+fn retained_offer_count(snapshot: &Snapshot) -> Result<usize, SharingError> {
+    snapshot.shares.iter().try_fold(
+        snapshot
+            .shares
+            .len()
+            .checked_add(snapshot.tombstones.len())
+            .ok_or(SharingError::LimitExceeded)?,
+        |total, share| {
+            total
+                .checked_add(share.superseded_offers.len())
+                .ok_or(SharingError::LimitExceeded)
+        },
+    )
 }
 
 #[cfg(test)]

@@ -126,6 +126,7 @@ cgo_ldflags="-isysroot $macos_sdk -mmacosx-version-min=15.0"
     CC="$(xcrun --find clang)" \
     SDKROOT="$macos_sdk" CGO_CFLAGS="$cgo_cflags" CGO_LDFLAGS="$cgo_ldflags" \
     "$go_bin" list -tags noupgrade -deps -json ./cmd/syncthing > "$graph"
+  "$go_bin" mod verify
 )
 
 test -f "$worker" && test ! -L "$worker" && test -x "$worker" || fail "worker build is incomplete"

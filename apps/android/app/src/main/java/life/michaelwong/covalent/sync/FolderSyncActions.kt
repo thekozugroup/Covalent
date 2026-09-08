@@ -30,6 +30,25 @@ internal class FolderSyncActions(
     fun pause(offerId: String, paused: Boolean): FolderSyncMutation =
         api.pause(ensureNodeReady(), offerId, paused)
 
+    fun renew(offerId: String): FolderSyncMutation {
+        check(grants.records().any { it.offerId == offerId && it.kind == FolderSyncGrantKind.OFFER }) {
+            "The saved folder choice for this outgoing invitation is unavailable."
+        }
+        val connection = ensureNodeReady()
+        val mutation = api.renew(connection, offerId)
+        check(mutation.offerId != null && mutation.offerId != offerId) {
+            "The node did not identify a new invitation."
+        }
+        val snapshot = api.status(connection)
+        check(snapshot.shares.any {
+            !it.incoming && it.offerId == mutation.offerId && offerId in it.supersededOfferIds
+        }) { "The node did not confirm the replacement invitation. Refresh folders before trying again." }
+        // The original binding remains durable if the response or this save
+        // fails. Refresh recovers it from the authenticated ID relationship.
+        grants.reconcile(snapshot)
+        return mutation
+    }
+
     fun repair(offerId: String, root: String): FolderSyncMutation {
         val selectedRoot = validateRoot(root)
         grants.prepareRepair(offerId, selectedRoot)

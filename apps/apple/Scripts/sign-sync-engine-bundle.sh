@@ -63,10 +63,10 @@ verify_notice() {
 verify_notice "$license" 3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04
 verify_notice "$authors" 5a0044d13ddf6f013bdd5c2bc419bf45d6123c356567510237e82f304d113d48
 verify_notice "$provenance" 94f3b2bd71120d3dc6f3bdc400a0b538ca8e6be04e740144e140bda4439decc9
-verify_notice "$source_build" 211b7847de85f74cdf7a9ef4cc19cfd9a6e5a09b8bb68a19307162c8b11f256e
-verify_notice "$notice_index" 872e47f2495dfaebe7b150f96fbb77d8e8ed5ed7958234f69f566a8daa975dd6
-verify_notice "$target_notice_manifest" 3624dee064d0ce242d94012c60ffb5aa89b946448166aaf0a613f837bfa3bf5b
-verify_notice "$combined_notices" 231a9ded1c9e9f09182187ed2372de5fc2a37c718c4ba67091eac3b9d0bd7a87
+verify_notice "$source_build" 4e603f44b00ed564be92568c6615b7399f29c0a7ad8d1acb49ae094a9ede0cac
+verify_notice "$notice_index" 34355beb1e337124c8b22f9f2744da16f1911e4e99fffa31060dea0ea2ebd310
+verify_notice "$target_notice_manifest" 422afb7c2a27e2882e3791dbf8c059e2c96ee529d9ec5773e8cc369f375caa11
+verify_notice "$combined_notices" 87e9c362fac963404229addf563d77dfccb23747a8e06a96c5b77d13b675c2fb
 
 sign_one() {
   identifier=$1
@@ -126,10 +126,10 @@ value = {
         "PROVENANCE.txt": "94f3b2bd71120d3dc6f3bdc400a0b538ca8e6be04e740144e140bda4439decc9",
         "Syncthing-AUTHORS.txt": "5a0044d13ddf6f013bdd5c2bc419bf45d6123c356567510237e82f304d113d48",
         "Syncthing-LICENSE.txt": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
-        "source-build.json": "211b7847de85f74cdf7a9ef4cc19cfd9a6e5a09b8bb68a19307162c8b11f256e",
-        "notices-index.txt": "872e47f2495dfaebe7b150f96fbb77d8e8ed5ed7958234f69f566a8daa975dd6",
-        "notices/manifest.json": "3624dee064d0ce242d94012c60ffb5aa89b946448166aaf0a613f837bfa3bf5b",
-        "notices/THIRD-PARTY-NOTICES.txt": "231a9ded1c9e9f09182187ed2372de5fc2a37c718c4ba67091eac3b9d0bd7a87",
+        "source-build.json": "4e603f44b00ed564be92568c6615b7399f29c0a7ad8d1acb49ae094a9ede0cac",
+        "notices-index.txt": "34355beb1e337124c8b22f9f2744da16f1911e4e99fffa31060dea0ea2ebd310",
+        "notices/manifest.json": "422afb7c2a27e2882e3791dbf8c059e2c96ee529d9ec5773e8cc369f375caa11",
+        "notices/THIRD-PARTY-NOTICES.txt": "87e9c362fac963404229addf563d77dfccb23747a8e06a96c5b77d13b675c2fb",
     },
     "executables": {
         "covalent-engine-guardian": {

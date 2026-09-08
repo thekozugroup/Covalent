@@ -104,27 +104,52 @@ The build must retain the target inventory and notice-bundle manifest together.
 Do not regenerate the inventory from `go list -m all`: that includes modules
 which are not compiled and can also miss target-specific package distinctions.
 
-## Release gaps
+The inventory also retains each dependency's Go module content sum. The notice
+collector independently recognizes the complete MPL-2.0 license heading in the
+copied text and fails if that observation was suppressed in the inventory. For
+every such compiled module it creates a deterministic `tar.gz` source archive,
+records its SHA-256 and size, and prints both the bundled relative path and an
+external exact-version source URL in `THIRD-PARTY-NOTICES.txt`. This is a narrow
+MPL source-access safeguard, not a general SPDX classifier.
 
-1. Generate a separate `GOOS=linux`, `CGO_ENABLED=0` inventory for both Linux
-   architectures and build its notice bundle. Android's graph is not a valid
-   substitute: it contains the CGO SQLite implementation, while other host
-   builds have already shown additional pure-Go SQLite modules.
-2. Install the complete generated bundle in the shipped image/APK and expose a
-   readable notices route or screen. The two-file Syncthing license/AUTHORS
-   placeholder alone is insufficient for the observed dependency and embedded
-   GUI texts.
-3. Preserve Syncthing's MPL-2.0 text and publish the exact corresponding source
-   and any modified MPL-covered files by a stable release URL. The source URL
-   and modification statement need release-owner review.
-4. Review Android NDK link evidence separately. Android platform shared-library
-   names do not themselves mean those libraries are redistributed, but any
-   statically linked compiler runtime or copied NDK material must appear in the
-   APK notice inventory.
-5. Confirm that the official OFL text plus Fork Awesome's upstream copyright
-   reference is displayed with the shipped font. Confirm whether quic-go's
-   uncompiled brand-assets policy can be omitted only after package-to-file
-   provenance proves no such asset enters the binary.
-6. Treat the grouped text-family review as factual evidence. A release owner or
-   counsel still decides the final notice presentation and license
-   compatibility.
+Source archives contain only regular files and directories under `source/`.
+Symlinks and special files are rejected, every file is hashed before and after
+archival, and paths, counts, source bytes, and archive bytes are bounded. Across
+one bundle the current bounds are 100,000 source entries, 256 MiB uncompressed,
+and 64 MiB archived. Archive payloads are separate resources and are never fed
+to the bounded notice text reader. Builders run `go mod verify` before
+collection so dependency source directories are checked against the recorded
+module sums.
+
+## Target coverage and remaining evidence
+
+Both Linux architectures now build their own `GOOS=linux`, `CGO_ENABLED=0`
+inventories and complete notice bundles in Docker. Android's two ABI graphs
+are collected independently with CGO enabled. They are not interchangeable:
+the SQLite implementations and compiled packages differ. The complete Docker
+and Android builds pass at checkpoint 32, and Android's native Settings notice
+reader has passed actual device execution. The Mac package includes its exact
+target bundle and native notice viewer.
+
+Checkpoint 33 adds corresponding-source archives to the common collector.
+Two independent Mac builds reproduce all five archives and the complete
+manifest/text byte for byte; final signed Mac packaging verifies the retained
+archive hashes. Fresh Android and Linux builds must still demonstrate that the
+same new collection and packaging path succeeds for their actual targets.
+
+Remaining technical evidence is:
+
+1. Retain and review the exact Linux, Android and Mac target inventories together
+   with their packaged manifests, source archives and readable notice output.
+2. Classify Android NDK linkage using the exact packaged ELF/link reports.
+   Android platform shared-library names do not establish redistribution;
+   statically linked compiler runtimes or copied NDK material need their own
+   retained notice evidence.
+3. Check the final recipient-visible notice output and exact source locations.
+   The collector includes the complete OFL text and Fork Awesome copyright
+   reference, and retains the over-collected quic-go brand-assets policy.
+   No omission decision is required while those texts remain included.
+
+The grouped text-family table is engineering evidence about the observed
+texts. It does not claim a legal opinion or substitute for review of any future
+changes to covered source files.

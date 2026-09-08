@@ -1891,6 +1891,12 @@ func realDaemonBackupVerifyAndRestore() async throws {
             #expect(request.url?.path == "/api/v1/sync/remove")
         case 5:
             #expect(request.url?.path == "/api/v1/sync/retry")
+        case 6:
+            #expect(request.url?.path == "/api/v1/sync/renew")
+            let payload = try #require(requestBody(request))
+            let object = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+            #expect(Set(object.keys) == ["offerId"])
+            #expect(UUID(uuidString: try #require(object["offerId"] as? String)) == offer)
         default:
             Issue.record("Unexpected folder mutation request")
         }
@@ -1907,6 +1913,7 @@ func realDaemonBackupVerifyAndRestore() async throws {
     _ = try await client.pauseFolder(FolderPauseRequest(offerId: offer, paused: true))
     _ = try await client.removeFolder(FolderReferenceRequest(offerId: offer))
     _ = try await client.retryFolderSync()
+    _ = try await client.renewFolder(FolderReferenceRequest(offerId: offer))
 }
 
 @Test func folderStateDoesNotClaimRemoteConvergenceFromIdleHealth() {

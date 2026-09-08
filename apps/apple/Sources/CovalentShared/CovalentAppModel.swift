@@ -208,6 +208,9 @@ public final class CovalentAppModel: ObservableObject {
     /// normal alert detail and are never shown in the folder list.
     @Published public private(set) var folderSyncError: String?
     @Published public private(set) var folderSyncMutationInFlight = false
+    /// A failed helper restart must retry releasing retired sandbox scopes even
+    /// after their bookmarks have already been removed from persistence.
+    private var folderSyncScopeRefreshRequired = false
     @Published public private(set) var backups: [BackupSummary] = []
     @Published public private(set) var discoveryCandidates: [DiscoveryCandidate] = []
     @Published public var backupDraftBackupId: UUID?
@@ -518,17 +521,10 @@ public final class CovalentAppModel: ObservableObject {
             async let exportedSettings = client.exportSettings()
             async let providerConnections = client.providers()
             async let backupSummaries = client.backups()
-            async let folders = client.folderSyncStatus()
             settings = try await exportedSettings
             providers = try await providerConnections
             backups = try await backupSummaries
-            do {
-                folderSyncStatus = try await folders
-                folderSyncError = nil
-            } catch {
-                folderSyncStatus = nil
-                folderSyncError = "Folder sync status is unavailable."
-            }
+            await refreshFolders()
             discoveryCandidates = (try? await client.discoveryCandidates()) ?? []
             lastRefreshedAt = Date()
             phase = .ready
@@ -556,7 +552,13 @@ public final class CovalentAppModel: ObservableObject {
     }
 
     public func refreshFolders() async {
-      guard !folderSyncLoading else { return }
+      guard !folderSyncLoading, beginFolderMutation() else { return }
+      defer { folderSyncMutationInFlight = false }
+      await refreshFoldersDuringMutation()
+    }
+
+    /// Status can rebind or retire saved grants, so it shares the mutation lock.
+    private func refreshFoldersDuringMutation() async {
       guard configuration.apiToken != nil else {
         folderSyncStatus = nil
         folderSyncError = "Connect to this Mac's local service to manage folders."
@@ -567,12 +569,39 @@ public final class CovalentAppModel: ObservableObject {
       defer { folderSyncLoading = false }
 
       do {
-        folderSyncStatus = try await client.folderSyncStatus()
+        folderSyncStatus = try await reconciledFolderStatus()
         folderSyncError = nil
       } catch {
         folderSyncStatus = nil
         folderSyncError = "Folder sync status is unavailable. Try again."
       }
+    }
+
+    private func reconciledFolderStatus() async throws -> FolderSyncStatus {
+      // Each restart below retires at least one of the bounded 128 bookmarks.
+      // Fetch again afterward so the UI never publishes pre-restart health.
+      for _ in 0...128 {
+        if folderSyncScopeRefreshRequired {
+          try await restartForFolderSyncDirectoryGrants()
+          folderSyncScopeRefreshRequired = false
+        }
+        let snapshot = try await client.folderSyncStatus()
+        let updated = try FolderSyncGrantReconciliation.reconcile(directoryGrants, with: snapshot)
+        let retainedIDs = Set(updated.map(\.id))
+        let retiredScope = directoryGrants.contains {
+          $0.purpose == .folderSync && !retainedIDs.contains($0.id)
+        }
+        if updated != directoryGrants {
+          try await persistence.saveDirectoryGrants(updated)
+          directoryGrants = updated
+        }
+        if retiredScope {
+          folderSyncScopeRefreshRequired = true
+          continue
+        }
+        return snapshot
+      }
+      throw NodeClientError.invalidResponse
     }
 
     @discardableResult
@@ -602,7 +631,7 @@ public final class CovalentAppModel: ObservableObject {
         }
         guard let offerId = mutation.offerId else { throw NodeClientError.invalidResponse }
         try await bindFolderSyncGrant(savedGrant, to: offerId)
-        await refreshFolders()
+        await refreshFoldersDuringMutation()
         return true
       } catch {
         report(error, title: "Folder couldn't be shared")
@@ -626,10 +655,35 @@ public final class CovalentAppModel: ObservableObject {
             FolderAcceptRequest(offerId: offerId, selectedRoot: url.path)
           )
         }
-        await refreshFolders()
+        await refreshFoldersDuringMutation()
         return true
       } catch {
         report(error, title: "Folder couldn't be accepted")
+        return false
+      }
+    }
+
+    @discardableResult
+    public func renewFolderInvitation(_ offerId: UUID) async -> Bool {
+      guard beginFolderMutation() else { return false }
+      defer { folderSyncMutationInFlight = false }
+      do {
+        guard let share = folderSyncStatus?.shares.first(where: { $0.offerId == offerId }),
+              !share.incoming, share.expired, (share.phase == .offered || share.phase == .paused),
+              let grant = directoryGrants.first(where: {
+                $0.purpose == .folderSync && $0.folderOfferId == offerId
+              }) else { throw NodeClientError.invalidResponse }
+        let result = try await client.renewFolder(FolderReferenceRequest(offerId: offerId))
+        guard let replacementID = result.offerId, replacementID != offerId else {
+          throw NodeClientError.invalidResponse
+        }
+        // The old binding is already durable. A lost response or failed save is
+        // repaired by the next authenticated status relationship after restart.
+        try await bindFolderSyncGrant(grant, to: replacementID)
+        await refreshFoldersDuringMutation()
+        return true
+      } catch {
+        report(error, title: "Invitation couldn't be renewed")
         return false
       }
     }
@@ -693,7 +747,7 @@ public final class CovalentAppModel: ObservableObject {
         directoryGrants = candidates
         try await restartForFolderSyncDirectoryGrants()
         try await removePendingFolderRepair(offerId: offerId)
-        await refreshFolders()
+        await refreshFoldersDuringMutation()
         return true
       } catch {
         report(error, title: "Folder access couldn't be restored") { [weak self] in
@@ -722,7 +776,7 @@ public final class CovalentAppModel: ObservableObject {
 
       do {
         _ = try await client.pauseFolder(FolderPauseRequest(offerId: offerId, paused: paused))
-        await refreshFolders()
+        await refreshFoldersDuringMutation()
       } catch {
         report(error, title: "Folder couldn't be updated")
       }
@@ -741,7 +795,7 @@ public final class CovalentAppModel: ObservableObject {
           try await restartForFolderSyncDirectoryGrants()
         }
         try await removePendingFolderRepair(offerId: offerId)
-        await refreshFolders()
+        await refreshFoldersDuringMutation()
       } catch {
         report(error, title: "Folder couldn't be removed")
       }
@@ -753,7 +807,7 @@ public final class CovalentAppModel: ObservableObject {
 
       do {
         _ = try await client.retryFolderSync()
-        await refreshFolders()
+        await refreshFoldersDuringMutation()
       } catch {
         report(error, title: "Folder sync needs attention")
       }

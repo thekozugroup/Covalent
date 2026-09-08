@@ -103,15 +103,20 @@ internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier =
                     throw IllegalStateException("not ready")
                 }
                 withContext(Dispatchers.IO) {
+                    val previousChoices = grants.records().mapNotNull { it.offerId }.toSet()
                     val snapshot = api.status(ready).also(grants::reconcile)
-                    snapshot to grants.records()
+                    val retiredRecipientChoice = snapshot.shares.any { share ->
+                        share.incoming && share.supersededOfferIds.any { it in previousChoices }
+                    }
+                    Triple(snapshot, grants.records()
                         .filter { it.pendingRoot != null && !it.pendingRemoval }
                         .mapNotNull { it.offerId }
-                        .toSet()
+                        .toSet(), retiredRecipientChoice)
                 }
-            }.onSuccess { (snapshot, pending) ->
+            }.onSuccess { (snapshot, pending, retiredRecipientChoice) ->
                 status = snapshot
                 pendingRepairOffers = pending
+                if (retiredRecipientChoice) selectedFolder = null
             }.onFailure { error = folderSyncErrorText(it) }
             busy = false
         }
@@ -407,6 +412,7 @@ internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier =
                                         "accept" -> actions.accept(share.offerId, checkNotNull(selectedFolder))
                                         "pause" -> actions.pause(share.offerId, true)
                                         "resume" -> actions.pause(share.offerId, false)
+                                        "renew" -> actions.renew(share.offerId)
                                         "repair" -> actions.repair(share.offerId, checkNotNull(selectedFolder))
                                         "retry-repair" -> actions.retryRepair(share.offerId)
                                         "remove" -> actions.remove(share.offerId)
@@ -510,7 +516,9 @@ private fun FolderShareCard(
                 FolderShareSummary.CONNECTION_UNKNOWN -> stringResource(R.string.folder_sync_connection_unknown)
             }
             Text(summary)
-            if (share.expired) Text(stringResource(R.string.folder_sync_invitation_expired), color = MaterialTheme.colorScheme.error)
+            if (share.expired) Text(stringResource(
+                if (share.incoming) R.string.folder_sync_renew_incoming_detail else R.string.folder_sync_renew_detail,
+            ), color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (status.issue == FolderSyncIssue.FOLDER_ACCESS && share.phase != FolderSharePhase.REMOVED) {
                 Text(
                     stringResource(
@@ -534,6 +542,13 @@ private fun FolderShareCard(
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (status.issue != FolderSyncIssue.FOLDER_ACCESS && !share.incoming && share.expired &&
+                    share.phase in setOf(FolderSharePhase.OFFERED, FolderSharePhase.PAUSED)
+                ) {
+                    Button(onClick = { mutate("renew") }, enabled = !busy) {
+                        Text(stringResource(R.string.folder_sync_renew))
+                    }
+                }
                 if (
                     status.issue != FolderSyncIssue.FOLDER_ACCESS &&
                     share.incoming && share.phase == FolderSharePhase.OFFERED
@@ -545,7 +560,7 @@ private fun FolderShareCard(
                 if (status.issue != FolderSyncIssue.FOLDER_ACCESS && share.phase == FolderSharePhase.READY) {
                     OutlinedButton(onClick = { mutate("pause") }, enabled = !busy) { Text(stringResource(R.string.action_pause)) }
                 }
-                if (status.issue != FolderSyncIssue.FOLDER_ACCESS && share.phase == FolderSharePhase.PAUSED) {
+                if (status.issue != FolderSyncIssue.FOLDER_ACCESS && share.phase == FolderSharePhase.PAUSED && !share.expired) {
                     OutlinedButton(onClick = { mutate("resume") }, enabled = !busy) { Text(stringResource(R.string.action_resume)) }
                 }
                 if (share.phase != FolderSharePhase.REMOVED) {

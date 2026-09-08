@@ -153,6 +153,13 @@ struct MacFoldersView: View {
         }
         LabeledContent("Paired Device", value: peerName(for: share, status: status))
           .font(.subheadline)
+        if share.expired {
+          Text(share.incoming
+            ? "Ask the other device to send a new invitation, then choose your folder again."
+            : "Send a new invitation so the other device can choose its folder and accept again.")
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+        }
         HStack {
           Spacer()
           shareActions(share, state: state, status: status)
@@ -201,6 +208,9 @@ struct MacFoldersView: View {
         Button(state == .invitationExpired ? "Remove" : "Decline", role: .destructive) {
           Task { await model.removeFolder(share.offerId) }
         }
+        .accessibilityLabel(
+          "\(state == .invitationExpired ? "Remove" : "Decline") \(share.label) invitation"
+        )
       } else {
         if state == .needsAttention {
           Button("Try Again") {
@@ -208,16 +218,24 @@ struct MacFoldersView: View {
           }
         }
 
-        Button(share.phase == .paused ? "Resume" : "Pause") {
-          Task {
-            await model.setFolderPaused(
-              share.offerId,
-              paused: share.phase != .paused
-            )
+        if share.expired && !share.incoming && (share.phase == .offered || share.phase == .paused) {
+          Button("Send New Invitation") {
+            Task { _ = await model.renewFolderInvitation(share.offerId) }
           }
+          .accessibilityLabel("Send a new invitation for \(share.label)")
+          .accessibilityHint("The other device must choose a folder and accept again.")
+        } else {
+          Button(share.phase == .paused ? "Resume" : "Pause") {
+            Task {
+              await model.setFolderPaused(
+                share.offerId,
+                paused: share.phase != .paused
+              )
+            }
+          }
+          .disabled(state == .invitationExpired)
+          .accessibilityLabel("\(share.phase == .paused ? "Resume" : "Pause") \(share.label)")
         }
-        .disabled(state == .invitationExpired)
-        .accessibilityLabel("\(share.phase == .paused ? "Resume" : "Pause") \(share.label)")
 
         Button("Remove…", role: .destructive) {
           folderBeingRemoved = share

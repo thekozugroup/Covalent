@@ -102,6 +102,105 @@ test("a lost offer response reloads and retries the exact retained body", async 
   assert.equal(reloaded.loadPending(), null);
 });
 
+test("renewal permits only expired outgoing invitations", async () => {
+  for (const candidate of [
+    share({ expired: true }),
+    share({ incoming: false }),
+    share({ incoming: false, expired: true, phase: "ready" }),
+    share({ incoming: false, expired: true, phase: "removed" }),
+  ]) {
+    let mutations = 0;
+    const controller = folders.coordinator({
+      storage: new MemoryStorage(),
+      api: async (path) => {
+        if (path === "/api/v1/sync/status") return status({ shares: [candidate] });
+        mutations += 1;
+      },
+    });
+    enable(controller);
+    await controller.refresh();
+    await assert.rejects(controller.renew(offerId), /folder sync guidance/);
+    assert.equal(mutations, 0);
+  }
+});
+
+test("renewal metadata defaults safely and rejects ambiguous or excessive old identifiers", () => {
+  assert.deepEqual(folders.requireStatus(status({ shares: [share()] })).shares[0].supersededOfferIds, []);
+  const oldId = "55555555-5555-4555-8555-555555555555";
+  for (const ids of [null, [offerId], [oldId, oldId], Array(129).fill(oldId), ["00000000-0000-0000-0000-000000000000"]]) {
+    assert.throws(() => folders.requireStatus(status({ shares: [share({ supersededOfferIds: ids })] })));
+  }
+  assert.throws(() => folders.requireStatus(status({ shares: [
+    share({ supersededOfferIds: [oldId] }), share({ offerId: oldId }),
+  ] })));
+  assert.deepEqual(folders.requireStatus(status({ shares: [share({ supersededOfferIds: [oldId] })] }))
+    .shares[0].supersededOfferIds, [oldId]);
+});
+
+test("lost renewal response retries the expired ID and preserves an unrelated draft", async () => {
+  const storage = new MemoryStorage();
+  const draft = { peerId, folderId, label: "Other plans", selectedRoot: "/other" };
+  folders.pending.save(storage, deviceId, draft);
+  const replacementId = "55555555-5555-4555-8555-555555555555";
+  const calls = [];
+  const controller = folders.coordinator({
+    storage,
+    api: async (path, options) => {
+      if (path === "/api/v1/sync/status") {
+        return status({ shares: [share({ incoming: false, expired: true, phase: "paused" })] });
+      }
+      calls.push({ path, method: options.method, body: JSON.parse(options.body) });
+      if (calls.length === 1) throw new TypeError("response lost after renewal committed");
+      return { schemaVersion: 1, offerId: replacementId, lifecycle: "running", issue: null };
+    },
+  });
+  enable(controller);
+  await controller.refresh();
+  await assert.rejects(controller.renew(offerId), TypeError);
+  assert.equal(controller.isMutationLocked(), false);
+  assert.equal((await controller.renew(offerId)).offerId, replacementId);
+  assert.deepEqual(calls, Array(2).fill({ path: "/api/v1/sync/renew", method: "POST", body: { offerId } }));
+  assert.deepEqual(controller.loadPending(), draft);
+});
+
+test("renewal rejects a response without a different invitation ID", async () => {
+  for (const returnedId of [undefined, null, offerId]) {
+    const controller = folders.coordinator({
+      storage: new MemoryStorage(),
+      api: async (path) => path === "/api/v1/sync/status"
+        ? status({ shares: [share({ incoming: false, expired: true })] })
+        : { schemaVersion: 1, offerId: returnedId, lifecycle: "running", issue: null },
+    });
+    enable(controller);
+    await controller.refresh();
+    await assert.rejects(controller.renew(offerId), /folder sync guidance/);
+    assert.equal(controller.isMutationLocked(), false);
+  }
+});
+
+test("renewal serializes mutations and refuses a result for the previous server", async () => {
+  let finish;
+  let mutations = 0;
+  const controller = folders.coordinator({
+    storage: new MemoryStorage(),
+    api: async (path) => {
+      if (path === "/api/v1/sync/status") return status({ shares: [share({ incoming: false, expired: true })] });
+      mutations += 1;
+      return new Promise((resolve) => { finish = resolve; });
+    },
+  });
+  enable(controller);
+  await controller.refresh();
+  const request = controller.renew(offerId);
+  await assert.rejects(controller.remove(offerId), /folder sync guidance/);
+  assert.equal(mutations, 1);
+  controller.setAccess({ deviceId: otherDeviceId, unlocked: true });
+  finish({ schemaVersion: 1, offerId: folderId, lifecycle: "running", issue: null });
+  await assert.rejects(request, (error) => /previous server/.test(error.covalentGuidance));
+  assert.equal(controller.current(), null);
+  assert.equal(controller.isMutationLocked(), false);
+});
+
 test("storage failure prevents an offer mutation", async () => {
   let calls = 0;
   const brokenStorage = {

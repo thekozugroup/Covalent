@@ -248,6 +248,255 @@ fn replay_after_expiry_is_exact_and_removal_survives_repairing() {
 }
 
 #[test]
+fn expired_offer_renewal_is_idempotent_replayable_and_rejects_stale_acceptance() {
+    let a = Device::new("Mac", 43223);
+    let b = Device::new("Docker", 43224);
+    pair(&a, &b);
+    let mut first = a.journal();
+    let mut second = b.journal();
+    let offer = first
+        .offer(
+            b.engine.device_id(),
+            Uuid::new_v4(),
+            "Documents",
+            &a.files(),
+            2000,
+        )
+        .unwrap();
+    second.receive_offer(offer.clone(), 2001).unwrap();
+    let stale_acceptance = second
+        .accept(offer.offer_id, &b.files(), offer.expires_at_unix_ms - 1)
+        .unwrap();
+    second.set_paused(offer.offer_id, true).unwrap();
+    assert_eq!(second.summaries().unwrap()[0].phase, SharingPhase::Paused);
+    let renewed = first
+        .renew_offer(offer.offer_id, offer.expires_at_unix_ms)
+        .unwrap();
+    assert_ne!(renewed.offer_id, offer.offer_id);
+    assert_eq!(renewed.folder_id, offer.folder_id);
+    assert_eq!(renewed.label, offer.label);
+    assert_eq!(renewed.source_engine, offer.source_engine);
+    assert_eq!(renewed.pairing_id, offer.pairing_id);
+    assert!(renewed.issued_at_unix_ms > offer.issued_at_unix_ms);
+    assert!(renewed.expires_at_unix_ms > offer.expires_at_unix_ms);
+    let renewed_revision = first.revision();
+    assert_eq!(
+        first
+            .renew_offer(offer.offer_id, offer.expires_at_unix_ms + 1)
+            .unwrap(),
+        renewed
+    );
+    assert_eq!(first.revision(), renewed_revision);
+    assert!(matches!(
+        &first.outbound_records().unwrap()[0].record,
+        FolderShareRecord::Offer(current) if current == &renewed
+    ));
+
+    second
+        .receive_offer(renewed.clone(), offer.expires_at_unix_ms + 1)
+        .unwrap();
+    assert_eq!(
+        second
+            .renew_offer(offer.offer_id, offer.expires_at_unix_ms + 1)
+            .unwrap_err(),
+        SharingError::InvalidRecord
+    );
+    assert_eq!(second.summaries().unwrap().len(), 1);
+    assert_eq!(second.summaries().unwrap()[0].offer_id, renewed.offer_id);
+    assert_eq!(second.summaries().unwrap()[0].phase, SharingPhase::Offered);
+    assert!(second.snapshot.shares[0].root.is_none());
+    assert!(second.snapshot.shares[0].acceptance.is_none());
+    assert!(second.desired_settings().unwrap().folders.is_empty());
+    assert!(second.outbound_records().unwrap().is_empty());
+    assert_eq!(
+        second
+            .receive_offer(offer.clone(), offer.expires_at_unix_ms + 1)
+            .unwrap_err(),
+        SharingError::Removed
+    );
+    assert_eq!(
+        first
+            .receive_acceptance(
+                renewed.offer_id,
+                stale_acceptance,
+                offer.expires_at_unix_ms + 2,
+            )
+            .unwrap_err(),
+        SharingError::InvalidRecord
+    );
+    let acceptance = second
+        .accept(renewed.offer_id, &b.files(), offer.expires_at_unix_ms + 2)
+        .unwrap();
+    let commit = first
+        .receive_acceptance(renewed.offer_id, acceptance, offer.expires_at_unix_ms + 3)
+        .unwrap();
+    second.receive_commit(renewed.offer_id, commit).unwrap();
+    drop(first);
+    drop(second);
+
+    let first = a.reopen();
+    let second = b.reopen();
+    assert_eq!(first.snapshot.shares[0].superseded_offers.len(), 1);
+    assert_eq!(second.snapshot.shares[0].superseded_offers.len(), 1);
+    for summary in [
+        first.summaries().unwrap()[0].clone(),
+        second.summaries().unwrap()[0].clone(),
+    ] {
+        assert_eq!(summary.offer_id, renewed.offer_id);
+        assert_eq!(summary.superseded_offer_ids, [offer.offer_id]);
+        let encoded = serde_json::to_string(&summary).unwrap();
+        assert!(!encoded.contains(b.files().to_str().unwrap()));
+        assert!(!encoded.contains(&offer.signature));
+    }
+    assert_eq!(
+        first.index(offer.offer_id).unwrap_err(),
+        SharingError::Removed
+    );
+    assert_eq!(
+        second.index(offer.offer_id).unwrap_err(),
+        SharingError::Removed
+    );
+    assert_eq!(first.summaries().unwrap()[0].phase, SharingPhase::Ready);
+    assert_eq!(second.summaries().unwrap()[0].phase, SharingPhase::Ready);
+}
+
+#[test]
+fn renewal_rejects_live_incoming_accepted_and_removed_offers_without_mutation() {
+    let a = Device::new("Mac", 43225);
+    let b = Device::new("Docker", 43226);
+    pair(&a, &b);
+    let mut first = a.journal();
+    let mut second = b.journal();
+    let offer = first
+        .offer(
+            b.engine.device_id(),
+            Uuid::new_v4(),
+            "Documents",
+            &a.files(),
+            2000,
+        )
+        .unwrap();
+    let first_revision = first.revision();
+    assert_eq!(
+        first
+            .renew_offer(offer.offer_id, offer.expires_at_unix_ms - 1)
+            .unwrap_err(),
+        SharingError::InvalidRecord
+    );
+    assert_eq!(first.revision(), first_revision);
+    second.receive_offer(offer.clone(), 2001).unwrap();
+    let second_revision = second.revision();
+    assert_eq!(
+        second
+            .renew_offer(offer.offer_id, offer.expires_at_unix_ms)
+            .unwrap_err(),
+        SharingError::InvalidRecord
+    );
+    assert_eq!(second.revision(), second_revision);
+
+    let acceptance = second.accept(offer.offer_id, &b.files(), 2002).unwrap();
+    first
+        .receive_acceptance(offer.offer_id, acceptance, 2003)
+        .unwrap();
+    let accepted_revision = first.revision();
+    assert_eq!(
+        first
+            .renew_offer(offer.offer_id, offer.expires_at_unix_ms)
+            .unwrap_err(),
+        SharingError::InvalidRecord
+    );
+    assert_eq!(first.revision(), accepted_revision);
+
+    first.remove(offer.offer_id).unwrap();
+    let removed_revision = first.revision();
+    assert_eq!(
+        first
+            .renew_offer(offer.offer_id, offer.expires_at_unix_ms)
+            .unwrap_err(),
+        SharingError::Removed
+    );
+    assert_eq!(first.revision(), removed_revision);
+}
+
+#[test]
+fn removed_recipient_is_not_recreated_by_source_renewal() {
+    let a = Device::new("Mac", 43227);
+    let b = Device::new("Docker", 43228);
+    pair(&a, &b);
+    let mut first = a.journal();
+    let mut second = b.journal();
+    let offer = first
+        .offer(
+            b.engine.device_id(),
+            Uuid::new_v4(),
+            "Documents",
+            &a.files(),
+            2000,
+        )
+        .unwrap();
+    second.receive_offer(offer.clone(), 2001).unwrap();
+    second.remove(offer.offer_id).unwrap();
+    let renewed = first
+        .renew_offer(offer.offer_id, offer.expires_at_unix_ms)
+        .unwrap();
+    let revision = second.revision();
+    assert_eq!(
+        second
+            .receive_offer(renewed, offer.expires_at_unix_ms + 1)
+            .unwrap_err(),
+        SharingError::Removed
+    );
+    assert_eq!(second.revision(), revision);
+    assert_eq!(second.summaries().unwrap()[0].phase, SharingPhase::Removed);
+}
+
+#[test]
+fn renewal_quota_accepts_the_last_slot_and_rejects_the_next_without_mutation() {
+    let a = Device::new("Mac", 43229);
+    let b = Device::new("Docker", 43230);
+    pair(&a, &b);
+    let mut first = a.journal();
+    let offer = first
+        .offer(
+            b.engine.device_id(),
+            Uuid::new_v4(),
+            "Documents",
+            &a.files(),
+            2000,
+        )
+        .unwrap();
+    let mut candidate = first.snapshot.clone();
+    candidate.shares[0].superseded_offers = (1..MAX_RENEWALS_PER_SHARE)
+        .map(|value| SupersededOffer {
+            offer_id: Uuid::from_u128(value as u128),
+            issued_at_unix_ms: value as u64,
+        })
+        .collect();
+    first.persist(candidate).unwrap();
+    let renewed = first
+        .renew_offer(offer.offer_id, offer.expires_at_unix_ms)
+        .unwrap();
+    assert_eq!(
+        first.snapshot.shares[0].superseded_offers.len(),
+        MAX_RENEWALS_PER_SHARE
+    );
+    let revision = first.revision();
+    assert_eq!(
+        first
+            .renew_offer(renewed.offer_id, renewed.expires_at_unix_ms)
+            .unwrap_err(),
+        SharingError::LimitExceeded
+    );
+    assert_eq!(first.revision(), revision);
+    drop(first);
+    let reopened = a.reopen();
+    assert_eq!(
+        reopened.snapshot.shares[0].superseded_offers.len(),
+        MAX_RENEWALS_PER_SHARE
+    );
+}
+
+#[test]
 fn revocation_is_reconciled_durably_before_restart_settings() {
     let a = Device::new("Mac", 43231);
     let b = Device::new("Docker", 43232);

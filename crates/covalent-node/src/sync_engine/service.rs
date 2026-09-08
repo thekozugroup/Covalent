@@ -522,6 +522,17 @@ impl FolderSyncService {
             .await
     }
 
+    /// Durably replace one expired outgoing invitation with a fresh signed
+    /// invitation. No worker starts because renewal carries no target consent.
+    pub async fn renew_offer(
+        &self,
+        offer_id: Uuid,
+        now: u64,
+    ) -> Result<CommittedMutation<FolderShareOffer>, FolderSyncServiceError> {
+        self.mutate(|journal| journal.renew_offer(offer_id, now))
+            .await
+    }
+
     pub async fn accept(
         &self,
         offer_id: Uuid,

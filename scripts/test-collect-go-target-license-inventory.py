@@ -35,7 +35,9 @@ class Fixture:
         go_sum = b"fixture checksum evidence\n"
         (self.source / "go.mod").write_bytes(go_mod)
         (self.source / "go.sum").write_bytes(go_sum)
-        (self.source / "LICENSE").write_text("MPL-2.0 fixture\n", encoding="utf-8")
+        (self.source / "LICENSE").write_text(
+            "Mozilla Public License Version 2.0\n", encoding="utf-8"
+        )
         (self.source / "AUTHORS").write_text("fixture authors\n", encoding="utf-8")
         licenses.GO_MOD_SHA256 = hashlib.sha256(go_mod).hexdigest()
         licenses.GO_SUM_SHA256 = hashlib.sha256(go_sum).hexdigest()
@@ -68,7 +70,12 @@ class Fixture:
             rows.append(
                 {
                     "ImportPath": f"{path}/package{index}",
-                    "Module": {"Path": path, "Version": version, "Dir": str(directory)},
+                    "Module": {
+                        "Path": path,
+                        "Version": version,
+                        "Dir": str(directory),
+                        "Sum": "h1:" + "A" * 43 + "=",
+                    },
                 }
             )
         report = self.reports / f"{name}.ndjson"
@@ -121,6 +128,11 @@ class GoTargetLicenseInventoryTests(unittest.TestCase):
         self.assertEqual(rows["example.org/arm"]["targets"], ["arm64"])
         self.assertEqual(rows["example.org/common"]["targets"], ["amd64", "arm64"])
         self.assertEqual(first["targets"][0]["buildTags"], ["noupgrade"])
+        self.assertEqual(
+            rows[licenses.MAIN_MODULE]["recognizedLicenseTexts"], ["MPL-2.0"]
+        )
+        self.assertEqual(rows["example.org/common"]["recognizedLicenseTexts"], [])
+        self.assertEqual(rows["example.org/common"]["moduleSum"], "h1:" + "A" * 43 + "=")
         notice = next(
             item
             for item in rows["example.org/common"]["licenseAndNoticeFiles"]
@@ -144,6 +156,22 @@ class GoTargetLicenseInventoryTests(unittest.TestCase):
             inventory["missingLicenseEvidence"], ["example.org/missing@v1"]
         )
 
+    def test_dependency_module_requires_exact_content_sum(self) -> None:
+        module = self.fixture.module("example.org/module@v1")
+        report = self.fixture.report(
+            "amd64", [("example.org/module", "v1", module)]
+        )
+        rows = [json.loads(line) for line in report.read_text().splitlines()]
+        rows[-1]["Module"].pop("Sum")
+        report.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+        with self.assertRaisesRegex(licenses.EvidenceError, "checksum evidence"):
+            licenses.build_inventory(
+                self.fixture.source,
+                self.fixture.modules,
+                [self.fixture.target("amd64", report)],
+            )
+
     def test_wrong_source_graph_and_module_escape_are_rejected(self) -> None:
         report = self.fixture.report("amd64", [])
         (self.fixture.source / "go.sum").write_text("changed\n", encoding="utf-8")
@@ -165,10 +193,12 @@ class GoTargetLicenseInventoryTests(unittest.TestCase):
                     "Path": "example.org/original",
                     "Version": "v1.0.0",
                     "Dir": str(replacement),
+                    "Sum": "h1:" + "B" * 43 + "=",
                     "Replace": {
                         "Path": "example.org/replacement",
                         "Version": "v1.1.0",
                         "Dir": str(replacement),
+                        "Sum": "h1:" + "C" * 43 + "=",
                     },
                 },
             }
@@ -193,6 +223,7 @@ class GoTargetLicenseInventoryTests(unittest.TestCase):
             {"path": "example.org/replacement", "version": "v1.1.0"},
         )
         self.assertEqual(row["status"], "observed")
+        self.assertEqual(row["moduleSum"], "h1:" + "C" * 43 + "=")
 
         (self.fixture.source / "go.sum").write_bytes(b"fixture checksum evidence\n")
         outside = self.fixture.source / "outside-module"

@@ -203,6 +203,96 @@ async fn make_ready_folder_at(
 }
 
 #[tokio::test]
+async fn concurrent_expired_offer_renewals_converge_on_one_durable_replacement() {
+    let first = Device::new("Mac", 44311);
+    let second = Device::new("Server", 44312);
+    pair(&first, &second);
+    let backend = Arc::new(TestBackend::default());
+    let service = Arc::new(first.service(first.journal(), Arc::clone(&backend)));
+    let offer = service
+        .offer(
+            second.engine.device_id(),
+            Uuid::new_v4(),
+            "Documents",
+            &first.files(),
+            2000,
+        )
+        .await
+        .unwrap()
+        .into_value();
+    let expires = offer.expires_at_unix_ms;
+
+    let (left, right) = tokio::join!(
+        service.renew_offer(offer.offer_id, expires),
+        service.renew_offer(offer.offer_id, expires)
+    );
+    let mut returned = Vec::new();
+    for result in [left, right] {
+        match result {
+            Ok(committed) => returned.push(committed.into_value().offer_id),
+            Err(error) => assert_eq!(error, FolderSyncServiceError::Busy),
+        }
+    }
+    let retried = service
+        .renew_offer(offer.offer_id, expires + 1)
+        .await
+        .unwrap()
+        .into_value();
+    assert!(!returned.is_empty());
+    assert!(
+        returned
+            .iter()
+            .all(|offer_id| *offer_id == retried.offer_id)
+    );
+    let status = service.status().await.unwrap();
+    assert_eq!(status.shares().len(), 1);
+    assert_eq!(status.shares()[0].offer_id, retried.offer_id);
+    assert_eq!(status.shares()[0].phase, SharingPhase::Offered);
+    assert_eq!(backend.snapshot().launches, 0);
+}
+
+#[tokio::test]
+async fn renewing_pending_consent_does_not_restart_an_unrelated_running_folder() {
+    let first = Device::new("Mac", 44313);
+    let second = Device::new("Server", 44314);
+    let third = Device::new("Phone", 44315);
+    pair(&first, &second);
+    pair(&first, &third);
+    let first_backend = Arc::new(TestBackend::default());
+    let second_backend = Arc::new(TestBackend::default());
+    let source = first.service(first.journal(), Arc::clone(&first_backend));
+    let target = second.service(second.journal(), second_backend);
+    make_ready(&first, &second, &source, &target).await;
+    let pending_root = first.root.join("pending-phone");
+    std::fs::create_dir(&pending_root).unwrap();
+    let pending = source
+        .offer(
+            third.engine.device_id(),
+            Uuid::new_v4(),
+            "Phone files",
+            &pending_root,
+            4000,
+        )
+        .await
+        .unwrap()
+        .into_value();
+    let before = first_backend.snapshot();
+
+    let renewed = source
+        .renew_offer(pending.offer_id, pending.expires_at_unix_ms)
+        .await
+        .unwrap();
+
+    assert_ne!(renewed.value().offer_id, pending.offer_id);
+    assert_eq!(renewed.lifecycle(), FolderSyncLifecycle::Running);
+    let after = first_backend.snapshot();
+    assert_eq!(after.launches, before.launches);
+    assert_eq!(after.close_calls, before.close_calls);
+    assert_eq!(after.stop_calls, before.stop_calls);
+    assert_eq!(after.active, 1);
+}
+
+#[tokio::test]
 async fn disconnect_reconnect_and_unknown_do_not_stop_a_healthy_worker() {
     let first = Device::new("Mac", 44209);
     let second = Device::new("Server", 44210);

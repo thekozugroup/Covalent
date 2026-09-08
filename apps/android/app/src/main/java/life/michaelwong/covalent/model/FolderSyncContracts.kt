@@ -33,6 +33,7 @@ data class FolderShare(
     val expiresAtUnixMs: Long?,
     val expired: Boolean,
     val peerConnection: PeerConnectionState = PeerConnectionState.UNKNOWN,
+    val supersededOfferIds: List<String> = emptyList(),
 )
 
 enum class FolderSharePhase { OFFERED, AWAITING_COMMIT, READY, PAUSED, REMOVED }

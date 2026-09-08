@@ -144,6 +144,33 @@ pub(crate) async fn accept(
     }
 }
 
+/// Replace an expired outgoing invitation after an explicit local request.
+/// The returned offer ID names the newly signed invitation; callers must
+/// durably replace their pending draft reference with that value.
+pub(crate) async fn renew(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ContractJson(request): ContractJson<ShareRequest>,
+) -> Result<axum::Json<MutationResponse>, ApiError> {
+    authorize(&state, &headers)?;
+    #[cfg(unix)]
+    {
+        let committed = ready_service(&state)?
+            .renew_offer(request.offer_id, crate::now_unix_ms())
+            .await
+            .map_err(service_error)?;
+        Ok(mutation_response(
+            Some(committed.value().offer_id),
+            committed.lifecycle(),
+        ))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = request;
+        Err(unavailable_error())
+    }
+}
+
 pub(crate) async fn pause(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -382,6 +409,7 @@ struct PeerResponse {
 #[serde(rename_all = "camelCase")]
 struct ShareResponse {
     offer_id: uuid::Uuid,
+    superseded_offer_ids: Vec<uuid::Uuid>,
     folder_id: uuid::Uuid,
     label: String,
     peer_id: covalent_protocol::DeviceId,
@@ -600,6 +628,7 @@ fn share_responses(
         .iter()
         .map(|share| ShareResponse {
             offer_id: share.offer_id,
+            superseded_offer_ids: share.superseded_offer_ids.clone(),
             folder_id: share.folder_id,
             label: share.label.clone(),
             peer_id: share.peer_id,

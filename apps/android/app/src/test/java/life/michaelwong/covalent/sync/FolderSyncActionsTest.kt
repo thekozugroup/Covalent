@@ -2,6 +2,8 @@ package life.michaelwong.covalent.sync
 
 import java.util.UUID
 import life.michaelwong.covalent.model.FolderHealthFreshness
+import life.michaelwong.covalent.model.FolderShare
+import life.michaelwong.covalent.model.FolderSharePhase
 import life.michaelwong.covalent.model.FolderSyncAvailability
 import life.michaelwong.covalent.model.FolderSyncLifecycle
 import life.michaelwong.covalent.model.FolderSyncMutation
@@ -97,6 +99,33 @@ class FolderSyncActionsTest {
         assertEquals(false, journal.removalPending)
     }
 
+    @Test
+    fun renewalRequiresSavedSenderChoiceAndAcknowledgedReplacementRelationship() {
+        val events = mutableListOf<String>()
+        val journal = RecordingJournal(events)
+        val api = RecordingApi(events, responseOffer = OTHER_OFFER)
+        assertThrows(IllegalStateException::class.java) { actions(events, journal, api).renew(OFFER) }
+        assertEquals(emptyList<String>(), events)
+        journal.saved = listOf(FolderSyncGrant(
+            "offer:$OFFER", FolderSyncGrantKind.OFFER, OFFER, OTHER_OFFER, OTHER_OFFER,
+            "/storage/emulated/0/Photos", "Photos",
+        ))
+        assertThrows(IllegalStateException::class.java) { actions(events, journal, api).renew(OFFER) }
+        assertEquals(listOf("node", "api-renew"), events)
+        assertEquals(OFFER, journal.saved.single().offerId)
+        events.clear()
+        val confirmed = STATUS.copy(shares = listOf(FolderShare(
+            OTHER_OFFER, OTHER_OFFER, "Photos", OTHER_OFFER, false,
+            FolderSharePhase.OFFERED, 100, false, supersededOfferIds = listOf(OFFER),
+        )))
+        val result = actions(events, journal, RecordingApi(
+            events, responseOffer = OTHER_OFFER, responseStatus = confirmed,
+        )).renew(OFFER)
+        assertEquals(OTHER_OFFER, result.offerId)
+        assertEquals(listOf("node", "api-renew", "reconcile"), events)
+        assertEquals(confirmed, journal.reconciledStatus)
+    }
+
     private fun actions(
         events: MutableList<String>,
         journal: RecordingJournal,
@@ -125,8 +154,10 @@ class FolderSyncActionsTest {
             private set
         var removalPending = false
             private set
+        var saved = emptyList<FolderSyncGrant>()
+        var reconciledStatus: FolderSyncStatus? = null
 
-        override fun records() = emptyList<FolderSyncGrant>()
+        override fun records() = saved
         override fun prepareOffer(peerId: String, proposedFolderId: UUID, root: String, label: String): UUID {
             events += "prepare-offer"
             offeredRoot = root
@@ -157,7 +188,10 @@ class FolderSyncActionsTest {
             check(removalPending)
             removalPending = false
         }
-        override fun reconcile(status: FolderSyncStatus) = Unit
+        override fun reconcile(status: FolderSyncStatus) {
+            events += "reconcile"
+            reconciledStatus = status
+        }
     }
 
     private class RecordingApi(
@@ -165,10 +199,11 @@ class FolderSyncActionsTest {
         private val failAccept: Boolean = false,
         private val failRepair: Boolean = false,
         private val responseOffer: String = OFFER,
+        private val responseStatus: FolderSyncStatus = STATUS,
     ) : FolderSyncApi {
         var offeredRoot: String? = null
             private set
-        override fun status(connection: NodeConnection) = STATUS
+        override fun status(connection: NodeConnection) = responseStatus
         override fun offer(connection: NodeConnection, peerId: String, folderId: UUID, label: String, selectedRoot: String): FolderSyncMutation {
             events += "api-offer"
             offeredRoot = selectedRoot
@@ -180,6 +215,10 @@ class FolderSyncActionsTest {
             return MUTATION
         }
         override fun pause(connection: NodeConnection, offerId: String, paused: Boolean) = MUTATION
+        override fun renew(connection: NodeConnection, offerId: String): FolderSyncMutation {
+            events += "api-renew"
+            return mutation(responseOffer)
+        }
         override fun remove(connection: NodeConnection, offerId: String): FolderSyncMutation {
             events += "api-remove"
             return mutation(responseOffer)

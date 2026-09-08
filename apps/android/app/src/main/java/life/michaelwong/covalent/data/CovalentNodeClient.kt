@@ -202,6 +202,12 @@ class CovalentNodeClient(
         ).toFolderSyncMutation()
     }
 
+    fun renewFolder(baseUrl: String, token: String, offerId: String): FolderSyncMutation {
+        requireUuid(offerId, "offer")
+        return post(baseUrl, token, "/api/v1/sync/renew", JSONObject().put("offerId", offerId))
+            .toFolderSyncMutation()
+    }
+
     fun removeFolder(baseUrl: String, token: String, offerId: String): FolderSyncMutation {
         requireUuid(offerId, "offer")
         return post(
@@ -938,7 +944,7 @@ private fun JSONObject.toFolderSyncStatus(): FolderSyncStatus {
             requireJsonKeys(
                 share,
                 setOf("offerId", "folderId", "label", "peerId", "incoming", "phase", "expiresAtUnixMs", "expired"),
-                setOf("peerConnection"),
+                setOf("peerConnection", "supersededOfferIds"),
             )
             FolderShare(
                 offerId = requireUuid(share.getString("offerId"), "folder offer ID"),
@@ -965,10 +971,24 @@ private fun JSONObject.toFolderSyncStatus(): FolderSyncStatus {
                     "paused" -> PeerConnectionState.PAUSED
                     else -> error("The node returned an unknown peer connection state.")
                 },
+                supersededOfferIds = if (share.has("supersededOfferIds")) {
+                    val oldIds = share.getJSONArray("supersededOfferIds")
+                    check(oldIds.length() <= 128)
+                    List(oldIds.length()) {
+                        requireUuid(oldIds.getString(it), "superseded offer ID").also { id ->
+                            check(id != "00000000-0000-0000-0000-000000000000")
+                        }
+                    }
+                } else emptyList(),
             )
         }
     }
     check(shares.map(FolderShare::offerId).toSet().size == shares.size)
+    val retainedOfferIds = shares.map(FolderShare::offerId).toMutableSet()
+    shares.forEach { share ->
+        check(share.phase != FolderSharePhase.REMOVED || share.supersededOfferIds.isEmpty())
+        share.supersededOfferIds.forEach { check(retainedOfferIds.add(it)) }
+    }
     check(shares.all { share ->
         share.phase == FolderSharePhase.REMOVED || peers.any { it.peerId == share.peerId }
     })

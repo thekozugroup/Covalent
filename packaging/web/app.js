@@ -665,7 +665,7 @@ function renderFolderActions(container, status, share, view) {
     container.append(pathLabel, accept);
   }
 
-  if (!(share.incoming && share.phase === "offered")) {
+  if (!share.expired && !(share.incoming && share.phase === "offered")) {
     const paused = share.phase === "paused";
     const pause = folderActionButton(paused ? "Resume" : "Pause", () => {
       void runFolderMutation(
@@ -673,8 +673,16 @@ function renderFolderActions(container, status, share, view) {
         paused ? "Folder sync resumed." : "Folder sync paused.",
       );
     });
-    pause.disabled = pause.disabled || share.expired;
     container.append(pause);
+  }
+
+  if (share.expired && !share.incoming && ["offered", "paused"].includes(share.phase)) {
+    container.append(folderActionButton("Send new invitation", () => {
+      void runFolderMutation(
+        () => folderController.renew(share.offerId),
+        "New invitation created. Accept it on the other device to start syncing.",
+      );
+    }));
   }
 
   const removeLabel = share.incoming && share.phase === "offered" && !share.expired ? "Decline" : "Remove…";
@@ -703,7 +711,11 @@ function renderFolderActions(container, status, share, view) {
   container.append(remove, confirmation);
 
   if (view.kind === "expired") {
-    container.querySelectorAll("button:not(.quiet)").forEach((button) => { button.disabled = true; });
+    const guidance = document.createElement("p");
+    guidance.textContent = share.incoming
+      ? `Ask ${folderPeerName(status, share.peerId)} to send a new invitation, then choose your folder again.`
+      : "Send a new invitation so the other device can choose its folder and accept again.";
+    container.append(guidance);
   }
 }
 

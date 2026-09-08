@@ -1034,6 +1034,26 @@ mod tests {
         )
         .await;
         assert!(unauthenticated.contains(" 401 "));
+        let renew_body = r#"{"offerId":"00000000-0000-0000-0000-000000000001"}"#;
+        let unauthenticated_renewal = request(
+            runtime.ready_info().api_address(),
+            &format!(
+                "POST /api/v1/sync/renew HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{renew_body}",
+                renew_body.len(),
+            ),
+        )
+        .await;
+        assert!(unauthenticated_renewal.contains(" 401 "));
+        let unavailable_renewal = request(
+            runtime.ready_info().api_address(),
+            &format!(
+                "POST /api/v1/sync/renew HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{renew_body}",
+                runtime.ready_info().api_token().expose(),
+                renew_body.len(),
+            ),
+        )
+        .await;
+        assert!(unavailable_renewal.contains(" 409 "));
         let denied = request(
             runtime.ready_info().api_address(),
             &format!(

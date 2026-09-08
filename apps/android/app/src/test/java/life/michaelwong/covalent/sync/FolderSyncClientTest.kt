@@ -10,6 +10,7 @@ import life.michaelwong.covalent.model.PeerConnectionState
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.json.JSONObject
+import org.json.JSONArray
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -20,7 +21,7 @@ class FolderSyncClientTest {
     fun authenticatedFolderRoutesUseTheBoundedV1Contract() {
         val server = MockWebServer()
         server.enqueue(MockResponse().setBody(STATUS))
-        repeat(6) { server.enqueue(MockResponse().setBody(MUTATION)) }
+        repeat(7) { server.enqueue(MockResponse().setBody(MUTATION)) }
         server.start()
         try {
             val base = server.url("/").toString().removeSuffix("/")
@@ -38,6 +39,7 @@ class FolderSyncClientTest {
             client.repairFolder(base, "token", OFFER, "/storage/emulated/0/Repaired")
             client.removeFolder(base, "token", OFFER)
             client.retryFolderSync(base, "token")
+            client.renewFolder(base, "token", OFFER)
 
             assertEquals("/api/v1/sync/status", server.takeRequest().path)
             assertEquals("/api/v1/sync/folders", server.takeRequest().path)
@@ -53,6 +55,13 @@ class FolderSyncClientTest {
             assertEquals("/storage/emulated/0/Repaired", repairBody.getString("selectedRoot"))
             assertEquals("/api/v1/sync/remove", server.takeRequest().path)
             assertEquals("/api/v1/sync/retry", server.takeRequest().path)
+            val renewal = server.takeRequest()
+            assertEquals("/api/v1/sync/renew", renewal.path)
+            assertEquals("POST", renewal.method)
+            assertEquals("Bearer token", renewal.getHeader("Authorization"))
+            val renewalBody = JSONObject(renewal.body.readUtf8())
+            assertEquals(setOf("offerId"), renewalBody.keys().asSequence().toSet())
+            assertEquals(OFFER, renewalBody.getString("offerId"))
         } finally {
             server.shutdown()
         }
@@ -141,6 +150,33 @@ class FolderSyncClientTest {
             assertEquals(PeerConnectionFreshness.NEVER_OBSERVED, old.connectionFreshness)
             assertEquals(PeerConnectionState.UNKNOWN, old.shares.single().peerConnection)
             assertTrue(runCatching { CovalentNodeClient().folderSyncStatus(base, "token") }.isFailure)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun replacementIdsAreBoundedUniqueAndCannotNameTheCurrentInvitation() {
+        val oldId = "55555555-5555-4555-8555-555555555555"
+        val variants = listOf(
+            JSONArray().put(oldId), JSONObject.NULL, JSONArray().put(OFFER),
+            JSONArray().put(oldId).put(oldId), JSONArray(List(129) { oldId }),
+            JSONArray().put("00000000-0000-0000-0000-000000000000"),
+        )
+        val server = MockWebServer()
+        variants.forEach { value ->
+            val json = JSONObject(STATUS)
+            json.getJSONArray("shares").getJSONObject(0).put("supersededOfferIds", value)
+            server.enqueue(MockResponse().setBody(json.toString()))
+        }
+        server.start()
+        try {
+            val base = server.url("/").toString().removeSuffix("/")
+            val client = CovalentNodeClient()
+            assertEquals(listOf(oldId), client.folderSyncStatus(base, "token").shares.single().supersededOfferIds)
+            repeat(variants.size - 1) {
+                assertTrue(runCatching { client.folderSyncStatus(base, "token") }.isFailure)
+            }
         } finally {
             server.shutdown()
         }

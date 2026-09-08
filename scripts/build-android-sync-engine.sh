@@ -445,6 +445,10 @@ collect_target_graph() {
 
 collect_target_graph arm64-v8a arm64 aarch64-linux-android26-clang
 collect_target_graph x86_64 amd64 x86_64-linux-android26-clang
+(
+  cd "$build_source"
+  go mod verify
+)
 
 inventory="$reports_root/android-target-license-inventory.json"
 python3 "$inventory_tool" \

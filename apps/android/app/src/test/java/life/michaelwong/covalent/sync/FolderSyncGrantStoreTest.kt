@@ -1,5 +1,12 @@
 package life.michaelwong.covalent.sync
 
+import java.util.UUID
+import life.michaelwong.covalent.model.FolderShare
+import life.michaelwong.covalent.model.FolderSharePhase
+import life.michaelwong.covalent.model.FolderSyncStatus
+import life.michaelwong.covalent.model.FolderSyncAvailability
+import life.michaelwong.covalent.model.FolderSyncLifecycle
+import life.michaelwong.covalent.model.FolderHealthFreshness
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -114,6 +121,64 @@ class FolderSyncGrantStoreTest {
         assertEquals(NEW_ROOT, FolderSyncGrantStore(disk).pendingRepairRoot(OFFER))
     }
 
+    @Test
+    fun renewedSenderBindingSurvivesReopenAndFailedSaveRetainsExactOriginal() {
+        val disk = MemoryPersistence()
+        val store = FolderSyncGrantStore(disk)
+        store.prepareOffer(PEER, UUID.fromString(FOLDER), OLD_ROOT, "Photos")
+        store.finishOffer(UUID.fromString(FOLDER), OFFER)
+        val before = disk.value
+        val replacement = renewalShare(incoming = false)
+        disk.failWrites = true
+        assertThrows(IllegalStateException::class.java) { store.reconcile(renewalStatus(replacement)) }
+        assertEquals(before, disk.value)
+        disk.failWrites = false
+        FolderSyncGrantStore(disk).reconcile(renewalStatus(replacement))
+        val reopened = FolderSyncGrantStore(disk).records().single()
+        assertEquals(REPLACEMENT, reopened.offerId)
+        assertEquals(OLD_ROOT, reopened.root)
+        assertEquals(FOLDER, reopened.folderId)
+        assertEquals(PEER, reopened.peerId)
+        assertFalse(FolderSyncGrantStore(disk).hasPendingCapabilityChange())
+    }
+
+    @Test
+    fun recipientRenewalRetiresOldChoiceAndRequiresExplicitAcceptanceAgain() {
+        val disk = MemoryPersistence()
+        val store = FolderSyncGrantStore(disk)
+        store.prepareAcceptance(OFFER, OLD_ROOT)
+        store.reconcile(renewalStatus(renewalShare(incoming = true)))
+        assertTrue(FolderSyncGrantStore(disk).records().isEmpty())
+        FolderSyncGrantStore(disk).prepareAcceptance(REPLACEMENT, NEW_ROOT)
+        assertEquals(NEW_ROOT, FolderSyncGrantStore(disk).records().single().root)
+        assertEquals(REPLACEMENT, FolderSyncGrantStore(disk).records().single().offerId)
+    }
+
+    @Test
+    fun absentRowsNeverDropChoicesAndAmbiguousRenewalsNeverWrite() {
+        val disk = MemoryPersistence()
+        val store = FolderSyncGrantStore(disk)
+        store.prepareAcceptance(OFFER, OLD_ROOT)
+        val before = disk.value
+        store.reconcile(renewalStatus())
+        assertEquals(before, disk.value)
+        val replacement = renewalShare(incoming = true)
+        assertThrows(IllegalStateException::class.java) {
+            store.reconcile(renewalStatus(replacement, replacement.copy(offerId = FOLDER)))
+        }
+        assertEquals(before, disk.value)
+    }
+
+    private fun renewalShare(incoming: Boolean) = FolderShare(
+        REPLACEMENT, FOLDER, "Photos", PEER, incoming, FolderSharePhase.OFFERED,
+        100, false, supersededOfferIds = listOf(OFFER),
+    )
+
+    private fun renewalStatus(vararg shares: FolderShare) = FolderSyncStatus(
+        FolderSyncAvailability.AVAILABLE, FolderSyncLifecycle.RUNNING, null,
+        FolderHealthFreshness.FRESH, emptyList(), shares.toList(), emptyList(),
+    )
+
     private class MemoryPersistence(initial: String? = null) : FolderSyncGrantPersistence {
         override val readable = true
         var value: String? = initial
@@ -129,6 +194,9 @@ class FolderSyncGrantStoreTest {
 
     private companion object {
         const val OFFER = "33333333-3333-4333-8333-333333333333"
+        const val REPLACEMENT = "44444444-4444-4444-8444-444444444444"
+        const val FOLDER = "11111111-1111-4111-8111-111111111111"
+        const val PEER = "22222222-2222-4222-8222-222222222222"
         const val OLD_ROOT = "/storage/emulated/0/Photos"
         const val NEW_ROOT = "/storage/emulated/0/Repaired"
         const val OTHER_ROOT = "/storage/emulated/0/Other"

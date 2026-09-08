@@ -800,3 +800,143 @@ source access; that packaging work remains open. Audit manifest SHA-256 is
 `68a44946d3c32bd93050b43c0266ae6fdfca867818bf97df36529eaf67fb73a0`.
 Its owned caches/source cleanup removed 417,380,299 logical bytes after retaining
 compact evidence. The acceptance ledger remains **70%: 14 of 20 milestones**.
+
+
+## Checkpoint 33: explicit renewal, native grant handoff and corresponding source
+
+Checkpoint 32 (`1ba4e9f2856c841a5154af9aa312fa5b333fc907`) ran as tested merge
+`3cad2e730a4bda175f63123be11fe5a773f1d64b` in CI `34278383979`. Rust/contracts,
+both complete Docker jobs, Mac bundle/integration/UI, Android foundation, iOS
+Tier 2, dependency review, CodeQL and release versions pass. The Mac hosted
+source build reproduced worker SHA-256
+`4df1dea892fac3c9d1c0e822827c9a4c57711dcddaaf56a61edaab41d5337bbb`,
+including the expected 295,173-byte checkpoint-32 notice text.
+
+Android foundation and the device preflight record 145 passing JVM tests. The
+API 37 suite completed 59 of its 76 named tests. Test 60, the complete native
+folder journey, changed MANAGE_EXTERNAL_STORAGE from its own instrumentation
+process; ActivityManager explicitly killed the app UID for that permission
+change. No native journey completion is claimed. The host must change permission
+between completed instrumentation phases and verify actual cold-start recovery.
+The retained failure artifact is `10077571093`, SHA-256
+`83e348da68937a8297f1c8bac3a979485880d82b9d9524e561e69d3d89300508`.
+
+The integrated replacement keeps all 76 source-derived test names: 75 run in
+the baseline process, and the same folder journey test must pass independently
+in setup, denied and restored processes. The host starts the ordinary Activity
+after setup, observes exactly one packaged helper pair, changes the app-op and
+requires that exact app PID and both helpers to exit. Denied cold startup must
+remain worker-free while native cancellation/removal runs; restoring access
+must not resurrect the removed share or change either retained file tree.
+Permission and cleanup mutations require the exact owned emulator, installed
+debug package and exclusive gate lock. Failed fixture cleanup retains its
+private receipt, and app data is cleared only after successful restored-phase
+cleanup. Shell syntax, exact result-contract tests, release guardrails and
+foundation checks pass locally; Kotlin and device execution remain pending.
+
+### Exact new-worker sandbox and HIG evidence
+
+The production default Keychain, LocalNodeManager, app model, packaged helper
+and new source-built worker complete two signed App Sandbox launches. Signed
+pairing, explicit folder consent, first transfer, cold bookmark/identity
+restoration, second transfer and removal with both copies preserved all pass.
+The exact peer endpoint and certificate remain stable. Result SHA-256 is
+`2a132d263d388f7cd5c1af35bb23667f463a6ac36c18d8df89014eb70d0673d1`;
+cleanup SHA-256 is
+`1818a4836e68581b0a5d4daa44b0bc8d75e1387db4a2d55b3c3ad133b5d04b6a`.
+The final cold transfer preceded the first background health probe, so the
+result deliberately does not claim fresh post-restart health. The sandbox
+reaped its own local worker tree; the outer fixture reaped the exact peer tree.
+Cleanup removed 376,160,256 logical bytes and the unique fixture Keychain item.
+
+Checkpoint-32 HIG execution covers Command-4, native sidebar/Form, light and
+process-local dark appearance, the 900-point width floor, separate exact-share
+AX actions with labels/help, native folder-only NSOpenPanel, explicit Remove
+and Keep Files confirmation, and Escape cancellation. The checklist SHA-256 is
+`ff263591d3a558c09b6377ac02f629568d2e418025f356e680e6337b19090721`.
+This is not a complete spoken VoiceOver or full Tab traversal claim. The user's
+global appearance, keyboard-navigation and VoiceOver settings were unchanged.
+
+Checkpoint-33 renewal views also compile as the full Swift 6 product and run
+in a signed sandbox fixture at exactly 900 by 640 content points. Both expired
+rows and the composer remain visible. The outgoing renewal action names its
+share and explains fresh recipient consent; the expired incoming folder picker
+is disabled with truthful guidance. Native file-preserving removal and Escape
+cancellation produce no sync mutation. This review found one generic incoming
+Remove accessibility label, now corrected to name the invitation for both
+Remove and Decline. Result SHA-256 before that label correction is
+`da1cd8bc455a5e1d5dbc64fa194786ed434dd470ab2107496ab6081f03188e73`.
+The ineffective per-process keyboard-navigation override is recorded as a test
+limit. Cleanup removed 338,874,932 logical bytes, reaped every owned process and
+deleted the fixture token; frozen source and the signed app archive remain.
+
+The personal upgrade fixture uses the exact production Keychain store and two
+different ad-hoc executable/CDHashes. Build 1 provisions a unique login
+Keychain hierarchy; Build 2 reaches the real SecurityAgent authorization
+dialog. Automatic approval review rejects access to SecurityAgent. Authorized
+upgrade completion and exact hierarchy retention after that authorization remain
+unverified. The ACL retains one trusted application; the fixture changes no
+ACL/global setting. Build 1 deletes its exact test item and verifies absence.
+Result SHA-256 is
+`49bd690cc8772492c2473e063d2b1965387dfb62f1ed38c35a534b4970f198d2`.
+
+### Renewal preserves explicit consent and durable folder bindings
+
+Authenticated `POST /api/v1/sync/renew` replaces an expired outgoing unaccepted
+invitation with a freshly signed ID and later validity period. The source
+retains bounded superseded ID/time metadata; retrying an old ID returns the
+exact durable replacement. Old acceptance/commit messages cannot authorize
+the replacement. A recipient's uncommitted old acceptance and root are retired
+together, including a paused awaiting-commit state, so the fresh invitation is
+Offered and needs a new folder choice and acceptance. Accepted source records
+and removed shares cannot be renewed.
+
+The status projection includes bounded `supersededOfferIds` relationships. Native
+clients default missing metadata to an empty list and reject ambiguous
+relationships before changing saved grants. Sender grants retain their folder
+and rebind only through the authenticated relationship or exact renewal
+acknowledgement. Recipient bookmarks/choices are retired without file deletion;
+no new recipient consent is inferred from a matching label or an absent row.
+Mac retirement persists the reduced bookmark set and restarts/reaps the helper
+to release the old inherited sandbox scope before publishing fresh status. An
+in-memory retry flag survives restart failure; cold startup uses the reduced
+durable grant set. Sender ID-only rebinding does not restart an unchanged scope.
+
+A same-host proof runs two real production FolderSyncServices and the exact
+pinned Go 1.26.7 worker with two folders. Twelve checks cover renewal, unrelated
+folder continuity, exact retry after source journal/service cold reopen, stale
+acceptance rejection, no transfer before fresh consent, bidirectional transfer
+using only the fresh destination, and an unchanged sentinel at the old root.
+The host clock is unchanged. All owned workers, guardians and fixture roots
+are removed. Result SHA-256 is
+`5f15f4aab6ba55bc66635079ceed7db1f6fa27269f2b11ce8d6eb05c242113f9`.
+This proves signed service delivery and real bytes on loopback; WAN delivery
+and complete native renewal UI execution remain separate checks.
+
+Local integrated checks pass 284 node library tests, 146 shared Swift tests,
+107 web tests, strict workspace Clippy and formatting, and the exact
+OpenAPI/runtime/client route contracts. A focused node regression also passes
+after adding the paused-recipient renewal case. New Android renewal tests and
+host-driven permission phases still need the next hosted build and device run.
+
+### Deterministic corresponding-source archives
+
+The common target inventory records exact Go module h1 sums, and builders run
+`go mod verify`. The notice collector independently recognizes the copied
+MPL-2.0 text and packages bounded, deterministic tar+gzip source archives. Each
+archive has an exact source URL, module identity/version or Syncthing commit,
+SHA-256, byte and entry counts. Archives remain separate from the bounded text
+viewer and are streamed/rechecked by Mac packaging and final bundle validation.
+
+The Mac target contains 58 modules and 465 packages. Five MPL archives contain
+1,199 entries and 19,784,715 uncompressed source bytes, totaling 8,408,088
+compressed bytes. Two independent builds reproduce the inventory, manifest,
+combined text and all five archives byte for byte. The worker bytes are
+unchanged. New combined notice SHA-256 is
+`87e9c362fac963404229addf563d77dfccb23747a8e06a96c5b77d13b675c2fb`;
+source-build descriptor SHA-256 is
+`4e603f44b00ed564be92568c6615b7399f29c0a7ad8d1acb49ae094a9ede0cac`.
+The isolated proof removed another 2,298,786,788 logical bytes of owned caches
+and build state after retaining compact evidence. Actual Android/Linux target
+packaging and final dependency classification remain open. Acceptance remains
+**70%: 14 of 20 milestones**.

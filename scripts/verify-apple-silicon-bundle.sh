@@ -89,8 +89,10 @@ done
 python3 - "$engine_manifest" "$guardian" "$worker" <<'PY'
 import hashlib
 import json
+import os
 import pathlib
 import re
+import stat
 import sys
 
 manifest_path, guardian_path, worker_path = map(pathlib.Path, sys.argv[1:])
@@ -129,16 +131,71 @@ expected_notices = {
     "PROVENANCE.txt": "94f3b2bd71120d3dc6f3bdc400a0b538ca8e6be04e740144e140bda4439decc9",
     "Syncthing-AUTHORS.txt": "5a0044d13ddf6f013bdd5c2bc419bf45d6123c356567510237e82f304d113d48",
     "Syncthing-LICENSE.txt": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
-    "source-build.json": "211b7847de85f74cdf7a9ef4cc19cfd9a6e5a09b8bb68a19307162c8b11f256e",
-    "notices-index.txt": "872e47f2495dfaebe7b150f96fbb77d8e8ed5ed7958234f69f566a8daa975dd6",
-    "notices/manifest.json": "3624dee064d0ce242d94012c60ffb5aa89b946448166aaf0a613f837bfa3bf5b",
-    "notices/THIRD-PARTY-NOTICES.txt": "231a9ded1c9e9f09182187ed2372de5fc2a37c718c4ba67091eac3b9d0bd7a87",
+    "source-build.json": "4e603f44b00ed564be92568c6615b7399f29c0a7ad8d1acb49ae094a9ede0cac",
+    "notices-index.txt": "34355beb1e337124c8b22f9f2744da16f1911e4e99fffa31060dea0ea2ebd310",
+    "notices/manifest.json": "422afb7c2a27e2882e3791dbf8c059e2c96ee529d9ec5773e8cc369f375caa11",
+    "notices/THIRD-PARTY-NOTICES.txt": "87e9c362fac963404229addf563d77dfccb23747a8e06a96c5b77d13b675c2fb",
 }
 if data["notices"] != expected_notices:
     raise SystemExit("sync-engine notice inventory is invalid")
 for name, expected in expected_notices.items():
     if hashlib.sha256((manifest_path.parent / name).read_bytes()).hexdigest() != expected:
         raise SystemExit("sync-engine notice digest is invalid")
+target_manifest = json.loads(
+    (manifest_path.parent / "notices/manifest.json").read_bytes()
+)
+sources = target_manifest.get("correspondingSources")
+if not isinstance(sources, list) or len(sources) != 5:
+    raise SystemExit("sync-engine corresponding-source inventory is invalid")
+combined = (manifest_path.parent / "notices/THIRD-PARTY-NOTICES.txt").read_text()
+for source in sources:
+    archive = source.get("archive") if isinstance(source, dict) else None
+    relative = archive.get("bundlePath") if isinstance(archive, dict) else None
+    expected = archive.get("sha256") if isinstance(archive, dict) else None
+    expected_bytes = archive.get("bytes") if isinstance(archive, dict) else None
+    if (
+        not isinstance(relative, str)
+        or re.fullmatch(r"sources/[0-9]{4}-source\.tar\.gz", relative) is None
+        or not isinstance(expected, str)
+        or re.fullmatch(r"[0-9a-f]{64}", expected) is None
+        or not isinstance(expected_bytes, int)
+        or isinstance(expected_bytes, bool)
+        or not 1 <= expected_bytes <= 64 * 1024 * 1024
+        or relative not in combined
+        or expected not in combined
+    ):
+        raise SystemExit("sync-engine corresponding-source record is invalid")
+    archive_path = manifest_path.parent / "notices" / relative
+    current = manifest_path.parent / "notices"
+    for part in pathlib.PurePosixPath(relative).parts:
+        current = current / part
+        if stat.S_ISLNK(current.lstat().st_mode):
+            raise SystemExit("sync-engine corresponding-source path is unsafe")
+    descriptor = os.open(
+        archive_path,
+        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        metadata = os.fstat(descriptor)
+        digest = hashlib.sha256()
+        retained = 0
+        while retained <= expected_bytes:
+            chunk = os.read(descriptor, min(1024 * 1024, expected_bytes + 1 - retained))
+            if not chunk:
+                break
+            retained += len(chunk)
+            digest.update(chunk)
+        final = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or retained != expected_bytes
+            or digest.hexdigest() != expected
+            or (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns)
+            != (final.st_dev, final.st_ino, final.st_size, final.st_mtime_ns)
+        ):
+            raise SystemExit("sync-engine corresponding-source archive is invalid")
+    finally:
+        os.close(descriptor)
 executables = data["executables"]
 if set(executables) != {"covalent-engine-guardian", "covalent-syncthing"}:
     raise SystemExit("sync-engine executable inventory is invalid")

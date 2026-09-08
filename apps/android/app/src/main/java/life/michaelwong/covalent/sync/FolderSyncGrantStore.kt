@@ -5,6 +5,7 @@ import java.nio.file.Paths
 import java.text.Normalizer
 import java.util.UUID
 import life.michaelwong.covalent.model.FolderSharePhase
+import life.michaelwong.covalent.model.FolderShare
 import life.michaelwong.covalent.model.FolderSyncStatus
 import life.michaelwong.covalent.node.CredentialProtectedPreferences
 import org.json.JSONArray
@@ -207,7 +208,33 @@ internal class FolderSyncGrantStore(
     override fun reconcile(status: FolderSyncStatus) = synchronized(JOURNAL_LOCK) {
         val removed = status.shares.filter { it.phase == FolderSharePhase.REMOVED }.map { it.offerId }.toSet()
         val original = recordsLocked()
-        var grants = original.filterNot { it.offerId in removed }
+        val replacements = mutableMapOf<String, FolderShare>()
+        val retainedIds = status.shares.map { it.offerId }.toMutableSet()
+        check(retainedIds.size == status.shares.size)
+        status.shares.forEach { share ->
+            check(share.supersededOfferIds.size <= 128)
+            check(share.phase != FolderSharePhase.REMOVED || share.supersededOfferIds.isEmpty())
+            share.supersededOfferIds.forEach { oldId ->
+                check(retainedIds.add(oldId)) { "The node returned ambiguous replacement invitations." }
+                replacements[oldId] = share
+            }
+        }
+        var grants = original.filterNot { it.offerId in removed }.mapNotNull { grant ->
+            val replacement = grant.offerId?.let(replacements::get) ?: return@mapNotNull grant
+            if (replacement.incoming) {
+                check(grant.kind == FolderSyncGrantKind.ACCEPTANCE)
+                // A new recipient invitation never inherits the earlier choice.
+                null
+            } else {
+                check(grant.kind == FolderSyncGrantKind.OFFER && grant.folderId == replacement.folderId &&
+                    grant.peerId == replacement.peerId && grant.label == replacement.label)
+                FolderSyncGrant(
+                    "offer:${replacement.offerId}", grant.kind, replacement.offerId,
+                    grant.folderId, grant.peerId, grant.root, grant.label, grant.pendingRoot, grant.pendingRemoval,
+                )
+            }
+        }
+        check(grants.map(FolderSyncGrant::key).toSet().size == grants.size)
         val pending = grants.filter { it.kind == FolderSyncGrantKind.OFFER && it.offerId == null }
         pending.forEach { grant ->
             val share = status.shares.singleOrNull { !it.incoming && it.folderId == grant.folderId }

@@ -923,6 +923,8 @@ public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
     public let expiresAtUnixMs: UInt64?
     public let expired: Bool
     public let peerConnection: PeerConnectionState
+    /// Authenticated journal identifiers retired by this replacement invitation.
+    public let supersededOfferIds: [UUID]
 
     public var id: UUID { offerId }
 
@@ -935,7 +937,8 @@ public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
       phase: FolderSharePhase,
       expiresAtUnixMs: UInt64?,
       expired: Bool,
-      peerConnection: PeerConnectionState = .unknown
+      peerConnection: PeerConnectionState = .unknown,
+      supersededOfferIds: [UUID] = []
     ) {
       self.offerId = offerId
       self.folderId = folderId
@@ -946,11 +949,12 @@ public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
       self.expiresAtUnixMs = expiresAtUnixMs
       self.expired = expired
       self.peerConnection = peerConnection
+      self.supersededOfferIds = supersededOfferIds
     }
 
     private enum CodingKeys: String, CodingKey {
       case offerId, folderId, label, peerId, incoming, phase, expiresAtUnixMs, expired
-      case peerConnection
+      case peerConnection, supersededOfferIds
     }
 
     public init(from decoder: Decoder) throws {
@@ -965,6 +969,8 @@ public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
       expired = try values.decode(Bool.self, forKey: .expired)
       peerConnection = values.contains(.peerConnection)
         ? try values.decode(PeerConnectionState.self, forKey: .peerConnection) : .unknown
+      supersededOfferIds = values.contains(.supersededOfferIds)
+        ? try values.decode([UUID].self, forKey: .supersededOfferIds) : []
     }
 }
 
@@ -1087,6 +1093,32 @@ public enum FolderShareDisplayState: Equatable, Sendable {
 }
 
 extension FolderSyncStatus {
+    /// Validate the complete relationship before using it to change local grants.
+    func invitationReplacements() throws -> [UUID: FolderShare] {
+      guard shares.count <= 4_096 else { throw NodeClientError.invalidResponse }
+      let nilID = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+      var ids = Set<UUID>()
+      for share in shares {
+        guard share.offerId != nilID, ids.insert(share.offerId).inserted else {
+          throw NodeClientError.invalidResponse
+        }
+      }
+      var replacements: [UUID: FolderShare] = [:]
+      for share in shares {
+        guard share.supersededOfferIds.count <= 128,
+              share.phase != .removed || share.supersededOfferIds.isEmpty else {
+          throw NodeClientError.invalidResponse
+        }
+        for oldID in share.supersededOfferIds {
+          guard oldID != nilID, ids.insert(oldID).inserted else {
+            throw NodeClientError.invalidResponse
+          }
+          replacements[oldID] = share
+        }
+      }
+      return replacements
+    }
+
     public var isInitialScanning: Bool {
       availability == "available" && lifecycle == "initialScanning"
     }

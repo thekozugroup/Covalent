@@ -99,6 +99,7 @@ build_worker() {
       GOTOOLCHAIN=local \
       go list -tags noupgrade -deps -json ./cmd/syncthing \
         > "$output_root/go-target-deps.ndjson"
+    env GOFLAGS=-mod=readonly GOTOOLCHAIN=local go mod verify
   )
   test "$go_mod_before" = "$(sha256 "$source_dir/go.mod")" && \
     test "$go_sum_before" = "$(sha256 "$source_dir/go.sum")" || {

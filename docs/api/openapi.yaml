@@ -114,6 +114,34 @@ paths:
           $ref: "#/components/responses/Conflict"
         "503":
           $ref: "#/components/responses/Conflict"
+  /api/v1/sync/renew:
+    post:
+      summary: Renew an expired outgoing folder invitation
+      operationId: renewFolderInvitation
+      description: >-
+        Explicitly replaces one expired, unaccepted outgoing invitation with a
+        newly signed invitation. The response offerId is the new invitation ID;
+        clients must durably replace the expired pending reference. Accepted or
+        removed invitations cannot be renewed, and the recipient must explicitly
+        accept the new invitation. If the recipient's prior acceptance expired
+        before the source committed it, intake retires that acceptance and its
+        local grant without deleting files, and exposes the replacement as a new
+        offered invitation requiring folder selection and consent again.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FolderReference"
+      responses:
+        "200":
+          $ref: "#/components/responses/FolderSyncMutation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Conflict"
   /api/v1/sync/pause:
     post:
       summary: Pause or resume this device's participation in a shared folder
@@ -1656,11 +1684,19 @@ components:
     FolderShareSummary:
       type: object
       additionalProperties: false
-      required: [offerId, folderId, label, peerId, incoming, phase, expiresAtUnixMs, expired, peerConnection]
+      required: [offerId, supersededOfferIds, folderId, label, peerId, incoming, phase, expiresAtUnixMs, expired, peerConnection]
       properties:
         offerId:
           type: string
           format: uuid
+        supersededOfferIds:
+          type: array
+          maxItems: 128
+          uniqueItems: true
+          description: Older invitation IDs replaced by this exact authenticated journal row. Clients retire matching local grant bindings and require fresh consent for the current offer ID.
+          items:
+            type: string
+            format: uuid
         folderId:
           type: string
           format: uuid

@@ -9,6 +9,7 @@ decide legal obligations or approve a release.
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import json
 import os
@@ -16,6 +17,7 @@ import pathlib
 import re
 import stat
 import sys
+import tarfile
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -36,6 +38,7 @@ SAFE_MODULE = re.compile(r"[A-Za-z0-9._~+/-]{1,512}")
 SAFE_VERSION = re.compile(r"v[0-9A-Za-z.+~-]{1,255}")
 SAFE_TARGET = re.compile(r"[A-Za-z0-9_.+-]{1,64}")
 HEX_SHA256 = re.compile(r"[0-9a-f]{64}")
+MODULE_SUM = re.compile(r"h1:[A-Za-z0-9+/]{43}=")
 
 
 class NoticeError(Exception):
@@ -48,6 +51,13 @@ class Budget:
     bytes: int = 0
 
 
+@dataclass
+class SourceBudget:
+    entries: int = 0
+    uncompressed_bytes: int = 0
+    archive_bytes: int = 0
+
+
 MAX_INVENTORY_BYTES = 16 * 1024 * 1024
 MAX_MODULES = 2_048
 MAX_CANDIDATES = 8_192
@@ -56,6 +66,11 @@ MAX_TOTAL_BYTES = 64 * 1024 * 1024
 MAX_RELATIVE_BYTES = 4_096
 MAX_DEPTH = 64
 MAX_STANDARD_PACKAGES = 4_096
+MAX_SOURCE_ENTRIES = 100_000
+MAX_SOURCE_NAME_BYTES = 32 * 1024 * 1024
+MAX_SOURCE_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
+MAX_SOURCE_ARCHIVE_BYTES = 64 * 1024 * 1024
+RECOGNIZED_LICENSE_TEXTS = {"MPL-2.0"}
 
 
 def _read_regular(path: pathlib.Path, maximum: int) -> bytes:
@@ -98,6 +113,20 @@ def _read_regular(path: pathlib.Path, maximum: int) -> bytes:
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _recognized_license_texts(data: bytes) -> set[str]:
+    """Recognize only texts that need corresponding-source packaging.
+
+    This is deliberately not a general SPDX classifier or legal conclusion.
+    """
+    normalized = b" ".join(data.lower().split())
+    if (
+        b"mozilla public license version 2.0" in normalized
+        or b"mozilla public license, version 2.0" in normalized
+    ):
+        return {"MPL-2.0"}
+    return set()
 
 
 def _exact_file(path: pathlib.Path, expected: str, maximum: int) -> bytes:
@@ -169,6 +198,259 @@ def _module_root(
     return matches[0]
 
 
+def _source_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+    )
+
+
+def _source_file_digest(path: pathlib.Path, expected: os.stat_result) -> str:
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise NoticeError("corresponding source file is unavailable") from error
+    try:
+        before = os.fstat(descriptor)
+        if _source_identity(before) != _source_identity(expected):
+            raise NoticeError("corresponding source changed before hashing")
+        digest = hashlib.sha256()
+        retained = 0
+        while retained <= expected.st_size:
+            chunk = os.read(descriptor, min(1024 * 1024, expected.st_size + 1 - retained))
+            if not chunk:
+                break
+            retained += len(chunk)
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        if retained != expected.st_size or _source_identity(after) != _source_identity(expected):
+            raise NoticeError("corresponding source changed while hashing")
+        return digest.hexdigest()
+    finally:
+        os.close(descriptor)
+
+
+def _source_snapshot(
+    root: pathlib.Path,
+) -> tuple[tuple[int, int, int, int, int], list[dict[str, Any]], int, int]:
+    try:
+        root_metadata = root.lstat()
+    except OSError as error:
+        raise NoticeError("corresponding source is unavailable") from error
+    if not stat.S_ISDIR(root_metadata.st_mode) or root.is_symlink():
+        raise NoticeError("corresponding source root is unsafe")
+    stack: list[tuple[pathlib.Path, pathlib.PurePosixPath]] = [
+        (root, pathlib.PurePosixPath("."))
+    ]
+    rows: list[dict[str, Any]] = []
+    total_bytes = 0
+    name_bytes = 0
+    while stack:
+        directory, relative_directory = stack.pop()
+        try:
+            entries = []
+            staged_name_bytes = 0
+            with os.scandir(directory) as iterator:
+                for entry in iterator:
+                    entries.append(entry)
+                    staged_name_bytes += len(os.fsencode(entry.name))
+                    if len(rows) + len(entries) > MAX_SOURCE_ENTRIES:
+                        raise NoticeError("corresponding source entry bound exceeded")
+                    if name_bytes + staged_name_bytes > MAX_SOURCE_NAME_BYTES:
+                        raise NoticeError("corresponding source name byte bound exceeded")
+        except OSError as error:
+            raise NoticeError("corresponding source cannot be enumerated") from error
+        pending_directories: list[tuple[pathlib.Path, pathlib.PurePosixPath]] = []
+        for entry in sorted(entries, key=lambda item: os.fsencode(item.name)):
+            relative = pathlib.PurePosixPath(entry.name)
+            if relative_directory != pathlib.PurePosixPath("."):
+                relative = relative_directory / relative
+            try:
+                encoded = relative.as_posix().encode("utf-8")
+            except UnicodeEncodeError as error:
+                raise NoticeError("corresponding source path is not UTF-8") from error
+            if len(encoded) > MAX_RELATIVE_BYTES or len(relative.parts) > MAX_DEPTH:
+                raise NoticeError("corresponding source path bound exceeded")
+            name_bytes += len(encoded)
+            if name_bytes > MAX_SOURCE_NAME_BYTES:
+                raise NoticeError("corresponding source name byte bound exceeded")
+            try:
+                metadata = entry.stat(follow_symlinks=False)
+            except OSError as error:
+                raise NoticeError("corresponding source changed during enumeration") from error
+            if stat.S_ISLNK(metadata.st_mode):
+                raise NoticeError("corresponding source contains a symbolic link")
+            if stat.S_ISDIR(metadata.st_mode):
+                kind = "directory"
+                pending_directories.append((pathlib.Path(entry.path), relative))
+            elif stat.S_ISREG(metadata.st_mode):
+                kind = "file"
+                total_bytes += metadata.st_size
+            else:
+                raise NoticeError("corresponding source contains an unsupported entry")
+            rows.append(
+                {
+                    "relative": relative.as_posix(),
+                    "kind": kind,
+                    "mode": metadata.st_mode,
+                    "size": metadata.st_size,
+                    "identity": _source_identity(metadata),
+                    "sha256": (
+                        _source_file_digest(pathlib.Path(entry.path), metadata)
+                        if kind == "file"
+                        else None
+                    ),
+                }
+            )
+            if len(rows) > MAX_SOURCE_ENTRIES:
+                raise NoticeError("corresponding source entry bound exceeded")
+            if total_bytes > MAX_SOURCE_UNCOMPRESSED_BYTES:
+                raise NoticeError("corresponding source byte bound exceeded")
+        stack.extend(reversed(pending_directories))
+    rows.sort(key=lambda row: os.fsencode(row["relative"]))
+    return _source_identity(root_metadata), rows, total_bytes, name_bytes
+
+
+class _BoundedArchiveWriter:
+    def __init__(self, output: Any, maximum: int) -> None:
+        self.output = output
+        self.maximum = maximum
+        self.bytes = 0
+
+    def write(self, data: bytes) -> int:
+        if self.bytes + len(data) > self.maximum:
+            raise NoticeError("corresponding source archive byte bound exceeded")
+        written = self.output.write(data)
+        if written != len(data):
+            raise NoticeError("corresponding source archive write did not complete")
+        self.bytes += written
+        return written
+
+    def tell(self) -> int:
+        return self.bytes
+
+    def flush(self) -> None:
+        self.output.flush()
+
+
+def _source_archive(
+    root: pathlib.Path,
+    destination: pathlib.Path,
+    budget: SourceBudget,
+) -> dict[str, Any]:
+    root_identity, rows, source_bytes, name_bytes = _source_snapshot(root)
+    if (
+        budget.entries + len(rows) > MAX_SOURCE_ENTRIES
+        or budget.uncompressed_bytes + source_bytes > MAX_SOURCE_UNCOMPRESSED_BYTES
+    ):
+        raise NoticeError("corresponding source aggregate bound exceeded")
+    destination.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open(destination, flags, 0o444)
+    except OSError as error:
+        raise NoticeError("corresponding source archive cannot be created") from error
+    try:
+        with os.fdopen(descriptor, "wb", buffering=0, closefd=False) as raw:
+            writer = _BoundedArchiveWriter(
+                raw, MAX_SOURCE_ARCHIVE_BYTES - budget.archive_bytes
+            )
+            with gzip.GzipFile(
+                filename="", mode="wb", fileobj=writer, mtime=0
+            ) as compressed, tarfile.open(
+                fileobj=compressed, mode="w", format=tarfile.GNU_FORMAT
+            ) as archive:
+                root_header = tarfile.TarInfo("source")
+                root_header.type = tarfile.DIRTYPE
+                root_header.mode = 0o755
+                root_header.mtime = 0
+                root_header.uid = root_header.gid = 0
+                root_header.uname = root_header.gname = ""
+                archive.addfile(root_header)
+                for row in rows:
+                    relative = row["relative"]
+                    header = tarfile.TarInfo(f"source/{relative}")
+                    header.mode = 0o755 if row["kind"] == "directory" or row["mode"] & 0o111 else 0o644
+                    header.mtime = 0
+                    header.uid = header.gid = 0
+                    header.uname = header.gname = ""
+                    if row["kind"] == "directory":
+                        header.type = tarfile.DIRTYPE
+                        archive.addfile(header)
+                        continue
+                    header.size = row["size"]
+                    source = _safe_child(root, relative)
+                    source_flags = (
+                        os.O_RDONLY
+                        | getattr(os, "O_CLOEXEC", 0)
+                        | getattr(os, "O_NOFOLLOW", 0)
+                        | getattr(os, "O_NONBLOCK", 0)
+                    )
+                    try:
+                        source_descriptor = os.open(source, source_flags)
+                    except OSError as error:
+                        raise NoticeError("corresponding source file is unavailable") from error
+                    try:
+                        before = os.fstat(source_descriptor)
+                        if _source_identity(before) != row["identity"]:
+                            raise NoticeError("corresponding source changed before file archival")
+                        with os.fdopen(source_descriptor, "rb", closefd=False) as file_object:
+                            archive.addfile(header, file_object)
+                        after = os.fstat(source_descriptor)
+                        if _source_identity(after) != row["identity"]:
+                            raise NoticeError("corresponding source changed while reading a file")
+                    finally:
+                        os.close(source_descriptor)
+            writer.flush()
+            os.fsync(descriptor)
+        archive_bytes = os.fstat(descriptor).st_size
+    except Exception:
+        os.close(descriptor)
+        try:
+            destination.unlink()
+        except OSError:
+            pass
+        raise
+    else:
+        os.close(descriptor)
+    final_root_identity, final_rows, final_bytes, final_name_bytes = _source_snapshot(root)
+    if (
+        final_root_identity != root_identity
+        or final_rows != rows
+        or final_bytes != source_bytes
+        or final_name_bytes != name_bytes
+    ):
+        try:
+            destination.unlink()
+        except OSError:
+            pass
+        raise NoticeError("corresponding source tree changed during archival")
+    archive_data = _read_regular(destination, MAX_SOURCE_ARCHIVE_BYTES)
+    if len(archive_data) != archive_bytes:
+        raise NoticeError("corresponding source archive changed after write")
+    budget.entries += len(rows)
+    budget.uncompressed_bytes += source_bytes
+    budget.archive_bytes += archive_bytes
+    return {
+        "format": "tar+gzip",
+        "root": "source/",
+        "bundlePath": destination.relative_to(destination.parents[1]).as_posix(),
+        "bytes": archive_bytes,
+        "sha256": _sha256(archive_data),
+        "entries": len(rows),
+        "uncompressedBytes": source_bytes,
+    }
+
+
 def _write_new(path: pathlib.Path, data: bytes, mode: int = 0o444) -> None:
     path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
@@ -193,6 +475,7 @@ def _combined_notice(
     output: pathlib.Path,
     go_files: list[dict[str, Any]],
     module_rows: list[dict[str, Any]],
+    source_archives: list[dict[str, Any]],
 ) -> bytes:
     sections: list[tuple[str, str]] = []
     for item in go_files:
@@ -222,6 +505,26 @@ def _combined_notice(
         b"Covalent synchronized-folder engine notices\n"
         b"Exact copied texts for the compiled target graph; release review remains required.\n"
     )
+    if source_archives:
+        combined.extend(
+            b"\n===== MPL-2.0 corresponding source =====\n"
+            b"Exact source archives are bundled separately from this text, relative to the notice manifest.\n"
+        )
+        for item in source_archives:
+            version = item["version"] or ENGINE_COMMIT
+            combined.extend(
+                (
+                    f"{item['path']}@{version}\n"
+                    f"  bundled archive: {item['archive']['bundlePath']}\n"
+                    f"  archive SHA-256: {item['archive']['sha256']}\n"
+                    f"  archive bytes: {item['archive']['bytes']}\n"
+                    f"  external source: {item['externalSourceUrl']}\n"
+                ).encode("utf-8")
+            )
+            if item["moduleSum"] is not None:
+                combined.extend(
+                    f"  Go module content sum: {item['moduleSum']}\n".encode("utf-8")
+                )
     for label, relative in sections:
         data = _read_regular(_safe_child(output, relative), MAX_CANDIDATE_BYTES)
         combined.extend(f"\n===== {label} =====\n".encode("utf-8"))
@@ -346,6 +649,7 @@ def build_bundle(
         raise NoticeError("output must be a new directory under an existing parent")
     output.mkdir(mode=0o755)
     budget = Budget()
+    source_budget = SourceBudget()
 
     version_lines = (
         _read_regular(go_root / "VERSION", 128).decode("utf-8", "strict").splitlines()
@@ -400,6 +704,7 @@ def build_bundle(
 
     seen_modules: set[tuple[str, str | None]] = set()
     module_rows: list[dict[str, Any]] = []
+    source_archives: list[dict[str, Any]] = []
     for index, module in enumerate(inventory["modules"]):
         if not isinstance(module, dict):
             raise NoticeError("module inventory row is malformed")
@@ -408,6 +713,8 @@ def build_bundle(
         candidates = module.get("licenseAndNoticeFiles")
         module_targets = module.get("targets")
         replacement = module.get("replacement")
+        module_sum = module.get("moduleSum")
+        recognized = module.get("recognizedLicenseTexts")
         if (
             not isinstance(path, str)
             or SAFE_MODULE.fullmatch(path) is None
@@ -423,6 +730,12 @@ def build_bundle(
             or module_targets != sorted(set(module_targets))
             or not set(module_targets).issubset(target_names)
             or module.get("status") != "observed"
+            or not isinstance(recognized, list)
+            or any(
+                not isinstance(item, str) or item not in RECOGNIZED_LICENSE_TEXTS
+                for item in recognized
+            )
+            or recognized != sorted(set(recognized))
         ):
             raise NoticeError("module inventory row is malformed")
         if replacement is not None and (
@@ -439,16 +752,21 @@ def build_bundle(
             raise NoticeError("module inventory contains a duplicate")
         seen_modules.add(key)
         if path == MAIN_MODULE:
-            if version_value is not None:
+            if version_value is not None or module_sum is not None:
                 raise NoticeError("main module version binding differs")
             root = source_root
         else:
-            if version_value is None:
+            if (
+                version_value is None
+                or not isinstance(module_sum, str)
+                or MODULE_SUM.fullmatch(module_sum) is None
+            ):
                 raise NoticeError("dependency module has no version")
             source_path = replacement["path"] if replacement else path
             source_version = replacement["version"] if replacement else version_value
             root = _module_root(module_caches, source_path, source_version)
         candidate_rows: list[dict[str, Any]] = []
+        observed_recognized: set[str] = set()
         seen_paths: set[str] = set()
         for candidate in candidates:
             if not isinstance(candidate, dict):
@@ -482,14 +800,61 @@ def build_bundle(
                     **result,
                 }
             )
-        module_rows.append(
-            {
+            if kind == "license":
+                observed_recognized.update(
+                    _recognized_license_texts(
+                        _read_regular(
+                            output.joinpath(*bundle_relative.parts),
+                            MAX_CANDIDATE_BYTES,
+                        )
+                    )
+                )
+        if sorted(observed_recognized) != recognized:
+            raise NoticeError("recognized license text evidence differs")
+        module_row = {
+            "path": path,
+            "version": version_value,
+            "replacement": replacement,
+            "targets": module_targets,
+            "moduleSum": module_sum,
+            "recognizedLicenseTexts": recognized,
+            "files": candidate_rows,
+        }
+        if "MPL-2.0" in recognized:
+            archive = _source_archive(
+                root, output / "sources" / f"{index:04d}-source.tar.gz", source_budget
+            )
+            budget.files += 1
+            budget.bytes += archive["bytes"]
+            if budget.files > MAX_CANDIDATES or budget.bytes > MAX_TOTAL_BYTES:
+                raise NoticeError("notice bundle aggregate bound exceeded")
+            source_path = replacement["path"] if replacement else path
+            source_version = replacement["version"] if replacement else version_value
+            if path == MAIN_MODULE:
+                external_source = (
+                    "https://github.com/syncthing/syncthing/tree/" + ENGINE_COMMIT
+                )
+            else:
+                external_source = (
+                    "https://proxy.golang.org/"
+                    f"{_escape_module(source_path)}/@v/{_escape_module(source_version)}.zip"
+                )
+            source_record = {
                 "path": path,
                 "version": version_value,
-                "replacement": replacement,
-                "targets": module_targets,
-                "files": candidate_rows,
+                "sourcePath": source_path,
+                "sourceVersion": source_version,
+                "moduleSum": module_sum,
+                "licenseText": "MPL-2.0",
+                "externalSourceUrl": external_source,
+                "archive": archive,
             }
+            if path == MAIN_MODULE:
+                source_record["sourceCommit"] = ENGINE_COMMIT
+            source_archives.append(source_record)
+            module_row["correspondingSource"] = source_record
+        module_rows.append(
+            module_row
         )
 
     source_license = next(
@@ -531,7 +896,7 @@ def build_bundle(
     if budget.files > MAX_CANDIDATES or budget.bytes > MAX_TOTAL_BYTES:
         raise NoticeError("notice bundle aggregate bound exceeded")
 
-    combined = _combined_notice(output, go_files, module_rows)
+    combined = _combined_notice(output, go_files, module_rows, source_archives)
     combined_digest = _sha256(combined)
     budget.files += 1
     budget.bytes += len(combined)
@@ -542,11 +907,12 @@ def build_bundle(
     manifest: dict[str, Any] = {
         "schemaVersion": 1,
         "status": "texts-collected-review-required",
-        "scope": "Byte-exact license and notice texts for the supplied compiled target inventory; no legal conclusion or release approval.",
+        "scope": "Byte-exact license and notice texts plus bounded corresponding-source archives for recognized MPL-2.0 texts in the supplied compiled target inventory; no legal conclusion or release approval.",
         "inventorySha256": _sha256(inventory_raw),
         "engine": {"version": ENGINE_VERSION, "commit": ENGINE_COMMIT},
         "targets": targets,
         "modules": module_rows,
+        "correspondingSources": source_archives,
         "goToolchain": {
             "version": GO_VERSION,
             "standardLibraryPackages": sorted(standard_packages),
@@ -572,11 +938,21 @@ def build_bundle(
             "bytes": len(combined),
             "sha256": combined_digest,
         },
-        "bounds": {"files": budget.files, "bytes": budget.bytes},
+        "bounds": {
+            "files": budget.files,
+            "bytes": budget.bytes,
+            "sourceEntries": source_budget.entries,
+            "sourceUncompressedBytes": source_budget.uncompressed_bytes,
+            "sourceArchiveBytes": source_budget.archive_bytes,
+            "maximumSourceEntries": MAX_SOURCE_ENTRIES,
+            "maximumSourceUncompressedBytes": MAX_SOURCE_UNCOMPRESSED_BYTES,
+            "maximumSourceArchiveBytes": MAX_SOURCE_ARCHIVE_BYTES,
+        },
         "reviewRequired": [
             "Classify the copied texts and retain every notice required by each exact target graph.",
             "Review compiler and platform runtime material separately; it is outside the Go module graph.",
             "Never substitute an inventory from another GOOS, GOARCH, CGO, or build-tag combination.",
+            "Confirm the recipient-facing source locations remain available for the externally distributed executable.",
         ],
     }
     encoded = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
@@ -616,6 +992,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             {
                 "status": manifest["status"],
                 "modules": len(manifest["modules"]),
+                "correspondingSources": len(manifest["correspondingSources"]),
                 "files": manifest["bounds"]["files"],
                 "bytes": manifest["bounds"]["bytes"],
             },

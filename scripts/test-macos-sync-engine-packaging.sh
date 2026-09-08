@@ -35,6 +35,8 @@ for contract in \
   Syncthing-AUTHORS.txt \
   THIRD-PARTY-NOTICES.txt \
   source-build.json \
+  correspondingSources \
+  'mod verify' \
   'xcrun clang' \
   '-arch arm64' \
   '-mmacosx-version-min=15.0' \
@@ -116,6 +118,19 @@ for name, record in manifest["executables"].items():
     digest = hashlib.sha256((root / "MacOS" / name).read_bytes()).hexdigest()
     if digest != record["signedSha256"]:
         raise SystemExit("post-sign manifest digest mismatch")
+notice_root = root / "Resources/CovalentSyncEngine/notices"
+notice_manifest = json.loads((notice_root / "manifest.json").read_bytes())
+sources = notice_manifest.get("correspondingSources")
+if not isinstance(sources, list) or len(sources) != 5:
+    raise SystemExit("packaged corresponding-source inventory differs")
+combined = (notice_root / "THIRD-PARTY-NOTICES.txt").read_text()
+for source in sources:
+    archive = source["archive"]
+    path = notice_root / archive["bundlePath"]
+    if hashlib.sha256(path.read_bytes()).hexdigest() != archive["sha256"]:
+        raise SystemExit("packaged corresponding-source archive differs")
+    if archive["bundlePath"] not in combined or archive["sha256"] not in combined:
+        raise SystemExit("corresponding-source access is not recipient-visible")
 PY
 
   COVALENT_SYNCTHING_SOURCE_DIR=$SYNCTHING_SOURCE_DIR \
@@ -129,6 +144,12 @@ PY
     "$test_root/repeat/MacOS/covalent-syncthing"
   cmp "$test_root/Resources/CovalentSyncEngine/manifest.json" \
     "$test_root/repeat/Resources/CovalentSyncEngine/manifest.json"
+  cmp "$test_root/Resources/CovalentSyncEngine/notices/manifest.json" \
+    "$test_root/repeat/Resources/CovalentSyncEngine/notices/manifest.json"
+  for archive in "$test_root/Resources/CovalentSyncEngine/notices/sources/"*.tar.gz; do
+    cmp "$archive" \
+      "$test_root/repeat/Resources/CovalentSyncEngine/notices/sources/$(basename "$archive")"
+  done
 
   mkdir -p "$test_root/unsafe/MacOS" "$test_root/unsafe/Resources/CovalentSyncEngine"
   printf '%s' preserved > "$test_root/sentinel"

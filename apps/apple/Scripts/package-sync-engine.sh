@@ -84,6 +84,83 @@ ditto "$provenance_source" "$resource_directory/PROVENANCE.txt"
 ditto "$build_output/notices" "$resource_directory/notices"
 combined="$resource_directory/notices/THIRD-PARTY-NOTICES.txt"
 notice_manifest="$resource_directory/notices/manifest.json"
+python3 - "$resource_directory/notices" "$notice_manifest" <<'PY'
+import hashlib
+import json
+import os
+import pathlib
+import re
+import stat
+import sys
+
+root = pathlib.Path(sys.argv[1])
+manifest = json.loads(pathlib.Path(sys.argv[2]).read_bytes())
+records = manifest.get("correspondingSources")
+if not isinstance(records, list) or not records or len(records) > 2_048:
+    raise SystemExit("sync-engine corresponding-source manifest is incomplete")
+seen = set()
+total = 0
+for record in records:
+    archive = record.get("archive") if isinstance(record, dict) else None
+    if not isinstance(archive, dict):
+        raise SystemExit("sync-engine corresponding-source record is malformed")
+    relative = archive.get("bundlePath")
+    expected_bytes = archive.get("bytes")
+    expected_sha = archive.get("sha256")
+    if (
+        not isinstance(relative, str)
+        or re.fullmatch(r"sources/[0-9]{4}-source\.tar\.gz", relative) is None
+        or relative in seen
+        or not isinstance(expected_bytes, int)
+        or isinstance(expected_bytes, bool)
+        or not 1 <= expected_bytes <= 64 * 1024 * 1024
+        or not isinstance(expected_sha, str)
+        or re.fullmatch(r"[0-9a-f]{64}", expected_sha) is None
+        or not isinstance(record.get("externalSourceUrl"), str)
+        or not record["externalSourceUrl"].startswith("https://")
+    ):
+        raise SystemExit("sync-engine corresponding-source record is malformed")
+    seen.add(relative)
+    candidate = root.joinpath(*pathlib.PurePosixPath(relative).parts)
+    current = root
+    for part in pathlib.PurePosixPath(relative).parts:
+        current = current / part
+        mode = current.lstat().st_mode
+        if stat.S_ISLNK(mode):
+            raise SystemExit("sync-engine corresponding-source path contains a symlink")
+    descriptor = os.open(
+        candidate,
+        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_size != expected_bytes:
+            raise SystemExit("sync-engine corresponding-source archive differs")
+        digest = hashlib.sha256()
+        retained = 0
+        while retained <= expected_bytes:
+            chunk = os.read(descriptor, min(1024 * 1024, expected_bytes + 1 - retained))
+            if not chunk:
+                break
+            retained += len(chunk)
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        identity = lambda value: (
+            value.st_dev, value.st_ino, value.st_size,
+            value.st_mtime_ns, value.st_ctime_ns,
+        )
+        if (
+            retained != expected_bytes
+            or digest.hexdigest() != expected_sha
+            or identity(before) != identity(after)
+        ):
+            raise SystemExit("sync-engine corresponding-source archive differs")
+    finally:
+        os.close(descriptor)
+    total += expected_bytes
+if total > 64 * 1024 * 1024:
+    raise SystemExit("sync-engine corresponding-source archives exceed their bound")
+PY
 combined_sha=$(shasum -a 256 "$combined" | awk '{print $1}')
 combined_bytes=$(wc -c < "$combined" | tr -d '[:space:]')
 notice_manifest_sha=$(shasum -a 256 "$notice_manifest" | awk '{print $1}')

@@ -1,4 +1,7 @@
 <resources>
+    <string name="folder_sync_renew">Send new invitation</string>
+    <string name="folder_sync_renew_detail">The other device must choose its folder and accept again.</string>
+    <string name="folder_sync_renew_incoming_detail">Ask the other device to send a new invitation, then choose your folder again.</string>
     <string name="app_name">Covalent</string>
 
     <string name="action_accept_invitation">Accept invitation</string>

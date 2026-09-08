@@ -1302,6 +1302,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/sync/status", get(sync_api::status))
         .route("/api/v1/sync/folders", post(sync_api::offer))
         .route("/api/v1/sync/accept", post(sync_api::accept))
+        .route("/api/v1/sync/renew", post(sync_api::renew))
         .route("/api/v1/sync/pause", post(sync_api::pause))
         .route("/api/v1/sync/remove", post(sync_api::remove))
         .route("/api/v1/sync/repair", post(sync_api::repair))

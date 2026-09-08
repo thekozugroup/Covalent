@@ -7,8 +7,10 @@ import importlib.util
 import json
 import pathlib
 import sys
+import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 
 SCRIPT = pathlib.Path(__file__).with_name("collect-sync-engine-notices.py")
@@ -77,6 +79,8 @@ class Fixture:
                 "version": None,
                 "status": "observed",
                 "targets": ["fixture"],
+                "moduleSum": None,
+                "recognizedLicenseTexts": ["MPL-2.0"],
                 "licenseAndNoticeFiles": [
                     self._candidate(self.source, "AUTHORS", "notice"),
                     self._candidate(self.source, "LICENSE", "license"),
@@ -87,6 +91,8 @@ class Fixture:
                 "version": "v1.2.3",
                 "status": "observed",
                 "targets": ["fixture"],
+                "moduleSum": "h1:" + "A" * 43 + "=",
+                "recognizedLicenseTexts": [],
                 "licenseAndNoticeFiles": [
                     self._candidate(self.module, "LICENSE", "license")
                 ],
@@ -145,7 +151,19 @@ class NoticeBundleTests(unittest.TestCase):
 
         self.assertEqual(manifest["status"], "texts-collected-review-required")
         self.assertEqual(len(manifest["modules"]), 2)
-        self.assertEqual(manifest["bounds"]["files"], 9)
+        self.assertEqual(manifest["bounds"]["files"], 10)
+        self.assertEqual(len(manifest["correspondingSources"]), 1)
+        source_record = manifest["correspondingSources"][0]
+        archive_path = self.fixture.output / source_record["archive"]["bundlePath"]
+        self.assertEqual(
+            hashlib.sha256(archive_path.read_bytes()).hexdigest(),
+            source_record["archive"]["sha256"],
+        )
+        with tarfile.open(archive_path, "r:gz") as archive:
+            self.assertEqual(
+                sorted(archive.getnames()),
+                ["source", "source/AUTHORS", "source/LICENSE"],
+            )
         self.assertEqual(
             (self.fixture.output / "modules/0001/LICENSE").read_bytes(),
             self.fixture.module_license,
@@ -166,6 +184,85 @@ class NoticeBundleTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(combined).hexdigest(), manifest["combinedNotice"]["sha256"])
         self.assertIn(self.fixture.module_license, combined)
         self.assertIn(b"Go go1.26.7 / LICENSE", combined)
+        self.assertIn(b"MPL-2.0 corresponding source", combined)
+        self.assertIn(source_record["archive"]["sha256"].encode(), combined)
+        self.assertIn(b"github.com/syncthing/syncthing/tree/", combined)
+
+    def test_source_archives_are_path_independent_and_mpl_dependency_is_included(self) -> None:
+        mpl = b"Mozilla Public License, version 2.0\nfixture dependency\n"
+        self.fixture.module_license = mpl
+        (self.fixture.module / "LICENSE").write_bytes(mpl)
+        (self.fixture.module / "module.go").write_text("package fixture\n")
+        document = json.loads(self.fixture.inventory.read_text())
+        document["modules"][1]["licenseAndNoticeFiles"] = [
+            self.fixture._candidate(self.fixture.module, "LICENSE", "license")
+        ]
+        document["modules"][1]["recognizedLicenseTexts"] = ["MPL-2.0"]
+        self.fixture.inventory.write_text(json.dumps(document), encoding="utf-8")
+
+        first = self.fixture.build()
+        second_fixture = Fixture()
+        try:
+            second_fixture.module_license = mpl
+            (second_fixture.module / "LICENSE").write_bytes(mpl)
+            (second_fixture.module / "module.go").write_text("package fixture\n")
+            second_document = json.loads(second_fixture.inventory.read_text())
+            second_document["modules"][1]["licenseAndNoticeFiles"] = [
+                second_fixture._candidate(second_fixture.module, "LICENSE", "license")
+            ]
+            second_document["modules"][1]["recognizedLicenseTexts"] = ["MPL-2.0"]
+            second_fixture.inventory.write_text(json.dumps(second_document), encoding="utf-8")
+            second = second_fixture.build()
+            self.assertEqual(
+                [row["archive"]["sha256"] for row in first["correspondingSources"]],
+                [row["archive"]["sha256"] for row in second["correspondingSources"]],
+            )
+        finally:
+            second_fixture.close()
+        self.assertEqual(len(first["correspondingSources"]), 2)
+        dependency = first["correspondingSources"][1]
+        self.assertEqual(dependency["moduleSum"], "h1:" + "A" * 43 + "=")
+        self.assertIn("proxy.golang.org/example.org/!mixed", dependency["externalSourceUrl"])
+        self.assertNotIn(
+            b"package fixture",
+            (self.fixture.output / "THIRD-PARTY-NOTICES.txt").read_bytes(),
+        )
+
+    def test_mpl_source_symlink_and_archive_bound_fail_closed(self) -> None:
+        outside = self.fixture.root / "outside.go"
+        outside.write_text("package outside\n")
+        (self.fixture.source / "linked.go").symlink_to(outside)
+        with self.assertRaisesRegex(notices.NoticeError, "symbolic link"):
+            self.fixture.build()
+        self.assertFalse((self.fixture.output / "manifest.json").exists())
+
+        self.fixture.output = self.fixture.root / "bounded"
+        (self.fixture.source / "linked.go").unlink()
+        with mock.patch.object(notices, "MAX_SOURCE_ARCHIVE_BYTES", 512):
+            with self.assertRaisesRegex(notices.NoticeError, "archive byte bound"):
+                self.fixture.build()
+        self.assertFalse((self.fixture.output / "manifest.json").exists())
+
+    def test_source_mutation_during_archival_rejects_success_manifest(self) -> None:
+        original = notices._source_snapshot
+        calls = 0
+
+        def mutate_before_final_snapshot(root: pathlib.Path):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                (root / "LICENSE").write_bytes(
+                    (root / "LICENSE").read_bytes() + b"changed\n"
+                )
+            return original(root)
+
+        with mock.patch.object(
+            notices, "_source_snapshot", side_effect=mutate_before_final_snapshot
+        ):
+            with self.assertRaisesRegex(notices.NoticeError, "tree changed"):
+                self.fixture.build()
+
+        self.assertFalse((self.fixture.output / "manifest.json").exists())
 
     def test_missing_candidate_fails_without_success_manifest(self) -> None:
         (self.fixture.module / "LICENSE").unlink()
@@ -195,6 +292,16 @@ class NoticeBundleTests(unittest.TestCase):
             self.fixture.build()
 
         self.assertFalse(self.fixture.output.exists())
+
+    def test_recognized_license_text_binding_cannot_be_suppressed(self) -> None:
+        document = json.loads(self.fixture.inventory.read_text())
+        document["modules"][0]["recognizedLicenseTexts"] = []
+        self.fixture.inventory.write_text(json.dumps(document), encoding="utf-8")
+
+        with self.assertRaisesRegex(notices.NoticeError, "license text evidence"):
+            self.fixture.build()
+
+        self.assertFalse((self.fixture.output / "manifest.json").exists())
 
     def test_candidate_byte_count_must_match_observed_file(self) -> None:
         document = json.loads(self.fixture.inventory.read_text())
@@ -229,6 +336,7 @@ class NoticeBundleTests(unittest.TestCase):
             "path": replacement_path,
             "version": replacement_version,
         }
+        document["modules"][1]["moduleSum"] = "h1:" + "B" * 43 + "="
         self.fixture.inventory.write_text(json.dumps(document), encoding="utf-8")
 
         manifest = self.fixture.build()

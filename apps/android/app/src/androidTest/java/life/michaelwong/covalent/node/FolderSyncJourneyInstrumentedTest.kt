@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Process
 import android.os.ParcelFileDescriptor
 import android.system.ErrnoException
 import android.system.Os
@@ -36,7 +37,6 @@ import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import java.security.SecureRandom
 import java.util.Base64
-import java.util.UUID
 import java.util.concurrent.TimeUnit
 import life.michaelwong.covalent.BuildConfig
 import life.michaelwong.covalent.R
@@ -63,7 +63,14 @@ import life.michaelwong.covalent.ui.theme.CovalentTheme
 import org.junit.Rule
 import org.junit.Test
 
-/** Hosted API-37 proof of the real Android service, JNI, guardian, and packaged workers. */
+/**
+ * Hosted API-37 proof of the real Android service, JNI, guardian, and packaged workers.
+ *
+ * The host runs this one named test in three separate instrumentation processes. Android kills an
+ * app when its UID-wide all-files app-op changes, so changing that permission from this test would
+ * kill the assertion code itself. A private synchronous receipt carries only bounded, nonsecret
+ * fixture identity between setup, denied, and restored phases.
+ */
 class FolderSyncJourneyInstrumentedTest {
     @get:Rule
     val compose = createComposeRule()
@@ -83,19 +90,37 @@ class FolderSyncJourneyInstrumentedTest {
         assertTrue(BuildConfig.DEBUG)
         assertTrue(BuildConfig.COVALENT_SYNC_ENGINE_PACKAGED)
         assertTrue(CovalentNative.isAvailable)
-
+        val arguments = InstrumentationRegistry.getArguments()
+        val runId = requireRunId(arguments.getString(JOURNEY_RUN_ID_ARGUMENT))
+        val phase = arguments.getString(JOURNEY_PHASE_ARGUMENT)
+            ?: throw AssertionError("The host runner did not select an Android folder journey phase.")
         val manager = EmbeddedNodeManager(context)
 
+        when (phase) {
+            PHASE_SETUP -> runSetupPhase(manager, runId)
+            PHASE_DENIED -> runDeniedPhase(
+                manager,
+                runId,
+                requirePriorProcessId(arguments.getString(JOURNEY_PRIOR_PID_ARGUMENT)),
+            )
+            PHASE_RESTORED -> runRestoredPhase(manager, runId)
+            else -> fail("The host runner selected an unknown Android folder journey phase.")
+        }
+    }
+
+    private fun runSetupPhase(manager: EmbeddedNodeManager, runId: String) {
+        assertEquals(
+            PackageManager.PERMISSION_GRANTED,
+            context.checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK),
+        )
+        await("host-granted all-files access") { FolderSyncSpecialAccess.granted() }
+        cleanupStaleFixture(manager)
+        var preserveForPermissionKill = false
         try {
-            setFolderAccess("default")
-            grantLocalNetwork()
-            await("default all-files access state") { !FolderSyncSpecialAccess.granted() }
-            setFolderAccess("allow")
-            await("all-files access grant") { FolderSyncSpecialAccess.granted() }
             assertFalse("The hosted app fixture must start without folder-sync demand", manager.folderSyncRequested())
             val packageValue = FolderSyncInstrumentationBridge.isolatedPackage(context)
             installedEngine = packageValue.engine
-            val roots = createExternalFixture()
+            val roots = createExternalFixture(runId)
             val rootA = RawFolderAccess(context).select(roots.first.path)
             val rootB = RawFolderAccess(context).select(roots.second.path)
             assertTrue(manager.enableFolderSyncHost())
@@ -145,11 +170,10 @@ class FolderSyncJourneyInstrumentedTest {
             await("paused service worker stop") {
                 exactHelperCounts() == HelperCounts(workers = 1, guardians = 1)
             }
-            val paused = "api37-edit-held-while-paused\n".toByteArray(StandardCharsets.UTF_8)
-            overwrite(File(rootA, "forward.txt"), paused)
+            overwrite(File(rootA, "forward.txt"), PAUSED_CONTENT)
             assertFileUnchangedFor(File(rootB, "forward.txt"), forward, NEGATIVE_WINDOW_MILLIS)
             clickScreenText(context.getString(R.string.action_resume))
-            awaitFile("resumed transfer", File(rootB, "forward.txt"), paused)
+            awaitFile("resumed transfer", File(rootB, "forward.txt"), PAUSED_CONTENT)
             awaitExactHelperCounts(workers = 2, guardians = 2)
 
             stopServiceAndAwaitWorkers(checkNotNull(manager.localConnectionForFolderSync()), remainingWorkers = 1)
@@ -161,19 +185,51 @@ class FolderSyncJourneyInstrumentedTest {
             assertEquals(identityA.certificateFingerprint, restartedIdentity.certificateFingerprint)
             assertEquals(identityA.certificateDer, restartedIdentity.certificateDer)
             awaitExactHelperCounts(workers = 2, guardians = 2)
-            val afterRestart = "api37-reverse-after-service-restart\n".toByteArray(StandardCharsets.UTF_8)
-            writeNew(File(rootB, "after-restart.txt"), afterRestart)
-            awaitFile("transfer after cold service restart", File(rootA, "after-restart.txt"), afterRestart)
+            writeNew(File(rootB, "after-restart.txt"), AFTER_RESTART_CONTENT)
+            awaitFile("transfer after cold service restart", File(rootA, "after-restart.txt"), AFTER_RESTART_CONTENT)
 
-            // Both fixture nodes share this app UID. Stop the isolated peer
-            // before revoking a UID-wide permission so its expected access
-            // failure cannot obscure the production service's reaping proof.
+            // Leave exactly the production service worker alive. The host now
+            // launches the ordinary activity, proves that persisted startup has
+            // restored this one worker, and changes the UID app-op outside this
+            // process. Android intentionally kills this process for that change.
             assertTrue(CovalentNative.stop(secondHandle).ok)
             secondHandle = 0
             awaitExactHelperCounts(workers = 1, guardians = 1)
-            setFolderAccess("deny")
-            await("special-access loss") { !FolderSyncSpecialAccess.granted() }
-            awaitExactHelperCounts(workers = 0, guardians = 0)
+            persistReceipt(
+                JourneyReceipt(
+                    runId = runId,
+                    stage = RECEIPT_SETUP,
+                    offerId = checkNotNull(offerId),
+                    peerId = identityB.deviceId,
+                    setupProcessId = Process.myPid(),
+                ),
+            )
+            instrumentation.runOnMainSync { showScreen.value = false }
+            preserveForPermissionKill = true
+        } finally {
+            if (!preserveForPermissionKill) cleanup(manager, runId)
+        }
+    }
+
+    private fun runDeniedPhase(manager: EmbeddedNodeManager, runId: String, priorProcessId: Int) {
+        val receipt = readReceipt(runId, RECEIPT_SETUP)
+        offerId = receipt.offerId
+        installedEngine = FolderSyncInstrumentationBridge.isolatedPackage(context).engine
+        fixtureRoot = fixtureDirectory(runId)
+        secondData = secondDataDirectory(runId)
+        assertFalse(FolderSyncSpecialAccess.granted())
+        assertTrue(
+            "The denied phase must run after the host observed the old process die",
+            priorProcessId != Process.myPid(),
+        )
+        assertTrue(
+            "The setup instrumentation process must not survive the host-observed permission kill",
+            receipt.setupProcessId != Process.myPid(),
+        )
+        awaitExactHelperCounts(workers = 0, guardians = 0)
+        var preserveForRestore = false
+        try {
+            manager.reconnectIfEnabled()
             val unavailableA = awaitValue("access-unavailable service API") { manager.liveConnection() }
             val unavailable = client.folderSyncStatus(unavailableA.baseUrl, unavailableA.token)
             assertEquals(FolderSyncAvailability.NEEDS_ATTENTION, unavailable.availability)
@@ -183,10 +239,10 @@ class FolderSyncJourneyInstrumentedTest {
             assertEquals(PeerConnectionFreshness.NEVER_OBSERVED, unavailable.connectionFreshness)
             assertTrue(unavailable.folders.isEmpty())
             val unavailableShare = unavailable.shares.single { it.offerId == offerId }
-            assertEquals(identityB.deviceId, unavailableShare.peerId)
+            assertEquals(receipt.peerId, unavailableShare.peerId)
             assertEquals(FolderSharePhase.READY, unavailableShare.phase)
             assertEquals(PeerConnectionState.UNKNOWN, unavailableShare.peerConnection)
-            assertTrue(unavailable.peers.any { it.peerId == identityB.deviceId })
+            assertTrue(unavailable.peers.any { it.peerId == receipt.peerId })
 
             stopServiceAndAwaitWorkers(unavailableA, remainingWorkers = 0)
             manager.reconnectIfEnabled()
@@ -197,6 +253,9 @@ class FolderSyncJourneyInstrumentedTest {
             )
             assertHelperCountsUnchangedFor(HelperCounts(0, 0), NEGATIVE_WINDOW_MILLIS)
 
+            compose.setContent {
+                CovalentTheme { if (showScreen.value) FolderSyncScreen(manager) }
+            }
             clickScreenText(context.getString(R.string.action_refresh_backups))
             visibleScreenText(FOLDER_LABEL).assertIsDisplayed()
             visibleScreenText(context.getString(R.string.folder_sync_restore_access_detail)).assertIsDisplayed()
@@ -214,23 +273,45 @@ class FolderSyncJourneyInstrumentedTest {
                 client.folderSyncStatus(deniedRestart.baseUrl, deniedRestart.token).shares
                     .single { it.offerId == offerId }.phase == FolderSharePhase.REMOVED
             }
-            // Only restore this disposable emulator permission after the
-            // durable removal. Regaining access must not revive sharing.
-            setFolderAccess("allow")
-            await("fixture read access restored") { FolderSyncSpecialAccess.granted() }
-            assertHelperCountsUnchangedFor(HelperCounts(0, 0), NEGATIVE_WINDOW_MILLIS)
-            assertArrayEquals(paused, readBounded(File(rootA, "forward.txt")))
-            assertArrayEquals(paused, readBounded(File(rootB, "forward.txt")))
-            assertArrayEquals(afterRestart, readBounded(File(rootA, "after-restart.txt")))
-            assertArrayEquals(afterRestart, readBounded(File(rootB, "after-restart.txt")))
-            offerId = null
+            persistReceipt(receipt.copy(stage = RECEIPT_REMOVED))
+            instrumentation.runOnMainSync { showScreen.value = false }
+            preserveForRestore = true
         } finally {
-            try {
-                instrumentation.runOnMainSync { showScreen.value = false }
-            } finally {
-                cleanup(manager)
+            if (!preserveForRestore) {
+                runCatching { instrumentation.runOnMainSync { showScreen.value = false } }
+                context.stopService(Intent(context, NodeProviderService::class.java))
             }
         }
+    }
+
+    private fun runRestoredPhase(manager: EmbeddedNodeManager, runId: String) {
+        val receipt = readReceipt(runId, RECEIPT_REMOVED)
+        offerId = receipt.offerId
+        installedEngine = FolderSyncInstrumentationBridge.isolatedPackage(context).engine
+        fixtureRoot = fixtureDirectory(runId)
+        secondData = secondDataDirectory(runId)
+        await("host-restored all-files access") { FolderSyncSpecialAccess.granted() }
+        try {
+            assertHelperCountsUnchangedFor(HelperCounts(0, 0), NEGATIVE_WINDOW_MILLIS)
+            val rootA = File(checkNotNull(fixtureRoot), "first")
+            val rootB = File(checkNotNull(fixtureRoot), "second")
+            assertArrayEquals(PAUSED_CONTENT, readBounded(File(rootA, "forward.txt")))
+            assertArrayEquals(PAUSED_CONTENT, readBounded(File(rootB, "forward.txt")))
+            assertArrayEquals(AFTER_RESTART_CONTENT, readBounded(File(rootA, "after-restart.txt")))
+            assertArrayEquals(AFTER_RESTART_CONTENT, readBounded(File(rootB, "after-restart.txt")))
+            manager.reconnectIfEnabled()
+            val restored = awaitValue("restored local node API") { manager.liveConnection() }
+            await("removed share remains durable after access restoration") {
+                client.folderSyncStatus(restored.baseUrl, restored.token).shares
+                    .single { it.offerId == receipt.offerId }.phase == FolderSharePhase.REMOVED
+            }
+            assertHelperCountsUnchangedFor(HelperCounts(0, 0), NEGATIVE_WINDOW_MILLIS)
+        } finally {
+            cleanup(manager, runId)
+        }
+        assertTrue(readAnyReceipt() == null)
+        assertFalse(fixtureDirectory(runId).exists())
+        assertFalse(secondDataDirectory(runId).exists())
     }
 
     private fun visibleScreenText(value: String): SemanticsNodeInteraction {
@@ -253,7 +334,8 @@ class FolderSyncJourneyInstrumentedTest {
     }
 
     private fun startSecondNode(packageValue: PackagedSyncEnginePackage.Verified): NodeConnection {
-        val data = File(context.noBackupFilesDir, "journey-${UUID.randomUUID()}").absoluteFile
+        val runId = requireRunId(InstrumentationRegistry.getArguments().getString(JOURNEY_RUN_ID_ARGUMENT))
+        val data = secondDataDirectory(runId)
         check(data.parentFile == context.noBackupFilesDir.canonicalFile)
         check(data.mkdir())
         secondData = data
@@ -344,11 +426,11 @@ class FolderSyncJourneyInstrumentedTest {
         return value.takeIf { runCatching { client.status(it.baseUrl) }.isSuccess }
     }
 
-    private fun createExternalFixture(): Pair<File, File> {
+    private fun createExternalFixture(runId: String): Pair<File, File> {
         val shared = RawFolderAccess(context).roots().firstOrNull()?.absolutePath
             ?.let(::File)?.canonicalFile
             ?: error("The emulator exposes no shared-storage root.")
-        val fixture = File(shared, "CovalentApi37-${UUID.randomUUID()}").absoluteFile
+        val fixture = File(shared, "$FIXTURE_PREFIX$runId").absoluteFile
         check(fixture.parentFile == shared)
         val first = File(fixture, "first")
         val second = File(fixture, "second")
@@ -356,19 +438,6 @@ class FolderSyncJourneyInstrumentedTest {
         fixtureRoot = fixture
         check(first.mkdir() && second.mkdir())
         return first to second
-    }
-
-    private fun grantLocalNetwork() {
-        shell("pm grant ${context.packageName} ${Manifest.permission.ACCESS_LOCAL_NETWORK}")
-        assertEquals(
-            PackageManager.PERMISSION_GRANTED,
-            context.checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK),
-        )
-    }
-
-    private fun setFolderAccess(mode: String) {
-        check(mode in setOf("allow", "deny", "default"))
-        shell("appops set --uid ${context.packageName} MANAGE_EXTERNAL_STORAGE $mode")
     }
 
     private fun shell(command: String): String {
@@ -480,7 +549,106 @@ class FolderSyncJourneyInstrumentedTest {
         }
     }
 
-    private fun cleanup(manager: EmbeddedNodeManager) {
+    private fun requireRunId(value: String?): String {
+        if (value == null || !RUN_ID.matches(value)) {
+            throw AssertionError("The host runner did not provide a canonical folder journey run ID.")
+        }
+        return value
+    }
+
+    private fun requirePriorProcessId(value: String?): Int {
+        val parsed = value?.toIntOrNull()
+        if (parsed == null || parsed <= 1) {
+            throw AssertionError("The host runner did not provide the process it observed before denial.")
+        }
+        return parsed
+    }
+
+    private fun fixtureDirectory(runId: String): File {
+        val shared = RawFolderAccess(context).roots().firstOrNull()?.absolutePath
+            ?.let(::File)?.canonicalFile
+            ?: error("The emulator exposes no shared-storage root.")
+        return File(shared, "$FIXTURE_PREFIX${requireRunId(runId)}").absoluteFile.also {
+            check(it.parentFile == shared)
+        }
+    }
+
+    private fun secondDataDirectory(runId: String): File =
+        File(context.noBackupFilesDir.canonicalFile, "$SECOND_DATA_PREFIX${requireRunId(runId)}")
+            .absoluteFile.also { check(it.parentFile == context.noBackupFilesDir.canonicalFile) }
+
+    private fun readAnyReceipt(): JourneyReceipt? {
+        val preferences = context.getSharedPreferences(JOURNEY_RECEIPT_PREFERENCES, Context.MODE_PRIVATE)
+        val values = preferences.all
+        if (values.isEmpty()) return null
+        if (values.keys != RECEIPT_KEYS) {
+            throw AssertionError("The private folder journey receipt has an unknown shape.")
+        }
+        val runId = requireRunId(values[RECEIPT_RUN_ID] as? String)
+        val stage = values[RECEIPT_STAGE] as? String
+        val offer = values[RECEIPT_OFFER_ID] as? String
+        val peer = values[RECEIPT_PEER_ID] as? String
+        val process = values[RECEIPT_SETUP_PID] as? Int
+        if (
+            stage !in setOf(RECEIPT_SETUP, RECEIPT_REMOVED) ||
+            offer == null || offer.isBlank() || offer.length > MAX_RECEIPT_VALUE_CHARS ||
+            peer == null || peer.isBlank() || peer.length > MAX_RECEIPT_VALUE_CHARS ||
+            process == null || process <= 1
+        ) {
+            throw AssertionError("The private folder journey receipt is malformed.")
+        }
+        return JourneyReceipt(runId, stage, offer, peer, process)
+    }
+
+    private fun readReceipt(runId: String, stage: String): JourneyReceipt {
+        val receipt = readAnyReceipt()
+            ?: throw AssertionError("The preceding folder journey phase left no durable receipt.")
+        if (receipt.runId != runId || receipt.stage != stage) {
+            throw AssertionError("The private folder journey receipt does not match this phase.")
+        }
+        return receipt
+    }
+
+    private fun persistReceipt(receipt: JourneyReceipt) {
+        val preferences = context.getSharedPreferences(JOURNEY_RECEIPT_PREFERENCES, Context.MODE_PRIVATE)
+        check(
+            preferences.edit().clear()
+                .putString(RECEIPT_RUN_ID, requireRunId(receipt.runId))
+                .putString(RECEIPT_STAGE, receipt.stage)
+                .putString(RECEIPT_OFFER_ID, receipt.offerId)
+                .putString(RECEIPT_PEER_ID, receipt.peerId)
+                .putInt(RECEIPT_SETUP_PID, receipt.setupProcessId)
+                .commit(),
+        )
+        assertEquals(receipt, readReceipt(receipt.runId, receipt.stage))
+    }
+
+    private fun cleanupStaleFixture(manager: EmbeddedNodeManager) {
+        val stale = readAnyReceipt() ?: return
+        installedEngine = FolderSyncInstrumentationBridge.isolatedPackage(context).engine
+        fixtureRoot = fixtureDirectory(stale.runId)
+        secondData = secondDataDirectory(stale.runId)
+        manager.reconnectIfEnabled()
+        val connection = awaitValue("stale journey local node API") { manager.liveConnection() }
+        val oldShare = client.folderSyncStatus(connection.baseUrl, connection.token).shares
+            .singleOrNull { it.offerId == stale.offerId }
+        if (oldShare != null && oldShare.phase != FolderSharePhase.REMOVED) {
+            client.removeFolder(connection.baseUrl, connection.token, stale.offerId)
+            await("stale journey share removal") {
+                client.folderSyncStatus(connection.baseUrl, connection.token).shares
+                    .singleOrNull { it.offerId == stale.offerId }
+                    ?.phase == FolderSharePhase.REMOVED
+            }
+        }
+        cleanup(manager, stale.runId)
+        assertTrue(readAnyReceipt() == null)
+        assertFalse(fixtureDirectory(stale.runId).exists())
+        installedEngine = null
+        fixtureRoot = null
+        secondData = null
+    }
+
+    private fun cleanup(manager: EmbeddedNodeManager, runId: String) {
         val failures = mutableListOf<Throwable>()
         fun attempt(action: () -> Unit) {
             runCatching(action).exceptionOrNull()?.let(failures::add)
@@ -518,18 +686,35 @@ class FolderSyncJourneyInstrumentedTest {
             )
         }
         if (helpersReaped) {
-            // Cleanup reads only test-owned external roots; access is restored
-            // after exact helper reaping and reset even if deletion fails.
-            attempt { setFolderAccess("allow") }
-            attempt { fixtureRoot?.let(::deleteTreeWithoutFollowingLinks) }
-            attempt { secondData?.let(::deleteTreeWithoutFollowingLinks) }
+            // The host grants access before setup/restored cleanup. Every path is
+            // derived from its canonical UUID run ID; cleanup never accepts a
+            // provider or caller-supplied path and never follows a symbolic link.
+            if (!FolderSyncSpecialAccess.granted()) {
+                failures += AssertionError(
+                    "Folder access disappeared before the owned external fixture was removed.",
+                )
+            } else {
+                attempt { deleteTreeWithoutFollowingLinks(fixtureRoot ?: fixtureDirectory(runId)) }
+            }
+            attempt { deleteTreeWithoutFollowingLinks(secondData ?: secondDataDirectory(runId)) }
             attempt {
                 installedEngine?.runtimeDirectory?.let(::File)?.takeIf(File::exists)
                     ?.let(::deleteTreeWithoutFollowingLinks)
             }
         }
-        attempt { setFolderAccess("default") }
         attempt { assertFalse(manager.folderSyncAccessUnavailable()) }
+        // Keep the receipt whenever reaping, deletion, or state cleanup failed.
+        // A later owned setup can then locate and safely finish cleanup instead
+        // of leaving an anonymous external fixture behind. The host may clear
+        // app data only after this restored phase returns success.
+        if (failures.isEmpty()) {
+            attempt {
+                check(
+                    context.getSharedPreferences(JOURNEY_RECEIPT_PREFERENCES, Context.MODE_PRIVATE)
+                        .edit().clear().commit(),
+                )
+            }
+        }
         if (failures.isNotEmpty()) {
             val error = AssertionError(
                 "The API-37 folder journey did not clean up safely.",
@@ -543,15 +728,45 @@ class FolderSyncJourneyInstrumentedTest {
     private fun deleteTreeWithoutFollowingLinks(root: File) {
         val rootPath = root.toPath()
         if (!Files.exists(rootPath, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return
-        Files.walkFileTree(rootPath, object : java.nio.file.SimpleFileVisitor<Path>() {
-            override fun visitFile(file: Path, attributes: java.nio.file.attribute.BasicFileAttributes) =
-                Files.delete(file).let { java.nio.file.FileVisitResult.CONTINUE }
-
-            override fun postVisitDirectory(directory: Path, error: java.io.IOException?) =
-                if (error != null) throw error else Files.delete(directory).let {
-                    java.nio.file.FileVisitResult.CONTINUE
+        var entries = 0
+        Files.walkFileTree(
+            rootPath,
+            emptySet<java.nio.file.FileVisitOption>(),
+            MAX_CLEANUP_DEPTH,
+            object : java.nio.file.SimpleFileVisitor<Path>() {
+                private fun charge() {
+                    check(++entries <= MAX_CLEANUP_ENTRIES) {
+                        "The test-owned cleanup tree exceeded its entry bound."
+                    }
                 }
-        })
+
+                override fun preVisitDirectory(
+                    directory: Path,
+                    attributes: java.nio.file.attribute.BasicFileAttributes,
+                ): java.nio.file.FileVisitResult {
+                    charge()
+                    return java.nio.file.FileVisitResult.CONTINUE
+                }
+
+                override fun visitFile(
+                    file: Path,
+                    attributes: java.nio.file.attribute.BasicFileAttributes,
+                ): java.nio.file.FileVisitResult {
+                    charge()
+                    Files.delete(file)
+                    return java.nio.file.FileVisitResult.CONTINUE
+                }
+
+                override fun postVisitDirectory(
+                    directory: Path,
+                    error: java.io.IOException?,
+                ): java.nio.file.FileVisitResult {
+                    if (error != null) throw error
+                    Files.delete(directory)
+                    return java.nio.file.FileVisitResult.CONTINUE
+                }
+            },
+        )
     }
 
     private fun await(label: String, timeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS, condition: () -> Boolean) {
@@ -576,8 +791,43 @@ class FolderSyncJourneyInstrumentedTest {
 
     private data class HelperCounts(val workers: Int, val guardians: Int)
 
+    private data class JourneyReceipt(
+        val runId: String,
+        val stage: String,
+        val offerId: String,
+        val peerId: String,
+        val setupProcessId: Int,
+    )
+
     private companion object {
         const val FOLDER_LABEL = "API 37 folder journey"
+        const val JOURNEY_PHASE_ARGUMENT = "covalentFolderJourneyPhase"
+        const val JOURNEY_RUN_ID_ARGUMENT = "covalentFolderJourneyRunId"
+        const val JOURNEY_PRIOR_PID_ARGUMENT = "covalentFolderJourneyPriorPid"
+        const val PHASE_SETUP = "setup"
+        const val PHASE_DENIED = "denied"
+        const val PHASE_RESTORED = "restored"
+        const val JOURNEY_RECEIPT_PREFERENCES = "covalent_api37_folder_journey"
+        const val RECEIPT_RUN_ID = "run_id"
+        const val RECEIPT_STAGE = "stage"
+        const val RECEIPT_OFFER_ID = "offer_id"
+        const val RECEIPT_PEER_ID = "peer_id"
+        const val RECEIPT_SETUP_PID = "setup_pid"
+        const val RECEIPT_SETUP = "setup-complete"
+        const val RECEIPT_REMOVED = "removal-complete"
+        const val FIXTURE_PREFIX = "CovalentApi37-"
+        const val SECOND_DATA_PREFIX = "journey-"
+        const val MAX_RECEIPT_VALUE_CHARS = 512
+        val RUN_ID = Regex("[0-9a-f]{32}")
+        val PAUSED_CONTENT = "api37-edit-held-while-paused\n".toByteArray(StandardCharsets.UTF_8)
+        val AFTER_RESTART_CONTENT = "api37-reverse-after-service-restart\n".toByteArray(StandardCharsets.UTF_8)
+        val RECEIPT_KEYS = setOf(
+            RECEIPT_RUN_ID,
+            RECEIPT_STAGE,
+            RECEIPT_OFFER_ID,
+            RECEIPT_PEER_ID,
+            RECEIPT_SETUP_PID,
+        )
         const val POLL_MILLIS = 250L
         const val DEFAULT_TIMEOUT_MILLIS = 90_000L
         const val TRANSFER_TIMEOUT_MILLIS = 120_000L
@@ -585,6 +835,8 @@ class FolderSyncJourneyInstrumentedTest {
         const val NEGATIVE_WINDOW_MILLIS = 7_000L
         const val PROCESS_SCAN_SECONDS = 5L
         const val MAX_PROC_ENTRIES = 4_096
+        const val MAX_CLEANUP_ENTRIES = 100_000
+        const val MAX_CLEANUP_DEPTH = 64
         const val MAX_TEST_FILE_BYTES = 64 * 1_024
         const val MAX_SHELL_OUTPUT_BYTES = 16 * 1_024
     }

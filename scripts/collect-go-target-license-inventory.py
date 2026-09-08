@@ -30,6 +30,7 @@ ROOT_PACKAGE = f"{MAIN_MODULE}/cmd/syncthing"
 SAFE_TARGET = re.compile(r"[A-Za-z0-9_.+-]{1,64}")
 SAFE_MODULE = re.compile(r"[A-Za-z0-9._~+/-]{1,512}")
 SAFE_VERSION = re.compile(r"v[0-9A-Za-z.+~-]{1,255}")
+MODULE_SUM = re.compile(r"h1:[A-Za-z0-9+/]{43}=")
 LICENSE_TOKENS = {"LICENSE", "LICENCE", "COPYING"}
 NOTICE_TOKENS = {"NOTICE", "COPYRIGHT", "PATENTS", "AUTHORS"}
 SOURCE_SUFFIXES = {
@@ -216,6 +217,22 @@ def _hash_regular(path: pathlib.Path, maximum: int) -> tuple[int, str]:
         os.close(descriptor)
 
 
+def _recognized_license_texts(path: pathlib.Path, maximum: int) -> set[str]:
+    """Recognize only license texts needed for source-access packaging.
+
+    This deliberately is not a general SPDX classifier. The notice collector
+    repeats the check against the copied bytes before creating source access
+    records.
+    """
+    normalized = b" ".join(_read_regular(path, maximum).lower().split())
+    if (
+        b"mozilla public license version 2.0" in normalized
+        or b"mozilla public license, version 2.0" in normalized
+    ):
+        return {"MPL-2.0"}
+    return set()
+
+
 def _scan_candidates(
     root: pathlib.Path, limits: Limits, budget: ScanBudget
 ) -> list[dict[str, Any]]:
@@ -367,7 +384,18 @@ def build_inventory(
                 directory = _contained_directory(effective.get("Dir"), module_cache)
                 origin = "private-gomodcache"
             key = (path, version)
-            binding = (str(directory), effective.get("Path"), effective.get("Version"))
+            module_sum = effective.get("Sum")
+            if main and module_sum is not None:
+                raise EvidenceError("target main module checksum binding differs")
+            if not main and (
+                not isinstance(module_sum, str)
+                or MODULE_SUM.fullmatch(module_sum) is None
+            ):
+                raise EvidenceError("compiled module checksum evidence is incomplete")
+            binding = (
+                str(directory), effective.get("Path"), effective.get("Version"),
+                module_sum,
+            )
             existing = modules.get(key)
             if existing is None:
                 if len(modules) >= limits.modules:
@@ -375,6 +403,7 @@ def build_inventory(
                 modules[key] = {
                     "path": path, "version": version, "directory": directory,
                     "origin": origin, "binding": binding, "targets": {target.name},
+                    "module_sum": module_sum,
                     "replacement": None if effective is module else {
                         "path": effective.get("Path"), "version": effective.get("Version")
                     },
@@ -403,6 +432,16 @@ def build_inventory(
             "sourceOrigin": module["origin"],
             "targets": sorted(module["targets"]), "replacement": module["replacement"],
             "status": module_status, "licenseAndNoticeFiles": candidates,
+            "moduleSum": module["module_sum"],
+            "recognizedLicenseTexts": sorted({
+                family
+                for candidate in candidates
+                if candidate["kind"] == "license"
+                for family in _recognized_license_texts(
+                    module["directory"] / candidate["path"],
+                    limits.candidate_file_bytes,
+                )
+            }),
         }
         if module["path"] == MAIN_MODULE:
             row["declaredLicense"] = "MPL-2.0"

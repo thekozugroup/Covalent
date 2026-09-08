@@ -151,6 +151,7 @@ public actor NodeClient {
       let status: FolderSyncStatus = try await send(path: "api/v1/sync/status")
       guard ["neverObserved", "fresh", "stale"].contains(status.connectionFreshness)
       else { throw NodeClientError.invalidResponse }
+      _ = try status.invitationReplacements()
       return status
     }
 
@@ -159,7 +160,11 @@ public actor NodeClient {
     }
 
     public func acceptFolder(_ request: FolderAcceptRequest) async throws -> FolderSyncMutation {
-        try await send(path: "api/v1/sync/accept", method: "POST", body: request)
+      try await send(path: "api/v1/sync/accept", method: "POST", body: request)
+    }
+
+    public func renewFolder(_ request: FolderReferenceRequest) async throws -> FolderSyncMutation {
+      try await send(path: "api/v1/sync/renew", method: "POST", body: request)
     }
 
     public func repairFolder(_ request: FolderRepairRequest) async throws -> FolderSyncMutation {

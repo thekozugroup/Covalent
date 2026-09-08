@@ -128,6 +128,11 @@
       const share = object(value, "The node returned an invalid shared folder.");
       const peerConnection = Object.prototype.hasOwnProperty.call(share, "peerConnection")
         ? share.peerConnection : "unknown";
+      const superseded = Object.hasOwn(share, "supersededOfferIds") ? share.supersededOfferIds : [];
+      if (!Array.isArray(superseded) || superseded.length > 128
+        || share.phase === "removed" && superseded.length !== 0) {
+        throw guidance("The node returned invalid replacement invitations.");
+      }
       if (!PHASES.has(share.phase) || !CONNECTION_STATES.has(peerConnection)
         || typeof share.incoming !== "boolean"
         || typeof share.expired !== "boolean"
@@ -146,8 +151,19 @@
         // The server owns expiry. Browser clock arithmetic must never override it.
         expired: share.expired,
         peerConnection,
+        supersededOfferIds: Object.freeze(superseded.map((id) => uuid(id))),
       });
     });
+    const retainedOfferIds = new Set(shares.map((share) => share.offerId));
+    if (retainedOfferIds.size !== shares.length) throw guidance("The node returned duplicate folder invitations.");
+    for (const share of shares) {
+      for (const oldId of share.supersededOfferIds) {
+        if (oldId === "00000000-0000-0000-0000-000000000000" || retainedOfferIds.has(oldId)) {
+          throw guidance("The node returned ambiguous replacement invitations.");
+        }
+        retainedOfferIds.add(oldId);
+      }
+    }
     const folders = boundedArray(status.folders, "The node returned too many folder health records.").map((value) => {
       const folder = object(value, "The node returned invalid folder health.");
       if (!HEALTH_STATES.has(folder.state) || typeof folder.statusError !== "boolean"
@@ -420,6 +436,22 @@
       return mutate("/api/v1/sync/accept", { offerId: id, selectedRoot: selectedRoot(rootPath) });
     }
 
+    async function renew(offerId) {
+      const id = uuid(offerId);
+      const share = currentStatus?.shares.find((item) => item.offerId === id);
+      if (!share || share.incoming || !share.expired
+        || !["offered", "paused"].includes(share.phase)) {
+        throw guidance("Only an expired invitation you sent can be renewed. Refresh folders first.");
+      }
+      // Retrying the expired ID returns the same durable replacement. Keep any
+      // unrelated new-folder draft intact, including after a lost response.
+      const result = await mutate("/api/v1/sync/renew", { offerId: id });
+      if (result.offerId === null || result.offerId === id) {
+        throw guidance("The server did not identify the new invitation. Refresh folders before trying again.");
+      }
+      return result;
+    }
+
     function pause(offerId, paused) {
       if (typeof paused !== "boolean") throw guidance("The folder pause request is invalid.");
       return mutate("/api/v1/sync/pause", { offerId: uuid(offerId), paused });
@@ -447,6 +479,7 @@
       pause,
       refresh,
       remove,
+      renew,
       retryPendingOffer,
       retryService,
       sendOffer,

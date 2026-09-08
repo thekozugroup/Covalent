@@ -252,6 +252,142 @@ private func folderStatusJSON(
     return "{\"schemaVersion\":1,\"availability\":\"available\",\"lifecycle\":\"needsAttention\",\"issue\":\(issueJSON),\"healthFreshness\":\"unknown\",\"connectionFreshness\":\"fresh\",\"peers\":[{\"peerId\":\"\(peer.uuidString.lowercased())\",\"displayName\":\"Peer Mac\"}],\"shares\":[{\"offerId\":\"\(offer.uuidString.lowercased())\",\"folderId\":\"\(folder.uuidString.lowercased())\",\"label\":\"Plans\",\"peerId\":\"\(peer.uuidString.lowercased())\",\"incoming\":true,\"phase\":\"ready\",\"expiresAtUnixMs\":null,\"expired\":false,\"peerConnection\":\"connected\"}],\"folders\":[]}"
 }
 
+@Test @MainActor func lostRenewalResponseIsRecoveredByStatusWithoutRestartingWorker() async throws {
+    let fixture = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let root = fixture.appending(path: "source")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let grant = try SelectedDirectoryGrant.capture(url: root, purpose: .folderSync)
+    let oldID = UUID()
+    let newID = UUID()
+    let folder = UUID()
+    let peer = UUID()
+    let persistence = AppleAppPersistence(directoryURL: fixture.appending(path: "state"))
+    let sequence = RequestSequence()
+    let recorder = RequestRecorder(removeAfterRequest: false) { request in
+        switch sequence.next() {
+        case 0:
+            #expect(request.url?.path == "/api/v1/sync/folders")
+            return TestResponse.response(request, status: 200, json: mutationJSON(offer: oldID))
+        case 1:
+            return TestResponse.response(request, status: 200, json: renewalModelStatus(
+                offer: oldID, folder: folder, peer: peer, incoming: false, expired: true
+            ))
+        case 2:
+            #expect(request.url?.path == "/api/v1/sync/renew")
+            throw URLError(.networkConnectionLost)
+        case 3:
+            return TestResponse.response(request, status: 200, json: renewalModelStatus(
+                offer: newID, folder: folder, peer: peer, incoming: false, superseded: oldID
+            ))
+        default:
+            Issue.record("Unexpected renewal request")
+            return TestResponse.response(request, status: 500, json: "{}")
+        }
+    }
+    let (model, bootstrapper) = try renewalModel(recorder: recorder, persistence: persistence)
+    #expect(await model.offerFolder(peerId: peer, folderId: folder, label: "Plans", grant: grant))
+    #expect(!(await model.renewFolderInvitation(oldID)))
+    #expect(model.directoryGrants.first?.folderOfferId == oldID)
+    await model.refreshFolders()
+    #expect(model.directoryGrants.first?.folderOfferId == newID)
+    #expect(model.directoryGrants.first?.bookmarkData == grant.bookmarkData)
+    let reopened = try #require(try await persistence.loadDirectoryGrants().first)
+    #expect(reopened.folderOfferId == newID)
+    #expect(reopened.id == grant.id)
+    #expect(reopened.bookmarkData == grant.bookmarkData)
+    #expect(bootstrapper.restartCalls == 1)
+    #expect(!model.folderSyncMutationInFlight)
+}
+
+@Test @MainActor func incomingRenewalRetriesScopeRetirementBeforeFreshSelectionOfPreviousFolder() async throws {
+    let fixture = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let root = fixture.appending(path: "destination")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let oldGrant = try SelectedDirectoryGrant.capture(url: root, purpose: .folderSync)
+    let freshGrant = try SelectedDirectoryGrant.capture(url: root, purpose: .folderSync)
+    let oldID = UUID()
+    let newID = UUID()
+    let folder = UUID()
+    let peer = UUID()
+    let persistence = AppleAppPersistence(directoryURL: fixture.appending(path: "state"))
+    let sequence = RequestSequence()
+    let recorder = RequestRecorder(removeAfterRequest: false) { request in
+        switch sequence.next() {
+        case 0:
+            return TestResponse.response(request, status: 200, json: mutationJSON(offer: oldID))
+        case 1:
+            return TestResponse.response(request, status: 200, json: renewalModelStatus(
+                offer: oldID, folder: folder, peer: peer, incoming: true, phase: "awaitingCommit"
+            ))
+        case 2, 3:
+            return TestResponse.response(request, status: 200, json: renewalModelStatus(
+                offer: newID, folder: folder, peer: peer, incoming: true, superseded: oldID
+            ))
+        case 4:
+            #expect(request.url?.path == "/api/v1/sync/accept")
+            let payload = try #require(folderRepairRequestBody(request))
+            let object = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+            #expect(UUID(uuidString: try #require(object["offerId"] as? String)) == newID)
+            return TestResponse.response(request, status: 200, json: mutationJSON(offer: newID))
+        case 5:
+            return TestResponse.response(request, status: 200, json: renewalModelStatus(
+                offer: newID, folder: folder, peer: peer, incoming: true,
+                phase: "awaitingCommit", superseded: oldID
+            ))
+        default:
+            Issue.record("Unexpected recipient renewal request")
+            return TestResponse.response(request, status: 500, json: "{}")
+        }
+    }
+    let (model, bootstrapper) = try renewalModel(recorder: recorder, persistence: persistence)
+    #expect(await model.acceptFolder(offerId: oldID, grant: oldGrant))
+    bootstrapper.restartFailuresRemaining = 1
+    await model.refreshFolders()
+    #expect(model.directoryGrants.isEmpty)
+    #expect(try await persistence.loadDirectoryGrants().isEmpty)
+    #expect(model.folderSyncStatus == nil)
+    #expect(bootstrapper.restartCalls == 2)
+    await model.refreshFolders()
+    #expect(bootstrapper.restartCalls == 3)
+    #expect(model.folderSyncStatus?.shares.first?.offerId == newID)
+    #expect(await model.acceptFolder(offerId: newID, grant: freshGrant))
+    #expect(model.directoryGrants.first?.id == freshGrant.id)
+    #expect(model.directoryGrants.first?.folderOfferId == newID)
+    #expect(FileManager.default.fileExists(atPath: root.path))
+}
+
+@MainActor private func renewalModel(
+    recorder: RequestRecorder, persistence: AppleAppPersistence
+) throws -> (CovalentAppModel, FolderGrantBootstrapper) {
+    let port = RecordingURLProtocol.recorder.install(recorder)
+    let configuration = try NodeConnectionConfiguration(
+        baseURL: URL(string: "http://127.0.0.1:\(port)")!, apiToken: String(repeating: "n", count: 32)
+    )
+    let sessionConfiguration = URLSessionConfiguration.ephemeral
+    sessionConfiguration.protocolClasses = [RecordingURLProtocol.self]
+    let bootstrapper = FolderGrantBootstrapper(configuration: configuration)
+    return (CovalentAppModel(
+        persistence: persistence,
+        client: NodeClient(configuration: configuration, session: URLSession(configuration: sessionConfiguration)),
+        configuration: configuration, localNodeBootstrapper: bootstrapper
+    ), bootstrapper)
+}
+
+private func renewalModelStatus(
+    offer: UUID, folder: UUID, peer: UUID, incoming: Bool, phase: String = "offered",
+    expired: Bool = false, superseded: UUID? = nil
+) -> String {
+    let oldIDs = superseded.map { "\"\($0.uuidString)\"" } ?? ""
+    return """
+    {"availability":"available","lifecycle":"running","issue":null,"healthFreshness":"fresh","peers":[],
+    "shares":[{"offerId":"\(offer)","folderId":"\(folder)","peerId":"\(peer)","label":"Plans",
+    "incoming":\(incoming),"phase":"\(phase)","expiresAtUnixMs":100,"expired":\(expired),
+    "supersededOfferIds":[\(oldIDs)]}],"folders":[]}
+    """
+}
+
 private func mutationJSON(offer: UUID) -> String {
     "{\"offerId\":\"\(offer.uuidString.lowercased())\",\"lifecycle\":\"stopped\",\"issue\":\"folderAccess\"}"
 }
