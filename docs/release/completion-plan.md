@@ -19,7 +19,10 @@ propagation.
 
 Atmos is a separate Ubuntu test server, authorized through `ssh Atmos` for
 isolated temporary-folder validation. Passing an Atmos drill does not count
-as a physical Atlas/Unraid install or Android-device test. Do not change any
+as a physical Atlas/Unraid install or Android-device test. The user confirmed
+Atlas is offline and accepted Docker validation as its completion path; an
+on-host Atlas installation is therefore deferred and is not a release blocker
+for this goal. Do not claim it was performed. Do not change any
 existing Atmos services, host settings, or user data. Use unique temporary
 paths, bounded resources, unused ports, and cleanup of only this run's resources.
 
@@ -37,11 +40,11 @@ Close every known release-blocking finding; do not remove a gate to raise a scor
 | Core correctness | Unit, property, adversarial, migration, concurrency, corruption, interrupted-job and source-loss tests; strict lint | Recovery checkpoint: all 307 Rust tests across 22 suites passed, zero failed/ignored; strict workspace Clippy and 89 web tests passed. Hosted native and final artifact checks remain required. |
 | Owner-device loss | A user can export a protected recovery kit, replace a lost owner device, discover its authenticated catalogs, see partial availability, and restore | API, CLI/runtime, web and native recovery flows published at `9e52876`. Real owner-loss HTTP/QUIC restore and web-downloaded kit roundtrip pass locally. Linux CI exposed a QUIC socket-release race during immediate restart; the fix must pass hosted validation. Native UI, final artifacts and large-catalog memory evidence remain required. |
 | Beginner workflow | Install → connect → choose folder → protect → verify → restore through real UI; clear errors and recovery; no manual IDs in ordinary flows | Real browser unlock, automatic snapshot/name defaults, named backup selection, preview invalidation, restore and Verify passed with disposable files. Preview now explains individual file actions and renamed conflict destinations instead of raw JSON. Full cross-device onboarding pending. |
-| macOS | Shared tests, live helper integration, native UI/accessibility, verified arm64 app package, install and upgrade | The new recovery app bundle built at `9e52876`. Shared-test compilation stopped on an optional NSNumber expression, now corrected; integration/UI must rerun. Local Xcode license and CLT Testing limitations remain. |
-| Android | JVM, instrumented SAF and process-death tests, TalkBack/large text, install and upgrade of stable personal artifact | At `9e52876`, native x86_64 size was 11,483,168 bytes against the unchanged 11,141,120-byte ceiling; both lanes stopped before device tests. The earlier SAF fixture-permission fix and new recovery tests remain unvalidated on the emulator. Size optimization and a fresh full run are required. |
-| Docker | Both CPU architectures; TLS and key-protection contracts; rootless/read-only runtime; bounded storage/memory; three-node recovery | Both image architectures and container runtime/e2e passed on checkpoint `9e52876`; repeat on final revision. |
+| macOS | Shared tests, live helper integration, native UI/accessibility, verified arm64 app package, install and upgrade | The recovery app bundle built at `e5a622c`. Hosted shared tests passed 104 of 105; the remaining reference count for two new recovery errors is reconciled. Integration/UI must rerun. Local Xcode license and CLT Testing limitations remain. |
+| Android | JVM, instrumented SAF and process-death tests, TalkBack/large text, install and upgrade of stable personal artifact | At `e5a622c`, arm64 JNI is 8,384,224 bytes and x86_64 is 9,918,032 bytes; both pass the unchanged budget. JVM tests passed 102 of 103; one internal term in recovery copy is corrected. Emulator tests and the full native lanes must rerun. |
+| Docker | Both CPU architectures; TLS and key-protection contracts; rootless/read-only runtime; bounded storage/memory; three-node recovery | Both image architectures and container runtime/e2e passed on checkpoint `e5a622c`; repeat on final revision. |
 | Atmos network drill | Mac ↔ Ubuntu pairing, explicitly selected replica, interrupted/restarted operation, source-loss restore, exact hashes, cleanup | Passed with a 64 MiB incompressible payload: same-job pause/resume, provider container restart preserving identity, local source/cache loss, provider-only restore and exact content checks. Dedicated resources removed; pre-existing container/image IDs survived. See [drill evidence](atmos-drill-2026-09-07.md). |
-| Atlas/Unraid | Trusted preflight, exact-image install/upgrade, selected-share permissions, real backup/restore | Preflight strengthened and fixtures pass. A trusted-key read-only SSH attempt to Atlas timed out; actual host evidence pending. |
+| Atlas/Unraid | Docker deployment, Unraid template/mount contracts, exact-image install/upgrade and backup/restore; on-host Atlas check deferred by the user | Atlas is offline. The user accepted Docker validation in its place on 2026-09-07. Preflight fixtures and both Docker architectures pass; final-image and full owner-loss Docker validation remain required. No physical Atlas install is claimed. |
 | Security and supply chain | Dependency audits, CodeQL, immutable image scans/signatures/SBOMs, safe secret storage, exact release commit provenance | cargo-audit (289 dependencies, warnings denied) and cargo-deny advisories/bans/licenses/sources passed. CodeQL Java/Kotlin, Swift and the repository-wide zero-open-alert policy passed at `9e52876`. Final artifact evidence is pending; current main signature is unknown_key and account has no registered signing key. |
 | Performance | Crypto ≥20 MiB/s; default 10k-entry interrupted/resumed scan and restore ≤45 s; provider restore ≥4 MiB/s and scaling gate; node ≤16 MiB, CLI ≤8 MiB, image ≤96 MiB | Baseline crypto 185.04 MiB/s, 10k-entry recovery 5.10 s, local provider restore 222–242 MiB/s; intermediate release node 10,304,896 bytes and CLI 4,079,664 bytes. Final artifacts pending. |
 | Release delivery | Green exact-revision CI, verified signed tag, complete downloadable artifacts and checksums, replacement immutable Unraid digest, working beginner instructions | v0.2.0 remains unpublished |
@@ -105,6 +108,9 @@ packages, credentials, private server inventories, or raw diagnostic bundles.
 - Recovery through the web console produced two real downloaded files. A fresh
   disposable node recovered the original identity from those files; the exact
   generated downloads and all temporary state were then removed.
+- [Android size and host transfer evidence](android-size-profile-2026-09-07.md)
+  records measured native reductions with the unchanged size ceiling and the
+  four alternating host QUIC correctness/resource runs.
 - [Recovery audit](core-audit-2026-09-07.md) records streaming memory limits,
   crash-safe snapshot watermarks, runtime handoff repair and bounded shutdown.
   These improvements still require final native and artifact evidence.
@@ -114,7 +120,8 @@ packages, credentials, private server inventories, or raw diagnostic bundles.
 1. Close reproducible reliability and recovery defects; preserve old snapshots.
 2. Complete the beginner workflows and verify them in the actual clients.
 3. Prove real cross-machine behavior in disposable Mac/Atmos directories.
-4. Complete native and container package checks, then Atlas hardware validation.
+4. Complete native and container package checks, including the Docker acceptance
+   path the user approved for offline Atlas.
 5. Measure and optimize only demonstrated performance bottlenecks, rerunning
    correctness and resource bounds after each change.
 6. Assemble and verify the release and final evidence; mark the goal complete

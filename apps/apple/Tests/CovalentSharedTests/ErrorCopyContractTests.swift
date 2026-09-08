@@ -126,7 +126,7 @@ import Testing
             unmapped.isEmpty,
             "These codes fall through to status-shaped copy instead of being authored: \(unmapped)"
         )
-        #expect(Self.engineErrorCodes.count == 69, "The reference set changed; reconcile it deliberately.")
+        #expect(Self.engineErrorCodes.count == 71, "The reference set changed; reconcile it deliberately.")
     }
 
     /// Negative control for the mapping probe: a code that is definitely not
@@ -275,8 +275,6 @@ import Testing
         "claim_window_exhausted",
         "claim_window_expired",
         "confirmation_required",
-        "recovery_confirmation_required",
-        "recovery_not_configured",
         "duplicate_archive_entry",
         "insufficient_storage",
         "internal_error",
@@ -316,6 +314,8 @@ import Testing
         "peer_endpoint_unavailable",
         "protocol_incompatible",
         "provider_binding_mismatch",
+        "recovery_confirmation_required",
+        "recovery_not_configured",
         "resource_limit",
         "restore_conflict",
         "restore_plan_mismatch",

@@ -3880,6 +3880,8 @@ mod tests {
         let owner = Arc::new(Engine::open(test_options(owner_data.path())).expect("owner"));
         let provider_engine =
             Arc::new(Engine::open(test_options(provider_data.path())).expect("provider"));
+        trust_all(&owner, &provider_engine);
+        trust_all(&provider_engine, &owner);
         let tls = test_tls(provider_data.path(), "tls");
         let node = QuicNode::bind(
             "127.0.0.1:0".parse().expect("address"),
@@ -3894,10 +3896,23 @@ mod tests {
             address,
             provider_engine.public_identity(),
             tls.certificate_der().to_vec(),
-            owner,
+            Arc::clone(&owner),
         )
         .expect("provider client");
-        let connection = provider.connection().await.expect("live QUIC connection");
+        // A client-side handshake can complete before the server has accepted
+        // and dispatched its `Incoming`. Complete a signed storage operation so
+        // this test exercises shutdown of a live application connection rather
+        // than Quinn's unsampled initial-PTO draining path.
+        let probe_provider = provider.clone();
+        let capability = tokio::task::spawn_blocking(move || probe_provider.probe_capability())
+            .await
+            .expect("join capability probe")
+            .expect("complete authenticated storage request");
+        assert_eq!(capability.provider_device_id, provider_engine.device_id());
+        let connection = provider
+            .connection()
+            .await
+            .expect("retained QUIC connection");
         assert!(connection.close_reason().is_none());
 
         shutdown.close();
@@ -3922,6 +3937,8 @@ mod tests {
         let owner = Arc::new(Engine::open(test_options(owner_data.path())).expect("owner"));
         let provider_engine =
             Arc::new(Engine::open(test_options(provider_data.path())).expect("provider"));
+        trust_all(&owner, &provider_engine);
+        trust_all(&provider_engine, &owner);
         let tls = test_tls(provider_data.path(), "tls");
         let node = QuicNode::bind(
             "127.0.0.1:0".parse().expect("address"),
@@ -3936,10 +3953,21 @@ mod tests {
             address,
             provider_engine.public_identity(),
             tls.certificate_der().to_vec(),
-            owner,
+            Arc::clone(&owner),
         )
         .expect("provider client");
-        let connection = provider.connection().await.expect("live QUIC connection");
+        // Prove the server accepted and dispatched this connection before its
+        // serving task is aborted; a client handshake alone does not prove it.
+        let probe_provider = provider.clone();
+        let capability = tokio::task::spawn_blocking(move || probe_provider.probe_capability())
+            .await
+            .expect("join capability probe")
+            .expect("complete authenticated storage request");
+        assert_eq!(capability.provider_device_id, provider_engine.device_id());
+        let connection = provider
+            .connection()
+            .await
+            .expect("retained QUIC connection");
         assert!(connection.close_reason().is_none());
 
         task.abort();

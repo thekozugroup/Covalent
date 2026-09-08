@@ -346,10 +346,10 @@ public enum NodeAPIErrorCopy {
         ),
         "confirmation_required": ("This has to be confirmed on the other device before it can finish.", .none),
         "recovery_confirmation_required": (
-            "Confirm that you want to create or retry this recovery operation before it can continue.", .none
+            "Confirm that you want to create recovery files or retry recovery, then continue.", .none
         ),
         "recovery_not_configured": (
-            "This local service was not started from an owner-loss recovery kit.", .none
+            "This backup server was set up normally. To replace a lost device, start a new installation with its recovery files.", .none
         ),
 
         // Source folder

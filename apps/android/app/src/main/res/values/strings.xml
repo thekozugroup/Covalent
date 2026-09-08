@@ -331,7 +331,7 @@
     <string name="recovery_phase_no_catalogs">All your backup devices were checked, but no backups were found.</string>
     <string name="recovery_status_counts">%1$d backups recovered · %2$d of %3$d backup devices checked</string>
     <string name="recovery_newer_snapshot_warning">A newer backup may still exist on another device.</string>
-    <string name="recovery_provider_failure">Provider %1$s: %2$s</string>
+    <string name="recovery_provider_failure">Backup device %1$s could not be checked: %2$s</string>
     <string name="recovery_more_failures">%1$d more device problems</string>
     <string name="action_retry_recovery">Check again</string>
     <string name="recovery_retry_confirm_title">Check your backup devices again?</string>
