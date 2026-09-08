@@ -246,16 +246,27 @@ impl WrappedSecret {
         binding: SecretBinding<'_>,
         plaintext: Zeroizing<Vec<u8>>,
     ) -> Result<Self, CoreError> {
+        Self::wrap_with_rng(kek, binding, plaintext, &mut OsRng)
+    }
+
+    fn wrap_with_rng(
+        kek: KeyEncryptionKey,
+        binding: SecretBinding<'_>,
+        plaintext: Zeroizing<Vec<u8>>,
+        rng: &mut impl RngCore,
+    ) -> Result<Self, CoreError> {
         binding.validate()?;
         if plaintext.is_empty() || plaintext.len() > MAX_PLAINTEXT_LENGTH {
             return Err(CoreError::ResourceLimit("wrapped secret plaintext size"));
         }
 
-        let mut salt = [0_u8; SALT_LENGTH];
-        let mut nonce = [0_u8; NONCE_LENGTH];
-        OsRng.fill_bytes(&mut salt);
-        OsRng.fill_bytes(&mut nonce);
-        Self::wrap_with_material(kek, binding, plaintext, salt, nonce)
+        let mut salt = Zeroizing::new([0_u8; SALT_LENGTH]);
+        let mut nonce = Zeroizing::new([0_u8; NONCE_LENGTH]);
+        rng.try_fill_bytes(salt.as_mut())
+            .map_err(|_| CoreError::EntropyUnavailable)?;
+        rng.try_fill_bytes(nonce.as_mut())
+            .map_err(|_| CoreError::EntropyUnavailable)?;
+        Self::wrap_with_material(kek, binding, plaintext, *salt, *nonce)
     }
 
     /// Authenticates and unwraps a secret for the exact expected binding.
@@ -531,6 +542,50 @@ mod tests {
         assert_eq!(record.purpose().unwrap(), "device-identity");
         assert_eq!(record.context().unwrap(), b"node:4f6b9a");
         assert_eq!(record.key_version().unwrap(), 7);
+    }
+
+    #[test]
+    fn wrapping_entropy_failure_returns_a_redacted_error_at_either_random_step() {
+        struct FailingRng {
+            calls: usize,
+            fail_at: usize,
+        }
+        impl RngCore for FailingRng {
+            fn next_u32(&mut self) -> u32 {
+                panic!("infallible RNG must not be called")
+            }
+            fn next_u64(&mut self) -> u64 {
+                panic!("infallible RNG must not be called")
+            }
+            fn fill_bytes(&mut self, _: &mut [u8]) {
+                panic!("infallible RNG must not be called")
+            }
+            fn try_fill_bytes(&mut self, bytes: &mut [u8]) -> Result<(), rand_core::Error> {
+                self.calls += 1;
+                bytes.fill(37);
+                if self.calls == self.fail_at {
+                    Err(rand_core::Error::from(
+                        std::num::NonZeroU32::new(rand_core::Error::CUSTOM_START).unwrap(),
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+        }
+        for fail_at in [1, 2] {
+            let mut rng = FailingRng { calls: 0, fail_at };
+            let result = WrappedSecret::wrap_with_rng(
+                key(),
+                binding(),
+                Zeroizing::new(b"private secret canary".to_vec()),
+                &mut rng,
+            );
+            assert_eq!(rng.calls, fail_at);
+            let error = result.expect_err("entropy failure");
+            assert!(matches!(error, CoreError::EntropyUnavailable));
+            let rendered = format!("{error:?} {error}");
+            assert!(!rendered.contains("canary"));
+        }
     }
 
     #[test]

@@ -32,7 +32,7 @@ use super::membership_transition::{
     MembershipArchiveQueryError, MembershipTransitionEvidence, WriterLifetime,
     check_survivor_history_compatibility, validate_membership_transition,
 };
-use super::operation::{ClockEntry, decode_signature_checked_operation};
+use super::operation::{ClockEntry, OperationDigest, decode_signature_checked_operation};
 use super::path::SyncPath;
 use super::register::{CausalRegister, OpId, RegisterEntry};
 use super::{VersionVector, VersionVectorOrder};
@@ -264,6 +264,52 @@ struct AcceptedOperation {
     canonical_record: Box<[u8]>,
 }
 
+/// A lookup of exact fully admitted history, with one bounded decoded body.
+/// This view alone makes no claim that the operation remains the current
+/// projected value or that a user-folder mutation has been applied.
+pub struct AcceptedOperationRef<'a> {
+    id: OpId,
+    digest: OperationDigest,
+    body: OperationBody,
+    canonical_record: &'a [u8],
+}
+
+impl AcceptedOperationRef<'_> {
+    /// Returns the admitted folder-global operation identity.
+    #[must_use]
+    pub const fn id(&self) -> OpId {
+        self.id
+    }
+
+    /// Returns the commitment to the exact admitted signed record.
+    #[must_use]
+    pub const fn digest(&self) -> OperationDigest {
+        self.digest
+    }
+
+    /// Borrows a bounded decoded body for immediate apply validation.
+    #[must_use]
+    pub const fn body(&self) -> &OperationBody {
+        &self.body
+    }
+
+    /// Borrows the canonical signed record retained by this accepted history.
+    #[must_use]
+    pub const fn canonical_record(&self) -> &[u8] {
+        self.canonical_record
+    }
+}
+
+impl fmt::Debug for AcceptedOperationRef<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AcceptedOperationRef")
+            .field("id", &self.id)
+            .field("record_length", &self.canonical_record.len())
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct PermitIdentity {
     base: EpochDigest,
@@ -454,6 +500,106 @@ impl FolderEventMachine {
     #[must_use]
     pub fn register(&self, path: &SyncPath) -> Option<&CausalRegister<EntryValue>> {
         self.registers.get(path)
+    }
+
+    /// Reports live accepted values strictly below a component boundary.
+    /// Apply uses this to reject a file that would obstruct retained children.
+    /// The ordered range visits only descendants and does not clone the index.
+    #[must_use]
+    pub fn has_live_descendants(&self, path: &SyncPath) -> bool {
+        use std::ops::Bound;
+        let prefix = format!("{}/", path.as_str());
+        self.registers
+            .range::<str, _>((Bound::Included(prefix.as_str()), Bound::Unbounded))
+            .take_while(|(candidate, _)| candidate.as_str().starts_with(&prefix))
+            .any(|(_, register)| {
+                register
+                    .active()
+                    .any(|entry| entry.value() != &EntryValue::Tombstone)
+            })
+    }
+
+    /// Resolves an exact already-admitted event without admitting new history.
+    ///
+    /// The event envelope and retained signed bytes must agree exactly. A body
+    /// is decoded into this one returned view, rather than duplicating bodies
+    /// throughout the permanent history index. Apply callers additionally check
+    /// the current register/projection and use this through a usable durable log.
+    pub fn accepted_operation(
+        &self,
+        id: OpId,
+        exact_event: &[u8],
+    ) -> Result<AcceptedOperationRef<'_>, FolderEventError> {
+        let retained = self
+            .operations
+            .get(&id)
+            .ok_or(FolderEventError::MissingHistory)?;
+        let envelope =
+            EventEnvelope::parse(exact_event).map_err(|_| FolderEventError::InvalidEvent)?;
+        if envelope.kind() != EventKind::Operation
+            || envelope.record() != retained.canonical_record.as_ref()
+        {
+            return Err(FolderEventError::InvalidEvent);
+        }
+        self.admitted_view(id, retained)
+    }
+
+    /// Resolves a protected apply-journal reference against fully admitted history.
+    ///
+    /// A matching identity and signed-record digest select the exact retained
+    /// canonical record. This never admits supplied or signature-only history;
+    /// apply replay must also compare the returned body to every journaled field.
+    pub fn accepted_operation_by_digest(
+        &self,
+        id: OpId,
+        expected_digest: [u8; 32],
+    ) -> Result<AcceptedOperationRef<'_>, FolderEventError> {
+        let retained = self
+            .operations
+            .get(&id)
+            .ok_or(FolderEventError::MissingHistory)?;
+        if retained.header.digest() != expected_digest {
+            return Err(FolderEventError::InvalidEvent);
+        }
+        self.admitted_view(id, retained)
+    }
+
+    fn admitted_view<'a>(
+        &'a self,
+        id: OpId,
+        retained: &'a AcceptedOperation,
+    ) -> Result<AcceptedOperationRef<'a>, FolderEventError> {
+        let envelope =
+            EventEnvelope::from_signed_record(EventKind::Operation, &retained.canonical_record)
+                .map_err(|_| FolderEventError::InvalidEvent)?;
+        let writer = envelope
+            .untrusted_operation_writer_hint()
+            .map_err(|_| FolderEventError::InvalidEvent)?;
+        let timeline = self
+            .writer_timelines
+            .get(&writer)
+            .ok_or(FolderEventError::InvalidEvent)?;
+        let checked = decode_signature_checked_operation(
+            envelope.record(),
+            self.config.folder_id,
+            writer,
+            &timeline.writer_key,
+        )
+        .map_err(|_| FolderEventError::InvalidEvent)?;
+        let header = checked
+            .to_admission_header()
+            .map_err(|_| FolderEventError::InvalidEvent)?;
+        if header.id() != id || header.digest() != retained.header.digest() {
+            return Err(FolderEventError::InvalidEvent);
+        }
+        let body =
+            OperationBody::decode(checked.body()).map_err(|_| FolderEventError::InvalidEvent)?;
+        Ok(AcceptedOperationRef {
+            id,
+            digest: checked.digest(),
+            body,
+            canonical_record: &retained.canonical_record,
+        })
     }
 
     /// Derives bounded signing inputs from current accepted state.
@@ -1834,6 +1980,144 @@ mod tests {
 
     fn directory() -> EntryValue {
         EntryValue::Directory
+    }
+
+    #[test]
+    fn descendant_checks_follow_component_boundaries_and_active_live_values() {
+        let fixture = Fixture::new();
+        let mut machine = fixture.machine();
+        append(&mut machine, &fixture.genesis_event());
+        let parent = SyncPath::from_wire("parent").unwrap();
+        let sibling = fixture.operation(
+            1,
+            None,
+            &[ClockEntry::new(fixture.authority_writer, 1).unwrap()],
+            "parent-sibling",
+            directory(),
+        );
+        append(&mut machine, &sibling);
+        assert!(!machine.has_live_descendants(&parent));
+        let sibling_id = OpId::new(fixture.authority_writer.into_vector_actor(), 1).unwrap();
+        let predecessor = machine
+            .accepted_operation(sibling_id, &sibling)
+            .unwrap()
+            .digest();
+        let child = fixture.operation(
+            2,
+            Some(predecessor),
+            &[ClockEntry::new(fixture.authority_writer, 2).unwrap()],
+            "parent/child",
+            directory(),
+        );
+        append(&mut machine, &child);
+        assert!(machine.has_live_descendants(&parent));
+        assert!(!machine.has_live_descendants(&SyncPath::from_wire("par").unwrap()));
+        assert!(!machine.has_live_descendants(&SyncPath::from_wire("parent/child").unwrap()));
+        let child_id = OpId::new(fixture.authority_writer.into_vector_actor(), 2).unwrap();
+        let predecessor = machine
+            .accepted_operation(child_id, &child)
+            .unwrap()
+            .digest();
+        let deleted = fixture.operation(
+            3,
+            Some(predecessor),
+            &[ClockEntry::new(fixture.authority_writer, 3).unwrap()],
+            "parent/child",
+            EntryValue::Tombstone,
+        );
+        append(&mut machine, &deleted);
+        assert!(!machine.has_live_descendants(&parent));
+    }
+
+    #[test]
+    fn accepted_operation_view_requires_exact_admitted_history_without_mutation() {
+        let fixture = Fixture::new();
+        let mut machine = fixture.machine();
+        append(&mut machine, &fixture.genesis_event());
+        let clock = [ClockEntry::new(fixture.authority_writer, 1).unwrap()];
+        let event = fixture.operation(1, None, &clock, "private-apply-canary", directory());
+        let id = OpId::new(fixture.authority_writer.into_vector_actor(), 1).unwrap();
+        assert!(matches!(
+            machine.accepted_operation(id, &event),
+            Err(FolderEventError::MissingHistory)
+        ));
+        append(&mut machine, &event);
+        let revision = machine.revision;
+        let charge = machine.index_bytes;
+        let view = machine
+            .accepted_operation(id, &event)
+            .expect("accepted view");
+        assert_eq!(view.id(), id);
+        assert_eq!(view.body().path().as_str(), "private-apply-canary");
+        assert_eq!(view.body().value(), directory());
+        assert_eq!(view.canonical_record(), &event[1..]);
+        assert_eq!(
+            view.digest().to_bytes(),
+            *blake3::hash(&event[1..]).as_bytes()
+        );
+        assert!(!format!("{view:?}").contains("private-apply-canary"));
+        let predecessor = view.digest();
+        drop(view);
+        let by_digest = machine
+            .accepted_operation_by_digest(id, predecessor.to_bytes())
+            .expect("protected journal reference");
+        assert_eq!(by_digest.canonical_record(), &event[1..]);
+        assert_eq!(by_digest.body().path().as_str(), "private-apply-canary");
+        assert!(matches!(
+            machine.accepted_operation_by_digest(id, [0; 32]),
+            Err(FolderEventError::InvalidEvent)
+        ));
+        assert!(matches!(
+            machine.accepted_operation_by_digest(
+                OpId::new(fixture.authority_writer.into_vector_actor(), 9).unwrap(),
+                predecessor.to_bytes()
+            ),
+            Err(FolderEventError::MissingHistory)
+        ));
+
+        let other_body = fixture.operation(1, None, &clock, "other", directory());
+        let mut tampered = event.clone();
+        *tampered.last_mut().unwrap() ^= 1;
+        for wrong in [&other_body, &tampered, &fixture.genesis_event()] {
+            assert!(matches!(
+                machine.accepted_operation(id, wrong),
+                Err(FolderEventError::InvalidEvent)
+            ));
+        }
+        for end in 0..event.len() {
+            assert!(machine.accepted_operation(id, &event[..end]).is_err());
+        }
+        assert_eq!(machine.revision, revision);
+        assert_eq!(machine.index_bytes, charge);
+
+        // Accepted history remains readable after another value supersedes it;
+        // the applier separately enforces the current register/projection.
+        let second = fixture.operation(
+            2,
+            Some(predecessor),
+            &[ClockEntry::new(fixture.authority_writer, 2).unwrap()],
+            "private-apply-canary",
+            EntryValue::Tombstone,
+        );
+        append(&mut machine, &second);
+        assert_eq!(
+            machine
+                .accepted_operation(id, &event)
+                .unwrap()
+                .body()
+                .value(),
+            directory()
+        );
+        assert_eq!(
+            machine
+                .register(&SyncPath::from_wire("private-apply-canary").unwrap())
+                .unwrap()
+                .active()
+                .next()
+                .unwrap()
+                .value(),
+            &EntryValue::Tombstone
+        );
     }
 
     #[test]

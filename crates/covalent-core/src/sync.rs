@@ -32,6 +32,11 @@ pub mod freeze;
 pub mod frontier;
 /// Folder and per-install writer identifier types.
 pub mod ids;
+/// Protected immutable local writer/key installation for one sync folder.
+#[cfg(unix)]
+pub mod installation;
+#[cfg(all(test, unix))]
+mod installation_handoff_tests;
 /// Bounded authenticated frames for future private synchronization logs.
 pub mod log_frame;
 /// Replay-derived membership and operation admission with bounded indexes.

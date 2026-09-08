@@ -36,13 +36,13 @@ Close every known release-blocking finding; do not remove a gate to raise a scor
 
 | Area | Required evidence | Current state |
 | --- | --- | --- |
-| Product scope | Explicit backup/sync semantics and a matching acceptance scenario | Automatic two-way sync is required. Signed records, causal/conflict checks, private storage, read-only Unix inventories, bootstrap-backed membership replay and content-gated durable publication are implemented. Write-loss reconciliation, installation lifecycle, peer exchange, safe apply, native setup and multi-device acceptance remain outstanding. |
-| Core correctness | Unit, property, adversarial, migration, concurrency, corruption, interrupted-job and source-loss tests; strict lint | At `5bb37ec`, hosted Rust/contracts passed 512 tests across 22 suites with zero failed/ignored, strict workspace Clippy and 89 web tests. All release-candidate software and CodeQL gates passed on that checkpoint. Newer work and final artifacts still require their own checks. |
+| Product scope | Explicit backup/sync semantics and a matching acceptance scenario | Automatic two-way sync is required. Signed records, causal/conflict checks, protected installation keys, private storage, read-only Unix inventories, bootstrap-backed membership replay and content-gated durable publication are implemented. Write-loss reconciliation, the full folder coordinator, peer exchange, safe apply, native setup and multi-device acceptance remain outstanding. |
+| Core correctness | Unit, property, adversarial, migration, concurrency, corruption, interrupted-job and source-loss tests; strict lint | At `ec05732`, hosted Rust/contracts passed 565 tests across 22 suites with zero failed/ignored, strict workspace Clippy and 89 web tests. All release-candidate software and CodeQL gates passed on that checkpoint. Newer work and final artifacts still require their own checks. |
 | Owner-device loss | A user can export a protected recovery kit, replace a lost owner device, discover its authenticated catalogs, see partial availability, and restore | API, CLI/runtime, web and native recovery flows pass. At source content matching `1839796`, the real Mac–Atmos Docker drill passed protected export, deletion of the entire original owner state, automatic catalog import and exact provider-only restore. Native UI also passes. Final artifacts and large-catalog memory evidence remain required. |
 | Beginner workflow | Install → connect → choose folder → protect → verify → restore through real UI; clear errors and recovery; no manual IDs in ordinary flows | Real browser unlock, automatic snapshot/name defaults, named backup selection, preview invalidation, restore and Verify passed with disposable files. Preview now explains individual file actions and renamed conflict destinations instead of raw JSON. Full cross-device onboarding pending. |
 | macOS | Shared tests, live helper integration, native UI/accessibility, verified arm64 app package, install and upgrade | At `1839796`, the app bundle, all 105 shared tests, live helper integration, and all four native UI tests passed. The native gate requires exactly four passed, zero failed/skipped, including first-launch setup/recovery cancellation and the system accessibility audit. Final artifact install/upgrade remains required. Local Xcode license and CLT Testing limitations remain. |
 | Android | JVM, instrumented SAF and process-death tests, TalkBack/large text, install and upgrade of stable personal artifact | At `e5a622c`, arm64 JNI is 8,384,224 bytes and x86_64 is 9,918,032 bytes; both pass the unchanged budget. At `1839796`, Android foundation and API 37 device gates passed: 103 JVM tests and all 65 named instrumentation tests, with no skipped device tests. Recovery plural resources pass lint. Final-revision and personal-artifact validation remain required. |
-| Docker | Both CPU architectures; TLS and key-protection contracts; rootless/read-only runtime; bounded storage/memory; three-node recovery | Both image architectures and container runtime/e2e passed on checkpoint `5bb37ec`; repeat on final revision. |
+| Docker | Both CPU architectures; TLS and key-protection contracts; rootless/read-only runtime; bounded storage/memory; three-node recovery | Both image architectures and container runtime/e2e passed on checkpoint `ec05732`; repeat on final revision. |
 | Atmos network drill | Mac ↔ Ubuntu pairing, explicitly selected replica, interrupted/restarted operation, source-loss restore, exact hashes, cleanup | Passed with a 64 MiB incompressible payload: same-job pause/resume, provider container restart preserving identity, local source/cache loss, provider-only restore and exact content checks. Dedicated resources removed; pre-existing container/image IDs survived. See [drill evidence](atmos-drill-2026-09-07.md). |
 | Atlas/Unraid | Docker deployment, Unraid template/mount contracts, exact-image install/upgrade and backup/restore; on-host Atlas check deferred by the user | Atlas is offline. The user accepted Docker validation in its place on 2026-09-07. Preflight fixtures, both Docker architectures and the full owner-loss Atmos Docker drill pass. Final-image install/upgrade remains required. No physical Atlas install is claimed. |
 | Security and supply chain | Dependency audits, CodeQL, immutable image scans/signatures/SBOMs, safe secret storage, exact release commit provenance | cargo-audit (289 dependencies, warnings denied) and cargo-deny advisories/bans/licenses/sources passed. CodeQL Java/Kotlin, Swift and the repository-wide zero-open-alert policy passed at `1839796`. Final artifact evidence is pending; current main signature is unknown_key and account has no registered signing key. |
@@ -232,6 +232,29 @@ packages, credentials, private server inventories, or raw diagnostic bundles.
   membership-machine tests, 13 content-encryption tests, 16 content-store tests,
   and seven durable-publication tests. Hosted native/container/security checks
   remain required for the new checkpoint and again for the final release.
+- Checkpoint `ec057326a2edca341dda1673bde326987af2ccdd` subsequently passed
+  [all release-candidate software gates](https://github.com/thekozugroup/Covalent/actions/runs/34194249214)
+  and [CodeQL with the zero-open-alert policy](https://github.com/thekozugroup/Covalent/actions/runs/34194249234).
+  The hosted full-workspace run passed 565 tests across 22 suites, zero failed
+  or ignored; three nested subprocess test summaries are excluded from this
+  total. All 89 web tests and all 65 expected Android instrumentation tests
+  passed. Both Docker architectures and macOS integration/UI and bundle gates
+  passed. These checks do not constitute final artifact or network-sync proof.
+- The next installation slice adds immutable protected local writer/key records,
+  distinct installation/generation domains, bounded canonical authentication,
+  no-clobber creation and durable reopen. A consuming core handoff keeps the
+  outer lock while creating and reopening actual event/content stores; it proves
+  stable keys, retained content and counter continuity across two publications.
+  Secret-wrapping entropy failures now return a fixed retryable native error.
+  Accepted-operation views bind application to admitted history; an ordered
+  descendant check exposes live child entries before ancestor-file creation.
+- Local validation of this installation slice passes 578 all-feature workspace
+  tests across 22 suites, zero failed or ignored, strict all-target/all-feature
+  workspace Clippy, formatting and foundation checks. This includes eight
+  installation tests and the real child-store handoff, entropy, native-error
+  mapping, admitted-view and descendant regressions. Authority configuration,
+  the folder coordinator and safe user-folder mutation remain outstanding;
+  hosted checks must still run on this new checkpoint and the final release.
 
 ## Work order
 

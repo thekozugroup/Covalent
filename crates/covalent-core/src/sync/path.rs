@@ -157,6 +157,14 @@ impl AsRef<str> for SyncPath {
     }
 }
 
+// SyncPath and RelativePath both order their one canonical string field.
+// Borrowing that same string preserves ordering for bounded BTree prefix scans.
+impl std::borrow::Borrow<str> for SyncPath {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+
 /// Wire deserialization validates the strict constructor and reuses an owned
 /// decoded string. The enclosing transport must still bound the complete wire
 /// frame before asking Serde to decode it.

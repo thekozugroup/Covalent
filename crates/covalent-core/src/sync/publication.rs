@@ -17,7 +17,7 @@ use super::content_store::VerifiedContentReceipt;
 use super::event::{EncodedEventEnvelope, EventEnvelope, EventKind};
 use super::event_log::{DurableEventLog, EventAppendOutcome, EventLogError};
 use super::ids::WriterId;
-use super::log_frame::LogFileKind;
+use super::log_frame::{LogBinding, LogFileKind};
 use super::machine::FolderEventMachine;
 use super::operation::encode_signed_operation;
 use super::register::OpId;
@@ -123,6 +123,13 @@ impl DurableFolderLog {
     pub fn machine(&self) -> Result<&FolderEventMachine, PublicationError> {
         self.ensure_usable()?;
         Ok(self.log.machine()?)
+    }
+
+    /// Returns the namespace of this usable, replayed durable folder log.
+    /// Coordinators use all three IDs to match content and apply generations.
+    pub fn binding(&self) -> Result<LogBinding, PublicationError> {
+        self.ensure_usable()?;
+        Ok(self.log.binding()?)
     }
 
     /// Appends a received event after the concrete machine validates it.

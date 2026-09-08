@@ -224,8 +224,24 @@ quotas. This first store never evicts content or cleans staging implicitly;
 explicit reclaim of proven unreferenced staging remains future work. Quotas
 describe logical encrypted bytes and objects, not filesystem overhead or RSS.
 
+Each local sync installation now creates an immutable protected record with
+independent installation/generation identifiers, a fresh writer signing key,
+separate event/apply log keys, and a content-generation secret. Creation requires
+a fresh private root and never replaces an incumbent. Reopen authenticates the
+bounded canonical record and syncs it before returning keys. Entropy failures,
+including secret wrapping, return fixed errors rather than panicking. A real
+handoff test retains the outer lock while opening child stores and proves that
+content and folder-global counters survive repeated close/reopen cycles.
+
+File application can obtain a bounded operation view only from fully admitted
+history, bound to exact event bytes or to an authenticated journal's exact
+operation ID/digest. Historical acceptance alone does not authorize applying
+an obsolete projection; the applier must still check current registers and all
+desired journal fields. A bounded ordered lookup detects live descendants so
+creating an ancestor file cannot hide child entries absent from disk.
+
 Network folder sync remains unshipped. Write-loss/freeze transitions and their
-history reconciliation still fail closed. Private installation/key lifecycle,
-peer exchange, safe user-folder apply, native setup, SAF scanning/apply and the
-multi-device acceptance gates above remain outstanding. Existing Backup and
-Restore behavior remains independently tested.
+history reconciliation still fail closed. Authority configuration and the full
+folder coordinator, peer exchange, safe user-folder apply, native setup, SAF
+scanning/apply and the multi-device acceptance gates above remain outstanding.
+Existing Backup and Restore behavior remains independently tested.

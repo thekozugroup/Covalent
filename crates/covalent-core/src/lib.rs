@@ -212,6 +212,9 @@ pub enum CoreError {
     /// Key material had an invalid encoded length.
     #[error("invalid cryptographic key material")]
     InvalidKeyMaterial,
+    /// The operating system could not provide cryptographic randomness.
+    #[error("secure randomness is unavailable")]
+    EntropyUnavailable,
     /// A record used an unsupported algorithm or version.
     #[error("unsupported cryptographic suite: {0}")]
     UnsupportedCipherSuite(String),
