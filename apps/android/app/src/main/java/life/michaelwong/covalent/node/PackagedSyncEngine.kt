@@ -47,6 +47,10 @@ internal object PackagedSyncEngine {
     private const val GUARDIAN_MANIFEST = "engine-guardian-sha256.txt"
     private const val MAX_MANIFEST_BYTES = 1024
     private const val MAX_HELPER_BYTES = 64L * 1024L * 1024L
+    // The Java O_CLOEXEC field arrived in API 27; the flag already exists in
+    // Android 8's arm64/x86_64 Linux ABI (asm-generic/fcntl.h: 02000000).
+    // Pass it atomically to open on API 26 too, avoiding an open/fcntl race.
+    private const val OPEN_CLOSE_ON_EXEC = 0x80000
     // Rust appends `/cv-engine-XXXXXX/api.sock` (26 bytes) below the Unix
     // socket's 100-byte portable path ceiling.
     private const val MAX_RUNTIME_PATH_BYTES = 74
@@ -148,11 +152,12 @@ internal object PackagedSyncEngine {
         val digest = MessageDigest.getInstance("SHA-256")
         val descriptor = Os.open(
             helper.path,
-            OsConstants.O_RDONLY or OsConstants.O_CLOEXEC or
+            OsConstants.O_RDONLY or OPEN_CLOSE_ON_EXEC or
                 OsConstants.O_NOFOLLOW or OsConstants.O_NONBLOCK,
             0,
         )
         FileInputStream(descriptor).use { input ->
+            check(Os.fcntlInt(input.fd, OsConstants.F_GETFD, 0) and OsConstants.FD_CLOEXEC != 0)
             val opened = Os.fstat(input.fd)
             check(
                 opened.st_dev == before.st_dev &&

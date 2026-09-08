@@ -15,7 +15,8 @@ the controller and the process reaper through actual worker exit.
 
 Each session creates a fresh mode-0700 temporary directory, mode-0600 engine
 configuration/certificate/key files and a random private API credential. The
-engine uses an owner-only Unix socket. The client rejects symlinked endpoint
+engine uses an owner-only Unix socket on Linux/Android and pinned numeric
+loopback TLS on macOS as described below. The Unix client rejects symlinked endpoint
 ancestors, checks directory/socket identity before and after connect, verifies
 the peer UID and sends the key only in a sensitive request header. Exchanges
 have a five-second whole-request deadline; responses are bounded at 2 MiB,
@@ -176,7 +177,21 @@ The exact-key test checks the authenticated header. The production two-node
 proof passed again using this transport, including bidirectional convergence,
 pause/resume, cold restart, revocation and cleanup; result SHA-256
 `a08b8c930f964f711cb232cea54efeba75bc48339a4eb93caed845d62d5be790`.
-Actual execution inside the signed app sandbox is still a separate gate.
+Actual execution inside the signed app sandbox now passes at production commit
+`6a8be5a8b84b66367a1c03041990606ea91a05cb`. LaunchServices started an ad-hoc
+signed app whose helpers inherited the production sandbox entitlements. Two
+real pinned-engine sessions verified version, device identity and effective
+numeric-loopback TLS configuration. A real folder reported no errors; fresh
+mode-0600 HTTPS certificate/key material differed from the durable sync
+identity. Both sessions reaped, the same durable identity reopened, and final
+runtime/process counts were zero. The canonical container runtime parent was
+108 bytes. Result SHA-256:
+`14610477a838d3ed804c4ad96d4d38f9a88b2c6fc338eb36ebacab08a5a27abb`.
+The signed archive passed deep strict code-sign verification before and after
+extraction; archive SHA-256:
+`aedd978fc9fea5fab324c23ac066dd26319e25aac51199cf79f1cba0228176af`.
+This fixture used container-root data; cold user-selected security-scoped
+bookmarks and an end-to-end native setup flow remain separate gates.
 
 ## Native and container integration checkpoint
 
@@ -202,6 +217,51 @@ now covers the engine build script and guardian source, with mutation tests.
 Both actual architecture builds, image vulnerability scans, rootless runtime
 and the unchanged 96 MiB image budget still need hosted evidence. Compiled
 third-party notice aggregation remains a release gate.
+
+Checkpoint `6a8be5a8` passed hosted macOS app bundling, iOS Tier 2, dependency
+delta and both CodeQL analyses. Its aggregate software gate failed: Linux Clippy
+flagged casts that are needed on macOS, Swift exposed one remaining private
+test helper, Android API 26 could not reference the API-27 Java `O_CLOEXEC`
+field, and both Docker packages stopped at the guardian-size check. The next
+snapshot corrects these findings; it requires a fresh hosted run.
+
+An isolated, resource-limited arm64 Docker check on Atmos measured the pinned
+builder's static-PIE guardian at 242,888 bytes before stripping and 67,128 bytes
+after removing debug/symbol tables. The package now strips at link time and
+retains its existing 128 KiB ceiling, 64 KiB ELF load alignment, RELRO,
+immediate binding and non-executable stack. The final binary had no loader or
+shared-library dependency and executed its missing-argument refusal (exit
+64). Its SHA-256 was
+`e03a0e48a8b355d0b7fc5fde9c0e08e64f32055a2c909d1b77fbbee10dba353f`.
+The owned container, newly pulled image and temporary folder were removed;
+all 21 pre-existing containers and 24 pre-existing images were preserved.
+This is guardian evidence, not a complete container acceptance result.
+
+The next snapshot passes all 243 node library tests, including three new
+provider-disable checks, and strict workspace Clippy. The combined macOS
+shared/app Swift 6 source typecheck passes locally; hosted Swift Testing and
+Android lint/device acceptance still require the next run.
+
+Android's API-26 path passes the existing arm64/x86_64 Linux `O_CLOEXEC` value
+atomically to `open`, then checks `F_GETFD` before reading the executable.
+The constant is documented by the
+[Android 8 UAPI header](https://raw.githubusercontent.com/aosp-mirror/platform_bionic/android-8.0.0_r1/libc/kernel/uapi/asm-generic/fcntl.h).
+No non-atomic open/flag-setting fallback is used.
+
+The native runtime now has a separate local backup-provider admission flag.
+When disabled, it closes storage connections before any request stream and
+omits the chunk-storage discovery capability, while retaining pairing,
+folder control and the owner's local backup/recovery API. Native hosts must
+stop the previous runtime before changing this flag. An actual trusted QUIC
+storage refusal followed by a successful signed pairing probe verifies this
+boundary without deleting provider data.
+
+The bounded notice collector and its six regression tests are integrated.
+Its actual Android target reproduction collected 60 modules, 95 candidate
+module texts and 109 total payload files (321,396 bytes); the manifest digest
+is `194ab907dccf3da2bb94e70d942887b14571ebb4763523d851098b3012d579ea`.
+The [target inventory review](../security/syncthing-target-license-inventory.md)
+retains the Linux-specific graph, NDK runtime and shipped-notice gaps.
 
 ## Remaining integration and release work
 

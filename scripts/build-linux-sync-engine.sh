@@ -128,16 +128,23 @@ package_engine() {
   install -m 0555 "$worker_root/covalent-syncthing" "$worker"
   cc -std=c11 -Wall -Wextra -Werror -Os \
     -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE -static-pie \
-    -Wl,-z,relro,-z,now,-z,noexecstack \
+    -Wl,-s,-z,relro,-z,now,-z,noexecstack \
     "$guardian_source" -o "$guardian"
   chmod 0555 "$guardian"
 
   worker_size=$(size_of "$worker")
   guardian_size=$(size_of "$guardian")
+  printf 'Linux engine package bytes: worker=%s guardian=%s\n' "$worker_size" "$guardian_size"
   test "$worker_size" -ge "$MIN_WORKER_BYTES" && \
-    test "$worker_size" -le "$MAX_WORKER_BYTES"
+    test "$worker_size" -le "$MAX_WORKER_BYTES" || {
+    echo "Linux worker exceeds its reviewed package size range" >&2
+    exit 1
+  }
   test "$guardian_size" -ge "$MIN_GUARDIAN_BYTES" && \
-    test "$guardian_size" -le "$MAX_GUARDIAN_BYTES"
+    test "$guardian_size" -le "$MAX_GUARDIAN_BYTES" || {
+    echo "Linux guardian exceeds its reviewed package size range" >&2
+    exit 1
+  }
   readelf=$(cc -print-prog-name=readelf)
   command -v "$readelf" >/dev/null 2>&1 || {
     echo "The pinned Linux builder does not provide readelf" >&2
@@ -157,10 +164,12 @@ package_engine() {
     fi
     chmod 0444 "$elf_header" "$elf_dynamic" "$elf_program"
   done
-  grep -Eq "Machine:[[:space:]]+$expected_machine$" \
-    "$output_root/share/covalent-syncthing.elf-header"
-  grep -Eq "Machine:[[:space:]]+$expected_machine$" \
-    "$output_root/share/covalent-engine-guardian.elf-header"
+  for executable in covalent-syncthing covalent-engine-guardian; do
+    grep -Eq "Machine:[[:space:]]+$expected_machine$" "$output_root/share/$executable.elf-header" || {
+      echo "Linux engine package ELF machine did not match the requested target" >&2
+      exit 1
+    }
+  done
 
   worker_sha=$(sha256 "$worker")
   guardian_sha=$(sha256 "$guardian")

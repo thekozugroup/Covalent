@@ -476,6 +476,7 @@ pub struct QuicNode {
     endpoint: Endpoint,
     runtime: Arc<OwnedQuinnRuntime>,
     engine: Arc<Engine>,
+    local_provider_enabled: bool,
     certificate_fingerprint: String,
     replay_window: Arc<Mutex<ReplayWindow>>,
     rate_limiter: Arc<Mutex<PeerRateLimiter>>,
@@ -609,6 +610,7 @@ impl QuicNode {
             endpoint,
             runtime,
             engine,
+            local_provider_enabled: true,
             certificate_fingerprint: tls_identity.certificate_fingerprint(),
             replay_window: Arc::new(Mutex::new(ReplayWindow::default())),
             rate_limiter: Arc::new(Mutex::new(PeerRateLimiter::default())),
@@ -623,6 +625,14 @@ impl QuicNode {
             #[cfg(unix)]
             folder_admission: Arc::new(crate::sync_control::FolderControlAdmission::default()),
         })
+    }
+
+    /// Keeps pairing and folder control available without accepting any remote
+    /// backup storage stream, including capacity advertisements and reads.
+    #[must_use]
+    pub fn with_local_provider_enabled(mut self, enabled: bool) -> Self {
+        self.local_provider_enabled = enabled;
+        self
     }
 
     /// Serves the pairing-only ALPN on this same endpoint, so the advertised and
@@ -688,6 +698,7 @@ impl QuicNode {
                 continue;
             };
             let engine = Arc::clone(&self.engine);
+            let local_provider_enabled = self.local_provider_enabled;
             let fingerprint = self.certificate_fingerprint.clone();
             let replay_window = Arc::clone(&self.replay_window);
             let rate_limiter = Arc::clone(&self.rate_limiter);
@@ -729,6 +740,10 @@ impl QuicNode {
                     } else {
                         connection.close(VarInt::from_u32(1), b"folder sync unavailable");
                     }
+                    return;
+                }
+                if !local_provider_enabled {
+                    connection.close(VarInt::from_u32(1), b"backup storage disabled");
                     return;
                 }
                 serve_storage_connection(
@@ -3917,6 +3932,89 @@ mod tests {
             Ok(_) => 0,
             Err(error) => panic!("inspect test directory: {error}"),
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn disabled_provider_refuses_storage_but_serves_pairing() {
+        use crate::network_pairing::{
+            NetworkPairingManager, NetworkPairingWireOperation, NetworkPairingWireResponse,
+        };
+        use crate::pairing_transport::PairingConnection;
+
+        let owner_data = tempdir().unwrap();
+        let provider_data = tempdir().unwrap();
+        let owner = Arc::new(Engine::open(test_options(owner_data.path())).unwrap());
+        let provider_engine = Arc::new(Engine::open(test_options(provider_data.path())).unwrap());
+        trust_all(&owner, &provider_engine);
+        trust_all(&provider_engine, &owner);
+        let owner_pairing =
+            NetworkPairingManager::open(Arc::clone(&owner), owner_data.path().join("pairing.json"))
+                .unwrap();
+        let provider_pairing = Arc::new(
+            NetworkPairingManager::open(
+                Arc::clone(&provider_engine),
+                provider_data.path().join("pairing.json"),
+            )
+            .unwrap(),
+        );
+        let tls = test_tls(provider_data.path(), "tls");
+        let node = QuicNode::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            Arc::clone(&provider_engine),
+            &tls,
+        )
+        .unwrap()
+        .with_local_provider_enabled(false)
+        .with_pairing_service(Arc::new(NetworkPairingService::new(
+            Arc::clone(&provider_engine),
+            provider_pairing,
+            None,
+        )));
+        let address = node.local_addr().unwrap();
+        let shutdown = node.shutdown_handle();
+        let task = tokio::spawn(node.run());
+        let client = QuicProvider::new(
+            address,
+            provider_engine.public_identity(),
+            tls.certificate_der().to_vec(),
+            Arc::clone(&owner),
+        )
+        .unwrap();
+        let store_files = regular_files_below(provider_engine.store().root());
+        let probe = tokio::task::spawn_blocking(move || client.probe_capability());
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), probe)
+                .await
+                .expect("disabled admission is prompt")
+                .unwrap()
+                .is_err()
+        );
+        assert_eq!(
+            regular_files_below(provider_engine.store().root()),
+            store_files
+        );
+        let pairing = PairingConnection::connect(address).await.unwrap();
+        let request = owner_pairing
+            .sign_wire_request(
+                NetworkPairingWireOperation::Probe,
+                current_unix_ms().unwrap(),
+            )
+            .unwrap();
+        assert!(matches!(
+            pairing.request(&request).await.unwrap(),
+            NetworkPairingWireResponse::Probe { .. }
+        ));
+        drop(pairing);
+        shutdown.close();
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), shutdown.wait_for_release())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(std::net::UdpSocket::bind(address).is_ok());
     }
 
     #[tokio::test(flavor = "multi_thread")]

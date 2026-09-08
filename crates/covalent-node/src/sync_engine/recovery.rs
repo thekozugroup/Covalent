@@ -201,6 +201,8 @@ struct ObjectIdentity {
 }
 
 impl ObjectIdentity {
+    // libc uses different device/link-count integer widths on macOS and Linux.
+    #[allow(clippy::unnecessary_cast)]
     fn from_stat(stat: rustix::fs::Stat) -> Self {
         Self {
             device: stat.st_dev as u64,

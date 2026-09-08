@@ -817,15 +817,21 @@ public final class CovalentAppModel: ObservableObject {
       guard grant.purpose == .folderSync else {
         throw SelectedDirectoryError.notAFileURL
       }
-      let selectedRoot = try grant.resolve().url.standardizedFileURL.resolvingSymlinksInPath()
-      let hasEquivalentRoot = directoryGrants.contains { existing in
-        guard existing.purpose == .folderSync,
-          let existingRoot = try? existing.resolve().url.standardizedFileURL.resolvingSymlinksInPath()
-        else {
-          return false
-        }
-        return existingRoot == selectedRoot
+      let selectedRoot = try await grant.resolve().withCoordinatedRead { url in
+        url.standardizedFileURL.resolvingSymlinksInPath()
       }
+      var hasEquivalentRoot = false
+      for existing in directoryGrants where existing.purpose == .folderSync {
+        try Task.checkCancellation()
+        guard let existingRoot = try? await existing.resolve().withCoordinatedRead({ url in
+          url.standardizedFileURL.resolvingSymlinksInPath()
+        }) else { continue }
+        if existingRoot == selectedRoot {
+          hasEquivalentRoot = true
+          break
+        }
+      }
+      try Task.checkCancellation()
       if hasEquivalentRoot {
         return false
       }
@@ -843,8 +849,10 @@ public final class CovalentAppModel: ObservableObject {
       guard let localNodeBootstrapper else { return }
       let replacement = try await localNodeBootstrapper.restartForFolderSyncDirectoryGrants(
         directoryGrants)
-      configuration = replacement
-      client = NodeClient(configuration: replacement)
+      if replacement != configuration {
+        configuration = replacement
+        client = NodeClient(configuration: replacement)
+      }
     }
 
     public func addDirectoryGrant(url: URL, purpose: DirectoryAccessPurpose) async -> SelectedDirectoryGrant? {

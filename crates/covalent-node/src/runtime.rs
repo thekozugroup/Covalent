@@ -185,6 +185,10 @@ pub struct NodeRuntimeConfig {
     pub archive_limits: ArchiveLimits,
     /// Provider-side quota and lease policy.
     pub provider_quota_policy: ProviderQuotaPolicy,
+    /// Admit remote backup storage requests. Native hosts may keep folder sync
+    /// and owner backup/recovery active while their provider switch is off.
+    /// Changing this value requires stopping the old runtime first.
+    pub local_provider_enabled: bool,
     /// Required platform or explicitly provisioned KEK source.
     pub key_protector: Option<Arc<dyn KeyProtector>>,
     /// Optional owner-loss bootstrap for an empty state directory.
@@ -237,6 +241,7 @@ impl NodeRuntimeConfig {
             platform_tier: PlatformTier::Tier1,
             archive_limits: ArchiveLimits::default(),
             provider_quota_policy: ProviderQuotaPolicy::default(),
+            local_provider_enabled: true,
             key_protector: None,
             recovery: None,
             api_token: LocalApiTokenSource::Persisted,
@@ -315,6 +320,7 @@ impl NodeRuntime {
             platform_tier,
             archive_limits,
             provider_quota_policy,
+            local_provider_enabled,
             key_protector,
             recovery,
             api_token,
@@ -453,15 +459,20 @@ impl NodeRuntime {
             .context("load persisted discovery preference")?
             .lan_discovery_enabled;
         let quic_node = QuicNode::bind(requested_peer_address, Arc::clone(&engine), &tls_identity)
-            .context("bind QUIC peer endpoint")?;
+            .context("bind QUIC peer endpoint")?
+            .with_local_provider_enabled(local_provider_enabled);
         let peer_address = quic_node
             .local_addr()
             .context("inspect QUIC peer endpoint")?;
         let static_advertised_peer_address =
             resolve_advertised_peer_address(peer_address, advertised_peer_address)?;
         let discovery = Arc::new(
-            DiscoveryController::new(discovery_enabled, peer_address.port())
-                .context("start LAN discovery controller")?,
+            DiscoveryController::new_with_provider(
+                discovery_enabled,
+                peer_address.port(),
+                local_provider_enabled,
+            )
+            .context("start LAN discovery controller")?,
         );
         let mut state = AppState::new(Arc::clone(&engine), platform_tier, api_token.to_string())
             .context("create local API state")?
@@ -891,6 +902,29 @@ mod tests {
         NodeRuntime::start(test_configuration(directory))
             .await
             .expect("start runtime")
+    }
+
+    #[tokio::test]
+    async fn disabled_provider_keeps_owner_api_and_folder_status_available() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut configuration = test_configuration(&directory);
+        configuration.local_provider_enabled = false;
+        let runtime = NodeRuntime::start(configuration).await.unwrap();
+        let ready = runtime.ready_info();
+        for path in [
+            "/api/v1/status",
+            "/api/v1/backups",
+            "/api/v1/recovery/status",
+        ] {
+            let response = request(ready.api_address(), &format!(
+                "GET {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {}\r\nConnection: close\r\n\r\n",
+                ready.api_token().expose(),
+            )).await;
+            assert!(response.starts_with("HTTP/1.1 200"), "{path}: {response}");
+        }
+        #[cfg(unix)]
+        assert_eq!(sync_status(&runtime).await["schemaVersion"], 1);
+        runtime.stop().await.unwrap();
     }
 
     async fn request(address: SocketAddr, request: &str) -> String {

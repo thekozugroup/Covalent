@@ -2299,7 +2299,7 @@ final class RequestSequence: @unchecked Sendable {
     }
 }
 
-private final class RecorderBox: @unchecked Sendable {
+final class RecorderBox: @unchecked Sendable {
     private let lock = NSLock()
     private var values: [Int: RequestRecorder] = [:]
     private var nextPort = 20_000

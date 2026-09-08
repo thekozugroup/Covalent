@@ -418,6 +418,8 @@ impl StagedRecord {
         fsync(&self.directory).map_err(|_| EngineStateError::PersistenceUncertain)
     }
 
+    // macOS stat device numbers are narrower than Linux's u64 representation.
+    #[allow(clippy::unnecessary_cast)]
     fn is_current(&self) -> bool {
         statat(
             &self.directory,

@@ -82,6 +82,14 @@ public struct SelectedDirectoryGrant: Codable, Equatable, Identifiable, Sendable
         guard !isStale else {
             throw SelectedDirectoryError.staleBookmark
         }
+        // Resolving a security-scoped bookmark produces the URL but does not
+        // grant access to it. Validate only while a temporary scope is active;
+        // callers start their own operation or helper-lifetime scope afterward.
+        let didStartAccess = url.startAccessingSecurityScopedResource()
+        guard didStartAccess else {
+            throw SelectedDirectoryError.accessDenied
+        }
+        defer { url.stopAccessingSecurityScopedResource() }
         let values = try url.resourceValues(forKeys: [.isDirectoryKey])
         guard values.isDirectory == true else {
             throw SelectedDirectoryError.permissionRevoked
@@ -114,6 +122,10 @@ public struct ResolvedSelectedDirectory: Sendable {
             throw SelectedDirectoryError.accessDenied
         }
         defer { url.stopAccessingSecurityScopedResource() }
+        let values = try url.resourceValues(forKeys: [.isDirectoryKey])
+        guard values.isDirectory == true else {
+            throw SelectedDirectoryError.permissionRevoked
+        }
         try Task.checkCancellation()
 
         let intent = writing

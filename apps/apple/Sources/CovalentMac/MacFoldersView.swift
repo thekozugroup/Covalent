@@ -194,7 +194,7 @@ struct MacFoldersView: View {
                 let offer = PendingOffer(
                   peerId: peerId,
                   folderId: draftFolderId,
-                  label: safeLabel.isEmpty ? "Shared folder" : safeLabel,
+                  label: safeLabel.isEmpty ? grant.displayName : safeLabel,
                   grant: grant
                 )
                 pendingOffer = offer
