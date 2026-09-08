@@ -590,7 +590,7 @@ class FolderSyncJourneyInstrumentedTest {
         val peer = values[RECEIPT_PEER_ID] as? String
         val process = values[RECEIPT_SETUP_PID] as? Int
         if (
-            stage !in setOf(RECEIPT_SETUP, RECEIPT_REMOVED) ||
+            stage == null || stage !in setOf(RECEIPT_SETUP, RECEIPT_REMOVED) ||
             offer == null || offer.isBlank() || offer.length > MAX_RECEIPT_VALUE_CHARS ||
             peer == null || peer.isBlank() || peer.length > MAX_RECEIPT_VALUE_CHARS ||
             process == null || process <= 1

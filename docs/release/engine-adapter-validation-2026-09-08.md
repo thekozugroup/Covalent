@@ -940,3 +940,44 @@ The isolated proof removed another 2,298,786,788 logical bytes of owned caches
 and build state after retaining compact evidence. Actual Android/Linux target
 packaging and final dependency classification remain open. Acceptance remains
 **70%: 14 of 20 milestones**.
+
+## Checkpoint 34: Android fixture nullability and exact checkpoint-33 results
+
+Checkpoint 33 (`c97f214555a65b08258908b824de1e4c7cf07b03`) ran as tested merge
+`a3320f36a2adfbe9cb4b45333a69e4c0078ba09a` in CI `34284223594`.
+Rust/contracts, both complete Docker architectures, Mac bundle/integration/UI,
+iOS Tier 2, dependency review and release versions pass. The hosted Mac builder
+again produces worker SHA-256
+`4df1dea892fac3c9d1c0e822827c9a4c57711dcddaaf56a61edaab41d5337bbb`
+with the new 297,075-byte notice text and verified corresponding-source archives.
+The complete images measure 133,809,664 bytes on amd64 and 124,833,792 bytes on
+arm64, under the unchanged 134,217,728-byte budget. Only 408,064 bytes of amd64
+headroom remain; future image changes must still pass the same measured gate.
+
+Both Android lanes compile production Debug and Release Kotlin, then fail
+instrumentation compilation at the same receipt constructor: checking nullable
+`stage` membership in a set does not establish Kotlin's non-null type. The
+fixture now explicitly rejects `stage == null` before construction. This keeps
+its strict receipt validation and permits the compiler to establish `String`.
+No test is skipped. The source-derived 76-name result contract still passes
+locally; fresh JVM/lint/device evidence is required. The failed prebuild also
+correctly leaves no freshness stamp, so the device gate refuses to run a stale
+APK. Checkpoint-33 job IDs are `102255914745` and `102255914706`.
+
+The final published Mac renewal view also passes a signed sandbox AX check
+at exactly 900 by 640 content points. Incoming actions independently expose
+`Remove Shared Receipts invitation` and `Decline Design Drafts invitation`,
+with correctly disabled/enabled folder pickers. The native keep-files removal
+sheet is canceled and no sync mutation is sent. Result SHA-256 is
+`72f0c02963c8e3d918639b3dfba9d4c8e1b91356d714e780193ada212fcccf3d`.
+All owned processes and fixture data were removed; the cleanup receipt records
+344,776,704 allocated bytes, separately from prior logical-byte measurements.
+The observed text-only Tab traversal follows the user's disabled system
+Keyboard navigation preference. It is not evidence of a product defect; full
+keyboard and spoken VoiceOver execution remain unverified, and no global
+setting was changed.
+
+Publication cleanup verified all 47 checkpoint-33 files and modes against the
+reachable Git commit before removing 108 temporary payload files totaling
+3,816,152 logical bytes. The source tree and compact publication/evidence
+receipts remain. Acceptance stays **70%: 14 of 20 milestones**.
