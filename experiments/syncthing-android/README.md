@@ -86,6 +86,13 @@ test result. The runner now requires unchanged `surfaceflinger` and
 guest diagnostics on failure. Guest graphics preparation is emulator-specific;
 this proof neither exercises a launcher nor validates screen capture.
 
+The first prepared run timed out before instrumentation because the shared
+readiness helper still targeted the production app's Compose activity. The
+workflow now supplies its supported package/component overrides for this
+experimental APK and its declared, non-direct-boot platform Activity. All
+credential-unlock, service latency, install and six-sample stability requirements
+remain in force. This is a harness correction, not a runtime pass.
+
 ## Deliberate limits
 
 This does not prove API-26 or arm64 runtime execution, foreground-service survival, Doze,

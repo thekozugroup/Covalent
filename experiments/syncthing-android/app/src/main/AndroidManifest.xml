@@ -7,5 +7,10 @@
         android:fullBackupContent="false"
         android:label="Covalent engine proof"
         android:supportsRtl="true"
-        android:usesCleartextTraffic="true" />
+        android:usesCleartextTraffic="true">
+        <!-- A non-direct-boot component lets the shared guest readiness gate
+             verify this APK's credential-unlocked package resolution. The
+             executable proof does not launch an Activity or take screenshots. -->
+        <activity android:name="android.app.Activity" android:exported="false" />
+    </application>
 </manifest>

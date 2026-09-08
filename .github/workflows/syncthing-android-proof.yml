@@ -68,7 +68,7 @@ jobs:
             export ANDROID_SERIAL=emulator-5570
             ./scripts/disable-android-guest-launcher.sh emulator-5570
             ./scripts/disable-android-guest-snapshots.sh emulator-5570
-            ./scripts/wait-for-android-guest.sh emulator-5570 experiments/syncthing-android/app/build/outputs/apk/debug/app-debug.apk
+            COVALENT_ANDROID_APP_PACKAGE=life.michaelwong.covalent.engineproof COVALENT_ANDROID_LAUNCH_COMPONENT=android.app.Activity ./scripts/wait-for-android-guest.sh emulator-5570 experiments/syncthing-android/app/build/outputs/apk/debug/app-debug.apk
             experiments/syncthing-android/run-api37-proof.sh --prebuilt
       - name: Preserve proof build records
         if: always()
