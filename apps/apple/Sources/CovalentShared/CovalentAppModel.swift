@@ -1484,7 +1484,7 @@ public final class CovalentAppModel: ObservableObject {
 /// UI-test launch metadata contains only this relative, non-secret basename. The
 /// harness pre-provisions the file in the target app's Application Support
 /// container; production launches never enter this code path.
-private func readPrivateUITestToken(relativePath: String) -> String? {
+func readPrivateUITestToken(relativePath: String) -> String? {
     guard relativePath.hasPrefix("ui-token-"),
           relativePath.utf8.count > "ui-token-".utf8.count,
           (1...96).contains(relativePath.utf8.count),

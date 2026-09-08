@@ -6,10 +6,11 @@ ssh_host=Atmos
 revision=''
 node_bin="$root/target/debug/covalent-node"
 run=false
+owner_loss=false
 
 usage() {
   cat <<'EOF'
-Usage: scripts/test-remote-drill.sh --source-revision COMMIT [--node-bin PATH] [--ssh HOST] --execute
+Usage: scripts/test-remote-drill.sh --source-revision COMMIT [--node-bin PATH] [--ssh HOST] [--owner-loss] --execute
 Without --execute this makes no local or remote changes.
 EOF
 }
@@ -18,6 +19,7 @@ while [ "$#" -gt 0 ]; do
     --source-revision) revision=$2; shift 2 ;;
     --node-bin) node_bin=$2; shift 2 ;;
     --ssh) ssh_host=$2; shift 2 ;;
+    --owner-loss) owner_loss=true; shift ;;
     --execute) run=true; shift ;;
     --help|-h) usage; exit 0 ;;
     *) usage >&2; exit 64 ;;
@@ -30,7 +32,9 @@ for x in git ssh scp python3 openssl shasum netstat; do command -v "$x" >/dev/nu
 [ -x "$node_bin" ] || { echo "local node binary is missing: $node_bin" >&2; exit 1; }
 commit=$(git -C "$root" rev-parse --verify "$revision^{commit}") || exit 1
 opts='-o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10'
-local_root='' remote_root='' builder='' image='' container='' node_pid='' tunnel_pid=''
+local_root='' remote_root='' nonce='' builder='' image='' container=''
+node_pid='' node_identity='' tunnel_pid='' tunnel_identity=''
+child_shutdown_checks=100
 preexisting_containers=''
 preexisting_images=''
 
@@ -67,63 +71,70 @@ remote_cleanup() {
     echo "remote drill cleanup refused unsafe temporary path: $remote_root" >&2
     return 1
   fi
-  if ! ssh $opts "$ssh_host" sh -s -- "$remote_root" "$builder" "$image" "$container" <<'SH'
+  if ! ssh $opts "$ssh_host" sh -s -- "$remote_root" "$nonce" "$builder" "$image" "$container" <<'SH'
 set -u
-root=$1 builder=$2 image=$3 container=$4
+root=$1 nonce=$2 builder=$3 image=$4 container=$5
 case "$root" in /tmp/covalent-remote-drill.[A-Za-z0-9]*) ;; *) echo "unsafe remote drill path" >&2; exit 2 ;; esac
 suffix=${root#/tmp/covalent-remote-drill.}
 case "$suffix" in ''|*[!A-Za-z0-9]*) echo "unsafe remote drill suffix" >&2; exit 2 ;; esac
-case "$builder:$image:$container" in
-  covalent-remote-drill-[0-9]*-[0-9]*:covalent-remote-drill:[0-9]*-[0-9]*:covalent-remote-drill-[0-9]*-[0-9]*) ;;
-  *) echo "unsafe remote drill resource name" >&2; exit 2 ;;
-esac
+case "$nonce" in ''|*[!0-9a-f]*) echo "unsafe remote drill nonce" >&2; exit 2 ;; esac
+[ "${#nonce}" -eq 32 ] && [ "$builder" = "covalent-remote-drill-$nonce" ] &&
+  [ "$image" = "covalent-remote-drill:$nonce" ] && [ "$container" = "covalent-remote-drill-$nonce" ] || {
+    echo "unsafe remote drill resource relationship" >&2; exit 2
+  }
 docker info >/dev/null 2>&1 || { echo "cannot inspect Docker while cleaning the drill" >&2; exit 1; }
 cleanup_status=0
 buildkit_container="buildx_buildkit_${builder}0"
-buildkit_image=$(docker container inspect --format '{{.Image}}' "$buildkit_container" 2>/dev/null || true)
-if docker container inspect "$container" >/dev/null 2>&1; then
+container_owned=false
+[ "$(cat "$root/container-owned" 2>/dev/null || true)" = "$nonce" ] &&
+  [ "$(docker container inspect --format '{{index .Config.Labels "life.michaelwong.covalent.remote-drill"}}' "$container" 2>/dev/null || true)" = "$nonce" ] && container_owned=true
+if [ "$container_owned" = true ]; then
   docker rm -f "$container" >/dev/null 2>&1 || { echo "could not remove drill container: $container" >&2; cleanup_status=1; }
+  if docker container inspect "$container" >/dev/null 2>&1; then
+    echo "drill container remains: $container" >&2; cleanup_status=1
+  fi
+elif docker container inspect "$container" >/dev/null 2>&1; then
+  echo "selected container lacks drill ownership proof and was retained: $container" >&2; cleanup_status=1
 fi
-if docker container inspect "$container" >/dev/null 2>&1; then
-  echo "drill container remains: $container" >&2; cleanup_status=1
-fi
-if docker buildx inspect "$builder" >/dev/null 2>&1; then
+builder_owned=false
+[ "$(cat "$root/builder-owned" 2>/dev/null || true)" = "$nonce" ] && builder_owned=true
+if [ "$builder_owned" = true ] && docker buildx inspect "$builder" >/dev/null 2>&1; then
   docker buildx rm -f "$builder" >/dev/null 2>&1 || { echo "could not remove drill builder: $builder" >&2; cleanup_status=1; }
 fi
-if docker buildx inspect "$builder" >/dev/null 2>&1; then
-  echo "drill builder remains: $builder" >&2; cleanup_status=1
+if [ "$builder_owned" = true ]; then
+  if docker buildx inspect "$builder" >/dev/null 2>&1; then
+    echo "drill builder remains: $builder" >&2; cleanup_status=1
+  fi
+  if docker ps -aq --filter "name=buildx_buildkit_$builder" | grep -q .; then
+    echo "drill BuildKit container remains for builder: $builder" >&2; cleanup_status=1
+  fi
+  if docker volume inspect "${buildkit_container}_state" >/dev/null 2>&1; then
+    echo "drill BuildKit volume remains: ${buildkit_container}_state" >&2; cleanup_status=1
+  fi
+  echo "remote drill: shared BuildKit base-image cache intentionally retained"
+elif docker buildx inspect "$builder" >/dev/null 2>&1; then
+  echo "selected builder lacks drill ownership proof and was retained: $builder" >&2; cleanup_status=1
 fi
-if docker ps -aq --filter "name=buildx_buildkit_$builder" | grep -q .; then
-  echo "drill BuildKit container remains for builder: $builder" >&2; cleanup_status=1
-fi
-if docker volume inspect "${buildkit_container}_state" >/dev/null 2>&1; then
-  echo "drill BuildKit volume remains: ${buildkit_container}_state" >&2; cleanup_status=1
-fi
-case "$buildkit_image" in
-  sha256:*)
-    if [ -f "$root/preexisting-full-image-ids" ] && ! grep -Fqx -- "$buildkit_image" "$root/preexisting-full-image-ids"; then
-      if docker ps -aq --filter "ancestor=$buildkit_image" | grep -q .; then
-        echo "new drill BuildKit image is now in use; retained: $buildkit_image" >&2; cleanup_status=1
-      elif ! docker image rm "$buildkit_image" >/dev/null 2>&1; then
-        echo "could not remove drill-only BuildKit image: $buildkit_image" >&2; cleanup_status=1
-      fi
-      if docker image inspect "$buildkit_image" >/dev/null 2>&1; then
-        echo "drill-only BuildKit image remains: $buildkit_image" >&2; cleanup_status=1
-      fi
-    fi
-    ;;
-esac
-if docker image inspect "$image" >/dev/null 2>&1; then
+image_owned=false
+[ "$(cat "$root/image-owned" 2>/dev/null || true)" = "$nonce" ] &&
+  [ "$(docker image inspect --format '{{index .Config.Labels "life.michaelwong.covalent.remote-drill"}}' "$image" 2>/dev/null || true)" = "$nonce" ] && image_owned=true
+if [ "$image_owned" = true ]; then
   docker image rm "$image" >/dev/null 2>&1 || { echo "could not remove drill image: $image" >&2; cleanup_status=1; }
+  if docker image inspect "$image" >/dev/null 2>&1; then
+    echo "drill image tag remains: $image" >&2; cleanup_status=1
+  fi
+elif docker image inspect "$image" >/dev/null 2>&1; then
+  echo "selected image tag lacks drill ownership proof and was retained: $image" >&2; cleanup_status=1
 fi
-if docker image inspect "$image" >/dev/null 2>&1; then
-  echo "drill image remains: $image" >&2; cleanup_status=1
-fi
-if [ -e "$root" ]; then
-  rm -rf -- "$root" || { echo "could not remove drill temporary path: $root" >&2; cleanup_status=1; }
-fi
-if [ -e "$root" ]; then
-  echo "drill temporary path remains: $root" >&2; cleanup_status=1
+if [ "$cleanup_status" -eq 0 ]; then
+  if [ -e "$root" ]; then
+    rm -rf -- "$root" || { echo "could not remove drill temporary path: $root" >&2; cleanup_status=1; }
+  fi
+  if [ -e "$root" ]; then
+    echo "drill temporary path remains: $root" >&2; cleanup_status=1
+  fi
+else
+  echo "remote cleanup failed; retaining drill root for ownership diagnosis: $root" >&2
 fi
 exit "$cleanup_status"
 SH
@@ -132,15 +143,217 @@ SH
     return 1
   fi
 }
+
+child_process_identity() {
+  child_pid=$1
+  child_ppid=$(ps -o ppid= -p "$child_pid" 2>/dev/null | tr -d '[:space:]')
+  child_started=$(ps -o lstart= -p "$child_pid" 2>/dev/null | sed 's/^ *//;s/ *$//')
+  [ "$child_ppid" = "$$" ] && [ -n "$child_started" ] || return 1
+  printf '%s:%s\n' "$child_ppid" "$child_started"
+}
+
+uncaptured_child_is_running() {
+  child_pid=$1
+  kill -0 "$child_pid" >/dev/null 2>&1 || return 1
+  child_state=$(ps -o stat= -p "$child_pid" 2>/dev/null | sed 's/^ *//')
+  case "$child_state" in Z*) return 1 ;; *) return 0 ;; esac
+}
+
+stop_uncaptured_child() {
+  child_pid=$1 child_name=$2
+  kill -TERM "$child_pid" >/dev/null 2>&1 || true
+  checks=0
+  while uncaptured_child_is_running "$child_pid" && [ "$checks" -lt "$child_shutdown_checks" ]; do
+    sleep 0.1
+    checks=$((checks + 1))
+  done
+  if uncaptured_child_is_running "$child_pid"; then
+    if ! kill -KILL "$child_pid" >/dev/null 2>&1; then
+      echo "$child_name identity capture and bounded KILL both failed pid=$child_pid" >&2
+      return 1
+    fi
+    checks=0
+    while uncaptured_child_is_running "$child_pid" && [ "$checks" -lt 20 ]; do
+      sleep 0.1
+      checks=$((checks + 1))
+    done
+    if uncaptured_child_is_running "$child_pid"; then
+      echo "$child_name remained alive after bounded identity-capture cleanup pid=$child_pid" >&2
+      return 1
+    fi
+  fi
+  wait "$child_pid" >/dev/null 2>&1 || true
+  echo "$child_name identity capture failed; exact newly spawned child was reaped" >&2
+  return 1
+}
+
+owned_child_is_running() {
+  child_pid=$1 expected_identity=$2
+  [ "$(child_process_identity "$child_pid" 2>/dev/null || true)" = "$expected_identity" ] || return 1
+  child_state=$(ps -o stat= -p "$child_pid" 2>/dev/null | sed 's/^ *//')
+  case "$child_state" in ''|Z*) return 1 ;; *) return 0 ;; esac
+}
+
+stop_owned_child() {
+  child_pid=$1 expected_identity=$2 child_name=$3 require_clean=$4
+  [ -n "$child_pid" ] || return 0
+  if [ "$(child_process_identity "$child_pid" 2>/dev/null || true)" != "$expected_identity" ]; then
+    echo "$child_name identity no longer matches captured child pid=$child_pid" >&2
+    return 1
+  fi
+  was_running=false
+  if owned_child_is_running "$child_pid" "$expected_identity"; then
+    was_running=true
+    kill -TERM "$child_pid" >/dev/null 2>&1 || true
+  fi
+  checks=0
+  while owned_child_is_running "$child_pid" "$expected_identity" && [ "$checks" -lt "$child_shutdown_checks" ]; do
+    sleep 0.1
+    checks=$((checks + 1))
+  done
+  forced=false
+  if owned_child_is_running "$child_pid" "$expected_identity"; then
+    forced=true
+    if ! kill -KILL "$child_pid" >/dev/null 2>&1; then
+      echo "$child_name could not KILL captured child pid=$child_pid" >&2
+      return 1
+    fi
+    checks=0
+    while owned_child_is_running "$child_pid" "$expected_identity" && [ "$checks" -lt 20 ]; do
+      sleep 0.1
+      checks=$((checks + 1))
+    done
+    if owned_child_is_running "$child_pid" "$expected_identity"; then
+      echo "$child_name remained alive after KILL pid=$child_pid" >&2
+      return 1
+    fi
+  fi
+  wait_status=0
+  wait "$child_pid" || wait_status=$?
+  if [ "$forced" = true ]; then
+    echo "$child_name ignored TERM and required KILL (pid=$child_pid)" >&2
+    return 1
+  fi
+  if [ "$require_clean" = true ] && { [ "$was_running" != true ] || [ "$wait_status" -ne 0 ]; }; then
+    echo "$child_name did not stop cleanly (pid=$child_pid status=$wait_status)" >&2
+    return 1
+  fi
+}
+
+stop_local_node() {
+  require_clean=${1:-false}
+  [ -n "$node_pid" ] || return 0
+  owned_pid=$node_pid
+  owned_identity=$node_identity
+  stop_status=0
+  stop_owned_child "$owned_pid" "$owned_identity" 'local drill node' "$require_clean" || stop_status=$?
+  if [ "$stop_status" -eq 0 ] || ! kill -0 "$owned_pid" >/dev/null 2>&1; then
+    node_pid=''
+    node_identity=''
+  fi
+  return "$stop_status"
+}
+
+stop_tunnel() {
+  [ -n "$tunnel_pid" ] || return 0
+  owned_pid=$tunnel_pid
+  owned_identity=$tunnel_identity
+  stop_status=0
+  stop_owned_child "$owned_pid" "$owned_identity" 'SSH management tunnel' false || stop_status=$?
+  if [ "$stop_status" -eq 0 ] || ! kill -0 "$owned_pid" >/dev/null 2>&1; then
+    tunnel_pid=''
+    tunnel_identity=''
+  fi
+  return "$stop_status"
+}
+
+wait_local_node() {
+  local_log=$1
+  for n in $(seq 1 90); do
+    "$node_bin" healthcheck --url "http://127.0.0.1:$local_api/healthz" >/dev/null 2>&1 && return 0
+    kill -0 "$node_pid" >/dev/null 2>&1 || break
+    sleep 1
+  done
+  sed -n '1,120p' "$local_log" >&2
+  echo "local drill node did not become ready" >&2
+  return 1
+}
+
+start_local_serve() {
+  local_log="$local_root/node.log"
+  "$node_bin" serve --listen "127.0.0.1:$local_api" --peer-listen "$local_ip:$local_peer" \
+    --advertised-peer-address "$local_ip:$local_peer" --data-dir "$state_dir" --device-name 'Mac remote drill' \
+    --key-encryption-key-file "$local_root/local-kek" --api-token-file "$local_token" > "$local_log" 2>&1 &
+  node_pid=$!
+  if ! node_identity=$(child_process_identity "$node_pid"); then
+    stop_uncaptured_child "$node_pid" 'local drill node' || true
+    kill -0 "$node_pid" >/dev/null 2>&1 || node_pid=''
+    return 1
+  fi
+  wait_local_node "$local_log"
+}
+
+start_local_recover() {
+  local_log="$local_root/recovered-node.log"
+  "$node_bin" recover --recovery-kit-file "$recovery_dir/owner.covalent-recovery" \
+    --recovery-key-file "$recovery_dir/owner.covalent-recovery-key" \
+    --listen "127.0.0.1:$local_api" --peer-listen "$local_ip:$local_peer" \
+    --advertised-peer-address "$local_ip:$local_peer" --data-dir "$state_dir" \
+    --device-name 'Recovered Mac drill' --key-encryption-key-file "$fresh_kek" \
+    --key-encryption-key-version 1 --api-token-file "$local_token" > "$local_log" 2>&1 &
+  node_pid=$!
+  if ! node_identity=$(child_process_identity "$node_pid"); then
+    stop_uncaptured_child "$node_pid" 'recovered local drill node' || true
+    kill -0 "$node_pid" >/dev/null 2>&1 || node_pid=''
+    return 1
+  fi
+  wait_local_node "$local_log"
+}
+
+remove_owner_fixture_path() {
+  fixture_name=$1
+  case "$fixture_name" in source|state|local-kek|local-token|node.log) ;;
+    *) echo "refusing unexpected owner-loss fixture path: $fixture_name" >&2; return 1 ;;
+  esac
+  fixture_path="$local_root/$fixture_name"
+  [ -e "$fixture_path" ] || { echo "owner-loss fixture path is missing: $fixture_path" >&2; return 1; }
+  [ ! -L "$fixture_path" ] || { echo "refusing symlink owner-loss fixture path: $fixture_path" >&2; return 1; }
+  rm -rf -- "$fixture_path"
+  [ ! -e "$fixture_path" ] && [ ! -L "$fixture_path" ] || {
+    echo "owner-loss fixture path remains after deletion: $fixture_path" >&2
+    return 1
+  }
+}
+
+assert_private_file() {
+  private_path=$1
+  [ -f "$private_path" ] && [ ! -L "$private_path" ] || {
+    echo "private drill file is not a regular file: $private_path" >&2
+    return 1
+  }
+  if private_mode=$(stat -c '%a' "$private_path" 2>/dev/null); then :
+  else private_mode=$(stat -f '%Lp' "$private_path") || return 1
+  fi
+  [ "$private_mode" = 600 ] || {
+    echo "private drill file mode is $private_mode, expected 600: $private_path" >&2
+    return 1
+  }
+}
+
 cleanup() {
   status=$?
   trap - EXIT HUP INT TERM
   cleanup_status=0
-  [ -z "$tunnel_pid" ] || { kill "$tunnel_pid" >/dev/null 2>&1 || true; wait "$tunnel_pid" >/dev/null 2>&1 || true; }
-  [ -z "$node_pid" ] || { kill "$node_pid" >/dev/null 2>&1 || true; wait "$node_pid" >/dev/null 2>&1 || true; }
+  stop_tunnel || cleanup_status=1
+  stop_local_node false || cleanup_status=1
   remote_cleanup || cleanup_status=1
   assert_preexisting_ids_survive || cleanup_status=1
-  [ -z "$local_root" ] || rm -rf -- "$local_root"
+  if [ -n "$node_pid" ] || [ -n "$tunnel_pid" ]; then
+    echo "local drill child remains; retaining private fixture for safe diagnosis: $local_root" >&2
+    cleanup_status=1
+  else
+    [ -z "$local_root" ] || rm -rf -- "$local_root"
+  fi
   [ "$status" -ne 0 ] || return "$cleanup_status"
   return "$status"
 }
@@ -154,6 +367,7 @@ tmp_base=$(printenv TMPDIR 2>/dev/null || true)
 [ -n "$tmp_base" ] || tmp_base=/tmp
 local_root=$(mktemp -d "$tmp_base/covalent-remote-drill.XXXXXX")
 chmod 700 "$local_root"
+local_root=$(CDPATH='' cd -- "$local_root" && pwd -P)
 archive="$local_root/source.tar.gz" manifest="$local_root/source-manifest.sha256"
 
 # Snapshot only tracked and non-ignored files; this records working-tree
@@ -204,8 +418,10 @@ if netstat -an -p tcp 2>/dev/null | grep -E "[.:]($local_api|$forward)[[:space:]
   echo "selected local drill port is occupied" >&2; exit 1
 fi
 
-id=$(date +%s)-$$
-builder=covalent-remote-drill-$id image=covalent-remote-drill:$id container=covalent-remote-drill-$id
+nonce=$(openssl rand -hex 16)
+case "$nonce" in ''|*[!0-9a-f]*) echo "could not generate a safe drill nonce" >&2; exit 1 ;; esac
+[ "${#nonce}" -eq 32 ] || { echo "drill nonce has the wrong length" >&2; exit 1; }
+builder=covalent-remote-drill-$nonce image=covalent-remote-drill:$nonce container=covalent-remote-drill-$nonce
 remote_root=$(ssh $opts "$ssh_host" 'mktemp -d /tmp/covalent-remote-drill.XXXXXX')
 valid_remote_root "$remote_root" || { echo "unsafe remote temporary path" >&2; exit 1; }
 preexisting_containers="$local_root/preexisting-container-ids"
@@ -213,18 +429,26 @@ preexisting_images="$local_root/preexisting-image-ids"
 ssh $opts "$ssh_host" 'docker ps -aq | sort -u' > "$preexisting_containers"
 ssh $opts "$ssh_host" 'docker image ls -aq | sort -u' > "$preexisting_images"
 ssh $opts "$ssh_host" "mkdir -p '$remote_root/source' '$remote_root/config' '$remote_root/data' '$remote_root/secrets'"
-ssh $opts "$ssh_host" "docker image ls --no-trunc -aq | sort -u > '$remote_root/preexisting-full-image-ids'"
 cat "$archive" | ssh $opts "$ssh_host" "tar -xzf - -C '$remote_root/source'"
 scp -q $opts "$manifest" "$ssh_host:$remote_root/source-manifest.sha256"
 
 # A dedicated docker-container BuildKit instance prevents this build from
 # sharing the daemon builder/cache. Unsupported resource options must fail.
-ssh $opts "$ssh_host" sh -s -- "$remote_root" "$builder" "$image" <<'SH'
+ssh $opts "$ssh_host" sh -s -- "$remote_root" "$nonce" "$builder" "$image" "$container" <<'SH'
 set -eu
-root=$1 builder=$2 image=$3
+root=$1 nonce=$2 builder=$3 image=$4 container=$5
+case "$nonce" in ''|*[!0-9a-f]*) echo "unsafe remote drill nonce" >&2; exit 2 ;; esac
+[ "${#nonce}" -eq 32 ] && [ "$builder" = "covalent-remote-drill-$nonce" ] &&
+  [ "$image" = "covalent-remote-drill:$nonce" ] && [ "$container" = "covalent-remote-drill-$nonce" ] || {
+    echo "unsafe remote drill resource relationship" >&2; exit 2
+  }
+! docker buildx inspect "$builder" >/dev/null 2>&1 || { echo "selected drill builder already exists" >&2; exit 1; }
+! docker image inspect "$image" >/dev/null 2>&1 || { echo "selected drill image tag already exists" >&2; exit 1; }
+! docker container inspect "$container" >/dev/null 2>&1 || { echo "selected drill container already exists" >&2; exit 1; }
 docker buildx create --name "$builder" --driver docker-container \
   --driver-opt image=moby/buildkit:v0.22.0 --driver-opt memory=4294967296 --driver-opt memory-swap=4294967296 \
   --driver-opt cpu-quota=100000 --driver-opt cpu-period=100000 --driver-opt cpuset-cpus=0 >/dev/null
+printf '%s\n' "$nonce" > "$root/builder-owned"
 docker buildx inspect --bootstrap "$builder" >/dev/null
 buildkit=$(docker ps -aq --filter "name=buildx_buildkit_$builder")
 [ -n "$buildkit" ]
@@ -235,7 +459,10 @@ test "$(docker inspect --format '{{.HostConfig.CpuPeriod}}' "$buildkit")" = 1000
 test "$(docker inspect --format '{{.HostConfig.CpusetCpus}}' "$buildkit")" = 0
 (cd "$root/source" && sha256sum -c "$root/source-manifest.sha256")
 docker buildx build --builder "$builder" --load --tag "$image" \
+  --label "life.michaelwong.covalent.remote-drill=$nonce" \
   --file "$root/source/packaging/docker/Dockerfile" "$root/source"
+[ "$(docker image inspect --format '{{index .Config.Labels "life.michaelwong.covalent.remote-drill"}}' "$image")" = "$nonce" ]
+printf '%s\n' "$nonce" > "$root/image-owned"
 uid=$(id -u)
 gid=$(id -g)
 docker run --rm --user "$uid:$gid" --mount "type=bind,source=$root/secrets,target=/secrets" \
@@ -251,12 +478,17 @@ scp -q $opts "$remote_token" "$ssh_host:$remote_root/secrets/api-token"
 # 0600. Set and prove the secret contract explicitly before starting the node.
 ssh $opts "$ssh_host" "chmod 600 '$remote_root/secrets/api-token' && test \"\$(stat -c %a '$remote_root/secrets/api-token')\" = 600"
 
-ssh $opts "$ssh_host" sh -s -- "$remote_root" "$container" "$image" "$remote_ip" "$remote_peer" "$remote_api" <<'SH'
+ssh $opts "$ssh_host" sh -s -- "$remote_root" "$nonce" "$container" "$image" "$remote_ip" "$remote_peer" "$remote_api" <<'SH'
 set -eu
-root=$1 container=$2 image=$3 ip=$4 peer=$5 api=$6
+root=$1 nonce=$2 container=$3 image=$4 ip=$5 peer=$6 api=$7
+case "$nonce" in ''|*[!0-9a-f]*) echo "unsafe remote drill nonce" >&2; exit 2 ;; esac
+[ "${#nonce}" -eq 32 ] && [ "$container" = "covalent-remote-drill-$nonce" ] &&
+  [ "$image" = "covalent-remote-drill:$nonce" ] || { echo "unsafe remote drill resource relationship" >&2; exit 2; }
+! docker container inspect "$container" >/dev/null 2>&1 || { echo "selected drill container already exists" >&2; exit 1; }
 uid=$(id -u)
 gid=$(id -g)
 docker run -d --name "$container" --user "$uid:$gid" --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --label "life.michaelwong.covalent.remote-drill=$nonce" \
   --cpus 0.75 --memory 768m --pids-limit 128 --tmpfs /tmp:rw,noexec,nosuid,size=64m \
   --mount "type=bind,source=$root/config,target=/config" --mount "type=bind,source=$root/data,target=/data" \
   --mount "type=bind,source=$root/secrets/key-encryption-key,target=/run/secrets/covalent-kek,readonly" \
@@ -267,6 +499,8 @@ docker run -d --name "$container" --user "$uid:$gid" --read-only --cap-drop ALL 
   --env COVALENT_DATA_DIR=/data --env COVALENT_KEY_ENCRYPTION_KEY_FILE=/run/secrets/covalent-kek \
   --env COVALENT_KEY_ENCRYPTION_KEY_VERSION=1 --env COVALENT_LAN_DISCOVERY=false \
   "$image" serve --api-token-file /run/secrets/covalent-api-token >/dev/null
+[ "$(docker container inspect --format '{{index .Config.Labels "life.michaelwong.covalent.remote-drill"}}' "$container")" = "$nonce" ]
+printf '%s\n' "$nonce" > "$root/container-owned"
 for n in $(seq 1 90); do
   docker exec "$container" covalent-node healthcheck --url http://127.0.0.1:8787/healthz >/dev/null 2>&1 &&
     test -f "$root/config/caddy/data/caddy/pki/authorities/local/root.crt" && exit 0
@@ -278,10 +512,17 @@ remote_ca="$local_root/remote-root.crt"
 scp -q $opts "$ssh_host:$remote_root/config/caddy/data/caddy/pki/authorities/local/root.crt" "$remote_ca"
 ssh $opts -o ExitOnForwardFailure=yes -N -L "127.0.0.1:$forward:127.0.0.1:$remote_api" "$ssh_host" &
 tunnel_pid=$!
+if ! tunnel_identity=$(child_process_identity "$tunnel_pid"); then
+  stop_uncaptured_child "$tunnel_pid" 'SSH management tunnel' || true
+  kill -0 "$tunnel_pid" >/dev/null 2>&1 || tunnel_pid=''
+  exit 1
+fi
 sleep 1; kill -0 "$tunnel_pid" >/dev/null || { echo "SSH management tunnel failed" >&2; exit 1; }
 
 source_dir="$local_root/source" state_dir="$local_root/state" restore_dir="$local_root/restore"
+recovery_dir="$local_root/recovery-export" handoff="$local_root/owner-loss-handoff.json"
 mkdir -p "$source_dir/nested/empty" "$state_dir" "$restore_dir"
+[ "$owner_loss" != true ] || { mkdir -m 700 "$recovery_dir"; }
 printf 'Covalent remote drill payload\n' > "$source_dir/nested/payload.txt"
 python3 - "$source_dir/nested/stream.bin" <<'PYDATA'
 import os,sys
@@ -292,37 +533,28 @@ PYDATA
 cp "$source_dir/nested/payload.txt" "$local_root/expected.txt"
 shasum -a 256 "$source_dir/nested/stream.bin" | awk '{print $1}' > "$local_root/stream.sha256"
 "$node_bin" provision-key --key-file "$local_root/local-kek" >/dev/null
-"$node_bin" serve --listen "127.0.0.1:$local_api" --peer-listen "$local_ip:$local_peer" \
-  --advertised-peer-address "$local_ip:$local_peer" --data-dir "$state_dir" --device-name 'Mac remote drill' \
-  --key-encryption-key-file "$local_root/local-kek" --api-token-file "$local_token" > "$local_root/node.log" 2>&1 &
-node_pid=$!
-for n in $(seq 1 90); do "$node_bin" healthcheck --url "http://127.0.0.1:$local_api/healthz" >/dev/null 2>&1 && break; sleep 1; done
-"$node_bin" healthcheck --url "http://127.0.0.1:$local_api/healthz" >/dev/null || { sed -n '1,120p' "$local_root/node.log" >&2; exit 1; }
+start_local_serve
 
 SSH_HOST=$ssh_host REMOTE_CONTAINER=$container \
 LOCAL_API=$local_api REMOTE_API=$forward LOCAL_TOKEN=$local_token REMOTE_TOKEN=$remote_token REMOTE_CA=$remote_ca \
-SOURCE_DIR=$source_dir RESTORE_DIR=$restore_dir LOCAL_ROOT=$local_root LOCAL_PEER=$local_ip:$local_peer REMOTE_PEER=$remote_ip:$remote_peer python3 - <<'PY'
-import concurrent.futures,hashlib,json,os,ssl,subprocess,time,urllib.error,urllib.request,uuid
+SOURCE_DIR=$source_dir RESTORE_DIR=$restore_dir LOCAL_ROOT=$local_root LOCAL_PEER=$local_ip:$local_peer REMOTE_PEER=$remote_ip:$remote_peer \
+SCRIPT_ROOT=$root/scripts OWNER_LOSS=$owner_loss RECOVERY_DIR=$recovery_dir HANDOFF=$handoff \
+PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+import concurrent.futures,hashlib,json,os,ssl,subprocess,sys,time,urllib.error,uuid
 from pathlib import Path
-tokens={k:Path(os.environ[k]).read_text().strip() for k in ("LOCAL_TOKEN","REMOTE_TOKEN")}
-base={"local":"http://127.0.0.1:"+os.environ["LOCAL_API"],"remote":"https://localhost:"+os.environ["REMOTE_API"]}
-ctx={"local":None,"remote":ssl.create_default_context(cafile=os.environ["REMOTE_CA"])}
-class NodeError(RuntimeError):
- def __init__(self,node,path,status,response):
-  self.code=response.get("code")
-  super().__init__(node+" "+path+" HTTP "+str(status)+" "+json.dumps(response))
-def call(node,path,body=None):
- d=None if body is None else json.dumps(body).encode()
- h={"Accept":"application/json","Authorization":"Bearer "+tokens[node.upper()+"_TOKEN"]}
- if d:h["Content-Type"]="application/json"
- try:
-  with urllib.request.urlopen(urllib.request.Request(base[node]+path,data=d,headers=h,method="GET" if d is None else "POST"),timeout=120,context=ctx[node]) as r:return json.loads(r.read() or b"null")
- except urllib.error.HTTPError as e:raise NodeError(node,path,e.code,json.loads(e.read())) from e
+sys.path.insert(0,os.environ["SCRIPT_ROOT"])
+from remote_drill_api import DrillClient,NodeError,RECOVERY_MAXIMUM_BYTES,decode_recovery_export,write_private
+client=DrillClient({
+ "local":("http://127.0.0.1:"+os.environ["LOCAL_API"],os.environ["LOCAL_TOKEN"],None),
+ "remote":("https://localhost:"+os.environ["REMOTE_API"],os.environ["REMOTE_TOKEN"],ssl.create_default_context(cafile=os.environ["REMOTE_CA"])),
+})
+call=client.call
 for _ in range(30):
  try:
   if call("local","/api/v1/status")["state"]=="ready" and call("remote","/api/v1/status")["state"]=="ready":break
  except (OSError,urllib.error.URLError,RuntimeError):time.sleep(1)
 else:raise SystemExit("node readiness failed")
+owner_identity=call("local","/api/v1/transport/identity")
 invite=call("local","/api/v1/pair/invitations",{"lifetimeMs":600000,"endpoints":[os.environ["LOCAL_PEER"]]})
 session=call("remote","/api/v1/pair/accept",{"invitation":invite,"responderName":"Atmos drill provider","responderRoles":["storage_provider","backup_reader"],"inviterRoles":["backup_writer","backup_reader"]})
 code=session["authenticationString"]
@@ -368,6 +600,16 @@ for _ in range(90):
 else:raise SystemExit("restarted provider did not become ready")
 if call("remote","/api/v1/transport/identity")!=identity:raise SystemExit("provider identity changed across restart")
 print("remote drill: selected provider restarted with its durable identity: ok")
+if os.environ["OWNER_LOSS"]=="true":
+ exported=call("local","/api/v1/recovery/kit",{"confirmed":True},maximum_bytes=RECOVERY_MAXIMUM_BYTES)
+ kit,key=decode_recovery_export(exported)
+ recovery=Path(os.environ["RECOVERY_DIR"])
+ write_private(recovery/"owner.covalent-recovery",kit)
+ write_private(recovery/"owner.covalent-recovery-key",key)
+ handoff={"protocolVersion":exported["protocolVersion"],"ownerDeviceId":owner_identity["deviceId"],"providerId":transport["peerId"],"backupId":backup["backupId"],"snapshotId":"remote-drill-0001","backupSeconds":backup_seconds}
+ write_private(os.environ["HANDOFF"],json.dumps(handoff,separators=(",",":"),sort_keys=True).encode())
+ print("remote drill: exported a private owner-loss recovery pair: ok")
+ raise SystemExit(0)
 source=Path(os.environ["SOURCE_DIR"])
 for p in sorted(source.rglob("*"),reverse=True):p.unlink() if p.is_file() else p.rmdir()
 source.rmdir()
@@ -386,4 +628,78 @@ call("local","/api/v1/jobs/discard",{"jobId":"remote-drill-restore"})
 print("remote drill: Tailnet QUIC backup, source loss, provider-only restore: ok")
 print("remote drill: 64 MiB incompressible payload; backup including pause/resume {:.2f}s; provider-only restore {:.2f}s ({:.2f} MiB/s)".format(backup_seconds,restore_seconds,64/restore_seconds))
 PY
+
+if [ "$owner_loss" = true ]; then
+  assert_private_file "$recovery_dir/owner.covalent-recovery"
+  assert_private_file "$recovery_dir/owner.covalent-recovery-key"
+  assert_private_file "$handoff"
+  stop_local_node true
+  remove_owner_fixture_path source
+  remove_owner_fixture_path state
+  remove_owner_fixture_path local-kek
+  remove_owner_fixture_path local-token
+  remove_owner_fixture_path node.log
+
+  fresh_kek="$local_root/fresh-kek"
+  local_token="$local_root/fresh-token"
+  "$node_bin" provision-key --key-file "$fresh_kek" >/dev/null
+  openssl rand -hex 32 > "$local_token"
+  chmod 600 "$local_token"
+  assert_private_file "$fresh_kek"
+  assert_private_file "$local_token"
+  start_local_recover
+
+  LOCAL_API=$local_api LOCAL_TOKEN=$local_token RESTORE_DIR=$restore_dir LOCAL_ROOT=$local_root \
+  SCRIPT_ROOT=$root/scripts HANDOFF=$handoff PYTHONDONTWRITEBYTECODE=1 python3 - <<'PYRECOVERY'
+import hashlib,json,os,sys,time,urllib.error
+from pathlib import Path
+sys.path.insert(0,os.environ["SCRIPT_ROOT"])
+from remote_drill_api import DrillClient,RECOVERY_MAXIMUM_BYTES
+call=DrillClient({"local":("http://127.0.0.1:"+os.environ["LOCAL_API"],os.environ["LOCAL_TOKEN"],None)}).call
+handoff=json.loads(Path(os.environ["HANDOFF"]).read_bytes())
+expected_provider=handoff["providerId"]
+deadline=time.monotonic()+180
+while True:
+ remaining=deadline-time.monotonic()
+ if remaining<=0:raise SystemExit("automatic owner-loss recovery did not finish within 180 seconds")
+ try:status=call("local","/api/v1/recovery/status",maximum_bytes=RECOVERY_MAXIMUM_BYTES,timeout=min(10,remaining))
+ except (OSError,urllib.error.URLError):time.sleep(min(1,max(0,remaining)));continue
+ phase=status.get("phase")
+ if phase=="imported":break
+ if phase!="pending":raise SystemExit("automatic owner-loss recovery stopped in phase "+repr(phase))
+ time.sleep(min(1,max(0,deadline-time.monotonic())))
+if status.get("newerSnapshotMayExist") is not False or status.get("failures")!=[]:raise SystemExit("imported recovery retained incomplete evidence")
+if status.get("protocolVersion")!=handoff["protocolVersion"]:raise SystemExit("recovery protocol version changed across owner loss")
+if status.get("configuredProviderIds")!=[expected_provider] or status.get("queriedProviderIds")!=[expected_provider]:raise SystemExit("recovery provider sets do not exactly match the selected provider")
+backups=status.get("recoveredBackups")
+if not isinstance(backups,list) or len(backups)!=1:raise SystemExit("recovery did not import exactly one backup")
+recovered=backups[0]
+if recovered.get("backupId")!=handoff["backupId"] or recovered.get("snapshotId")!=handoff["snapshotId"] or recovered.get("sourceProviderIds")!=[expected_provider]:raise SystemExit("recovered backup evidence does not match the selected provider")
+identity=call("local","/api/v1/transport/identity")
+if identity.get("deviceId")!=handoff["ownerDeviceId"]:raise SystemExit("recovery changed the original owner device identity")
+listed=call("local","/api/v1/backups")
+if not isinstance(listed,list) or [item.get("backupId") for item in listed]!=[handoff["backupId"]]:raise SystemExit("recovered backup list is not exact")
+restore=Path(os.environ["RESTORE_DIR"]);root=Path(os.environ["LOCAL_ROOT"])
+local_chunks=root/"state/store/chunks"
+if local_chunks.exists() and any(path.is_file() for path in local_chunks.rglob("*")):raise SystemExit("fresh owner unexpectedly retained local ciphertext before restore")
+plan=call("local","/api/v1/restores/preview",{"backupId":handoff["backupId"],"snapshotId":handoff["snapshotId"],"targetRoot":str(restore),"conflictPolicy":"fail","jobId":"remote-drill-owner-loss-restore"})
+started=time.monotonic()
+result=call("local","/api/v1/restores/execute",{"planId":plan["planId"]})
+restore_seconds=time.monotonic()-started
+restored_files=sorted(str(path.relative_to(restore)) for path in restore.rglob("*") if path.is_file())
+restored_directories=sorted(str(path.relative_to(restore)) for path in restore.rglob("*") if path.is_dir())
+if result.get("filesRestored")!=2 or restored_files!=["nested/payload.txt","nested/stream.bin"] or restored_directories!=["nested","nested/empty"]:raise SystemExit("owner-loss restore tree is not exact")
+if (restore/"nested/payload.txt").read_bytes()!=(root/"expected.txt").read_bytes():raise SystemExit("owner-loss restore payload failed")
+digest_state=hashlib.sha256()
+with open(restore/"nested/stream.bin","rb") as restored_stream:
+ while chunk:=restored_stream.read(1024*1024):digest_state.update(chunk)
+digest=digest_state.hexdigest()
+expected_digest=(root/"stream.sha256").read_text().strip()
+if digest!=expected_digest or not (restore/"nested/empty").is_dir():raise SystemExit("owner-loss restore integrity failed")
+call("local","/api/v1/jobs/discard",{"jobId":"remote-drill-owner-loss-restore"})
+print("remote drill: entire-owner-loss automatic catalog import and provider-only restore: ok")
+print("remote drill: ownerDeviceId={} providerId={} backupId={} sourceSha256={}".format(handoff["ownerDeviceId"],expected_provider,handoff["backupId"],expected_digest))
+print("remote drill: 64 MiB incompressible payload; backup including pause/resume {:.2f}s; owner-loss restore {:.2f}s ({:.2f} MiB/s)".format(handoff["backupSeconds"],restore_seconds,64/restore_seconds))
+PYRECOVERY
+fi
 echo "remote drill: complete; trap removes only drill-owned resources"

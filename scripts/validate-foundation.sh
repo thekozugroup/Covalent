@@ -138,6 +138,7 @@ node ./scripts/test-setup-guidance.mjs
 ./scripts/test-personal-macos-app-builder.sh
 ./scripts/test-personal-android-apk-builder.sh
 ./scripts/test-android-jni-build-command.sh
+./scripts/test-remote-drill-owner-loss.sh
 ./scripts/test-openapi-routes.sh
 
 # The contract fixtures are a gate, not a nicety: `if command -v jq` silently

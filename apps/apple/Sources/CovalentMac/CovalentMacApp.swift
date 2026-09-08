@@ -125,10 +125,9 @@ private final class FirstLaunchUITestBootstrapper: LocalNodeBootstrapping {
         let environment = ProcessInfo.processInfo.environment
         guard let address = environment["COVALENT_UI_TEST_BASE_URL"],
               let url = URL(string: address),
-              let tokenFile = environment["COVALENT_UI_TEST_TOKEN_FILE"]
+              let tokenFile = environment["COVALENT_UI_TEST_TOKEN_FILE"],
+              let token = readPrivateUITestToken(relativePath: tokenFile)
         else { throw CocoaError(.fileNoSuchFile) }
-        let token = try String(contentsOfFile: tokenFile, encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
         return try NodeConnectionConfiguration(baseURL: url, apiToken: token)
     }
 }
