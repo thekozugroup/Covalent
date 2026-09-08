@@ -66,7 +66,23 @@ The user exports a versioned file containing the device name, LAN discovery pref
 - Automatic replica placement, background selection, or opaque availability promises.
 - Arbitrary filesystem restore or restore outside an explicitly authorized root.
 - A supported iOS client. Explicitly out of scope for now, along with full-device iOS backup, unsupported background execution, and access to other apps' private data.
-- File sync, photo management, media streaming, password management, or generic object storage.
+- Photo management, media streaming, password management, or generic object storage.
+
+## Planned two-way folder synchronization
+
+Status: planned for future work; not implemented, released, or a current support promise. The scope is defined by [ADR 0006](../adr/0006-two-way-folder-sync.md) and [Folder synchronization](synchronization.md).
+
+### Planned journey
+
+The user chooses a folder, chooses member devices and their roles, then starts synchronization. Members explicitly receive the folder epoch key; storage providers hold opaque encrypted data and do not decide membership or placement. A revoked member stops receiving new epoch keys at the explicit revocation cutoff.
+
+### Planned release prerequisites
+
+- Each writer has a distinct device identity. Folder roles, membership changes, independent epoch keys, recipient wraps, and revocation cutoffs are durably authenticated before operations are accepted.
+- Causal version vectors preserve concurrent file, directory, and deletion values. Delete tombstones remain until every active member acknowledges collection or the member is explicitly removed. Scan failures produce zero deletes.
+- Every member can recover the same state through signed operation history and encrypted provider data. The protocol rejects malformed, unauthenticated, missing-dependency, and equivocal history without silently choosing a version.
+- macOS applies changes beneath an authorized root using a crash-safe journal. Android uses the Storage Access Framework and its real background-execution limits; it never promises background synchronization the platform cannot run.
+- Tests cover source loss, offline members, revocation, concurrent edits and deletes, interrupted apply and restart, provider opacity, and platform-native access before any support or release claim.
 
 ## Acceptance boundary
 

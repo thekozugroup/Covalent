@@ -22,4 +22,6 @@ There is no committed milestone for making iOS supported.
 
 ## Later
 
-Only evidence-backed improvements within the locked backup/restore scope, for the supported platforms: Unraid, macOS, and Android. Windows and iOS clients, automatic replica placement, and required hosted services remain excluded.
+Two-way folder synchronization is planned, not implemented or released. The intended journey is simple: choose a folder, choose member devices and roles, then synchronize. Its concrete behavior and acceptance gates are recorded in [ADR 0006](../adr/0006-two-way-folder-sync.md) and [Folder synchronization](synchronization.md).
+
+Any release claim requires authenticated distinct writer identities, explicit membership and revocation, independent epoch keys and recipient wraps, causally preserved concurrent file/directory/delete values, safe tombstone retention, opaque encrypted providers, crash-safe authorized-root application on macOS and SAF-safe application on Android. Backup and restore remain their own supported scope; Windows, iOS, automatic replica placement, and required hosted services remain excluded.

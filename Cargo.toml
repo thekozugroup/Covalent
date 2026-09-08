@@ -22,6 +22,7 @@ anyhow = "1.0.100"
 axum = "0.8.6"
 base64 = "0.22.1"
 blake3 = "1.8.2"
+caseless = "=0.2.2"
 chacha20poly1305 = "0.10.1"
 clap = { version = "4.5.51", features = ["derive", "env"] }
 ed25519-dalek = { version = "2.2.0", features = ["rand_core", "serde", "zeroize"] }
@@ -38,7 +39,7 @@ quinn = "0.11.9"
 rand_core = { version = "0.6.4", features = ["getrandom"] }
 rcgen = { version = "0.14.3", features = ["crypto", "pem"] }
 rustls = { version = "0.23.35", default-features = false, features = ["ring", "std"] }
-rustix = { version = "1.1.2", features = ["fs"] }
+rustix = { version = "1.1.2", features = ["fs", "process"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 sha2 = "0.10.9"
@@ -49,6 +50,7 @@ tokio-util = { version = "0.7.19", features = ["io"] }
 tower = { version = "0.5.2", features = ["util"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
+unicode-normalization = "=0.1.25"
 uuid = { version = "1.18.1", features = ["serde", "v4"] }
 walkdir = "2.5.0"
 x509-parser = "0.18.1"

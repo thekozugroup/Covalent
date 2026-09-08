@@ -14,6 +14,8 @@ mod recovery;
 mod replication;
 mod restore;
 mod storage;
+/// Folder-sync protocol and private-state foundations; no network sync runtime is shipped.
+pub mod sync;
 
 use std::fs;
 use std::path::{Path, PathBuf};

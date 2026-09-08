@@ -36,7 +36,7 @@ Close every known release-blocking finding; do not remove a gate to raise a scor
 
 | Area | Required evidence | Current state |
 | --- | --- | --- |
-| Product scope | Explicit backup/sync semantics and a matching acceptance scenario | Automatic two-way sync is required by the working interpretation of this goal; implementation and acceptance evidence remain outstanding. |
+| Product scope | Explicit backup/sync semantics and a matching acceptance scenario | Automatic two-way sync is required. Bounded signed records, causal/conflict checks, private event storage and read-only Unix inventory foundations are implemented; peer runtime, safe apply, native setup and multi-device acceptance remain outstanding. |
 | Core correctness | Unit, property, adversarial, migration, concurrency, corruption, interrupted-job and source-loss tests; strict lint | At `1839796`, hosted Rust/contracts passed: 311 Rust tests across 22 suites, zero failed/ignored. Strict workspace Clippy and 89 web tests pass. Final revision and artifact checks remain required. |
 | Owner-device loss | A user can export a protected recovery kit, replace a lost owner device, discover its authenticated catalogs, see partial availability, and restore | API, CLI/runtime, web and native recovery flows pass. At source content matching `1839796`, the real Mac–Atmos Docker drill passed protected export, deletion of the entire original owner state, automatic catalog import and exact provider-only restore. Native UI also passes. Final artifacts and large-catalog memory evidence remain required. |
 | Beginner workflow | Install → connect → choose folder → protect → verify → restore through real UI; clear errors and recovery; no manual IDs in ordinary flows | Real browser unlock, automatic snapshot/name defaults, named backup selection, preview invalidation, restore and Verify passed with disposable files. Preview now explains individual file actions and renamed conflict destinations instead of raw JSON. Full cross-device onboarding pending. |
@@ -142,6 +142,19 @@ packages, credentials, private server inventories, or raw diagnostic bundles.
   Swift/Java/Kotlin CodeQL and the zero-open-alert policy passed at the same
   checkpoint;
   it does not complete the still-unshipped two-way sync feature.
+- The documentation checkpoint `1d8f9e6` passed every release-candidate software
+  gate in [CI run 34185411055](https://github.com/thekozugroup/Covalent/actions/runs/34185411055).
+  Swift and Java/Kotlin analysis and the zero-open-alert policy also passed in
+  [CodeQL run 34185411065](https://github.com/thekozugroup/Covalent/actions/runs/34185411065).
+- The next sync foundation checkpoint adds canonical signed records, exact
+  causal history checks, deterministic conflict projection, an encrypted
+  private event log and a read-only Unix inventory scanner. Local default
+  and all-feature workspace tests passed: 472 tests in 22 suites, zero failed
+  or ignored. A subsequent lossless cross-Unix timestamp conversion passed
+  all seven focused scanner tests. Strict all-target/all-feature workspace
+  Clippy and foundation validation passed. Exact-revision hosted checks are
+  still required before treating the new checkpoint as software-gate evidence. It does not
+  yet provide network synchronization or mutate shared user folders.
 - [Android size and host transfer evidence](android-size-profile-2026-09-07.md)
   records measured native reductions with the unchanged size ceiling and the
   four alternating host QUIC correctness/resource runs.
