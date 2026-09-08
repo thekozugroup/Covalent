@@ -1,7 +1,8 @@
 # Isolated Mac–Atmos recovery drill
 
 Status: passed as development evidence; repeat on the final release revision.
-Atmos is Ubuntu arm64, separate from the required Atlas/Unraid hardware gate.
+Atmos is Ubuntu arm64. The owner later confirmed Atlas is offline and accepted
+Docker validation as its completion path; no physical Atlas install is claimed.
 
 The drill ran through `scripts/test-remote-drill.sh` with generated temporary
 content only. Its source base was `69a6106cbfbd6960c7fe18075ac6d6795d8b41d3`
@@ -45,3 +46,7 @@ This drill preserves the owner's identity and metadata while losing its
 source and local data chunks. It does **not** prove recovery after loss of the
 entire owner device, automatic two-way synchronization, or native mobile UI
 behavior. Those remain separate completion gates.
+
+The later [complete owner-loss drill](atmos-owner-loss-2026-09-07.md) separately
+passed deletion of the entire owner state, recovery from exported private
+files, automatic catalog import and provider-only restore.
