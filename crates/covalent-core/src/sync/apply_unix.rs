@@ -1,8 +1,9 @@
-//! Descriptor-relative create-only application of admitted folder operations.
+//! Descriptor-relative create and observation application of admitted folder operations.
 //!
 //! Every user-folder mutation follows a committed encrypted apply intent. This
-//! first slice creates absent files and directories or durably verifies an
-//! existing directory. It never replaces, removes, or changes an incumbent.
+//! slice creates absent files and directories or durably verifies an
+//! existing file or directory. It never replaces, removes, chmods, or rewrites
+//! an incumbent during adoption.
 
 use std::fs::File;
 use std::io::{Read as _, Write as _};
@@ -53,7 +54,10 @@ pub struct ApplyLimits {
     pub maximum_revalidation_bytes: u64,
 }
 
-/// A durable create attempt's current visible state. Only `Applied` is success.
+/// A durable create or adoption attempt's current visible state.
+///
+/// Adoption proves local filesystem state only. It does not promise that the
+/// installation has retained content that it can serve to another member.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ApplyOutcome {
     Applied,
@@ -114,6 +118,48 @@ struct TargetParent {
     name: String,
 }
 
+#[derive(Clone, Copy)]
+struct ObservedFile {
+    identity: EntryIdentity,
+    permission_bits: u16,
+}
+
+struct OpenedAdoptionFile {
+    file: File,
+    before: rustix::fs::Stat,
+    observed: ObservedFile,
+}
+
+struct OpenedAdoptionDirectory {
+    descriptor: OwnedFd,
+    identity: EntryIdentity,
+}
+
+type AdoptionIoHook = (AdoptionIoPoint, Box<dyn FnOnce() -> Result<(), ApplyError>>);
+
+#[derive(Default)]
+struct AdoptionVerifyHooks {
+    after_sync: Option<Box<dyn FnOnce(EntryIdentity)>>,
+    io: Option<AdoptionIoHook>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AdoptionIoPoint {
+    ReadFile,
+    SyncFile,
+    InspectFile,
+    SyncDirectory,
+    InspectDirectory,
+    SyncParent,
+}
+
+#[derive(Clone, Copy)]
+enum FileModeRequirement {
+    Staged,
+    Adoptable,
+    Exact(u16),
+}
+
 /// A lifetime-locked private apply journal and anchored authorized user root.
 pub struct DurableFolderApplier {
     log: DurableEventLog<ApplyMachine>,
@@ -123,6 +169,10 @@ pub struct DurableFolderApplier {
     failpoint: Option<ApplyFailpoint>,
     #[cfg(test)]
     mutation_hook: Option<(ApplyMutationPoint, Box<dyn FnOnce()>)>,
+    #[cfg(test)]
+    adoption_sync_hook: Option<Box<dyn FnOnce(EntryIdentity)>>,
+    #[cfg(test)]
+    adoption_io_hook: Option<AdoptionIoHook>,
     root: UserRoot,
     outer: Arc<PrivateStateDir>,
     outer_lock: Arc<PrivateStateLock>,
@@ -167,13 +217,17 @@ impl DurableFolderApplier {
             failpoint: None,
             #[cfg(test)]
             mutation_hook: None,
+            #[cfg(test)]
+            adoption_sync_hook: None,
+            #[cfg(test)]
+            adoption_io_hook: None,
         })
     }
 
-    /// Replays the private journal, then checks cancellation for every
-    /// apply-specific history and filesystem record it validates. The shared
-    /// encrypted-log decoder currently completes its bounded replay before
-    /// these apply-specific cancellation checks begin.
+    /// Replays the private journal with pause/cancel checks between bounded
+    /// frames, then checks every apply-specific history/filesystem visit. A
+    /// started valid incomplete-tail repair finishes its sync before stopping;
+    /// individual filesystem calls and state transitions are not preempted.
     #[allow(clippy::too_many_arguments)]
     pub fn open(
         outer: Arc<PrivateStateDir>,
@@ -193,7 +247,9 @@ impl DurableFolderApplier {
         let user_root = UserRoot::open(root)?;
         let directory = outer.open_child(apply_dir)?;
         let machine = ApplyMachine::new(limits.machine)?;
-        let log = DurableEventLog::open(&directory, log_file, binding, key, log_limits, machine)?;
+        let log = DurableEventLog::open_with_control(
+            &directory, log_file, binding, key, log_limits, machine, control,
+        )?;
         let applier = Self {
             outer,
             outer_lock,
@@ -205,6 +261,10 @@ impl DurableFolderApplier {
             failpoint: None,
             #[cfg(test)]
             mutation_hook: None,
+            #[cfg(test)]
+            adoption_sync_hook: None,
+            #[cfg(test)]
+            adoption_io_hook: None,
         };
         applier.validate_replayed_history(events, control)?;
         applier.validate_replayed_filesystem(events, control)?;
@@ -261,6 +321,51 @@ impl DurableFolderApplier {
         }
     }
 
+    /// Durably adopts a matching incumbent file or directory without creating,
+    /// replacing, deleting, chmodding, or otherwise rewriting its contents.
+    pub fn adopt_existing(
+        &mut self,
+        events: &DurableFolderLog,
+        id: OpId,
+        exact_event: &[u8],
+        control: &JobControl,
+    ) -> Result<ApplyOutcome, ApplyError> {
+        check_control(control)?;
+        self.require_usable(events, control)?;
+        let accepted = events
+            .machine()?
+            .accepted_operation(id, exact_event)
+            .map_err(|_| ApplyError::UnadmittedOperation)?;
+        let body = accepted.body();
+        require_active(events, id, body)?;
+        if let Some(outcome) = self.existing_outcome(id)? {
+            return Ok(outcome);
+        }
+        if let Some(transaction) = self.log.machine()?.pending_operation(id) {
+            let action = self
+                .log
+                .machine()?
+                .transaction(transaction)
+                .ok_or(ApplyError::Changed)?
+                .intent()
+                .action();
+            return match action {
+                ApplyAction::EnsureExisting | ApplyAction::AdoptExisting => {
+                    self.finish_existing(transaction, events, control)
+                }
+                ApplyAction::Create => Err(ApplyError::Pending),
+            };
+        }
+        let operation = OperationBinding::new(id, accepted.digest());
+        match body.value() {
+            EntryValue::File(content) => {
+                self.begin_adopt_file(operation, body, content, events, control)
+            }
+            EntryValue::Directory => self.begin_ensure_directory(operation, body, events, control),
+            EntryValue::Tombstone => Err(ApplyError::ProjectionConflict),
+        }
+    }
+
     /// Revalidates every incomplete journal transaction and completes only
     /// stages whose exact identity was durably recorded by `StageReady`.
     pub fn reconcile(
@@ -298,51 +403,12 @@ impl DurableFolderApplier {
         store: &SyncContentStore,
         control: &JobControl,
     ) -> Result<ApplyOutcome, ApplyError> {
-        let parent = self.root.open_parent(body.path(), self.limits)?;
-        parent.reject_name_collision(body.path(), self.limits)?;
+        let parent = self.root.open_parent(body.path(), self.limits, control)?;
+        parent.reject_name_collision(body.path(), self.limits, control)?;
         let target = parent.target_identity()?;
         if let Some(identity) = target {
             if body.value() == EntryValue::Directory && parent.target_is_directory(identity)? {
-                let transaction = ApplyTransactionId::random()?;
-                let intent = ApplyIntent::new(
-                    transaction,
-                    operation,
-                    self.root.identity,
-                    body.path().clone(),
-                    EntryValue::Directory,
-                    ApplyAction::EnsureExisting,
-                    ExpectedTarget::Directory(identity),
-                    None,
-                )?;
-                let digest = self.append(ApplyRecord::Intent(intent))?;
-                let current = parent.open_target_directory()?;
-                if current != identity {
-                    return self.conflict(
-                        transaction,
-                        digest,
-                        operation,
-                        body.path(),
-                        ConflictReason::TargetChanged,
-                        Some(current),
-                    );
-                }
-                fsync_target_directory(&parent)?;
-                self.revalidate_promoted_target(
-                    body.path(),
-                    parent.identity,
-                    identity,
-                    EntryValue::Directory,
-                    control,
-                )?;
-                let applied = ApplyApplied::new(
-                    transaction,
-                    digest,
-                    operation,
-                    identity,
-                    EntryValue::Directory,
-                )?;
-                self.append(ApplyRecord::Applied(applied))?;
-                return Ok(ApplyOutcome::Applied);
+                return self.begin_ensure_directory(operation, body, events, control);
             }
             return self.record_standalone_conflict(
                 operation,
@@ -372,7 +438,7 @@ impl DurableFolderApplier {
         self.fail_if(ApplyFailpoint::IntentCommitted)?;
         self.run_mutation_hook(ApplyMutationPoint::BeforeStageCreate);
         self.root
-            .revalidate_parent(body.path(), parent.identity, self.limits)?;
+            .revalidate_parent(body.path(), parent.identity, self.limits, control)?;
         let stage_identity = match file {
             Some(content) => parent.create_file_stage(&stage_name, content, store, control),
             None => parent.create_directory_stage(&stage_name, control),
@@ -387,7 +453,101 @@ impl DurableFolderApplier {
         )?;
         self.append(ApplyRecord::StageReady(stage))?;
         self.fail_if(ApplyFailpoint::StageReadyCommitted)?;
-        self.finish_create(transaction, events, store, control)
+        self.finish_create(transaction, events, control)
+    }
+
+    fn begin_ensure_directory(
+        &mut self,
+        operation: OperationBinding,
+        body: &OperationBody,
+        events: &DurableFolderLog,
+        control: &JobControl,
+    ) -> Result<ApplyOutcome, ApplyError> {
+        let parent = self.root.open_parent(body.path(), self.limits, control)?;
+        parent.reject_name_collision(body.path(), self.limits, control)?;
+        let Some(identity) = parent.target_identity()? else {
+            return self.record_standalone_conflict(
+                operation,
+                body.path(),
+                ConflictReason::TargetChanged,
+                None,
+            );
+        };
+        if !parent.target_is_directory(identity)? {
+            return self.record_standalone_conflict(
+                operation,
+                body.path(),
+                ConflictReason::TargetExists,
+                Some(identity),
+            );
+        }
+        let transaction = ApplyTransactionId::random()?;
+        let intent = ApplyIntent::new(
+            transaction,
+            operation,
+            self.root.identity,
+            body.path().clone(),
+            EntryValue::Directory,
+            ApplyAction::EnsureExisting,
+            ExpectedTarget::Directory(identity),
+            None,
+        )?;
+        self.append(ApplyRecord::Intent(intent))?;
+        self.fail_if(ApplyFailpoint::IntentCommitted)?;
+        self.finish_existing(transaction, events, control)
+    }
+
+    fn begin_adopt_file(
+        &mut self,
+        operation: OperationBinding,
+        body: &OperationBody,
+        content: FileContent,
+        events: &DurableFolderLog,
+        control: &JobControl,
+    ) -> Result<ApplyOutcome, ApplyError> {
+        if content.byte_length() > self.limits.maximum_revalidation_bytes {
+            return Err(ApplyError::ResourceLimit);
+        }
+        let parent = self.root.open_parent(body.path(), self.limits, control)?;
+        parent.reject_name_collision(body.path(), self.limits, control)?;
+        let observed = match parent.inspect_file(
+            parent.name.as_str(),
+            None,
+            content,
+            FileModeRequirement::Adoptable,
+            control,
+        ) {
+            Ok(observed) => observed,
+            Err(ApplyError::Interrupted) => return Err(ApplyError::Interrupted),
+            Err(ApplyError::ResourceLimit) => return Err(ApplyError::ResourceLimit),
+            Err(ApplyError::Changed | ApplyError::NameCollision | ApplyError::UnsafeParent) => {
+                return self.record_standalone_conflict(
+                    operation,
+                    body.path(),
+                    ConflictReason::ContentMismatch,
+                    parent.target_identity()?,
+                );
+            }
+            Err(error) => return Err(error),
+        };
+        let transaction = ApplyTransactionId::random()?;
+        let intent = ApplyIntent::new(
+            transaction,
+            operation,
+            self.root.identity,
+            body.path().clone(),
+            EntryValue::File(content),
+            ApplyAction::AdoptExisting,
+            ExpectedTarget::File {
+                identity: observed.identity,
+                permission_bits: observed.permission_bits,
+            },
+            None,
+        )?;
+        self.append(ApplyRecord::Intent(intent))?;
+        self.fail_if(ApplyFailpoint::IntentCommitted)?;
+        self.run_mutation_hook(ApplyMutationPoint::BeforeAdoptionVerification);
+        self.finish_existing(transaction, events, control)
     }
 
     fn reconcile_transaction(
@@ -425,9 +585,15 @@ impl DurableFolderApplier {
         if accepted.body().path() != &path || accepted.body().value() != desired {
             return Err(ApplyError::Changed);
         }
+        if matches!(
+            action,
+            ApplyAction::EnsureExisting | ApplyAction::AdoptExisting
+        ) {
+            return self.finish_existing(transaction, events, control);
+        }
         if !has_stage_ready && action == ApplyAction::Create {
             let stage_name = stage_name.ok_or(ApplyError::Changed)?;
-            let parent = self.root.open_parent(&path, self.limits)?;
+            let parent = self.root.open_parent(&path, self.limits, control)?;
             if let Some(target) = parent.target_identity()? {
                 return self.conflict(
                     transaction,
@@ -453,7 +619,7 @@ impl DurableFolderApplier {
                 }
             }
             self.root
-                .revalidate_parent(&path, parent.identity, self.limits)?;
+                .revalidate_parent(&path, parent.identity, self.limits, control)?;
             let stage_identity = match desired {
                 EntryValue::File(content) => {
                     parent.create_file_stage(&stage_name, content, store, control)?
@@ -470,18 +636,248 @@ impl DurableFolderApplier {
             )?;
             self.append(ApplyRecord::StageReady(ready))?;
         }
-        self.finish_create(transaction, events, store, control)
+        self.finish_create(transaction, events, control)
+    }
+
+    fn finish_existing(
+        &mut self,
+        transaction: ApplyTransactionId,
+        events: &DurableFolderLog,
+        control: &JobControl,
+    ) -> Result<ApplyOutcome, ApplyError> {
+        check_control(control)?;
+        let (intent_digest, operation, root, path, desired, action, expected) = {
+            let retained = self
+                .log
+                .machine()?
+                .transaction(transaction)
+                .ok_or(ApplyError::Changed)?;
+            let intent = retained.intent();
+            (
+                retained.intent_digest(),
+                intent.operation(),
+                intent.root(),
+                intent.path().clone(),
+                intent.desired(),
+                intent.action(),
+                intent.expected_target(),
+            )
+        };
+        if root != self.root.identity {
+            return Err(ApplyError::Changed);
+        }
+        let parent = match self.root.open_parent(&path, self.limits, control) {
+            Ok(parent) => parent,
+            Err(ApplyError::Changed) => {
+                return self.conflict(
+                    transaction,
+                    intent_digest,
+                    operation,
+                    &path,
+                    ConflictReason::RootChanged,
+                    None,
+                );
+            }
+            Err(ApplyError::UnsafeParent) => {
+                return self.conflict(
+                    transaction,
+                    intent_digest,
+                    operation,
+                    &path,
+                    ConflictReason::ParentChanged,
+                    None,
+                );
+            }
+            Err(ApplyError::NameCollision) => {
+                return self.conflict(
+                    transaction,
+                    intent_digest,
+                    operation,
+                    &path,
+                    ConflictReason::PortableNameCollision,
+                    None,
+                );
+            }
+            Err(error) => return Err(error),
+        };
+        if let Err(error) = parent.reject_name_collision(&path, self.limits, control) {
+            if matches!(error, ApplyError::NameCollision) {
+                return self.conflict(
+                    transaction,
+                    intent_digest,
+                    operation,
+                    &path,
+                    ConflictReason::PortableNameCollision,
+                    None,
+                );
+            }
+            return Err(error);
+        }
+        let target_identity = match (action, expected, desired) {
+            (
+                ApplyAction::EnsureExisting,
+                ExpectedTarget::Directory(expected),
+                EntryValue::Directory,
+            ) => {
+                let opened = match parent.open_adoption_directory(expected) {
+                    Ok(opened) => opened,
+                    Err(
+                        ApplyError::Changed | ApplyError::NameCollision | ApplyError::UnsafeParent,
+                    ) => {
+                        return self.conflict(
+                            transaction,
+                            intent_digest,
+                            operation,
+                            &path,
+                            ConflictReason::TargetChanged,
+                            parent.target_identity()?,
+                        );
+                    }
+                    Err(error) => return Err(error),
+                };
+                self.run_mutation_hook(ApplyMutationPoint::BeforeAdoptionDescriptorSync);
+                let hooks = self.take_adoption_verify_hooks();
+                if let Err(error) = opened.sync_and_revalidate(&parent, control, hooks) {
+                    if matches!(
+                        error,
+                        ApplyError::Changed | ApplyError::NameCollision | ApplyError::UnsafeParent
+                    ) {
+                        return self.conflict(
+                            transaction,
+                            intent_digest,
+                            operation,
+                            &path,
+                            ConflictReason::TargetChanged,
+                            parent.target_identity()?,
+                        );
+                    }
+                    return Err(error);
+                }
+                self.run_mutation_hook(ApplyMutationPoint::BeforeAdoptionReceipt);
+                if let Err(error) = self.revalidate_existing_target(
+                    &path,
+                    parent.identity,
+                    expected,
+                    desired,
+                    None,
+                    control,
+                ) {
+                    if matches!(
+                        error,
+                        ApplyError::Changed | ApplyError::NameCollision | ApplyError::UnsafeParent
+                    ) {
+                        return self.conflict(
+                            transaction,
+                            intent_digest,
+                            operation,
+                            &path,
+                            ConflictReason::TargetChanged,
+                            parent.target_identity()?,
+                        );
+                    }
+                    return Err(error);
+                }
+                expected
+            }
+            (
+                ApplyAction::AdoptExisting,
+                ExpectedTarget::File {
+                    identity,
+                    permission_bits,
+                },
+                EntryValue::File(content),
+            ) => {
+                if content.byte_length() > self.limits.maximum_revalidation_bytes {
+                    return Err(ApplyError::ResourceLimit);
+                }
+                let opened = match parent.open_adoption_file(
+                    parent.name.as_str(),
+                    Some(identity),
+                    content,
+                    FileModeRequirement::Exact(permission_bits),
+                ) {
+                    Ok(opened) => opened,
+                    Err(
+                        ApplyError::Changed | ApplyError::NameCollision | ApplyError::UnsafeParent,
+                    ) => {
+                        return self.conflict(
+                            transaction,
+                            intent_digest,
+                            operation,
+                            &path,
+                            ConflictReason::TargetChanged,
+                            parent.target_identity()?,
+                        );
+                    }
+                    Err(error) => return Err(error),
+                };
+                self.run_mutation_hook(ApplyMutationPoint::BeforeAdoptionDescriptorSync);
+                let hooks = self.take_adoption_verify_hooks();
+                if let Err(error) =
+                    opened.verify(&parent, parent.name.as_str(), content, control, true, hooks)
+                {
+                    if matches!(
+                        error,
+                        ApplyError::Changed | ApplyError::NameCollision | ApplyError::UnsafeParent
+                    ) {
+                        return self.conflict(
+                            transaction,
+                            intent_digest,
+                            operation,
+                            &path,
+                            ConflictReason::TargetChanged,
+                            parent.target_identity()?,
+                        );
+                    }
+                    return Err(error);
+                }
+                self.run_mutation_hook(ApplyMutationPoint::BeforeAdoptionReceipt);
+                if let Err(error) = self.revalidate_existing_target(
+                    &path,
+                    parent.identity,
+                    identity,
+                    desired,
+                    Some(permission_bits),
+                    control,
+                ) {
+                    if matches!(
+                        error,
+                        ApplyError::Changed | ApplyError::NameCollision | ApplyError::UnsafeParent
+                    ) {
+                        return self.conflict(
+                            transaction,
+                            intent_digest,
+                            operation,
+                            &path,
+                            ConflictReason::TargetChanged,
+                            parent.target_identity()?,
+                        );
+                    }
+                    return Err(error);
+                }
+                identity
+            }
+            _ => return Err(ApplyError::Changed),
+        };
+        require_bound_active(events, operation, &path, desired)?;
+        check_control(control)?;
+        let applied = ApplyApplied::new(
+            transaction,
+            intent_digest,
+            operation,
+            target_identity,
+            desired,
+        )?;
+        self.append(ApplyRecord::Applied(applied))?;
+        Ok(ApplyOutcome::Applied)
     }
 
     fn finish_create(
         &mut self,
         transaction: ApplyTransactionId,
         events: &DurableFolderLog,
-        store: &SyncContentStore,
         control: &JobControl,
     ) -> Result<ApplyOutcome, ApplyError> {
-        let _ = events;
-        let _ = store;
         check_control(control)?;
         let (intent_digest, operation, path, desired, action, stage_name, stage_identity) = {
             let machine = self.log.machine()?;
@@ -512,50 +908,12 @@ impl DurableFolderApplier {
         {
             return Err(ApplyError::Changed);
         }
-        if action == ApplyAction::EnsureExisting {
-            let parent = self.root.open_parent(&path, self.limits)?;
-            let ExpectedTarget::Directory(expected) = self
-                .log
-                .machine()?
-                .transaction(transaction)
-                .ok_or(ApplyError::Changed)?
-                .intent()
-                .expected_target()
-            else {
-                return Err(ApplyError::Changed);
-            };
-            let current = parent.open_target_directory()?;
-            if current != expected {
-                return self.conflict(
-                    transaction,
-                    intent_digest,
-                    operation,
-                    &path,
-                    ConflictReason::TargetChanged,
-                    Some(current),
-                );
-            }
-            parent.sync_target_and_parent(EntryValue::Directory)?;
-            self.revalidate_promoted_target(
-                &path,
-                parent.identity,
-                current,
-                EntryValue::Directory,
-                control,
-            )?;
-            let applied = ApplyApplied::new(
-                transaction,
-                intent_digest,
-                operation,
-                current,
-                EntryValue::Directory,
-            )?;
-            self.append(ApplyRecord::Applied(applied))?;
-            return Ok(ApplyOutcome::Applied);
+        if action != ApplyAction::Create {
+            return Err(ApplyError::Changed);
         }
         let stage_identity = stage_identity.ok_or(ApplyError::Pending)?;
         let stage_name = stage_name.ok_or(ApplyError::Changed)?;
-        let parent = match self.root.open_parent(&path, self.limits) {
+        let parent = match self.root.open_parent(&path, self.limits, control) {
             Ok(parent) => parent,
             Err(ApplyError::Changed) => {
                 return self.conflict(
@@ -642,7 +1000,27 @@ impl DurableFolderApplier {
                 }
                 self.run_mutation_hook(ApplyMutationPoint::BeforePromotion);
                 self.root
-                    .revalidate_parent(&path, parent.identity, self.limits)?;
+                    .revalidate_parent(&path, parent.identity, self.limits, control)?;
+                if let Err(error) =
+                    parent.validate_stage(&stage_name, stage_identity, desired, control)
+                {
+                    if matches!(error, ApplyError::Interrupted | ApplyError::ResourceLimit) {
+                        return Err(error);
+                    }
+                    return self.conflict(
+                        transaction,
+                        intent_digest,
+                        operation,
+                        &path,
+                        ConflictReason::StageChanged,
+                        parent.named_identity(stage_name.as_str())?,
+                    );
+                }
+                self.run_mutation_hook(ApplyMutationPoint::AfterPromotionValidation);
+                // The rename primitive is not an inode-conditioned CAS. The
+                // validation above closes deterministic caller seams; the
+                // post-rename check below treats a syscall-window
+                // substitution as a preserved durable conflict.
                 renameat_with(
                     &parent.descriptor,
                     stage_name.as_str(),
@@ -654,10 +1032,24 @@ impl DurableFolderApplier {
                 self.fail_if(ApplyFailpoint::Promoted)?;
             }
         }
-        parent.validate_target(stage_identity, desired, control)?;
+        if let Err(error) = parent.validate_target(stage_identity, desired, control) {
+            if matches!(error, ApplyError::Interrupted | ApplyError::ResourceLimit) {
+                return Err(error);
+            }
+            return self.conflict(
+                transaction,
+                intent_digest,
+                operation,
+                &path,
+                ConflictReason::FinalChanged,
+                parent.target_identity()?,
+            );
+        }
         parent.sync_target_and_parent(desired)?;
         self.revalidate_promoted_target(&path, parent.identity, stage_identity, desired, control)?;
         self.fail_if(ApplyFailpoint::TargetSynced)?;
+        require_bound_active(events, operation, &path, desired)?;
+        check_control(control)?;
         let applied = ApplyApplied::new(
             transaction,
             intent_digest,
@@ -667,6 +1059,31 @@ impl DurableFolderApplier {
         )?;
         self.append(ApplyRecord::Applied(applied))?;
         Ok(ApplyOutcome::Applied)
+    }
+
+    fn revalidate_existing_target(
+        &self,
+        path: &SyncPath,
+        parent_identity: EntryIdentity,
+        target_identity: EntryIdentity,
+        desired: EntryValue,
+        permission_bits: Option<u16>,
+        control: &JobControl,
+    ) -> Result<(), ApplyError> {
+        let current_parent = self.root.open_parent(path, self.limits, control)?;
+        if current_parent.identity != parent_identity {
+            return Err(ApplyError::Changed);
+        }
+        current_parent.reject_name_collision(path, self.limits, control)?;
+        match permission_bits {
+            Some(permission_bits) => current_parent.validate_adopted_target(
+                target_identity,
+                desired,
+                permission_bits,
+                control,
+            ),
+            None => current_parent.validate_target(target_identity, desired, control),
+        }
     }
 
     fn append(
@@ -809,10 +1226,28 @@ impl DurableFolderApplier {
                 Err(ApplyError::ProjectionConflict) => return Ok(()),
                 Err(error) => return Err(error),
             }
-            let parent = self
-                .root
-                .open_parent(transaction.intent().path(), self.limits)?;
-            parent.validate_target(applied.target_identity(), applied.desired(), control)?;
+            let parent =
+                self.root
+                    .open_parent(transaction.intent().path(), self.limits, control)?;
+            match (
+                transaction.intent().action(),
+                transaction.intent().expected_target(),
+            ) {
+                (
+                    ApplyAction::AdoptExisting,
+                    ExpectedTarget::File {
+                        permission_bits, ..
+                    },
+                ) => parent.validate_adopted_target(
+                    applied.target_identity(),
+                    applied.desired(),
+                    permission_bits,
+                    control,
+                )?,
+                _ => {
+                    parent.validate_target(applied.target_identity(), applied.desired(), control)?
+                }
+            }
             Ok(())
         })
     }
@@ -841,11 +1276,11 @@ impl DurableFolderApplier {
         desired: EntryValue,
         control: &JobControl,
     ) -> Result<(), ApplyError> {
-        let current_parent = self.root.open_parent(path, self.limits)?;
+        let current_parent = self.root.open_parent(path, self.limits, control)?;
         if current_parent.identity != parent_identity {
             return Err(ApplyError::Changed);
         }
-        current_parent.reject_name_collision(path, self.limits)?;
+        current_parent.reject_name_collision(path, self.limits, control)?;
         current_parent.validate_target(target_identity, desired, control)
     }
 
@@ -870,6 +1305,20 @@ impl DurableFolderApplier {
             hook();
         }
     }
+
+    fn take_adoption_verify_hooks(&mut self) -> AdoptionVerifyHooks {
+        #[cfg(not(test))]
+        {
+            AdoptionVerifyHooks::default()
+        }
+        #[cfg(test)]
+        {
+            AdoptionVerifyHooks {
+                after_sync: self.adoption_sync_hook.take(),
+                io: self.adoption_io_hook.take(),
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -885,6 +1334,10 @@ enum ApplyFailpoint {
 enum ApplyMutationPoint {
     BeforeStageCreate,
     BeforePromotion,
+    AfterPromotionValidation,
+    BeforeAdoptionVerification,
+    BeforeAdoptionDescriptorSync,
+    BeforeAdoptionReceipt,
 }
 
 fn validate_configuration(
@@ -965,6 +1418,22 @@ fn require_active(
     Ok(())
 }
 
+fn require_bound_active(
+    events: &DurableFolderLog,
+    operation: OperationBinding,
+    path: &SyncPath,
+    desired: EntryValue,
+) -> Result<(), ApplyError> {
+    let accepted = events
+        .machine()?
+        .accepted_operation_by_digest(operation.id(), operation.digest_bytes())
+        .map_err(|_| ApplyError::UnadmittedOperation)?;
+    if accepted.body().path() != path || accepted.body().value() != desired {
+        return Err(ApplyError::Changed);
+    }
+    require_active(events, accepted.id(), accepted.body())
+}
+
 impl UserRoot {
     fn open(root: &AuthorizedRoot) -> Result<Self, ApplyError> {
         let descriptor = open(
@@ -1012,7 +1481,9 @@ impl UserRoot {
         &self,
         path: &SyncPath,
         limits: ApplyLimits,
+        control: &JobControl,
     ) -> Result<TargetParent, ApplyError> {
+        check_control(control)?;
         self.revalidate()?;
         let mut components = path.components().peekable();
         let mut current = openat(
@@ -1028,12 +1499,13 @@ impl UserRoot {
         .map_err(|error| os_error("duplicate authorized apply root", error))?;
         let mut final_name = None;
         while let Some(component) = components.next() {
+            check_control(control)?;
             if components.peek().is_none() {
-                reject_component_collision(&current, component, limits)?;
+                reject_component_collision(&current, component, limits, control)?;
                 final_name = Some(component.to_owned());
                 break;
             }
-            reject_component_collision(&current, component, limits)?;
+            reject_component_collision(&current, component, limits, control)?;
             current = openat(
                 &current,
                 component,
@@ -1065,8 +1537,9 @@ impl UserRoot {
         path: &SyncPath,
         expected: EntryIdentity,
         limits: ApplyLimits,
+        control: &JobControl,
     ) -> Result<(), ApplyError> {
-        let current = self.open_parent(path, limits)?;
+        let current = self.open_parent(path, limits, control)?;
         if current.identity != expected {
             return Err(ApplyError::Changed);
         }
@@ -1078,6 +1551,7 @@ fn reject_component_collision(
     directory: &OwnedFd,
     name: &str,
     limits: ApplyLimits,
+    control: &JobControl,
 ) -> Result<(), ApplyError> {
     let target = SyncPath::from_wire(name)
         .map_err(|_| ApplyError::InvalidConfiguration)?
@@ -1087,6 +1561,7 @@ fn reject_component_collision(
     let mut reader =
         Dir::read_from(directory).map_err(|error| os_error("enumerate apply parent", error))?;
     for entry in &mut reader {
+        check_control(control)?;
         let entry = entry.map_err(|error| os_error("read apply parent entry", error))?;
         let raw = entry.file_name().to_bytes();
         if matches!(raw, b"." | b"..") {
@@ -1115,8 +1590,9 @@ impl TargetParent {
         &self,
         path: &SyncPath,
         limits: ApplyLimits,
+        control: &JobControl,
     ) -> Result<(), ApplyError> {
-        reject_component_collision(&self.descriptor, &self.name, limits)?;
+        reject_component_collision(&self.descriptor, &self.name, limits, control)?;
         let _ = path;
         self.revalidate()
     }
@@ -1153,7 +1629,10 @@ impl TargetParent {
             && FileType::from_raw_mode(stat.st_mode) == FileType::Directory)
     }
 
-    fn open_target_directory(&self) -> Result<EntryIdentity, ApplyError> {
+    fn open_adoption_directory(
+        &self,
+        expected: EntryIdentity,
+    ) -> Result<OpenedAdoptionDirectory, ApplyError> {
         let fd = openat(
             &self.descriptor,
             self.name.as_str(),
@@ -1164,9 +1643,22 @@ impl TargetParent {
                 | OFlags::NONBLOCK,
             Mode::empty(),
         )
-        .map_err(|error| os_error("open apply directory", error))?;
+        .map_err(|error| match error {
+            rustix::io::Errno::NOENT | rustix::io::Errno::NOTDIR | rustix::io::Errno::LOOP => {
+                ApplyError::Changed
+            }
+            other => os_error("open apply directory", other),
+        })?;
         let stat = fstat(&fd).map_err(|error| os_error("inspect apply directory handle", error))?;
-        Ok(identity(&stat))
+        if identity(&stat) != expected
+            || FileType::from_raw_mode(stat.st_mode) != FileType::Directory
+        {
+            return Err(ApplyError::Changed);
+        }
+        Ok(OpenedAdoptionDirectory {
+            descriptor: fd,
+            identity: expected,
+        })
     }
 
     fn create_directory_stage(
@@ -1265,7 +1757,13 @@ impl TargetParent {
         desired: EntryValue,
         control: &JobControl,
     ) -> Result<(), ApplyError> {
-        self.validate_named(name.as_str(), expected, desired, control)
+        self.validate_named(
+            name.as_str(),
+            expected,
+            desired,
+            FileModeRequirement::Staged,
+            control,
+        )
     }
 
     fn validate_target(
@@ -1274,7 +1772,29 @@ impl TargetParent {
         desired: EntryValue,
         control: &JobControl,
     ) -> Result<(), ApplyError> {
-        self.validate_named(self.name.as_str(), expected, desired, control)
+        self.validate_named(
+            self.name.as_str(),
+            expected,
+            desired,
+            FileModeRequirement::Staged,
+            control,
+        )
+    }
+
+    fn validate_adopted_target(
+        &self,
+        expected: EntryIdentity,
+        desired: EntryValue,
+        permission_bits: u16,
+        control: &JobControl,
+    ) -> Result<(), ApplyError> {
+        self.validate_named(
+            self.name.as_str(),
+            expected,
+            desired,
+            FileModeRequirement::Exact(permission_bits),
+            control,
+        )
     }
 
     fn validate_named(
@@ -1282,6 +1802,7 @@ impl TargetParent {
         name: &str,
         expected: EntryIdentity,
         desired: EntryValue,
+        file_mode: FileModeRequirement,
         control: &JobControl,
     ) -> Result<(), ApplyError> {
         check_control(control)?;
@@ -1297,14 +1818,26 @@ impl TargetParent {
                         | OFlags::NONBLOCK,
                     Mode::empty(),
                 )
-                .map_err(|error| os_error("open applied directory", error))?;
+                .map_err(|error| match error {
+                    rustix::io::Errno::NOENT
+                    | rustix::io::Errno::NOTDIR
+                    | rustix::io::Errno::LOOP => ApplyError::Changed,
+                    other => os_error("open applied directory", other),
+                })?;
                 let stat =
                     fstat(&fd).map_err(|error| os_error("inspect applied directory", error))?;
                 if identity(&stat) != expected {
                     return Err(ApplyError::Changed);
                 }
-                let named = statat(&self.descriptor, name, AtFlags::SYMLINK_NOFOLLOW)
-                    .map_err(|error| os_error("reinspect applied directory entry", error))?;
+                let named =
+                    statat(&self.descriptor, name, AtFlags::SYMLINK_NOFOLLOW).map_err(|error| {
+                        match error {
+                            rustix::io::Errno::NOENT | rustix::io::Errno::NOTDIR => {
+                                ApplyError::Changed
+                            }
+                            other => os_error("reinspect applied directory entry", other),
+                        }
+                    })?;
                 if identity(&named) != expected
                     || FileType::from_raw_mode(named.st_mode) != FileType::Directory
                 {
@@ -1312,70 +1845,72 @@ impl TargetParent {
                 }
             }
             EntryValue::File(content) => {
-                let fd = openat(
-                    &self.descriptor,
-                    name,
-                    OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
-                    Mode::empty(),
-                )
-                .map_err(|error| os_error("open applied file", error))?;
-                let stat = fstat(&fd).map_err(|error| os_error("inspect applied file", error))?;
-                if identity(&stat) != expected
-                    || FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
-                    || stat.st_nlink != 1
-                    || stat.st_size < 0
-                    || stat.st_size as u64 != content.byte_length()
-                {
-                    return Err(ApplyError::Changed);
-                }
-                let expected_mode = if content.executable() {
-                    EXECUTABLE_FILE_MODE
-                } else {
-                    FILE_MODE
-                };
-                if permission_bits(stat.st_mode) != expected_mode {
-                    return Err(ApplyError::Changed);
-                }
-                let mut file = File::from(fd);
-                let mut hasher = blake3::Hasher::new();
-                let mut total = 0_u64;
-                let mut buffer = [0_u8; STREAM_BUFFER_BYTES];
-                loop {
-                    check_control(control)?;
-                    let read = file
-                        .read(&mut buffer)
-                        .map_err(|error| std_io_error("read applied file", error))?;
-                    if read == 0 {
-                        break;
-                    }
-                    total = total.checked_add(read as u64).ok_or(ApplyError::Changed)?;
-                    if total > content.byte_length() {
-                        return Err(ApplyError::Changed);
-                    }
-                    hasher.update(&buffer[..read]);
-                }
-                if total != content.byte_length()
-                    || hasher.finalize().as_bytes() != &content.digest().to_bytes()
-                {
-                    return Err(ApplyError::Changed);
-                }
-                let after = fstat(&file)
-                    .map_err(|error| os_error("reinspect applied file handle", error))?;
-                let named = statat(&self.descriptor, name, AtFlags::SYMLINK_NOFOLLOW)
-                    .map_err(|error| os_error("reinspect applied file entry", error))?;
-                if !same_file_fingerprint(&stat, &after)
-                    || identity(&named) != expected
-                    || FileType::from_raw_mode(named.st_mode) != FileType::RegularFile
-                    || named.st_nlink != 1
-                    || named.st_mode != after.st_mode
-                    || named.st_size != after.st_size
-                {
-                    return Err(ApplyError::Changed);
-                }
+                self.inspect_file(name, Some(expected), content, file_mode, control)?;
             }
             EntryValue::Tombstone => return Err(ApplyError::InvalidConfiguration),
         }
         Ok(())
+    }
+
+    fn inspect_file(
+        &self,
+        name: &str,
+        expected: Option<EntryIdentity>,
+        content: FileContent,
+        mode_requirement: FileModeRequirement,
+        control: &JobControl,
+    ) -> Result<ObservedFile, ApplyError> {
+        check_control(control)?;
+        self.open_adoption_file(name, expected, content, mode_requirement)?
+            .verify(
+                self,
+                name,
+                content,
+                control,
+                false,
+                AdoptionVerifyHooks::default(),
+            )
+    }
+
+    fn open_adoption_file(
+        &self,
+        name: &str,
+        expected: Option<EntryIdentity>,
+        content: FileContent,
+        mode_requirement: FileModeRequirement,
+    ) -> Result<OpenedAdoptionFile, ApplyError> {
+        let fd = openat(
+            &self.descriptor,
+            name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+            Mode::empty(),
+        )
+        .map_err(|error| match error {
+            rustix::io::Errno::NOENT | rustix::io::Errno::NOTDIR | rustix::io::Errno::LOOP => {
+                ApplyError::Changed
+            }
+            other => os_error("open applied file", other),
+        })?;
+        let stat = fstat(&fd).map_err(|error| os_error("inspect applied file", error))?;
+        let observed_identity = identity(&stat);
+        let permission_bits = adoption_permission_bits(stat.st_mode);
+        if expected.is_some_and(|expected| expected != observed_identity)
+            || FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
+            || stat.st_nlink != 1
+            || stat.st_size < 0
+            || stat.st_size as u64 != content.byte_length()
+            || !mode_requirement.accepts(permission_bits, content.executable())
+        {
+            return Err(ApplyError::Changed);
+        }
+        Ok(OpenedAdoptionFile {
+            file: File::from(fd),
+            before: stat,
+            observed: ObservedFile {
+                identity: observed_identity,
+                permission_bits,
+            },
+        })
     }
 
     fn sync_target_and_parent(&self, desired: EntryValue) -> Result<(), ApplyError> {
@@ -1393,8 +1928,128 @@ impl TargetParent {
     }
 }
 
-fn fsync_target_directory(parent: &TargetParent) -> Result<(), ApplyError> {
-    parent.sync_target_and_parent(EntryValue::Directory)
+impl OpenedAdoptionFile {
+    fn verify(
+        mut self,
+        parent: &TargetParent,
+        name: &str,
+        content: FileContent,
+        control: &JobControl,
+        sync: bool,
+        mut hooks: AdoptionVerifyHooks,
+    ) -> Result<ObservedFile, ApplyError> {
+        let mut hasher = blake3::Hasher::new();
+        let mut total = 0_u64;
+        let mut buffer = [0_u8; STREAM_BUFFER_BYTES];
+        loop {
+            check_control(control)?;
+            run_adoption_io_hook(&mut hooks.io, AdoptionIoPoint::ReadFile)?;
+            let read = self
+                .file
+                .read(&mut buffer)
+                .map_err(|error| std_io_error("read applied file", error))?;
+            if read == 0 {
+                break;
+            }
+            total = total.checked_add(read as u64).ok_or(ApplyError::Changed)?;
+            if total > content.byte_length() {
+                return Err(ApplyError::Changed);
+            }
+            hasher.update(&buffer[..read]);
+        }
+        if total != content.byte_length()
+            || hasher.finalize().as_bytes() != &content.digest().to_bytes()
+        {
+            return Err(ApplyError::Changed);
+        }
+        check_control(control)?;
+        if sync {
+            run_adoption_io_hook(&mut hooks.io, AdoptionIoPoint::SyncFile)?;
+            fsync(&self.file).map_err(|error| os_error("sync adopted file", error))?;
+            if let Some(hook) = hooks.after_sync.take() {
+                hook(self.observed.identity);
+            }
+            check_control(control)?;
+        }
+        run_adoption_io_hook(&mut hooks.io, AdoptionIoPoint::InspectFile)?;
+        let after =
+            fstat(&self.file).map_err(|error| os_error("reinspect applied file handle", error))?;
+        let named = statat(&parent.descriptor, name, AtFlags::SYMLINK_NOFOLLOW).map_err(
+            |error| match error {
+                rustix::io::Errno::NOENT | rustix::io::Errno::NOTDIR => ApplyError::Changed,
+                other => os_error("reinspect applied file entry", other),
+            },
+        )?;
+        if !same_file_fingerprint(&self.before, &after)
+            || !same_file_fingerprint(&after, &named)
+            || identity(&named) != self.observed.identity
+            || FileType::from_raw_mode(named.st_mode) != FileType::RegularFile
+            || named.st_nlink != 1
+        {
+            return Err(ApplyError::Changed);
+        }
+        if sync {
+            run_adoption_io_hook(&mut hooks.io, AdoptionIoPoint::SyncParent)?;
+            fsync(&parent.descriptor)
+                .map_err(|error| os_error("sync adopted file parent", error))?;
+            check_control(control)?;
+        }
+        Ok(self.observed)
+    }
+}
+
+impl OpenedAdoptionDirectory {
+    fn sync_and_revalidate(
+        self,
+        parent: &TargetParent,
+        control: &JobControl,
+        mut hooks: AdoptionVerifyHooks,
+    ) -> Result<(), ApplyError> {
+        check_control(control)?;
+        run_adoption_io_hook(&mut hooks.io, AdoptionIoPoint::SyncDirectory)?;
+        fsync(&self.descriptor).map_err(|error| os_error("sync adopted directory", error))?;
+        if let Some(hook) = hooks.after_sync.take() {
+            hook(self.identity);
+        }
+        check_control(control)?;
+        run_adoption_io_hook(&mut hooks.io, AdoptionIoPoint::InspectDirectory)?;
+        let after = fstat(&self.descriptor)
+            .map_err(|error| os_error("reinspect adopted directory", error))?;
+        let named = statat(
+            &parent.descriptor,
+            parent.name.as_str(),
+            AtFlags::SYMLINK_NOFOLLOW,
+        )
+        .map_err(|error| match error {
+            rustix::io::Errno::NOENT | rustix::io::Errno::NOTDIR => ApplyError::Changed,
+            other => os_error("reinspect adopted directory entry", other),
+        })?;
+        if identity(&after) != self.identity
+            || identity(&named) != self.identity
+            || FileType::from_raw_mode(after.st_mode) != FileType::Directory
+            || FileType::from_raw_mode(named.st_mode) != FileType::Directory
+        {
+            return Err(ApplyError::Changed);
+        }
+        run_adoption_io_hook(&mut hooks.io, AdoptionIoPoint::SyncParent)?;
+        fsync(&parent.descriptor)
+            .map_err(|error| os_error("sync adopted directory parent", error))?;
+        check_control(control)
+    }
+}
+
+fn run_adoption_io_hook(
+    hook: &mut Option<AdoptionIoHook>,
+    point: AdoptionIoPoint,
+) -> Result<(), ApplyError> {
+    if hook
+        .as_ref()
+        .is_some_and(|(selected, _)| *selected == point)
+    {
+        let (_, run) = hook.take().expect("checked adoption I/O hook");
+        run()?;
+    }
+    Ok(())
 }
 
 fn same_file_fingerprint(left: &rustix::fs::Stat, right: &rustix::fs::Stat) -> bool {
@@ -1409,6 +2064,22 @@ fn same_file_fingerprint(left: &rustix::fs::Stat, right: &rustix::fs::Stat) -> b
         && left.st_ctime_nsec == right.st_ctime_nsec
 }
 
+impl FileModeRequirement {
+    fn accepts(self, permission_bits: u16, executable: bool) -> bool {
+        match self {
+            Self::Staged => permission_bits == if executable { 0o700 } else { 0o600 },
+            Self::Adoptable => {
+                permission_bits <= 0o777 && (permission_bits & 0o111 != 0) == executable
+            }
+            Self::Exact(expected) => {
+                expected <= 0o777
+                    && permission_bits == expected
+                    && (permission_bits & 0o111 != 0) == executable
+            }
+        }
+    }
+}
+
 #[allow(clippy::unnecessary_cast)]
 fn identity(stat: &rustix::fs::Stat) -> EntryIdentity {
     EntryIdentity::new(stat.st_dev as u64, stat.st_ino as u64)
@@ -1419,8 +2090,8 @@ fn check_control(control: &JobControl) -> Result<(), ApplyError> {
 }
 
 #[allow(clippy::unnecessary_cast)]
-fn permission_bits(mode: rustix::fs::RawMode) -> RawMode {
-    mode as RawMode & 0o777
+fn adoption_permission_bits(mode: rustix::fs::RawMode) -> u16 {
+    (mode as u32 & 0o7777) as u16
 }
 
 fn os_error(operation: &'static str, error: rustix::io::Errno) -> ApplyError {
@@ -1442,8 +2113,8 @@ mod tests {
     use std::fs;
     use std::io::Cursor;
     use std::os::unix::ffi::OsStringExt as _;
-    use std::os::unix::fs::PermissionsExt as _;
     use std::os::unix::fs::symlink;
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
     use covalent_protocol::DeviceId;
     use ed25519_dalek::SigningKey;
@@ -1458,6 +2129,7 @@ mod tests {
     use crate::sync::ids::{FolderId, WriterId};
     use crate::sync::machine::{FolderEventMachine, FolderMachineConfig, FolderMachineLimits};
     use crate::sync::membership::{MemberGrant, MemberRole, encode_signed_epoch};
+    use crate::sync::publication::PublishedOperation;
 
     fn folder() -> FolderId {
         FolderId::from_uuid(Uuid::from_u128(0xa1))
@@ -1648,6 +2320,767 @@ mod tests {
             )
             .unwrap()
         }
+    }
+
+    fn retain_and_publish_existing_file(
+        fixture: &mut Fixture,
+        path: &str,
+        bytes: &[u8],
+        mode: u32,
+    ) -> PublishedOperation {
+        let target = fixture.user.path().join(path);
+        fs::write(&target, bytes).unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(mode)).unwrap();
+        let executable = mode & 0o111 != 0;
+        let content = FileContent::new(
+            ContentDigest::from_bytes(*blake3::hash(bytes).as_bytes()),
+            bytes.len() as u64,
+            executable,
+        )
+        .unwrap();
+        let receipt = fixture
+            .store
+            .retain_stream(content, Cursor::new(bytes), &JobControl::new())
+            .unwrap();
+        fixture
+            .events
+            .publish_retained(
+                &OperationBody::new(
+                    SyncPath::from_wire(path).unwrap(),
+                    EntryValue::File(content),
+                ),
+                &receipt,
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn adoption_preserves_ordinary_file_modes_and_is_idempotent() {
+        let mut fixture = Fixture::new();
+        let plain = retain_and_publish_existing_file(&mut fixture, "plain.txt", b"plain", 0o644);
+        let executable = retain_and_publish_existing_file(&mut fixture, "tool.sh", b"tool", 0o755);
+        let mut applier = fixture.applier();
+        for (operation, path, mode) in [
+            (&plain, "plain.txt", 0o644),
+            (&executable, "tool.sh", 0o755),
+        ] {
+            let before = fs::metadata(fixture.user.path().join(path)).unwrap();
+            assert_eq!(
+                applier
+                    .adopt_existing(
+                        &fixture.events,
+                        operation.id(),
+                        operation.event_bytes(),
+                        &JobControl::new(),
+                    )
+                    .unwrap(),
+                ApplyOutcome::Applied
+            );
+            let after = fs::metadata(fixture.user.path().join(path)).unwrap();
+            assert_eq!(before.ino(), after.ino());
+            assert_eq!(after.permissions().mode() & 0o7777, mode);
+            let revision = applier.log.machine().unwrap().revision();
+            assert_eq!(
+                applier
+                    .adopt_existing(
+                        &fixture.events,
+                        operation.id(),
+                        operation.event_bytes(),
+                        &JobControl::new(),
+                    )
+                    .unwrap(),
+                ApplyOutcome::Applied
+            );
+            assert_eq!(applier.log.machine().unwrap().revision(), revision);
+        }
+        drop(applier);
+        let reopened = fixture.reopen_applier();
+        assert_eq!(
+            reopened.existing_outcome(plain.id()).unwrap(),
+            Some(ApplyOutcome::Applied)
+        );
+        assert_eq!(
+            reopened.existing_outcome(executable.id()).unwrap(),
+            Some(ApplyOutcome::Applied)
+        );
+    }
+
+    #[test]
+    fn directory_adoption_verifies_only_and_never_creates_an_absent_target() {
+        let mut fixture = Fixture::new();
+        fs::create_dir(fixture.user.path().join("present-dir")).unwrap();
+        fs::set_permissions(
+            fixture.user.path().join("present-dir"),
+            fs::Permissions::from_mode(0o750),
+        )
+        .unwrap();
+        let present = fixture
+            .events
+            .publish_local(&OperationBody::new(
+                SyncPath::from_wire("present-dir").unwrap(),
+                EntryValue::Directory,
+            ))
+            .unwrap();
+        let absent = fixture
+            .events
+            .publish_local(&OperationBody::new(
+                SyncPath::from_wire("absent-dir").unwrap(),
+                EntryValue::Directory,
+            ))
+            .unwrap();
+        let mut applier = fixture.applier();
+        assert_eq!(
+            applier
+                .adopt_existing(
+                    &fixture.events,
+                    present.id(),
+                    present.event_bytes(),
+                    &JobControl::new(),
+                )
+                .unwrap(),
+            ApplyOutcome::Applied
+        );
+        assert_eq!(
+            fs::metadata(fixture.user.path().join("present-dir"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o750
+        );
+        assert_eq!(
+            applier
+                .adopt_existing(
+                    &fixture.events,
+                    absent.id(),
+                    absent.event_bytes(),
+                    &JobControl::new(),
+                )
+                .unwrap(),
+            ApplyOutcome::Conflict
+        );
+        assert!(!fixture.user.path().join("absent-dir").exists());
+    }
+
+    #[test]
+    fn interrupted_directory_adoption_preserves_a_replaced_entry_as_conflict() {
+        let mut fixture = Fixture::new();
+        let target = fixture.user.path().join("pending-dir");
+        let preserved = fixture.user.path().join("preserved-dir");
+        let outside = tempfile::tempdir().unwrap();
+        fs::create_dir(&target).unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o750)).unwrap();
+        let operation = fixture
+            .events
+            .publish_local(&OperationBody::new(
+                SyncPath::from_wire("pending-dir").unwrap(),
+                EntryValue::Directory,
+            ))
+            .unwrap();
+        let mut applier = fixture.applier();
+        applier.failpoint = Some(ApplyFailpoint::IntentCommitted);
+        assert!(matches!(
+            applier.adopt_existing(
+                &fixture.events,
+                operation.id(),
+                operation.event_bytes(),
+                &JobControl::new(),
+            ),
+            Err(ApplyError::Pending)
+        ));
+        fs::rename(&target, &preserved).unwrap();
+        symlink(outside.path(), &target).unwrap();
+
+        assert_eq!(
+            applier
+                .adopt_existing(
+                    &fixture.events,
+                    operation.id(),
+                    operation.event_bytes(),
+                    &JobControl::new(),
+                )
+                .unwrap(),
+            ApplyOutcome::Conflict
+        );
+        assert!(preserved.is_dir());
+        assert!(
+            fs::symlink_metadata(&target)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(outside.path().is_dir());
+        drop(applier);
+        let reopened = fixture.reopen_applier();
+        assert_eq!(
+            reopened.existing_outcome(operation.id()).unwrap(),
+            Some(ApplyOutcome::Conflict)
+        );
+    }
+
+    #[test]
+    fn adoption_rejects_final_symlinks_and_special_permission_bits() {
+        let mut fixture = Fixture::new();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        fs::write(outside.path(), b"outside").unwrap();
+        symlink(outside.path(), fixture.user.path().join("linked-file")).unwrap();
+        let linked_content = FileContent::new(
+            ContentDigest::from_bytes(*blake3::hash(b"outside").as_bytes()),
+            7,
+            false,
+        )
+        .unwrap();
+        let linked_receipt = fixture
+            .store
+            .retain_stream(linked_content, Cursor::new(b"outside"), &JobControl::new())
+            .unwrap();
+        let linked = fixture
+            .events
+            .publish_retained(
+                &OperationBody::new(
+                    SyncPath::from_wire("linked-file").unwrap(),
+                    EntryValue::File(linked_content),
+                ),
+                &linked_receipt,
+            )
+            .unwrap();
+        let special =
+            retain_and_publish_existing_file(&mut fixture, "special-file", b"special", 0o4755);
+        let mut applier = fixture.applier();
+        assert_eq!(
+            applier
+                .adopt_existing(
+                    &fixture.events,
+                    linked.id(),
+                    linked.event_bytes(),
+                    &JobControl::new(),
+                )
+                .unwrap(),
+            ApplyOutcome::Conflict
+        );
+        assert!(
+            fs::symlink_metadata(fixture.user.path().join("linked-file"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read(outside.path()).unwrap(), b"outside");
+        assert_eq!(
+            applier
+                .adopt_existing(
+                    &fixture.events,
+                    special.id(),
+                    special.event_bytes(),
+                    &JobControl::new(),
+                )
+                .unwrap(),
+            ApplyOutcome::Conflict
+        );
+        assert_eq!(
+            fs::metadata(fixture.user.path().join("special-file"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o4755
+        );
+    }
+
+    #[test]
+    fn adoption_byte_mode_and_inode_races_become_durable_conflicts() {
+        #[derive(Clone, Copy)]
+        enum Race {
+            Bytes,
+            Mode,
+            Inode,
+        }
+        for (point, race) in [
+            (ApplyMutationPoint::BeforeAdoptionVerification, Race::Bytes),
+            (ApplyMutationPoint::BeforeAdoptionReceipt, Race::Mode),
+            (ApplyMutationPoint::BeforeAdoptionReceipt, Race::Inode),
+        ] {
+            let mut fixture = Fixture::new();
+            let operation =
+                retain_and_publish_existing_file(&mut fixture, "raced", b"original", 0o644);
+            let target = fixture.user.path().join("raced");
+            let original_inode = fs::metadata(&target).unwrap().ino();
+            let hook_target = target.clone();
+            let mut applier = fixture.applier();
+            applier.mutation_hook = Some((
+                point,
+                Box::new(move || match race {
+                    Race::Bytes => fs::write(&hook_target, b"mutated!").unwrap(),
+                    Race::Mode => {
+                        fs::set_permissions(&hook_target, fs::Permissions::from_mode(0o600))
+                            .unwrap()
+                    }
+                    Race::Inode => {
+                        fs::remove_file(&hook_target).unwrap();
+                        fs::write(&hook_target, b"original").unwrap();
+                        fs::set_permissions(&hook_target, fs::Permissions::from_mode(0o644))
+                            .unwrap();
+                    }
+                }),
+            ));
+            assert_eq!(
+                applier
+                    .adopt_existing(
+                        &fixture.events,
+                        operation.id(),
+                        operation.event_bytes(),
+                        &JobControl::new(),
+                    )
+                    .unwrap(),
+                ApplyOutcome::Conflict
+            );
+            assert!(matches!(
+                applier
+                    .log
+                    .machine()
+                    .unwrap()
+                    .operation_terminal(operation.id()),
+                Some(ApplyTerminal::Conflict(_))
+            ));
+            if matches!(race, Race::Inode) {
+                assert_ne!(fs::metadata(target).unwrap().ino(), original_inode);
+            }
+            drop(applier);
+            let reopened = fixture.reopen_applier();
+            assert_eq!(
+                reopened.existing_outcome(operation.id()).unwrap(),
+                Some(ApplyOutcome::Conflict)
+            );
+        }
+    }
+
+    #[test]
+    fn adoption_syncs_the_exact_verified_inode_across_an_a_b_a_name_swap() {
+        let mut fixture = Fixture::new();
+        let operation =
+            retain_and_publish_existing_file(&mut fixture, "sync-race", b"stable", 0o644);
+        let target = fixture.user.path().join("sync-race");
+        let preserved_a = fixture.user.path().join("preserved-a");
+        let preserved_b = fixture.user.path().join("preserved-b");
+        let metadata = fs::metadata(&target).unwrap();
+        let expected = EntryIdentity::new(metadata.dev(), metadata.ino());
+
+        let before_target = target.clone();
+        let before_a = preserved_a.clone();
+        let mut applier = fixture.applier();
+        applier.mutation_hook = Some((
+            ApplyMutationPoint::BeforeAdoptionDescriptorSync,
+            Box::new(move || {
+                fs::rename(&before_target, &before_a).unwrap();
+                fs::write(&before_target, b"stable").unwrap();
+                fs::set_permissions(&before_target, fs::Permissions::from_mode(0o644)).unwrap();
+            }),
+        ));
+        let synchronized = Arc::new(std::sync::Mutex::new(None));
+        let observed = Arc::clone(&synchronized);
+        let after_target = target.clone();
+        let after_a = preserved_a.clone();
+        let after_b = preserved_b.clone();
+        applier.adoption_sync_hook = Some(Box::new(move |identity| {
+            *observed.lock().unwrap() = Some(identity);
+            fs::rename(&after_target, &after_b).unwrap();
+            fs::rename(&after_a, &after_target).unwrap();
+        }));
+
+        assert_eq!(
+            applier
+                .adopt_existing(
+                    &fixture.events,
+                    operation.id(),
+                    operation.event_bytes(),
+                    &JobControl::new(),
+                )
+                .unwrap(),
+            ApplyOutcome::Conflict
+        );
+        assert_eq!(*synchronized.lock().unwrap(), Some(expected));
+        assert_eq!(fs::read(&target).unwrap(), b"stable");
+        assert_eq!(fs::read(&preserved_b).unwrap(), b"stable");
+        assert_ne!(
+            fs::metadata(&target).unwrap().ino(),
+            fs::metadata(&preserved_b).unwrap().ino()
+        );
+        assert!(matches!(
+            applier
+                .log
+                .machine()
+                .unwrap()
+                .operation_terminal(operation.id()),
+            Some(ApplyTerminal::Conflict(_))
+        ));
+    }
+
+    #[test]
+    fn cancellation_after_adoption_sync_cannot_commit_applied() {
+        let mut fixture = Fixture::new();
+        let operation =
+            retain_and_publish_existing_file(&mut fixture, "cancel-late", b"stable", 0o644);
+        let control = Arc::new(JobControl::new());
+        let cancel = Arc::clone(&control);
+        let mut applier = fixture.applier();
+        applier.mutation_hook = Some((
+            ApplyMutationPoint::BeforeAdoptionReceipt,
+            Box::new(move || cancel.cancel()),
+        ));
+
+        assert!(matches!(
+            applier.adopt_existing(
+                &fixture.events,
+                operation.id(),
+                operation.event_bytes(),
+                &control,
+            ),
+            Err(ApplyError::Interrupted)
+        ));
+        assert_eq!(applier.log.machine().unwrap().revision(), 1);
+        assert!(
+            applier
+                .log
+                .machine()
+                .unwrap()
+                .operation_terminal(operation.id())
+                .is_none()
+        );
+        assert_eq!(
+            applier
+                .adopt_existing(
+                    &fixture.events,
+                    operation.id(),
+                    operation.event_bytes(),
+                    &JobControl::new(),
+                )
+                .unwrap(),
+            ApplyOutcome::Applied
+        );
+        assert_eq!(applier.log.machine().unwrap().revision(), 2);
+    }
+
+    #[test]
+    fn transient_file_adoption_io_failures_leave_the_intent_replayable() {
+        for point in [
+            AdoptionIoPoint::ReadFile,
+            AdoptionIoPoint::SyncFile,
+            AdoptionIoPoint::InspectFile,
+            AdoptionIoPoint::SyncParent,
+        ] {
+            let mut fixture = Fixture::new();
+            let operation =
+                retain_and_publish_existing_file(&mut fixture, "io-file", b"stable", 0o644);
+            let mut applier = fixture.applier();
+            applier.adoption_io_hook = Some((
+                point,
+                Box::new(|| {
+                    Err(ApplyError::Io {
+                        operation: "injected adoption I/O",
+                        errno: Some(5),
+                    })
+                }),
+            ));
+
+            assert!(matches!(
+                applier.adopt_existing(
+                    &fixture.events,
+                    operation.id(),
+                    operation.event_bytes(),
+                    &JobControl::new(),
+                ),
+                Err(ApplyError::Io { .. })
+            ));
+            assert_eq!(applier.log.machine().unwrap().revision(), 1);
+            assert!(
+                applier
+                    .log
+                    .machine()
+                    .unwrap()
+                    .operation_terminal(operation.id())
+                    .is_none()
+            );
+            assert_eq!(
+                applier
+                    .adopt_existing(
+                        &fixture.events,
+                        operation.id(),
+                        operation.event_bytes(),
+                        &JobControl::new(),
+                    )
+                    .unwrap(),
+                ApplyOutcome::Applied
+            );
+            assert_eq!(applier.log.machine().unwrap().revision(), 2);
+        }
+    }
+
+    #[test]
+    fn transient_directory_adoption_io_failures_leave_the_intent_replayable() {
+        for point in [
+            AdoptionIoPoint::SyncDirectory,
+            AdoptionIoPoint::InspectDirectory,
+            AdoptionIoPoint::SyncParent,
+        ] {
+            let mut fixture = Fixture::new();
+            fs::create_dir(fixture.user.path().join("io-directory")).unwrap();
+            fs::set_permissions(
+                fixture.user.path().join("io-directory"),
+                fs::Permissions::from_mode(0o750),
+            )
+            .unwrap();
+            let operation = fixture
+                .events
+                .publish_local(&OperationBody::new(
+                    SyncPath::from_wire("io-directory").unwrap(),
+                    EntryValue::Directory,
+                ))
+                .unwrap();
+            let mut applier = fixture.applier();
+            applier.adoption_io_hook = Some((
+                point,
+                Box::new(|| {
+                    Err(ApplyError::Io {
+                        operation: "injected adoption I/O",
+                        errno: Some(5),
+                    })
+                }),
+            ));
+
+            assert!(matches!(
+                applier.adopt_existing(
+                    &fixture.events,
+                    operation.id(),
+                    operation.event_bytes(),
+                    &JobControl::new(),
+                ),
+                Err(ApplyError::Io { .. })
+            ));
+            assert_eq!(applier.log.machine().unwrap().revision(), 1);
+            assert_eq!(
+                applier
+                    .adopt_existing(
+                        &fixture.events,
+                        operation.id(),
+                        operation.event_bytes(),
+                        &JobControl::new(),
+                    )
+                    .unwrap(),
+                ApplyOutcome::Applied
+            );
+            assert_eq!(applier.log.machine().unwrap().revision(), 2);
+            assert_eq!(
+                fs::metadata(fixture.user.path().join("io-directory"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o7777,
+                0o750
+            );
+        }
+    }
+
+    #[test]
+    fn interrupted_adoption_replays_once_and_rejects_wrong_root() {
+        let mut fixture = Fixture::new();
+        let operation =
+            retain_and_publish_existing_file(&mut fixture, "pending-adopt", b"stable", 0o644);
+        let mut applier = fixture.applier();
+        applier.failpoint = Some(ApplyFailpoint::IntentCommitted);
+        assert!(matches!(
+            applier.adopt_existing(
+                &fixture.events,
+                operation.id(),
+                operation.event_bytes(),
+                &JobControl::new(),
+            ),
+            Err(ApplyError::Pending)
+        ));
+        assert_eq!(applier.log.machine().unwrap().revision(), 1);
+        drop(applier);
+
+        let wrong_root = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            DurableFolderApplier::open(
+                Arc::clone(&fixture.outer),
+                Arc::clone(&fixture.outer_lock),
+                &StateKey::new("apply").unwrap(),
+                &StateKey::new("apply.v1").unwrap(),
+                apply_binding(),
+                LogFrameKey::from_bytes([0xaa; 32]),
+                log_limits(),
+                apply_limits(),
+                &AuthorizedRoot::open(wrong_root.path()).unwrap(),
+                &fixture.events,
+                &JobControl::new(),
+            ),
+            Err(ApplyError::Changed)
+        ));
+
+        let mut reopened = fixture.reopen_applier();
+        let cancelled = JobControl::new();
+        cancelled.cancel();
+        assert!(matches!(
+            reopened.adopt_existing(
+                &fixture.events,
+                operation.id(),
+                operation.event_bytes(),
+                &cancelled,
+            ),
+            Err(ApplyError::Interrupted)
+        ));
+        assert_eq!(reopened.log.machine().unwrap().revision(), 1);
+        assert_eq!(
+            reopened
+                .adopt_existing(
+                    &fixture.events,
+                    operation.id(),
+                    operation.event_bytes(),
+                    &JobControl::new(),
+                )
+                .unwrap(),
+            ApplyOutcome::Applied
+        );
+        assert_eq!(reopened.log.machine().unwrap().revision(), 2);
+        let revision = reopened.log.machine().unwrap().revision();
+        assert_eq!(
+            reopened
+                .adopt_existing(
+                    &fixture.events,
+                    operation.id(),
+                    operation.event_bytes(),
+                    &JobControl::new(),
+                )
+                .unwrap(),
+            ApplyOutcome::Applied
+        );
+        assert_eq!(reopened.log.machine().unwrap().revision(), revision);
+    }
+
+    #[test]
+    fn superseded_pending_adoption_never_becomes_applied() {
+        let mut fixture = Fixture::new();
+        let first = retain_and_publish_existing_file(&mut fixture, "superseded", b"stable", 0o644);
+        let mut applier = fixture.applier();
+        applier.failpoint = Some(ApplyFailpoint::IntentCommitted);
+        assert!(matches!(
+            applier.adopt_existing(
+                &fixture.events,
+                first.id(),
+                first.event_bytes(),
+                &JobControl::new(),
+            ),
+            Err(ApplyError::Pending)
+        ));
+        let content = FileContent::new(
+            ContentDigest::from_bytes(*blake3::hash(b"stable").as_bytes()),
+            6,
+            false,
+        )
+        .unwrap();
+        let receipt = fixture
+            .store
+            .verify_retained(content, &JobControl::new())
+            .unwrap();
+        let newer = fixture
+            .events
+            .publish_retained(
+                &OperationBody::new(
+                    SyncPath::from_wire("superseded").unwrap(),
+                    EntryValue::File(content),
+                ),
+                &receipt,
+            )
+            .unwrap();
+        assert!(matches!(
+            applier.adopt_existing(
+                &fixture.events,
+                first.id(),
+                first.event_bytes(),
+                &JobControl::new(),
+            ),
+            Err(ApplyError::ProjectionConflict)
+        ));
+        assert_eq!(applier.log.machine().unwrap().revision(), 1);
+        assert_eq!(
+            fs::read(fixture.user.path().join("superseded")).unwrap(),
+            b"stable"
+        );
+        assert_ne!(newer.id(), first.id());
+    }
+
+    #[test]
+    fn promotion_window_substitution_is_preserved_as_a_durable_conflict() {
+        let mut fixture = Fixture::new();
+        let bytes = b"desired";
+        let content = FileContent::new(
+            ContentDigest::from_bytes(*blake3::hash(bytes).as_bytes()),
+            bytes.len() as u64,
+            false,
+        )
+        .unwrap();
+        let receipt = fixture
+            .store
+            .retain_stream(content, Cursor::new(bytes), &JobControl::new())
+            .unwrap();
+        let operation = fixture
+            .events
+            .publish_retained(
+                &OperationBody::new(
+                    SyncPath::from_wire("promotion-race").unwrap(),
+                    EntryValue::File(content),
+                ),
+                &receipt,
+            )
+            .unwrap();
+        let root = fixture.user.path().to_path_buf();
+        let mut applier = fixture.applier();
+        applier.mutation_hook = Some((
+            ApplyMutationPoint::AfterPromotionValidation,
+            Box::new(move || {
+                let stage = fs::read_dir(&root)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .find(|path| {
+                        path.file_name()
+                            .and_then(|name| name.to_str())
+                            .is_some_and(|name| name.starts_with(".covalent-stage-"))
+                    })
+                    .unwrap();
+                fs::remove_file(&stage).unwrap();
+                fs::write(&stage, b"unknown replacement").unwrap();
+            }),
+        ));
+        assert_eq!(
+            applier
+                .apply(
+                    &fixture.events,
+                    &fixture.store,
+                    operation.id(),
+                    operation.event_bytes(),
+                    &JobControl::new(),
+                )
+                .unwrap(),
+            ApplyOutcome::Conflict
+        );
+        assert_eq!(
+            fs::read(fixture.user.path().join("promotion-race")).unwrap(),
+            b"unknown replacement"
+        );
+        let Some(ApplyTerminal::Conflict(conflict)) = applier
+            .log
+            .machine()
+            .unwrap()
+            .operation_terminal(operation.id())
+        else {
+            panic!("substitution must be terminal")
+        };
+        assert_eq!(conflict.reason(), ConflictReason::FinalChanged);
+        drop(applier);
+        let reopened = fixture.reopen_applier();
+        assert_eq!(
+            reopened.existing_outcome(operation.id()).unwrap(),
+            Some(ApplyOutcome::Conflict)
+        );
     }
 
     #[test]

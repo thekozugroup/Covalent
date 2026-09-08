@@ -416,15 +416,30 @@ impl PrivateStateDir {
     /// Unix `flock` behavior. This is cooperative serialization, not a defense
     /// against another same-user process that ignores the lock.
     pub fn try_lock(&self) -> Result<PrivateStateLock, StateDirError> {
+        self.lock_with_creation(true)
+    }
+
+    /// Locks the existing private lock entry without recreating a missing one.
+    /// Ready-state reopen uses this to preserve evidence of missing topology.
+    pub fn try_lock_existing(&self) -> Result<PrivateStateLock, StateDirError> {
+        self.lock_with_creation(false)
+    }
+
+    fn lock_with_creation(
+        &self,
+        create_if_missing: bool,
+    ) -> Result<PrivateStateLock, StateDirError> {
         self.revalidate()?;
         let key = StateKey(WRITER_LOCK_KEY.to_owned());
         let file = match self.open_existing_file_raw(&key) {
             Ok(file) => file,
-            Err(error) if error == rustix::io::Errno::NOENT => match self.create_lock_file(&key) {
-                Ok(file) => file,
-                Err(StateDirError::AlreadyExists) => self.open_existing_file(&key)?,
-                Err(error) => return Err(error),
-            },
+            Err(error) if create_if_missing && error == rustix::io::Errno::NOENT => {
+                match self.create_lock_file(&key) {
+                    Ok(file) => file,
+                    Err(StateDirError::AlreadyExists) => self.open_existing_file(&key)?,
+                    Err(error) => return Err(error),
+                }
+            }
             Err(error) => return Err(file_open_error("open private state lock", error)),
         };
         validate_lock_file(&file)?;
@@ -1202,6 +1217,42 @@ mod tests {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).expect("protect state root");
         let state = PrivateStateDir::open_root(&path).expect("open state root");
         (temporary, path, state)
+    }
+
+    #[test]
+    fn strict_lock_reopen_never_recreates_missing_or_unsafe_entries() {
+        let (_temporary, path, state) = private_root();
+        assert!(state.try_lock_existing().is_err());
+        assert_eq!(fs::read_dir(&path).unwrap().count(), 0);
+        let initial = state.try_lock().unwrap();
+        drop(initial);
+        let reopened = state.try_lock_existing().unwrap();
+        assert!(matches!(
+            state.try_lock_existing(),
+            Err(StateDirError::Locked)
+        ));
+        drop(reopened);
+        fs::set_permissions(
+            path.join(WRITER_LOCK_KEY),
+            fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        assert!(matches!(
+            state.try_lock_existing(),
+            Err(StateDirError::UnsafeFile)
+        ));
+        assert_eq!(
+            fs::metadata(path.join(WRITER_LOCK_KEY))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o644
+        );
+        fs::rename(path.join(WRITER_LOCK_KEY), path.join("preserved-lock.v1")).unwrap();
+        assert!(state.try_lock_existing().is_err());
+        assert!(!path.join(WRITER_LOCK_KEY).exists());
+        assert!(path.join("preserved-lock.v1").exists());
     }
 
     fn spawn_probe(test_name: &str, root: &Path, expect_unlocked: bool) -> std::process::Child {

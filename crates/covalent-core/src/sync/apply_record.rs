@@ -40,6 +40,7 @@ const FILE_TAG: u8 = 1;
 const DIRECTORY_TAG: u8 = 2;
 const ABSENT_TAG: u8 = 1;
 const EXISTING_DIRECTORY_TAG: u8 = 2;
+const EXISTING_FILE_TAG: u8 = 3;
 
 /// A random identifier for one local apply attempt.
 #[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -232,7 +233,7 @@ impl fmt::Debug for StageName {
     }
 }
 
-/// The only mutation actions supported by the create-only journal.
+/// The actions supported by the create-only and observation-only journal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum ApplyAction {
@@ -240,6 +241,8 @@ pub enum ApplyAction {
     Create = 1,
     /// Verify and durably acknowledge an already present directory.
     EnsureExisting = 2,
+    /// Verify and durably acknowledge an already present regular file.
+    AdoptExisting = 3,
 }
 
 /// The exact target state observed before an intent became durable.
@@ -249,6 +252,11 @@ pub enum ExpectedTarget {
     Absent,
     /// The desired directory already existed with this exact identity.
     Directory(EntryIdentity),
+    /// The desired file already existed with this identity and exact mode.
+    File {
+        identity: EntryIdentity,
+        permission_bits: u16,
+    },
 }
 
 /// A fixed conflict classification; no rejected path or filesystem text is retained.
@@ -286,7 +294,7 @@ pub enum ApplyConflictReason {
 /// Short compatibility name used by the Unix apply adapter.
 pub type ConflictReason = ApplyConflictReason;
 
-/// A fixed reason why the create-only adapter cannot apply an operation.
+/// A fixed reason why the bounded create/adoption adapter cannot apply an operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum ApplyUnsupportedReason {
@@ -325,7 +333,7 @@ pub struct ApplyIntent {
 }
 
 impl ApplyIntent {
-    /// Constructs a semantically valid create-only intent.
+    /// Constructs a semantically valid create or adoption intent.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         transaction: ApplyTransactionId,
@@ -342,6 +350,15 @@ impl ApplyIntent {
             (ApplyAction::Create, ExpectedTarget::Absent, Some(_)) => true,
             (ApplyAction::EnsureExisting, ExpectedTarget::Directory(_), None) => {
                 matches!(desired, EntryValue::Directory)
+            }
+            (
+                ApplyAction::AdoptExisting,
+                ExpectedTarget::File {
+                    permission_bits, ..
+                },
+                None,
+            ) => {
+                matches!(desired, EntryValue::File(file) if valid_adoption_mode(permission_bits, file.executable()))
             }
             _ => false,
         };
@@ -390,7 +407,7 @@ impl ApplyIntent {
     pub const fn desired(&self) -> EntryValue {
         self.desired
     }
-    /// Returns the selected create-only action.
+    /// Returns the selected create or adoption action.
     #[must_use]
     pub const fn action(&self) -> ApplyAction {
         self.action
@@ -890,10 +907,10 @@ pub enum ApplyRecordError {
     /// The path length or canonical path encoding was invalid.
     #[error("invalid canonical apply path")]
     InvalidPath,
-    /// Tombstones are not valid desired states in the create-only journal.
+    /// Tombstones are not valid desired states in this create/adoption journal.
     #[error("unsupported desired apply value")]
     UnsupportedValue,
-    /// The action tag was outside the closed create-only set.
+    /// The action tag was outside the closed apply set.
     #[error("unknown apply action")]
     InvalidAction,
     /// The expected-target tag was outside the closed set.
@@ -921,6 +938,10 @@ fn validate_desired(value: EntryValue) -> Result<(), ApplyRecordError> {
         EntryValue::File(_) | EntryValue::Directory => Ok(()),
         EntryValue::Tombstone => Err(ApplyRecordError::UnsupportedValue),
     }
+}
+
+fn valid_adoption_mode(permission_bits: u16, executable: bool) -> bool {
+    permission_bits <= 0o777 && (permission_bits & 0o111 != 0) == executable
 }
 
 fn digest_bytes(bytes: &[u8]) -> ApplyRecordDigest {
@@ -971,6 +992,14 @@ fn encode_expected(bytes: &mut Vec<u8>, expected: ExpectedTarget) {
         ExpectedTarget::Directory(identity) => {
             bytes.push(EXISTING_DIRECTORY_TAG);
             encode_identity(bytes, identity);
+        }
+        ExpectedTarget::File {
+            identity,
+            permission_bits,
+        } => {
+            bytes.push(EXISTING_FILE_TAG);
+            encode_identity(bytes, identity);
+            bytes.extend_from_slice(&permission_bits.to_be_bytes());
         }
     }
 }
@@ -1106,6 +1135,7 @@ impl<'a> Cursor<'a> {
         match self.u8()? {
             1 => Ok(ApplyAction::Create),
             2 => Ok(ApplyAction::EnsureExisting),
+            3 => Ok(ApplyAction::AdoptExisting),
             _ => Err(ApplyRecordError::InvalidAction),
         }
     }
@@ -1114,6 +1144,10 @@ impl<'a> Cursor<'a> {
         match self.u8()? {
             ABSENT_TAG => Ok(ExpectedTarget::Absent),
             EXISTING_DIRECTORY_TAG => self.identity().map(ExpectedTarget::Directory),
+            EXISTING_FILE_TAG => Ok(ExpectedTarget::File {
+                identity: self.identity()?,
+                permission_bits: self.u16()?,
+            }),
             _ => Err(ApplyRecordError::InvalidExpectedTarget),
         }
     }
@@ -1280,6 +1314,22 @@ mod tests {
                 )
                 .expect("ensure intent"),
             ),
+            ApplyRecord::Intent(
+                ApplyIntent::new(
+                    transaction(),
+                    operation(),
+                    EntryIdentity::new(1, 2),
+                    path(),
+                    file(),
+                    ApplyAction::AdoptExisting,
+                    ExpectedTarget::File {
+                        identity: EntryIdentity::new(9, 10),
+                        permission_bits: 0o755,
+                    },
+                    None,
+                )
+                .expect("adoption intent"),
+            ),
         ]
     }
 
@@ -1322,6 +1372,24 @@ mod tests {
             ),
             Err(ApplyRecordError::InvalidShape)
         );
+        for invalid_mode in [0o4755, 0o644] {
+            assert_eq!(
+                ApplyIntent::new(
+                    transaction(),
+                    operation(),
+                    EntryIdentity::new(1, 2),
+                    path(),
+                    file(),
+                    ApplyAction::AdoptExisting,
+                    ExpectedTarget::File {
+                        identity: EntryIdentity::new(3, 4),
+                        permission_bits: invalid_mode,
+                    },
+                    None,
+                ),
+                Err(ApplyRecordError::InvalidShape)
+            );
+        }
         assert_eq!(
             ApplyIntent::new(
                 transaction(),
@@ -1354,10 +1422,13 @@ mod tests {
 
     #[test]
     fn decoder_rejects_truncation_trailing_bytes_and_header_malleability() {
-        let encoded = records()[0].encode();
-        for end in 0..encoded.as_bytes().len() {
-            assert!(ApplyRecord::decode(&encoded.as_bytes()[..end]).is_err());
+        for record in records() {
+            let encoded = record.encode();
+            for end in 0..encoded.as_bytes().len() {
+                assert!(ApplyRecord::decode(&encoded.as_bytes()[..end]).is_err());
+            }
         }
+        let encoded = records()[0].encode();
         let mut trailing = encoded.as_bytes().to_vec();
         trailing.push(0);
         assert_eq!(

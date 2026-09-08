@@ -1,6 +1,6 @@
 # ADR 0006: Two-way folder synchronization
 
-Status: proposed — implementation planned, not shipped.
+Status: in development — core foundations implemented; network folder sync not shipped.
 
 ## Context
 
@@ -224,6 +224,12 @@ quotas. This first store never evicts content or cleans staging implicitly;
 explicit reclaim of proven unreferenced staging remains future work. Quotas
 describe logical encrypted bytes and objects, not filesystem overhead or RSS.
 
+Ready-state startup can now request existing-only private locks and content
+storage. That path never creates a missing child directory or lock and still
+validates complete inventory, quotas and retained objects. Initialization keeps
+its separate creation-capable path. The coordinator must select these modes
+explicitly; a failed ordinary reopen is not permission to reinitialize storage.
+
 Each local sync installation now creates an immutable protected record with
 independent installation/generation identifiers, a fresh writer signing key,
 separate event/apply log keys, and a content-generation secret. Creation requires
@@ -232,6 +238,15 @@ bounded canonical record and syncs it before returning keys. Entropy failures,
 including secret wrapping, return fixed errors rather than panicking. A real
 handoff test retains the outer lock while opening child stores and proves that
 content and folder-global counters survive repeated close/reopen cycles.
+
+Authority and local transport pins now live in a separate immutable protected
+record bound to the exact folder, installation, generation, writer and local
+signing public key. Creation requires only the installation record and held
+root lock to exist; opening never substitutes a key from incoming history.
+Malformed, missing or changed trust fails closed. A stable opaque setup
+commitment binds these authenticated identities for the upcoming readiness
+marker. Replay configuration derives from these durable pins. This authenticates storage of the setup workflow's
+trust decision; live transport still has to prove private-key possession.
 
 File application can obtain a bounded operation view only from fully admitted
 history, bound to exact event bytes or to an authenticated journal's exact
@@ -262,17 +277,43 @@ Current applied files are revalidated with bounded, cancellable hashing. Machine
 quotas include a fixed initial index allowance and per-record owned storage.
 These are logical accounting bounds, not measured RSS guarantees.
 
-This create-only slice preserves incumbents, records supported conflict outcomes,
-and reports tombstones as unsupported. Missing/unsafe parents and portable-name
+Existing-file adoption now verifies a matching incumbent without rewriting its
+bytes or permissions. The intent records its exact inode and ordinary permission
+bits. Hashing and sync use the same held no-follow descriptor; named identity,
+parent and current projection are checked before durable success. Matching
+existing directories can also be adopted, but a missing directory is never
+created by adoption. Observed content, mode or identity changes become durable
+conflicts; transient read/stat/sync failures keep the original intent retryable.
+Special-mode files, symlinks and hard links are rejected. Cancellation after
+filesystem sync cannot append Applied. Adoption proves the incumbent's state,
+not that its content is retained for a peer or bootstrap acknowledgement.
+
+Create promotion rechecks staging immediately before the no-replace operation
+and verifies the promoted object afterward. This is not an inode compare-and-swap;
+an observed substitution in the syscall window becomes a preserved conflict.
+The applier reports tombstones as unsupported. Missing/unsafe parents and portable-name
 collisions discovered before an intent are visible errors, not durable conflict
-records. Generic encrypted-log replay is bounded but not yet cancellable; the
-subsequent filesystem reconciliation is cancellable. Rechecking every current
+records. The applier now uses controlled encrypted-log replay with pause/cancel
+checks between bounded frame reads and state transitions, followed by cancellable
+filesystem reconciliation. A started valid EOF-tail repair finishes sync before
+honoring interruption. Other callers must opt in; synchronous filesystem calls
+and individual bounded transitions are not preempted. Rechecking every current
 applied file is a conservative correctness barrier that still needs performance
 measurement. It does not implement an applied acknowledgement frontier.
 
+Android now has a metadata-only SAF observer using direct resolver queries and
+two matching bounded scans. It preserves opaque document IDs and returns no
+observation after null/loading/error cursors, partial or virtual documents,
+malformed rows, traversal limits, cancellation or observed mutation. Entry
+reservations include pending ancestor siblings, and string/aggregate quotas are
+charged before retention. Preliminary portable-name checks defer authoritative
+Unicode handling to Rust. These observations prove neither file content nor an
+atomic provider snapshot and cannot authorize adoption, deletion or sync success.
+Generic SAF mutation semantics still require a separate implementation decision.
+
 Network folder sync remains unshipped. Write-loss/freeze transitions and their
-history reconciliation still fail closed. Authority configuration and the full
-folder coordinator, peer exchange, existing-file adoption, safe replacement and
-deletion, conflict materialization, native setup, SAF scanning/apply and the
+history reconciliation still fail closed. The full folder coordinator, peer
+exchange, safe replacement and deletion, conflict materialization, native setup,
+Android content verification/application and the
 multi-device acceptance gates above remain outstanding.
 Existing Backup and Restore behavior remains independently tested.

@@ -10,7 +10,8 @@ connect their own devices, choose a folder, understand its protection state,
 and recover a file without learning internal identifiers or reading maintainer
 documentation. Reliability and recovery gates come before performance tuning.
 
-The current implementation is backup and restore. Given the requested
+The shipped user flows are backup and restore; folder-sync foundations are in
+development. Given the requested
 Syncthing-like behavior, this completion goal assumes automatic two-way folder
 synchronization, safe conflict handling, and recoverable history are required.
 It must not be advertised as implemented until separately validated. Existing
@@ -36,13 +37,13 @@ Close every known release-blocking finding; do not remove a gate to raise a scor
 
 | Area | Required evidence | Current state |
 | --- | --- | --- |
-| Product scope | Explicit backup/sync semantics and a matching acceptance scenario | Automatic two-way sync is required. Signed records, causal/conflict checks, protected installation keys, private storage, read-only Unix inventories, bootstrap-backed membership replay and content-gated durable publication and journaled create-only Unix application are implemented. Write-loss reconciliation, the full folder coordinator, peer exchange, existing-file adoption, replacement/deletion, native setup and multi-device acceptance remain outstanding. |
-| Core correctness | Unit, property, adversarial, migration, concurrency, corruption, interrupted-job and source-loss tests; strict lint | At `088c147`, hosted Rust/contracts passed 578 tests across 22 suites with zero failed/ignored, strict workspace Clippy and 89 web tests. All release-candidate software and CodeQL gates passed on that checkpoint. Newer work and final artifacts still require their own checks. |
+| Product scope | Explicit backup/sync semantics and a matching acceptance scenario | Automatic two-way sync is required. Signed records, causal/conflict checks, protected installation keys, private storage, read-only Unix inventories, bootstrap-backed membership replay and content-gated durable publication, protected authority pins, journaled Unix creation and verified incumbent adoption, and bounded Android metadata observation are implemented. Write-loss reconciliation, the full folder coordinator, peer exchange, replacement/deletion, native setup and multi-device acceptance remain outstanding. |
+| Core correctness | Unit, property, adversarial, migration, concurrency, corruption, interrupted-job and source-loss tests; strict lint | At `f80c375`, hosted Rust/contracts passed 610 tests across 22 suites with zero failed/ignored, strict workspace Clippy and 89 web tests. All release-candidate software and CodeQL gates passed on that checkpoint. The newer combined authority/adoption/controlled-replay slice passes 640 local Rust tests across 22 suites, zero failed/ignored, strict Clippy and foundation checks; its hosted gates and final artifacts still require their own checks. |
 | Owner-device loss | A user can export a protected recovery kit, replace a lost owner device, discover its authenticated catalogs, see partial availability, and restore | API, CLI/runtime, web and native recovery flows pass. At source content matching `1839796`, the real Mac–Atmos Docker drill passed protected export, deletion of the entire original owner state, automatic catalog import and exact provider-only restore. Native UI also passes. Final artifacts and large-catalog memory evidence remain required. |
 | Beginner workflow | Install → connect → choose folder → protect → verify → restore through real UI; clear errors and recovery; no manual IDs in ordinary flows | Real browser unlock, automatic snapshot/name defaults, named backup selection, preview invalidation, restore and Verify passed with disposable files. Preview now explains individual file actions and renamed conflict destinations instead of raw JSON. Full cross-device onboarding pending. |
 | macOS | Shared tests, live helper integration, native UI/accessibility, verified arm64 app package, install and upgrade | At `1839796`, the app bundle, all 105 shared tests, live helper integration, and all four native UI tests passed. The native gate requires exactly four passed, zero failed/skipped, including first-launch setup/recovery cancellation and the system accessibility audit. Final artifact install/upgrade remains required. Local Xcode license and CLT Testing limitations remain. |
-| Android | JVM, instrumented SAF and process-death tests, TalkBack/large text, install and upgrade of stable personal artifact | At `e5a622c`, arm64 JNI is 8,384,224 bytes and x86_64 is 9,918,032 bytes; both pass the unchanged budget. At `1839796`, Android foundation and API 37 device gates passed: 103 JVM tests and all 65 named instrumentation tests, with no skipped device tests. Recovery plural resources pass lint. Final-revision and personal-artifact validation remain required. |
-| Docker | Both CPU architectures; TLS and key-protection contracts; rootless/read-only runtime; bounded storage/memory; three-node recovery | Both image architectures and container runtime/e2e passed on checkpoint `088c147`; repeat on final revision. |
+| Android | JVM, instrumented SAF and process-death tests, TalkBack/large text, install and upgrade of stable personal artifact | At `e5a622c`, arm64 JNI is 8,384,224 bytes and x86_64 is 9,918,032 bytes; both pass the unchanged budget. At `1839796`, Android foundation and API 37 device gates passed: 103 JVM tests and all 65 named instrumentation tests, with no skipped device tests. Recovery plural resources pass lint. The new metadata observer adds nine JVM and six device tests (71 required device tests by name); these new tests are unrun locally without a working JDK/SDK. Hosted and personal-artifact validation remain required. |
+| Docker | Both CPU architectures; TLS and key-protection contracts; rootless/read-only runtime; bounded storage/memory; three-node recovery | Both image architectures and container runtime/e2e passed on checkpoint `f80c375`; repeat on final revision. |
 | Atmos network drill | Mac ↔ Ubuntu pairing, explicitly selected replica, interrupted/restarted operation, source-loss restore, exact hashes, cleanup | Passed with a 64 MiB incompressible payload: same-job pause/resume, provider container restart preserving identity, local source/cache loss, provider-only restore and exact content checks. Dedicated resources removed; pre-existing container/image IDs survived. See [drill evidence](atmos-drill-2026-09-07.md). |
 | Atlas/Unraid | Docker deployment, Unraid template/mount contracts, exact-image install/upgrade and backup/restore; on-host Atlas check deferred by the user | Atlas is offline. The user accepted Docker validation in its place on 2026-09-07. Preflight fixtures, both Docker architectures and the full owner-loss Atmos Docker drill pass. Final-image install/upgrade remains required. No physical Atlas install is claimed. |
 | Security and supply chain | Dependency audits, CodeQL, immutable image scans/signatures/SBOMs, safe secret storage, exact release commit provenance | cargo-audit (289 dependencies, warnings denied) and cargo-deny advisories/bans/licenses/sources passed. CodeQL Java/Kotlin, Swift and the repository-wide zero-open-alert policy passed at `1839796`. Final artifact evidence is pending; current main signature is unknown_key and account has no registered signing key. |
@@ -292,7 +293,8 @@ packages, credentials, private server inventories, or raw diagnostic bundles.
   instrumentation tests passed by name. Both Docker architectures, runtime/e2e,
   macOS integration/UI/bundle, Android packaging and iOS checks passed. Linux
   node and CLI sizes remained 13,007,472 and 5,228,448 bytes, within their budgets.
-  Swift CodeQL was still running when this evidence was recorded.
+  [CodeQL also passed](https://github.com/thekozugroup/Covalent/actions/runs/34198531311),
+  including Swift, Java/Kotlin and the policy gate.
 - The next Unix apply slice journals admitted operations before creating user
   files or directories, verifies staged content and inode identity, syncs files
   and parents, and promotes without replacing an incumbent. Every retry uses
@@ -310,6 +312,74 @@ packages, credentials, private server inventories, or raw diagnostic bundles.
   applied-file verification is bounded and cancellable; encrypted-log replay
   is bounded but not yet cancellable. Hosted platform checks remain required
   for this checkpoint, and all final runtime/artifact gates remain open.
+
+- Create-only checkpoint `f80c375` passed every
+  [release-candidate software gate](https://github.com/thekozugroup/Covalent/actions/runs/34200579929)
+  and [CodeQL gate](https://github.com/thekozugroup/Covalent/actions/runs/34200579922).
+  Hosted Rust ran 610 tests across 22 suites, zero failed or ignored; web ran
+  89 with zero failed or skipped. Android API 37 proved all 65 expected tests
+  passed by name. Both Docker architectures, container runtime/e2e, macOS
+  integration/UI/bundle, Android packaging and iOS checks passed. Release
+  node/CLI sizes stayed within budget at 13,007,472 and 5,228,448 bytes.
+  This validates the checkpoint's tests; the subsequently identified adoption
+  and promotion-race work still requires its own evidence.
+- The following authority slice persists immutable protected authority and local
+  transport pins before any child state exists. Context authentication binds
+  the exact folder, installation, generation, writer and local signing key.
+  Replay configuration derives from those pins, never from a peer's key claim.
+  Ten focused tests pass, including real local and remote genesis admission,
+  restart, identity/key changes, malformed records, private-file substitution
+  and missing trust after child state. Independent read-only review found no
+  implementation defect; its requested positive remote-authority restart test
+  was added and passed. A stable opaque setup commitment binds authenticated
+  installation, authority and transport identities for the upcoming ready marker.
+  Setup trust and live private-key possession still
+  belong to the authenticated pairing/session workflow.
+- Controlled event-log replay now checks pause/cancel between bounded frame
+  reads and transitions and exposes no partial state after interruption. A
+  started valid incomplete-tail repair finishes sync before honoring cancel.
+  Four new regressions plus the existing history suite pass all 25 event-log
+  tests. The Unix applier now uses this entry point and keeps subsequent
+  filesystem reconciliation cancellable. The future coordinator must do the
+  same. A single synchronous syscall or bounded record transition is not
+  preempted. Hosted checks remain required on the resulting checkpoint.
+
+- Startup review identified that creation-capable content-store open could
+  silently recreate missing internal directories. New existing-only lock and
+  content-store APIs preserve missing-state evidence and keep initialization
+  separate. Three new tests pass for retained bytes/lifetime exclusion, each
+  missing child or lock, and absent/unsafe lock entries. These APIs remain a
+  prerequisite for the upcoming explicit coordinator-ready initialization;
+  existing callers are not automatically converted to the strict mode.
+
+- Verified incumbent adoption preserves matching file bytes and ordinary modes,
+  reuses interrupted intents and never creates a missing directory. Hashing and
+  sync operate on the same held descriptor, with named-identity and parent
+  checks before success. Observed byte/mode/inode changes become durable
+  conflicts; transient I/O remains retryable. A create-promotion race fix checks
+  immediately before and after promotion, preserving an unexpected object as
+  conflict. The independent final adoption review found no remaining defect.
+  All 35 focused apply tests pass, including same-descriptor sync, permission
+  preservation, late cancellation, retryable file/directory I/O and both sides
+  of the promotion window. This still does not implement replacement/deletion
+  or prove retained content availability for an adopted file.
+- Android's direct SAF metadata observer requires two complete matching scans,
+  preserves opaque IDs, and fails closed for incomplete provider responses,
+  malformed metadata, cycles, name collisions, cancellation and observed
+  mutation. Entry and UTF-8 metadata limits include pending sibling buffers.
+  It opens no file content and cannot represent content proof, deletion,
+  adoption or successful sync. Nine JVM tests and six real-provider device
+  tests are added; the instrumentation-result fixture passes and derives 71
+  required device tests by name. No local JVM, Gradle, lint or device pass is
+  claimed: a working local JDK/SDK is unavailable. Hosted execution is required.
+- The combined authority/adoption/controlled-replay/strict-reopen checkpoint
+  passes 640 all-feature workspace tests across 22 suites with zero failed or
+  ignored, strict workspace Clippy, formatting and foundation checks. Authority
+  setup has ten focused tests, including all setup-commitment identity fields;
+  strict existing-state startup adds three regressions. Independent reviews of
+  authority, replay control and strict reopen found no remaining issues.
+  These checks validate implemented boundaries; network folder sync and final
+  platform/release acceptance remain open.
 
 ## Work order
 

@@ -92,8 +92,13 @@ struct LockedDirectory {
 }
 
 impl LockedDirectory {
-    fn new(dir: PrivateStateDir) -> Result<Self, ContentStoreError> {
-        let lock = dir.try_lock().map_err(storage_error)?;
+    fn new(dir: PrivateStateDir, create_missing: bool) -> Result<Self, ContentStoreError> {
+        let lock = if create_missing {
+            dir.try_lock()
+        } else {
+            dir.try_lock_existing()
+        }
+        .map_err(storage_error)?;
         Ok(Self { dir, lock })
     }
 }
@@ -132,20 +137,43 @@ impl SyncContentStore {
         crypto: SyncContentCrypto,
         limits: ContentStoreLimits,
     ) -> Result<Self, ContentStoreError> {
+        Self::open_with_creation(root, crypto, limits, true)
+    }
+
+    /// Reopens complete existing storage without creating directories or locks.
+    /// A missing child/lock is an error, preserving evidence for explicit
+    /// initialization recovery rather than silently rebuilding ready state.
+    pub fn open_existing(
+        root: PrivateStateDir,
+        crypto: SyncContentCrypto,
+        limits: ContentStoreLimits,
+    ) -> Result<Self, ContentStoreError> {
+        Self::open_with_creation(root, crypto, limits, false)
+    }
+
+    fn open_with_creation(
+        root: PrivateStateDir,
+        crypto: SyncContentCrypto,
+        limits: ContentStoreLimits,
+        create_missing: bool,
+    ) -> Result<Self, ContentStoreError> {
         if limits.maximum_stored_bytes == 0
             || limits.maximum_objects == 0
             || limits.maximum_objects > MAX_STORE_OBJECTS
         {
             return Err(ContentStoreError::InvalidLimits);
         }
-        let root = LockedDirectory::new(root)?;
+        let root = LockedDirectory::new(root, create_missing)?;
         validate_root(&root)?;
         let child = |name| -> Result<LockedDirectory, ContentStoreError> {
-            LockedDirectory::new(
-                root.dir
-                    .open_or_create_child(&internal_key(name)?)
-                    .map_err(storage_error)?,
-            )
+            let key = internal_key(name)?;
+            let directory = if create_missing {
+                root.dir.open_or_create_child(&key)
+            } else {
+                root.dir.open_child(&key)
+            }
+            .map_err(storage_error)?;
+            LockedDirectory::new(directory, create_missing)
         };
         let chunks = child("chunks")?;
         let manifests = child("manifests")?;

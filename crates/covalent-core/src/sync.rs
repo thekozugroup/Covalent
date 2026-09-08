@@ -6,7 +6,8 @@
 //! bootstrap-backed membership additions/upgrades and read-only removals;
 //! write-loss changes still fail closed. Local file publication requires exact
 //! durable content receipts. A Unix applier can journal and verify create-only
-//! file/directory placement. No network sync runtime is shipped; replacement,
+//! file/directory placement and adopt matching existing files without changing
+//! their modes. No network sync runtime is shipped; replacement,
 //! deletion, live authorization and applied/acknowledged frontiers remain open.
 
 /// Read-only causal-history admission checks for a future synchronized path.
@@ -16,9 +17,12 @@ pub mod admission;
 pub mod apply_machine;
 /// Canonical bounded plaintext records for the encrypted apply journal.
 pub mod apply_record;
-/// Descriptor-relative create-only filesystem application.
+/// Descriptor-relative filesystem creation and verified incumbent adoption.
 #[cfg(unix)]
 pub mod apply_unix;
+/// Immutable protected authority and transport pins for local folder replay.
+#[cfg(unix)]
+pub mod authority_config;
 /// Canonical bounded operation bodies for future folder mutations.
 pub mod body;
 /// Canonical signed read-only bootstrap permits and candidate receipts.

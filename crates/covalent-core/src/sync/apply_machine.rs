@@ -1,4 +1,4 @@
-//! Replay state for the private create-only filesystem-apply journal.
+//! Replay state for the private create and observation filesystem-apply journal.
 //!
 //! This machine validates journal structure and transaction ordering. It does
 //! not admit folder operations, authorize a writer, or inspect user files. The
@@ -446,6 +446,17 @@ impl ApplyMachine {
                             return Err(ApplyMachineError::InvalidTransition);
                         }
                     }
+                    ApplyAction::AdoptExisting => {
+                        let ExpectedTarget::File {
+                            identity: expected, ..
+                        } = retained.intent.expected_target()
+                        else {
+                            return Err(ApplyMachineError::InvalidTransition);
+                        };
+                        if retained.stage_ready.is_some() || expected != applied.target_identity() {
+                            return Err(ApplyMachineError::InvalidTransition);
+                        }
+                    }
                 }
                 Ok(Transition::Applied(applied))
             }
@@ -514,6 +525,11 @@ fn intent_shape_valid(intent: &ApplyIntent) -> bool {
             ApplyAction::EnsureExisting,
             ExpectedTarget::Directory(_),
             None
+        ) | (
+            EntryValue::File(_),
+            ApplyAction::AdoptExisting,
+            ExpectedTarget::File { .. },
+            None
         )
     )
 }
@@ -543,7 +559,7 @@ mod tests {
 
     use super::*;
     use crate::sync::apply_record::{ApplyUnsupportedReason, EntryIdentity, StageName};
-    use crate::sync::body::OperationBody;
+    use crate::sync::body::{ContentDigest, FileContent, OperationBody};
     use crate::sync::ids::{FolderId, WriterId};
     use crate::sync::operation::{
         ClockEntry, decode_signature_checked_operation, encode_signed_operation,
@@ -714,5 +730,72 @@ mod tests {
             Some(ApplyMachineError::Equivocation)
         );
         assert_eq!(machine.revision(), 1);
+    }
+
+    #[test]
+    fn adoption_requires_exact_incumbent_identity_and_no_stage() {
+        let transaction = ApplyTransactionId::from_bytes([8; 32]).unwrap();
+        let path = SyncPath::from_wire("adopted-file").unwrap();
+        let operation = operation_at(&path, 1);
+        let desired = EntryValue::File(
+            FileContent::new(ContentDigest::from_bytes([9; 32]), 12, false).unwrap(),
+        );
+        let identity = EntryIdentity::new(10, 11);
+        let intent = ApplyRecord::Intent(
+            ApplyIntent::new(
+                transaction,
+                operation,
+                EntryIdentity::new(1, 2),
+                path,
+                desired,
+                ApplyAction::AdoptExisting,
+                ExpectedTarget::File {
+                    identity,
+                    permission_bits: 0o644,
+                },
+                None,
+            )
+            .unwrap(),
+        );
+        let intent_digest = intent.digest();
+        let mut machine = ApplyMachine::new(limits(1 << 20)).unwrap();
+        let PreparedEvent::Append(prepared) =
+            machine.prepare_record(intent.encode().as_bytes()).unwrap()
+        else {
+            panic!("adoption intent must append")
+        };
+        machine.commit_record(prepared).unwrap();
+
+        let wrong = ApplyRecord::Applied(
+            ApplyApplied::new(
+                transaction,
+                intent_digest,
+                operation,
+                EntryIdentity::new(10, 12),
+                desired,
+            )
+            .unwrap(),
+        )
+        .encode();
+        assert_eq!(
+            machine.prepare_record(wrong.as_bytes()).err(),
+            Some(ApplyMachineError::InvalidTransition)
+        );
+        assert_eq!(machine.revision(), 1);
+
+        let applied = ApplyRecord::Applied(
+            ApplyApplied::new(transaction, intent_digest, operation, identity, desired).unwrap(),
+        )
+        .encode();
+        let PreparedEvent::Append(prepared) = machine.prepare_record(applied.as_bytes()).unwrap()
+        else {
+            panic!("matching adoption receipt must append")
+        };
+        machine.commit_record(prepared).unwrap();
+        assert_eq!(machine.revision(), 2);
+        assert!(matches!(
+            machine.operation_terminal(operation.id()),
+            Some(ApplyTerminal::Applied(_))
+        ));
     }
 }

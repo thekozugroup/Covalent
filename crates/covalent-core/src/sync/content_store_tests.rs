@@ -673,3 +673,94 @@ fn receipt_debug_and_store_errors_redact_private_canaries() {
         }
     }
 }
+
+#[test]
+fn strict_reopen_retains_content_and_lifetime_exclusion() {
+    let (temporary, mut store) = fixture();
+    let bytes = b"strict reopen preserves complete retained content";
+    let expected = content(bytes, false);
+    store
+        .retain_stream(expected, bytes.as_slice(), &JobControl::new())
+        .unwrap();
+    let usage = store.usage().unwrap();
+    drop(store);
+    let reopened = SyncContentStore::open_existing(
+        private_root(temporary.path()),
+        crypto(default_domain()),
+        limits(),
+    )
+    .unwrap();
+    assert_eq!(reopened.usage().unwrap(), usage);
+    reopened
+        .verify_retained(expected, &JobControl::new())
+        .unwrap();
+    assert!(
+        SyncContentStore::open_existing(
+            private_root(temporary.path()),
+            crypto(default_domain()),
+            limits()
+        )
+        .is_err()
+    );
+    drop(reopened);
+    assert!(
+        SyncContentStore::open_existing(
+            private_root(temporary.path()),
+            crypto(default_domain()),
+            limits()
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn strict_reopen_never_recreates_any_missing_directory_or_lock() {
+    let empty = new_root();
+    assert!(
+        SyncContentStore::open_existing(
+            private_root(empty.path()),
+            crypto(default_domain()),
+            limits()
+        )
+        .is_err()
+    );
+    assert_eq!(fs::read_dir(empty.path()).unwrap().count(), 0);
+    for missing in [
+        "writer.lock",
+        "chunks",
+        "manifests",
+        "staging",
+        "chunks/writer.lock",
+        "manifests/writer.lock",
+        "staging/writer.lock",
+    ] {
+        let (temporary, store) = fixture();
+        drop(store);
+        let quarantine = new_root();
+        let displaced = quarantine.path().join("preserved");
+        fs::rename(temporary.path().join(missing), &displaced).unwrap();
+        assert!(
+            SyncContentStore::open_existing(
+                private_root(temporary.path()),
+                crypto(default_domain()),
+                limits()
+            )
+            .is_err(),
+            "missing {missing}"
+        );
+        assert!(
+            !temporary.path().join(missing).exists(),
+            "recreated {missing}"
+        );
+        assert!(displaced.exists());
+        fs::rename(&displaced, temporary.path().join(missing)).unwrap();
+        assert!(
+            SyncContentStore::open_existing(
+                private_root(temporary.path()),
+                crypto(default_domain()),
+                limits()
+            )
+            .is_ok()
+        );
+    }
+}

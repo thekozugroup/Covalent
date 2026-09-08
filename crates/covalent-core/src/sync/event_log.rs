@@ -84,6 +84,8 @@ pub enum EventLogError {
     InvalidFileHeader,
     #[error("folder event log changed outside its transaction")]
     Changed,
+    #[error("folder event replay was interrupted")]
+    Interrupted,
     #[error("folder event log requires reopen after an uncertain transaction")]
     Poisoned,
     #[error("folder event page limits are invalid")]
@@ -137,6 +139,7 @@ impl<M: EventMachine> DurableEventLog<M> {
     /// Replays an existing stream under its exclusive folder lock.
     /// Only a structurally incomplete final frame at physical EOF is repaired.
     /// Complete corruption or event rejection leaves the file untouched.
+    /// Long-running callers should use [`Self::open_with_control`].
     pub fn open(
         directory: &PrivateStateDir,
         file_name: &StateKey,
@@ -145,16 +148,44 @@ impl<M: EventMachine> DurableEventLog<M> {
         limits: EventLogLimits,
         machine: M,
     ) -> Result<Self, EventLogError> {
+        Self::open_with_control(
+            directory,
+            file_name,
+            binding,
+            key,
+            limits,
+            machine,
+            &crate::JobControl::new(),
+        )
+    }
+
+    /// Replays with pause/cancel checks between bounded frame reads and machine
+    /// transitions. An interrupted open exposes no partial machine and releases
+    /// its child lock. A started valid EOF-tail repair completes its sync before
+    /// observing interruption, so cancellation never skips repair durability.
+    /// A single filesystem call or machine transition is not preempted.
+    pub fn open_with_control(
+        directory: &PrivateStateDir,
+        file_name: &StateKey,
+        binding: LogBinding,
+        key: LogFrameKey,
+        limits: EventLogLimits,
+        machine: M,
+        control: &crate::JobControl,
+    ) -> Result<Self, EventLogError> {
+        let mut check = || control.check().map_err(|_| EventLogError::Interrupted);
+        check()?;
         validate_limits(limits)?;
         require_empty_machine(&machine)?;
         let lock = directory.try_lock()?;
         let file = directory.open_file(file_name, limits.maximum_bytes)?;
         // A prior creation may have stopped before its parent sync. Persist
         // the admitted entry before this reopen can expose durable state.
+        check()?;
         directory.sync(&lock)?;
         let io = OsLogIo { file, lock };
         Ok(Self {
-            inner: LogInner::open(io, binding, key, limits, machine)?,
+            inner: LogInner::open_checked(io, binding, key, limits, machine, &mut check)?,
         })
     }
 
@@ -246,12 +277,24 @@ fn validate_limits(limits: EventLogLimits) -> Result<(), EventLogError> {
 
 impl<M: EventMachine, I: LogIo> LogInner<M, I> {
     fn open(
+        io: I,
+        binding: LogBinding,
+        key: LogFrameKey,
+        limits: EventLogLimits,
+        machine: M,
+    ) -> Result<Self, EventLogError> {
+        Self::open_checked(io, binding, key, limits, machine, &mut || Ok(()))
+    }
+
+    fn open_checked(
         mut io: I,
         binding: LogBinding,
         key: LogFrameKey,
         limits: EventLogLimits,
         mut machine: M,
+        check: &mut impl FnMut() -> Result<(), EventLogError>,
     ) -> Result<Self, EventLogError> {
+        check()?;
         validate_limits(limits)?;
         require_empty_machine(&machine)?;
         let initial_length = io.len()?;
@@ -265,6 +308,7 @@ impl<M: EventMachine, I: LogIo> LogInner<M, I> {
         let mut records = 0_u64;
         let mut repaired_tail_bytes = 0;
         while committed_bytes < initial_length {
+            check()?;
             let ordinal = records.checked_add(1).ok_or(EventLogError::QuotaExceeded)?;
             let requested =
                 (initial_length - committed_bytes).min(MAX_ENCODED_LOG_FRAME_BYTES as u64);
@@ -272,6 +316,7 @@ impl<M: EventMachine, I: LogIo> LogInner<M, I> {
             if input.len() as u64 != requested || io.len()? != initial_length {
                 return Err(EventLogError::Changed);
             }
+            check()?;
             match log_frame::parse_one(&input, &binding, LogOrdinal::new(ordinal)?, &key)? {
                 ParseOutcome::Complete(frame) => {
                     if ordinal > limits.maximum_records {
@@ -283,6 +328,7 @@ impl<M: EventMachine, I: LogIo> LogInner<M, I> {
                         // replay interpretation cannot silently discard a frame.
                         return Err(EventValidationError.into());
                     };
+                    check()?;
                     machine.commit(prepared)?;
                     committed_bytes = committed_bytes
                         .checked_add(frame.consumed() as u64)
@@ -295,11 +341,15 @@ impl<M: EventMachine, I: LogIo> LogInner<M, I> {
                     if committed_bytes + input.len() as u64 != initial_length {
                         return Err(EventLogError::Changed);
                     }
+                    check()?;
                     io.truncate(committed_bytes)?;
                     repaired_tail_bytes = initial_length - committed_bytes;
                     break;
                 }
             }
+        }
+        if repaired_tail_bytes == 0 {
+            check()?;
         }
         if io.len()? != committed_bytes {
             return Err(EventLogError::Changed);
@@ -311,6 +361,7 @@ impl<M: EventMachine, I: LogIo> LogInner<M, I> {
         if io.len()? != committed_bytes {
             return Err(EventLogError::Changed);
         }
+        check()?;
         Ok(Self {
             cursor_token: Arc::new(()),
             io,
@@ -393,6 +444,7 @@ fn require_empty_machine(machine: &impl EventMachine) -> Result<(), EventLogErro
 #[cfg(test)]
 mod tests {
     mod page_tests;
+    mod replay_control_tests;
 
     use std::cell::RefCell;
     use std::fs;
