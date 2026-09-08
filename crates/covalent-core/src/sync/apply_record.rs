@@ -14,6 +14,7 @@ use zeroize::Zeroizing;
 
 use super::body::{EntryValue, FileContent};
 use super::log_frame::MAX_LOG_PLAINTEXT_BYTES;
+use super::membership::EpochDigest;
 use super::operation::OperationDigest;
 use super::path::{MAX_SYNC_PATH_BYTES, SyncPath};
 use super::register::OpId;
@@ -35,6 +36,7 @@ const STAGE_READY_TAG: u8 = 2;
 const APPLIED_TAG: u8 = 3;
 const CONFLICT_TAG: u8 = 4;
 const UNSUPPORTED_TAG: u8 = 5;
+const ROOT_READY_TAG: u8 = 6;
 
 const FILE_TAG: u8 = 1;
 const DIRECTORY_TAG: u8 = 2;
@@ -139,6 +141,81 @@ impl EntryIdentity {
 impl fmt::Debug for EntryIdentity {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("EntryIdentity([redacted])")
+    }
+}
+
+/// The exact recognized event-history prefix present before coordinator readiness.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ApplyInitialization {
+    /// This installation authored and retained the exact authority-only genesis.
+    OwnerGenesis(EpochDigest),
+    /// This installation retained no events and awaits authenticated bootstrap.
+    AwaitingBootstrap,
+}
+
+/// First-only authenticated binding between the apply log and coordinator setup.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct ApplyRootReady {
+    root: EntryIdentity,
+    setup_binding: [u8; DIGEST_BYTES],
+    initialization: ApplyInitialization,
+}
+
+impl ApplyRootReady {
+    pub(crate) fn new(
+        root: EntryIdentity,
+        setup_binding: [u8; DIGEST_BYTES],
+        initialization: ApplyInitialization,
+    ) -> Self {
+        Self {
+            root,
+            setup_binding,
+            initialization,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_parts(
+        root: EntryIdentity,
+        setup_binding: [u8; DIGEST_BYTES],
+        initialization: ApplyInitialization,
+    ) -> Self {
+        Self {
+            root,
+            setup_binding,
+            initialization,
+        }
+    }
+
+    /// Returns the exact descriptor identity of the authorized user root.
+    #[must_use]
+    pub const fn root(&self) -> EntryIdentity {
+        self.root
+    }
+
+    /// Returns the recognized initial event-history state.
+    #[must_use]
+    pub const fn initialization(&self) -> ApplyInitialization {
+        self.initialization
+    }
+
+    #[must_use]
+    pub(crate) const fn setup_binding(&self) -> &[u8; DIGEST_BYTES] {
+        &self.setup_binding
+    }
+
+    pub(crate) fn matches_setup(&self, setup_binding: &[u8; DIGEST_BYTES]) -> bool {
+        self.setup_binding == *setup_binding
+    }
+}
+
+impl fmt::Debug for ApplyRootReady {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ApplyRootReady")
+            .field("initialization", &self.initialization)
+            .field("bindings", &"[redacted]")
+            .finish()
     }
 }
 
@@ -686,6 +763,8 @@ impl fmt::Debug for ApplyUnsupported {
 /// One canonical private apply write-ahead record.
 #[derive(Clone, Eq, PartialEq)]
 pub enum ApplyRecord {
+    /// First-only coordinator root/setup readiness binding.
+    RootReady(ApplyRootReady),
     /// Durable pre-mutation intent.
     Intent(ApplyIntent),
     /// Durable verified-stage evidence.
@@ -707,6 +786,18 @@ impl ApplyRecord {
         bytes.extend_from_slice(&WIRE_VERSION.to_be_bytes());
         bytes.push(FLAGS);
         match self {
+            Self::RootReady(record) => {
+                bytes.push(ROOT_READY_TAG);
+                encode_identity(&mut bytes, record.root);
+                bytes.extend_from_slice(&record.setup_binding);
+                match record.initialization {
+                    ApplyInitialization::OwnerGenesis(digest) => {
+                        bytes.push(1);
+                        bytes.extend_from_slice(&digest.to_bytes());
+                    }
+                    ApplyInitialization::AwaitingBootstrap => bytes.push(2),
+                }
+            }
             Self::Intent(record) => {
                 bytes.push(INTENT_TAG);
                 encode_transaction(&mut bytes, record.transaction);
@@ -772,6 +863,17 @@ impl ApplyRecord {
         }
         let tag = cursor.u8()?;
         let record = match tag {
+            ROOT_READY_TAG => Self::RootReady(ApplyRootReady {
+                root: cursor.identity()?,
+                setup_binding: cursor.array()?,
+                initialization: match cursor.u8()? {
+                    1 => {
+                        ApplyInitialization::OwnerGenesis(EpochDigest::from_bytes(cursor.array()?))
+                    }
+                    2 => ApplyInitialization::AwaitingBootstrap,
+                    _ => return Err(ApplyRecordError::InvalidInitialization),
+                },
+            }),
             INTENT_TAG => Self::Intent(ApplyIntent::new(
                 cursor.transaction()?,
                 cursor.operation()?,
@@ -828,6 +930,7 @@ impl ApplyRecord {
 impl fmt::Debug for ApplyRecord {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let kind = match self {
+            Self::RootReady(_) => "RootReady",
             Self::Intent(_) => "Intent",
             Self::StageReady(_) => "StageReady",
             Self::Applied(_) => "Applied",
@@ -913,6 +1016,9 @@ pub enum ApplyRecordError {
     /// The action tag was outside the closed apply set.
     #[error("unknown apply action")]
     InvalidAction,
+    /// The initial event-history state tag was outside the closed set.
+    #[error("unknown apply initialization state")]
+    InvalidInitialization,
     /// The expected-target tag was outside the closed set.
     #[error("unknown expected target state")]
     InvalidExpectedTarget,
@@ -1266,6 +1372,11 @@ mod tests {
         );
         let digest = create.digest();
         vec![
+            ApplyRecord::RootReady(ApplyRootReady::from_test_parts(
+                EntryIdentity::new(21, 22),
+                [23; DIGEST_BYTES],
+                ApplyInitialization::OwnerGenesis(EpochDigest::from_bytes([24; DIGEST_BYTES])),
+            )),
             create,
             ApplyRecord::StageReady(
                 ApplyStageReady::new(
@@ -1428,7 +1539,7 @@ mod tests {
                 assert!(ApplyRecord::decode(&encoded.as_bytes()[..end]).is_err());
             }
         }
-        let encoded = records()[0].encode();
+        let encoded = records()[1].encode();
         let mut trailing = encoded.as_bytes().to_vec();
         trailing.push(0);
         assert_eq!(
@@ -1488,7 +1599,7 @@ mod tests {
 
     #[test]
     fn noncanonical_actor_and_optional_tags_are_rejected() {
-        let encoded = records()[0].encode();
+        let encoded = records()[1].encode();
         let mut upper_actor = encoded.as_bytes().to_vec();
         let actor_offset = MAGIC.len() + 2 + 1 + 1 + TRANSACTION_BYTES;
         upper_actor[actor_offset + 10] = b'A';
@@ -1497,7 +1608,7 @@ mod tests {
             Err(ApplyRecordError::InvalidOperation)
         );
 
-        let conflict = records()[3].encode();
+        let conflict = records()[4].encode();
         let mut bad_optional = conflict.as_bytes().to_vec();
         bad_optional[MAGIC.len() + 2 + 1 + 1 + TRANSACTION_BYTES] = 2;
         assert_eq!(

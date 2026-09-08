@@ -227,8 +227,15 @@ describe logical encrypted bytes and objects, not filesystem overhead or RSS.
 Ready-state startup can now request existing-only private locks and content
 storage. That path never creates a missing child directory or lock and still
 validates complete inventory, quotas and retained objects. Initialization keeps
-its separate creation-capable path. The coordinator must select these modes
+its separate creation-capable path. The coordinator selects these modes
 explicitly; a failed ordinary reopen is not permission to reinitialize storage.
+Its first-only encrypted ApplyRootReady record binds the authorized root,
+authenticated setup commitment and owner-genesis/awaiting-bootstrap choice.
+No child mutation/signing capability escapes before that record is synced.
+Ordinary open requires complete existing topology; explicit resume accepts only
+recognized empty initialization prefixes. A missing owner genesis after later
+children exist is preserved and rejected. Child owners drop before the retained
+installation lock. Transport pin equality does not prove live key possession.
 
 Each local sync installation now creates an immutable protected record with
 independent installation/generation identifiers, a fresh writer signing key,
@@ -244,7 +251,7 @@ record bound to the exact folder, installation, generation, writer and local
 signing public key. Creation requires only the installation record and held
 root lock to exist; opening never substitutes a key from incoming history.
 Malformed, missing or changed trust fails closed. A stable opaque setup
-commitment binds these authenticated identities for the upcoming readiness
+commitment binds these authenticated identities to the durable readiness
 marker. Replay configuration derives from these durable pins. This authenticates storage of the setup workflow's
 trust decision; live transport still has to prove private-key possession.
 
@@ -317,9 +324,27 @@ Unicode handling to Rust. These observations prove neither file content nor an
 atomic provider snapshot and cannot authorize adoption, deletion or sync success.
 Generic SAF mutation semantics still require a separate implementation decision.
 
-Network folder sync remains unshipped. Write-loss/freeze transitions and their
-history reconciliation still fail closed. The full folder coordinator, peer
-exchange, safe replacement and deletion, conflict materialization, native setup,
-Android content verification/application and the
-multi-device acceptance gates above remain outstanding.
+Unix path lookup preserves a single physical filename whose NFC form exactly
+matches the canonical path, including decomposed parent components. Complete
+bounded enumeration rejects case-only mismatches, multiple equivalent entries,
+invalid names and resource exhaustion. Revalidation binds the selected spelling
+and parent identity; a spelling change is accepted only when both lookups name
+the same device and inode. Directory enumeration is not an atomic namespace
+snapshot, and external writers can still introduce ambiguity after a scan.
+No-replace promotion and subsequent scans preserve unexpected incumbents.
+
+The event machine now retains signed write-loss proposals, immutable survivor
+receipts and authority aborts. A committed proposal blocks new losing-writer
+publication/ordinary ingress and other membership activity. Receipt claims are
+unresolved evidence until their complete frontier and exact losing tips match
+admitted history; they never become History by signature or counter ceiling.
+Exact historical duplicate/equivocation checks remain available after freeze
+or abort. Abort retires only the proposal's actionable quota and retains its
+permanent evidence. Local receipt signing, quarantine and write-loss epoch
+activation still fail closed or are unavailable in this slice.
+
+Network folder sync remains unshipped. The serialized scan/publication/apply
+runtime, history reconciliation, peer exchange, safe replacement and deletion,
+conflict materialization, native setup, Android content verification/application
+and multi-device acceptance gates above remain outstanding.
 Existing Backup and Restore behavior remains independently tested.

@@ -37,13 +37,13 @@ Close every known release-blocking finding; do not remove a gate to raise a scor
 
 | Area | Required evidence | Current state |
 | --- | --- | --- |
-| Product scope | Explicit backup/sync semantics and a matching acceptance scenario | Automatic two-way sync is required. Signed records, causal/conflict checks, protected installation keys, private storage, read-only Unix inventories, bootstrap-backed membership replay and content-gated durable publication, protected authority pins, journaled Unix creation and verified incumbent adoption, and bounded Android metadata observation are implemented. Write-loss reconciliation, the full folder coordinator, peer exchange, replacement/deletion, native setup and multi-device acceptance remain outstanding. |
-| Core correctness | Unit, property, adversarial, migration, concurrency, corruption, interrupted-job and source-loss tests; strict lint | At `f80c375`, hosted Rust/contracts passed 610 tests across 22 suites with zero failed/ignored, strict workspace Clippy and 89 web tests. All release-candidate software and CodeQL gates passed on that checkpoint. Checkpoint `d13955a` exposed a Linux adoption inode-reuse failure despite 640 local passing tests. The subsequent descriptor-lifetime and retry fixes pass 643 local Rust tests across 22 suites with zero failed/ignored; Linux and final platform confirmation remain required. |
+| Product scope | Explicit backup/sync semantics and a matching acceptance scenario | Automatic two-way sync is required. Signed records, causal/conflict checks, protected installation keys, private storage, read-only Unix inventories, bootstrap-backed membership replay and content-gated durable publication, protected authority pins, journaled Unix creation and verified incumbent adoption, bounded Android metadata observation, durable coordinator readiness, and signed write-loss freeze/receipt/abort admission are implemented. Write-loss reconciliation, the serialized sync runtime, peer exchange, replacement/deletion, native setup and multi-device acceptance remain outstanding. |
+| Core correctness | Unit, property, adversarial, migration, concurrency, corruption, interrupted-job and source-loss tests; strict lint | At `f80c375`, hosted Rust/contracts passed 610 tests across 22 suites with zero failed/ignored, strict workspace Clippy and 89 web tests. All release-candidate software and CodeQL gates passed on that checkpoint. Checkpoint `d13955a` exposed a Linux adoption inode-reuse failure despite 640 local passing tests. The descriptor-lifetime and retry fixes at `4a6d1ba` subsequently passed all 643 hosted Linux Rust tests across 22 suites with zero failed/ignored, plus 89 web tests. The next combined readiness/freeze/Unicode slice passes 467 local core tests and strict workspace Clippy; fresh platform and final release confirmation remain required. |
 | Owner-device loss | A user can export a protected recovery kit, replace a lost owner device, discover its authenticated catalogs, see partial availability, and restore | API, CLI/runtime, web and native recovery flows pass. At source content matching `1839796`, the real Mac–Atmos Docker drill passed protected export, deletion of the entire original owner state, automatic catalog import and exact provider-only restore. Native UI also passes. Final artifacts and large-catalog memory evidence remain required. |
 | Beginner workflow | Install → connect → choose folder → protect → verify → restore through real UI; clear errors and recovery; no manual IDs in ordinary flows | Real browser unlock, automatic snapshot/name defaults, named backup selection, preview invalidation, restore and Verify passed with disposable files. Preview now explains individual file actions and renamed conflict destinations instead of raw JSON. Full cross-device onboarding pending. |
 | macOS | Shared tests, live helper integration, native UI/accessibility, verified arm64 app package, install and upgrade | At `1839796`, the app bundle, all 105 shared tests, live helper integration, and all four native UI tests passed. The native gate requires exactly four passed, zero failed/skipped, including first-launch setup/recovery cancellation and the system accessibility audit. Final artifact install/upgrade remains required. Local Xcode license and CLT Testing limitations remain. |
 | Android | JVM, instrumented SAF and process-death tests, TalkBack/large text, install and upgrade of stable personal artifact | At `e5a622c`, arm64 JNI is 8,384,224 bytes and x86_64 is 9,918,032 bytes; both pass the unchanged budget. At `1839796`, Android foundation and API 37 device gates passed: 103 JVM tests and all 65 named instrumentation tests, with no skipped device tests. Recovery plural resources pass lint. At `d13955a`, hosted Android compilation, lint and packaging passed, and the saved JUnit report proves all 112 JVM tests passed (including nine metadata tests), zero failures/errors/skips. All 71 expected API 37 tests also passed by name, including six new real-provider tests. Final-revision and personal-artifact validation remain required. |
-| Docker | Both CPU architectures; TLS and key-protection contracts; rootless/read-only runtime; bounded storage/memory; three-node recovery | Both image architectures and container runtime/e2e passed on checkpoint `f80c375`; repeat on final revision. |
+| Docker | Both CPU architectures; TLS and key-protection contracts; rootless/read-only runtime; bounded storage/memory; three-node recovery | Both image architectures and container runtime/e2e passed on checkpoint `4a6d1ba`; repeat on final revision. |
 | Atmos network drill | Mac ↔ Ubuntu pairing, explicitly selected replica, interrupted/restarted operation, source-loss restore, exact hashes, cleanup | Passed with a 64 MiB incompressible payload: same-job pause/resume, provider container restart preserving identity, local source/cache loss, provider-only restore and exact content checks. Dedicated resources removed; pre-existing container/image IDs survived. See [drill evidence](atmos-drill-2026-09-07.md). |
 | Atlas/Unraid | Docker deployment, Unraid template/mount contracts, exact-image install/upgrade and backup/restore; on-host Atlas check deferred by the user | Atlas is offline. The user accepted Docker validation in its place on 2026-09-07. Preflight fixtures, both Docker architectures and the full owner-loss Atmos Docker drill pass. Final-image install/upgrade remains required. No physical Atlas install is claimed. |
 | Security and supply chain | Dependency audits, CodeQL, immutable image scans/signatures/SBOMs, safe secret storage, exact release commit provenance | cargo-audit (289 dependencies, warnings denied) and cargo-deny advisories/bans/licenses/sources passed. CodeQL Java/Kotlin, Swift and the repository-wide zero-open-alert policy passed at `1839796`. Final artifact evidence is pending; current main signature is unknown_key and account has no registered signing key. |
@@ -415,8 +415,61 @@ packages, credentials, private server inventories, or raw diagnostic bundles.
   71 expected tests passed by name at 09:07:07 UTC, including all six new real-
   provider metadata tests. Both Docker architectures, macOS integration/UI/bundle,
   iOS and dependency-delta checks also passed. The overall software gate remains
-  failed because of the Linux Rust defect described above; Swift CodeQL is still
-  pending at this point.
+  failed because of the Linux Rust defect described above. Both CodeQL languages
+  and the policy gate subsequently passed on that exact checkpoint.
+
+- Checkpoint `4a6d1ba` subsequently passed the hosted Linux regression and all
+  643 Rust tests across 22 suites, zero failed/ignored, strict Clippy, contracts
+  and 89 web tests. Both Docker architectures, container runtime/e2e, macOS
+  integration/UI/bundle, Android foundation and all 71 expected API 37 tests
+  passed. The iOS Tier 2 accessibility audit failed with “Contrast nearly
+  passed”; its separate primary-workflow test passed. The required-software
+  aggregate passed because iOS is Tier 2, but the iOS failure remains an open
+  finding until the new revision passes its audit. Both CodeQL languages and
+  the zero-open-alert policy passed on that checkpoint.
+- The new folder coordinator authenticates immutable setup and transport pins,
+  holds the installation lock until every child closes, and exposes no child
+  mutation/signing capability before a first-only encrypted ApplyRootReady
+  record is synced. Ready binds the exact authorized root, setup commitment,
+  and either owner genesis or awaiting-bootstrap initialization. Ordinary open
+  requires complete existing topology; explicit initialization resumes only
+  recognized empty prefixes. Unknown, missing or corrupt later state is
+  preserved. Independent review found that a header-only owner event log could
+  incorrectly regenerate genesis after later children existed; the fix and a
+  byte-preservation regression now reject both open and resume in that state.
+  All 11 coordinator tests pass, including cancellation immediately after Ready
+  sync followed by successful strict reopen. The review also found no remaining
+  issue in the descriptor-lifetime creation extension.
+- Signed write-loss proposals now durably freeze losing writers against new
+  local publication and ordinary ingress. Exact historical duplicates remain
+  readable after freeze or abort; signature verification precedes equivocation
+  classification. The machine retains one immutable receipt per exact survivor,
+  including read-only survivors, while unresolved claims stay outside admitted
+  history. An exact authority abort releases only actionable freeze quota;
+  permanent evidence remains. Other membership activity is blocked while the
+  proposal is pending. Local receipt signing, quarantine, reconciliation and
+  write-loss epoch activation remain unfinished. Focused lifecycle, adversarial,
+  quota and encrypted restart tests pass; independent review found no defect.
+- Unix apply now resolves one actual on-disk spelling whose NFC form exactly
+  matches the canonical path, including decomposed macOS filenames and parents.
+  Case-only mismatches and multiple physical equivalent entries fail closed.
+  Each bounded complete directory scan is rechecked against selected names and
+  parent identity; creation still uses no-replace promotion. Three new tests
+  cover scan → retain → publish → adopt → reopen, a real filesystem-dependent
+  exclusive-name collision, and an incumbent appearing before promotion. All
+  29 Unix tests pass locally; Linux execution remains required. This does not
+  claim an atomic directory snapshot against concurrent external writers.
+- The iOS selected-tab caption used light-mode system blue on an opaque white
+  tab bar, with calculated contrast 4.02:1. Its adaptive replacement calculates
+  to 9.23:1 on white in light mode and 9.99:1 on black in dark mode. The failing
+  xcresult report did not identify its element, so this addresses the measured
+  caption defect without claiming the audit is fixed before a hosted rerun.
+  The original strict audit is unchanged and no failure is filtered out.
+
+- The combined readiness/freeze/Unicode source passes 661 all-feature Rust
+  workspace tests across 22 suites, zero failed/ignored, including 467 core
+  tests. Strict workspace Clippy, formatting and foundation checks pass.
+  The iOS color change and all other changes still require fresh hosted gates.
 
 ## Work order
 

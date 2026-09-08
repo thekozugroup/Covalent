@@ -13,7 +13,8 @@ use thiserror::Error;
 
 use super::apply_record::{
     ApplyAction, ApplyApplied, ApplyConflict, ApplyIntent, ApplyRecord, ApplyRecordDigest,
-    ApplyStageReady, ApplyTransactionId, ApplyUnsupported, ExpectedTarget, OperationBinding,
+    ApplyRootReady, ApplyStageReady, ApplyTransactionId, ApplyUnsupported, ExpectedTarget,
+    OperationBinding,
 };
 use super::body::EntryValue;
 use super::event_log::{EventMachine, EventValidationError, PreparedEvent};
@@ -46,6 +47,8 @@ pub enum ApplyMachineError {
     MissingPhase,
     #[error("apply journal transaction order is invalid")]
     InvalidTransition,
+    #[error("apply journal has no authenticated root readiness record")]
+    NotReady,
     #[error("apply journal contains an equivocation")]
     Equivocation,
     #[error("apply replay state exceeds its configured quota")]
@@ -112,6 +115,7 @@ enum OperationState {
 }
 
 enum Transition {
+    RootReady(ApplyRootReady),
     Intent(ApplyIntent, ApplyRecordDigest),
     StageReady(ApplyStageReady),
     Applied(ApplyApplied),
@@ -135,6 +139,7 @@ pub struct ApplyMachine {
     limits: ApplyMachineLimits,
     revision: u64,
     retained_bytes: u64,
+    ready: Option<ApplyRootReady>,
     seen: BTreeMap<ApplyRecordDigest, Box<[u8]>>,
     transactions: BTreeMap<ApplyTransactionId, RetainedTransaction>,
     attempts: BTreeMap<ApplyTransactionId, OpId>,
@@ -165,6 +170,7 @@ impl ApplyMachine {
             limits,
             revision: 0,
             retained_bytes: BASE_INDEX_CHARGE_BYTES,
+            ready: None,
             seen: BTreeMap::new(),
             transactions: BTreeMap::new(),
             attempts: BTreeMap::new(),
@@ -175,6 +181,12 @@ impl ApplyMachine {
     #[must_use]
     pub const fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// Returns the first-only authenticated coordinator readiness binding.
+    #[must_use]
+    pub const fn ready(&self) -> Option<&ApplyRootReady> {
+        self.ready.as_ref()
     }
 
     pub fn transaction(&self, transaction: ApplyTransactionId) -> Option<ApplyTransaction<'_>> {
@@ -315,6 +327,7 @@ impl ApplyMachine {
             return Err(ApplyMachineError::StalePrepared);
         }
         match prepared.transition {
+            Transition::RootReady(ready) => self.ready = Some(ready),
             Transition::Intent(intent, digest) => {
                 self.operations.insert(
                     intent.operation().id(),
@@ -387,7 +400,21 @@ impl ApplyMachine {
     }
 
     fn validate_transition(&self, record: ApplyRecord) -> Result<Transition, ApplyMachineError> {
+        if !matches!(&record, ApplyRecord::RootReady(_)) && self.ready.is_none() {
+            return Err(ApplyMachineError::NotReady);
+        }
         match record {
+            ApplyRecord::RootReady(ready) => {
+                if self.revision != 0
+                    || self.ready.is_some()
+                    || !self.transactions.is_empty()
+                    || !self.attempts.is_empty()
+                    || !self.operations.is_empty()
+                {
+                    return Err(ApplyMachineError::InvalidTransition);
+                }
+                Ok(Transition::RootReady(ready))
+            }
             ApplyRecord::Intent(intent) => {
                 if self.transactions.contains_key(&intent.transaction())
                     || self.attempts.contains_key(&intent.transaction())
@@ -494,6 +521,7 @@ impl ApplyMachine {
 
 fn owned_dynamic_charge(record: &ApplyRecord) -> Result<u64, ApplyMachineError> {
     let bytes = match record {
+        ApplyRecord::RootReady(_) => Some(0),
         ApplyRecord::Intent(value) => value
             .path()
             .as_str()
@@ -558,7 +586,9 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::sync::apply_record::{ApplyUnsupportedReason, EntryIdentity, StageName};
+    use crate::sync::apply_record::{
+        ApplyInitialization, ApplyRootReady, ApplyUnsupportedReason, EntryIdentity, StageName,
+    };
     use crate::sync::body::{ContentDigest, FileContent, OperationBody};
     use crate::sync::ids::{FolderId, WriterId};
     use crate::sync::operation::{
@@ -623,12 +653,68 @@ mod tests {
         intent_at(transaction, SyncPath::from_wire("machine-canary").unwrap())
     }
 
+    fn ready_record() -> ApplyRecord {
+        ApplyRecord::RootReady(ApplyRootReady::from_test_parts(
+            EntryIdentity::new(91, 92),
+            [93; 32],
+            ApplyInitialization::OwnerGenesis(super::super::membership::EpochDigest::from_bytes(
+                [94; 32],
+            )),
+        ))
+    }
+
+    fn ready_machine(bytes: u64) -> ApplyMachine {
+        let mut machine = ApplyMachine::new(limits(bytes)).unwrap();
+        let encoded = ready_record().encode();
+        let PreparedEvent::Append(prepared) = machine.prepare_record(encoded.as_bytes()).unwrap()
+        else {
+            panic!("ready must append")
+        };
+        machine.commit_record(prepared).unwrap();
+        machine
+    }
+
+    #[test]
+    fn readiness_is_first_only_and_operations_cannot_precede_it() {
+        let transaction = ApplyTransactionId::from_bytes([31; 32]).unwrap();
+        let intent = intent(transaction).encode();
+        let mut machine = ApplyMachine::new(limits(1 << 20)).unwrap();
+        assert_eq!(
+            machine.prepare_record(intent.as_bytes()).err(),
+            Some(ApplyMachineError::NotReady)
+        );
+        assert_eq!(machine.revision(), 0);
+
+        let ready = ready_record().encode();
+        let PreparedEvent::Append(prepared) = machine.prepare_record(ready.as_bytes()).unwrap()
+        else {
+            panic!("ready must append")
+        };
+        machine.commit_record(prepared).unwrap();
+        assert!(machine.ready().is_some());
+        assert!(matches!(
+            machine.prepare_record(ready.as_bytes()),
+            Ok(PreparedEvent::Duplicate)
+        ));
+        let different = ApplyRecord::RootReady(ApplyRootReady::from_test_parts(
+            EntryIdentity::new(91, 95),
+            [93; 32],
+            ApplyInitialization::AwaitingBootstrap,
+        ))
+        .encode();
+        assert_eq!(
+            machine.prepare_record(different.as_bytes()).err(),
+            Some(ApplyMachineError::InvalidTransition)
+        );
+        assert_eq!(machine.revision(), 1);
+    }
+
     #[test]
     fn prepared_values_are_exact_instance_and_revision_bound() {
         let transaction = ApplyTransactionId::from_bytes([1; 32]).unwrap();
         let record = intent(transaction).encode();
-        let mut first = ApplyMachine::new(limits(1 << 20)).unwrap();
-        let mut second = ApplyMachine::new(limits(1 << 20)).unwrap();
+        let mut first = ready_machine(1 << 20);
+        let mut second = ready_machine(1 << 20);
         let PreparedEvent::Append(prepared) = first.prepare_record(record.as_bytes()).unwrap()
         else {
             panic!("new intent must append")
@@ -637,7 +723,7 @@ mod tests {
             second.commit_record(prepared),
             Err(ApplyMachineError::WrongMachine)
         );
-        assert_eq!(second.revision(), 0);
+        assert_eq!(second.revision(), 1);
 
         let PreparedEvent::Append(stale) = first.prepare_record(record.as_bytes()).unwrap() else {
             panic!("new intent must append")
@@ -651,7 +737,7 @@ mod tests {
             first.commit_record(stale),
             Err(ApplyMachineError::StalePrepared)
         );
-        assert_eq!(first.revision(), 1);
+        assert_eq!(first.revision(), 2);
     }
 
     #[test]
@@ -660,18 +746,22 @@ mod tests {
         let long_path = SyncPath::from_wire(vec!["x".repeat(250); 16].join("/")).unwrap();
         let record = intent_at(transaction, long_path);
         let encoded = record.encode();
+        let ready = ready_record();
+        let ready_encoded = ready.encode();
         let exact_charge = BASE_INDEX_CHARGE_BYTES
+            + RECORD_INDEX_CHARGE_BYTES
+            + ready_encoded.as_bytes().len() as u64
             + RECORD_INDEX_CHARGE_BYTES
             + encoded.as_bytes().len() as u64
             + owned_dynamic_charge(&record).unwrap();
-        let below = ApplyMachine::new(limits(exact_charge - 1)).unwrap();
+        let below = ready_machine(exact_charge - 1);
         assert!(matches!(
             below.prepare_record(encoded.as_bytes()),
             Err(ApplyMachineError::QuotaExceeded)
         ));
-        assert_eq!(below.revision(), 0);
+        assert_eq!(below.revision(), 1);
 
-        let exact = ApplyMachine::new(limits(exact_charge)).unwrap();
+        let exact = ready_machine(exact_charge);
         assert!(matches!(
             exact.prepare_record(encoded.as_bytes()),
             Ok(PreparedEvent::Append(_))
@@ -691,12 +781,12 @@ mod tests {
             .unwrap(),
         )
         .encode();
-        let machine = ApplyMachine::new(limits(1 << 20)).unwrap();
+        let machine = ready_machine(1 << 20);
         assert!(matches!(
             machine.prepare_record(stage.as_bytes()),
             Err(ApplyMachineError::MissingPhase)
         ));
-        assert_eq!(machine.revision(), 0);
+        assert_eq!(machine.revision(), 1);
     }
 
     #[test]
@@ -710,7 +800,7 @@ mod tests {
             ApplyUnsupportedReason::Replace,
         ))
         .encode();
-        let mut machine = ApplyMachine::new(limits(1 << 20)).unwrap();
+        let mut machine = ready_machine(1 << 20);
         let PreparedEvent::Append(prepared) = machine.prepare_record(first.as_bytes()).unwrap()
         else {
             panic!("new unsupported record must append")
@@ -729,7 +819,7 @@ mod tests {
             machine.prepare_record(second.as_bytes()).err(),
             Some(ApplyMachineError::Equivocation)
         );
-        assert_eq!(machine.revision(), 1);
+        assert_eq!(machine.revision(), 2);
     }
 
     #[test]
@@ -758,7 +848,7 @@ mod tests {
             .unwrap(),
         );
         let intent_digest = intent.digest();
-        let mut machine = ApplyMachine::new(limits(1 << 20)).unwrap();
+        let mut machine = ready_machine(1 << 20);
         let PreparedEvent::Append(prepared) =
             machine.prepare_record(intent.encode().as_bytes()).unwrap()
         else {
@@ -781,7 +871,7 @@ mod tests {
             machine.prepare_record(wrong.as_bytes()).err(),
             Some(ApplyMachineError::InvalidTransition)
         );
-        assert_eq!(machine.revision(), 1);
+        assert_eq!(machine.revision(), 2);
 
         let applied = ApplyRecord::Applied(
             ApplyApplied::new(transaction, intent_digest, operation, identity, desired).unwrap(),
@@ -792,7 +882,7 @@ mod tests {
             panic!("matching adoption receipt must append")
         };
         machine.commit_record(prepared).unwrap();
-        assert_eq!(machine.revision(), 2);
+        assert_eq!(machine.revision(), 3);
         assert!(matches!(
             machine.operation_terminal(operation.id()),
             Some(ApplyTerminal::Applied(_))

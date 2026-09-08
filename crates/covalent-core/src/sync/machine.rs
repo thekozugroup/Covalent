@@ -2,9 +2,10 @@
 //!
 //! This slice accepts a canonical membership chain containing bootstrap-backed
 //! Add/upgrade and ordinary read-only removal transitions, plus operations
-//! authorized by its retained history. Write-loss transitions and reconciliation
-//! remain fail closed. Successful preparation is not a peer acknowledgement and
-//! does not mutate files in the synchronized folder.
+//! authorized by its retained history. It durably freezes write-losing members
+//! while retaining signed proposal, receipt, and abort evidence; write-loss epoch
+//! activation and reconciliation remain fail closed. Successful preparation is
+//! not a peer acknowledgement and does not mutate files in the synchronized folder.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -22,6 +23,11 @@ use super::bootstrap::{
 };
 use super::event::{EventEnvelope, EventKind};
 use super::event_log::{EventMachine, EventValidationError, PreparedEvent};
+use super::freeze::{
+    SignatureCheckedFreezeAbort, SignatureCheckedFreezeReceipt, SignatureCheckedWriteLossProposal,
+    WriteLossAction, decode_signature_checked_freeze_abort,
+    decode_signature_checked_freeze_receipt, decode_signature_checked_write_loss_proposal,
+};
 use super::frontier::{FrontierError, check_closed_frontier};
 use super::ids::{FolderId, WriterId};
 use super::membership::{
@@ -122,6 +128,12 @@ pub enum FolderEventError {
     /// The operation is not authorized by the exact accepted membership head.
     #[error("folder operation membership is not authorized")]
     UnauthorizedOperation,
+    /// A committed write-loss proposal has frozen this writer's new operations.
+    #[error("folder writer is frozen by a pending membership proposal")]
+    WriterFrozen,
+    /// A committed write-loss proposal blocks this new control event.
+    #[error("folder membership freeze is already pending")]
+    FreezePending,
     /// A retained operation identity was presented with different bytes.
     #[error("folder event conflicts with retained history")]
     Equivocation,
@@ -331,6 +343,149 @@ struct RetainedReceipt {
     checked: SignatureCheckedBootstrapReceipt,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct FreezeProposalIdentity {
+    base: EpochDigest,
+    nonce: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct FreezeReceiptIdentity {
+    proposal: [u8; 32],
+    signer: WriterId,
+}
+
+struct RetainedFreezeProposal {
+    checked: SignatureCheckedWriteLossProposal,
+}
+
+struct RetainedFreezeReceipt {
+    checked: SignatureCheckedFreezeReceipt,
+}
+
+struct RetainedFreezeAbort {
+    checked: SignatureCheckedFreezeAbort,
+}
+
+struct PendingFreeze {
+    proposal: [u8; 32],
+    receipts: BTreeMap<WriterId, [u8; 32]>,
+    evidence_bytes: u64,
+    evidence_records: u64,
+}
+
+/// Exact-history status of one retained receipt for the pending proposal.
+///
+/// `Resolved` says only that every claimed frontier component and losing tip
+/// matches retained admitted operation history. It is not an applied-content
+/// acknowledgement, a durable-freeze proof, or completed reconciliation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FreezeReceiptState {
+    /// No immutable receipt from this exact survivor is retained.
+    Missing,
+    /// A signature-checked receipt is retained but its claims are not in exact local history.
+    Unresolved,
+    /// Every claimed operation is available and exact in admitted local history.
+    Resolved,
+}
+
+/// Read-only state of the single actionable write-loss proposal.
+#[derive(Clone, Copy, Debug)]
+pub enum FolderFreezeState<'a> {
+    /// No write-loss proposal currently blocks membership activity.
+    Unfrozen,
+    /// One exact committed proposal is pending explicit abort or future reconciliation.
+    Pending(PendingFreezeRef<'a>),
+}
+
+/// Borrowed, non-authorizing view of one pending write-loss proposal.
+#[derive(Clone, Copy)]
+pub struct PendingFreezeRef<'a> {
+    machine: &'a FolderEventMachine,
+    proposal: &'a SignatureCheckedWriteLossProposal,
+}
+
+impl PendingFreezeRef<'_> {
+    /// Returns the commitment to the complete signed proposal.
+    #[must_use]
+    pub const fn proposal_digest(&self) -> [u8; 32] {
+        self.proposal.digest().to_bytes()
+    }
+
+    /// Returns the exact membership base frozen by the proposal.
+    #[must_use]
+    pub const fn base_epoch(&self) -> u64 {
+        self.proposal.base_epoch()
+    }
+
+    /// Returns the exact signed base-epoch digest.
+    #[must_use]
+    pub const fn base_epoch_digest(&self) -> EpochDigest {
+        self.proposal.base_epoch_digest()
+    }
+
+    /// Returns every resulting survivor, including read-only members.
+    #[must_use]
+    pub fn survivor_writer_ids(&self) -> &[WriterId] {
+        self.proposal.survivor_writer_ids()
+    }
+
+    /// Returns the writers whose write capability would be lost.
+    #[must_use]
+    pub fn losing_writer_ids(&self) -> &[WriterId] {
+        self.proposal.losing_writer_ids()
+    }
+
+    /// Reports the retained receipt and exact-history status for one survivor.
+    #[must_use]
+    pub fn receipt_state(&self, writer: WriterId) -> Option<FreezeReceiptState> {
+        self.proposal
+            .survivor_writer_ids()
+            .binary_search(&writer)
+            .ok()?;
+        let pending = self.machine.pending_freeze.as_ref()?;
+        let Some(digest) = pending.receipts.get(&writer) else {
+            return Some(FreezeReceiptState::Missing);
+        };
+        let receipt = self.machine.freeze_receipts.get(digest)?;
+        Some(
+            if self
+                .machine
+                .freeze_receipt_has_exact_history(&receipt.checked)
+            {
+                FreezeReceiptState::Resolved
+            } else {
+                FreezeReceiptState::Unresolved
+            },
+        )
+    }
+
+    /// Returns the number of immutable survivor receipts retained so far.
+    #[must_use]
+    pub fn receipt_count(&self) -> usize {
+        self.machine
+            .pending_freeze
+            .as_ref()
+            .map_or(0, |pending| pending.receipts.len())
+    }
+}
+
+impl fmt::Debug for PendingFreezeRef<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PendingFreezeRef")
+            .field("proposal_digest", &self.proposal.digest())
+            .field("base_epoch", &self.proposal.base_epoch())
+            .field("survivor_count", &self.proposal.survivor_writer_ids().len())
+            .field(
+                "losing_writer_count",
+                &self.proposal.losing_writer_ids().len(),
+            )
+            .field("receipt_count", &self.receipt_count())
+            .finish()
+    }
+}
+
 #[derive(Clone)]
 struct WriterTimeline {
     first_epoch: u64,
@@ -388,6 +543,30 @@ enum PreparedChange {
         index_bytes: u64,
         retired_index_bytes: u64,
     },
+    FreezeProposal {
+        identity: FreezeProposalIdentity,
+        digest: [u8; 32],
+        retained: RetainedFreezeProposal,
+        index_bytes: u64,
+        pending_bytes: u64,
+        pending_records: u64,
+    },
+    FreezeReceipt {
+        identity: FreezeReceiptIdentity,
+        digest: [u8; 32],
+        retained: RetainedFreezeReceipt,
+        index_bytes: u64,
+        pending_bytes: u64,
+        pending_records: u64,
+    },
+    FreezeAbort {
+        proposal: [u8; 32],
+        digest: [u8; 32],
+        retained: RetainedFreezeAbort,
+        index_bytes: u64,
+        pending_bytes: u64,
+        pending_records: u64,
+    },
 }
 
 /// Opaque non-mutating preflight result bound to one exact machine revision.
@@ -405,6 +584,9 @@ impl fmt::Debug for PreparedFolderEvent {
             PreparedChange::BootstrapPermit { .. } => "bootstrap-permit",
             PreparedChange::BootstrapReceipt { .. } => "bootstrap-receipt",
             PreparedChange::MembershipTransition { .. } => "membership-transition",
+            PreparedChange::FreezeProposal { .. } => "freeze-proposal",
+            PreparedChange::FreezeReceipt { .. } => "freeze-receipt",
+            PreparedChange::FreezeAbort { .. } => "freeze-abort",
         };
         formatter
             .debug_struct("PreparedFolderEvent")
@@ -433,6 +615,12 @@ pub struct FolderEventMachine {
     receipt_identities: BTreeMap<ReceiptIdentity, [u8; 32]>,
     pending_permits: BTreeMap<[u8; 32], PendingPermitRef>,
     pending_receipts: BTreeMap<[u8; 32], PendingReceiptRef>,
+    freeze_proposals: BTreeMap<[u8; 32], RetainedFreezeProposal>,
+    freeze_proposal_identities: BTreeMap<FreezeProposalIdentity, [u8; 32]>,
+    freeze_receipts: BTreeMap<[u8; 32], RetainedFreezeReceipt>,
+    freeze_receipt_identities: BTreeMap<FreezeReceiptIdentity, [u8; 32]>,
+    freeze_aborts: BTreeMap<[u8; 32], RetainedFreezeAbort>,
+    pending_freeze: Option<PendingFreeze>,
     pending_evidence_bytes: u64,
     pending_evidence_records: u64,
     index_bytes: u64,
@@ -471,6 +659,12 @@ impl FolderEventMachine {
             receipt_identities: BTreeMap::new(),
             pending_permits: BTreeMap::new(),
             pending_receipts: BTreeMap::new(),
+            freeze_proposals: BTreeMap::new(),
+            freeze_proposal_identities: BTreeMap::new(),
+            freeze_receipts: BTreeMap::new(),
+            freeze_receipt_identities: BTreeMap::new(),
+            freeze_aborts: BTreeMap::new(),
+            pending_freeze: None,
             pending_evidence_bytes: 0,
             pending_evidence_records: 0,
             index_bytes: MACHINE_INDEX_BYTES,
@@ -494,6 +688,22 @@ impl FolderEventMachine {
     #[must_use]
     pub const fn current_frontier(&self) -> &VersionVector {
         &self.frontier
+    }
+
+    /// Returns the replay-derived write-loss freeze state.
+    #[must_use]
+    pub fn freeze_state(&self) -> FolderFreezeState<'_> {
+        let Some(pending) = &self.pending_freeze else {
+            return FolderFreezeState::Unfrozen;
+        };
+        let proposal = self
+            .freeze_proposals
+            .get(&pending.proposal)
+            .expect("committed pending freeze references retained proposal");
+        FolderFreezeState::Pending(PendingFreezeRef {
+            machine: self,
+            proposal: &proposal.checked,
+        })
     }
 
     /// Returns only active values derived from fully admitted operations.
@@ -614,6 +824,9 @@ impl FolderEventMachine {
         if writer != self.config.local_writer_id {
             return Err(FolderEventError::PublicationDenied);
         }
+        if self.is_losing_writer_frozen(writer) {
+            return Err(FolderEventError::PublicationDenied);
+        }
         let epoch = self
             .current_epoch()
             .ok_or(FolderEventError::PublicationDenied)?;
@@ -681,9 +894,9 @@ impl FolderEventMachine {
             EventKind::Operation => self.prepare_operation(&envelope),
             EventKind::BootstrapPermit => self.prepare_bootstrap_permit(&envelope),
             EventKind::BootstrapReceipt => self.prepare_bootstrap_receipt(&envelope),
-            EventKind::WriteLossProposal | EventKind::FreezeReceipt | EventKind::FreezeAbort => {
-                Err(FolderEventError::UnsupportedEvent)
-            }
+            EventKind::WriteLossProposal => self.prepare_freeze_proposal(&envelope),
+            EventKind::FreezeReceipt => self.prepare_freeze_receipt(&envelope),
+            EventKind::FreezeAbort => self.prepare_freeze_abort(&envelope),
         }
     }
 
@@ -779,7 +992,6 @@ impl FolderEventMachine {
             &routing_grant.writer_key,
         )
         .map_err(|_| FolderEventError::InvalidEvent)?;
-        self.authorize_operation(&operation, current_epoch)?;
         let header = operation
             .to_admission_header()
             .map_err(|_| FolderEventError::InvalidEvent)?;
@@ -790,6 +1002,10 @@ impl FolderEventMachine {
             } else {
                 Err(FolderEventError::Equivocation)
             };
+        }
+        self.authorize_operation(&operation, current_epoch)?;
+        if self.is_losing_writer_frozen(writer) {
+            return Err(FolderEventError::WriterFrozen);
         }
         self.require_revision_capacity()?;
         let admission = admission::check(self, &header).map_err(|error| match error {
@@ -894,6 +1110,9 @@ impl FolderEventMachine {
         if self.permits.contains_key(&digest) {
             return Err(FolderEventError::Equivocation);
         }
+        if self.pending_freeze.is_some() {
+            return Err(FolderEventError::FreezePending);
+        }
         let current = self
             .current_epoch()
             .ok_or(FolderEventError::MissingGenesis)?;
@@ -961,6 +1180,9 @@ impl FolderEventMachine {
                 Err(FolderEventError::Equivocation)
             };
         }
+        if self.pending_freeze.is_some() {
+            return Err(FolderEventError::FreezePending);
+        }
         let pending_permit = self
             .pending_permits
             .get(&identity.permit_digest)
@@ -1016,6 +1238,9 @@ impl FolderEventMachine {
             } else {
                 Err(FolderEventError::Equivocation)
             };
+        }
+        if self.pending_freeze.is_some() {
+            return Err(FolderEventError::FreezePending);
         }
         if candidate.proposal_digest().is_some()
             || !candidate.cutoffs().is_empty()
@@ -1086,6 +1311,290 @@ impl FolderEventMachine {
                 retired_index_bytes,
             },
         }))
+    }
+
+    fn prepare_freeze_proposal(
+        &self,
+        envelope: &EventEnvelope<'_>,
+    ) -> Result<PreparedEvent<PreparedFolderEvent>, FolderEventError> {
+        let proposal = decode_signature_checked_write_loss_proposal(
+            envelope.record(),
+            self.config.folder_id,
+            self.config.authority_writer_id,
+            &self.config.pinned_authority_key,
+        )
+        .map_err(|_| FolderEventError::InvalidEvent)?;
+        let identity = FreezeProposalIdentity {
+            base: proposal.base_epoch_digest(),
+            nonce: proposal.transition_nonce(),
+        };
+        let digest = proposal.digest().to_bytes();
+        if let Some(existing_digest) = self.freeze_proposal_identities.get(&identity) {
+            let retained = self
+                .freeze_proposals
+                .get(existing_digest)
+                .ok_or(FolderEventError::InvalidEvent)?;
+            return if retained.checked.canonical_record() == envelope.record()
+                && *existing_digest == digest
+            {
+                Ok(PreparedEvent::Duplicate)
+            } else {
+                Err(FolderEventError::Equivocation)
+            };
+        }
+        if self.freeze_proposals.contains_key(&digest) {
+            return Err(FolderEventError::Equivocation);
+        }
+        if self.pending_freeze.is_some() {
+            return Err(FolderEventError::FreezePending);
+        }
+        let current = self
+            .current_epoch()
+            .ok_or(FolderEventError::MissingGenesis)?;
+        if proposal.base_epoch() != current.epoch()
+            || proposal.base_epoch_digest() != current.digest()
+        {
+            return Err(FolderEventError::UnauthorizedOperation);
+        }
+        self.validate_freeze_proposal(&proposal, current)?;
+        self.require_revision_capacity()?;
+        let (index_bytes, pending_bytes, pending_records) =
+            self.evidence_resource_delta(envelope.record().len(), 0)?;
+        Ok(PreparedEvent::Append(PreparedFolderEvent {
+            machine_token: Arc::clone(&self.machine_token),
+            expected_revision: self.revision,
+            change: PreparedChange::FreezeProposal {
+                identity,
+                digest,
+                retained: RetainedFreezeProposal { checked: proposal },
+                index_bytes,
+                pending_bytes,
+                pending_records,
+            },
+        }))
+    }
+
+    fn prepare_freeze_receipt(
+        &self,
+        envelope: &EventEnvelope<'_>,
+    ) -> Result<PreparedEvent<PreparedFolderEvent>, FolderEventError> {
+        let hint = envelope
+            .untrusted_freeze_receipt_hint()
+            .map_err(|_| FolderEventError::InvalidEvent)?;
+        let proposal_digest = hint.proposal_digest().to_bytes();
+        let signer = hint.signer_writer_id();
+        let retained_proposal = self
+            .freeze_proposals
+            .get(&proposal_digest)
+            .ok_or(FolderEventError::MissingEvidence)?;
+        let base = self
+            .epochs
+            .get(&retained_proposal.checked.base_epoch_digest())
+            .filter(|epoch| epoch.epoch() == retained_proposal.checked.base_epoch())
+            .ok_or(FolderEventError::InvalidEvent)?;
+        let historical_grant = member_by_writer(base.roster(), signer)
+            .ok_or(FolderEventError::UnauthorizedOperation)?;
+        let receipt = decode_signature_checked_freeze_receipt(
+            envelope.record(),
+            &retained_proposal.checked,
+            historical_grant,
+        )
+        .map_err(|_| FolderEventError::InvalidEvent)?;
+        let identity = FreezeReceiptIdentity {
+            proposal: proposal_digest,
+            signer,
+        };
+        let digest = receipt.digest().to_bytes();
+        if let Some(existing_digest) = self.freeze_receipt_identities.get(&identity) {
+            let retained = self
+                .freeze_receipts
+                .get(existing_digest)
+                .ok_or(FolderEventError::InvalidEvent)?;
+            return if retained.checked.canonical_record() == envelope.record()
+                && *existing_digest == digest
+            {
+                Ok(PreparedEvent::Duplicate)
+            } else {
+                Err(FolderEventError::Equivocation)
+            };
+        }
+        if self.freeze_receipts.contains_key(&digest) {
+            return Err(FolderEventError::Equivocation);
+        }
+        let pending = self
+            .pending_freeze
+            .as_ref()
+            .filter(|pending| pending.proposal == proposal_digest)
+            .ok_or(FolderEventError::MissingEvidence)?;
+        if !retained_proposal
+            .checked
+            .survivor_writer_ids()
+            .contains(&signer)
+            || pending.receipts.contains_key(&signer)
+        {
+            return Err(FolderEventError::InvalidEvent);
+        }
+        self.require_revision_capacity()?;
+        let (index_bytes, pending_bytes, pending_records) = self
+            .evidence_resource_delta(envelope.record().len(), receipt.frontier().actor_count())?;
+        Ok(PreparedEvent::Append(PreparedFolderEvent {
+            machine_token: Arc::clone(&self.machine_token),
+            expected_revision: self.revision,
+            change: PreparedChange::FreezeReceipt {
+                identity,
+                digest,
+                retained: RetainedFreezeReceipt { checked: receipt },
+                index_bytes,
+                pending_bytes,
+                pending_records,
+            },
+        }))
+    }
+
+    fn prepare_freeze_abort(
+        &self,
+        envelope: &EventEnvelope<'_>,
+    ) -> Result<PreparedEvent<PreparedFolderEvent>, FolderEventError> {
+        let proposal_digest = envelope
+            .untrusted_freeze_abort_proposal_hint()
+            .map_err(|_| FolderEventError::InvalidEvent)?
+            .to_bytes();
+        let retained_proposal = self
+            .freeze_proposals
+            .get(&proposal_digest)
+            .ok_or(FolderEventError::MissingEvidence)?;
+        let abort = decode_signature_checked_freeze_abort(
+            envelope.record(),
+            &retained_proposal.checked,
+            &self.config.pinned_authority_key,
+        )
+        .map_err(|_| FolderEventError::InvalidEvent)?;
+        let digest = abort.digest().to_bytes();
+        if let Some(retained) = self.freeze_aborts.get(&proposal_digest) {
+            return if retained.checked.canonical_record() == envelope.record()
+                && retained.checked.digest().to_bytes() == digest
+            {
+                Ok(PreparedEvent::Duplicate)
+            } else {
+                Err(FolderEventError::Equivocation)
+            };
+        }
+        let pending = self
+            .pending_freeze
+            .as_ref()
+            .filter(|pending| pending.proposal == proposal_digest)
+            .ok_or(FolderEventError::MissingEvidence)?;
+        let current = self
+            .current_epoch()
+            .ok_or(FolderEventError::MissingGenesis)?;
+        if current.epoch() != abort.base_epoch() || current.digest() != abort.base_epoch_digest() {
+            return Err(FolderEventError::UnauthorizedOperation);
+        }
+        self.require_revision_capacity()?;
+        let reference_charge = pending
+            .evidence_records
+            .checked_mul(PENDING_REFERENCE_INDEX_BYTES)
+            .ok_or(FolderEventError::ResourceLimit)?;
+        let index_bytes = self
+            .index_bytes
+            .checked_sub(reference_charge)
+            .and_then(|bytes| bytes.checked_add(EVIDENCE_INDEX_BYTES))
+            .and_then(|bytes| bytes.checked_add(envelope.record().len() as u64))
+            .ok_or(FolderEventError::ResourceLimit)?;
+        self.require_index_limit(index_bytes)?;
+        let pending_bytes = self
+            .pending_evidence_bytes
+            .checked_sub(pending.evidence_bytes)
+            .ok_or(FolderEventError::InvalidEvent)?;
+        let pending_records = self
+            .pending_evidence_records
+            .checked_sub(pending.evidence_records)
+            .ok_or(FolderEventError::InvalidEvent)?;
+        Ok(PreparedEvent::Append(PreparedFolderEvent {
+            machine_token: Arc::clone(&self.machine_token),
+            expected_revision: self.revision,
+            change: PreparedChange::FreezeAbort {
+                proposal: proposal_digest,
+                digest,
+                retained: RetainedFreezeAbort { checked: abort },
+                index_bytes,
+                pending_bytes,
+                pending_records,
+            },
+        }))
+    }
+
+    fn validate_freeze_proposal(
+        &self,
+        proposal: &SignatureCheckedWriteLossProposal,
+        base: &SignatureCheckedEpoch,
+    ) -> Result<(), FolderEventError> {
+        let authority = member_by_writer(base.roster(), self.config.authority_writer_id)
+            .filter(|grant| grant.role() == MemberRole::ReadWrite)
+            .filter(|grant| grant.writer_key() == &self.config.pinned_authority_key)
+            .ok_or(FolderEventError::InvalidEvent)?;
+        let _ = authority;
+        let mut survivors = Vec::with_capacity(base.roster().len());
+        let mut losing = Vec::new();
+        for grant in base.roster() {
+            let action = proposal
+                .changes()
+                .binary_search_by_key(&grant.writer_id(), |change| change.writer_id())
+                .ok()
+                .map(|index| proposal.changes()[index].action());
+            match action {
+                Some(WriteLossAction::Remove) => {
+                    if grant.role() == MemberRole::ReadWrite {
+                        losing.push(grant.writer_id());
+                    }
+                }
+                Some(WriteLossAction::DowngradeToRead) => {
+                    if grant.role() != MemberRole::ReadWrite {
+                        return Err(FolderEventError::InvalidEvent);
+                    }
+                    survivors.push(grant.writer_id());
+                    losing.push(grant.writer_id());
+                }
+                None => survivors.push(grant.writer_id()),
+            }
+        }
+        if proposal
+            .changes()
+            .iter()
+            .any(|change| member_by_writer(base.roster(), change.writer_id()).is_none())
+            || losing.is_empty()
+            || survivors != proposal.survivor_writer_ids()
+            || losing != proposal.losing_writer_ids()
+        {
+            return Err(FolderEventError::InvalidEvent);
+        }
+        Ok(())
+    }
+
+    fn is_losing_writer_frozen(&self, writer: WriterId) -> bool {
+        let Some(pending) = &self.pending_freeze else {
+            return false;
+        };
+        self.freeze_proposals
+            .get(&pending.proposal)
+            .is_some_and(|proposal| proposal.checked.losing_writer_ids().contains(&writer))
+    }
+
+    fn freeze_receipt_has_exact_history(&self, receipt: &SignatureCheckedFreezeReceipt) -> bool {
+        if check_closed_frontier(self, receipt.frontier()).is_err() {
+            return false;
+        }
+        receipt.losing_writer_tips().iter().all(|tip| {
+            if tip.counter() == 0 {
+                return true;
+            }
+            let Ok(id) = OpId::new(tip.writer_id().into_vector_actor(), tip.counter()) else {
+                return false;
+            };
+            self.operations
+                .get(&id)
+                .is_some_and(|operation| operation.header.digest() == tip.operation_digest())
+        })
     }
 
     fn current_epoch(&self) -> Option<&SignatureCheckedEpoch> {
@@ -1520,6 +2029,96 @@ impl FolderEventMachine {
                 self.pending_evidence_records = 0;
                 self.index_bytes = index_bytes;
             }
+            PreparedChange::FreezeProposal {
+                identity,
+                digest,
+                retained,
+                index_bytes,
+                pending_bytes,
+                pending_records,
+            } => {
+                if self.pending_freeze.is_some()
+                    || self.freeze_proposal_identities.contains_key(&identity)
+                    || self.freeze_proposals.contains_key(&digest)
+                {
+                    return Err(FolderEventError::StalePrepared);
+                }
+                let evidence_bytes = retained.checked.canonical_record().len() as u64;
+                self.freeze_proposal_identities.insert(identity, digest);
+                self.freeze_proposals.insert(digest, retained);
+                self.pending_freeze = Some(PendingFreeze {
+                    proposal: digest,
+                    receipts: BTreeMap::new(),
+                    evidence_bytes,
+                    evidence_records: 1,
+                });
+                self.pending_evidence_bytes = pending_bytes;
+                self.pending_evidence_records = pending_records;
+                self.index_bytes = index_bytes;
+            }
+            PreparedChange::FreezeReceipt {
+                identity,
+                digest,
+                retained,
+                index_bytes,
+                pending_bytes,
+                pending_records,
+            } => {
+                let pending = self
+                    .pending_freeze
+                    .as_ref()
+                    .filter(|pending| pending.proposal == identity.proposal)
+                    .ok_or(FolderEventError::StalePrepared)?;
+                if pending.receipts.contains_key(&identity.signer)
+                    || self.freeze_receipt_identities.contains_key(&identity)
+                    || self.freeze_receipts.contains_key(&digest)
+                {
+                    return Err(FolderEventError::StalePrepared);
+                }
+                let next_evidence_bytes = pending
+                    .evidence_bytes
+                    .checked_add(retained.checked.canonical_record().len() as u64)
+                    .ok_or(FolderEventError::ResourceLimit)?;
+                let next_evidence_records = pending
+                    .evidence_records
+                    .checked_add(1)
+                    .ok_or(FolderEventError::ResourceLimit)?;
+                let pending = self
+                    .pending_freeze
+                    .as_mut()
+                    .ok_or(FolderEventError::StalePrepared)?;
+                pending.receipts.insert(identity.signer, digest);
+                pending.evidence_bytes = next_evidence_bytes;
+                pending.evidence_records = next_evidence_records;
+                self.freeze_receipt_identities.insert(identity, digest);
+                self.freeze_receipts.insert(digest, retained);
+                self.pending_evidence_bytes = pending_bytes;
+                self.pending_evidence_records = pending_records;
+                self.index_bytes = index_bytes;
+            }
+            PreparedChange::FreezeAbort {
+                proposal,
+                digest,
+                retained,
+                index_bytes,
+                pending_bytes,
+                pending_records,
+            } => {
+                if self
+                    .pending_freeze
+                    .as_ref()
+                    .is_none_or(|pending| pending.proposal != proposal)
+                    || self.freeze_aborts.contains_key(&proposal)
+                    || retained.checked.digest().to_bytes() != digest
+                {
+                    return Err(FolderEventError::StalePrepared);
+                }
+                self.freeze_aborts.insert(proposal, retained);
+                self.pending_freeze = None;
+                self.pending_evidence_bytes = pending_bytes;
+                self.pending_evidence_records = pending_records;
+                self.index_bytes = index_bytes;
+            }
         }
         self.revision = next_revision;
         Ok(())
@@ -1685,8 +2284,12 @@ mod tests {
     };
     use crate::sync::event::EventEnvelope;
     use crate::sync::event_log::{DurableEventLog, EventAppendOutcome, EventLogLimits};
+    use crate::sync::freeze::{
+        WriteLossChange, decode_signature_checked_write_loss_proposal, encode_signed_freeze_abort,
+        encode_signed_freeze_receipt, encode_signed_write_loss_proposal,
+    };
     use crate::sync::log_frame::{LogBinding, LogFileKind, LogFrameKey};
-    use crate::sync::membership::{MemberGrant, encode_signed_epoch};
+    use crate::sync::membership::{MemberGrant, WriterCutoff, encode_signed_epoch};
     use crate::sync::operation::{OperationDigest, encode_signed_operation};
     use crate::sync::state_dir::{PrivateStateDir, StateKey};
 
@@ -1954,6 +2557,81 @@ mod tests {
             .expect("checked next epoch")
             .digest();
             (Self::envelope(EventKind::MembershipEpoch, &record), digest)
+        }
+
+        fn add_member(
+            &self,
+            machine: &mut FolderEventMachine,
+            candidate: &MemberGrant,
+            candidate_key: &SigningKey,
+            nonce: u8,
+        ) -> EpochDigest {
+            let current = machine.current_epoch().expect("membership head");
+            let epoch = current.epoch();
+            let digest = current.digest();
+            let mut roster = current.roster().to_vec();
+            roster.push(candidate.clone());
+            roster.sort_unstable_by_key(MemberGrant::writer_id);
+            let (permit, receipt, receipt_digest) =
+                self.bootstrap_pair(epoch, digest, candidate, candidate_key, nonce, &[], &[]);
+            let (next, next_digest) =
+                self.next_epoch(epoch + 1, digest, &roster, &[receipt_digest]);
+            append(machine, &permit);
+            append(machine, &receipt);
+            append(machine, &next);
+            next_digest
+        }
+
+        fn freeze_proposal(
+            &self,
+            machine: &FolderEventMachine,
+            nonce: u8,
+            changes: &[WriteLossChange],
+        ) -> (Vec<u8>, SignatureCheckedWriteLossProposal) {
+            let current = machine.current_epoch().expect("membership head");
+            let mut survivors = Vec::new();
+            let mut losing = Vec::new();
+            for grant in current.roster() {
+                let action = changes
+                    .iter()
+                    .find(|change| change.writer_id() == grant.writer_id())
+                    .map(|change| change.action());
+                match action {
+                    Some(WriteLossAction::Remove) => {
+                        if grant.role() == MemberRole::ReadWrite {
+                            losing.push(grant.writer_id());
+                        }
+                    }
+                    Some(WriteLossAction::DowngradeToRead) => {
+                        survivors.push(grant.writer_id());
+                        losing.push(grant.writer_id());
+                    }
+                    None => survivors.push(grant.writer_id()),
+                }
+            }
+            let record = encode_signed_write_loss_proposal(
+                &self.authority_key,
+                self.folder_id,
+                current.epoch(),
+                current.digest(),
+                self.authority_writer,
+                [nonce; 32],
+                changes,
+                &survivors,
+                &losing,
+            )
+            .expect("proposal");
+            let checked = decode_signature_checked_write_loss_proposal(
+                &record,
+                self.folder_id,
+                self.authority_writer,
+                &self.authority_key.verifying_key(),
+            )
+            .expect("checked proposal");
+            (
+                Self::envelope(EventKind::WriteLossProposal, &record),
+                checked,
+            )
         }
     }
 
@@ -2502,17 +3180,17 @@ mod tests {
             (
                 EventKind::WriteLossProposal,
                 b"COVSFP01",
-                FolderEventError::UnsupportedEvent,
+                FolderEventError::InvalidEvent,
             ),
             (
                 EventKind::FreezeReceipt,
                 b"COVSFR01",
-                FolderEventError::UnsupportedEvent,
+                FolderEventError::InvalidEvent,
             ),
             (
                 EventKind::FreezeAbort,
                 b"COVSFA01",
-                FolderEventError::UnsupportedEvent,
+                FolderEventError::InvalidEvent,
             ),
         ] {
             let mut record = magic.to_vec();
@@ -3139,7 +3817,7 @@ mod tests {
         );
         assert_eq!(
             prepare_error(&machine, &before_add),
-            FolderEventError::UnauthorizedOperation
+            FolderEventError::Equivocation
         );
     }
 
@@ -3173,6 +3851,25 @@ mod tests {
         append(&mut machine, &permit);
         append(&mut machine, &receipt);
         append(&mut machine, &epoch_two);
+
+        let read_only_proposal_record = encode_signed_write_loss_proposal(
+            &fixture.authority_key,
+            fixture.folder_id,
+            2,
+            epoch_two_digest,
+            fixture.authority_writer,
+            [20; 32],
+            &[WriteLossChange::new(reader_writer, WriteLossAction::Remove)],
+            &[fixture.authority_writer],
+            &[reader_writer],
+        )
+        .expect("structurally valid claimed write loss");
+        let read_only_proposal =
+            Fixture::envelope(EventKind::WriteLossProposal, &read_only_proposal_record);
+        assert_eq!(
+            prepare_error(&machine, &read_only_proposal),
+            FolderEventError::InvalidEvent
+        );
 
         let (epoch_three, epoch_three_digest) =
             fixture.next_epoch(3, epoch_two_digest, &[fixture.authority_grant()], &[]);
@@ -3308,6 +4005,490 @@ mod tests {
             FolderEventError::MissingEvidence
         );
         assert_eq!(machine.revision, revision);
+    }
+
+    #[test]
+    fn write_loss_freeze_blocks_only_losing_writer_and_abort_releases_after_commit() {
+        let fixture = Fixture::new();
+        let candidate_writer = writer(40);
+        let candidate_key = key(4);
+        let candidate = fixture.grant(
+            candidate_writer,
+            &candidate_key,
+            50,
+            &key(5),
+            MemberRole::ReadWrite,
+        );
+        let mut machine = FolderEventMachine::new(FolderMachineConfig {
+            local_writer_id: candidate_writer,
+            ..fixture.config(GENEROUS_LIMITS)
+        })
+        .expect("machine");
+        append(&mut machine, &fixture.genesis_event());
+        let epoch_two = fixture.add_member(&mut machine, &candidate, &candidate_key, 70);
+
+        let candidate_first = fixture.operation_for(
+            &candidate_key,
+            candidate_writer,
+            2,
+            epoch_two,
+            1,
+            None,
+            &[ClockEntry::new(candidate_writer, 1).expect("clock")],
+            "candidate-first",
+            directory(),
+        );
+        append(&mut machine, &candidate_first);
+        let candidate_digest = machine
+            .accepted_operation(
+                OpId::new(candidate_writer.into_vector_actor(), 1).expect("id"),
+                &candidate_first,
+            )
+            .expect("candidate history")
+            .digest();
+        let changes = [WriteLossChange::new(
+            candidate_writer,
+            WriteLossAction::DowngradeToRead,
+        )];
+        let (proposal_event, proposal) = fixture.freeze_proposal(&machine, 71, &changes);
+        append(&mut machine, &proposal_event);
+        let FolderFreezeState::Pending(pending) = machine.freeze_state() else {
+            panic!("freeze must be pending");
+        };
+        assert_eq!(pending.losing_writer_ids(), &[candidate_writer]);
+        assert_eq!(pending.survivor_writer_ids().len(), 2);
+        assert_eq!(
+            pending.receipt_state(candidate_writer),
+            Some(FreezeReceiptState::Missing)
+        );
+        let current = machine.current_epoch().expect("frozen base");
+        let (blocked_epoch, _) =
+            fixture.next_epoch(current.epoch() + 1, current.digest(), current.roster(), &[]);
+        assert_eq!(
+            prepare_error(&machine, &blocked_epoch),
+            FolderEventError::FreezePending
+        );
+        assert_eq!(
+            machine
+                .publication_context(candidate_writer, &candidate_key.verifying_key())
+                .err(),
+            Some(FolderEventError::PublicationDenied)
+        );
+
+        let blocked = fixture.operation_for(
+            &candidate_key,
+            candidate_writer,
+            2,
+            epoch_two,
+            2,
+            Some(candidate_digest),
+            &[ClockEntry::new(candidate_writer, 2).expect("clock")],
+            "blocked",
+            directory(),
+        );
+        let revision = machine.revision;
+        let frontier = machine.current_frontier().clone();
+        assert_eq!(
+            prepare_error(&machine, &blocked),
+            FolderEventError::WriterFrozen
+        );
+        assert_eq!(machine.revision, revision);
+        assert_eq!(machine.current_frontier(), &frontier);
+        assert!(matches!(
+            machine.prepare_event(&candidate_first),
+            Ok(PreparedEvent::Duplicate)
+        ));
+
+        let authority_event = fixture.operation_for(
+            &fixture.authority_key,
+            fixture.authority_writer,
+            2,
+            epoch_two,
+            1,
+            None,
+            &[
+                ClockEntry::new(fixture.authority_writer, 1).expect("authority clock"),
+                ClockEntry::new(candidate_writer, 1).expect("candidate clock"),
+            ],
+            "survivor",
+            directory(),
+        );
+        append(&mut machine, &authority_event);
+        let authority_digest = machine
+            .accepted_operation(
+                OpId::new(fixture.authority_writer.into_vector_actor(), 1).expect("id"),
+                &authority_event,
+            )
+            .expect("authority history")
+            .digest();
+
+        let base = machine.current_epoch().expect("base");
+        let candidate_grant = member_by_writer(base.roster(), candidate_writer)
+            .expect("grant")
+            .clone();
+        let authority_grant = member_by_writer(base.roster(), fixture.authority_writer)
+            .expect("authority grant")
+            .clone();
+        let exact_frontier = [
+            ClockEntry::new(fixture.authority_writer, 1).expect("authority frontier"),
+            ClockEntry::new(candidate_writer, 1).expect("candidate frontier"),
+        ];
+        let tips =
+            [WriterCutoff::new(candidate_writer, 1, candidate_digest.to_bytes()).expect("tip")];
+        let candidate_receipt_record = encode_signed_freeze_receipt(
+            &candidate_key,
+            &proposal,
+            &candidate_grant,
+            &exact_frontier,
+            &tips,
+        )
+        .expect("candidate receipt");
+        let candidate_receipt =
+            Fixture::envelope(EventKind::FreezeReceipt, &candidate_receipt_record);
+        append(&mut machine, &candidate_receipt);
+        let FolderFreezeState::Pending(pending) = machine.freeze_state() else {
+            panic!("freeze pending");
+        };
+        assert_eq!(
+            pending.receipt_state(candidate_writer),
+            Some(FreezeReceiptState::Resolved)
+        );
+
+        let unresolved_frontier = [
+            ClockEntry::new(fixture.authority_writer, 1).expect("authority frontier"),
+            ClockEntry::new(candidate_writer, 2).expect("future frontier"),
+        ];
+        let unresolved_tips =
+            [WriterCutoff::new(candidate_writer, 2, [99; 32]).expect("future tip")];
+        let unresolved_record = encode_signed_freeze_receipt(
+            &fixture.authority_key,
+            &proposal,
+            &authority_grant,
+            &unresolved_frontier,
+            &unresolved_tips,
+        )
+        .expect("unresolved receipt");
+        let unresolved = Fixture::envelope(EventKind::FreezeReceipt, &unresolved_record);
+        append(&mut machine, &unresolved);
+        let FolderFreezeState::Pending(pending) = machine.freeze_state() else {
+            panic!("freeze pending");
+        };
+        assert_eq!(
+            pending.receipt_state(fixture.authority_writer),
+            Some(FreezeReceiptState::Unresolved)
+        );
+        assert_eq!(machine.operations.len(), 2);
+
+        let abort_record =
+            encode_signed_freeze_abort(&fixture.authority_key, &proposal).expect("signed abort");
+        let abort = Fixture::envelope(EventKind::FreezeAbort, &abort_record);
+        let PreparedEvent::Append(prepared_abort) = machine.prepare_event(&abort).expect("prepare")
+        else {
+            panic!("abort append");
+        };
+        assert_eq!(
+            machine
+                .publication_context(candidate_writer, &candidate_key.verifying_key())
+                .err(),
+            Some(FolderEventError::PublicationDenied)
+        );
+        let survivor_second = fixture.operation_for(
+            &fixture.authority_key,
+            fixture.authority_writer,
+            2,
+            epoch_two,
+            2,
+            Some(authority_digest),
+            &[
+                ClockEntry::new(fixture.authority_writer, 2).expect("authority clock"),
+                ClockEntry::new(candidate_writer, 1).expect("candidate clock"),
+            ],
+            "survivor-second",
+            directory(),
+        );
+        append(&mut machine, &survivor_second);
+        assert_eq!(
+            machine.commit_checked(prepared_abort),
+            Err(FolderEventError::StalePrepared)
+        );
+        assert!(matches!(
+            machine.freeze_state(),
+            FolderFreezeState::Pending(_)
+        ));
+        append(&mut machine, &abort);
+        assert!(matches!(
+            machine.freeze_state(),
+            FolderFreezeState::Unfrozen
+        ));
+        assert_eq!(
+            machine
+                .publication_context(candidate_writer, &candidate_key.verifying_key())
+                .expect("publication released")
+                .counter(),
+            2
+        );
+        assert!(matches!(
+            machine.prepare_event(&proposal_event),
+            Ok(PreparedEvent::Duplicate)
+        ));
+        assert!(matches!(
+            machine.prepare_event(&candidate_receipt),
+            Ok(PreparedEvent::Duplicate)
+        ));
+        assert!(matches!(
+            machine.prepare_event(&abort),
+            Ok(PreparedEvent::Duplicate)
+        ));
+    }
+
+    #[test]
+    fn freeze_validation_is_atomic_for_bad_signature_competitor_rewrite_and_quota() {
+        let fixture = Fixture::new();
+        let candidate_writer = writer(40);
+        let candidate_key = key(4);
+        let candidate = fixture.grant(
+            candidate_writer,
+            &candidate_key,
+            50,
+            &key(5),
+            MemberRole::ReadWrite,
+        );
+        let mut machine = fixture.machine();
+        append(&mut machine, &fixture.genesis_event());
+        fixture.add_member(&mut machine, &candidate, &candidate_key, 80);
+        let changes = [WriteLossChange::new(
+            candidate_writer,
+            WriteLossAction::Remove,
+        )];
+        let (proposal_event, proposal) = fixture.freeze_proposal(&machine, 81, &changes);
+        append(&mut machine, &proposal_event);
+        let revision = machine.revision;
+
+        let mut invalid_signature = proposal_event.clone();
+        *invalid_signature.last_mut().expect("signature byte") ^= 1;
+        assert_eq!(
+            prepare_error(&machine, &invalid_signature),
+            FolderEventError::InvalidEvent
+        );
+        let (competitor, _) = fixture.freeze_proposal(&machine, 82, &changes);
+        assert_eq!(
+            prepare_error(&machine, &competitor),
+            FolderEventError::FreezePending
+        );
+        assert_eq!(machine.revision, revision);
+
+        let authority_grant = machine.current_epoch().expect("base").roster()[0].clone();
+        let tips = [WriterCutoff::new(candidate_writer, 0, [0; 32]).expect("zero tip")];
+        let first_record = encode_signed_freeze_receipt(
+            &fixture.authority_key,
+            &proposal,
+            &authority_grant,
+            &[],
+            &tips,
+        )
+        .expect("first receipt");
+        let first = Fixture::envelope(EventKind::FreezeReceipt, &first_record);
+        append(&mut machine, &first);
+        let mut invalid_receipt_signature = first.clone();
+        *invalid_receipt_signature
+            .last_mut()
+            .expect("receipt signature byte") ^= 1;
+        assert_eq!(
+            prepare_error(&machine, &invalid_receipt_signature),
+            FolderEventError::InvalidEvent
+        );
+        let rewritten_record = encode_signed_freeze_receipt(
+            &fixture.authority_key,
+            &proposal,
+            &authority_grant,
+            &[ClockEntry::new(candidate_writer, 1).expect("future")],
+            &[WriterCutoff::new(candidate_writer, 1, [91; 32]).expect("future tip")],
+        )
+        .expect("rewritten receipt");
+        let rewritten = Fixture::envelope(EventKind::FreezeReceipt, &rewritten_record);
+        assert_eq!(
+            prepare_error(&machine, &rewritten),
+            FolderEventError::Equivocation
+        );
+        assert_eq!(machine.operations.len(), 0);
+
+        let mut limited = fixture.machine();
+        append(&mut limited, &fixture.genesis_event());
+        fixture.add_member(&mut limited, &candidate, &candidate_key, 83);
+        limited.config.limits.maximum_pending_evidence_records = 1;
+        let (limited_proposal, limited_checked) = fixture.freeze_proposal(&limited, 84, &changes);
+        append(&mut limited, &limited_proposal);
+        let limited_grant = limited.current_epoch().expect("base").roster()[0].clone();
+        let limited_receipt_record = encode_signed_freeze_receipt(
+            &fixture.authority_key,
+            &limited_checked,
+            &limited_grant,
+            &[],
+            &tips,
+        )
+        .expect("limited receipt");
+        let limited_receipt = Fixture::envelope(EventKind::FreezeReceipt, &limited_receipt_record);
+        let limited_revision = limited.revision;
+        let limited_index = limited.index_bytes;
+        assert_eq!(
+            prepare_error(&limited, &limited_receipt),
+            FolderEventError::ResourceLimit
+        );
+        assert_eq!(limited.revision, limited_revision);
+        assert_eq!(limited.index_bytes, limited_index);
+        assert_eq!(limited.pending_evidence_records, 1);
+        let FolderFreezeState::Pending(pending) = limited.freeze_state() else {
+            panic!("pending");
+        };
+        assert_eq!(pending.receipt_count(), 0);
+    }
+
+    #[test]
+    fn encrypted_log_replays_pending_freeze_and_durable_abort() {
+        let fixture = Fixture::new();
+        let candidate_writer = writer(40);
+        let candidate_key = key(4);
+        let candidate = fixture.grant(
+            candidate_writer,
+            &candidate_key,
+            50,
+            &key(5),
+            MemberRole::ReadWrite,
+        );
+        let (permit, receipt, receipt_digest) = fixture.bootstrap_pair(
+            1,
+            fixture.genesis_digest,
+            &candidate,
+            &candidate_key,
+            90,
+            &[],
+            &[],
+        );
+        let (epoch_two, epoch_two_digest) = fixture.next_epoch(
+            2,
+            fixture.genesis_digest,
+            &[fixture.authority_grant(), candidate],
+            &[receipt_digest],
+        );
+        let changes = [WriteLossChange::new(
+            candidate_writer,
+            WriteLossAction::Remove,
+        )];
+        let proposal_record = encode_signed_write_loss_proposal(
+            &fixture.authority_key,
+            fixture.folder_id,
+            2,
+            epoch_two_digest,
+            fixture.authority_writer,
+            [91; 32],
+            &changes,
+            &[fixture.authority_writer],
+            &[candidate_writer],
+        )
+        .expect("proposal");
+        let checked_proposal = decode_signature_checked_write_loss_proposal(
+            &proposal_record,
+            fixture.folder_id,
+            fixture.authority_writer,
+            &fixture.authority_key.verifying_key(),
+        )
+        .expect("checked proposal");
+        let proposal = Fixture::envelope(EventKind::WriteLossProposal, &proposal_record);
+        let abort_record =
+            encode_signed_freeze_abort(&fixture.authority_key, &checked_proposal).expect("abort");
+        let abort = Fixture::envelope(EventKind::FreezeAbort, &abort_record);
+
+        let temp = tempfile::tempdir().expect("temporary state");
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))
+            .expect("private state mode");
+        let directory = PrivateStateDir::open_root(temp.path()).expect("private state");
+        let file_name = StateKey::new("freeze-events.v1").expect("state key");
+        let binding = LogBinding::new(
+            fixture.folder_id,
+            Uuid::from_u128(201),
+            Uuid::from_u128(202),
+            LogFileKind::FolderEvents,
+        );
+        let limits = EventLogLimits {
+            maximum_bytes: 4 * 1_024 * 1_024,
+            maximum_records: 16,
+        };
+        let key_bytes = [203; 32];
+        let mut log = DurableEventLog::create(
+            &directory,
+            &file_name,
+            binding,
+            LogFrameKey::from_bytes(key_bytes),
+            limits,
+            FolderEventMachine::new(FolderMachineConfig {
+                local_writer_id: candidate_writer,
+                ..fixture.config(GENEROUS_LIMITS)
+            })
+            .expect("machine"),
+        )
+        .expect("create log");
+        for event in [
+            &fixture.genesis_event(),
+            &permit,
+            &receipt,
+            &epoch_two,
+            &proposal,
+        ] {
+            assert!(matches!(
+                log.append(event).expect("append"),
+                EventAppendOutcome::Committed { .. }
+            ));
+        }
+        drop(log);
+
+        let mut replay = DurableEventLog::open(
+            &directory,
+            &file_name,
+            binding,
+            LogFrameKey::from_bytes(key_bytes),
+            limits,
+            FolderEventMachine::new(FolderMachineConfig {
+                local_writer_id: candidate_writer,
+                ..fixture.config(GENEROUS_LIMITS)
+            })
+            .expect("replay machine"),
+        )
+        .expect("replay");
+        assert!(matches!(
+            replay.machine().expect("machine").freeze_state(),
+            FolderFreezeState::Pending(_)
+        ));
+        assert_eq!(
+            replay
+                .machine()
+                .expect("machine")
+                .publication_context(candidate_writer, &candidate_key.verifying_key())
+                .err(),
+            Some(FolderEventError::PublicationDenied)
+        );
+        assert!(matches!(
+            replay.append(&abort).expect("abort append"),
+            EventAppendOutcome::Committed { .. }
+        ));
+        drop(replay);
+
+        let replay = DurableEventLog::open(
+            &directory,
+            &file_name,
+            binding,
+            LogFrameKey::from_bytes(key_bytes),
+            limits,
+            FolderEventMachine::new(FolderMachineConfig {
+                local_writer_id: candidate_writer,
+                ..fixture.config(GENEROUS_LIMITS)
+            })
+            .expect("final machine"),
+        )
+        .expect("final replay");
+        assert!(matches!(
+            replay.machine().expect("machine").freeze_state(),
+            FolderFreezeState::Unfrozen
+        ));
     }
 
     #[test]

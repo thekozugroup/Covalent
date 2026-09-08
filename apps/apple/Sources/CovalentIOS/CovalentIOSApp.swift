@@ -12,6 +12,16 @@ struct CovalentIOSApp: App {
         let appearance = UITabBarAppearance()
         appearance.configureWithOpaqueBackground()
         appearance.backgroundColor = .systemBackground
+        // Tab captions are small text. The default light-mode system blue is
+        // below 4.5:1 against this opaque white background; use an adaptive
+        // selected color with ample contrast in both appearances.
+        let selectedColor = UIColor { traits in
+            if traits.userInterfaceStyle == .dark {
+                UIColor(red: 0.45, green: 0.72, blue: 1, alpha: 1)
+            } else {
+                UIColor(red: 0, green: 0.27, blue: 0.58, alpha: 1)
+            }
+        }
 
         for itemAppearance in [
             appearance.stackedLayoutAppearance,
@@ -20,8 +30,8 @@ struct CovalentIOSApp: App {
         ] {
             itemAppearance.normal.iconColor = .label
             itemAppearance.normal.titleTextAttributes = [.foregroundColor: UIColor.label]
-            itemAppearance.selected.iconColor = .systemBlue
-            itemAppearance.selected.titleTextAttributes = [.foregroundColor: UIColor.systemBlue]
+            itemAppearance.selected.iconColor = selectedColor
+            itemAppearance.selected.titleTextAttributes = [.foregroundColor: selectedColor]
         }
 
         UITabBar.appearance().standardAppearance = appearance

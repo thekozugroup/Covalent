@@ -4,10 +4,12 @@
 //! conflict projection, read-only inventories, and private encrypted event
 //! storage and immutable encrypted content retention. The replay engine accepts
 //! bootstrap-backed membership additions/upgrades and read-only removals;
-//! write-loss changes still fail closed. Local file publication requires exact
+//! signed write-loss proposals freeze losing writers until abort or future
+//! reconciliation. Local file publication requires exact
 //! durable content receipts. A Unix applier can journal and verify create-only
 //! file/directory placement and adopt matching existing files without changing
-//! their modes. No network sync runtime is shipped; replacement,
+//! their modes. The folder coordinator exposes stores only after a durable
+//! root/setup Ready record. No network sync runtime is shipped; replacement,
 //! deletion, live authorization and applied/acknowledged frontiers remain open.
 
 /// Read-only causal-history admission checks for a future synchronized path.
@@ -34,6 +36,9 @@ pub mod content_manifest;
 /// Verified immutable local retention before file operation publication.
 #[cfg(unix)]
 pub mod content_store;
+/// Authenticated folder initialization and strict durable-ready reopening.
+#[cfg(unix)]
+pub mod coordinator;
 /// Closed bounded event envelopes and explicitly untrusted routing hints.
 pub mod event;
 /// Bounded encrypted append and replay storage for private folder events.

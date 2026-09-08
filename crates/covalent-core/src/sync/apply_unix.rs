@@ -23,8 +23,9 @@ use crate::engine::JobControl;
 
 use super::apply_machine::{ApplyMachine, ApplyMachineError, ApplyMachineLimits, ApplyTerminal};
 use super::apply_record::{
-    ApplyAction, ApplyApplied, ApplyConflict, ApplyConflictReason as ConflictReason, ApplyIntent,
-    ApplyRecord, ApplyRecordError, ApplyStageReady, ApplyTransactionId, ApplyUnsupported,
+    ApplyAction, ApplyApplied, ApplyConflict, ApplyConflictReason as ConflictReason,
+    ApplyInitialization, ApplyIntent, ApplyRecord, ApplyRecordError, ApplyRootReady,
+    ApplyStageReady, ApplyTransactionId, ApplyUnsupported,
     ApplyUnsupportedReason as UnsupportedReason, EntryIdentity, ExpectedTarget, OperationBinding,
     StageName,
 };
@@ -85,6 +86,10 @@ pub enum ApplyError {
     ResourceLimit,
     #[error("apply transaction is pending explicit reconciliation")]
     Pending,
+    #[error("apply journal has no authenticated root readiness record")]
+    NotReady,
+    #[error("apply journal readiness does not match the configured folder root")]
+    ReadyMismatch,
     #[error("apply operation was interrupted")]
     Interrupted,
     #[error("apply filesystem operation failed during {operation} (errno {errno:?})")]
@@ -166,6 +171,7 @@ pub struct DurableFolderApplier {
     binding: LogBinding,
     limits: ApplyLimits,
     poisoned: bool,
+    ready: ApplyRootReady,
     failpoint: Option<ApplyFailpoint>,
     #[cfg(test)]
     mutation_hook: Option<(ApplyMutationPoint, Box<dyn FnOnce()>)>,
@@ -180,6 +186,11 @@ pub struct DurableFolderApplier {
     outer_lock: Arc<PrivateStateLock>,
 }
 
+pub(crate) enum ApplyInitializationState {
+    Ready(DurableFolderApplier),
+    Empty(DurableFolderApplier),
+}
+
 impl std::fmt::Debug for DurableFolderApplier {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -190,8 +201,10 @@ impl std::fmt::Debug for DurableFolderApplier {
 }
 
 impl DurableFolderApplier {
+    /// Creates an empty apply stream and commits its first-only readiness binding.
+    /// Only the folder coordinator may call this after event/content setup syncs.
     #[allow(clippy::too_many_arguments)]
-    pub fn create(
+    pub(crate) fn initialize_new_ready(
         outer: Arc<PrivateStateDir>,
         outer_lock: Arc<PrivateStateLock>,
         apply_dir: &StateKey,
@@ -200,15 +213,20 @@ impl DurableFolderApplier {
         key: LogFrameKey,
         log_limits: EventLogLimits,
         limits: ApplyLimits,
+        setup_binding: [u8; 32],
+        initialization: ApplyInitialization,
         root: &AuthorizedRoot,
         events: &DurableFolderLog,
+        control: &JobControl,
     ) -> Result<Self, ApplyError> {
+        check_control(control)?;
         validate_configuration(&outer, &outer_lock, binding, limits, root, events)?;
         let user_root = UserRoot::open(root)?;
+        let ready = ApplyRootReady::new(user_root.identity, setup_binding, initialization);
         let directory = outer.open_or_create_child(apply_dir)?;
         let machine = ApplyMachine::new(limits.machine)?;
         let log = DurableEventLog::create(&directory, log_file, binding, key, log_limits, machine)?;
-        Ok(Self {
+        let mut applier = Self {
             outer,
             outer_lock,
             root: user_root,
@@ -216,6 +234,7 @@ impl DurableFolderApplier {
             binding,
             limits,
             poisoned: false,
+            ready,
             failpoint: None,
             #[cfg(test)]
             mutation_hook: None,
@@ -225,15 +244,20 @@ impl DurableFolderApplier {
             adoption_io_hook: None,
             #[cfg(test)]
             create_validation_error: None,
-        })
+        };
+        applier.append(ApplyRecord::RootReady(ready))?;
+        run_after_ready_append_hook();
+        check_control(control)?;
+        Ok(applier)
     }
 
-    /// Replays the private journal with pause/cancel checks between bounded
+    /// Replays a ready journal with pause/cancel checks between bounded
     /// frames, then checks every apply-specific history/filesystem visit. A
     /// started valid incomplete-tail repair finishes its sync before stopping;
     /// individual filesystem calls and state transitions are not preempted.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
-    pub fn open(
+    pub(crate) fn open_ready(
         outer: Arc<PrivateStateDir>,
         outer_lock: Arc<PrivateStateLock>,
         apply_dir: &StateKey,
@@ -242,6 +266,99 @@ impl DurableFolderApplier {
         key: LogFrameKey,
         log_limits: EventLogLimits,
         limits: ApplyLimits,
+        setup_binding: [u8; 32],
+        initialization: ApplyInitialization,
+        root: &AuthorizedRoot,
+        events: &DurableFolderLog,
+        control: &JobControl,
+    ) -> Result<Self, ApplyError> {
+        match Self::open_initialization(
+            outer,
+            outer_lock,
+            apply_dir,
+            log_file,
+            binding,
+            key,
+            log_limits,
+            limits,
+            setup_binding,
+            initialization,
+            root,
+            events,
+            control,
+        )? {
+            ApplyInitializationState::Ready(applier) => Ok(applier),
+            ApplyInitializationState::Empty(_) => Err(ApplyError::NotReady),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn open_initialization(
+        outer: Arc<PrivateStateDir>,
+        outer_lock: Arc<PrivateStateLock>,
+        apply_dir: &StateKey,
+        log_file: &StateKey,
+        binding: LogBinding,
+        key: LogFrameKey,
+        log_limits: EventLogLimits,
+        limits: ApplyLimits,
+        setup_binding: [u8; 32],
+        initialization: ApplyInitialization,
+        root: &AuthorizedRoot,
+        events: &DurableFolderLog,
+        control: &JobControl,
+    ) -> Result<ApplyInitializationState, ApplyError> {
+        let expected = ApplyRootReady::new(EntryIdentity::new(0, 0), setup_binding, initialization);
+        let mut applier = Self::open_unvalidated(
+            outer, outer_lock, apply_dir, log_file, binding, key, log_limits, limits, expected,
+            root, events, control,
+        )?;
+        match applier.log.machine()?.ready().copied() {
+            Some(retained)
+                if retained.root() == applier.root.identity
+                    && retained.matches_setup(&setup_binding)
+                    && retained.initialization() == initialization =>
+            {
+                applier.ready = retained;
+                applier.validate_replayed_history(events, control)?;
+                applier.validate_replayed_filesystem(events, control)?;
+                Ok(ApplyInitializationState::Ready(applier))
+            }
+            Some(_) => Err(ApplyError::ReadyMismatch),
+            None if applier.log.committed_records()? == 0 => {
+                Ok(ApplyInitializationState::Empty(applier))
+            }
+            None => Err(ApplyError::NotReady),
+        }
+    }
+
+    pub(crate) fn commit_ready(mut self, control: &JobControl) -> Result<Self, ApplyError> {
+        if self.log.committed_records()? != 0 || self.log.machine()?.ready().is_some() {
+            return Err(ApplyError::NotReady);
+        }
+        let ready = ApplyRootReady::new(
+            self.root.identity,
+            *self.ready.setup_binding(),
+            self.ready.initialization(),
+        );
+        self.ready = ready;
+        self.append(ApplyRecord::RootReady(ready))?;
+        run_after_ready_append_hook();
+        check_control(control)?;
+        Ok(self)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn open_unvalidated(
+        outer: Arc<PrivateStateDir>,
+        outer_lock: Arc<PrivateStateLock>,
+        apply_dir: &StateKey,
+        log_file: &StateKey,
+        binding: LogBinding,
+        key: LogFrameKey,
+        log_limits: EventLogLimits,
+        limits: ApplyLimits,
+        ready: ApplyRootReady,
         root: &AuthorizedRoot,
         events: &DurableFolderLog,
         control: &JobControl,
@@ -254,7 +371,7 @@ impl DurableFolderApplier {
         let log = DurableEventLog::open_with_control(
             &directory, log_file, binding, key, log_limits, machine, control,
         )?;
-        let applier = Self {
+        Ok(Self {
             outer,
             outer_lock,
             root: user_root,
@@ -262,6 +379,7 @@ impl DurableFolderApplier {
             binding,
             limits,
             poisoned: false,
+            ready,
             failpoint: None,
             #[cfg(test)]
             mutation_hook: None,
@@ -271,10 +389,7 @@ impl DurableFolderApplier {
             adoption_io_hook: None,
             #[cfg(test)]
             create_validation_error: None,
-        };
-        applier.validate_replayed_history(events, control)?;
-        applier.validate_replayed_filesystem(events, control)?;
-        Ok(applier)
+        })
     }
 
     pub fn apply(
@@ -325,6 +440,15 @@ impl DurableFolderApplier {
                 self.begin_create(operation, body, None, events, store, control)
             }
         }
+    }
+
+    pub(crate) fn validate_ready(
+        &self,
+        events: &DurableFolderLog,
+        control: &JobControl,
+    ) -> Result<(), ApplyError> {
+        check_control(control)?;
+        self.require_usable(events, control)
     }
 
     /// Durably adopts a matching incumbent file or directory without creating,
@@ -443,8 +567,13 @@ impl DurableFolderApplier {
         let intent_digest = self.append(ApplyRecord::Intent(intent))?;
         self.fail_if(ApplyFailpoint::IntentCommitted)?;
         self.run_mutation_hook(ApplyMutationPoint::BeforeStageCreate);
-        self.root
-            .revalidate_parent(body.path(), parent.identity, self.limits, control)?;
+        self.root.revalidate_parent(
+            body.path(),
+            parent.identity,
+            &parent.name,
+            self.limits,
+            control,
+        )?;
         let stage_identity = match file {
             Some(content) => parent.create_file_stage(&stage_name, content, store, control),
             None => parent.create_directory_stage(&stage_name, control),
@@ -624,8 +753,13 @@ impl DurableFolderApplier {
                     return Err(ApplyError::InvalidConfiguration);
                 }
             }
-            self.root
-                .revalidate_parent(&path, parent.identity, self.limits, control)?;
+            self.root.revalidate_parent(
+                &path,
+                parent.identity,
+                &parent.name,
+                self.limits,
+                control,
+            )?;
             let stage_identity = match desired {
                 EntryValue::File(content) => {
                     parent.create_file_stage(&stage_name, content, store, control)?
@@ -1009,8 +1143,13 @@ impl DurableFolderApplier {
                     );
                 }
                 self.run_mutation_hook(ApplyMutationPoint::BeforePromotion);
-                self.root
-                    .revalidate_parent(&path, parent.identity, self.limits, control)?;
+                self.root.revalidate_parent(
+                    &path,
+                    parent.identity,
+                    &parent.name,
+                    self.limits,
+                    control,
+                )?;
                 if let Err(error) = self
                     .validate_create_at(CreateValidationPoint::Promotion, || {
                         parent.validate_stage(&stage_name, stage_identity, desired, control)
@@ -1302,7 +1441,9 @@ impl DurableFolderApplier {
         self.outer.sync(&self.outer_lock)?;
         require_matching_binding(self.binding, events.binding()?)?;
         self.root.revalidate()?;
-        let _ = self.log.machine()?;
+        if self.log.machine()?.ready() != Some(&self.ready) {
+            return Err(ApplyError::ReadyMismatch);
+        }
         self.validate_replayed_filesystem(events, control)?;
         Ok(())
     }
@@ -1588,15 +1729,14 @@ impl UserRoot {
         let mut final_name = None;
         while let Some(component) = components.next() {
             check_control(control)?;
+            let selected = resolve_component_name(&current, component, limits, control)?;
             if components.peek().is_none() {
-                reject_component_collision(&current, component, limits, control)?;
-                final_name = Some(component.to_owned());
+                final_name = Some(selected);
                 break;
             }
-            reject_component_collision(&current, component, limits, control)?;
             current = openat(
                 &current,
-                component,
+                selected.as_str(),
                 OFlags::RDONLY
                     | OFlags::DIRECTORY
                     | OFlags::NOFOLLOW
@@ -1624,6 +1764,7 @@ impl UserRoot {
         &self,
         path: &SyncPath,
         expected: EntryIdentity,
+        expected_name: &str,
         limits: ApplyLimits,
         control: &JobControl,
     ) -> Result<(), ApplyError> {
@@ -1631,19 +1772,22 @@ impl UserRoot {
         if current.identity != expected {
             return Err(ApplyError::Changed);
         }
-        Ok(())
+        current.require_same_selected_name(expected_name)
     }
 }
 
-fn reject_component_collision(
+// Resolve only a sole canonically equivalent local spelling. Casefold-only
+// matches and multiple physical entries remain conflicts. The bounded complete
+// scan returns no candidate on an error; normalization never proves identity.
+fn resolve_component_name(
     directory: &OwnedFd,
     name: &str,
     limits: ApplyLimits,
     control: &JobControl,
-) -> Result<(), ApplyError> {
-    let target = SyncPath::from_wire(name)
-        .map_err(|_| ApplyError::InvalidConfiguration)?
-        .portable_collision_key();
+) -> Result<String, ApplyError> {
+    let target = SyncPath::from_wire(name).map_err(|_| ApplyError::InvalidConfiguration)?;
+    let collision_key = target.portable_collision_key();
+    let mut selected = None;
     let mut entries = 0_usize;
     let mut name_bytes = 0_u64;
     let mut reader =
@@ -1666,11 +1810,15 @@ fn reject_component_collision(
         }
         let spelling = std::str::from_utf8(raw).map_err(|_| ApplyError::NameCollision)?;
         let local = SyncPath::from_local(spelling).map_err(|_| ApplyError::NameCollision)?;
-        if spelling != name && local.portable_collision_key() == target {
-            return Err(ApplyError::NameCollision);
+        if local.portable_collision_key() == collision_key {
+            if local != target || selected.is_some() {
+                return Err(ApplyError::NameCollision);
+            }
+            selected = Some(spelling.to_owned());
         }
     }
-    Ok(())
+    check_control(control)?;
+    Ok(selected.unwrap_or_else(|| name.to_owned()))
 }
 
 impl TargetParent {
@@ -1680,9 +1828,27 @@ impl TargetParent {
         limits: ApplyLimits,
         control: &JobControl,
     ) -> Result<(), ApplyError> {
-        reject_component_collision(&self.descriptor, &self.name, limits, control)?;
-        let _ = path;
+        let canonical = path
+            .components()
+            .last()
+            .ok_or(ApplyError::InvalidConfiguration)?;
+        let selected = resolve_component_name(&self.descriptor, canonical, limits, control)?;
+        self.require_same_selected_name(&selected)?;
         self.revalidate()
+    }
+
+    fn require_same_selected_name(&self, selected: &str) -> Result<(), ApplyError> {
+        if selected != self.name {
+            // Normalization-insensitive filesystems can report a different
+            // spelling after creation while both lookups name the same inode.
+            // The resolver already rejected multiple physical matching entries.
+            let retained = self.target_identity()?;
+            let resolved = self.named_identity(selected)?;
+            if retained.is_none() || retained != resolved {
+                return Err(ApplyError::Changed);
+            }
+        }
+        Ok(())
     }
 
     fn revalidate(&self) -> Result<(), ApplyError> {
@@ -2194,6 +2360,26 @@ fn check_control(control: &JobControl) -> Result<(), ApplyError> {
     control.check().map_err(|_| ApplyError::Interrupted)
 }
 
+#[cfg(test)]
+thread_local! {
+    static AFTER_READY_APPEND_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+pub(crate) fn set_after_ready_append_hook(hook: impl FnOnce() + 'static) {
+    AFTER_READY_APPEND_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+}
+
+fn run_after_ready_append_hook() {
+    #[cfg(test)]
+    AFTER_READY_APPEND_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
 #[allow(clippy::unnecessary_cast)]
 fn adoption_permission_bits(mode: rustix::fs::RawMode) -> u16 {
     (mode as u32 & 0o7777) as u16
@@ -2335,6 +2521,14 @@ mod tests {
             .to_vec()
     }
 
+    fn initialization(events: &DurableFolderLog) -> ApplyInitialization {
+        ApplyInitialization::OwnerGenesis(
+            events.machine().unwrap().current_head().unwrap().digest(),
+        )
+    }
+
+    const TEST_SETUP_BINDING: [u8; 32] = [0xab; 32];
+
     struct Fixture {
         state: TempDir,
         user: TempDir,
@@ -2394,7 +2588,7 @@ mod tests {
         }
 
         fn applier(&self) -> DurableFolderApplier {
-            DurableFolderApplier::create(
+            DurableFolderApplier::initialize_new_ready(
                 Arc::clone(&self.outer),
                 Arc::clone(&self.outer_lock),
                 &StateKey::new("apply").unwrap(),
@@ -2403,14 +2597,17 @@ mod tests {
                 LogFrameKey::from_bytes([0xaa; 32]),
                 log_limits(),
                 apply_limits(),
+                TEST_SETUP_BINDING,
+                initialization(&self.events),
                 &AuthorizedRoot::open(self.user.path()).unwrap(),
                 &self.events,
+                &JobControl::new(),
             )
             .unwrap()
         }
 
         fn reopen_applier(&self) -> DurableFolderApplier {
-            DurableFolderApplier::open(
+            DurableFolderApplier::open_ready(
                 Arc::clone(&self.outer),
                 Arc::clone(&self.outer_lock),
                 &StateKey::new("apply").unwrap(),
@@ -2419,6 +2616,8 @@ mod tests {
                 LogFrameKey::from_bytes([0xaa; 32]),
                 log_limits(),
                 apply_limits(),
+                TEST_SETUP_BINDING,
+                initialization(&self.events),
                 &AuthorizedRoot::open(self.user.path()).unwrap(),
                 &self.events,
                 &JobControl::new(),
@@ -2886,7 +3085,7 @@ mod tests {
             ),
             Err(ApplyError::Interrupted)
         ));
-        assert_eq!(applier.log.machine().unwrap().revision(), 1);
+        assert_eq!(applier.log.machine().unwrap().revision(), 2);
         assert!(
             applier
                 .log
@@ -2906,7 +3105,7 @@ mod tests {
                 .unwrap(),
             ApplyOutcome::Applied
         );
-        assert_eq!(applier.log.machine().unwrap().revision(), 2);
+        assert_eq!(applier.log.machine().unwrap().revision(), 3);
     }
 
     #[test]
@@ -2940,7 +3139,7 @@ mod tests {
                 ),
                 Err(ApplyError::Io { .. })
             ));
-            assert_eq!(applier.log.machine().unwrap().revision(), 1);
+            assert_eq!(applier.log.machine().unwrap().revision(), 2);
             assert!(
                 applier
                     .log
@@ -2960,7 +3159,7 @@ mod tests {
                     .unwrap(),
                 ApplyOutcome::Applied
             );
-            assert_eq!(applier.log.machine().unwrap().revision(), 2);
+            assert_eq!(applier.log.machine().unwrap().revision(), 3);
         }
     }
 
@@ -3005,7 +3204,7 @@ mod tests {
                 ),
                 Err(ApplyError::Io { .. })
             ));
-            assert_eq!(applier.log.machine().unwrap().revision(), 1);
+            assert_eq!(applier.log.machine().unwrap().revision(), 2);
             assert_eq!(
                 applier
                     .adopt_existing(
@@ -3017,7 +3216,7 @@ mod tests {
                     .unwrap(),
                 ApplyOutcome::Applied
             );
-            assert_eq!(applier.log.machine().unwrap().revision(), 2);
+            assert_eq!(applier.log.machine().unwrap().revision(), 3);
             assert_eq!(
                 fs::metadata(fixture.user.path().join("io-directory"))
                     .unwrap()
@@ -3045,12 +3244,12 @@ mod tests {
             ),
             Err(ApplyError::Pending)
         ));
-        assert_eq!(applier.log.machine().unwrap().revision(), 1);
+        assert_eq!(applier.log.machine().unwrap().revision(), 2);
         drop(applier);
 
         let wrong_root = tempfile::tempdir().unwrap();
         assert!(matches!(
-            DurableFolderApplier::open(
+            DurableFolderApplier::open_ready(
                 Arc::clone(&fixture.outer),
                 Arc::clone(&fixture.outer_lock),
                 &StateKey::new("apply").unwrap(),
@@ -3059,11 +3258,13 @@ mod tests {
                 LogFrameKey::from_bytes([0xaa; 32]),
                 log_limits(),
                 apply_limits(),
+                TEST_SETUP_BINDING,
+                initialization(&fixture.events),
                 &AuthorizedRoot::open(wrong_root.path()).unwrap(),
                 &fixture.events,
                 &JobControl::new(),
             ),
-            Err(ApplyError::Changed)
+            Err(ApplyError::ReadyMismatch)
         ));
 
         let mut reopened = fixture.reopen_applier();
@@ -3078,7 +3279,7 @@ mod tests {
             ),
             Err(ApplyError::Interrupted)
         ));
-        assert_eq!(reopened.log.machine().unwrap().revision(), 1);
+        assert_eq!(reopened.log.machine().unwrap().revision(), 2);
         assert_eq!(
             reopened
                 .adopt_existing(
@@ -3090,7 +3291,7 @@ mod tests {
                 .unwrap(),
             ApplyOutcome::Applied
         );
-        assert_eq!(reopened.log.machine().unwrap().revision(), 2);
+        assert_eq!(reopened.log.machine().unwrap().revision(), 3);
         let revision = reopened.log.machine().unwrap().revision();
         assert_eq!(
             reopened
@@ -3150,7 +3351,7 @@ mod tests {
             ),
             Err(ApplyError::ProjectionConflict)
         ));
-        assert_eq!(applier.log.machine().unwrap().revision(), 1);
+        assert_eq!(applier.log.machine().unwrap().revision(), 2);
         assert_eq!(
             fs::read(fixture.user.path().join("superseded")).unwrap(),
             b"stable"
@@ -3311,6 +3512,230 @@ mod tests {
     }
 
     #[test]
+    fn decomposed_inventory_names_publish_adopt_and_create_without_renaming() {
+        use crate::sync::source_inventory::{SourceInventoryLimits, scan_source_inventory};
+
+        let mut fixture = Fixture::new();
+        let directory = fixture.user.path().join("cafe\u{301}");
+        let file = directory.join("re\u{301}sume\u{301}.txt");
+        fs::create_dir(&directory).unwrap();
+        fs::write(&file, b"existing Unicode content").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+        let directory_inode = fs::metadata(&directory).unwrap().ino();
+        let file_inode = fs::metadata(&file).unwrap().ino();
+        let inventory = scan_source_inventory(
+            fixture.user.path(),
+            SourceInventoryLimits {
+                maximum_entries: 8,
+                maximum_path_bytes: 4096,
+                maximum_read_bytes: 4096,
+                maximum_depth: 4,
+            },
+            &JobControl::new(),
+        )
+        .unwrap();
+        assert_eq!(inventory.entries().len(), 2);
+        let canonical_directory = SyncPath::from_wire("caf\u{e9}").unwrap();
+        let canonical_file = SyncPath::from_wire("caf\u{e9}/r\u{e9}sum\u{e9}.txt").unwrap();
+        assert_eq!(
+            inventory.entries().get(&canonical_directory),
+            Some(&EntryValue::Directory)
+        );
+        assert!(matches!(
+            inventory.entries().get(&canonical_file),
+            Some(EntryValue::File(_))
+        ));
+        let mut operations = Vec::new();
+        for (path, value) in inventory.entries() {
+            let body = OperationBody::new(path.clone(), *value);
+            let operation = match value {
+                EntryValue::Directory => fixture.events.publish_local(&body).unwrap(),
+                EntryValue::File(content) => {
+                    let receipt = fixture
+                        .store
+                        .retain_stream(*content, File::open(&file).unwrap(), &JobControl::new())
+                        .unwrap();
+                    fixture.events.publish_retained(&body, &receipt).unwrap()
+                }
+                EntryValue::Tombstone => panic!("an inventory cannot infer a tombstone"),
+            };
+            operations.push(operation);
+        }
+        let mut applier = fixture.applier();
+        for operation in &operations {
+            assert_eq!(
+                applier
+                    .adopt_existing(
+                        &fixture.events,
+                        operation.id(),
+                        operation.event_bytes(),
+                        &JobControl::new()
+                    )
+                    .unwrap(),
+                ApplyOutcome::Applied
+            );
+        }
+        assert_eq!(fs::metadata(&directory).unwrap().ino(), directory_inode);
+        assert_eq!(fs::metadata(&file).unwrap().ino(), file_inode);
+        assert_eq!(fs::read_dir(fixture.user.path()).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        assert_eq!(fs::read(&file).unwrap(), b"existing Unicode content");
+        drop(applier);
+        let mut reopened = fixture.reopen_applier();
+        for operation in &operations {
+            assert_eq!(
+                reopened.existing_outcome(operation.id()).unwrap(),
+                Some(ApplyOutcome::Applied)
+            );
+        }
+        let bytes = b"new content in existing decomposed parent";
+        let content = FileContent::new(
+            ContentDigest::from_bytes(*blake3::hash(bytes).as_bytes()),
+            bytes.len() as u64,
+            false,
+        )
+        .unwrap();
+        let receipt = fixture
+            .store
+            .retain_stream(content, Cursor::new(bytes), &JobControl::new())
+            .unwrap();
+        let operation = fixture
+            .events
+            .publish_retained(
+                &OperationBody::new(
+                    SyncPath::from_wire("caf\u{e9}/na\u{ef}ve.txt").unwrap(),
+                    EntryValue::File(content),
+                ),
+                &receipt,
+            )
+            .unwrap();
+        assert_eq!(
+            reopened
+                .apply(
+                    &fixture.events,
+                    &fixture.store,
+                    operation.id(),
+                    operation.event_bytes(),
+                    &JobControl::new()
+                )
+                .unwrap(),
+            ApplyOutcome::Applied
+        );
+        assert_eq!(fs::read(directory.join("na\u{ef}ve.txt")).unwrap(), bytes);
+        assert_eq!(fs::read_dir(fixture.user.path()).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn equivalent_names_follow_actual_filesystem_ambiguity_without_overwrite() {
+        let fixture = Fixture::new();
+        let decomposed = fixture.user.path().join("cafe\u{301}");
+        let composed = fixture.user.path().join("caf\u{e9}");
+        fs::write(&decomposed, b"first").unwrap();
+        let second = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&composed);
+        let root = UserRoot::open(&AuthorizedRoot::open(fixture.user.path()).unwrap()).unwrap();
+        let path = SyncPath::from_wire("caf\u{e9}").unwrap();
+        match second {
+            Ok(mut file) => {
+                file.write_all(b"second").unwrap();
+                assert!(matches!(
+                    root.open_parent(&path, apply_limits(), &JobControl::new()),
+                    Err(ApplyError::NameCollision)
+                ));
+                assert_eq!(fs::read(&decomposed).unwrap(), b"first");
+                assert_eq!(fs::read(&composed).unwrap(), b"second");
+                assert_eq!(fs::read_dir(fixture.user.path()).unwrap().count(), 2);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Exclusive creation proves the normalizing filesystem exposes
+                // one physical entry through the two equivalent spellings.
+                let parent = root
+                    .open_parent(&path, apply_limits(), &JobControl::new())
+                    .unwrap();
+                assert_eq!(
+                    parent.target_identity().unwrap().unwrap().inode(),
+                    fs::metadata(&decomposed).unwrap().ino()
+                );
+                assert_eq!(
+                    fs::metadata(&decomposed).unwrap().ino(),
+                    fs::metadata(&composed).unwrap().ino()
+                );
+                assert_eq!(fs::read(&composed).unwrap(), b"first");
+                assert_eq!(fs::read_dir(fixture.user.path()).unwrap().count(), 1);
+            }
+            Err(error) => panic!("exclusive equivalent-name fixture failed: {error}"),
+        }
+    }
+
+    #[test]
+    fn newly_appearing_equivalent_name_is_preserved_before_promotion() {
+        let mut fixture = Fixture::new();
+        let bytes = b"remote desired bytes";
+        let content = FileContent::new(
+            ContentDigest::from_bytes(*blake3::hash(bytes).as_bytes()),
+            bytes.len() as u64,
+            false,
+        )
+        .unwrap();
+        let receipt = fixture
+            .store
+            .retain_stream(content, Cursor::new(bytes), &JobControl::new())
+            .unwrap();
+        let operation = fixture
+            .events
+            .publish_retained(
+                &OperationBody::new(
+                    SyncPath::from_wire("caf\u{e9}").unwrap(),
+                    EntryValue::File(content),
+                ),
+                &receipt,
+            )
+            .unwrap();
+        let decomposed = fixture.user.path().join("cafe\u{301}");
+        let hook_target = decomposed.clone();
+        let mut applier = fixture.applier();
+        applier.mutation_hook = Some((
+            ApplyMutationPoint::BeforePromotion,
+            Box::new(move || {
+                fs::write(&hook_target, b"new local bytes").unwrap();
+            }),
+        ));
+        assert!(
+            applier
+                .apply(
+                    &fixture.events,
+                    &fixture.store,
+                    operation.id(),
+                    operation.event_bytes(),
+                    &JobControl::new()
+                )
+                .is_err()
+        );
+        assert!(applier.existing_outcome(operation.id()).unwrap().is_none());
+        assert_eq!(fs::read(&decomposed).unwrap(), b"new local bytes");
+        assert_eq!(fs::read_dir(fixture.user.path()).unwrap().count(), 2);
+        drop(applier);
+        let mut reopened = fixture.reopen_applier();
+        assert_eq!(
+            reopened
+                .apply(
+                    &fixture.events,
+                    &fixture.store,
+                    operation.id(),
+                    operation.event_bytes(),
+                    &JobControl::new()
+                )
+                .unwrap(),
+            ApplyOutcome::Conflict
+        );
+        assert_eq!(fs::read(&decomposed).unwrap(), b"new local bytes");
+        assert_eq!(fs::read_dir(fixture.user.path()).unwrap().count(), 2);
+    }
+
+    #[test]
     fn incumbent_and_portable_collision_are_preserved() {
         let mut fixture = Fixture::new();
         fs::write(fixture.user.path().join("occupied"), b"sentinel").unwrap();
@@ -3339,11 +3764,11 @@ mod tests {
             b"sentinel"
         );
 
-        fs::create_dir(fixture.user.path().join("cafe\u{301}")).unwrap();
+        fs::create_dir(fixture.user.path().join("report")).unwrap();
         let colliding = fixture
             .events
             .publish_local(&OperationBody::new(
-                SyncPath::from_wire("caf\u{e9}").unwrap(),
+                SyncPath::from_wire("REPORT").unwrap(),
                 EntryValue::Directory,
             ))
             .unwrap();
@@ -3357,7 +3782,7 @@ mod tests {
             ),
             Err(ApplyError::NameCollision)
         ));
-        assert!(fixture.user.path().join("cafe\u{301}").is_dir());
+        assert!(fixture.user.path().join("report").is_dir());
         assert_eq!(fs::read_dir(fixture.user.path()).unwrap().count(), 2);
     }
 
@@ -3614,7 +4039,7 @@ mod tests {
                 assert_eq!(fs::read_dir(fixture.user.path()).unwrap().count(), 1);
             } else {
                 assert_eq!(outcome, ApplyOutcome::Applied);
-                assert_eq!(applier.log.committed_records().unwrap(), 3);
+                assert_eq!(applier.log.committed_records().unwrap(), 4);
                 assert!(
                     applier
                         .log
@@ -3638,7 +4063,7 @@ mod tests {
                         .unwrap(),
                     ApplyOutcome::Applied
                 );
-                assert_eq!(applier.log.committed_records().unwrap(), 3);
+                assert_eq!(applier.log.committed_records().unwrap(), 4);
             }
         }
     }
@@ -3670,7 +4095,7 @@ mod tests {
         fs::write(different.path().join("keep.txt"), b"unrelated local data").unwrap();
         let log_path = fixture.state.path().join("apply/apply.v1");
         let before = fs::read(&log_path).unwrap();
-        let reopened = DurableFolderApplier::open(
+        let reopened = DurableFolderApplier::open_ready(
             Arc::clone(&fixture.outer),
             Arc::clone(&fixture.outer_lock),
             &StateKey::new("apply").unwrap(),
@@ -3679,11 +4104,13 @@ mod tests {
             LogFrameKey::from_bytes([0xaa; 32]),
             log_limits(),
             apply_limits(),
+            TEST_SETUP_BINDING,
+            initialization(&fixture.events),
             &AuthorizedRoot::open(different.path()).unwrap(),
             &fixture.events,
             &JobControl::new(),
         );
-        assert!(matches!(reopened, Err(ApplyError::Changed)));
+        assert!(matches!(reopened, Err(ApplyError::ReadyMismatch)));
         assert_eq!(fs::read(&log_path).unwrap(), before);
         assert_eq!(fs::read_dir(different.path()).unwrap().count(), 1);
         assert_eq!(
@@ -4052,7 +4479,7 @@ mod tests {
         let control = JobControl::new();
         control.cancel();
         assert!(matches!(
-            DurableFolderApplier::open(
+            DurableFolderApplier::open_ready(
                 Arc::clone(&fixture.outer),
                 Arc::clone(&fixture.outer_lock),
                 &StateKey::new("apply").unwrap(),
@@ -4061,6 +4488,8 @@ mod tests {
                 LogFrameKey::from_bytes([0xaa; 32]),
                 log_limits(),
                 apply_limits(),
+                TEST_SETUP_BINDING,
+                initialization(&fixture.events),
                 &AuthorizedRoot::open(fixture.user.path()).unwrap(),
                 &fixture.events,
                 &control,
