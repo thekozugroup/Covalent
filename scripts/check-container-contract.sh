@@ -218,6 +218,13 @@ if [ -n "$image" ]; then
   docker run --rm --entrypoint sh "$image" -c \
     'apk info -e "libcrypto3=3.5.8-r0" && apk info -e "libssl3=3.5.8-r0"' \
     >/dev/null
+  # The supervisor preserves the real OS home for upstream initialization.
+  # A passwd entry without its directory let the node API start successfully
+  # while every folder worker was refused before spawn.
+  docker run --rm --network=none --read-only --cap-drop=ALL \
+    --security-opt=no-new-privileges --cpus=0.25 --memory=64m --pids-limit=32 \
+    --entrypoint sh "$image" -c \
+    'test "$HOME" = /home/covalent && test -d "$HOME" && test ! -L "$HOME" && test "$(stat -c "%u:%g:%a" "$HOME")" = 65532:65532:700'
   # The Dockerfile asserts the build inputs; this asserts the artefact. A
   # from-source Caddy that silently drifted from the reviewed upstream
   # compatibility snapshot would still produce a green build without it.

@@ -440,6 +440,40 @@ Local integrated validation passes 262 node library tests, 11 JNI tests,
 102 browser tests, strict workspace Clippy and foundation checks. Apple HIG
 conformance, native access repair and complete platform journeys remain open.
 
+## Checkpoint 29: container home and native command corrections
+
+Checkpoint 28 Docker diagnostics report `workerLaunch` for both paired nodes on
+both architectures, before any health observation. Code review found that the
+image's `adduser -H` creates an account whose real home directory is absent,
+while worker admission requires that directory. The image now creates
+`/home/covalent` with the account's ownership and mode 0700. A separate rootless,
+read-only image check verifies the runtime HOME and directory ownership/mode.
+Fresh complete synchronization must still confirm the correction.
+
+The hosted Swift suite ran 115 tests and found one new round-trip assertion
+comparing raw UUID letter case. Foundation encodes the UUID in uppercase;
+the signed protocol operates on the decoded UUID value. The assertion now
+accounts for that representation while preserving every other transport field
+exactly. The existing macOS app bundle gate passed.
+
+Checkpoint 28 Android compilation and JVM tests passed, but six lint errors
+blocked device execution. The correction scopes the storage-policy exception
+to the existing personal debug permission, uses configuration-aware Compose
+string resources and uses the AndroidX URI extension. No broad lint suppression
+is introduced. Both actual Android target inventories generated 311,314 bytes
+with combined SHA-256
+`9975031cbf6a1eba399c084bef50a4164a21f6b086c91a2ae244d8282de3979e`.
+The shipped notices viewer still needs device execution. Checkpoint 28 CodeQL
+completed successfully for every configured language; this does not complete
+the broader dependency review.
+
+The View menu now includes Folders with Command-4, retaining the three existing
+section shortcuts. Root's read-only CUA inspection also observed the real
+NSOpenPanel used by the production-manager proof: native sidebar, column view,
+search, selected test folder and Cancel/Choose controls with accessibility
+roles and labels. This proves the system picker, not complete Apple HIG
+conformance for the app or permission-repair screens.
+
 ## Remaining integration and release work
 
 The macOS folder screen now consumes the authenticated API, uses confirmed

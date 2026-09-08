@@ -2,13 +2,13 @@ package life.michaelwong.covalent.sync
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.storage.StorageManager
 import android.provider.Settings
 import android.system.Os
 import android.system.OsConstants
+import androidx.core.net.toUri
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Paths
@@ -33,7 +33,7 @@ internal object FolderSyncSpecialAccess {
         }
         return Intent(
             Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-            Uri.parse("package:${context.packageName}"),
+            "package:${context.packageName}".toUri(),
         )
     }
 }

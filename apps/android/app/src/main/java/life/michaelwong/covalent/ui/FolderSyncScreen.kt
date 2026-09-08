@@ -59,6 +59,10 @@ import life.michaelwong.covalent.sync.RawFolderEntry
 @Composable
 internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    val hostUnavailableMessage = stringResource(R.string.folder_sync_host_unavailable)
+    val localNetworkDeclinedMessage = stringResource(R.string.folder_sync_local_network_declined)
+    val accessDeclinedMessage = stringResource(R.string.folder_sync_access_declined)
+    val pairedDeviceName = stringResource(R.string.folder_sync_paired_device)
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val grants = remember(context) { FolderSyncGrantStore(context.applicationContext) }
     val api = remember { NodeFolderSyncApi(CovalentNodeClient()) }
@@ -108,7 +112,7 @@ internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier =
             hostRequested = enabled
             busy = false
             if (enabled) refresh()
-            else error = context.getString(R.string.folder_sync_host_unavailable)
+            else error = hostUnavailableMessage
         }
     }
 
@@ -118,7 +122,7 @@ internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier =
         if (granted) {
             enableHostAndRefresh()
         } else {
-            error = context.getString(R.string.folder_sync_local_network_declined)
+            error = localNetworkDeclinedMessage
         }
     }
     val specialAccess = rememberLauncherForActivityResult(
@@ -126,7 +130,7 @@ internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier =
     ) {
         accessGranted = FolderSyncSpecialAccess.granted()
         if (!accessGranted) {
-            error = context.getString(R.string.folder_sync_access_declined)
+            error = accessDeclinedMessage
         } else if (
             Build.VERSION.SDK_INT >= 37 && ContextCompat.checkSelfPermission(
                 context,
@@ -338,7 +342,7 @@ internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier =
                     status = snapshot,
                     share = share,
                     peerName = snapshot.peers.firstOrNull { it.peerId == share.peerId }?.displayName
-                        ?: context.getString(R.string.folder_sync_paired_device),
+                        ?: pairedDeviceName,
                     hasFolder = selectedFolder != null,
                     busy = busy,
                     mutate = { action ->

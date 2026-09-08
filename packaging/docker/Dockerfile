@@ -149,7 +149,7 @@ RUN apk add --no-cache --upgrade \
     && apk info -e 'libssl3=3.5.8-r0' \
     && addgroup -S -g 65532 covalent \
     && adduser -S -D -H -u 65532 -G covalent -s /sbin/nologin covalent \
-    && install -d -m 0700 -o 65532 -g 65532 /config /data /restore
+    && install -d -m 0700 -o 65532 -g 65532 /home/covalent /config /data /restore
 COPY --from=builder /source/target/release/covalent-node /usr/local/bin/covalent-node
 COPY --from=builder /source/target/release/covalent /usr/local/bin/covalent
 COPY --from=caddy /caddy.unprivileged /usr/local/bin/caddy

@@ -59,6 +59,8 @@ struct CovalentMacApp: App {
                     .keyboardShortcut("2")
                 Button("Devices") { model.selectedSection = .devices }
                     .keyboardShortcut("3")
+                Button("Folders") { model.selectedSection = .folders }
+                    .keyboardShortcut("4")
             }
             CommandMenu("Service") {
                 Button("Refresh") {

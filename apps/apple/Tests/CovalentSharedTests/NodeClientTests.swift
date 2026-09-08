@@ -1820,7 +1820,7 @@ func realDaemonBackupVerifyAndRestore() async throws {
     #expect(status.displayState(for: status.shares[0]) == .invitationExpired)
 }
 
-@Test func signedPairingInvitationPreservesExactTransportBindingAcrossNativeRoundTrip() throws {
+@Test func signedPairingInvitationPreservesTransportBindingAcrossNativeRoundTrip() throws {
     let owner = UUID()
     let object: [String: Any] = [
         "protocolVersion": 2,
@@ -1853,7 +1853,11 @@ func realDaemonBackupVerifyAndRestore() async throws {
     let encoded = try JSONEncoder().encode(invitation)
     let roundTrip = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
     let encodedBinding = try #require(roundTrip["transportBinding"] as? [String: Any])
-    let sourceBinding = try #require(object["transportBinding"] as? [String: Any])
+    var sourceBinding = try #require(object["transportBinding"] as? [String: Any])
+    // Foundation encodes UUIDs in uppercase. The signed protocol decodes them
+    // as UUID values before canonical serialization, so letter case is not a
+    // different identity. Every other transport field must remain byte-exact.
+    sourceBinding["peerId"] = owner.uuidString
     #expect(NSDictionary(dictionary: encodedBinding).isEqual(to: sourceBinding))
 }
 
