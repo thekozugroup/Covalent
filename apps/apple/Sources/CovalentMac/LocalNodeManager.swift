@@ -8,6 +8,9 @@ final class LocalNodeManager: LocalNodeBootstrapping {
     private static let existingHealthTimeout: Duration = .seconds(3)
     private static let shutdownTimeout: Duration = .seconds(5)
     private static let maximumLogBytes: UInt64 = 1_048_576
+    /// Peer bindings are signed during pairing, so this endpoint must survive
+    /// helper restarts that inherit newly selected folder capabilities.
+    private static let peerListenAddress = "0.0.0.0:8787"
 
     private let fileManager: FileManager
     private let session: URLSession
@@ -241,7 +244,7 @@ final class LocalNodeManager: LocalNodeBootstrapping {
         process.arguments = [
             "recover",
             "--listen", "127.0.0.1:0",
-            "--peer-listen", "0.0.0.0:0",
+            "--peer-listen", Self.peerListenAddress,
             "--data-dir", paths.dataDirectory.path,
             "--device-name", Host.current().localizedName ?? "This Mac",
             "--lan-discovery",
@@ -348,7 +351,7 @@ final class LocalNodeManager: LocalNodeBootstrapping {
         process.arguments = [
             "serve",
             "--listen", "127.0.0.1:0",
-            "--peer-listen", "0.0.0.0:0",
+            "--peer-listen", Self.peerListenAddress,
             "--data-dir", paths.dataDirectory.path,
             "--device-name", Host.current().localizedName ?? "This Mac",
             "--lan-discovery",
@@ -609,8 +612,12 @@ final class LocalNodeManager: LocalNodeBootstrapping {
         var paths = Set<String>()
         do {
             for grant in selected {
-                let url = try grant.resolve().url.standardizedFileURL
-                guard paths.insert(url.path).inserted else { continue }
+                // Keep the exact URL returned by bookmark resolution. Creating
+                // a standardized URL before opening it drops the security-scope
+                // association needed after a cold sandbox relaunch.
+                let url = try grant.resolve().url
+                let standardizedPath = url.standardizedFileURL.path
+                guard paths.insert(standardizedPath).inserted else { continue }
                 guard url.startAccessingSecurityScopedResource() else {
                     throw SelectedDirectoryError.accessDenied
                 }

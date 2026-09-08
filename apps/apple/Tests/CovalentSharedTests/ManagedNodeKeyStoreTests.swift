@@ -202,6 +202,37 @@ import Testing
     #expect(!manager.contains("COVALENT_API_TOKEN="))
 }
 
+@Test func managedNodeUsesStableSignedPeerEndpointAcrossEveryLaunchMode() throws {
+    let appleRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let manager = try String(
+        contentsOf: appleRoot.appending(path: "Sources/CovalentMac/LocalNodeManager.swift"),
+        encoding: .utf8
+    )
+
+    #expect(manager.contains("private static let peerListenAddress = \"0.0.0.0:8787\""))
+    #expect(manager.components(separatedBy: "\"--peer-listen\", Self.peerListenAddress").count == 3)
+    #expect(!manager.contains("\"--peer-listen\", \"0.0.0.0:0\""))
+}
+
+@Test func managedNodeOpensTheExactResolvedSecurityScopedURL() throws {
+    let appleRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let manager = try String(
+        contentsOf: appleRoot.appending(path: "Sources/CovalentMac/LocalNodeManager.swift"),
+        encoding: .utf8
+    )
+
+    #expect(manager.contains("let url = try grant.resolve().url\n"))
+    #expect(manager.contains("let standardizedPath = url.standardizedFileURL.path"))
+    #expect(manager.contains("url.startAccessingSecurityScopedResource()"))
+    #expect(!manager.contains("grant.resolve().url.standardizedFileURL"))
+}
+
 @Test func managedNodeShutdownRetainsIdentityUntilConfirmedExit() throws {
     let appleRoot = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()

@@ -23,6 +23,21 @@ import Testing
 }
 
 #if os(macOS)
+@Test func macAppDeclaresPersistentSecurityScopeEntitlement() throws {
+    let appleRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let data = try Data(contentsOf: appleRoot.appending(path: "Config/CovalentMac.entitlements"))
+    let entitlements = try #require(
+        PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+    )
+
+    #expect(entitlements["com.apple.security.app-sandbox"] as? Bool == true)
+    #expect(entitlements["com.apple.security.files.user-selected.read-write"] as? Bool == true)
+    #expect(entitlements["com.apple.security.files.bookmarks.app-scope"] as? Bool == true)
+}
+
 @Test func bookmarkResolutionRejectsFileWhileSecurityScopeIsActive() throws {
     let root = FileManager.default.temporaryDirectory
         .appending(path: UUID().uuidString, directoryHint: .isDirectory)

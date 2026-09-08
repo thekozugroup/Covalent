@@ -474,6 +474,81 @@ search, selected test folder and Cancel/Choose controls with accessibility
 roles and labels. This proves the system picker, not complete Apple HIG
 conformance for the app or permission-repair screens.
 
+## Checkpoint 30: Docker restart mapping and temporary-file cleanup
+
+[Checkpoint 29 CI](https://github.com/thekozugroup/Covalent/actions/runs/34266408065)
+passes Rust/contracts, dependency review, both macOS jobs, Android foundation
+and iOS. All 74 existing API 37 tests pass by exact test name, including the packaged
+notice reader. The new complete folder journey is not part of that run.
+Both Docker architectures now pass mutual pairing, consent, initial file
+transfer, seven-second pause withholding and resumed convergence. This confirms
+the worker-home correction. The remaining failure occurs while the harness
+waits for the restarted recipient API; the other node stays running and
+reports a fresh connected peer.
+
+The harness cached Docker's ephemeral published HTTPS port across stop/start.
+An isolated Atmos test reproduced port reassignment from 32768 to 32769. It
+reused an existing image solely for a bounded shell/sleep process, with no data
+mounts or application health check. All 21 existing containers and 24 image IDs
+remained unchanged; the exact labelled temporary container and network were
+removed. Proof result SHA-256:
+`4eda031d5896f1461dbfe8a8503f4fda86bb01a02ee535f64a7d168acbffeb47`.
+Harness SHA-256:
+`2575f8e7eac9571826d7610d2b25b2ede2c74117c8bf72e809e22f12d9877b77`.
+The sync harness now re-reads the exact owned container's loopback mapping after
+each start, retains the original TLS CA and server-name checks, and compares the
+complete public transport identity across restart. A bounded local fixture
+also rejects foreign ownership and non-loopback publication. A fresh complete
+Docker run is still required; this isolated port proof is not a sync result.
+
+Temporary cleanup removed 48 obsolete publication payload files only after
+verifying their contents against reachable published Git trees. It also removed
+22 inactive Rust/Go build-cache directories. The removed files total
+11,277,687,504 logical bytes; this is not a claim about physical APFS space
+reclaimed. All 104 retained test executables, source/results and report artifacts
+were hash-verified unchanged. Current tests, worktrees, toolchains and validation
+manifests remain. Detailed cleanup receipts are retained in the ignored
+`artifacts/validation-2026-09-08/temporary-cleanup` directory of the primary
+checkout. Future cleanup continues after exact resource ownership and process
+reaping have been verified.
+
+## Verified macOS manager fixes in checkpoint 30
+
+A real signed, sandboxed LaunchServices run used the production app model and
+local node manager to choose an external test folder through NSOpenPanel,
+restart with the retained scope, complete signed folder consent, synchronize
+both directions and restore the committed share after a cold relaunch. The
+peer endpoint and certificate stayed unchanged through both scope inheritance
+and cold restart. A second file synchronized, removal preserved both copies,
+and every production-owned helper, guardian and worker was reaped.
+
+This established three production corrections: normal and recovery peer
+listeners use UDP 8787, the app declares the persistent app-scope bookmark
+entitlement, and the manager starts access on the exact resolved bookmark URL.
+Path standardization is used only for deduplication; creating a derived URL
+before starting access lost its security-scope association after cold launch.
+Three focused Swift tests cover the corrected contracts.
+
+Result SHA-256:
+`bfb660405cd129a2485bb984151e83c133079f3edc42cbd64b1305b0bc44ff2f`.
+Verification SHA-256:
+`da54d006133923f53aeb5a61beb03c3d7e962c3fe5639939a08c95c98a924a24`.
+Sealed signed app ZIP SHA-256:
+`ec95363b71a0ce4ccffc5c0e68da3492dc8e557cda13c0f81d20cfb0cfec7eaa`.
+The manager source differed from the production file only by the module import
+needed to compile it in the isolated harness. The outer harness reaped the
+exact second-node fixture after the cold sandbox could not signal a process
+owned by its previous app instance. That fixture limitation did not affect
+production manager-owned process cleanup. Cleanup removed another 683,820,403
+logical bytes from nine owned temporary targets; frozen evidence remains.
+
+The ad-hoc test app's default data-protection Keychain query failed with
+`errSecMissingEntitlement` (-34018). The proof therefore used the existing
+persistence seam with a private fixture file. It establishes folder/manager
+behavior, not working secure default-store startup for personal builds. That
+startup issue is an explicit open release gate. Full native permission repair,
+HIG conformance and migration from older ephemeral peer addresses also remain.
+
 ## Remaining integration and release work
 
 The macOS folder screen now consumes the authenticated API, uses confirmed

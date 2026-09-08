@@ -1,7 +1,7 @@
 # Completion progress
 
-Updated: 2026-09-08. Checkpoint 29 builds on published commit
-`44b4fe84453fd499a11e383dd5e794f3b2693ee8`; evidence includes the integrated
+Updated: 2026-09-08. Checkpoint 30 builds on published commit
+`4b08b765eb0f7766330cb8d2f07b15fc583e2a15`; evidence includes the integrated
 checkpoint changes described below.
 
 **65% of acceptance milestones are verified: 13 of 20.** This is a milestone
@@ -38,12 +38,12 @@ Passing automated tests alone does not establish HIG conformance.
 | 10 | The macOS packaged worker runs inside its inherited app sandbox | Verified | Two signed LaunchServices TLS sessions, identity-preserving restart and complete reaping; container-owned fixture only. |
 | 11 | The Android packaged worker executes under Android process restrictions | Verified | Pinned arm64/x86_64 builds and actual API 37 x86_64 guardian/worker execution in proof run 34241597202. |
 | 12 | A full initial scan succeeds before any folder exchange | Verified | Two real production-runtime proofs used the exact integrated controller and pinned worker: 120,000-entry scan stayed network-inert; pause cancelled/reaped; resume transferred both ways; cold restart repeated the barrier. |
-| 13 | The complete macOS user-selected-folder journey and permission repair work | Open | Native UI exists; external security-scope grant, repair and install/upgrade acceptance remain. |
-| 14 | The complete Android folder journey and foreground lifecycle work | Open | Native folder UI, durable raw-folder grants and serialized foreground lifecycle are integrated; eleven JNI tests pass. Checkpoint 28 compiles and its JVM tests pass, but six lint errors block device execution. Narrow corrections are included; fresh complete device execution remains. |
-| 15 | Both complete Docker architectures install and run with safe writable sync mounts | Open | Both architectures pass image budgets and hardened runtime checks. Checkpoint 28 diagnostics show worker-launch failure on both architectures. The image creates the real account home required by worker admission, with a read-only runtime regression check. Full packaged sync awaits fresh execution. Atlas uses this Docker acceptance path. |
+| 13 | The complete macOS user-selected-folder journey and permission repair work | Open | The real production manager now passes native folder selection, two-way sync and cold bookmark/endpoint restoration. Permission repair, full HIG review and default secure-store startup under personal ad-hoc signing remain. |
+| 14 | The complete Android folder journey and foreground lifecycle work | Open | Native folder UI, durable raw-folder grants and serialized foreground lifecycle are integrated; eleven JNI tests pass. Checkpoint 29 passes the hosted Android foundation, including compilation, JVM tests and lint. All 74 existing API 37 device tests pass, including packaged notices. The complete native folder journey and repair remain. |
+| 15 | Both complete Docker architectures install and run with safe writable sync mounts | Open | Both architectures pass image budgets and hardened runtime checks. Checkpoint 29 passes two-way consent, initial file sync and pause/resume on both architectures after correcting the worker home. The restart test cached a temporary Docker host port; isolated Atmos execution confirmed that mapping changes on restart. The harness now refreshes the mapping while retaining TLS trust. Fresh complete restart/removal execution remains. Atlas uses this Docker acceptance path. |
 | 16 | The server console offers an intuitive folder setup and management journey | Verified | Chrome drove two real NodeRuntime instances through offer, accept, bidirectional transfer, pause/resume and explicit removal. Typed paths and focus survive polling; cancel preserves sharing; removal preserves files and blocks later transfer. Both runtimes and test fixtures were cleaned. |
 | 17 | Peer connectivity, invitation expiry/renewal, removal and address changes have complete user journeys | Open | Real paired workers now report connected, disconnected and reconnected while the surviving worker stays running. Renewal, remote removal and network-address changes remain. |
-| 18 | Shipped dependencies, notices and security gates are complete | Open | Checkpoint 28 Rust dependency checks and all CodeQL languages pass. Linux notices build on both architectures; both Android target inventories generate successfully. The Android viewer still requires device execution. Mac target inventory, final classification and container findings remain. |
+| 18 | Shipped dependencies, notices and security gates are complete | Open | Checkpoint 28 Rust dependency checks and all CodeQL languages pass. Linux notices build on both architectures; both Android target inventories generate successfully. The Android notices asset reader passes actual device execution. Mac target inventory, final classification and container findings remain. |
 | 19 | Platform installation, upgrade, accessibility and end-to-end regression gates pass | Open | Fresh hosted gates and complete native/package acceptance are required. |
 | 20 | Performance is measured and optimized after stability acceptance | Open | Folder-sync benchmarks, large-folder resource bounds and measured optimization remain. |
 

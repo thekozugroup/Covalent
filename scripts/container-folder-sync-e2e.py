@@ -150,14 +150,29 @@ class Fixture:
                    "--env", "COVALENT_DEVICE_NAME=Folder gate " + key,
                    "--env", "COVALENT_LAN_DISCOVERY=false",
                    self.image, "serve", "--api-token-file", "/run/secrets/token")
-            inspected = json.loads(docker("inspect", name))[0]
-            port = int(inspected["NetworkSettings"]["Ports"]["8443/tcp"][0]["HostPort"])
-            ip = inspected["NetworkSettings"]["Networks"][self.network]["IPAddress"]
-            self.nodes[key] = {"name": name, "token": token, "port": port, "ip": ip}
+            self.nodes[key] = {"name": name, "token": token}
+            self.refresh_endpoint(key)
             self.phase = "TLS readiness for node " + key
             self.wait(lambda: self.load_ca(key), "server CA creation")
             self.wait(lambda: self.request(key, "/api/v1/status").get("state") == "ready", "node readiness")
         self.checks.append("two-rootless-read-only-bounded-packaged-nodes")
+
+    def refresh_endpoint(self, key: str):
+        """Re-read Docker's current loopback mapping after every container start."""
+        node = self.nodes[key]
+        inspected = json.loads(docker("inspect", node["name"]))[0]
+        if (inspected["Config"]["Labels"].get("covalent.sync-gate") != self.prefix
+                or inspected["Name"].removeprefix("/") != node["name"]
+                or not inspected["State"]["Running"]):
+            raise GateError("the owned container is not running")
+        bindings = inspected["NetworkSettings"]["Ports"]["8443/tcp"]
+        if len(bindings) != 1 or bindings[0]["HostIp"] != "127.0.0.1":
+            raise GateError("the test API must have one loopback-only mapping")
+        port = int(bindings[0]["HostPort"])
+        if not 1 <= port <= 65535:
+            raise GateError("the test API mapping has an invalid port")
+        node["port"] = port
+        node["ip"] = inspected["NetworkSettings"]["Networks"][self.network]["IPAddress"]
 
     def load_ca(self, key: str) -> bool:
         node = self.nodes[key]
@@ -285,11 +300,15 @@ class Fixture:
         self.wait(lambda: self.matches("b", "forward.txt", paused_payload), "resumed transfer")
         self.checks.append("pause-withholds-edit-and-resume-converges")
         self.phase = "cold restart and reverse transfer"
-        before = self.request("b", "/api/v1/transport/identity")["deviceId"]
+        before = self.request("b", "/api/v1/transport/identity")
         docker("stop", "--time=20", self.nodes["b"]["name"])
         docker("start", self.nodes["b"]["name"])
+        # Docker can allocate another host port for the original ephemeral
+        # binding. Preserve the original CA/server identity while using the
+        # currently assigned mapping to verify the restarted node.
+        self.refresh_endpoint("b")
         self.wait(lambda: self.request("b", "/api/v1/status").get("state") == "ready", "cold restart")
-        if self.request("b", "/api/v1/transport/identity")["deviceId"] != before:
+        if self.request("b", "/api/v1/transport/identity") != before:
             raise GateError("cold restart replaced identity")
         reverse = b"reverse edit after packaged node restart\n"
         self.write("b", "reverse.txt", reverse)
