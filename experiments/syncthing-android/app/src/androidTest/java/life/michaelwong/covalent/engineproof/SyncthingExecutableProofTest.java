@@ -363,7 +363,7 @@ public final class SyncthingExecutableProofTest {
         assertTrueOrAbsentAttribute(gui, "enabled");
         assertFalseOrAbsentAttribute(gui, "tls");
         assertEquals("127.0.0.1:" + port, childText(gui, "address"));
-        assertEquals(apiKey, childText(gui, "apikey"));
+        assertTrue("Config API credential changed", apiKey.equals(childText(gui, "apikey")));
         assertFalseOrAbsentChild(gui, "insecureAdminAccess");
         assertFalseOrAbsentChild(gui, "insecureSkipHostcheck");
         assertFalseOrAbsentChild(gui, "metricsWithoutAuth");

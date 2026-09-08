@@ -78,6 +78,14 @@ Use `--prebuilt` only when the two APKs were built from the exact source in the 
 The script installs and removes only the experimental package and caps instrumentation at
 three minutes.
 
+Hosted execution uses the repository's existing API-37 guest preparation and
+stability checks. The standalone harness's first instrumented run omitted that
+preparation and Android aborted it with `System has crashed`; it produced no
+test result. The runner now requires unchanged `surfaceflinger` and
+`system_server` PIDs across instrumentation and emits bounded, credential-redacted
+guest diagnostics on failure. Guest graphics preparation is emulator-specific;
+this proof neither exercises a launcher nor validates screen capture.
+
 ## Deliberate limits
 
 This does not prove API-26 or arm64 runtime execution, foreground-service survival, Doze,
