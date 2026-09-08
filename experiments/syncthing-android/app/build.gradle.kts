@@ -81,4 +81,7 @@ tasks.named("preBuild").configure { dependsOn(buildSyncthingHelpers) }
 dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test:runner:1.7.0")
+    // Match the repository's verified Android test runtime instead of resolving
+    // the runner's older transitive coroutine metadata.
+    androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
 }
