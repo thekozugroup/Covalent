@@ -26,6 +26,64 @@ max_single_file_blocks=4194304
 command_timeout_seconds=900
 
 fail() { echo "error: $*" >&2; exit 1; }
+
+# Print only a bounded, terminal-safe tail. Raw files remain in the private
+# evidence directory and are uploaded by the enclosing proof workflow.
+print_diagnostic_tail() {
+  diagnostic_label=$1
+  diagnostic_file=$2
+  printf '%s\n' "--- $diagnostic_label (final 16384 bytes maximum) ---" >&2
+  python3 - "$diagnostic_file" <<'PY' >&2
+import os, pathlib, stat, sys
+path = pathlib.Path(sys.argv[1])
+try:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+                         getattr(os, "O_NOFOLLOW", 0))
+except OSError as error:
+    print(f"[diagnostic unavailable: {type(error).__name__}]")
+    raise SystemExit(0)
+try:
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode):
+        print("[diagnostic unavailable: not a regular file]")
+        raise SystemExit(0)
+    maximum = 16 * 1024
+    prefix = ""
+    if metadata.st_size > maximum:
+        os.lseek(descriptor, -maximum, os.SEEK_END)
+        prefix = f"[earlier {metadata.st_size - maximum} bytes omitted]\n"
+    chunks, retained = [], 0
+    while retained < maximum:
+        chunk = os.read(descriptor, min(4096, maximum - retained))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        retained += len(chunk)
+    text = b"".join(chunks).decode("utf-8", "backslashreplace")
+    safe = "".join(character if character in "\n\t" or " " <= character <= "~"
+                   else f"\\u{ord(character):04x}" for character in text)
+    rendered = (prefix + safe + ("" if safe.endswith("\n") else "\n")).encode("ascii")
+    if len(rendered) > maximum:
+        marker = b"[diagnostic rendering truncated after escaping]\n"
+        rendered = marker + rendered[-(maximum - len(marker)):]
+    sys.stdout.buffer.write(rendered)
+finally:
+    os.close(descriptor)
+PY
+}
+
+fail_stage() {
+  failure_stage=$1
+  failure_code=$2
+  shift 2
+  printf '%s\n' "error: $failure_stage failed with exit code $failure_code" >&2
+  while test "$#" -ge 2; do
+    print_diagnostic_tail "$1" "$2"
+    shift 2
+  done
+  exit 1
+}
+
 command -v git >/dev/null 2>&1 || fail "git is required"
 command -v python3 >/dev/null 2>&1 || fail "python3 is required"
 command -v shasum >/dev/null 2>&1 || fail "shasum is required"
@@ -130,11 +188,15 @@ mkdir "$GOPATH" "$GOMODCACHE" "$GOCACHE"
 
 host_os=$("$go_bin" env GOHOSTOS)
 host_arch=$("$go_bin" env GOHOSTARCH)
-if ! "$timeout_bin" "$command_timeout_seconds" env \
+if "$timeout_bin" "$command_timeout_seconds" env \
     GOOS="$host_os" GOARCH="$host_arch" CGO_ENABLED=0 \
     "$go_bin" install "$govuln_module@$govuln_version" \
     > "$reports/govulncheck-install.stdout" 2> "$reports/govulncheck-install.stderr"; then
-  fail "host-native govulncheck provisioning was incomplete"
+  :
+else
+  stage_code=$?
+  fail_stage "host-native govulncheck provisioning" "$stage_code" \
+    "govulncheck install stderr" "$reports/govulncheck-install.stderr"
 fi
 check_output_bounds
 govuln=$bindir/govulncheck
@@ -163,25 +225,38 @@ collect_target() {
   target=$reports/android-$goarch
   mkdir "$target"
 
-  if ! "$timeout_bin" "$command_timeout_seconds" env \
+  if "$timeout_bin" "$command_timeout_seconds" env \
       GOOS=android GOARCH="$goarch" CGO_ENABLED=1 CC="$cc" GOFLAGS="$target_goflags" \
       "$go_bin" env -json GOOS GOARCH GOHOSTOS GOHOSTARCH CGO_ENABLED CC GOFLAGS GOVERSION \
       > "$target/go-environment.json" 2> "$target/go-environment.stderr"; then
-    fail "$abi target environment collection was incomplete"
+    :
+  else
+    stage_code=$?
+    fail_stage "$abi target environment collection" "$stage_code" \
+      "$abi go env stderr" "$target/go-environment.stderr"
   fi
-  if ! "$timeout_bin" "$command_timeout_seconds" env \
+  if "$timeout_bin" "$command_timeout_seconds" env \
       GOOS=android GOARCH="$goarch" CGO_ENABLED=1 CC="$cc" GOFLAGS="$target_goflags" \
       "$go_bin" -C "$source_dir" list -mod=readonly -deps -json ./cmd/syncthing \
       > "$target/go-target-deps.ndjson" 2> "$target/go-target-deps.stderr"; then
-    fail "$abi target dependency inventory was incomplete"
+    :
+  else
+    stage_code=$?
+    fail_stage "$abi target dependency inventory" "$stage_code" \
+      "$abi go list stderr" "$target/go-target-deps.stderr"
   fi
   check_output_bounds
-  if ! "$timeout_bin" "$command_timeout_seconds" env \
+  if "$timeout_bin" "$command_timeout_seconds" env \
       GOOS=android GOARCH="$goarch" CGO_ENABLED=1 CC="$cc" GOFLAGS="$target_goflags" \
       "$govuln" -C "$source_dir" -db "$official_db" -mode source -scan symbol \
       -format json ./cmd/syncthing \
       > "$target/govulncheck.json" 2> "$target/govulncheck.stderr"; then
-    fail "$abi official source symbol scan was incomplete"
+    :
+  else
+    stage_code=$?
+    fail_stage "$abi official source symbol scan" "$stage_code" \
+      "$abi govulncheck stderr" "$target/govulncheck.stderr" \
+      "$abi govulncheck JSON" "$target/govulncheck.json"
   fi
   check_output_bounds
 }
@@ -189,10 +264,14 @@ collect_target() {
 collect_target arm64 arm64-v8a aarch64-linux-android26-clang
 collect_target amd64 x86_64 x86_64-linux-android26-clang
 
-if ! "$timeout_bin" "$command_timeout_seconds" \
+if "$timeout_bin" "$command_timeout_seconds" \
     "$go_bin" -C "$source_dir" mod verify \
     > "$reports/go-mod-verify.txt" 2> "$reports/go-mod-verify.stderr"; then
-  fail "downloaded module verification was incomplete"
+  :
+else
+  stage_code=$?
+  fail_stage "downloaded module verification" "$stage_code" \
+    "go mod verify stderr" "$reports/go-mod-verify.stderr"
 fi
 check_output_bounds
 
