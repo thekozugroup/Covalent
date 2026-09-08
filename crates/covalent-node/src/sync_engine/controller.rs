@@ -1,0 +1,330 @@
+//! One bounded engine session beneath a caller-owned durable installation.
+//!
+//! Membership authorization and durable desired-state reconciliation precede
+//! this module. It cannot accept a remote invitation or grant folder access.
+
+use std::fmt;
+use std::fs::File;
+use std::net::SocketAddr;
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use covalent_core::sync::state_dir::{PrivateStateDir, StateKey};
+use rand_core::{OsRng, RngCore as _};
+use serde_json::Value;
+use zeroize::Zeroizing;
+
+use super::config::{DesiredEngineConfig, EngineApiKey, EngineFolderConfig, EnginePeerConfig};
+use super::installation::EngineInstallation;
+use super::{
+    EngineApiClient, EngineApiError, EngineEndpoint, OwnedEngineWorker, StopOutcome,
+    VerifiedEngineExecutable,
+};
+
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
+const PINNED_ENGINE_VERSION: &str = "v2.1.3";
+
+/// Already-authorized desired state for one engine session. The enclosing
+/// controller must persist and reconcile it with Covalent's current peer grants
+/// before launch; these values are never a substitute for pairing authority.
+pub struct EngineSessionSettings {
+    /// Local device display name.
+    pub device_name: String,
+    /// Explicit direct sync listener; absent for a network-inert session.
+    pub listener: Option<SocketAddr>,
+    /// Explicit authenticated peer bindings.
+    pub peers: Vec<EnginePeerConfig>,
+    /// Explicit user-selected roots and accepted memberships.
+    pub folders: Vec<EngineFolderConfig>,
+}
+
+/// Redacted session failure; details are kept inside the local engine boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EngineSessionError {
+    /// Identity, paths, folder capabilities, or desired inputs are invalid.
+    InvalidConfiguration,
+    /// Private runtime material could not be created durably.
+    RuntimeUnavailable,
+    /// A pinned guardian/worker could not be launched.
+    LaunchFailed,
+    /// The expected worker did not become ready before its whole deadline.
+    StartupTimeout,
+    /// Worker identity, version, or effective settings differ from desired state.
+    StartupMismatch,
+    /// The running worker's private API is unavailable.
+    EngineUnavailable,
+}
+
+impl fmt::Display for EngineSessionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidConfiguration => "folder sync configuration is invalid",
+            Self::RuntimeUnavailable => "folder sync runtime storage is unavailable",
+            Self::LaunchFailed => "folder sync worker could not start",
+            Self::StartupTimeout => "folder sync worker did not become ready",
+            Self::StartupMismatch => "folder sync worker failed startup verification",
+            Self::EngineUnavailable => "folder sync worker is unavailable",
+        })
+    }
+}
+
+impl std::error::Error for EngineSessionError {}
+
+/// A verified active session. Dropping it closes the guardian lifeline; the
+/// dedicated reaper retains runtime files, installation lock and selected-root
+/// descriptors until the actual child exits. A stop timeout is not completion.
+pub struct ManagedEngineSession {
+    worker: OwnedEngineWorker,
+    client: EngineApiClient,
+    configuration: DesiredEngineConfig,
+    installation: Arc<EngineInstallation>,
+    roots: Arc<Vec<FolderRootLease>>,
+}
+
+impl fmt::Debug for ManagedEngineSession {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ManagedEngineSession([PRIVATE])")
+    }
+}
+
+// Field ownership, not an async cleanup task, ties these capabilities to the
+// native child wait. TempDir cannot be dropped by cancellation during startup.
+struct WorkerResources {
+    _runtime: tempfile::TempDir,
+    _installation: Arc<EngineInstallation>,
+    _roots: Arc<Vec<FolderRootLease>>,
+}
+
+struct FolderRootLease {
+    path: PathBuf,
+    file: File,
+    identity: (u64, u64),
+}
+
+impl ManagedEngineSession {
+    /// Create fresh per-run private configuration, launch the exact pinned
+    /// worker, and verify its version, identity and effective desired state.
+    /// `runtime_parent` is the native host's authorized temporary location; a
+    /// short path is required by Unix socket limits. It is separate from the
+    /// durable database root and contains no inherited engine configuration.
+    pub async fn start(
+        installation: Arc<EngineInstallation>,
+        guardian: &VerifiedEngineExecutable,
+        engine: &VerifiedEngineExecutable,
+        runtime_parent: &Path,
+        settings: EngineSessionSettings,
+    ) -> Result<Self, EngineSessionError> {
+        installation
+            .revalidate()
+            .map_err(|_| EngineSessionError::InvalidConfiguration)?;
+        let runtime = tempfile::Builder::new()
+            .prefix("cv-engine-")
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir_in(runtime_parent)
+            .map_err(|_| EngineSessionError::RuntimeUnavailable)?;
+        let config_dir = std::fs::canonicalize(runtime.path())
+            .map_err(|_| EngineSessionError::RuntimeUnavailable)?;
+        let private = PrivateStateDir::open_root(&config_dir)
+            .map_err(|_| EngineSessionError::RuntimeUnavailable)?;
+        let lock = private
+            .try_lock()
+            .map_err(|_| EngineSessionError::RuntimeUnavailable)?;
+        let mut random = Zeroizing::new([0_u8; 32]);
+        OsRng
+            .try_fill_bytes(random.as_mut())
+            .map_err(|_| EngineSessionError::RuntimeUnavailable)?;
+        let mut api_key = Zeroizing::new(String::with_capacity(64));
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        for byte in random.iter() {
+            api_key.push(char::from(HEX[usize::from(byte >> 4)]));
+            api_key.push(char::from(HEX[usize::from(byte & 15)]));
+        }
+        let socket = config_dir.join("api.sock");
+        let configuration = DesiredEngineConfig::new(
+            installation.device_id().clone(),
+            &settings.device_name,
+            socket.clone(),
+            EngineApiKey::parse(api_key).map_err(|_| EngineSessionError::InvalidConfiguration)?,
+            settings.listener,
+            settings.peers,
+            settings.folders,
+        )
+        .map_err(|_| EngineSessionError::InvalidConfiguration)?;
+        let roots = Arc::new(
+            configuration
+                .folders()
+                .iter()
+                .map(|folder| admit_root(folder.root(), installation.root(), &config_dir))
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+        let xml = configuration
+            .render_desired_xml()
+            .map_err(|_| EngineSessionError::InvalidConfiguration)?;
+        let certificate = installation.identity().certificate_pem();
+        for (name, bytes, maximum) in [
+            ("config.xml", xml.as_bytes(), 4 * 1024 * 1024),
+            ("cert.pem", certificate.as_bytes(), 24 * 1024),
+            (
+                "key.pem",
+                installation.identity().private_key_pem().as_bytes(),
+                4096,
+            ),
+        ] {
+            let key = StateKey::new(name).map_err(|_| EngineSessionError::RuntimeUnavailable)?;
+            private
+                .create_new_file(&lock, &key, bytes, maximum)
+                .map_err(|_| EngineSessionError::RuntimeUnavailable)?;
+        }
+        let database = installation
+            .database_directory()
+            .map_err(|_| EngineSessionError::RuntimeUnavailable)?;
+        let client = EngineApiClient::new(socket, configuration.api_key_copy())
+            .map_err(|_| EngineSessionError::InvalidConfiguration)?;
+        let resources = WorkerResources {
+            _runtime: runtime,
+            _installation: Arc::clone(&installation),
+            _roots: Arc::clone(&roots),
+        };
+        let worker =
+            OwnedEngineWorker::launch(guardian, engine, config_dir, database, Box::new(resources))
+                .map_err(|_| EngineSessionError::LaunchFailed)?;
+        let mut session = Self {
+            worker,
+            client,
+            configuration,
+            installation,
+            roots,
+        };
+        match tokio::time::timeout(STARTUP_TIMEOUT, session.verify_startup()).await {
+            Ok(Ok(())) => Ok(session),
+            result => {
+                // Close before awaiting so cancellation cannot leave a running
+                // worker. The reaper retains all leases through actual exit.
+                session.worker.close_lifeline();
+                let _ = session.worker.stop().await;
+                Err(match result {
+                    Ok(Err(error)) => error,
+                    _ => EngineSessionError::StartupTimeout,
+                })
+            }
+        }
+    }
+
+    async fn verify_startup(&mut self) -> Result<(), EngineSessionError> {
+        let version = loop {
+            self.revalidate_roots()?;
+            if self
+                .worker
+                .try_status()
+                .map_err(|_| EngineSessionError::StartupMismatch)?
+                .is_some()
+            {
+                return Err(EngineSessionError::StartupMismatch);
+            }
+            match self
+                .client
+                .json::<Value>(EngineEndpoint::SystemVersion)
+                .await
+            {
+                Ok(version) => break version,
+                Err(EngineApiError::Unavailable | EngineApiError::Timeout) => {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(_) => return Err(EngineSessionError::StartupMismatch),
+            }
+        };
+        if version.get("version").and_then(Value::as_str) != Some(PINNED_ENGINE_VERSION) {
+            return Err(EngineSessionError::StartupMismatch);
+        }
+        let status: Value = self
+            .client
+            .json(EngineEndpoint::SystemStatus)
+            .await
+            .map_err(|_| EngineSessionError::StartupMismatch)?;
+        if status.get("myID").and_then(Value::as_str) != Some(self.configuration.own_id().as_str())
+        {
+            return Err(EngineSessionError::StartupMismatch);
+        }
+        let effective: Value = self
+            .client
+            .json(EngineEndpoint::Configuration)
+            .await
+            .map_err(|_| EngineSessionError::StartupMismatch)?;
+        self.configuration
+            .verify_effective(&effective)
+            .map_err(|_| EngineSessionError::StartupMismatch)?;
+        self.revalidate_roots()
+    }
+
+    /// Verify retained filesystem capabilities before consulting local status.
+    /// The owning controller must also call this during its periodic health
+    /// loop; stock workers do not consume these descriptors themselves.
+    pub async fn status(&mut self) -> Result<Value, EngineSessionError> {
+        if let Err(error) = self.revalidate_roots() {
+            self.worker.close_lifeline();
+            return Err(error);
+        }
+        self.client
+            .json(EngineEndpoint::SystemStatus)
+            .await
+            .map_err(|_| EngineSessionError::EngineUnavailable)
+    }
+
+    /// Request stop through the owner lifeline and await bounded reaping.
+    pub async fn stop(&mut self) -> Result<StopOutcome, super::EngineSupervisorError> {
+        self.worker.stop().await
+    }
+
+    fn revalidate_roots(&self) -> Result<(), EngineSessionError> {
+        self.installation
+            .revalidate()
+            .map_err(|_| EngineSessionError::InvalidConfiguration)?;
+        for root in self.roots.iter() {
+            let metadata = std::fs::symlink_metadata(&root.path)
+                .map_err(|_| EngineSessionError::InvalidConfiguration)?;
+            let held = root
+                .file
+                .metadata()
+                .map_err(|_| EngineSessionError::InvalidConfiguration)?;
+            if !metadata.is_dir()
+                || (metadata.dev(), metadata.ino()) != root.identity
+                || (held.dev(), held.ino()) != root.identity
+            {
+                return Err(EngineSessionError::InvalidConfiguration);
+            }
+        }
+        Ok(())
+    }
+}
+
+fn admit_root(
+    path: &Path,
+    installation: &Path,
+    runtime: &Path,
+) -> Result<FolderRootLease, EngineSessionError> {
+    for private in [installation, runtime] {
+        if path.starts_with(private) || private.starts_with(path) {
+            return Err(EngineSessionError::InvalidConfiguration);
+        }
+    }
+    let descriptor = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|_| EngineSessionError::InvalidConfiguration)?;
+    let file = File::from(descriptor);
+    let metadata = file
+        .metadata()
+        .map_err(|_| EngineSessionError::InvalidConfiguration)?;
+    Ok(FolderRootLease {
+        path: path.to_path_buf(),
+        file,
+        identity: (metadata.dev(), metadata.ino()),
+    })
+}

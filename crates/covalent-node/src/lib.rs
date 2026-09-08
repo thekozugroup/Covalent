@@ -7,6 +7,8 @@ pub mod network_pairing;
 pub mod pairing_transport;
 mod recovery_state;
 pub mod runtime;
+#[cfg(unix)]
+pub mod sync_engine;
 pub mod transport;
 
 use std::collections::{BTreeMap, BTreeSet};

@@ -37,13 +37,13 @@ Close every known release-blocking finding; do not remove a gate to raise a scor
 
 | Area | Required evidence | Current state |
 | --- | --- | --- |
-| Product scope | Explicit backup/sync semantics and a matching acceptance scenario | Automatic two-way sync is required. Signed records, causal/conflict checks, protected installation keys, private storage, read-only Unix inventories, bootstrap-backed membership replay and content-gated durable publication, protected authority pins, journaled Unix creation and verified incumbent adoption, bounded Android metadata observation, durable coordinator readiness, and signed write-loss freeze/receipt/abort admission are implemented. Write-loss reconciliation, the serialized sync runtime, peer exchange, replacement/deletion, native setup and multi-device acceptance remain outstanding. |
-| Core correctness | Unit, property, adversarial, migration, concurrency, corruption, interrupted-job and source-loss tests; strict lint | At `f80c375`, hosted Rust/contracts passed 610 tests across 22 suites with zero failed/ignored, strict workspace Clippy and 89 web tests. All release-candidate software and CodeQL gates passed on that checkpoint. Checkpoint `d13955a` exposed a Linux adoption inode-reuse failure despite 640 local passing tests. The descriptor-lifetime and retry fixes at `4a6d1ba` subsequently passed all 643 hosted Linux Rust tests across 22 suites with zero failed/ignored, plus 89 web tests. The combined readiness/freeze/Unicode checkpoint `e561df6` passes all 661 hosted Rust tests across 22 suites with zero failed/ignored, 89 web tests and every software/CodeQL gate. Final runtime and release confirmation remain required. |
+| Product scope | Explicit backup/sync semantics and a matching acceptance scenario | Automatic two-way sync is required. [ADR 0007](../adr/0007-maintained-folder-sync-engine.md) selects pinned Syncthing v2.1.3 after real Mac, Atmos Docker and immutable Android API-37 execution proofs. The private Rust client, protected identity/installation, effective-config verifier and managed session controller pass real macOS cold-restart and two-way session tests; see [adapter validation](engine-adapter-validation-2026-09-08.md). NodeRuntime/API wiring, durable authenticated folder invitations, native setup, lifecycle/revocation and final multi-device acceptance remain outstanding. Custom signed-history foundations remain isolated. |
+| Core correctness | Unit, property, adversarial, migration, concurrency, corruption, interrupted-job and source-loss tests; strict lint | Checkpoint `a3acfc2` passes 686 local and hosted Rust tests across 22 suites, including 492 core tests, zero failed/ignored; strict workspace Clippy and 89 web tests pass. Every hosted software and CodeQL gate passes. Final automatic runtime and release confirmation remain required. |
 | Owner-device loss | A user can export a protected recovery kit, replace a lost owner device, discover its authenticated catalogs, see partial availability, and restore | API, CLI/runtime, web and native recovery flows pass. At source content matching `1839796`, the real Mac–Atmos Docker drill passed protected export, deletion of the entire original owner state, automatic catalog import and exact provider-only restore. Native UI also passes. Final artifacts and large-catalog memory evidence remain required. |
 | Beginner workflow | Install → connect → choose folder → protect → verify → restore through real UI; clear errors and recovery; no manual IDs in ordinary flows | Real browser unlock, automatic snapshot/name defaults, named backup selection, preview invalidation, restore and Verify passed with disposable files. Preview now explains individual file actions and renamed conflict destinations instead of raw JSON. Full cross-device onboarding pending. |
 | macOS | Shared tests, live helper integration, native UI/accessibility, verified arm64 app package, install and upgrade | At `1839796`, the app bundle, all 105 shared tests, live helper integration, and all four native UI tests passed. The native gate requires exactly four passed, zero failed/skipped, including first-launch setup/recovery cancellation and the system accessibility audit. Final artifact install/upgrade remains required. Local Xcode license and CLT Testing limitations remain. |
 | Android | JVM, instrumented SAF and process-death tests, TalkBack/large text, install and upgrade of stable personal artifact | At `e5a622c`, arm64 JNI is 8,384,224 bytes and x86_64 is 9,918,032 bytes; both pass the unchanged budget. At `1839796`, Android foundation and API 37 device gates passed: 103 JVM tests and all 65 named instrumentation tests, with no skipped device tests. Recovery plural resources pass lint. At `d13955a`, hosted Android compilation, lint and packaging passed, and the saved JUnit report proves all 112 JVM tests passed (including nine metadata tests), zero failures/errors/skips. All 71 expected API 37 tests also passed by name, including six new real-provider tests. Final-revision and personal-artifact validation remain required. |
-| Docker | Both CPU architectures; TLS and key-protection contracts; rootless/read-only runtime; bounded storage/memory; three-node recovery | Both image architectures and container runtime/e2e passed on checkpoint `4a6d1ba`; repeat on final revision. |
+| Docker | Both CPU architectures; TLS and key-protection contracts; rootless/read-only runtime; bounded storage/memory; three-node recovery | Both image architectures and container runtime/e2e passed on checkpoint `a3acfc2`; repeat on final revision. The maintained-engine Mac–Atmos Docker evaluation also passed, but is separate from Covalent integration. |
 | Atmos network drill | Mac ↔ Ubuntu pairing, explicitly selected replica, interrupted/restarted operation, source-loss restore, exact hashes, cleanup | Passed with a 64 MiB incompressible payload: same-job pause/resume, provider container restart preserving identity, local source/cache loss, provider-only restore and exact content checks. Dedicated resources removed; pre-existing container/image IDs survived. See [drill evidence](atmos-drill-2026-09-07.md). |
 | Atlas/Unraid | Docker deployment, Unraid template/mount contracts, exact-image install/upgrade and backup/restore; on-host Atlas check deferred by the user | Atlas is offline. The user accepted Docker validation in its place on 2026-09-07. Preflight fixtures, both Docker architectures and the full owner-loss Atmos Docker drill pass. Final-image install/upgrade remains required. No physical Atlas install is claimed. |
 | Security and supply chain | Dependency audits, CodeQL, immutable image scans/signatures/SBOMs, safe secret storage, exact release commit provenance | cargo-audit (289 dependencies, warnings denied) and cargo-deny advisories/bans/licenses/sources passed. CodeQL Java/Kotlin, Swift and the repository-wide zero-open-alert policy passed at `1839796`. Final artifact evidence is pending; current main signature is unknown_key and account has no registered signing key. |
@@ -533,6 +533,34 @@ packages, credentials, private server inventories, or raw diagnostic bundles.
   tests, with zero failures or ignored tests. Strict workspace Clippy,
   formatting, foundation validation and diff checks pass. Fresh hosted native,
   Linux/container and security gates are still required for this checkpoint.
+- Checkpoint `a3acfc2eaa4dcd98482bb38038a160980605c1ab` subsequently passed
+  every [hosted software gate](https://github.com/thekozugroup/Covalent/actions/runs/34216181198).
+  Linux proved all 686 Rust tests across 22 suites, including 492 core and all
+  19 coordinator tests, zero failed/ignored; web passed 89 tests. Both Docker
+  architectures/runtime/e2e, macOS integration/UI/bundle, Android foundation
+  and iOS passed. API 37 proved all 71 expected tests passed by name at
+  10:51:41 UTC. Both CodeQL languages and the zero-open-alerts policy
+  subsequently passed. Automatic sync acceptance and final signed release
+  gates remain unfinished.
+- The separate engine evaluation now also passes authenticated private Unix
+  socket control and a direct-worker crash during a 10,000-file transfer.
+  Every destination hash matched after restart and convergence, measured at
+  57.343 seconds. The first launcher-targeted crash attempt failed readiness;
+  the corrected direct-worker test and its process-ownership requirement are
+  recorded in the evaluation. These remain feasibility tests outside the
+  production application.
+
+- The immutable Android engine proof passed at `5716068` in [run 34224544802](https://github.com/thekozugroup/Covalent/actions/runs/34224544802): the exact named x86_64 API-37 test passed with stable framework PIDs, private API authentication, graceful shutdown and identity-preserving cold restart. Both ABI build hashes repeated. [ADR 0007](../adr/0007-maintained-folder-sync-engine.md) now selects the maintained engine for implementation; final Android storage/lifecycle, Covalent integration and release gates remain open.
+
+- The maintained-engine Rust session adapter passed 14 real macOS lifecycle checks
+  and nine two-way checks, including exact 64 KiB transfer, reverse creation,
+  deletion propagation and confirmed worker/resource cleanup. Its 37 focused
+  tests and all 723 workspace tests across 22 suites pass, with zero failures
+  or ignored tests; strict Clippy, formatting and dependency audits pass. The expanded standalone Android guardian proof at
+  `d20403b` ([run 34229120120](https://github.com/thekozugroup/Covalent/actions/runs/34229120120))
+  repeated both engine hashes, then failed before instrumentation when the
+  guardian dependency audit rejected `libdl.so`; NDK linkage review and an
+  actual rerun remain required. See [adapter evidence](engine-adapter-validation-2026-09-08.md).
 
 ## Work order
 

@@ -1,6 +1,9 @@
 # ADR 0006: Two-way folder synchronization
 
-Status: in development — core foundations implemented; network folder sync not shipped.
+Status: superseded for the initial automatic-sync implementation by
+[ADR 0007](0007-maintained-folder-sync-engine.md). The tested custom foundations
+remain isolated; their protocol guarantees are not claims for the maintained
+engine backend.
 
 ## Context
 
