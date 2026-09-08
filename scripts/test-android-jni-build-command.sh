@@ -13,6 +13,11 @@ fake_bin="$fixture_root/bin"
 fake_ndk="$fixture_root/ndk/27.1.12297006"
 cargo_log="$fixture_root/cargo-arguments"
 mkdir -p "$fake_bin" "$fake_ndk"
+cat > "$fake_ndk/source.properties" <<'EOF'
+Pkg.Revision = 27.1.12297006
+EOF
+printf '%s\n' 'fixture NDK notice' > "$fake_ndk/NOTICE"
+printf '%s\n' 'fixture toolchain notice' > "$fake_ndk/NOTICE.toolchain"
 
 cat > "$fake_bin/rustup" <<'EOF'
 #!/bin/sh

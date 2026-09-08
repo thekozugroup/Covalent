@@ -196,6 +196,11 @@ val buildAndroidJni = tasks.register<Exec>("buildAndroidJni") {
     group = "build"
     description = "Builds pinned Android arm64 and x86_64 JNI libraries with 16 KiB ELF alignment."
     workingDir = covalentRepoRoot
+    doFirst {
+        val generatedRoot = layout.buildDirectory.dir("generated/jniLibs").get().asFile
+        project.delete(generatedRoot)
+        check(generatedRoot.parentFile.mkdirs() || generatedRoot.parentFile.isDirectory)
+    }
     commandLine("./scripts/build-android-jni.sh", layout.buildDirectory.dir("generated/jniLibs").get().asFile.absolutePath)
     // The JNI archive links the node, core, and protocol crates too. Tracking
     // only the bridge crate made Gradle eligible to reuse native output after a
@@ -206,12 +211,15 @@ val buildAndroidJni = tasks.register<Exec>("buildAndroidJni") {
         covalentRepoRoot.resolve("Cargo.lock"),
         covalentRepoRoot.resolve("rust-toolchain.toml"),
         covalentRepoRoot.resolve("scripts/build-android-jni.sh"),
+        covalentRepoRoot.resolve("scripts/collect-android-native-link-provenance.py"),
         covalentRepoRoot.resolve("crates/covalent-android-jni"),
         covalentRepoRoot.resolve("crates/covalent-core"),
         covalentRepoRoot.resolve("crates/covalent-node"),
         covalentRepoRoot.resolve("crates/covalent-protocol"),
     )
     outputs.dir(layout.buildDirectory.dir("generated/jniLibs"))
+    // Recheck the external pinned NDK, its exact notices, and final link evidence.
+    outputs.upToDateWhen { false }
 }
 
 val buildAndroidSyncEngine = tasks.register<Exec>("buildAndroidSyncEngine") {
@@ -246,6 +254,8 @@ val buildAndroidSyncEngine = tasks.register<Exec>("buildAndroidSyncEngine") {
             covalentRepoRoot.resolve("scripts/android-native-budgets.sh"),
             covalentRepoRoot.resolve("scripts/collect-go-target-license-inventory.py"),
             covalentRepoRoot.resolve("scripts/collect-sync-engine-notices.py"),
+            covalentRepoRoot.resolve("scripts/collect-android-native-link-provenance.py"),
+            covalentRepoRoot.resolve("scripts/android-go-link-wrapper.sh"),
             covalentRepoRoot.resolve("packaging/sync-engine/engine-guardian.c"),
             covalentRepoRoot.resolve("docs/licenses/sync-engine/OFL-1.1.txt"),
             covalentRepoRoot.resolve("LICENSE"),

@@ -562,6 +562,25 @@ impl FolderSyncService {
             .await
     }
 
+    /// Apply one peer withdrawal already authenticated by the folder-control
+    /// envelope. The peer is not notified again from this node.
+    pub async fn receive_removal(
+        &self,
+        notice: &super::FolderRemovalNotice,
+    ) -> Result<CommittedMutation<()>, FolderSyncServiceError> {
+        self.mutate(|journal| journal.receive_removal(notice)).await
+    }
+
+    /// Durably retire a removal outbox entry after an authenticated peer ACK.
+    pub(crate) async fn acknowledge_removal(
+        &self,
+        peer_id: DeviceId,
+        current_offer_id: Uuid,
+    ) -> Result<CommittedMutation<()>, FolderSyncServiceError> {
+        self.mutate(|journal| journal.acknowledge_removal(peer_id, current_offer_id))
+            .await
+    }
+
     pub async fn pause(
         &self,
         offer_id: Uuid,

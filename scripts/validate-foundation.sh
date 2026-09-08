@@ -80,6 +80,11 @@ scripts/test-linux-sync-engine-notice-packaging.sh
 scripts/collect-go-target-license-inventory.py
 scripts/test-collect-go-target-license-inventory.py
 scripts/collect-sync-engine-notices.py
+scripts/collect-android-native-link-provenance.py
+scripts/android-go-link-wrapper.sh
+scripts/android-native-library-directory.py
+scripts/test-android-native-library-directory.py
+scripts/test-collect-android-native-link-provenance.py
 scripts/container-folder-sync-e2e.py
 scripts/test-collect-sync-engine-notices.py
 docs/security/syncthing-target-license-inventory.md
@@ -155,6 +160,8 @@ node ./scripts/test-setup-guidance.mjs
 ./scripts/test-macos-sync-engine-packaging.sh
 ./scripts/test-android-native-package.sh
 python3 -B ./scripts/test-collect-sync-engine-notices.py
+python3 -B ./scripts/test-collect-android-native-link-provenance.py
+python3 -B ./scripts/test-android-native-library-directory.py
 python3 -B ./scripts/test-collect-go-target-license-inventory.py
 ./scripts/test-linux-sync-engine-notice-packaging.sh
 ./scripts/test-personal-android-apk-builder.sh

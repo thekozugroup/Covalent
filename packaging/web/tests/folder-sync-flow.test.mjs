@@ -137,6 +137,24 @@ test("renewal metadata defaults safely and rejects ambiguous or excessive old id
     .shares[0].supersededOfferIds, [oldId]);
 });
 
+test("removal remains visible until the peer acknowledges and keeps old invitation IDs", () => {
+  const oldId = "55555555-5555-4555-8555-555555555555";
+  const snapshot = folders.requireStatus(status({ shares: [share({
+    phase: "removed", remoteRemovalPending: true, supersededOfferIds: [oldId],
+  })] }));
+  const removed = snapshot.shares[0];
+  assert.deepEqual(removed.supersededOfferIds, [oldId]);
+  assert.equal(removed.remoteRemovalPending, true);
+  assert.match(folders.shareView(snapshot, removed).text, /Stopped here.*confirm removal/);
+  assert.equal(folders.shareView(snapshot, { ...removed, remoteRemovalPending: false }).text,
+    "Sharing stopped. Files stay on both devices.");
+  assert.equal(folders.requireStatus(status({ shares: [share()] })).shares[0].remoteRemovalPending, false);
+  for (const value of [null, 1, "true", []]) {
+    assert.throws(() => folders.requireStatus(status({ shares: [share({ phase: "removed", remoteRemovalPending: value })] })));
+  }
+  assert.throws(() => folders.requireStatus(status({ shares: [share({ remoteRemovalPending: true })] })));
+});
+
 test("lost renewal response retries the expired ID and preserves an unrelated draft", async () => {
   const storage = new MemoryStorage();
   const draft = { peerId, folderId, label: "Other plans", selectedRoot: "/other" };

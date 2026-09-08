@@ -488,10 +488,23 @@ fn renewal_quota_accepts_the_last_slot_and_rejects_the_next_without_mutation() {
         SharingError::LimitExceeded
     );
     assert_eq!(first.revision(), revision);
+    first.remove(renewed.offer_id).unwrap();
+    let records = first.outbound_records().unwrap();
+    let FolderShareRecord::Removal(notice) = &records[0].record else {
+        panic!("expected removal notice");
+    };
+    assert_eq!(notice.offer_ids.len(), MAX_REMOVAL_OFFER_IDS);
     drop(first);
     let reopened = a.reopen();
+    assert_eq!(reopened.snapshot.tombstones.len(), MAX_REMOVAL_OFFER_IDS);
     assert_eq!(
-        reopened.snapshot.shares[0].superseded_offers.len(),
+        reopened.snapshot.pending_remote_removals[0].offer_ids.len(),
+        MAX_REMOVAL_OFFER_IDS
+    );
+    let summaries = reopened.summaries().unwrap();
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(
+        summaries[0].superseded_offer_ids.len(),
         MAX_RENEWALS_PER_SHARE
     );
 }
@@ -763,7 +776,7 @@ fn pending_peer_quota_preserves_capacity_and_removed_history_is_compact() {
 }
 
 #[test]
-fn expired_tombstones_are_reclaimed_without_clock_rollback_resurrection() {
+fn canonical_removed_status_survives_freshness_advance_without_resurrection() {
     let a = Device::new("Mac", 43341);
     let b = Device::new("Docker", 43342);
     pair(&a, &b);
@@ -772,9 +785,13 @@ fn expired_tombstones_are_reclaimed_without_clock_rollback_resurrection() {
     let (offer, _, commit) = share(&a, &b, &mut first, &mut second);
     second.remove(offer.offer_id).unwrap();
     second
+        .acknowledge_removal(a.engine.device_id(), offer.offer_id)
+        .unwrap();
+    second
         .advance_freshness_floor(2000 + INVITATION_LIFETIME_MS + 5 * 60 * 1000 + 1)
         .unwrap();
-    assert!(second.snapshot.tombstones.is_empty());
+    assert_eq!(second.snapshot.tombstones.len(), 1);
+    assert_eq!(second.summaries().unwrap()[0].phase, SharingPhase::Removed);
     drop(second);
     let mut second = b.reopen();
     assert_eq!(
@@ -904,10 +921,318 @@ fn durable_delivery_records_resume_exactly_and_stop_after_removal_or_revocation(
     second.receive_commit(offer.offer_id, commit).unwrap();
     assert!(second.outbound_records().unwrap().is_empty());
     first.remove(offer.offer_id).unwrap();
+    let outgoing = first.outbound_records().unwrap();
+    assert_eq!(outgoing.len(), 1);
+    assert!(matches!(
+        &outgoing[0].record,
+        FolderShareRecord::Removal(notice)
+            if notice.requester_id == a.engine.device_id()
+                && notice.target_id == b.engine.device_id()
+                && notice.offer_source_id == a.engine.device_id()
+                && notice.folder_id == offer.folder_id
+                && notice.offer_ids == [offer.offer_id]
+    ));
+    first
+        .acknowledge_removal(b.engine.device_id(), offer.offer_id)
+        .unwrap();
     assert!(first.outbound_records().unwrap().is_empty());
     b.engine.revoke_peer(a.engine.device_id()).unwrap();
     assert!(second.outbound_records().unwrap().is_empty());
     assert_eq!(second.summaries().unwrap()[0].phase, SharingPhase::Removed);
+}
+
+#[test]
+fn remote_removal_replays_across_restart_matches_renewal_prefix_and_keeps_files() {
+    let a = Device::new("Mac", 43373);
+    let b = Device::new("Docker", 43374);
+    let c = Device::new("Other", 43375);
+    pair(&a, &b);
+    pair(&b, &c);
+    std::fs::write(a.files().join("source.txt"), b"source bytes").unwrap();
+    std::fs::write(b.files().join("target.txt"), b"target bytes").unwrap();
+    let mut first = a.journal();
+    let mut second = b.journal();
+    let offer = first
+        .offer(
+            b.engine.device_id(),
+            Uuid::new_v4(),
+            "Documents",
+            &a.files(),
+            2_000,
+        )
+        .unwrap();
+    second.receive_offer(offer.clone(), 2_001).unwrap();
+    let first_renewal = first
+        .renew_offer(offer.offer_id, offer.expires_at_unix_ms)
+        .unwrap();
+    let renewed = first
+        .renew_offer(first_renewal.offer_id, first_renewal.expires_at_unix_ms)
+        .unwrap();
+    first.remove(renewed.offer_id).unwrap();
+    let summaries = first.summaries().unwrap();
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].offer_id, renewed.offer_id);
+    assert_eq!(
+        summaries[0].superseded_offer_ids,
+        [offer.offer_id, first_renewal.offer_id]
+    );
+    assert!(summaries[0].remote_removal_pending);
+    drop(first);
+
+    let mut first = a.reopen();
+    let records = first.outbound_records().unwrap();
+    let notice = match &records[0].record {
+        FolderShareRecord::Removal(notice) => notice.clone(),
+        other => panic!("expected removal, got {other:?}"),
+    };
+    assert_eq!(
+        notice.offer_ids,
+        [offer.offer_id, first_renewal.offer_id, renewed.offer_id]
+    );
+
+    let revision = second.revision();
+    let mut wrong = notice.clone();
+    wrong.folder_id = Uuid::new_v4();
+    assert_eq!(
+        second.receive_removal(&wrong).unwrap_err(),
+        SharingError::InvalidRecord
+    );
+    wrong = notice.clone();
+    wrong.requester_id = c.engine.device_id();
+    assert_eq!(
+        second.receive_removal(&wrong).unwrap_err(),
+        SharingError::InvalidRecord
+    );
+    wrong = notice.clone();
+    wrong.offer_ids[0] = Uuid::new_v4();
+    assert_eq!(
+        second.receive_removal(&wrong).unwrap_err(),
+        SharingError::InvalidRecord
+    );
+    wrong = notice.clone();
+    wrong.offer_ids.push(wrong.offer_ids[0]);
+    assert_eq!(
+        second.receive_removal(&wrong).unwrap_err(),
+        SharingError::InvalidRecord
+    );
+    wrong = notice.clone();
+    wrong.offer_ids.clear();
+    assert_eq!(
+        second.receive_removal(&wrong).unwrap_err(),
+        SharingError::InvalidRecord
+    );
+    wrong = notice.clone();
+    wrong.offer_ids = (1..=MAX_REMOVAL_OFFER_IDS + 1)
+        .map(|value| Uuid::from_u128(value as u128))
+        .collect();
+    assert_eq!(
+        second.receive_removal(&wrong).unwrap_err(),
+        SharingError::InvalidRecord
+    );
+    assert_eq!(second.revision(), revision);
+
+    second.receive_removal(&notice).unwrap();
+    let removed_revision = second.revision();
+    second.receive_removal(&notice).unwrap();
+    assert_eq!(second.revision(), removed_revision);
+    assert!(second.desired_settings().unwrap().folders.is_empty());
+    assert!(second.outbound_records().unwrap().is_empty());
+    assert_eq!(
+        std::fs::read(a.files().join("source.txt")).unwrap(),
+        b"source bytes"
+    );
+    assert_eq!(
+        std::fs::read(b.files().join("target.txt")).unwrap(),
+        b"target bytes"
+    );
+
+    first
+        .acknowledge_removal(b.engine.device_id(), renewed.offer_id)
+        .unwrap();
+    let acknowledged_revision = first.revision();
+    first
+        .acknowledge_removal(b.engine.device_id(), renewed.offer_id)
+        .unwrap();
+    assert_eq!(first.revision(), acknowledged_revision);
+    assert!(
+        !first.summaries().unwrap().iter().any(|summary| {
+            summary.offer_id == renewed.offer_id && summary.remote_removal_pending
+        })
+    );
+    drop(first);
+    let mut reopened = a.reopen();
+    let current = reopened
+        .summaries()
+        .unwrap()
+        .into_iter()
+        .find(|summary| summary.offer_id == renewed.offer_id)
+        .unwrap();
+    assert_eq!(
+        current.superseded_offer_ids,
+        [offer.offer_id, first_renewal.offer_id]
+    );
+    assert!(!current.remote_removal_pending);
+    assert!(reopened.outbound_records().unwrap().is_empty());
+}
+
+#[test]
+fn removal_and_renewal_crossing_in_flight_stop_the_whole_logical_invitation() {
+    let a = Device::new("Mac", 43379);
+    let b = Device::new("Docker", 43380);
+    pair(&a, &b);
+    let mut source = a.journal();
+    let mut target = b.journal();
+    let original = source
+        .offer(
+            b.engine.device_id(),
+            Uuid::new_v4(),
+            "Documents",
+            &a.files(),
+            2_000,
+        )
+        .unwrap();
+    target.receive_offer(original.clone(), 2_001).unwrap();
+
+    // The source renews while the target is offline. The target removes the
+    // older ID it knows, so its authenticated notice is a strict prefix of the
+    // source's current chain.
+    let renewed = source
+        .renew_offer(original.offer_id, original.expires_at_unix_ms)
+        .unwrap();
+    target.remove(original.offer_id).unwrap();
+    let short_notice = match target.outbound_records().unwrap()[0].record.clone() {
+        FolderShareRecord::Removal(notice) => notice,
+        other => panic!("expected removal, got {other:?}"),
+    };
+    assert_eq!(short_notice.offer_ids, [original.offer_id]);
+    source.receive_removal(&short_notice).unwrap();
+    let removed_revision = source.revision();
+    source.receive_removal(&short_notice).unwrap();
+    assert_eq!(source.revision(), removed_revision);
+    let removed = source.summaries().unwrap();
+    assert_eq!(removed.len(), 1);
+    assert_eq!(removed[0].offer_id, renewed.offer_id);
+    assert_eq!(removed[0].superseded_offer_ids, [original.offer_id]);
+    assert_eq!(removed[0].phase, SharingPhase::Removed);
+    assert!(source.desired_settings().unwrap().folders.is_empty());
+
+    // A later full-chain retry is compatible and remains idempotent.
+    let mut full_notice = short_notice.clone();
+    full_notice.offer_ids.push(renewed.offer_id);
+    source.receive_removal(&full_notice).unwrap();
+    assert_eq!(source.revision(), removed_revision);
+    drop(source);
+
+    // The renewal cannot arrive after the refusal and revive the target, even
+    // though the target did not know its new ID when it removed the share.
+    drop(target);
+    let mut target = b.reopen();
+    assert_eq!(
+        target
+            .receive_offer(renewed.clone(), renewed.issued_at_unix_ms)
+            .unwrap_err(),
+        SharingError::Removed
+    );
+    drop(target);
+    let mut target = b.reopen();
+    assert_eq!(
+        target
+            .receive_offer(renewed, original.expires_at_unix_ms)
+            .unwrap_err(),
+        SharingError::Removed
+    );
+
+    // If removal wins before a renewal is signed, the source cannot renew the
+    // now-terminal invitation either.
+    let mut source = a.reopen();
+    assert_eq!(
+        source
+            .renew_offer(original.offer_id, original.expires_at_unix_ms)
+            .unwrap_err(),
+        SharingError::Removed
+    );
+}
+
+#[test]
+fn removal_overtakes_unseen_offer_and_permanently_blocks_its_delayed_delivery() {
+    let a = Device::new("Mac", 43376);
+    let b = Device::new("Docker", 43377);
+    let c = Device::new("Other", 43378);
+    pair(&a, &b);
+    pair(&b, &c);
+    std::fs::write(a.files().join("source.txt"), b"source remains").unwrap();
+    std::fs::write(b.files().join("target.txt"), b"target remains").unwrap();
+    let mut first = a.journal();
+    let mut second = b.journal();
+    let offer = first
+        .offer(
+            b.engine.device_id(),
+            Uuid::new_v4(),
+            "Documents",
+            &a.files(),
+            2_000,
+        )
+        .unwrap();
+    first.remove(offer.offer_id).unwrap();
+    let later = first
+        .offer(
+            b.engine.device_id(),
+            Uuid::new_v4(),
+            "Other",
+            &a.files(),
+            2_100,
+        )
+        .unwrap();
+    let records = first.outbound_records().unwrap();
+    assert!(matches!(records[0].record, FolderShareRecord::Removal(_)));
+    let notice = records
+        .into_iter()
+        .find_map(|delivery| match delivery.record {
+            FolderShareRecord::Removal(notice) => Some(notice),
+            _ => None,
+        })
+        .unwrap();
+
+    second.receive_removal(&notice).unwrap();
+    let revision = second.revision();
+    second.receive_removal(&notice).unwrap();
+    assert_eq!(second.revision(), revision);
+    assert!(second.summaries().unwrap().is_empty());
+    drop(second);
+
+    let mut second = b.reopen();
+    assert_eq!(
+        second.receive_offer(offer, 2_001).unwrap_err(),
+        SharingError::Removed
+    );
+    let collision = FolderRemovalNotice {
+        requester_id: c.engine.device_id(),
+        target_id: b.engine.device_id(),
+        offer_source_id: c.engine.device_id(),
+        folder_id: Uuid::new_v4(),
+        offer_ids: notice.offer_ids.clone(),
+    };
+    assert_eq!(
+        second.receive_removal(&collision).unwrap_err(),
+        SharingError::InvalidRecord
+    );
+    assert_eq!(second.revision(), revision);
+
+    first
+        .acknowledge_removal(b.engine.device_id(), notice.offer_ids[0])
+        .unwrap();
+    assert!(matches!(
+        first.outbound_records().unwrap()[0].record,
+        FolderShareRecord::Offer(ref pending) if pending == &later
+    ));
+    assert_eq!(
+        std::fs::read(a.files().join("source.txt")).unwrap(),
+        b"source remains"
+    );
+    assert_eq!(
+        std::fs::read(b.files().join("target.txt")).unwrap(),
+        b"target remains"
+    );
 }
 
 #[test]
@@ -1107,6 +1432,11 @@ async fn worker_free_access_recovery_lists_repairs_and_removes_across_reopen() {
         reopened.summaries().unwrap()[0].phase,
         SharingPhase::Removed
     );
+    assert!(reopened.summaries().unwrap()[0].remote_removal_pending);
+    assert!(matches!(
+        reopened.outbound_records().unwrap()[0].record,
+        FolderShareRecord::Removal(_)
+    ));
     assert!(reopened.desired_settings().unwrap().folders.is_empty());
     assert!(replacement.is_dir());
 }

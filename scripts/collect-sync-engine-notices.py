@@ -37,6 +37,7 @@ OFL_LICENSE_SHA256 = "1d361a8f8e8ce6e68457dcd93fb56e162e6baa3bbb7e7573a290d44399
 SAFE_MODULE = re.compile(r"[A-Za-z0-9._~+/-]{1,512}")
 SAFE_VERSION = re.compile(r"v[0-9A-Za-z.+~-]{1,255}")
 SAFE_TARGET = re.compile(r"[A-Za-z0-9_.+-]{1,64}")
+SAFE_TOOLCHAIN_NAME = re.compile(r"[A-Za-z0-9_.+-]{1,64}")
 HEX_SHA256 = re.compile(r"[0-9a-f]{64}")
 MODULE_SUM = re.compile(r"h1:[A-Za-z0-9+/]{43}=")
 
@@ -476,6 +477,7 @@ def _combined_notice(
     go_files: list[dict[str, Any]],
     module_rows: list[dict[str, Any]],
     source_archives: list[dict[str, Any]],
+    toolchain_notices: list[dict[str, Any]],
 ) -> bytes:
     sections: list[tuple[str, str]] = []
     for item in go_files:
@@ -501,6 +503,8 @@ def _combined_notice(
             ("Embedded Fork Awesome assets / OFL-1.1", "supplemental/OFL-1.1.txt"),
         )
     )
+    for item in toolchain_notices:
+        sections.append((item["label"], item["bundlePath"]))
     combined = bytearray(
         b"Covalent synchronized-folder engine notices\n"
         b"Exact copied texts for the compiled target graph; release review remains required.\n"
@@ -638,6 +642,7 @@ def build_bundle(
     project_license: pathlib.Path,
     ofl_license: pathlib.Path,
     output: pathlib.Path,
+    toolchain_notice_inputs: list[tuple[str, str, pathlib.Path, str]] | None = None,
 ) -> dict[str, Any]:
     inventory, inventory_raw = _read_inventory(inventory_path)
     source_root = _safe_root(source_root)
@@ -650,6 +655,36 @@ def build_bundle(
     output.mkdir(mode=0o755)
     budget = Budget()
     source_budget = SourceBudget()
+    toolchain_notice_inputs = toolchain_notice_inputs or []
+    toolchain_notices: list[dict[str, Any]] = []
+    seen_toolchain_names: set[str] = set()
+    for label, name, path, expected_digest in toolchain_notice_inputs:
+        if (
+            not label
+            or len(label.encode("utf-8")) > 256
+            or any(ord(character) < 0x20 for character in label)
+            or SAFE_TOOLCHAIN_NAME.fullmatch(name) is None
+            or name in seen_toolchain_names
+            or HEX_SHA256.fullmatch(expected_digest) is None
+        ):
+            raise NoticeError("toolchain notice descriptor is malformed")
+        seen_toolchain_names.add(name)
+        data = _exact_file(path, expected_digest, MAX_CANDIDATE_BYTES)
+        destination = f"toolchain/{name}"
+        _write_new(output / destination, data)
+        budget.files += 1
+        budget.bytes += len(data)
+        if budget.files > MAX_CANDIDATES or budget.bytes > MAX_TOTAL_BYTES:
+            raise NoticeError("notice bundle aggregate bound exceeded")
+        toolchain_notices.append(
+            {
+                "label": label,
+                "sourceName": name,
+                "bundlePath": destination,
+                "bytes": len(data),
+                "sha256": expected_digest,
+            }
+        )
 
     version_lines = (
         _read_regular(go_root / "VERSION", 128).decode("utf-8", "strict").splitlines()
@@ -896,7 +931,9 @@ def build_bundle(
     if budget.files > MAX_CANDIDATES or budget.bytes > MAX_TOTAL_BYTES:
         raise NoticeError("notice bundle aggregate bound exceeded")
 
-    combined = _combined_notice(output, go_files, module_rows, source_archives)
+    combined = _combined_notice(
+        output, go_files, module_rows, source_archives, toolchain_notices
+    )
     combined_digest = _sha256(combined)
     budget.files += 1
     budget.bytes += len(combined)
@@ -955,6 +992,14 @@ def build_bundle(
             "Confirm the recipient-facing source locations remain available for the externally distributed executable.",
         ],
     }
+    if toolchain_notices:
+        manifest["toolchainNotices"] = toolchain_notices
+        manifest["reviewRequired"] = [
+            "Classify the copied texts and retain every notice required by each exact target graph.",
+            "Confirm the classified final native link inputs match these exact NDK notice files.",
+            "Never substitute an inventory from another GOOS, GOARCH, CGO, or build-tag combination.",
+            "Confirm the recipient-facing source locations remain available for the externally distributed executable.",
+        ]
     encoded = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
     if len(encoded) > MAX_INVENTORY_BYTES:
         raise NoticeError("notice manifest bound exceeded")
@@ -971,6 +1016,13 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--guardian-source", required=True, type=pathlib.Path)
     parser.add_argument("--project-license", required=True, type=pathlib.Path)
     parser.add_argument("--ofl-license", required=True, type=pathlib.Path)
+    parser.add_argument(
+        "--toolchain-notice",
+        action="append",
+        nargs=4,
+        metavar=("LABEL", "NAME", "PATH", "SHA256"),
+        default=[],
+    )
     parser.add_argument("--output", required=True, type=pathlib.Path)
     arguments = parser.parse_args(argv)
     try:
@@ -983,6 +1035,10 @@ def main(argv: Iterable[str] | None = None) -> int:
             arguments.project_license,
             arguments.ofl_license,
             arguments.output,
+            [
+                (label, name, pathlib.Path(path), digest)
+                for label, name, path, digest in arguments.toolchain_notice
+            ],
         )
     except (NoticeError, UnicodeDecodeError) as error:
         print(f"error: {error}", file=sys.stderr)

@@ -180,6 +180,11 @@ class NoticeBundleTests(unittest.TestCase):
         )
         stored = json.loads((self.fixture.output / "manifest.json").read_text())
         self.assertEqual(stored, manifest)
+        self.assertNotIn("toolchainNotices", manifest)
+        self.assertIn(
+            "Review compiler and platform runtime material separately; it is outside the Go module graph.",
+            manifest["reviewRequired"],
+        )
         combined = (self.fixture.output / "THIRD-PARTY-NOTICES.txt").read_bytes()
         self.assertEqual(hashlib.sha256(combined).hexdigest(), manifest["combinedNotice"]["sha256"])
         self.assertIn(self.fixture.module_license, combined)
@@ -187,6 +192,99 @@ class NoticeBundleTests(unittest.TestCase):
         self.assertIn(b"MPL-2.0 corresponding source", combined)
         self.assertIn(source_record["archive"]["sha256"].encode(), combined)
         self.assertIn(b"github.com/syncthing/syncthing/tree/", combined)
+
+    def test_exact_toolchain_notices_are_bundled_without_changing_other_callers(self) -> None:
+        ndk_notice = self.fixture.root / "NOTICE"
+        toolchain_notice = self.fixture.root / "NOTICE.toolchain"
+        ndk_notice.write_bytes(b"Android NDK notice\n")
+        toolchain_notice.write_bytes(b"LLVM toolchain notice\n")
+        inputs = [
+            (
+                "Android NDK 27.1.12297006 / NOTICE",
+                "NOTICE",
+                ndk_notice,
+                hashlib.sha256(ndk_notice.read_bytes()).hexdigest(),
+            ),
+            (
+                "Android NDK 27.1.12297006 / NOTICE.toolchain",
+                "NOTICE.toolchain",
+                toolchain_notice,
+                hashlib.sha256(toolchain_notice.read_bytes()).hexdigest(),
+            ),
+        ]
+        manifest = notices.build_bundle(
+            self.fixture.inventory,
+            self.fixture.source,
+            [self.fixture.cache],
+            self.fixture.go,
+            REPOSITORY / "packaging/sync-engine/engine-guardian.c",
+            REPOSITORY / "LICENSE",
+            REPOSITORY / "docs/licenses/sync-engine/OFL-1.1.txt",
+            self.fixture.output,
+            inputs,
+        )
+        self.assertEqual(
+            [row["sourceName"] for row in manifest["toolchainNotices"]],
+            ["NOTICE", "NOTICE.toolchain"],
+        )
+        combined = (self.fixture.output / "THIRD-PARTY-NOTICES.txt").read_bytes()
+        self.assertIn(ndk_notice.read_bytes(), combined)
+        self.assertIn(toolchain_notice.read_bytes(), combined)
+        self.assertIn(b"Android NDK 27.1.12297006 / NOTICE", combined)
+        self.assertNotIn(
+            "Review compiler and platform runtime material separately",
+            manifest["reviewRequired"],
+        )
+
+    def test_toolchain_notice_digest_name_symlink_and_bound_fail_closed(self) -> None:
+        notice = self.fixture.root / "NOTICE"
+        notice.write_bytes(b"Android NDK notice\n")
+        arguments = (
+            self.fixture.inventory,
+            self.fixture.source,
+            [self.fixture.cache],
+            self.fixture.go,
+            REPOSITORY / "packaging/sync-engine/engine-guardian.c",
+            REPOSITORY / "LICENSE",
+            REPOSITORY / "docs/licenses/sync-engine/OFL-1.1.txt",
+        )
+        with self.assertRaisesRegex(notices.NoticeError, "differs"):
+            notices.build_bundle(
+                *arguments,
+                self.fixture.output,
+                [("NDK", "NOTICE", notice, "0" * 64)],
+            )
+
+        self.fixture.output = self.fixture.root / "unsafe-name"
+        with self.assertRaisesRegex(notices.NoticeError, "descriptor"):
+            notices.build_bundle(
+                *arguments,
+                self.fixture.output,
+                [("NDK", "../NOTICE", notice, hashlib.sha256(notice.read_bytes()).hexdigest())],
+            )
+
+        self.fixture.output = self.fixture.root / "linked"
+        target = self.fixture.root / "target"
+        target.write_bytes(notice.read_bytes())
+        notice.unlink()
+        notice.symlink_to(target)
+        with self.assertRaisesRegex(notices.NoticeError, "unavailable|regular file"):
+            notices.build_bundle(
+                *arguments,
+                self.fixture.output,
+                [("NDK", "NOTICE", notice, hashlib.sha256(target.read_bytes()).hexdigest())],
+            )
+
+        self.fixture.output = self.fixture.root / "oversized"
+        notice.unlink()
+        notice.write_bytes(b"x" * 32)
+        with mock.patch.object(notices, "MAX_CANDIDATE_BYTES", 16):
+            with self.assertRaisesRegex(notices.NoticeError, "bounded regular file"):
+                notices.build_bundle(
+                    *arguments,
+                    self.fixture.output,
+                    [("NDK", "NOTICE", notice, hashlib.sha256(notice.read_bytes()).hexdigest())],
+                )
 
     def test_source_archives_are_path_independent_and_mpl_dependency_is_included(self) -> None:
         mpl = b"Mozilla Public License, version 2.0\nfixture dependency\n"

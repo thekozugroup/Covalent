@@ -82,7 +82,7 @@ done
 python3 - "$package" \
   "$COVALENT_SYNC_ENGINE_MIN_BYTES" "$COVALENT_SYNC_ENGINE_MAX_BYTES" \
   "$COVALENT_ENGINE_GUARDIAN_MIN_BYTES" "$COVALENT_ENGINE_GUARDIAN_MAX_BYTES" <<'PY'
-import hashlib, pathlib, re, sys, zipfile
+import hashlib, json, pathlib, re, sys, zipfile
 
 package = pathlib.Path(sys.argv[1])
 worker_min, worker_max, guardian_min, guardian_max = map(int, sys.argv[2:])
@@ -139,6 +139,91 @@ def verify_helpers(archive, library, manifest):
         if retained != expected_size or digest.hexdigest() != expected_hash:
             raise SystemExit(f"packaged {library} hash differs from its manifest for {abi}")
 
+def read_bounded(archive, name, maximum):
+    full_name = prefix + "assets/" + name
+    if archive.namelist().count(full_name) != 1:
+        raise SystemExit(f"package must contain exactly one {full_name}")
+    info = archive.getinfo(full_name)
+    if not 0 < info.file_size <= maximum:
+        raise SystemExit(f"packaged {name} is empty or exceeds its bound")
+    return archive.read(info)
+
+def verify_notices(archive):
+    index = read_bounded(archive, "sync-engine-notices-index.txt", 1024)
+    try:
+        text = index.decode("ascii")
+    except UnicodeDecodeError:
+        raise SystemExit("packaged notice index is not ASCII")
+    lines = text.splitlines()
+    if not text.endswith("\n") or "\r" in text or len(lines) != 3 or lines[0] != "1":
+        raise SystemExit("packaged notice index is not canonical")
+    expected = {
+        "combined": ("sync-engine-notices/THIRD-PARTY-NOTICES.txt", 8 * 1024 * 1024),
+        "manifest": ("sync-engine-notices/manifest.json", 4 * 1024 * 1024),
+    }
+    verified = {}
+    for line in lines[1:]:
+        fields = line.split(" ")
+        if len(fields) != 4 or fields[0] not in expected or fields[0] in verified:
+            raise SystemExit("packaged notice index has a malformed row")
+        label, digest, size_text, path = fields
+        expected_path, maximum = expected[label]
+        if path != expected_path or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise SystemExit("packaged notice index has an invalid path or digest")
+        if not size_text.isascii() or not size_text.isdecimal() or str(int(size_text)) != size_text:
+            raise SystemExit("packaged notice index has an invalid size")
+        data = read_bounded(archive, path, maximum)
+        if len(data) != int(size_text) or hashlib.sha256(data).hexdigest() != digest:
+            raise SystemExit(f"packaged {label} notice evidence differs from its index")
+        verified[label] = data
+    if set(verified) != set(expected):
+        raise SystemExit("packaged notice index is incomplete")
+    try:
+        manifest = json.loads(verified["manifest"])
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise SystemExit("packaged notice manifest is malformed")
+    if manifest.get("schemaVersion") != 1 or manifest.get("status") != "texts-collected-review-required":
+        raise SystemExit("packaged notice manifest has an unsupported schema or status")
+    combined = verified["combined"]
+    declared_combined = manifest.get("combinedNotice")
+    if not isinstance(declared_combined, dict) or (
+        declared_combined.get("bytes") != len(combined)
+        or declared_combined.get("sha256") != hashlib.sha256(combined).hexdigest()
+    ):
+        raise SystemExit("packaged notice manifest does not bind the readable notice")
+    rows = manifest.get("toolchainNotices")
+    if not isinstance(rows, list) or len(rows) != 2:
+        raise SystemExit("packaged notice manifest lacks the exact NDK notice pair")
+    expected_names = {
+        "NOTICE": "Android NDK 27.1.12297006 / NOTICE",
+        "NOTICE.toolchain": "Android NDK 27.1.12297006 / NOTICE.toolchain",
+    }
+    seen = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise SystemExit("packaged toolchain notice row is malformed")
+        name = row.get("sourceName")
+        path = row.get("bundlePath")
+        digest = row.get("sha256")
+        size = row.get("bytes")
+        label = row.get("label")
+        if (
+            name not in expected_names or name in seen or label != expected_names[name]
+            or path != f"toolchain/{name}" or not isinstance(size, int)
+            or not 0 < size <= 2 * 1024 * 1024
+            or not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        ):
+            raise SystemExit("packaged toolchain notice row is malformed")
+        data = read_bounded(archive, "sync-engine-notices/" + path, 2 * 1024 * 1024)
+        if len(data) != size or hashlib.sha256(data).hexdigest() != digest:
+            raise SystemExit("packaged toolchain notice differs from its manifest")
+        readable_section = f"\n===== {label} =====\n".encode() + data
+        if readable_section not in combined:
+            raise SystemExit("packaged toolchain notice is absent from the readable notice")
+        seen.add(name)
+    if seen != set(expected_names):
+        raise SystemExit("packaged notice manifest lacks the exact NDK notice pair")
+
 with zipfile.ZipFile(package) as archive:
     if len(archive.namelist()) != len(set(archive.namelist())):
         raise SystemExit("package contains duplicate archive member names")
@@ -148,6 +233,7 @@ with zipfile.ZipFile(package) as archive:
         archive, "engine-guardian-sha256.txt", guardian_min, guardian_max)
     verify_helpers(archive, "libsyncthing.so", workers)
     verify_helpers(archive, "libengineguardian.so", guardians)
+    verify_notices(archive)
 PY
 
 echo "Android native package checks passed for $package."

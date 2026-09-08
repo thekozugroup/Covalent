@@ -79,7 +79,9 @@
     <string name="folder_sync_running">Folder sync is running</string>
     <string name="folder_sync_ready_to_share">Ready to share a folder</string>
     <string name="folder_sync_stop_title">Stop sharing “%1$s”?</string>
-    <string name="folder_sync_stop_detail">This phone stops exchanging changes with %1$s. Existing files stay on both devices. Sharing again requires a new invitation.</string>
+    <string name="folder_sync_stop_detail">Sync stops on this phone now and on %1$s when it reconnects. Files stay on both devices. Sharing again requires a new invitation.</string>
+    <string name="folder_sync_removal_pending">Stopped on this phone. Waiting for %1$s to confirm removal. Files stay on both devices.</string>
+    <string name="folder_sync_removed">Sharing stopped. Files stay on both devices.</string>
     <string name="folder_sync_keep_sharing">Keep sharing</string>
 
     <string name="confirm_cancel_transfer_title">Stop this transfer?</string>

@@ -8,6 +8,7 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 ndk_version=27.1.12297006
 ndk_root=${COVALENT_ANDROID_NDK_HOME:?Set COVALENT_ANDROID_NDK_HOME to Android NDK 27.1.12297006}
 output_root=${1:-"$repo_root/apps/android/app/build/generated/jniLibs"}
+link_provenance_tool="$repo_root/scripts/collect-android-native-link-provenance.py"
 
 case "$ndk_root" in
   *"/$ndk_version") ;;
@@ -17,6 +18,35 @@ test -d "$ndk_root" || {
   echo "Android NDK $ndk_version is required at $ndk_root" >&2
   exit 1
 }
+ndk_root=$(CDPATH='' cd -- "$ndk_root" && pwd -P)
+test -f "$ndk_root/source.properties" && test ! -L "$ndk_root/source.properties" || {
+  echo "Android NDK source.properties must be a regular non-symbolic-link file" >&2
+  exit 1
+}
+actual_ndk=$(awk -F= '
+  $1 ~ /^Pkg\.Revision[[:space:]]*$/ {
+    value = $2
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+    print value
+    exit
+  }
+' "$ndk_root/source.properties")
+test "$actual_ndk" = "$ndk_version" || {
+  echo "Expected Android NDK $ndk_version" >&2
+  exit 1
+}
+for notice_name in NOTICE NOTICE.toolchain; do
+  notice_path="$ndk_root/$notice_name"
+  test -f "$notice_path" && test ! -L "$notice_path" || {
+    echo "NDK $notice_name must be a regular non-symbolic-link file" >&2
+    exit 1
+  }
+  notice_size=$(wc -c < "$notice_path" | tr -d '[:space:]')
+  test "$notice_size" -gt 0 && test "$notice_size" -le 2097152 || {
+    echo "NDK $notice_name is empty or exceeds 2 MiB" >&2
+    exit 1
+  }
+done
 command -v rustup >/dev/null 2>&1 || {
   echo "cargo-ndk 4.1.2 is required: cargo install --locked cargo-ndk --version 4.1.2" >&2
   exit 1
@@ -43,7 +73,16 @@ for target in aarch64-linux-android x86_64-linux-android; do
   }
 done
 
-mkdir -p "$output_root"
+test ! -e "$output_root" && test ! -L "$output_root" || {
+  echo "Generated Android JNI output must be a new path" >&2
+  exit 1
+}
+test -d "$(dirname -- "$output_root")" || {
+  echo "Generated Android JNI output parent is missing" >&2
+  exit 1
+}
+mkdir "$output_root"
+output_root=$(CDPATH='' cd -- "$output_root" && pwd -P)
 export ANDROID_NDK_HOME="$ndk_root"
 export RUSTC="$rustc_bin"
 
@@ -84,6 +123,8 @@ test -f "$version_script" || {
   echo "Missing JNI export version script at $version_script" >&2
   exit 1
 }
+provenance_directory="$output_root/provenance"
+mkdir "$provenance_directory"
 
 for abi in arm64-v8a x86_64; do
   case "$abi" in
@@ -109,6 +150,8 @@ for abi in arm64-v8a x86_64; do
     echo "The pinned NDK clang driver for $triple$android_api is required" >&2
     exit 1
   }
+  link_map="$provenance_directory/jni-link-$abi.map"
+  driver_trace="$provenance_directory/jni-driver-$abi.txt"
 
   # --no-undefined keeps a missing runtime dependency a link error rather than
   # a load-time crash; --strip-all only drops .symtab, leaving .dynsym (and so
@@ -116,6 +159,25 @@ for abi in arm64-v8a x86_64; do
   # supported from API 23; minSdk is API 26, so this reduces load metadata on
   # every supported device without relying on unsafe identical-code folding.
   mkdir -p "$output_root/$abi"
+  "$clang_bin" -### -shared -o "$output_root/$abi/libcovalent_android_jni.so" \
+    -Wl,--version-script="$version_script" \
+    -Wl,--undefined=JNI_OnLoad \
+    -Wl,--gc-sections \
+    -Wl,--pack-dyn-relocs=android \
+    -Wl,--hash-style=both \
+    -Wl,--no-undefined \
+    -Wl,-z,max-page-size=16384 \
+    -Wl,-z,relro \
+    -Wl,-z,now \
+    -Wl,-z,noexecstack \
+    -Wl,--strip-all \
+    -Wl,-Map,"$link_map" \
+    "$archive" \
+    -llog -ldl -lm -lc >/dev/null 2> "$driver_trace"
+  test -s "$driver_trace" && test "$(wc -c < "$driver_trace" | tr -d '[:space:]')" -le 4194304 || {
+    echo "JNI Clang driver trace for $abi is empty or exceeds 4 MiB" >&2
+    exit 1
+  }
   "$clang_bin" -shared -o "$output_root/$abi/libcovalent_android_jni.so" \
     -Wl,--version-script="$version_script" \
     -Wl,--undefined=JNI_OnLoad \
@@ -128,13 +190,23 @@ for abi in arm64-v8a x86_64; do
     -Wl,-z,now \
     -Wl,-z,noexecstack \
     -Wl,--strip-all \
+    -Wl,-Map,"$link_map" \
     "$archive" \
     -llog -ldl -lm -lc
+  test -s "$link_map" && test "$(wc -c < "$link_map" | tr -d '[:space:]')" -le 134217728 || {
+    echo "JNI final link map for $abi is empty or exceeds 128 MiB" >&2
+    exit 1
+  }
 done
 
 llvm_readobj=$(find "$ndk_root/toolchains/llvm/prebuilt" -type f -path '*/bin/llvm-readobj' -print -quit)
+llvm_readelf=$(find "$ndk_root/toolchains/llvm/prebuilt" -type f -path '*/bin/llvm-readelf' -print -quit)
 test -x "$llvm_readobj" || {
   echo "The pinned NDK llvm-readobj is required to verify Android JNI libraries" >&2
+  exit 1
+}
+test -x "$llvm_readelf" || {
+  echo "The pinned NDK llvm-readelf is required to record Android JNI dependencies" >&2
   exit 1
 }
 
@@ -182,6 +254,22 @@ for abi in arm64-v8a x86_64; do
     exit 1
   }
   "$llvm_readobj" --dyn-symbols "$library" > "$symbols_directory/$abi.txt"
+  dynamic_report="$provenance_directory/jni-dynamic-$abi.txt"
+  "$llvm_readelf" -dW "$library" > "$dynamic_report"
+  test "$(wc -c < "$dynamic_report" | tr -d '[:space:]')" -le 1048576 || {
+    echo "JNI dynamic report for $abi exceeds 1 MiB" >&2
+    exit 1
+  }
+  python3 "$link_provenance_tool" \
+    --component jni \
+    --abi "$abi" \
+    --ndk-root "$ndk_root" \
+    --expected-revision "$ndk_version" \
+    --link-map "$provenance_directory/jni-link-$abi.map" \
+    --driver-trace "$provenance_directory/jni-driver-$abi.txt" \
+    --dynamic-report "$dynamic_report" \
+    --binary "$library" \
+    --output "$provenance_directory/jni-link-provenance-$abi.json"
   # Audit only symbols this library *defines*. The previous `sed` matched every
   # `Name:` line in the report, so it also flagged all ~68 imported libc symbols
   # (`read@LIBC`, `malloc@LIBC`, ...) plus the report's own `LoadName: <Not
@@ -245,3 +333,9 @@ shasum -a 256 "$output_root"/arm64-v8a/libcovalent_android_jni.so \
   "$output_root"/covalent-android-native-licenses.json \
   > "$output_root/covalent-android-native-checksums.sha256"
 tar -czf "$output_root/covalent-android-native-symbols.tar.gz" -C "$symbols_directory" .
+shasum -a 256 \
+  "$provenance_directory"/jni-driver-*.txt \
+  "$provenance_directory"/jni-dynamic-*.txt \
+  "$provenance_directory"/jni-link-*.map \
+  "$provenance_directory"/jni-link-provenance-*.json \
+  > "$output_root/covalent-android-native-provenance.sha256"

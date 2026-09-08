@@ -358,6 +358,87 @@ private func folderStatusJSON(
     #expect(FileManager.default.fileExists(atPath: root.path))
 }
 
+@Test @MainActor func remoteRemovalRetriesScopeRetirementAndPreservesFiles() async throws {
+    try await removalRetirementJourney(localRemoval: false)
+}
+
+@Test @MainActor func localRemovalRetriesFailedScopeRetirementOnNextRefresh() async throws {
+    try await removalRetirementJourney(localRemoval: true)
+}
+
+@Test @MainActor func remoteRemovalRetiresAPendingRepairAfterItsResponseWasLost() async throws {
+    try await removalRetirementJourney(localRemoval: false, pendingRepair: true)
+}
+
+@MainActor private func removalRetirementJourney(localRemoval: Bool, pendingRepair: Bool = false) async throws {
+    let fixture = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let root = fixture.appending(path: "destination")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let file = root.appending(path: "keep.txt")
+    let bytes = Data("Keep this file after removal".utf8)
+    try bytes.write(to: file)
+    let grant = try SelectedDirectoryGrant.capture(url: root, purpose: .folderSync)
+    let offer = UUID(), folder = UUID(), peer = UUID()
+    let persistence = AppleAppPersistence(directoryURL: fixture.appending(path: "state"))
+    let sequence = RequestSequence()
+    let removalStep = pendingRepair ? 3 : 2
+    let recorder = RequestRecorder(removeAfterRequest: false) { request in
+        let step = sequence.next()
+        switch step {
+        case 0:
+            #expect(request.url?.path == "/api/v1/sync/accept")
+            return TestResponse.response(request, status: 200, json: mutationJSON(offer: offer))
+        case 1:
+            if pendingRepair {
+                return TestResponse.response(request, status: 200, json: folderStatusJSON(
+                    offer: offer, folder: folder, peer: peer, issue: "folderAccess"
+                ))
+            }
+            return TestResponse.response(request, status: 200, json: renewalModelStatus(
+                offer: offer, folder: folder, peer: peer, incoming: true, phase: "ready"
+            ))
+        case 2 where pendingRepair:
+            #expect(request.url?.path == "/api/v1/sync/repair")
+            throw URLError(.networkConnectionLost)
+        case _ where localRemoval && step == removalStep:
+            #expect(request.url?.path == "/api/v1/sync/remove")
+            return TestResponse.response(request, status: 200, json: mutationJSON(offer: offer))
+        case _ where step == removalStep || step == removalStep + 1:
+            #expect(request.url?.path == "/api/v1/sync/status")
+            return TestResponse.response(request, status: 200, json: renewalModelStatus(
+                offer: offer, folder: folder, peer: peer, incoming: true, phase: "removed"
+            ))
+        default:
+            Issue.record("Unexpected removal request")
+            return TestResponse.response(request, status: 500, json: "{}")
+        }
+    }
+    let (model, bootstrapper) = try renewalModel(recorder: recorder, persistence: persistence)
+    #expect(await model.acceptFolder(offerId: offer, grant: grant))
+    if pendingRepair {
+        let replacementRoot = fixture.appending(path: "replacement")
+        try FileManager.default.createDirectory(at: replacementRoot, withIntermediateDirectories: true)
+        let replacement = try SelectedDirectoryGrant.capture(url: replacementRoot, purpose: .folderSync)
+        #expect(!(await model.repairFolderAccess(offerId: offer, grant: replacement)))
+        #expect(model.pendingFolderRepairs.count == 1)
+        #expect(bootstrapper.pendingRepairRestartCalls == 1)
+    }
+    bootstrapper.restartFailuresRemaining = 1
+    if localRemoval { await model.removeFolder(offer) }
+    else { await model.refreshFolders() }
+    #expect(model.directoryGrants.isEmpty)
+    #expect(try await persistence.loadDirectoryGrants().isEmpty)
+    #expect(model.pendingFolderRepairs.isEmpty)
+    #expect(try await persistence.loadPendingFolderRepairs().isEmpty)
+    #expect(bootstrapper.restartCalls == 2)
+    await model.refreshFolders()
+    #expect(bootstrapper.restartCalls == 3)
+    #expect(model.folderSyncStatus?.shares.first?.phase == .removed)
+    #expect(!model.folderSyncMutationInFlight)
+    #expect(try Data(contentsOf: file) == bytes)
+}
+
 @MainActor private func renewalModel(
     recorder: RequestRecorder, persistence: AppleAppPersistence
 ) throws -> (CovalentAppModel, FolderGrantBootstrapper) {

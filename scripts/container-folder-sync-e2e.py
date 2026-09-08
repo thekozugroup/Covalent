@@ -314,7 +314,10 @@ class Fixture:
         self.write("b", "reverse.txt", reverse)
         self.wait(lambda: self.matches("a", "reverse.txt", reverse), "reverse transfer after restart")
         self.checks.append("durable-identity-restart-and-reverse-transfer")
-        self.phase = "local removal and file preservation"
+        self.phase = "offline peer removal and file preservation"
+        # Pause only this fixture's recipient. Its network identity and mounted
+        # files remain allocated while it cannot acknowledge a control request.
+        docker("pause", self.nodes["b"]["name"])
         self.request("a", "/api/v1/sync/remove", {"offerId": offer_id})
         if not self.matches("a", "forward.txt", paused_payload) or not self.matches("a", "reverse.txt", reverse):
             raise GateError("local removal changed selected files")
@@ -322,6 +325,41 @@ class Fixture:
         if not self.matches("a", "forward.txt", paused_payload) or not self.matches("a", "reverse.txt", reverse):
             raise GateError("completed local removal changed selected files")
         self.checks.append("local-removal-preserves-files-and-stops-worker")
+
+        def removed(key: str, pending: bool) -> bool:
+            status = self.status(key)
+            rows = [row for row in status["shares"] if row["offerId"] == offer_id]
+            return (len(rows) == 1 and rows[0]["phase"] == "removed"
+                    and rows[0].get("remoteRemovalPending") is pending
+                    and status["lifecycle"] == "stopped")
+
+        self.wait(lambda: removed("a", True), "durable offline removal")
+        self.phase = "pending removal survives sender cold restart"
+        sender_identity = self.request("a", "/api/v1/transport/identity")
+        docker("stop", "--time=20", self.nodes["a"]["name"])
+        docker("start", self.nodes["a"]["name"])
+        self.refresh_endpoint("a")
+        self.wait(lambda: self.request("a", "/api/v1/status").get("state") == "ready", "sender cold restart")
+        if self.request("a", "/api/v1/transport/identity") != sender_identity:
+            raise GateError("sender cold restart replaced identity")
+        self.wait(lambda: removed("a", True), "cold pending removal")
+        self.checks.append("offline-removal-outbox-survives-sender-cold-restart")
+
+        self.phase = "authenticated removal delivery and acknowledgement"
+        docker("unpause", self.nodes["b"]["name"])
+        self.wait(lambda: removed("b", False), "signed removal delivery without echo")
+        self.wait(lambda: removed("a", False), "durable authenticated removal acknowledgement")
+        docker("stop", "--time=20", self.nodes["b"]["name"])
+        docker("start", self.nodes["b"]["name"])
+        self.refresh_endpoint("b")
+        self.wait(lambda: self.request("b", "/api/v1/status").get("state") == "ready", "removed recipient cold restart")
+        if self.request("b", "/api/v1/transport/identity") != before:
+            raise GateError("removed recipient cold restart replaced identity")
+        self.wait(lambda: removed("b", False), "cold recipient removal")
+        for key in ("a", "b"):
+            if not self.matches(key, "forward.txt", paused_payload) or not self.matches(key, "reverse.txt", reverse):
+                raise GateError("remote removal changed an existing file")
+        self.checks.append("signed-remote-removal-acknowledgement-and-recipient-cold-restart-keep-both-copies")
 
     @staticmethod
     def exists(kind: str, name: str) -> bool:
@@ -342,6 +380,8 @@ class Fixture:
                 if row["Config"]["Labels"].get("covalent.sync-gate") != self.prefix:
                     raise GateError("container ownership differs")
                 try:
+                    if row["State"].get("Paused"):
+                        docker("unpause", name)
                     docker("stop", "--time=20", name)
                     if self.exists("container", name):
                         stopped = json.loads(docker("inspect", name))[0]["State"]

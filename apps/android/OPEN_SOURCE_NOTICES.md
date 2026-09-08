@@ -7,8 +7,12 @@ and Covalent's preserved Open Font License text. The generator records exact sou
 and emits both a combined readable notice and a byte-exact manifest. The app verifies their
 declared lengths and SHA-256 digests before showing the combined notice under Settings.
 
-The generated manifest deliberately reports `texts-collected-review-required`. It is an
-inventory and distribution mechanism, not legal approval. Before a release, the Android NDK
-and Android platform runtime linkage must still be classified against the exact packaged ELF
-dependency reports. That review is separate because bionic and platform libraries are supplied
-by Android rather than copied into this APK.
+The Android build also retains bounded final-link maps, exact Clang driver traces, and complete
+dynamic-dependency reports for the worker, guardian, and JNI library. It classifies every NDK
+input that contributed sections, records the exact pinned NDK revision, and bundles that NDK's
+full `NOTICE` and `NOTICE.toolchain` files with verified lengths and SHA-256 digests. Android's
+dynamic platform libraries remain supplied by the device rather than copied into this APK.
+
+The generated manifest deliberately reports `texts-collected-review-required`. These records
+are an inventory and distribution mechanism, not legal approval. Release review must still
+confirm that the classified link inputs and copied notices satisfy each component's terms.

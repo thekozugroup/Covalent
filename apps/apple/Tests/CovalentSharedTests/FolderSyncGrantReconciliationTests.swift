@@ -29,6 +29,52 @@ import Testing
   #expect(try FolderSyncGrantReconciliation.reconcile([grant], with: renewalStatus([])) == [grant])
 }
 
+@Test func explicitRemovalRetiresBothDevicesGrantsAndKeepsUnrelatedAccess() throws {
+  let source = renewalGrant(UUID())
+  let recipient = renewalGrant(UUID())
+  let unrelated = renewalGrant(UUID())
+  let legacy = renewalGrant(nil)
+  let backup = SelectedDirectoryGrant(
+    displayName: "Backup", purpose: .backupSource, bookmarkData: Data([4, 5, 6])
+  )
+  let snapshot = renewalStatus([
+    renewalShare(offerID: source.folderOfferId!, incoming: false, superseded: [], phase: .removed),
+    renewalShare(offerID: recipient.folderOfferId!, incoming: true, superseded: [], phase: .removed),
+  ])
+  #expect(try FolderSyncGrantReconciliation.reconcile(
+    [source, recipient, unrelated, legacy, backup], with: snapshot
+  ) == [unrelated, legacy, backup])
+}
+
+@Test func removalAfterMissedRenewalRetiresOldBookmarkWithoutRebindingIt() throws {
+  for incoming in [false, true] {
+    let old = renewalGrant(UUID())
+    let removed = renewalShare(incoming: incoming, superseded: [old.folderOfferId!], phase: .removed)
+    #expect(try FolderSyncGrantReconciliation.reconcile([old], with: renewalStatus([removed])).isEmpty)
+  }
+}
+
+@Test func removalMetadataRequiresABooleanOnAnExplicitRemovedRow() throws {
+  let row = renewalShare(incoming: false, superseded: [], phase: .removed)
+  let encoded = try JSONEncoder().encode(row)
+  var json = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+  json.removeValue(forKey: "remoteRemovalPending")
+  #expect(try JSONDecoder().decode(FolderShare.self, from: JSONSerialization.data(withJSONObject: json)).remoteRemovalPending == false)
+  json["remoteRemovalPending"] = true
+  #expect(try JSONDecoder().decode(FolderShare.self, from: JSONSerialization.data(withJSONObject: json)).remoteRemovalPending)
+  for invalid in [NSNull(), "true", 1] as [Any] {
+    json["remoteRemovalPending"] = invalid
+    #expect(throws: (any Error).self) {
+      try JSONDecoder().decode(FolderShare.self, from: JSONSerialization.data(withJSONObject: json))
+    }
+  }
+  json["remoteRemovalPending"] = true
+  json["phase"] = "ready"
+  #expect(throws: NodeClientError.self) {
+    try JSONDecoder().decode(FolderShare.self, from: JSONSerialization.data(withJSONObject: json))
+  }
+}
+
 @Test func ambiguousAndOversizedRenewalRelationshipsFailBeforeGrantChanges() throws {
   let oldID = UUID()
   let grant = renewalGrant(oldID)
@@ -75,11 +121,11 @@ private func renewalGrant(_ offerID: UUID?) -> SelectedDirectoryGrant {
 }
 
 private func renewalShare(
-  offerID: UUID = UUID(), incoming: Bool, superseded: [UUID]
+  offerID: UUID = UUID(), incoming: Bool, superseded: [UUID], phase: FolderSharePhase = .offered
 ) -> FolderShare {
   FolderShare(
     offerId: offerID, folderId: UUID(), label: "Plans", peerId: UUID(),
-    incoming: incoming, phase: .offered, expiresAtUnixMs: 100, expired: false,
+    incoming: incoming, phase: phase, expiresAtUnixMs: 100, expired: false,
     supersededOfferIds: superseded
   )
 }

@@ -126,8 +126,8 @@ async fn deliver(
     service: Arc<FolderSyncService>,
     pending: Pending,
 ) -> Option<[u8; 32]> {
-    let (operation, acceptance_id) = match pending.delivery.record {
-        FolderShareRecord::Offer(offer) => (FolderControlOperation::SendOffer(offer), None),
+    let (operation, acceptance_id, removal_ack) = match pending.delivery.record {
+        FolderShareRecord::Offer(offer) => (FolderControlOperation::SendOffer(offer), None, None),
         FolderShareRecord::Acceptance {
             offer_id,
             acceptance,
@@ -137,18 +137,33 @@ async fn deliver(
                 acceptance,
             },
             Some(offer_id),
+            None,
         ),
         FolderShareRecord::Commit { offer_id, commit } => (
             FolderControlOperation::SendCommit { offer_id, commit },
             None,
+            None,
         ),
+        FolderShareRecord::Removal(notice) => {
+            let current = *notice.offer_ids.last()?;
+            let peer = notice.target_id;
+            (
+                FolderControlOperation::SendRemoval(notice),
+                None,
+                Some((peer, current)),
+            )
+        }
     };
     let response = send_folder_control(engine, pending.delivery.peer_transport, operation)
         .await
         .ok()?;
-    match (acceptance_id, response) {
-        (None, FolderControlPayload::Ack) => Some(pending.key),
-        (Some(offer_id), FolderControlPayload::Commit(commit)) => {
+    match (acceptance_id, removal_ack, response) {
+        (None, Some((peer, offer_id)), FolderControlPayload::Ack) => {
+            service.acknowledge_removal(peer, offer_id).await.ok()?;
+            Some(pending.key)
+        }
+        (None, None, FolderControlPayload::Ack) => Some(pending.key),
+        (Some(offer_id), None, FolderControlPayload::Commit(commit)) => {
             service.receive_commit(offer_id, commit).await.ok()?;
             Some(pending.key)
         }

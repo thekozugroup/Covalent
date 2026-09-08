@@ -129,13 +129,14 @@
       const peerConnection = Object.prototype.hasOwnProperty.call(share, "peerConnection")
         ? share.peerConnection : "unknown";
       const superseded = Object.hasOwn(share, "supersededOfferIds") ? share.supersededOfferIds : [];
-      if (!Array.isArray(superseded) || superseded.length > 128
-        || share.phase === "removed" && superseded.length !== 0) {
+      const remoteRemovalPending = Object.hasOwn(share, "remoteRemovalPending") ? share.remoteRemovalPending : false;
+      if (!Array.isArray(superseded) || superseded.length > 128) {
         throw guidance("The node returned invalid replacement invitations.");
       }
       if (!PHASES.has(share.phase) || !CONNECTION_STATES.has(peerConnection)
         || typeof share.incoming !== "boolean"
         || typeof share.expired !== "boolean"
+        || typeof remoteRemovalPending !== "boolean" || remoteRemovalPending && share.phase !== "removed"
         || !(share.expiresAtUnixMs === null || share.expiresAtUnixMs === undefined
           || Number.isSafeInteger(share.expiresAtUnixMs) && share.expiresAtUnixMs >= 0)) {
         throw guidance("The node returned an invalid shared-folder state.");
@@ -151,6 +152,7 @@
         // The server owns expiry. Browser clock arithmetic must never override it.
         expired: share.expired,
         peerConnection,
+        remoteRemovalPending,
         supersededOfferIds: Object.freeze(superseded.map((id) => uuid(id))),
       });
     });
@@ -235,6 +237,11 @@
   }
 
   function shareView(status, share) {
+    if (share.phase === "removed") return Object.freeze({
+      kind: "removed", text: share.remoteRemovalPending
+        ? "Stopped here. Waiting for the other device to confirm removal. Files stay on both devices."
+        : "Sharing stopped. Files stay on both devices.",
+    });
     if (share.expired) return Object.freeze({ kind: "expired", text: "Invitation expired" });
     if (share.phase === "paused") return Object.freeze({ kind: "paused", text: "Paused" });
     if (status.lifecycle === "initialScanning") return Object.freeze({ kind: "checking", text: "Checking folder" });

@@ -63,6 +63,16 @@ fn operation(source: DeviceId) -> FolderControlOperation {
     }
 }
 
+fn removal_operation(source: DeviceId, target: DeviceId) -> FolderControlOperation {
+    FolderControlOperation::SendRemoval(crate::sync_engine::FolderRemovalNotice {
+        requester_id: source,
+        target_id: target,
+        offer_source_id: source,
+        folder_id: uuid::Uuid::new_v4(),
+        offer_ids: vec![uuid::Uuid::new_v4(), uuid::Uuid::new_v4()],
+    })
+}
+
 fn resign(engine: &Engine, request: &mut FolderControlRequest) {
     request.signature = engine.sign_transport_transcript_with_domain(
         REQUEST_DOMAIN,
@@ -189,6 +199,74 @@ fn request_rejects_forwarding_version_time_and_signature_tampering() {
     resign(&source.engine, &mut noncanonical_nonce);
     assert_eq!(
         verify(&noncanonical_nonce),
+        Err(FolderControlError::Rejected)
+    );
+}
+
+#[test]
+fn removal_request_binds_both_peers_folder_and_complete_offer_chain() {
+    let source = test_engine();
+    let target = test_engine();
+    let other = test_engine();
+    let fingerprint = "c".repeat(64);
+    let request = sign_request(
+        &source.engine,
+        target.engine.device_id(),
+        &fingerprint,
+        removal_operation(source.engine.device_id(), target.engine.device_id()),
+    )
+    .expect("signed removal request");
+    verify_request(
+        &request,
+        target.engine.device_id(),
+        &fingerprint,
+        &source.engine.public_identity(),
+        &mut FolderControlReplay::default(),
+        request.issued_at_unix_ms,
+    )
+    .expect("authenticated removal request");
+
+    let mut altered_folder = request.clone();
+    let FolderControlOperation::SendRemoval(notice) = &mut altered_folder.operation else {
+        panic!("removal operation");
+    };
+    notice.folder_id = uuid::Uuid::new_v4();
+    assert_eq!(
+        verify_request(
+            &altered_folder,
+            target.engine.device_id(),
+            &fingerprint,
+            &source.engine.public_identity(),
+            &mut FolderControlReplay::default(),
+            altered_folder.issued_at_unix_ms,
+        ),
+        Err(FolderControlError::Rejected)
+    );
+
+    let mut altered_chain = request.clone();
+    let FolderControlOperation::SendRemoval(notice) = &mut altered_chain.operation else {
+        panic!("removal operation");
+    };
+    notice.offer_ids.reverse();
+    assert_eq!(
+        verify_request(
+            &altered_chain,
+            target.engine.device_id(),
+            &fingerprint,
+            &source.engine.public_identity(),
+            &mut FolderControlReplay::default(),
+            altered_chain.issued_at_unix_ms,
+        ),
+        Err(FolderControlError::Rejected)
+    );
+
+    assert_eq!(
+        sign_request(
+            &source.engine,
+            target.engine.device_id(),
+            &fingerprint,
+            removal_operation(source.engine.device_id(), other.engine.device_id()),
+        ),
         Err(FolderControlError::Rejected)
     );
 }

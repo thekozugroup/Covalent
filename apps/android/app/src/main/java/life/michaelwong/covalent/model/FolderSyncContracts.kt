@@ -34,17 +34,21 @@ data class FolderShare(
     val expired: Boolean,
     val peerConnection: PeerConnectionState = PeerConnectionState.UNKNOWN,
     val supersededOfferIds: List<String> = emptyList(),
+    val remoteRemovalPending: Boolean = false,
 )
 
 enum class FolderSharePhase { OFFERED, AWAITING_COMMIT, READY, PAUSED, REMOVED }
 
 enum class FolderShareSummary {
     INVITATION_EXPIRED, PAUSED, CHECKING, NEEDS_ATTENTION, WAITING_FOR_OTHER_DEVICE,
-    OFFLINE, SYNCING, WAITING_FOR_PEER, CONNECTED, CONNECTION_UNKNOWN,
+    OFFLINE, SYNCING, WAITING_FOR_PEER, CONNECTED, CONNECTION_UNKNOWN, REMOVAL_PENDING, REMOVED,
 }
 
 /** UI summary with expiry, pause, scanning and explicit errors ahead of reachability. */
 fun FolderSyncStatus.summaryFor(share: FolderShare): FolderShareSummary {
+    if (share.phase == FolderSharePhase.REMOVED) {
+        return if (share.remoteRemovalPending) FolderShareSummary.REMOVAL_PENDING else FolderShareSummary.REMOVED
+    }
     if (share.expired) return FolderShareSummary.INVITATION_EXPIRED
     if (share.phase == FolderSharePhase.PAUSED) return FolderShareSummary.PAUSED
     if (lifecycle == FolderSyncLifecycle.INITIAL_SCANNING) return FolderShareSummary.CHECKING

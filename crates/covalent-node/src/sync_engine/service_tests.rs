@@ -1275,6 +1275,113 @@ async fn invalid_and_replayed_records_cannot_restart_a_healthy_worker() {
 }
 
 #[tokio::test]
+async fn authenticated_remote_removal_restarts_each_side_once_and_keeps_unrelated_folder() {
+    let first = Device::new("Mac", 44277);
+    let second = Device::new("Docker", 44278);
+    pair(&first, &second);
+    let first_other = first.root.join("other-files");
+    let second_other = second.root.join("other-files");
+    std::fs::create_dir(&first_other).unwrap();
+    std::fs::create_dir(&second_other).unwrap();
+    std::fs::write(first.files().join("keep-source.txt"), b"source").unwrap();
+    std::fs::write(second.files().join("keep-target.txt"), b"target").unwrap();
+    let first_backend = Arc::new(TestBackend::default());
+    let second_backend = Arc::new(TestBackend::default());
+    let source = first.service(first.journal(), Arc::clone(&first_backend));
+    let target = second.service(second.journal(), Arc::clone(&second_backend));
+    let first_folder = Uuid::new_v4();
+    let second_folder = Uuid::new_v4();
+    let (removed_offer, _) = make_ready_folder_at(
+        &second,
+        &source,
+        &target,
+        first_folder,
+        &first.files(),
+        &second.files(),
+    )
+    .await;
+    make_ready_folder_at(
+        &second,
+        &source,
+        &target,
+        second_folder,
+        &first_other,
+        &second_other,
+    )
+    .await;
+    let source_before = first_backend.snapshot();
+    let target_before = second_backend.snapshot();
+
+    source.remove(removed_offer).await.unwrap();
+    let source_after_remove = first_backend.snapshot();
+    assert_eq!(source_after_remove.launches, source_before.launches + 1);
+    assert_eq!(source_after_remove.launched_folder_counts.last(), Some(&1));
+    source.remove(removed_offer).await.unwrap();
+    assert_eq!(
+        first_backend.snapshot().launches,
+        source_after_remove.launches
+    );
+    let status = source.status().await.unwrap();
+    assert!(
+        status
+            .shares()
+            .iter()
+            .any(|share| { share.offer_id == removed_offer && share.remote_removal_pending })
+    );
+    let notice = source
+        .outbound_records()
+        .await
+        .unwrap()
+        .into_value()
+        .into_iter()
+        .find_map(|delivery| match delivery.record {
+            FolderShareRecord::Removal(notice) => Some(notice),
+            _ => None,
+        })
+        .unwrap();
+
+    target.receive_removal(&notice).await.unwrap();
+    let target_after = second_backend.snapshot();
+    assert_eq!(target_after.launches, target_before.launches + 1);
+    assert_eq!(target_after.launched_folder_counts.last(), Some(&1));
+    target.receive_removal(&notice).await.unwrap();
+    assert_eq!(second_backend.snapshot().launches, target_after.launches);
+    assert!(
+        target
+            .outbound_records()
+            .await
+            .unwrap()
+            .into_value()
+            .iter()
+            .all(|delivery| !matches!(delivery.record, FolderShareRecord::Removal(_)))
+    );
+
+    let launches = first_backend.snapshot().launches;
+    source
+        .acknowledge_removal(second.engine.device_id(), removed_offer)
+        .await
+        .unwrap();
+    assert_eq!(first_backend.snapshot().launches, launches);
+    assert!(
+        !source
+            .status()
+            .await
+            .unwrap()
+            .shares()
+            .iter()
+            .any(|share| { share.offer_id == removed_offer && share.remote_removal_pending })
+    );
+    assert_eq!(
+        std::fs::read(first.files().join("keep-source.txt")).unwrap(),
+        b"source"
+    );
+    assert_eq!(
+        std::fs::read(second.files().join("keep-target.txt")).unwrap(),
+        b"target"
+    );
+}
+
+#[tokio::test]
 async fn freshness_only_revision_on_pending_limit_does_not_restart_worker() {
     let first = Device::new("Mac", 44273);
     let second = Device::new("Docker", 44274);

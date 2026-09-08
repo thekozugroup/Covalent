@@ -17,6 +17,25 @@ struct MacFoldersView: View {
       Form {
         folderContent
 
+        if let status = model.folderSyncStatus {
+          let pending = status.shares.filter { $0.phase == .removed && $0.remoteRemovalPending }
+          if !pending.isEmpty {
+            Section("Removal Pending") {
+              ForEach(pending) { share in
+                VStack(alignment: .leading, spacing: 8) {
+                  Label(share.label, systemImage: "folder")
+                    .font(.headline)
+                  Text("Stopped on This Mac")
+                  Text("Covalent will confirm removal when \(peerName(for: share, status: status)) reconnects. Files stay on both devices.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 4)
+              }
+            }
+          }
+        }
+
         if let status = model.folderSyncStatus,
            status.availability == "available",
            status.issue == nil,
@@ -41,7 +60,7 @@ struct MacFoldersView: View {
         }
         Button("Cancel", role: .cancel) {}
       } message: {
-        Text("Sync stops on this Mac. Files already in the folder stay where they are.")
+        Text("Sync stops on this Mac now and on the other device when it reconnects. Files stay on both devices.")
       }
     }
 

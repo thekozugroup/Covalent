@@ -213,7 +213,7 @@ internal class FolderSyncGrantStore(
         check(retainedIds.size == status.shares.size)
         status.shares.forEach { share ->
             check(share.supersededOfferIds.size <= 128)
-            check(share.phase != FolderSharePhase.REMOVED || share.supersededOfferIds.isEmpty())
+            check(!share.remoteRemovalPending || share.phase == FolderSharePhase.REMOVED)
             share.supersededOfferIds.forEach { oldId ->
                 check(retainedIds.add(oldId)) { "The node returned ambiguous replacement invitations." }
                 replacements[oldId] = share
@@ -221,6 +221,7 @@ internal class FolderSyncGrantStore(
         }
         var grants = original.filterNot { it.offerId in removed }.mapNotNull { grant ->
             val replacement = grant.offerId?.let(replacements::get) ?: return@mapNotNull grant
+            if (replacement.phase == FolderSharePhase.REMOVED) return@mapNotNull null
             if (replacement.incoming) {
                 check(grant.kind == FolderSyncGrantKind.ACCEPTANCE)
                 // A new recipient invitation never inherits the earlier choice.
@@ -235,10 +236,18 @@ internal class FolderSyncGrantStore(
             }
         }
         check(grants.map(FolderSyncGrant::key).toSet().size == grants.size)
+        val claimedOfferIds = grants.mapNotNull(FolderSyncGrant::offerId).toMutableSet()
         val pending = grants.filter { it.kind == FolderSyncGrantKind.OFFER && it.offerId == null }
         pending.forEach { grant ->
-            val share = status.shares.singleOrNull { !it.incoming && it.folderId == grant.folderId }
+            val share = status.shares.singleOrNull {
+                !it.incoming && it.offerId !in claimedOfferIds && it.folderId == grant.folderId &&
+                    it.peerId == grant.peerId && it.label == grant.label
+            }
                 ?: return@forEach
+            if (share.phase == FolderSharePhase.REMOVED) {
+                grants = grants.filterNot { it.key == grant.key }
+                return@forEach
+            }
             grants = grants.filterNot { it.key == grant.key } + FolderSyncGrant(
                 key = "offer:${share.offerId}",
                 kind = grant.kind,
@@ -250,7 +259,9 @@ internal class FolderSyncGrantStore(
                 pendingRoot = grant.pendingRoot,
                 pendingRemoval = grant.pendingRemoval,
             )
+            check(claimedOfferIds.add(share.offerId))
         }
+        check(grants.map(FolderSyncGrant::key).toSet().size == grants.size)
         if (grants.map(FolderSyncGrant::key) != original.map(FolderSyncGrant::key)) replaceLocked(grants)
     }
 

@@ -105,18 +105,20 @@ internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier =
                 withContext(Dispatchers.IO) {
                     val previousChoices = grants.records().mapNotNull { it.offerId }.toSet()
                     val snapshot = api.status(ready).also(grants::reconcile)
-                    val retiredRecipientChoice = snapshot.shares.any { share ->
-                        share.incoming && share.supersededOfferIds.any { it in previousChoices }
+                    val retiredChoice = snapshot.shares.any { share ->
+                        if (share.phase == FolderSharePhase.REMOVED) {
+                            share.offerId in previousChoices || share.supersededOfferIds.any { it in previousChoices }
+                        } else share.incoming && share.supersededOfferIds.any { it in previousChoices }
                     }
                     Triple(snapshot, grants.records()
                         .filter { it.pendingRoot != null && !it.pendingRemoval }
                         .mapNotNull { it.offerId }
-                        .toSet(), retiredRecipientChoice)
+                        .toSet(), retiredChoice)
                 }
-            }.onSuccess { (snapshot, pending, retiredRecipientChoice) ->
+            }.onSuccess { (snapshot, pending, retiredChoice) ->
                 status = snapshot
                 pendingRepairOffers = pending
-                if (retiredRecipientChoice) selectedFolder = null
+                if (retiredChoice) selectedFolder = null
             }.onFailure { error = folderSyncErrorText(it) }
             busy = false
         }
@@ -392,7 +394,7 @@ internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier =
                     }
                 }
             }
-            items(snapshot.shares, key = FolderShare::offerId) { share ->
+            items(snapshot.shares.filter { it.phase != FolderSharePhase.REMOVED || it.remoteRemovalPending }, key = FolderShare::offerId) { share ->
                 FolderShareCard(
                     status = snapshot,
                     share = share,
@@ -504,6 +506,8 @@ private fun FolderShareCard(
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(share.label, fontWeight = FontWeight.SemiBold)
             val summary = when (status.summaryFor(share)) {
+                FolderShareSummary.REMOVAL_PENDING -> stringResource(R.string.folder_sync_removal_pending, peerName)
+                FolderShareSummary.REMOVED -> stringResource(R.string.folder_sync_removed)
                 FolderShareSummary.INVITATION_EXPIRED -> stringResource(R.string.folder_sync_invitation_expired)
                 FolderShareSummary.PAUSED -> stringResource(R.string.folder_sync_connection_paused)
                 FolderShareSummary.CHECKING -> stringResource(R.string.folder_sync_connection_checking)
@@ -516,7 +520,7 @@ private fun FolderShareCard(
                 FolderShareSummary.CONNECTION_UNKNOWN -> stringResource(R.string.folder_sync_connection_unknown)
             }
             Text(summary)
-            if (share.expired) Text(stringResource(
+            if (share.phase != FolderSharePhase.REMOVED && share.expired) Text(stringResource(
                 if (share.incoming) R.string.folder_sync_renew_incoming_detail else R.string.folder_sync_renew_detail,
             ), color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (status.issue == FolderSyncIssue.FOLDER_ACCESS && share.phase != FolderSharePhase.REMOVED) {

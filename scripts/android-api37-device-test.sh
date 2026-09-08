@@ -707,21 +707,32 @@ install_or_dump "$test_apk"
 # Android 17 installs instrumentation packages disabled. Enable the exact
 # package before launch so the device gate cannot silently report zero tests.
 "$adb" -s "$serial" shell pm enable life.michaelwong.covalent.test >/dev/null
-native_library_directory=$(
-  "$adb" -s "$serial" shell dumpsys package life.michaelwong.covalent 2>/dev/null \
-    | tr -d '\r' | sed -n 's/^[[:space:]]*nativeLibraryDir=//p' | head -1
-)
-case "$native_library_directory" in
-  /data/app/*/lib/x86_64) ;;
-  *)
-    echo "The installed app's exact x86_64 native-library directory is unavailable." >&2
-    exit 1
-    ;;
-esac
+# dumpsys package does not reliably expose ApplicationInfo.nativeLibraryDir.
+# Resolve the exact installed base APK instead, then verify the proposed helper
+# directory and every helper's actual bytes before authorizing the fixture.
+if ! native_preflight=$(
+  "$adb" -s "$serial" shell pm path life.michaelwong.covalent \
+    | python3 -B "$repo_root/scripts/android-native-library-directory.py" "$apk"
+); then
+  echo "The installed app's exact native-library location could not be verified." >&2
+  dump_guest_failure_evidence
+  exit 1
+fi
+native_library_directory=$(printf '%s\n' "$native_preflight" | head -1)
+printf 'Verified installed base APK proposes native helper directory: %s\n' "$native_library_directory"
 for helper in libsyncthing.so libengineguardian.so; do
   if ! "$adb" -s "$serial" shell -T run-as life.michaelwong.covalent \
     test -x "$native_library_directory/$helper" >/dev/null; then
     echo "The installed immutable helper $helper is unavailable." >&2
+    exit 1
+  fi
+  expected_helper_hash=$(printf '%s\n' "$native_preflight" | awk -v name="$helper" '$2 == name {print $1}')
+  actual_helper_hash=$(
+    "$adb" -s "$serial" shell -T run-as life.michaelwong.covalent \
+      /system/bin/sha256sum "$native_library_directory/$helper" | awk '{print $1}'
+  )
+  if [ -z "$expected_helper_hash" ] || [ "$actual_helper_hash" != "$expected_helper_hash" ]; then
+    echo "The installed immutable helper $helper differs from the exact debug APK." >&2
     exit 1
   fi
 done

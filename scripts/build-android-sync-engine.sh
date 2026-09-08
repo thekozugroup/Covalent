@@ -11,6 +11,8 @@ repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 guardian_source="$repo_root/packaging/sync-engine/engine-guardian.c"
 inventory_tool="$repo_root/scripts/collect-go-target-license-inventory.py"
 notice_tool="$repo_root/scripts/collect-sync-engine-notices.py"
+link_provenance_tool="$repo_root/scripts/collect-android-native-link-provenance.py"
+go_link_wrapper_source="$repo_root/scripts/android-go-link-wrapper.sh"
 project_license="$repo_root/LICENSE"
 ofl_license="$repo_root/docs/licenses/sync-engine/OFL-1.1.txt"
 . "$repo_root/scripts/android-native-budgets.sh"
@@ -74,9 +76,11 @@ trap cleanup_private_work EXIT INT TERM
 export GOPATH="$private_work/gopath"
 export GOMODCACHE="$private_work/gomodcache"
 export GOCACHE="$private_work/gocache"
+export GOTMPDIR="$private_work/gotmp"
+export TMPDIR="$private_work/gotmp"
 export GOFLAGS=-mod=readonly
 export GOTOOLCHAIN=local
-mkdir "$GOPATH" "$GOMODCACHE" "$GOCACHE"
+mkdir "$GOPATH" "$GOMODCACHE" "$GOCACHE" "$GOTMPDIR"
 
 # Build from an archive of the pinned commit, never from the caller's mutable
 # checkout. Untracked Go files can otherwise join a package without changing
@@ -108,7 +112,8 @@ test -n "$ndk_dir" || {
   echo "Set COVALENT_ANDROID_NDK_HOME to Android NDK $expected_ndk" >&2
   exit 1
 }
-test -f "$ndk_dir/source.properties" || {
+ndk_dir=$(CDPATH='' cd -- "$ndk_dir" && pwd -P)
+test -f "$ndk_dir/source.properties" && test ! -L "$ndk_dir/source.properties" || {
   echo "NDK source.properties is missing under $ndk_dir" >&2
   exit 1
 }
@@ -124,6 +129,20 @@ test "$actual_ndk" = "$expected_ndk" || {
   echo "Expected Android NDK $expected_ndk" >&2
   exit 1
 }
+for notice_name in NOTICE NOTICE.toolchain; do
+  notice_path="$ndk_dir/$notice_name"
+  test -f "$notice_path" && test ! -L "$notice_path" || {
+    echo "NDK $notice_name must be a regular non-symbolic-link file" >&2
+    exit 1
+  }
+  notice_size=$(wc -c < "$notice_path" | tr -d '[:space:]')
+  test "$notice_size" -gt 0 && test "$notice_size" -le 2097152 || {
+    echo "NDK $notice_name is empty or exceeds 2 MiB" >&2
+    exit 1
+  }
+done
+ndk_notice_sha=$(shasum -a 256 "$ndk_dir/NOTICE" | awk '{print $1}')
+ndk_toolchain_notice_sha=$(shasum -a 256 "$ndk_dir/NOTICE.toolchain" | awk '{print $1}')
 
 prebuilt_root="$ndk_dir/toolchains/llvm/prebuilt"
 toolchain=
@@ -264,7 +283,18 @@ build_one() {
   compiler=$3
   output="$jni_root/$abi/libsyncthing.so"
   cc="$toolchain/bin/$compiler"
+  link_map="$reports_root/syncthing-link-$abi.map"
+  driver_trace="$reports_root/syncthing-driver-$abi.txt"
+  dynamic_report="$reports_root/syncthing-dynamic-$abi.txt"
+  provenance_report="$reports_root/syncthing-link-provenance-$abi.json"
+  link_marker="$reports_root/syncthing-link-$abi.invoked"
+  link_wrapper="$private_work/syncthing-link-$abi.sh"
   test -x "$cc" || { echo "Missing NDK compiler: $cc" >&2; exit 1; }
+  case "$link_wrapper" in
+    *[[:space:]]*) echo "Android external linker wrapper path contains whitespace" >&2; exit 1 ;;
+  esac
+  cp "$go_link_wrapper_source" "$link_wrapper"
+  chmod 700 "$link_wrapper"
 
   (
     cd "$build_source"
@@ -275,7 +305,13 @@ build_one() {
       GOFLAGS=-mod=readonly \
       GOTOOLCHAIN=local \
       SOURCE_DATE_EPOCH="$source_date_epoch" \
-      EXTRA_LDFLAGS='-checklinkname=0 -linkmode=external -extldflags=-Wl,-z,max-page-size=16384' \
+      COVALENT_REAL_CLANG="$cc" \
+      COVALENT_LINK_CLASSIFIER="$link_provenance_tool" \
+      COVALENT_LINK_PRIVATE_ROOT="$private_work" \
+      COVALENT_LINK_MAP="$link_map" \
+      COVALENT_DRIVER_TRACE="$driver_trace" \
+      COVALENT_LINK_MARKER="$link_marker" \
+      EXTRA_LDFLAGS="-checklinkname=0 -linkmode=external -extld=$link_wrapper -extldflags=-Wl,-z,max-page-size=16384" \
       go run build.go \
         -goos android \
         -goarch "$goarch" \
@@ -285,6 +321,10 @@ build_one() {
         -build-out "$output" \
         build syncthing
   )
+  test -s "$link_map" && test "$(wc -c < "$link_map" | tr -d '[:space:]')" -le 134217728 || {
+    echo "$abi Syncthing final link map is empty or exceeds 128 MiB" >&2
+    exit 1
+  }
 
   size=$(wc -c < "$output" | tr -d '[:space:]')
   test "$size" -ge "$COVALENT_SYNC_ENGINE_MIN_BYTES" && \
@@ -315,17 +355,37 @@ PY
     echo "$abi helper has a PT_LOAD segment aligned below 16 KiB" >&2
     exit 1
   }
-  "$readelf" -dW "$output" | grep -Eq 'TEXTREL|DT_TEXTREL' && {
+  "$readelf" -dW "$output" > "$dynamic_report"
+  test "$(wc -c < "$dynamic_report" | tr -d '[:space:]')" -le 1048576 || {
+    echo "$abi Syncthing dynamic report exceeds 1 MiB" >&2
+    exit 1
+  }
+  grep -Eq 'TEXTREL|DT_TEXTREL' "$dynamic_report" && {
     echo "$abi helper contains a text relocation" >&2
     exit 1
   }
 
-  needed=$("$readelf" -dW "$output" | sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p' | sort -u)
+  needed=$(sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p' "$dynamic_report" | sort -u)
   unexpected=$(printf '%s\n' "$needed" | sed '/^$/d' | grep -Ev '^(libc|libdl|liblog|libm)\.so$' || true)
   test -z "$unexpected" || {
     echo "$abi helper has unexpected runtime dependencies: $unexpected" >&2
     exit 1
   }
+  python3 "$link_provenance_tool" \
+    --component syncthing \
+    --abi "$abi" \
+    --ndk-root "$ndk_dir" \
+    --expected-revision "$expected_ndk" \
+    --link-map "$link_map" \
+    --driver-trace "$driver_trace" \
+    --dynamic-report "$dynamic_report" \
+    --binary "$output" \
+    --output "$provenance_report"
+  test -d "$link_marker" && test ! -L "$link_marker" || {
+    echo "$abi Syncthing linker invocation marker is missing or unsafe" >&2
+    exit 1
+  }
+  rmdir "$link_marker"
 
   hash=$(shasum -a 256 "$output" | awk '{print $1}')
   printf '%s %s %s\n' "$abi" "$hash" "$size" >> "$hash_file"
@@ -340,13 +400,29 @@ build_guardian() {
   readelf="$toolchain/bin/llvm-readelf"
   dynamic_report="$reports_root/guardian-dynamic-$abi.txt"
   symbol_report="$reports_root/guardian-symbols-$abi.txt"
+  link_map="$reports_root/guardian-link-$abi.map"
+  driver_trace="$reports_root/guardian-driver-$abi.txt"
+  provenance_report="$reports_root/guardian-link-provenance-$abi.json"
   test -x "$cc" || { echo "Missing NDK compiler: $cc" >&2; exit 1; }
 
+  "$cc" -### \
+    -std=c11 -Wall -Wextra -Werror -O2 \
+    -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE -pie \
+    -Wl,--as-needed,-z,relro,-z,now,-z,noexecstack,-z,max-page-size=16384,-Map,"$link_map" \
+    "$guardian_source" -o "$output" >/dev/null 2> "$driver_trace"
+  test -s "$driver_trace" && test "$(wc -c < "$driver_trace" | tr -d '[:space:]')" -le 4194304 || {
+    echo "$abi guardian Clang driver trace is empty or exceeds 4 MiB" >&2
+    exit 1
+  }
   "$cc" \
     -std=c11 -Wall -Wextra -Werror -O2 \
     -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE -pie \
-    -Wl,--as-needed,-z,relro,-z,now,-z,noexecstack,-z,max-page-size=16384 \
+    -Wl,--as-needed,-z,relro,-z,now,-z,noexecstack,-z,max-page-size=16384,-Map,"$link_map" \
     "$guardian_source" -o "$output"
+  test -s "$link_map" && test "$(wc -c < "$link_map" | tr -d '[:space:]')" -le 134217728 || {
+    echo "$abi guardian final link map is empty or exceeds 128 MiB" >&2
+    exit 1
+  }
 
   size=$(wc -c < "$output" | tr -d '[:space:]')
   test "$size" -ge "$COVALENT_ENGINE_GUARDIAN_MIN_BYTES" && \
@@ -406,6 +482,16 @@ PY
     echo "$abi guardian has unexpected runtime dependencies: $unexpected" >&2
     exit 1
   }
+  python3 "$link_provenance_tool" \
+    --component guardian \
+    --abi "$abi" \
+    --ndk-root "$ndk_dir" \
+    --expected-revision "$expected_ndk" \
+    --link-map "$link_map" \
+    --driver-trace "$driver_trace" \
+    --dynamic-report "$dynamic_report" \
+    --binary "$output" \
+    --output "$provenance_report"
 
   hash=$(shasum -a 256 "$output" | awk '{print $1}')
   printf '%s %s %s\n' "$abi" "$hash" "$size" >> "$guardian_hash_file"
@@ -469,7 +555,70 @@ python3 "$notice_tool" \
   --guardian-source "$guardian_source" \
   --project-license "$project_license" \
   --ofl-license "$ofl_license" \
+  --toolchain-notice "Android NDK $expected_ndk / NOTICE" NOTICE "$ndk_dir/NOTICE" "$ndk_notice_sha" \
+  --toolchain-notice "Android NDK $expected_ndk / NOTICE.toolchain" NOTICE.toolchain "$ndk_dir/NOTICE.toolchain" "$ndk_toolchain_notice_sha" \
   --output "$notices"
+
+python3 - "$reports_root" "$notices/manifest.json" "$hash_file" "$guardian_hash_file" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+reports = pathlib.Path(sys.argv[1])
+notice_manifest = json.loads(pathlib.Path(sys.argv[2]).read_text())
+binary_manifests = {}
+for component, manifest_path in (
+    ("syncthing", pathlib.Path(sys.argv[3])),
+    ("guardian", pathlib.Path(sys.argv[4])),
+):
+    parsed = {}
+    for line in manifest_path.read_text().splitlines():
+        fields = line.split(" ")
+        if len(fields) != 3:
+            raise SystemExit("native binary hash manifest is malformed")
+        abi, digest, size_text = fields
+        parsed[abi] = (int(size_text), digest)
+    if set(parsed) != {"arm64-v8a", "x86_64"}:
+        raise SystemExit("native binary hash manifest is incomplete")
+    binary_manifests[component] = parsed
+expected_notices = {
+    row["sourceName"]: (row["bytes"], row["sha256"])
+    for row in notice_manifest.get("toolchainNotices", [])
+}
+if set(expected_notices) != {"NOTICE", "NOTICE.toolchain"}:
+    raise SystemExit("Android notice manifest lacks the exact NDK notice pair")
+rows = []
+for component in ("guardian", "syncthing"):
+    for abi in ("arm64-v8a", "x86_64"):
+        path = reports / f"{component}-link-provenance-{abi}.json"
+        raw = path.read_bytes()
+        value = json.loads(raw)
+        observed = {
+            name: (record["bytes"], record["sha256"])
+            for name, record in value["ndk"]["files"].items()
+            if name in {"NOTICE", "NOTICE.toolchain"}
+        }
+        if observed != expected_notices:
+            raise SystemExit("NDK link and notice evidence disagree")
+        binary = value["evidence"]["binary"]
+        if (binary["bytes"], binary["sha256"]) != binary_manifests[component][abi]:
+            raise SystemExit("native binary and link provenance evidence disagree")
+        rows.append({
+            "abi": abi,
+            "component": component,
+            "manifestBytes": len(raw),
+            "manifestSha256": hashlib.sha256(raw).hexdigest(),
+        })
+index = {
+    "schemaVersion": 1,
+    "status": "link-inputs-classified-review-required",
+    "records": rows,
+}
+(reports / "android-sync-engine-link-provenance-index.json").write_text(
+    json.dumps(index, indent=2, sort_keys=True) + "\n"
+)
+PY
 
 combined="$notices/THIRD-PARTY-NOTICES.txt"
 notice_manifest="$notices/manifest.json"

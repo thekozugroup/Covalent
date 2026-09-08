@@ -240,7 +240,21 @@ jobs:
           path: |
             apps/android/app/build/reports/lint-results-*
             apps/android/app/build/test-results
+            apps/android/app/build/generated/syncEngine/reports
+            apps/android/app/build/generated/jniLibs/provenance
+            apps/android/app/build/generated/jniLibs/covalent-android-native-provenance.sha256
           if-no-files-found: warn
+      - name: Retain the exact Android native distribution evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-native-distribution-evidence-${{ github.sha }}
+          path: |
+            apps/android/app/build/outputs/apk/debug/app-debug.apk
+            apps/android/app/build/generated/syncEngine/reports
+            apps/android/app/build/generated/jniLibs/provenance
+            apps/android/app/build/generated/jniLibs/covalent-android-native-provenance.sha256
+          if-no-files-found: error
+          retention-days: 14
       - run: ./apps/android/gradlew -p apps/android :app:generateAndroidSbom
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -741,6 +755,9 @@ jobs:
             ${{ runner.temp }}/covalent-android-api37
             apps/android/app/build/reports/lint-results-*
             apps/android/app/build/test-results
+            apps/android/app/build/generated/syncEngine/reports
+            apps/android/app/build/generated/jniLibs/provenance
+            apps/android/app/build/generated/jniLibs/covalent-android-native-provenance.sha256
           if-no-files-found: warn
 
   container-foundation:
@@ -764,6 +781,24 @@ jobs:
           echo "fingerprint=${fingerprint}" >> "${GITHUB_OUTPUT}"
       - run: docker buildx build --platform linux/amd64 --load --build-arg VCS_REF=${{ github.sha }} --build-arg COVALENT_SOURCE_FINGERPRINT=${{ steps.docker-source.outputs.fingerprint }} -f packaging/docker/Dockerfile -t covalent:ci .
       - run: ./scripts/check-container-contract.sh covalent:ci "${GITHUB_SHA}" development "${{ steps.docker-source.outputs.fingerprint }}"
+      - name: Retain the exact amd64 engine distribution evidence
+        run: |
+          set -euo pipefail
+          image_id=$(docker image inspect --format '{{.Id}}' covalent:ci)
+          [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          container_id=$(docker create --network none --read-only --entrypoint /bin/true "$image_id")
+          [[ "$container_id" =~ ^[0-9a-f]{64}$ ]]
+          trap 'docker rm -v "$container_id" >/dev/null' EXIT
+          output="$RUNNER_TEMP/covalent-linux-engine-evidence-amd64"
+          test ! -e "$output"
+          mkdir "$output"
+          docker cp "$container_id:/usr/local/share/covalent/sync-engine/." "$output/"
+          docker image inspect "$image_id" > "$output/image-metadata.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-sync-engine-evidence-amd64-${{ github.sha }}
+          path: ${{ runner.temp }}/covalent-linux-engine-evidence-amd64
+          if-no-files-found: error
       - run: docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp --entrypoint covalent covalent:ci doctor
       - run: ./scripts/check-container-runtime.sh covalent:ci
       - run: ./scripts/check-artifact-budgets.sh --image-only covalent:ci --platform linux/amd64
@@ -796,6 +831,24 @@ jobs:
           echo "fingerprint=${fingerprint}" >> "${GITHUB_OUTPUT}"
       - run: docker buildx build --platform linux/arm64 --load --build-arg VCS_REF=${{ github.sha }} --build-arg COVALENT_SOURCE_FINGERPRINT=${{ steps.docker-source.outputs.fingerprint }} -f packaging/docker/Dockerfile -t covalent:ci-arm64 .
       - run: ./scripts/check-container-contract.sh covalent:ci-arm64 "${GITHUB_SHA}" development "${{ steps.docker-source.outputs.fingerprint }}"
+      - name: Retain the exact arm64 engine distribution evidence
+        run: |
+          set -euo pipefail
+          image_id=$(docker image inspect --format '{{.Id}}' covalent:ci-arm64)
+          [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          container_id=$(docker create --network none --read-only --entrypoint /bin/true "$image_id")
+          [[ "$container_id" =~ ^[0-9a-f]{64}$ ]]
+          trap 'docker rm -v "$container_id" >/dev/null' EXIT
+          output="$RUNNER_TEMP/covalent-linux-engine-evidence-arm64"
+          test ! -e "$output"
+          mkdir "$output"
+          docker cp "$container_id:/usr/local/share/covalent/sync-engine/." "$output/"
+          docker image inspect "$image_id" > "$output/image-metadata.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-sync-engine-evidence-arm64-${{ github.sha }}
+          path: ${{ runner.temp }}/covalent-linux-engine-evidence-arm64
+          if-no-files-found: error
       - run: ./scripts/check-artifact-budgets.sh --image-only covalent:ci-arm64 --platform linux/arm64
       - name: Validate packaged arm64 folder sync with isolated writable volumes
         run: python3 -B scripts/container-folder-sync-e2e.py covalent:ci-arm64

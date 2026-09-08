@@ -59,7 +59,7 @@ pub use service::{
     PeerConnectionState,
 };
 pub use sharing::{
-    FolderShareDelivery, FolderShareRecord, FolderSharingJournal, ShareSummary, SharingError,
-    SharingPhase,
+    FolderRemovalNotice, FolderShareDelivery, FolderShareRecord, FolderSharingJournal,
+    ShareSummary, SharingError, SharingPhase,
 };
 pub use state::{EngineStateError, EngineStateStore};

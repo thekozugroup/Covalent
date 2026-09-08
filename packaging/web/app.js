@@ -648,6 +648,7 @@ async function runFolderMutation(action, success) {
 }
 
 function renderFolderActions(container, status, share, view) {
+  if (share.phase === "removed") return;
   if (share.incoming && share.phase === "offered" && !share.expired) {
     const pathLabel = document.createElement("label");
     pathLabel.textContent = "Folder path on this server";
@@ -692,7 +693,7 @@ function renderFolderActions(container, status, share, view) {
   confirmation.setAttribute("role", "group");
   confirmation.setAttribute("aria-label", `Stop sharing ${share.label}`);
   const explanation = document.createElement("p");
-  explanation.textContent = "Stop syncing this folder? Local files will stay on this server.";
+  explanation.textContent = "Stop syncing this folder? Sync stops here now and on the other device when it reconnects. Files stay on both devices.";
   const remove = folderActionButton(removeLabel, () => {
     confirmation.hidden = false;
     cancel.focus();
@@ -704,7 +705,7 @@ function renderFolderActions(container, status, share, view) {
   const confirmed = folderActionButton("Stop sharing", () => {
     void runFolderMutation(
       () => folderController.remove(share.offerId),
-      "Folder removed from sync. Local files were preserved.",
+      "Sync stopped here. The other device will stop when it reconnects. Files stay on both devices.",
     );
   }, "quiet");
   confirmation.append(explanation, cancel, confirmed);
@@ -758,7 +759,7 @@ function renderFolderStatus(status) {
   const retry = $("[data-folders-retry-service]");
   retry.hidden = !(status.lifecycle === "needsAttention" || status.issue !== null);
   const list = $("[data-folders-list]");
-  const visibleShares = status.shares.filter((share) => share.phase !== "removed");
+  const visibleShares = status.shares.filter((share) => share.phase !== "removed" || share.remoteRemovalPending);
   const retained = new Map(Array.from(list.children).map((item) => [item.dataset.folderOfferId, item]));
   const visibleIds = new Set(visibleShares.map((share) => share.offerId));
   for (const [id, item] of retained) {

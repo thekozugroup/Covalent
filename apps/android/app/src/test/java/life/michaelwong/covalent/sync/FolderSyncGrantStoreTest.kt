@@ -169,6 +169,58 @@ class FolderSyncGrantStoreTest {
         assertEquals(before, disk.value)
     }
 
+    @Test
+    fun removalAfterMissedRenewalRetiresEitherSideAndRetriesFailedSave() {
+        for (incoming in listOf(false, true)) {
+            val disk = MemoryPersistence()
+            val store = FolderSyncGrantStore(disk)
+            if (incoming) store.prepareAcceptance(OFFER, OLD_ROOT)
+            else {
+                store.prepareOffer(PEER, UUID.fromString(FOLDER), OLD_ROOT, "Photos")
+                store.finishOffer(UUID.fromString(FOLDER), OFFER)
+            }
+            val before = disk.value
+            val removed = renewalShare(incoming).copy(phase = FolderSharePhase.REMOVED, remoteRemovalPending = true)
+            disk.failWrites = true
+            assertThrows(IllegalStateException::class.java) { store.reconcile(renewalStatus(removed)) }
+            assertEquals(before, disk.value)
+            disk.failWrites = false
+            FolderSyncGrantStore(disk).reconcile(renewalStatus(removed))
+            assertTrue(FolderSyncGrantStore(disk).records().isEmpty())
+        }
+    }
+
+    @Test
+    fun pendingOfferRemovalRequiresAnExactPeerFolderAndLabel() {
+        val disk = MemoryPersistence()
+        val store = FolderSyncGrantStore(disk)
+        store.prepareOffer(PEER, UUID.fromString(FOLDER), OLD_ROOT, "Photos")
+        val removed = renewalShare(false).copy(phase = FolderSharePhase.REMOVED)
+        val before = disk.value
+        for (foreign in listOf(removed.copy(peerId = OFFER), removed.copy(label = "Other"), removed.copy(folderId = OFFER))) {
+            store.reconcile(renewalStatus(foreign))
+            assertEquals(before, disk.value)
+        }
+        store.reconcile(renewalStatus(removed))
+        assertTrue(FolderSyncGrantStore(disk).records().isEmpty())
+    }
+
+    @Test
+    fun pendingOfferNeverRebindsToAnOfferIdAlreadyClaimedByAnotherGrant() {
+        val disk = MemoryPersistence()
+        val store = FolderSyncGrantStore(disk)
+        store.prepareOffer(PEER, UUID.fromString(FOLDER), OLD_ROOT, "Photos")
+        store.finishOffer(UUID.fromString(FOLDER), OFFER)
+        store.prepareOffer(PEER, UUID.fromString(FOLDER), OLD_ROOT, "Photos")
+        val before = disk.value
+        val existing = renewalShare(false).copy(offerId = OFFER, supersededOfferIds = emptyList())
+
+        store.reconcile(renewalStatus(existing))
+
+        assertEquals(before, disk.value)
+        assertEquals(setOf("offer:$OFFER", "folder:$FOLDER"), store.records().map { it.key }.toSet())
+    }
+
     private fun renewalShare(incoming: Boolean) = FolderShare(
         REPLACEMENT, FOLDER, "Photos", PEER, incoming, FolderSharePhase.OFFERED,
         100, false, supersededOfferIds = listOf(OFFER),

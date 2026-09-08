@@ -597,6 +597,20 @@ public final class CovalentAppModel: ObservableObject {
         }
         if retiredScope {
           folderSyncScopeRefreshRequired = true
+        }
+        // The relationship was validated above. Pending repair bookmarks must
+        // also be retired when their consent is withdrawn or replaced.
+        let retiredOffers = Set(snapshot.shares.flatMap { share -> [UUID] in
+          if share.phase == .removed { return [share.offerId] + share.supersededOfferIds }
+          return share.incoming ? share.supersededOfferIds : []
+        })
+        let retainedRepairs = pendingFolderRepairs.filter { !retiredOffers.contains($0.offerId) }
+        if retainedRepairs != pendingFolderRepairs {
+          try await persistence.savePendingFolderRepairs(retainedRepairs)
+          pendingFolderRepairs = retainedRepairs
+          folderSyncScopeRefreshRequired = true
+        }
+        if folderSyncScopeRefreshRequired {
           continue
         }
         return snapshot
@@ -792,7 +806,10 @@ public final class CovalentAppModel: ObservableObject {
         if retained != directoryGrants {
           try await persistence.saveDirectoryGrants(retained)
           directoryGrants = retained
+          folderSyncScopeRefreshRequired = true
+          folderSyncStatus = nil
           try await restartForFolderSyncDirectoryGrants()
+          folderSyncScopeRefreshRequired = false
         }
         try await removePendingFolderRepair(offerId: offerId)
         await refreshFoldersDuringMutation()

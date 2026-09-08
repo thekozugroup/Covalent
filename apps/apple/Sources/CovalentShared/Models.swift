@@ -925,6 +925,8 @@ public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
     public let peerConnection: PeerConnectionState
     /// Authenticated journal identifiers retired by this replacement invitation.
     public let supersededOfferIds: [UUID]
+    /// Local removal is durable; the peer has not yet acknowledged withdrawal.
+    public let remoteRemovalPending: Bool
 
     public var id: UUID { offerId }
 
@@ -938,7 +940,8 @@ public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
       expiresAtUnixMs: UInt64?,
       expired: Bool,
       peerConnection: PeerConnectionState = .unknown,
-      supersededOfferIds: [UUID] = []
+      supersededOfferIds: [UUID] = [],
+      remoteRemovalPending: Bool = false
     ) {
       self.offerId = offerId
       self.folderId = folderId
@@ -950,11 +953,12 @@ public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
       self.expired = expired
       self.peerConnection = peerConnection
       self.supersededOfferIds = supersededOfferIds
+      self.remoteRemovalPending = remoteRemovalPending
     }
 
     private enum CodingKeys: String, CodingKey {
       case offerId, folderId, label, peerId, incoming, phase, expiresAtUnixMs, expired
-      case peerConnection, supersededOfferIds
+      case peerConnection, supersededOfferIds, remoteRemovalPending
     }
 
     public init(from decoder: Decoder) throws {
@@ -971,6 +975,9 @@ public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
         ? try values.decode(PeerConnectionState.self, forKey: .peerConnection) : .unknown
       supersededOfferIds = values.contains(.supersededOfferIds)
         ? try values.decode([UUID].self, forKey: .supersededOfferIds) : []
+      remoteRemovalPending = values.contains(.remoteRemovalPending)
+        ? try values.decode(Bool.self, forKey: .remoteRemovalPending) : false
+      guard !remoteRemovalPending || phase == .removed else { throw NodeClientError.invalidResponse }
     }
 }
 
@@ -1106,7 +1113,7 @@ extension FolderSyncStatus {
       var replacements: [UUID: FolderShare] = [:]
       for share in shares {
         guard share.supersededOfferIds.count <= 128,
-              share.phase != .removed || share.supersededOfferIds.isEmpty else {
+              !share.remoteRemovalPending || share.phase == .removed else {
           throw NodeClientError.invalidResponse
         }
         for oldID in share.supersededOfferIds {

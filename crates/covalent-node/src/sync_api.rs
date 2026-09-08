@@ -418,6 +418,7 @@ struct ShareResponse {
     expires_at_unix_ms: Option<u64>,
     expired: bool,
     peer_connection: &'static str,
+    remote_removal_pending: bool,
 }
 
 #[derive(Serialize)]
@@ -638,6 +639,7 @@ fn share_responses(
                 .expires_at_unix_ms
                 .is_some_and(|expires| now >= expires),
             peer_connection: peer_connection_field(share.phase, connection(share.peer_id)),
+            remote_removal_pending: share.remote_removal_pending,
             phase: match share.phase {
                 SharingPhase::Offered => "offered",
                 SharingPhase::AwaitingCommit => "awaitingCommit",

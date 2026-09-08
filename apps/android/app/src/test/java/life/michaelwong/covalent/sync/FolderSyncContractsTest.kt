@@ -36,6 +36,14 @@ class FolderSyncContractsTest {
         assertEquals(FolderShareSummary.CONNECTED, status(share).summaryFor(share))
     }
 
+    @Test
+    fun removedShareNeverReportsAnOldConnectionOrFolderHealth() {
+        val removed = share(PeerConnectionState.CONNECTED).copy(phase = FolderSharePhase.REMOVED)
+        val oldHealth = status(removed, lifecycle = FolderSyncLifecycle.INITIAL_SCANNING)
+        assertEquals(FolderShareSummary.REMOVED, oldHealth.summaryFor(removed))
+        assertEquals(FolderShareSummary.REMOVAL_PENDING, oldHealth.summaryFor(removed.copy(remoteRemovalPending = true)))
+    }
+
     private fun share(connection: PeerConnectionState) = FolderShare(
         offerId = "33333333-3333-4333-8333-333333333333",
         folderId = FOLDER,

@@ -1684,7 +1684,7 @@ components:
     FolderShareSummary:
       type: object
       additionalProperties: false
-      required: [offerId, supersededOfferIds, folderId, label, peerId, incoming, phase, expiresAtUnixMs, expired, peerConnection]
+      required: [offerId, supersededOfferIds, folderId, label, peerId, incoming, phase, expiresAtUnixMs, expired, peerConnection, remoteRemovalPending]
       properties:
         offerId:
           type: string
@@ -1723,6 +1723,9 @@ components:
           type: string
           enum: [unknown, connected, disconnected, paused]
           description: Connection to this share's paired device from a fresh current-worker observation, or unknown when no such observation is available. A durably paused share reports paused.
+        remoteRemovalPending:
+          type: boolean
+          description: This node has stopped sharing locally and retained an authenticated removal notice that the peer has not yet acknowledged. It never claims remote files were deleted.
     FolderHealthObservation:
       type: object
       additionalProperties: false

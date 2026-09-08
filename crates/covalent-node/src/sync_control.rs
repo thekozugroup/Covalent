@@ -68,6 +68,7 @@ pub enum FolderControlOperation {
         offer_id: uuid::Uuid,
         commit: FolderShareCommit,
     },
+    SendRemoval(crate::sync_engine::FolderRemovalNotice),
 }
 impl FolderControlOperation {
     fn requester(&self) -> DeviceId {
@@ -75,6 +76,7 @@ impl FolderControlOperation {
             Self::SendOffer(offer) => offer.source_device_id,
             Self::SendAcceptance { acceptance, .. } => acceptance.target_device_id,
             Self::SendCommit { commit, .. } => commit.source_device_id,
+            Self::SendRemoval(notice) => notice.requester_id,
         }
     }
 
@@ -84,6 +86,7 @@ impl FolderControlOperation {
         match self {
             Self::SendOffer(offer) => Some(offer.target_device_id),
             Self::SendAcceptance { .. } | Self::SendCommit { .. } => None,
+            Self::SendRemoval(notice) => Some(notice.target_id),
         }
     }
 }
@@ -619,6 +622,13 @@ async fn apply_remote(
         }
         FolderControlOperation::SendCommit { offer_id, commit } => {
             match service.receive_commit(offer_id, commit).await {
+                Ok(_) => FolderControlPayload::Ack,
+                Err(crate::sync_engine::FolderSyncServiceError::Busy) => FolderControlPayload::Busy,
+                Err(_) => FolderControlPayload::NeedsAttention,
+            }
+        }
+        FolderControlOperation::SendRemoval(notice) => {
+            match service.receive_removal(&notice).await {
                 Ok(_) => FolderControlPayload::Ack,
                 Err(crate::sync_engine::FolderSyncServiceError::Busy) => FolderControlPayload::Busy,
                 Err(_) => FolderControlPayload::NeedsAttention,

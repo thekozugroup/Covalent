@@ -981,3 +981,165 @@ Publication cleanup verified all 47 checkpoint-33 files and modes against the
 reachable Git commit before removing 108 temporary payload files totaling
 3,816,152 logical bytes. The source tree and compact publication/evidence
 receipts remain. Acceptance stays **70%: 14 of 20 milestones**.
+
+
+## Checkpoint 35: explicit removal state and native access retirement
+
+Checkpoint 34 (`920dadc65c66f0d0645bb629d7c146fafc425097`) runs as tested merge
+`5e327af735c0fac74ad45d7fdecb6adcd54d43d6` in CI `34285937246`.
+Rust/contracts, Android foundation, both Docker architectures, Mac bundle and
+integration/UI, iOS Tier 2, dependency review and release versions pass.
+CodeQL run `34285937220` passes Java/Kotlin, Swift and policy. The Android API 37
+device job `102261422991` fails before instrumentation: its read-only package
+preflight cannot discover an accepted installed native-library directory. The
+emulator boots and the prebuilt gate verifies the exact APKs, 150 JVM tests with
+zero failures/errors, and lint without error-severity issues. Synthetic result-
+validator fixtures in that log are not device-test passes. Native-library path
+discovery and full device execution remain open.
+
+The three removal interfaces use the authenticated optional boolean
+`remoteRemovalPending` only on a `removed` row. They distinguish sync stopped
+locally from peer acknowledgement, keep pending removals visible without
+mutation controls, and explain that files stay on both devices. Missing legacy
+metadata defaults to false; null, non-boolean and contradictory active-row
+metadata fail closed. Removed rows can retain their explicit, bounded
+`supersededOfferIds` relationship so a missed renewal response cannot preserve
+an old folder-access record accidentally.
+
+Mac reconciliation retires current and superseded removed bookmarks without
+rebinding them, preserves unrelated and unbound access, and retires pending
+repair bookmarks when consent is removed or an incoming invitation is replaced.
+Its scope-retirement flag survives a failed worker restart, including removal
+initiated on this Mac. A later refresh retries retirement before publishing fresh
+status. Android reconciliation similarly retires both sides' old records and
+matches a pending unbound offer by the complete peer/folder/label relationship.
+It never binds such a pending offer to a removed row.
+
+The frozen client slice passes 152 shared Swift tests, 108 web tests and full
+production Mac application compilation. Regression journeys cover local and
+remote removal, failed restart/retry, an interrupted pending folder repair,
+persistent bookmark retirement, missed renewal, malformed metadata and unchanged
+local file bytes. These model tests do not establish live sandbox helper reaping
+or native removal UI execution. The four added Android JVM tests still require
+the next hosted build. Proof SHA-256 is
+`a9a9bc84107616e755266baf37bf40a683d86cc10abb36431536dfbe2bc54f59`;
+the 17-file patch SHA-256 is
+`dd0d320b05667cea0da563d8b12c19870e9b586b5f0bcdebc6540d75d7077840`.
+
+CI now retains exact Docker engine distributions and image metadata from
+unstarted, network-disabled temporary containers, removed by an exact-ID exit
+trap. It also retains Android native link reports and the debug APK for final
+cross-target review. Native build evidence remains separate from runtime tests.
+
+Cleanup removes only completed owned outputs. The client worktree removed
+323,229,273 logical bytes from its initial failed build cache, then 736,544,149
+logical bytes after the successful tests and Mac compilation. Logs, source
+hashes, patch and cleanup receipts remain. Publication cleanup verified all
+three checkpoint-34 files and modes against Git before removing eight temporary
+payload files totaling 231,000 logical bytes. No global caches, user folders or
+unrelated server resources were removed. Acceptance remains **70%: 14 of 20**.
+
+
+Checkpoint 35 also integrates the final ten-file backend removal slice. Fresh
+signed folder-control requests bind requester, target, original offer direction,
+folder ID and the bounded chronological invitation chain. An authenticated
+withdrawal may overtake an offer or race a renewal; compatible chain prefixes
+canonicalize to the same terminal refusal, while forks and cross-peer bindings
+fail closed. A durable outbox retries until a verified acknowledgement commits.
+Canonical removed summaries retain explicit current and superseded IDs under
+the existing finite 4,096 retained-offer quota, so native access cleanup never
+infers withdrawal from a missing row. Capacity exhaustion fails explicitly;
+terminal summaries are not silently discarded.
+
+The exact backend bytes pass 286 node-library tests, 26 focused sharing tests,
+strict all-target/all-feature Clippy with Rust 1.97.1, formatting and the OpenAPI
+check. Its real pinned-worker proof passes eight checks: two folders converge,
+local withdrawal stops one, the recipient removes without echo, lost
+acknowledgement and both cold reopens remain safe, both copies remain, and the
+unrelated folder continues in both directions. The proof invokes the receiving
+service directly; the signed control envelope is unit-tested separately. The
+backend manifest SHA-256 is
+`2e9cca4f56df9cdc13585697ba3bf5670b9d161575ee3e89f8386ee3650bb864`;
+patch `4a11bed90fc97f8bdad7bf8e3c4cf7478a7edf8ec982716bab601d9678da53e1`;
+live result `d33fae26938e974548a096f08bcb953bb7b5b2e9043acdffcf005e0859f4dd79`.
+Both Docker runtime gates now additionally pause the owned recipient, remove
+on the sender, restart the sender with a pending outbox, reconnect the recipient,
+require actual signed delivery and acknowledgement, then cold-reopen the
+recipient and verify both copies. These additional container checks are pending
+the next hosted run. Cleanup unpauses only exact labelled fixture containers.
+
+The Android preflight fix replaces unreliable dumpsys field discovery with the
+exact PackageManager base-APK path. A bounded parser rejects foreign, duplicate,
+split or malformed package paths and verifies both helper entries against their
+packaged size and digest manifests. Before permission-fixture ownership is
+established, the host confirms both installed helpers are executable and their
+actual on-device SHA-256 hashes equal the exact prebuilt APK. Four local tests
+pass, including tampering and malformed manifests; actual API 37 execution is
+still required. Proof SHA-256:
+`6246528d35239ac3a602677ceacbff771be7ca9bc7868c6eee251394cf4a5f3f`.
+
+The Android NDK slice captures final Clang driver traces, LLD maps, dynamic
+libraries and exact binary digests for Syncthing, the guardian and JNI on both
+ABIs. It bundles complete pinned NDK NOTICE and NOTICE.toolchain files and binds
+the notice hashes to the final link evidence. The Go wrapper forwards linker
+probes unchanged and captures exactly one private final go.o invocation;
+response files are bounded and validated. In-root NDK dot segments normalize,
+while path escape fails. Ten provenance tests, 13 notice tests, package/JNI
+fixtures and foundation checks pass. A real Go 1.26.7 external-link build through
+the production wrapper and host Clang 21 passes and its executable runs. The
+host shim omits the Android-only map flag, so actual Android LLD and both ABI
+packages remain unverified. Evidence status is explicitly
+`link-inputs-classified-review-required`, not a completed legal or security
+review. The final 15-file manifest SHA-256 is
+`50f2562d66ab54444aa6ebb06cd2524f793ebd6503b703dc8ca762036b205628`;
+patch `f4e0f99033db0809e1dd03288e958fa2c3e9e50de2884a60fa0b396a1d7c8a38`.
+
+The signed native Mac renewal stage passes all 22 checks against an owned pinned
+TLS response fixture. Actual system folder pickers select distinct owned
+roots; an actual retry click preserves the sender bookmark and grant identity
+while rebinding the old invitation to its replacement. Cold launches retain the
+new binding. The recipient makes a fresh choice; ambiguous replacement metadata
+fails closed. All 22 production Swift files match published checkpoint 33 and
+the retained frozen source bytes. The response fixture intentionally withholds
+replacement status until the second POST to exercise the retry click. It does
+not prove the production backend, signed peer, worker reaping or scope release.
+Result SHA-256:
+`8c9ce2981a33202b33e24968d9a2d926cfc8b22aaeb546f04aff6f59563f59ce`;
+source manifest
+`e0c41186840af0d8cb16b3267fe610487bd1bb2d1c3938998e97621598c6bcd6`.
+Cleanup reaped three exact owned processes, closed both fixture ports and
+removed 648,567,789 metered logical bytes. Compact proof, source and cleanup
+receipts remain; two empty OS-managed container shells remain.
+
+
+Independent Android review found that a saved bound grant and an interrupted
+pending grant for the same tuple could otherwise reconcile to the same offer
+key. The integrated correction reserves already-bound identifiers and checks
+unique keys again before persistence. Its regression requires unchanged
+persistent bytes for the existing-bound-plus-pending case. Removed cards also
+suppress obsolete expiry copy. The three-file correction manifest SHA-256 is
+`13e8393222bbd96e8fe34cd1340591a65c01b6e9122052c4916988b27edcb3a0`;
+patch `edade56cfd1372b0c3d688bd871e62efd610350ab2c26bf38ff47e1c226c6c74`.
+All five added Android JVM regressions require hosted execution. The integrated
+OpenAPI check passes 49 operations, 344 references and 48 client operations
+across 126 checked call sites. Integrated foundation and release guardrails
+pass. No milestone credit is taken for queued hosted execution.
+
+
+The exact integrated Mac removal sources additionally pass a signed native
+16-check fixture and bounded source review. Actual pickers establish the old
+grant and a distinct pending repair; a dropped mock repair retains both. A
+pinned authenticated mock status with the replacement's explicit removed chain
+retires both persistent arrays. The production AppModel retries a recorded
+empty-grant restart after one injected failure. Native accessibility exposes the
+exact folder/device, local stopped state and remote confirmation copy with no
+per-share actions. Both owned files remain byte-identical. All 22 frozen Swift
+files match the integrated source. This proves native UI and sequencing, not
+actual helper reaping or spoken VoiceOver. Result SHA-256:
+`ae41fe0d35af271b01fa542ff4fed2208307cb1789b2580f198d5e968ba7c514`;
+source manifest
+`f02c502d2222bb1d10dd122565b26c717fb642e7a963b3154d40014a73ad844a`.
+Exact cleanup reaped two processes, closed the listener and removed 338,072,685
+logical bytes across 3,804 items, retaining only compact evidence and one empty
+OS-managed container shell. Independent review found no preflight defect;
+actual Android installed-path/hash execution remains required.

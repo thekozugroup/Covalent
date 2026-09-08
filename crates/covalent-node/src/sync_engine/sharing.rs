@@ -32,6 +32,8 @@ const MAX_RETAINED_OFFERS: usize = 4096;
 const MAX_PENDING_OFFERS: usize = 128;
 const MAX_PEER_PENDING_OFFERS: usize = 16;
 const MAX_RENEWALS_PER_SHARE: usize = 128;
+const MAX_REMOVAL_OFFER_IDS: usize = MAX_RENEWALS_PER_SHARE + 1;
+const MAX_PENDING_REMOVALS: usize = MAX_SHARES;
 const INVITATION_LIFETIME_MS: u64 = covalent_core::MAX_FOLDER_SHARE_LIFETIME_MS;
 
 /// A local sharing decision failure, without keys, paths, or peer-supplied text.
@@ -92,6 +94,24 @@ pub struct ShareSummary {
     /// Only unaccepted invitations expire. A durable acceptance remains valid
     /// for replay after its original delivery window has elapsed.
     pub expires_at_unix_ms: Option<u64>,
+    /// This node has stopped locally and retained an authenticated notice for
+    /// delivery. It does not claim that the peer has received the notice yet.
+    pub remote_removal_pending: bool,
+}
+
+/// A withdrawal carried only inside the authenticated folder-control envelope.
+///
+/// The ordered offer chain lets a peer that missed one or more invitation
+/// renewals match its exact retained prefix. This value has no signature of its
+/// own and must never be accepted outside that verified envelope.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FolderRemovalNotice {
+    pub requester_id: DeviceId,
+    pub target_id: DeviceId,
+    pub offer_source_id: DeviceId,
+    pub folder_id: Uuid,
+    pub offer_ids: Vec<Uuid>,
 }
 
 /// One already durable record awaiting an idempotent authenticated delivery.
@@ -107,6 +127,7 @@ pub enum FolderShareRecord {
         offer_id: Uuid,
         commit: FolderShareCommit,
     },
+    Removal(FolderRemovalNotice),
 }
 
 #[derive(Clone)]
@@ -160,6 +181,10 @@ struct Snapshot {
     freshness_floor_unix_ms: u64,
     #[serde(default)]
     pending_root_reset: Option<PendingRootReset>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pending_remote_removals: Vec<PendingRemoteRemoval>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    remote_removal_tombstones: Vec<RemoteRemovalTombstone>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -168,6 +193,31 @@ struct PendingRootReset {
     offer_id: Uuid,
     folder_id: Uuid,
     replacement: LocalRoot,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PendingRemoteRemoval {
+    peer_identity: PublicIdentity,
+    peer_transport: TransportBinding,
+    peer_confirmed_at_unix_ms: u64,
+    offer_source_id: DeviceId,
+    folder_id: Uuid,
+    /// Chronological superseded identifiers followed by the current ID.
+    offer_ids: Vec<Uuid>,
+}
+
+/// Path-free refusal history for an authenticated removal that may overtake
+/// an invitation or one of its renewals. It carries no peer transport pin and
+/// grants no authority; its chain prevents the same logical invitation from
+/// being revived by a delayed descendant renewal.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RemoteRemovalTombstone {
+    peer_id: DeviceId,
+    offer_source_id: DeviceId,
+    folder_id: Uuid,
+    offer_ids: Vec<Uuid>,
 }
 
 /// One instance- and revision-bound root selection prepared before a worker is
@@ -191,6 +241,8 @@ impl fmt::Debug for PreparedRootRepair {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Tombstone {
     offer_id: Uuid,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    superseded_offer_ids: Vec<Uuid>,
     folder_id: Uuid,
     label: String,
     peer_id: DeviceId,
@@ -241,6 +293,8 @@ impl FolderSharingJournal {
             tombstones: Vec::new(),
             freshness_floor_unix_ms: 0,
             pending_root_reset: None,
+            pending_remote_removals: Vec::new(),
+            remote_removal_tombstones: Vec::new(),
         };
         validate_snapshot(&snapshot, &engine, &installation)?;
         let payload = serde_json::to_vec(&snapshot).map_err(|_| SharingError::InvalidState)?;
@@ -308,6 +362,29 @@ impl FolderSharingJournal {
             .config()
             .map_err(|_| SharingError::InvalidState)?;
         let mut result = Vec::new();
+        // Withdrawals take precedence over invitations and commits for the
+        // same peer. Delivery admits one record per peer per cadence, so this
+        // avoids a permanently rejected invitation starving a local removal.
+        for pending in &self.snapshot.pending_remote_removals {
+            let trust = observe_trust(&config, pending.peer_identity.device_id)?
+                .ok_or(SharingError::UntrustedPeer)?;
+            if trust.identity != pending.peer_identity
+                || trust.transport != pending.peer_transport
+                || trust.confirmed_at_unix_ms != pending.peer_confirmed_at_unix_ms
+            {
+                return Err(SharingError::UntrustedPeer);
+            }
+            result.push(FolderShareDelivery {
+                peer_transport: trust.transport,
+                record: FolderShareRecord::Removal(FolderRemovalNotice {
+                    requester_id: self.engine.device_id(),
+                    target_id: pending.peer_identity.device_id,
+                    offer_source_id: pending.offer_source_id,
+                    folder_id: pending.folder_id,
+                    offer_ids: pending.offer_ids.clone(),
+                }),
+            });
+        }
         for share in &self.snapshot.shares {
             if share.removed {
                 continue;
@@ -378,18 +455,38 @@ impl FolderSharingJournal {
                 } else {
                     SharingPhase::Offered
                 },
+                remote_removal_pending: false,
             })
             .collect();
-        summaries.extend(self.snapshot.tombstones.iter().map(|removed| ShareSummary {
-            offer_id: removed.offer_id,
-            superseded_offer_ids: Vec::new(),
-            folder_id: removed.folder_id,
-            label: removed.label.clone(),
-            peer_id: removed.peer_id,
-            incoming: removed.incoming,
-            phase: SharingPhase::Removed,
-            expires_at_unix_ms: None,
-        }));
+        let superseded_removed_ids = self
+            .snapshot
+            .tombstones
+            .iter()
+            .flat_map(|removed| removed.superseded_offer_ids.iter().copied())
+            .collect::<BTreeSet<_>>();
+        summaries.extend(
+            self.snapshot
+                .tombstones
+                .iter()
+                .filter(|removed| !superseded_removed_ids.contains(&removed.offer_id))
+                .map(|removed| ShareSummary {
+                    offer_id: removed.offer_id,
+                    superseded_offer_ids: removed.superseded_offer_ids.clone(),
+                    folder_id: removed.folder_id,
+                    label: removed.label.clone(),
+                    peer_id: removed.peer_id,
+                    incoming: removed.incoming,
+                    phase: SharingPhase::Removed,
+                    expires_at_unix_ms: None,
+                    remote_removal_pending: self.snapshot.pending_remote_removals.iter().any(
+                        |pending| {
+                            pending.peer_identity.device_id == removed.peer_id
+                                && pending.folder_id == removed.folder_id
+                                && pending.offer_ids.last() == Some(&removed.offer_id)
+                        },
+                    ),
+                }),
+        );
         Ok(summaries)
     }
 
@@ -511,10 +608,23 @@ impl FolderSharingJournal {
             .map_err(|_| SharingError::InvalidRecord)?;
         if self
             .snapshot
-            .tombstones
+            .remote_removal_tombstones
             .iter()
-            .any(|removed| removed.offer_id == offer.offer_id)
+            .any(|removed| {
+                removed.peer_id == offer.source_device_id
+                    && removed.offer_source_id == offer.source_device_id
+                    && removed.folder_id == offer.folder_id
+            })
         {
+            // A refusal applies to the authenticated logical invitation, not
+            // only the IDs the recipient had observed. A renewal that crossed
+            // the removal in flight cannot recreate the removed choice.
+            return Err(SharingError::Removed);
+        }
+        if self.snapshot.tombstones.iter().any(|removed| {
+            removed.offer_id == offer.offer_id
+                || removed.superseded_offer_ids.contains(&offer.offer_id)
+        }) {
             return Err(SharingError::Removed);
         }
         if let Some(old) = self
@@ -635,12 +745,9 @@ impl FolderSharingJournal {
         now: u64,
     ) -> Result<FolderShareOffer, SharingError> {
         self.reconcile_trust()?;
-        if self
-            .snapshot
-            .tombstones
-            .iter()
-            .any(|removed| removed.offer_id == offer_id)
-        {
+        if self.snapshot.tombstones.iter().any(|removed| {
+            removed.offer_id == offer_id || removed.superseded_offer_ids.contains(&offer_id)
+        }) {
             return Err(SharingError::Removed);
         }
         if let Some(share) = self.snapshot.shares.iter().find(|share| {
@@ -840,7 +947,221 @@ impl FolderSharingJournal {
             return Ok(());
         }
         let mut next = self.snapshot.clone();
+        let share = &next.shares[index];
+        let mut offer_ids = share
+            .superseded_offers
+            .iter()
+            .map(|old| old.offer_id)
+            .collect::<Vec<_>>();
+        offer_ids.push(share.offer.offer_id);
+        if offer_ids.len() > MAX_REMOVAL_OFFER_IDS
+            || next.pending_remote_removals.len() >= MAX_PENDING_REMOVALS
+        {
+            return Err(SharingError::LimitExceeded);
+        }
+        next.pending_remote_removals.push(PendingRemoteRemoval {
+            peer_identity: share.peer_identity.clone(),
+            peer_transport: share.peer_transport.clone(),
+            peer_confirmed_at_unix_ms: share.peer_confirmed_at_unix_ms,
+            offer_source_id: share.offer.source_device_id,
+            folder_id: share.offer.folder_id,
+            offer_ids,
+        });
         next.shares[index].removed = true;
+        self.persist(next)
+    }
+
+    /// Apply a withdrawal only after the outer control request authenticated
+    /// `notice.requester_id`. No notice is echoed back to its sender.
+    pub fn receive_removal(&mut self, notice: &FolderRemovalNotice) -> Result<(), SharingError> {
+        self.reconcile_trust()?;
+        validate_removal_notice(notice, self.engine.device_id())?;
+        self.trusted_peer(notice.requester_id)?;
+
+        let matching_refusal = self
+            .snapshot
+            .remote_removal_tombstones
+            .iter()
+            .position(|removed| {
+                removed.peer_id == notice.requester_id
+                    && removed.offer_source_id == notice.offer_source_id
+                    && removed.folder_id == notice.folder_id
+            });
+        if matching_refusal.is_some_and(|index| {
+            self.snapshot.remote_removal_tombstones[index].offer_ids == notice.offer_ids
+        }) {
+            return Ok(());
+        }
+        if self
+            .snapshot
+            .remote_removal_tombstones
+            .iter()
+            .enumerate()
+            .any(|(index, removed)| {
+                Some(index) != matching_refusal
+                    && removed
+                        .offer_ids
+                        .iter()
+                        .any(|offer_id| notice.offer_ids.contains(offer_id))
+            })
+            || matching_refusal.is_some_and(|index| {
+                let retained = &self.snapshot.remote_removal_tombstones[index].offer_ids;
+                !is_prefix(retained, &notice.offer_ids) && !is_prefix(&notice.offer_ids, retained)
+            })
+            || notice.offer_ids.iter().any(|offer_id| {
+                retained_offer_binding(&self.snapshot, *offer_id).is_some_and(|binding| {
+                    binding
+                        != (
+                            notice.requester_id,
+                            notice.folder_id,
+                            notice.offer_source_id,
+                        )
+                })
+            })
+        {
+            return Err(SharingError::InvalidRecord);
+        }
+
+        let matching_share = self.snapshot.shares.iter().position(|share| {
+            share.peer_identity.device_id == notice.requester_id
+                && share.offer.folder_id == notice.folder_id
+        });
+        let mut canonical_ids = notice.offer_ids.clone();
+        if let Some(index) = matching_refusal {
+            let retained = &self.snapshot.remote_removal_tombstones[index].offer_ids;
+            if retained.len() > canonical_ids.len() {
+                canonical_ids.clone_from(retained);
+            }
+        }
+        if let Some(index) = matching_share {
+            let share = &self.snapshot.shares[index];
+            if share.offer.source_device_id != notice.offer_source_id {
+                return Err(SharingError::InvalidRecord);
+            }
+            let mut known = share
+                .superseded_offers
+                .iter()
+                .map(|old| old.offer_id)
+                .collect::<Vec<_>>();
+            known.push(share.offer.offer_id);
+            // Removal and renewal can cross in flight. Either side may know a
+            // longer prefix of the same authenticated logical invitation. A
+            // shorter removal still stops known descendants; unrelated forks
+            // remain invalid.
+            if !is_prefix(&known, &canonical_ids) && !is_prefix(&canonical_ids, &known) {
+                return Err(SharingError::InvalidRecord);
+            }
+            if known.len() > canonical_ids.len() {
+                canonical_ids = known;
+            }
+        }
+        if canonical_ids.len() > MAX_REMOVAL_OFFER_IDS
+            || self
+                .snapshot
+                .remote_removal_tombstones
+                .iter()
+                .enumerate()
+                .any(|(index, removed)| {
+                    Some(index) != matching_refusal
+                        && removed
+                            .offer_ids
+                            .iter()
+                            .any(|offer_id| canonical_ids.contains(offer_id))
+                })
+        {
+            return Err(SharingError::InvalidRecord);
+        }
+        if matching_refusal.is_some_and(|index| {
+            self.snapshot.remote_removal_tombstones[index].offer_ids == canonical_ids
+        }) && matching_share.is_none_or(|index| self.snapshot.shares[index].removed)
+        {
+            return Ok(());
+        }
+
+        // An authenticated withdrawal may overtake its invitation. Retain the
+        // exact IDs even when none were known so delayed delivery cannot
+        // recreate consent after this acknowledgement.
+        let retained_ids = self.snapshot.remote_removal_tombstones.iter().try_fold(
+            0_usize,
+            |total, removed| {
+                total
+                    .checked_add(removed.offer_ids.len())
+                    .ok_or(SharingError::LimitExceeded)
+            },
+        )?;
+        let replaced_len = matching_refusal
+            .map(|index| {
+                self.snapshot.remote_removal_tombstones[index]
+                    .offer_ids
+                    .len()
+            })
+            .unwrap_or(0);
+        if (matching_refusal.is_none()
+            && self.snapshot.remote_removal_tombstones.len() >= MAX_RETAINED_OFFERS)
+            || self
+                .snapshot
+                .remote_removal_tombstones
+                .iter()
+                .filter(|removed| removed.peer_id == notice.requester_id)
+                .count()
+                >= MAX_SHARES
+                && matching_refusal.is_none()
+            || retained_ids
+                .checked_sub(replaced_len)
+                .and_then(|total| total.checked_add(canonical_ids.len()))
+                .is_none_or(|total| total > MAX_RETAINED_OFFERS)
+        {
+            return Err(SharingError::LimitExceeded);
+        }
+        let mut next = self.snapshot.clone();
+        if let Some(index) = matching_share {
+            next.shares[index].removed = true;
+        }
+        if let Some(index) = matching_refusal {
+            next.remote_removal_tombstones[index].offer_ids = canonical_ids;
+        } else {
+            next.remote_removal_tombstones.push(RemoteRemovalTombstone {
+                peer_id: notice.requester_id,
+                offer_source_id: notice.offer_source_id,
+                folder_id: notice.folder_id,
+                offer_ids: canonical_ids,
+            });
+        }
+        self.persist(next)
+    }
+
+    /// Stop replaying one withdrawal only after its peer returned an
+    /// authenticated acknowledgement. Lost acknowledgements remain retryable.
+    pub fn acknowledge_removal(
+        &mut self,
+        peer_id: DeviceId,
+        current_offer_id: Uuid,
+    ) -> Result<(), SharingError> {
+        self.store
+            .payload()
+            .map_err(|_| SharingError::PersistenceUncertain)?;
+        let Some(index) = self
+            .snapshot
+            .pending_remote_removals
+            .iter()
+            .position(|pending| {
+                pending.peer_identity.device_id == peer_id
+                    && pending.offer_ids.last() == Some(&current_offer_id)
+            })
+        else {
+            return if self
+                .snapshot
+                .tombstones
+                .iter()
+                .any(|removed| removed.peer_id == peer_id && removed.offer_id == current_offer_id)
+            {
+                Ok(())
+            } else {
+                Err(SharingError::InvalidRecord)
+            };
+        };
+        let mut next = self.snapshot.clone();
+        next.pending_remote_removals.remove(index);
         self.persist(next)
     }
 
@@ -1003,6 +1324,10 @@ impl FolderSharingJournal {
                 changed = true;
             }
         }
+        let pending_before = next.pending_remote_removals.len();
+        next.pending_remote_removals
+            .retain(|pending| pending.peer_identity.device_id != peer_id);
+        changed |= next.pending_remote_removals.len() != pending_before;
         if changed {
             self.persist(next)?;
         }
@@ -1120,6 +1445,19 @@ impl FolderSharingJournal {
                 changed = true;
             }
         }
+        let pending_before = next.pending_remote_removals.len();
+        let mut retained = Vec::with_capacity(pending_before);
+        for pending in std::mem::take(&mut next.pending_remote_removals) {
+            if observe_trust(&config, pending.peer_identity.device_id)?.is_some_and(|current| {
+                current.identity == pending.peer_identity
+                    && current.transport == pending.peer_transport
+                    && current.confirmed_at_unix_ms == pending.peer_confirmed_at_unix_ms
+            }) {
+                retained.push(pending);
+            }
+        }
+        next.pending_remote_removals = retained;
+        changed |= next.pending_remote_removals.len() != pending_before;
         if changed {
             self.persist(next)?;
         }
@@ -1157,12 +1495,9 @@ impl FolderSharingJournal {
     }
 
     fn index(&self, offer: Uuid) -> Result<usize, SharingError> {
-        if self
-            .snapshot
-            .tombstones
-            .iter()
-            .any(|removed| removed.offer_id == offer)
-        {
+        if self.snapshot.tombstones.iter().any(|removed| {
+            removed.offer_id == offer || removed.superseded_offer_ids.contains(&offer)
+        }) {
             return Err(SharingError::Removed);
         }
         if self.snapshot.shares.iter().any(|share| {
@@ -1250,8 +1585,21 @@ fn validate_snapshot(
     let mut labels = BTreeMap::<Uuid, &str>::new();
     let mut peer_engines = BTreeMap::new();
     let mut engine_owners = BTreeMap::new();
+    let mut removed_chain_total = 0_usize;
     for removed in &snapshot.tombstones {
+        removed_chain_total = removed_chain_total
+            .checked_add(removed.superseded_offer_ids.len())
+            .ok_or(SharingError::LimitExceeded)?;
         if removed.offer_id.is_nil()
+            || removed.superseded_offer_ids.len() > MAX_RENEWALS_PER_SHARE
+            || removed.superseded_offer_ids.iter().any(Uuid::is_nil)
+            || removed
+                .superseded_offer_ids
+                .iter()
+                .collect::<BTreeSet<_>>()
+                .len()
+                != removed.superseded_offer_ids.len()
+            || removed.superseded_offer_ids.contains(&removed.offer_id)
             || removed.folder_id.is_nil()
             || removed.peer_id == engine.device_id()
             || removed.issued_at_unix_ms == 0
@@ -1262,6 +1610,9 @@ fn validate_snapshot(
         {
             return Err(SharingError::InvalidState);
         }
+    }
+    if removed_chain_total > MAX_RETAINED_OFFERS {
+        return Err(SharingError::LimitExceeded);
     }
     for share in &snapshot.shares {
         let source_is_owner = share.offer.source_device_id == engine.device_id();
@@ -1375,6 +1726,116 @@ fn validate_snapshot(
             }
         }
     }
+    let mut removed_chain_ids = BTreeSet::new();
+    for removed in &snapshot.tombstones {
+        for offer_id in &removed.superseded_offer_ids {
+            if !removed_chain_ids.insert(*offer_id)
+                || snapshot.shares.iter().any(|share| {
+                    share.offer.offer_id == *offer_id
+                        || share
+                            .superseded_offers
+                            .iter()
+                            .any(|superseded| superseded.offer_id == *offer_id)
+                })
+                || snapshot.tombstones.iter().any(|candidate| {
+                    candidate.offer_id == *offer_id
+                        && (candidate.peer_id != removed.peer_id
+                            || candidate.folder_id != removed.folder_id
+                            || candidate.incoming != removed.incoming)
+                })
+            {
+                return Err(SharingError::InvalidState);
+            }
+        }
+    }
+    if snapshot.pending_remote_removals.len() > MAX_PENDING_REMOVALS {
+        return Err(SharingError::LimitExceeded);
+    }
+    let mut pending_offer_ids = BTreeSet::new();
+    let mut pending_total = 0_usize;
+    for pending in &snapshot.pending_remote_removals {
+        pending_total = pending_total
+            .checked_add(pending.offer_ids.len())
+            .ok_or(SharingError::LimitExceeded)?;
+        if pending.peer_identity.device_id == engine.device_id()
+            || pending.peer_transport.peer_id != pending.peer_identity.device_id
+            || pending.peer_confirmed_at_unix_ms == 0
+            || pending.offer_source_id != engine.device_id()
+                && pending.offer_source_id != pending.peer_identity.device_id
+            || pending.folder_id.is_nil()
+            || pending.offer_ids.is_empty()
+            || pending.offer_ids.len() > MAX_REMOVAL_OFFER_IDS
+            || pending.offer_ids.iter().any(Uuid::is_nil)
+            || snapshot
+                .tombstones
+                .iter()
+                .find(|removed| {
+                    Some(&removed.offer_id) == pending.offer_ids.last()
+                        && removed.folder_id == pending.folder_id
+                        && removed.peer_id == pending.peer_identity.device_id
+                        && (if removed.incoming {
+                            removed.peer_id
+                        } else {
+                            engine.device_id()
+                        }) == pending.offer_source_id
+                })
+                .is_none_or(|current| {
+                    current.superseded_offer_ids.as_slice()
+                        != &pending.offer_ids[..pending.offer_ids.len() - 1]
+                })
+            || pending.offer_ids.iter().any(|offer_id| {
+                !pending_offer_ids.insert(*offer_id)
+                    || !snapshot.tombstones.iter().any(|removed| {
+                        removed.offer_id == *offer_id
+                            && removed.folder_id == pending.folder_id
+                            && removed.peer_id == pending.peer_identity.device_id
+                            && (if removed.incoming {
+                                removed.peer_id
+                            } else {
+                                engine.device_id()
+                            }) == pending.offer_source_id
+                    })
+            })
+        {
+            return Err(SharingError::InvalidState);
+        }
+    }
+    if pending_total > MAX_RETAINED_OFFERS {
+        return Err(SharingError::LimitExceeded);
+    }
+    if snapshot.remote_removal_tombstones.len() > MAX_RETAINED_OFFERS {
+        return Err(SharingError::LimitExceeded);
+    }
+    let mut remote_ids = BTreeSet::new();
+    let mut remote_per_peer = BTreeMap::<DeviceId, usize>::new();
+    let mut remote_total = 0_usize;
+    for removed in &snapshot.remote_removal_tombstones {
+        remote_total = remote_total
+            .checked_add(removed.offer_ids.len())
+            .ok_or(SharingError::LimitExceeded)?;
+        let count = remote_per_peer.entry(removed.peer_id).or_default();
+        *count = count.checked_add(1).ok_or(SharingError::LimitExceeded)?;
+        if removed.peer_id == engine.device_id()
+            || removed.offer_source_id != engine.device_id()
+                && removed.offer_source_id != removed.peer_id
+            || removed.folder_id.is_nil()
+            || removed.offer_ids.is_empty()
+            || removed.offer_ids.len() > MAX_REMOVAL_OFFER_IDS
+            || *count > MAX_SHARES
+            || removed.offer_ids.iter().any(Uuid::is_nil)
+            || removed.offer_ids.iter().any(|offer_id| {
+                !remote_ids.insert(*offer_id)
+                    || retained_offer_binding(snapshot, *offer_id).is_some_and(|binding| {
+                        binding != (removed.peer_id, removed.folder_id, removed.offer_source_id)
+                    })
+            })
+        {
+            return Err(SharingError::InvalidState);
+        }
+    }
+    if remote_total > MAX_RETAINED_OFFERS {
+        return Err(SharingError::LimitExceeded);
+    }
     for (id, root) in &roots {
         if roots.iter().any(|(other, path)| {
             id != other && (root.path.starts_with(&path.path) || path.path.starts_with(&root.path))
@@ -1414,6 +1875,25 @@ fn validate_snapshot(
         {
             return Err(SharingError::InvalidState);
         }
+    }
+    Ok(())
+}
+
+fn validate_removal_notice(
+    notice: &FolderRemovalNotice,
+    expected_target: DeviceId,
+) -> Result<(), SharingError> {
+    if notice.requester_id == expected_target
+        || notice.target_id != expected_target
+        || notice.offer_source_id != notice.requester_id
+            && notice.offer_source_id != notice.target_id
+        || notice.folder_id.is_nil()
+        || notice.offer_ids.is_empty()
+        || notice.offer_ids.len() > MAX_REMOVAL_OFFER_IDS
+        || notice.offer_ids.iter().any(Uuid::is_nil)
+        || notice.offer_ids.iter().collect::<BTreeSet<_>>().len() != notice.offer_ids.len()
+    {
+        return Err(SharingError::InvalidRecord);
     }
     Ok(())
 }
@@ -1499,13 +1979,26 @@ fn observe_trust(
 
 fn compact_removed(snapshot: &mut Snapshot) {
     let owner = snapshot.owner.device_id;
+    let pending_ids = snapshot
+        .pending_remote_removals
+        .iter()
+        .flat_map(|pending| pending.offer_ids.iter().copied())
+        .collect::<BTreeSet<_>>();
     let mut retained = Vec::with_capacity(snapshot.shares.len());
     for share in snapshot.shares.drain(..) {
         if share.removed {
+            let superseded_offer_ids = share
+                .superseded_offers
+                .iter()
+                .map(|superseded| superseded.offer_id)
+                .collect::<Vec<_>>();
             for superseded in share.superseded_offers {
-                if superseded.issued_at_unix_ms >= snapshot.freshness_floor_unix_ms {
+                if superseded.issued_at_unix_ms >= snapshot.freshness_floor_unix_ms
+                    || pending_ids.contains(&superseded.offer_id)
+                {
                     snapshot.tombstones.push(Tombstone {
                         offer_id: superseded.offer_id,
+                        superseded_offer_ids: Vec::new(),
                         folder_id: share.offer.folder_id,
                         label: share.offer.label.clone(),
                         peer_id: share.peer_identity.device_id,
@@ -1514,16 +2007,18 @@ fn compact_removed(snapshot: &mut Snapshot) {
                     });
                 }
             }
-            if share.offer.issued_at_unix_ms >= snapshot.freshness_floor_unix_ms {
-                snapshot.tombstones.push(Tombstone {
-                    offer_id: share.offer.offer_id,
-                    folder_id: share.offer.folder_id,
-                    label: share.offer.label,
-                    peer_id: share.peer_identity.device_id,
-                    incoming: share.offer.target_device_id == owner,
-                    issued_at_unix_ms: share.offer.issued_at_unix_ms,
-                });
-            }
+            // Retain the canonical terminal row under the existing finite offer
+            // quota so native capability cleanup never has to infer removal
+            // from an absent status row. Individual renewal tombstones may age.
+            snapshot.tombstones.push(Tombstone {
+                offer_id: share.offer.offer_id,
+                superseded_offer_ids,
+                folder_id: share.offer.folder_id,
+                label: share.offer.label,
+                peer_id: share.peer_identity.device_id,
+                incoming: share.offer.target_device_id == owner,
+                issued_at_unix_ms: share.offer.issued_at_unix_ms,
+            });
         } else {
             retained.push(share);
         }
@@ -1539,10 +2034,26 @@ fn advance_freshness_floor_candidate(snapshot: &mut Snapshot, now: u64) {
     let floor = freshness_floor(now);
     if floor > snapshot.freshness_floor_unix_ms {
         snapshot.freshness_floor_unix_ms = floor;
-        snapshot
+        let pending_ids = snapshot
+            .pending_remote_removals
+            .iter()
+            .flat_map(|pending| pending.offer_ids.iter().copied())
+            .collect::<BTreeSet<_>>();
+        let superseded_ids = snapshot
             .tombstones
-            .retain(|removed| removed.issued_at_unix_ms >= floor);
+            .iter()
+            .flat_map(|removed| removed.superseded_offer_ids.iter().copied())
+            .collect::<BTreeSet<_>>();
+        snapshot.tombstones.retain(|removed| {
+            !superseded_ids.contains(&removed.offer_id)
+                || removed.issued_at_unix_ms >= floor
+                || pending_ids.contains(&removed.offer_id)
+        });
     }
+}
+
+fn is_prefix<T: PartialEq>(prefix: &[T], sequence: &[T]) -> bool {
+    prefix.len() <= sequence.len() && sequence[..prefix.len()] == *prefix
 }
 
 fn retained_offer_count(snapshot: &Snapshot) -> Result<usize, SharingError> {
@@ -1558,6 +2069,37 @@ fn retained_offer_count(snapshot: &Snapshot) -> Result<usize, SharingError> {
                 .ok_or(SharingError::LimitExceeded)
         },
     )
+}
+
+fn retained_offer_binding(
+    snapshot: &Snapshot,
+    offer_id: Uuid,
+) -> Option<(DeviceId, Uuid, DeviceId)> {
+    if let Some(removed) = snapshot.tombstones.iter().find(|removed| {
+        removed.offer_id == offer_id || removed.superseded_offer_ids.contains(&offer_id)
+    }) {
+        return Some((
+            removed.peer_id,
+            removed.folder_id,
+            if removed.incoming {
+                removed.peer_id
+            } else {
+                snapshot.owner.device_id
+            },
+        ));
+    }
+    snapshot.shares.iter().find_map(|share| {
+        (share.offer.offer_id == offer_id
+            || share
+                .superseded_offers
+                .iter()
+                .any(|superseded| superseded.offer_id == offer_id))
+        .then_some((
+            share.peer_identity.device_id,
+            share.offer.folder_id,
+            share.offer.source_device_id,
+        ))
+    })
 }
 
 #[cfg(test)]

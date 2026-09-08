@@ -944,7 +944,7 @@ private fun JSONObject.toFolderSyncStatus(): FolderSyncStatus {
             requireJsonKeys(
                 share,
                 setOf("offerId", "folderId", "label", "peerId", "incoming", "phase", "expiresAtUnixMs", "expired"),
-                setOf("peerConnection", "supersededOfferIds"),
+                setOf("peerConnection", "supersededOfferIds", "remoteRemovalPending"),
             )
             FolderShare(
                 offerId = requireUuid(share.getString("offerId"), "folder offer ID"),
@@ -980,13 +980,17 @@ private fun JSONObject.toFolderSyncStatus(): FolderSyncStatus {
                         }
                     }
                 } else emptyList(),
+                remoteRemovalPending = if (share.has("remoteRemovalPending")) {
+                    (share.get("remoteRemovalPending") as? Boolean)
+                        ?: error("The node returned an invalid removal status.")
+                } else false,
             )
         }
     }
     check(shares.map(FolderShare::offerId).toSet().size == shares.size)
     val retainedOfferIds = shares.map(FolderShare::offerId).toMutableSet()
     shares.forEach { share ->
-        check(share.phase != FolderSharePhase.REMOVED || share.supersededOfferIds.isEmpty())
+        check(!share.remoteRemovalPending || share.phase == FolderSharePhase.REMOVED)
         share.supersededOfferIds.forEach { check(retainedOfferIds.add(it)) }
     }
     check(shares.all { share ->

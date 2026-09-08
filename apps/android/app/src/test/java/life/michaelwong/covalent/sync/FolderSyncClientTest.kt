@@ -182,6 +182,36 @@ class FolderSyncClientTest {
         }
     }
 
+    @Test
+    fun removalStatusPreservesRetiredIdsAndRejectsMalformedPendingFlags() {
+        val oldId = "55555555-5555-4555-8555-555555555555"
+        val server = MockWebServer()
+        val variants = listOf(true, JSONObject.NULL, "true", 1)
+        variants.forEach { value ->
+            val json = JSONObject(STATUS)
+            json.getJSONArray("shares").getJSONObject(0)
+                .put("phase", "removed").put("supersededOfferIds", JSONArray().put(oldId))
+                .put("remoteRemovalPending", value)
+            server.enqueue(MockResponse().setBody(json.toString()))
+        }
+        val inconsistent = JSONObject(STATUS)
+        inconsistent.getJSONArray("shares").getJSONObject(0).put("remoteRemovalPending", true)
+        server.enqueue(MockResponse().setBody(inconsistent.toString()))
+        server.start()
+        try {
+            val base = server.url("/").toString().removeSuffix("/")
+            val client = CovalentNodeClient()
+            val removed = client.folderSyncStatus(base, "token").shares.single()
+            assertTrue(removed.remoteRemovalPending)
+            assertEquals(listOf(oldId), removed.supersededOfferIds)
+            repeat(variants.size) {
+                assertTrue(runCatching { client.folderSyncStatus(base, "token") }.isFailure)
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
+
     private companion object {
         const val PEER = "22222222-2222-4222-8222-222222222222"
         const val FOLDER = "11111111-1111-4111-8111-111111111111"
