@@ -20,19 +20,36 @@ public struct SelectedDirectoryGrant: Codable, Equatable, Identifiable, Sendable
     public let purpose: DirectoryAccessPurpose
     public let bookmarkData: Data
     public let capturedAt: Date
+    /// The exact durable folder share that owns this capability. Older saved
+    /// grants decode as unbound and are migrated only when the choice is
+    /// unambiguous; a label or path is never used to guess a share identity.
+    public let folderOfferId: UUID?
 
     public init(
         id: UUID = UUID(),
         displayName: String,
         purpose: DirectoryAccessPurpose,
         bookmarkData: Data,
-        capturedAt: Date = Date()
+        capturedAt: Date = Date(),
+        folderOfferId: UUID? = nil
     ) {
         self.id = id
         self.displayName = displayName
         self.purpose = purpose
         self.bookmarkData = bookmarkData
         self.capturedAt = capturedAt
+        self.folderOfferId = folderOfferId
+    }
+
+    public func bound(toFolderOfferId offerId: UUID) -> Self {
+        Self(
+            id: id,
+            displayName: displayName,
+            purpose: purpose,
+            bookmarkData: bookmarkData,
+            capturedAt: capturedAt,
+            folderOfferId: offerId
+        )
     }
 
     public static func capture(url: URL, purpose: DirectoryAccessPurpose) throws -> Self {
@@ -95,6 +112,32 @@ public struct SelectedDirectoryGrant: Codable, Equatable, Identifiable, Sendable
             throw SelectedDirectoryError.permissionRevoked
         }
         return ResolvedSelectedDirectory(url: url)
+    }
+}
+
+/// A replacement bookmark saved before the local node is asked to mutate its
+/// folder journal. It remains until the exact repair is acknowledged and the
+/// normal helper has restarted with the promoted grant.
+public struct PendingFolderAccessRepair: Codable, Equatable, Identifiable, Sendable {
+    public let offerId: UUID
+    public let replacementGrant: SelectedDirectoryGrant
+    /// Exact request value retained across response loss and app relaunch.
+    /// The path is local-only and is never rendered or sent to a peer.
+    public let selectedRoot: String
+    public let preparedAt: Date
+
+    public var id: UUID { offerId }
+
+    public init(
+        offerId: UUID,
+        replacementGrant: SelectedDirectoryGrant,
+        selectedRoot: String,
+        preparedAt: Date = Date()
+    ) {
+        self.offerId = offerId
+        self.replacementGrant = replacementGrant.bound(toFolderOfferId: offerId)
+        self.selectedRoot = selectedRoot
+        self.preparedAt = preparedAt
     }
 }
 
@@ -203,6 +246,40 @@ extension SelectedDirectoryError: LocalizedError {
         case .accessDenied: "Covalent could not open this folder. Check its permission and try again."
         case .coordinationFailed: "The system could not coordinate safe access to this folder."
         case .tooManyFolderSyncGrants: "Remove a shared folder before adding another one."
+        }
+    }
+}
+
+public enum FolderAccessRepairError: Error, Equatable, Sendable {
+    case repairNotRequired
+    case shareMissing
+    case pendingRepairMissing
+    case differentRepairAlreadyPending
+    case ambiguousSavedAccess
+    case folderAlreadyUsed
+    case savedGrantMissing
+    case invalidSavedRepair
+}
+
+extension FolderAccessRepairError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .repairNotRequired:
+            "Folder access is already available. Refresh Folders before making another change."
+        case .shareMissing:
+            "This shared folder is no longer available. Refresh Folders and choose the current share."
+        case .pendingRepairMissing:
+            "Choose this folder again before retrying access repair."
+        case .differentRepairAlreadyPending:
+            "Finish the saved folder repair before choosing a different folder."
+        case .ambiguousSavedAccess:
+            "Covalent can't safely match the saved access to this share. Repair or remove one shared folder at a time."
+        case .folderAlreadyUsed:
+            "That folder is already used by another shared folder. Choose a different folder."
+        case .savedGrantMissing:
+            "The saved folder access is missing. Choose the folder again."
+        case .invalidSavedRepair:
+            "The saved folder repair could not be verified. Choose the affected folder again."
         }
     }
 }

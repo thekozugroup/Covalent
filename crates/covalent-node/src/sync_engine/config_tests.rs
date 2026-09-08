@@ -211,6 +211,14 @@ fn scan_gate_fixture(config: &DesiredEngineConfig) -> Value {
     value
 }
 
+fn reset_gate_fixture(config: &DesiredEngineConfig) -> Value {
+    let mut value = scan_gate_fixture(config);
+    for folder in value["folders"].as_array_mut().expect("folders") {
+        folder["paused"] = json!(true);
+    }
+    value
+}
+
 fn assert_effective_mismatch(config: &DesiredEngineConfig, value: &Value) {
     assert_eq!(
         config.verify_effective(value).unwrap_err(),
@@ -366,6 +374,40 @@ fn scan_gate_keeps_folders_local_until_exact_promotion() {
     drifted["options"]["relaysEnabled"] = json!(true);
     assert_eq!(
         config.promotion_payload(drifted).unwrap_err(),
+        EngineConfigError::EffectiveConfigMismatch
+    );
+}
+
+#[test]
+fn reset_gate_pauses_folder_runners_as_well_as_network_paths() {
+    let fixture = TempDir::new().expect("temporary directory");
+    let root = fixture.path().join("folder");
+    std::fs::create_dir(&root).expect("root");
+    let config = desired(
+        &fixture,
+        vec![peer()],
+        vec![folder(root, vec![id(PEER_ID), id(OWN_ID)])],
+        Some(address(22000)),
+    )
+    .expect("config");
+
+    let xml = config.render_reset_gate_xml().expect("reset-gate XML");
+    assert!(xml.contains("<folder "));
+    assert!(xml.contains("<listenAddress></listenAddress>"));
+    assert_eq!(xml.matches("<paused>true</paused>").count(), 2);
+
+    let reset = reset_gate_fixture(&config);
+    config
+        .verify_reset_gate_effective(&reset)
+        .expect("exact reset gate");
+    assert_eq!(
+        config.verify_scan_gate_effective(&reset).unwrap_err(),
+        EngineConfigError::EffectiveConfigMismatch
+    );
+    assert_eq!(
+        config
+            .verify_reset_gate_effective(&scan_gate_fixture(&config))
+            .unwrap_err(),
         EngineConfigError::EffectiveConfigMismatch
     );
 }

@@ -24,6 +24,13 @@ pub(crate) struct AcceptRequest {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct RepairRequest {
+    offer_id: uuid::Uuid,
+    selected_root: std::path::PathBuf,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ShareRequest {
     offer_id: uuid::Uuid,
 }
@@ -169,20 +176,80 @@ pub(crate) async fn remove(
     authorize(&state, &headers)?;
     #[cfg(unix)]
     {
-        let committed = ready_service(&state)?
-            .remove(request.offer_id)
-            .await
-            .map_err(service_error)?;
-        Ok(mutation_response(
-            Some(request.offer_id),
-            committed.lifecycle(),
-        ))
+        use crate::sync_engine::FolderSyncRuntimeState;
+        match &state.folder_sync {
+            FolderSyncRuntimeState::Ready(service) => {
+                let committed = service
+                    .remove(request.offer_id)
+                    .await
+                    .map_err(service_error)?;
+                Ok(mutation_response(
+                    Some(request.offer_id),
+                    committed.lifecycle(),
+                ))
+            }
+            FolderSyncRuntimeState::FolderAccessUnavailable(Some(recovery)) => {
+                recovery
+                    .remove(request.offer_id)
+                    .await
+                    .map_err(sharing_error)?;
+                Ok(folder_access_mutation_response(request.offer_id))
+            }
+            _ => Err(unavailable_error()),
+        }
     }
     #[cfg(not(unix))]
     {
         let _ = request;
         Err(unavailable_error())
     }
+}
+
+pub(crate) async fn repair(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ContractJson(request): ContractJson<RepairRequest>,
+) -> Result<axum::Json<MutationResponse>, ApiError> {
+    authorize(&state, &headers)?;
+    #[cfg(unix)]
+    {
+        use crate::sync_engine::FolderSyncRuntimeState;
+        match &state.folder_sync {
+            FolderSyncRuntimeState::Ready(service) => {
+                let committed = service
+                    .repair_root(request.offer_id, &request.selected_root)
+                    .await
+                    .map_err(service_error)?;
+                Ok(mutation_response(
+                    Some(request.offer_id),
+                    committed.lifecycle(),
+                ))
+            }
+            FolderSyncRuntimeState::FolderAccessUnavailable(Some(recovery)) => {
+                recovery
+                    .repair_root(request.offer_id, &request.selected_root)
+                    .await
+                    .map_err(sharing_error)?;
+                Ok(folder_access_mutation_response(request.offer_id))
+            }
+            _ => Err(unavailable_error()),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = request;
+        Err(unavailable_error())
+    }
+}
+
+#[cfg(unix)]
+fn folder_access_mutation_response(offer_id: uuid::Uuid) -> axum::Json<MutationResponse> {
+    axum::Json(MutationResponse {
+        schema_version: 1,
+        offer_id: Some(offer_id),
+        lifecycle: "stopped",
+        issue: Some("folderAccess"),
+    })
 }
 
 pub(crate) async fn retry(
@@ -363,8 +430,7 @@ pub(crate) async fn status(
     #[cfg(unix)]
     {
         use crate::sync_engine::{
-            FolderHealthFreshness, FolderLifecycle, FolderSyncRuntimeState,
-            PeerConnectionFreshness, SharingPhase,
+            FolderHealthFreshness, FolderLifecycle, FolderSyncRuntimeState, PeerConnectionFreshness,
         };
         let service = match &state.folder_sync {
             FolderSyncRuntimeState::NotPackaged => {
@@ -379,61 +445,36 @@ pub(crate) async fn status(
                     Some("installation"),
                 )));
             }
-            FolderSyncRuntimeState::FolderAccessUnavailable => {
-                return Ok(axum::Json(SyncStatusResponse::unavailable(
-                    "needsAttention",
-                    Some("folderAccess"),
-                )));
+            FolderSyncRuntimeState::FolderAccessUnavailable(recovery) => {
+                let Some(recovery) = recovery else {
+                    return Ok(axum::Json(SyncStatusResponse::unavailable(
+                        "needsAttention",
+                        Some("folderAccess"),
+                    )));
+                };
+                let summaries = recovery.summaries().await.map_err(sharing_error)?;
+                let config = state.engine.config().map_err(ApiError::from_core)?;
+                return Ok(axum::Json(SyncStatusResponse {
+                    schema_version: 1,
+                    availability: "needsAttention",
+                    lifecycle: "stopped",
+                    issue: Some("folderAccess"),
+                    health_freshness: "neverObserved",
+                    connection_freshness: "neverObserved",
+                    peers: peer_responses(&config),
+                    shares: share_responses(&summaries, |_| {
+                        crate::sync_engine::PeerConnectionState::Unknown
+                    }),
+                    folders: Vec::new(),
+                }));
             }
             FolderSyncRuntimeState::Ready(service) => service,
         };
         let snapshot = service.status().await.map_err(service_error)?;
         let config = state.engine.config().map_err(ApiError::from_core)?;
-        let peers = config
-            .trusted_peers
-            .iter()
-            .filter(|(id, grant)| {
-                !grant.revoked
-                    && grant.confirmed_at_unix_ms != 0
-                    && grant.peer_device_id == **id
-                    && config
-                        .trusted_peer_transports
-                        .get(id)
-                        .is_some_and(|pin| pin.peer_id == **id)
-            })
-            .map(|(id, grant)| PeerResponse {
-                peer_id: *id,
-                display_name: grant.display_name.clone(),
-            })
-            .collect();
+        let peers = peer_responses(&config);
         let (lifecycle, issue) = lifecycle_fields(snapshot.lifecycle());
-        let now = crate::now_unix_ms();
-        let shares = snapshot
-            .shares()
-            .iter()
-            .map(|share| ShareResponse {
-                offer_id: share.offer_id,
-                folder_id: share.folder_id,
-                label: share.label.clone(),
-                peer_id: share.peer_id,
-                incoming: share.incoming,
-                expires_at_unix_ms: share.expires_at_unix_ms,
-                expired: share
-                    .expires_at_unix_ms
-                    .is_some_and(|expires| now >= expires),
-                peer_connection: peer_connection_field(
-                    share.phase,
-                    snapshot.peer_connection(share.peer_id),
-                ),
-                phase: match share.phase {
-                    SharingPhase::Offered => "offered",
-                    SharingPhase::AwaitingCommit => "awaitingCommit",
-                    SharingPhase::Ready => "ready",
-                    SharingPhase::Paused => "paused",
-                    SharingPhase::Removed => "removed",
-                },
-            })
-            .collect();
+        let shares = share_responses(snapshot.shares(), |peer| snapshot.peer_connection(peer));
         let folders = snapshot
             .folder_health()
             .iter()
@@ -520,4 +561,61 @@ pub(crate) fn service_error(error: crate::sync_engine::FolderSyncServiceError) -
         retryable,
         upload_offset: None,
     }
+}
+
+#[cfg(unix)]
+fn sharing_error(_: crate::sync_engine::SharingError) -> ApiError {
+    service_error(crate::sync_engine::FolderSyncServiceError::Journal)
+}
+
+#[cfg(unix)]
+fn peer_responses(config: &covalent_core::NodeConfig) -> Vec<PeerResponse> {
+    config
+        .trusted_peers
+        .iter()
+        .filter(|(id, grant)| {
+            !grant.revoked
+                && grant.confirmed_at_unix_ms != 0
+                && grant.peer_device_id == **id
+                && config
+                    .trusted_peer_transports
+                    .get(id)
+                    .is_some_and(|pin| pin.peer_id == **id)
+        })
+        .map(|(id, grant)| PeerResponse {
+            peer_id: *id,
+            display_name: grant.display_name.clone(),
+        })
+        .collect()
+}
+
+#[cfg(unix)]
+fn share_responses(
+    summaries: &[crate::sync_engine::ShareSummary],
+    connection: impl Fn(covalent_protocol::DeviceId) -> crate::sync_engine::PeerConnectionState,
+) -> Vec<ShareResponse> {
+    use crate::sync_engine::SharingPhase;
+    let now = crate::now_unix_ms();
+    summaries
+        .iter()
+        .map(|share| ShareResponse {
+            offer_id: share.offer_id,
+            folder_id: share.folder_id,
+            label: share.label.clone(),
+            peer_id: share.peer_id,
+            incoming: share.incoming,
+            expires_at_unix_ms: share.expires_at_unix_ms,
+            expired: share
+                .expires_at_unix_ms
+                .is_some_and(|expires| now >= expires),
+            peer_connection: peer_connection_field(share.phase, connection(share.peer_id)),
+            phase: match share.phase {
+                SharingPhase::Offered => "offered",
+                SharingPhase::AwaitingCommit => "awaitingCommit",
+                SharingPhase::Ready => "ready",
+                SharingPhase::Paused => "paused",
+                SharingPhase::Removed => "removed",
+            },
+        })
+        .collect()
 }

@@ -14,6 +14,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -36,6 +37,7 @@ import life.michaelwong.covalent.ui.CovalentApp
 import life.michaelwong.covalent.ui.ConnectionHealth
 import life.michaelwong.covalent.ui.CovalentViewModel
 import life.michaelwong.covalent.ui.PairingRole
+import life.michaelwong.covalent.ui.NetworkPairingCard
 import life.michaelwong.covalent.ui.Screen
 import life.michaelwong.covalent.ui.PrimaryActionToolbar
 import life.michaelwong.covalent.ui.validateAndPersistSetup
@@ -45,6 +47,9 @@ import life.michaelwong.covalent.data.EnrolledTrust
 import life.michaelwong.covalent.data.NodeApiException
 import life.michaelwong.covalent.data.SecureNodeStore
 import life.michaelwong.covalent.model.NodeStatus
+import life.michaelwong.covalent.model.NetworkPairing
+import life.michaelwong.covalent.model.NetworkPairingDirection
+import life.michaelwong.covalent.model.NetworkPairingState
 import life.michaelwong.covalent.model.PlatformTier
 import life.michaelwong.covalent.model.RememberedBackup
 import life.michaelwong.covalent.model.RestorePlanPage
@@ -69,16 +74,70 @@ class CovalentAppTest {
     val compose = createComposeRule()
 
     @Test
-    fun firstLaunchRequiresDirectNodeConnection() {
+    fun firstLaunchOffersDirectFolderSyncAndBackPreservesBackupDraft() {
         val isolatedStore = isolatedStore("first_launch")
-        val state = CovalentViewModel(SavedStateHandle())
+        val state = CovalentViewModel(SavedStateHandle()).apply {
+            initialize(isolatedStore)
+            setupName = "Draft backup server"
+            setupAddress = "https://backup.example.test"
+            setupToken = "draft-token-that-must-not-be-lost"
+        }
         compose.setContent {
             CovalentTheme {
                 CovalentApp(isolatedStore, state)
             }
         }
-        compose.onNodeWithText("Connect your backup server").assertIsDisplayed()
-        compose.onNodeWithText("Server access token").assertIsDisplayed()
+
+        compose.onNodeWithText("Welcome to Covalent").assertIsDisplayed()
+        compose.onNodeWithTag("setup.folderSync").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Shared folders").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.onNodeWithText("Welcome to Covalent").assertIsDisplayed()
+        compose.onNodeWithText("Server access token").performScrollTo().assertIsDisplayed()
+        compose.runOnIdle {
+            assertEquals("Draft backup server", state.setupName)
+            assertEquals("https://backup.example.test", state.setupAddress)
+            assertEquals("draft-token-that-must-not-be-lost", state.setupToken)
+            assertEquals("", isolatedStore.baseUrl)
+            assertEquals("", isolatedStore.token)
+        }
+    }
+
+    @Test
+    fun networkPairingCardUsesFolderCopyOnlyWhenExplicit() {
+        val folderMode = mutableStateOf(false)
+        val pairing = NetworkPairing(
+            pairingId = "11111111-1111-4111-8111-111111111111",
+            direction = NetworkPairingDirection.OUTGOING,
+            peerName = "Nearby device",
+            authenticationString = "alpha-bravo-charlie",
+            expiresAtUnixMs = System.currentTimeMillis() + 60_000,
+            state = NetworkPairingState.AWAITING_LOCAL_CONFIRMATION,
+            failureCode = null,
+            failureMessage = null,
+            peerTransport = null,
+        )
+        compose.setContent {
+            CovalentTheme {
+                if (folderMode.value) {
+                    NetworkPairingCard(pairing, false, false, {}, {}, forFolderSync = true)
+                } else {
+                    NetworkPairingCard(pairing, false, false, {}, {})
+                }
+            }
+        }
+
+        compose.onNodeWithText("Codes match — use as backup device").assertIsDisplayed()
+        compose.onNodeWithText(
+            "Compare this code on both physical devices. Continue only if every group matches. " +
+                "Pairing copies nothing now; you choose this device separately when creating a backup.",
+        ).assertIsDisplayed()
+        compose.runOnIdle { folderMode.value = true }
+        compose.onNodeWithText("Codes match — pair device").assertIsDisplayed()
+        compose.onNodeWithText(
+            "Compare this code on both physical devices. Continue only if every group matches. " +
+                "Pairing copies nothing now; choose a folder separately after pairing.",
+        ).assertIsDisplayed()
     }
 
     @Test

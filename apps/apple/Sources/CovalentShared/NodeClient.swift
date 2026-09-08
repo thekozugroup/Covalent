@@ -159,7 +159,11 @@ public actor NodeClient {
     }
 
     public func acceptFolder(_ request: FolderAcceptRequest) async throws -> FolderSyncMutation {
-      try await send(path: "api/v1/sync/accept", method: "POST", body: request)
+        try await send(path: "api/v1/sync/accept", method: "POST", body: request)
+    }
+
+    public func repairFolder(_ request: FolderRepairRequest) async throws -> FolderSyncMutation {
+        try await send(path: "api/v1/sync/repair", method: "POST", body: request)
     }
 
     public func pauseFolder(_ request: FolderPauseRequest) async throws -> FolderSyncMutation {

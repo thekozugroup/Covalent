@@ -330,6 +330,7 @@ class NodeProviderService : Service() {
             scheduleAccessCheck()
             updateNotification(
                 if (demandAtLaunch.backupEnabled) "Android provider is available"
+                else if (accessUnavailableAtLaunch) "Shared folders need attention"
                 else "Shared folders are available",
             )
         } else {

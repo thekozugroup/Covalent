@@ -11,94 +11,127 @@ struct MacFoldersView: View {
     @State private var draftFolderId = UUID()
     @State private var pendingOffer: PendingOffer?
     @State private var folderBeingRemoved: FolderShare?
+    @FocusState private var focusedField: ComposerField?
 
     var body: some View {
-      ScrollView {
-        VStack(alignment: .leading, spacing: 20) {
-          Text("Folders")
-            .font(.largeTitle.bold())
+      Form {
+        folderContent
 
-          content
-
-          if let status = model.folderSyncStatus, status.availability == "available" {
-            shareComposer(status: status)
-          }
+        if let status = model.folderSyncStatus,
+           status.availability == "available",
+           status.issue == nil,
+           !status.isInitialScanning {
+          shareComposer(status: status)
         }
-        .padding(32)
       }
+      .formStyle(.grouped)
       .navigationTitle("Folders")
       .task { await refreshWhileVisible() }
       .confirmationDialog(
-        "Remove this folder from sync?",
+        "Remove Shared Folder?",
         isPresented: Binding(
           get: { folderBeingRemoved != nil },
           set: { if !$0 { folderBeingRemoved = nil } }
         )
       ) {
-        Button("Remove and keep local files", role: .destructive) {
+        Button("Remove and Keep Files", role: .destructive) {
           guard let share = folderBeingRemoved else { return }
           Task { await model.removeFolder(share.offerId) }
           folderBeingRemoved = nil
         }
         Button("Cancel", role: .cancel) {}
       } message: {
-        Text("This stops sync on this Mac. Local files stay on this Mac.")
+        Text("Sync stops on this Mac. Files already in the folder stay where they are.")
       }
     }
 
     @ViewBuilder
-    private var content: some View {
+    private var folderContent: some View {
       if model.folderSyncLoading && model.folderSyncStatus == nil {
-        ProgressView("Checking folder sync")
-      } else if let message = model.folderSyncError {
-        ContentUnavailableView(
-          "Folder sync is unavailable",
-          systemImage: "exclamationmark.triangle",
-          description: Text(message)
-        )
-        Button("Try Again") {
-          Task { await model.refreshFolders() }
+        Section {
+          ProgressView("Checking Folder Sync…")
         }
+      } else if let message = model.folderSyncError {
+        unavailableSection(
+          title: "Folder Sync Is Unavailable",
+          message: message,
+          offersRetry: true
+        )
       } else if let status = model.folderSyncStatus {
-        if status.availability != "available" {
-          ContentUnavailableView(
-            "Folder sync is unavailable",
-            systemImage: "exclamationmark.triangle",
-            description: Text(unavailableCopy(for: status))
-          )
-          if status.issue != "folderAccess" {
-            Button("Try Again") {
-              Task { await model.refreshFolders() }
-            }
+        let shares = visibleShares(in: status)
+        if status.issue == "folderAccess", !shares.isEmpty {
+          Section {
+            Label(
+              "Choose each affected folder again. Covalent keeps the existing share and files while restoring access.",
+              systemImage: "exclamationmark.folder"
+            )
+            .foregroundStyle(.secondary)
+            .accessibilityLabel("Folder access needs attention")
+            .accessibilityValue("Choose the affected folder again to restore access.")
+          } header: {
+            Text("Folder Access")
           }
-        } else if status.isInitialScanning && visibleShares(in: status).isEmpty {
-          ContentUnavailableView(
-            "Checking folders",
-            systemImage: "folder.badge.gearshape",
-            description: Text("Covalent is checking local folder contents before sync starts.")
+          shareSection(shares, status: status)
+        } else if status.availability != "available" {
+          unavailableSection(
+            title: "Folder Sync Is Unavailable",
+            message: unavailableCopy(for: status),
+            offersRetry: status.issue != "folderAccess"
           )
-        } else if visibleShares(in: status).isEmpty {
+        } else if status.isInitialScanning && shares.isEmpty {
+          Section {
+            ContentUnavailableView(
+              "Checking Folders",
+              systemImage: "folder.badge.gearshape",
+              description: Text("Covalent is checking local folder contents before sync starts.")
+            )
+          }
+        } else if shares.isEmpty {
+          Section {
+            ContentUnavailableView(
+              "Keep a Folder in Sync",
+              systemImage: "folder.badge.plus",
+              description: Text("Choose a paired device and a folder on this Mac.")
+            )
+          }
+        } else {
+          shareSection(shares, status: status)
+        }
+      } else {
+        Section {
           ContentUnavailableView(
-            "Keep a folder in sync",
+            "Keep a Folder in Sync",
             systemImage: "folder.badge.plus",
             description: Text("Choose a paired device and a folder on this Mac.")
           )
-        } else {
-          shares(status)
         }
-      } else {
-        ContentUnavailableView(
-          "Keep a folder in sync",
-          systemImage: "folder.badge.plus",
-          description: Text("Choose a paired device and a folder on this Mac.")
-        )
       }
     }
 
-    @ViewBuilder
-    private func shares(_ status: FolderSyncStatus) -> some View {
-      VStack(spacing: 12) {
-        ForEach(visibleShares(in: status)) { share in
+    private func unavailableSection(
+      title: String,
+      message: String,
+      offersRetry: Bool
+    ) -> some View {
+      Section {
+        ContentUnavailableView(
+          title,
+          systemImage: "exclamationmark.triangle",
+          description: Text(message)
+        )
+        if offersRetry {
+          Button("Try Again") {
+            Task { await model.refreshFolders() }
+          }
+          .disabled(model.folderSyncLoading)
+          .accessibilityHint("Checks the local folder service again.")
+        }
+      }
+    }
+
+    private func shareSection(_ shares: [FolderShare], status: FolderSyncStatus) -> some View {
+      Section("Shared Folders") {
+        ForEach(shares) { share in
           shareRow(share, status: status)
         }
       }
@@ -106,49 +139,75 @@ struct MacFoldersView: View {
 
     private func shareRow(_ share: FolderShare, status: FolderSyncStatus) -> some View {
       let state = status.displayState(for: share)
-      return HStack(alignment: .center, spacing: 16) {
-        VStack(alignment: .leading, spacing: 4) {
-          Text(share.label)
+      return VStack(alignment: .leading, spacing: 8) {
+        HStack(alignment: .firstTextBaseline) {
+          Label(share.label, systemImage: "folder")
             .font(.headline)
-          Text(peerName(for: share, status: status))
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
+          Spacer()
           Text(status.displayLabel(for: share))
             .font(.subheadline)
             .foregroundStyle(
-              state == .needsAttention || state == .invitationExpired ? .red : .secondary)
+              state == .needsAttention || state == .invitationExpired
+                ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary)
+            )
         }
-
-        Spacer()
-
-        shareActions(share, state: state)
+        LabeledContent("Paired Device", value: peerName(for: share, status: status))
+          .font(.subheadline)
+        HStack {
+          Spacer()
+          shareActions(share, state: state, status: status)
+            .disabled(!model.isAuthorized || model.folderSyncMutationInFlight)
+        }
       }
-      .padding()
-      .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+      .padding(.vertical, 4)
     }
 
     @ViewBuilder
-    private func shareActions(_ share: FolderShare, state: FolderShareDisplayState) -> some View {
-      if state == .needsAttention {
-        Button("Try Again") {
-          Task { await model.retryFolderSync() }
+    private func shareActions(
+      _ share: FolderShare,
+      state: FolderShareDisplayState,
+      status: FolderSyncStatus
+    ) -> some View {
+      if status.issue == "folderAccess" {
+        if model.hasPendingFolderAccessRepair(for: share.offerId) {
+          Button("Finish Repair") {
+            Task { _ = await model.retryFolderAccessRepair(offerId: share.offerId) }
+          }
+          .keyboardShortcut(.defaultAction)
+          .accessibilityHint("Retries the saved replacement for \(share.label).")
         }
-        .disabled(!model.isAuthorized || model.folderSyncMutationInFlight)
-      }
+        Button("Choose Again…") {
+          chooseFolder(purpose: .folderSync) { grant in
+            Task { _ = await model.repairFolderAccess(offerId: share.offerId, grant: grant) }
+          }
+        }
+        .accessibilityLabel("Choose folder again for \(share.label)")
+        .accessibilityHint("Opens the system folder picker and preserves the share identity.")
 
-      if share.incoming && share.phase == .offered {
-        Button("Choose folder") {
+        Button("Remove…", role: .destructive) {
+          folderBeingRemoved = share
+        }
+        .accessibilityLabel("Remove \(share.label) from sync")
+      } else if share.incoming && share.phase == .offered {
+        Button("Choose Folder…") {
           chooseFolder(purpose: .folderSync) { grant in
             Task { _ = await model.acceptFolder(offerId: share.offerId, grant: grant) }
           }
         }
-        .disabled(!model.isAuthorized || model.folderSyncMutationInFlight || state == .invitationExpired)
+        .keyboardShortcut(.defaultAction)
+        .disabled(state == .invitationExpired)
+        .accessibilityLabel("Choose a folder for \(share.label)")
 
         Button(state == .invitationExpired ? "Remove" : "Decline", role: .destructive) {
           Task { await model.removeFolder(share.offerId) }
         }
-        .disabled(!model.isAuthorized || model.folderSyncMutationInFlight)
       } else {
+        if state == .needsAttention {
+          Button("Try Again") {
+            Task { await model.retryFolderSync() }
+          }
+        }
+
         Button(share.phase == .paused ? "Resume" : "Pause") {
           Task {
             await model.setFolderPaused(
@@ -157,43 +216,45 @@ struct MacFoldersView: View {
             )
           }
         }
-        .disabled(!model.isAuthorized || model.folderSyncMutationInFlight || state == .invitationExpired)
+        .disabled(state == .invitationExpired)
+        .accessibilityLabel("\(share.phase == .paused ? "Resume" : "Pause") \(share.label)")
 
         Button("Remove…", role: .destructive) {
           folderBeingRemoved = share
         }
-        .disabled(!model.isAuthorized || model.folderSyncMutationInFlight)
+        .accessibilityLabel("Remove \(share.label) from sync")
       }
     }
 
     private func shareComposer(status: FolderSyncStatus) -> some View {
-      VStack(alignment: .leading, spacing: 12) {
-        Text("Keep a folder in sync")
-          .font(.title2.bold())
-
+      Section("Share a Folder") {
         if status.peers.isEmpty {
-          Text("Pair a device before sharing a folder.")
+          Label("Pair a device before sharing a folder.", systemImage: "laptopcomputer.and.iphone")
             .foregroundStyle(.secondary)
         } else {
-          Picker("Paired device", selection: $chosenPeer) {
-            Text("Choose a device").tag(UUID?.none)
+          Picker("Paired Device", selection: $chosenPeer) {
+            Text("Choose a Device").tag(UUID?.none)
             ForEach(status.peers) { peer in
               Text(peer.displayName).tag(Optional(peer.peerId))
             }
           }
+          .accessibilityHint("Selects the paired device that will receive this folder offer.")
 
-          TextField("Folder name", text: $label, prompt: Text("Shared documents"))
+          TextField("Folder Name", text: $label, prompt: Text("Shared Documents"))
+            .focused($focusedField, equals: .label)
+            .accessibilityHint("Names the folder for the paired device.")
 
           if let pendingOffer {
-            Text("Retry the folder you already chose.")
-              .font(.caption)
+            Label("The previous result was uncertain. Retry the same folder offer.", systemImage: "arrow.clockwise")
+              .font(.callout)
               .foregroundStyle(.secondary)
-            Button("Try sharing chosen folder again") {
+            Button("Try Sharing Again") {
               submit(pendingOffer)
             }
+            .keyboardShortcut(.defaultAction)
             .disabled(!model.isAuthorized || model.folderSyncMutationInFlight)
           } else {
-            Button("Choose folder and share") {
+            Button("Choose Folder and Share…") {
               guard let peerId = chosenPeer else { return }
               let safeLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
               chooseFolder(purpose: .folderSync) { grant in
@@ -207,12 +268,12 @@ struct MacFoldersView: View {
                 submit(offer)
               }
             }
+            .keyboardShortcut(.defaultAction)
             .disabled(chosenPeer == nil || !model.isAuthorized || model.folderSyncMutationInFlight)
+            .accessibilityHint("Opens the system folder picker, then sends one folder offer.")
           }
         }
       }
-      .padding()
-      .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
     }
 
     private func submit(_ offer: PendingOffer) {
@@ -227,6 +288,7 @@ struct MacFoldersView: View {
           pendingOffer = nil
           draftFolderId = UUID()
           label = ""
+          focusedField = nil
         }
       }
     }
@@ -247,17 +309,21 @@ struct MacFoldersView: View {
     }
 
     private func peerName(for share: FolderShare, status: FolderSyncStatus) -> String {
-      status.peers.first(where: { $0.peerId == share.peerId })?.displayName ?? "Paired device"
+      status.peers.first(where: { $0.peerId == share.peerId })?.displayName ?? "Paired Device"
     }
 
     private func unavailableCopy(for status: FolderSyncStatus) -> String {
       if status.issue == "folderAccess" {
-        return "Saved folder access needs to be granted again. Remove the affected sharing, then choose the folder again."
+        return "Saved folder access needs attention. Choose the affected folder again to preserve its existing share."
       }
       if status.lifecycle == "needsAttention" {
         return "Folder sync needs attention. Try again after the local service is ready."
       }
       return "The local folder service is not ready. Try again shortly."
+    }
+
+    private enum ComposerField: Hashable {
+      case label
     }
 
     private struct PendingOffer {
@@ -275,6 +341,8 @@ struct MacFoldersView: View {
       panel.canChooseDirectories = true
       panel.canChooseFiles = false
       panel.allowsMultipleSelection = false
+      panel.prompt = "Choose"
+      panel.message = "Choose a folder on this Mac. Covalent will save access only for that folder."
       guard panel.runModal() == .OK,
         let url = panel.url,
         let grant = try? SelectedDirectoryGrant.capture(url: url, purpose: purpose)

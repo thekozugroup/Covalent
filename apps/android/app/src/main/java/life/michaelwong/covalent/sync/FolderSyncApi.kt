@@ -18,6 +18,7 @@ internal interface FolderSyncApi {
     fun accept(connection: NodeConnection, offerId: String, selectedRoot: String): FolderSyncMutation
     fun pause(connection: NodeConnection, offerId: String, paused: Boolean): FolderSyncMutation
     fun remove(connection: NodeConnection, offerId: String): FolderSyncMutation
+    fun repair(connection: NodeConnection, offerId: String, selectedRoot: String): FolderSyncMutation
     fun retry(connection: NodeConnection): FolderSyncMutation
 }
 
@@ -41,6 +42,9 @@ internal class NodeFolderSyncApi(private val client: CovalentNodeClient) : Folde
 
     override fun remove(connection: NodeConnection, offerId: String) =
         client.removeFolder(connection.baseUrl, connection.token, offerId)
+
+    override fun repair(connection: NodeConnection, offerId: String, selectedRoot: String) =
+        client.repairFolder(connection.baseUrl, connection.token, offerId, selectedRoot)
 
     override fun retry(connection: NodeConnection) =
         client.retryFolderSync(connection.baseUrl, connection.token)

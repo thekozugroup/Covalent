@@ -22,6 +22,36 @@ import Testing
     #expect(value == "cold bookmark fixture")
 }
 
+@Test func legacyDirectoryGrantDecodesWithoutGuessingAFolderShare() throws {
+    let grantId = UUID()
+    let json = "{\"id\":\"\(grantId.uuidString)\",\"displayName\":\"Legacy\",\"purpose\":\"folderSync\",\"bookmarkData\":\"AA==\",\"capturedAt\":0}"
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .secondsSince1970
+    let grant = try decoder.decode(SelectedDirectoryGrant.self, from: Data(json.utf8))
+    #expect(grant.id == grantId)
+    #expect(grant.folderOfferId == nil)
+}
+
+@Test func malformedPendingFolderRepairFailsClosed() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let selected = root.appending(path: "selected", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: selected, withIntermediateDirectories: true)
+    let wrongPurpose = try SelectedDirectoryGrant.capture(url: selected, purpose: .backupSource)
+    let persistence = AppleAppPersistence(directoryURL: root.appending(path: "state"))
+    try await persistence.savePendingFolderRepairs([
+        PendingFolderAccessRepair(
+            offerId: UUID(),
+            replacementGrant: wrongPurpose,
+            selectedRoot: selected.path
+        )
+    ])
+    await #expect(throws: FolderAccessRepairError.invalidSavedRepair) {
+        _ = try await persistence.loadPendingFolderRepairs()
+    }
+}
+
 #if os(macOS)
 @Test func macAppDeclaresPersistentSecurityScopeEntitlement() throws {
     let appleRoot = URL(fileURLWithPath: #filePath)
@@ -36,6 +66,12 @@ import Testing
     #expect(entitlements["com.apple.security.app-sandbox"] as? Bool == true)
     #expect(entitlements["com.apple.security.files.user-selected.read-write"] as? Bool == true)
     #expect(entitlements["com.apple.security.files.bookmarks.app-scope"] as? Bool == true)
+
+    let project = try String(
+        contentsOf: appleRoot.appending(path: "Project.yml"),
+        encoding: .utf8
+    )
+    #expect(project.contains("com.apple.security.files.bookmarks.app-scope: true"))
 }
 
 @Test func bookmarkResolutionRejectsFileWhileSecurityScopeIsActive() throws {

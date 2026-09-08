@@ -72,6 +72,12 @@
     <string name="folder_sync_offer">Offer this folder</string>
     <string name="folder_sync_invitation_expired">This invitation expired. Remove it and create another.</string>
     <string name="folder_sync_remove">Stop sharing</string>
+    <string name="folder_sync_stopping">Stopping folder sync…</string>
+    <string name="folder_sync_running">Folder sync is running</string>
+    <string name="folder_sync_ready_to_share">Ready to share a folder</string>
+    <string name="folder_sync_stop_title">Stop sharing “%1$s”?</string>
+    <string name="folder_sync_stop_detail">This phone stops exchanging changes with %1$s. Existing files stay on both devices. Sharing again requires a new invitation.</string>
+    <string name="folder_sync_keep_sharing">Keep sharing</string>
 
     <string name="confirm_cancel_transfer_title">Stop this transfer?</string>
     <string name="confirm_cancel_transfer_message">“%1$s” stops now and its queued work is discarded. This cannot be undone — you would have to start the backup or restore again from the beginning.</string>
@@ -141,8 +147,8 @@
     <string name="error_transfer_precondition">Covalent stopped this transfer because something it needed changed. Check the folder you chose, then start it again.</string>
     <string name="error_resume_transfer">Android could not resume a pending transfer.</string>
 
-    <string name="setup_title">Connect your backup server</string>
-    <string name="setup_subtitle">Use a server you control. Covalent verifies it before any backup, restore, or pairing is allowed.</string>
+    <string name="setup_title">Welcome to Covalent</string>
+    <string name="setup_subtitle">Keep folders in sync between your devices, or connect a server for backups.</string>
     <string name="setup_nearby_title">Server on your network</string>
     <string name="setup_nearby_detail">Enter the secure web address your Covalent server shows. Android asks for local network access before the first check.</string>
     <string name="setup_handoff_title">Trusted claim output</string>
@@ -518,9 +524,28 @@
     <string name="folder_sync_waiting_for_device">Waiting for %1$s</string>
     <string name="folder_sync_connected_to_device">Connected to %1$s</string>
     <string name="folder_sync_connection_unknown">Connection status unknown</string>
+    <string name="folder_sync_restore_access_detail">Android no longer allows Covalent to open this folder. Restore all-files access to see your folder choices. You can stop sharing now; your files will stay on this phone.</string>
+    <string name="folder_sync_choose_again_detail">Choose the folder again to restore this share. Covalent keeps the previous folder choice until this phone confirms the replacement.</string>
+    <string name="folder_sync_use_selected_again">Use selected folder</string>
+    <string name="folder_sync_retry_saved_repair">Retry saved folder repair</string>
     <string name="open_source_notices_title">Open Source Notices</string>
     <string name="open_source_notices_detail">Licenses and notices for the open source software included with Covalent.</string>
     <string name="open_source_notices_error">Covalent could not verify the notices included in this app.</string>
     <string name="action_view_open_source_notices">View notices</string>
     <string name="action_close">Close</string>
+    <string name="folder_sync_setup_action">Sync folders with this phone</string>
+    <string name="folder_sync_setup_detail">Choose folders and pair your devices. No backup server is required.</string>
+    <string name="setup_backup_section">Connect your backup server</string>
+    <string name="folder_sync_pair_title">Connect another device</string>
+    <string name="folder_sync_pair_detail">Pair this phone with your Mac, server, or another phone. Compare the code on both devices before confirming.</string>
+    <string name="folder_sync_pair_compare">Compare this code on both physical devices. Continue only if every group matches. Pairing copies nothing now; choose a folder separately after pairing.</string>
+    <string name="folder_sync_pair_address">Device address</string>
+    <string name="folder_sync_pair_address_example">192.168.1.20:8787</string>
+    <string name="folder_sync_pair_start">Pair device</string>
+    <string name="folder_sync_confirm_device">Codes match — pair device</string>
+    <string name="folder_sync_pair_complete">Device paired. You can now share a folder.</string>
+    <string name="folder_sync_pair_finishing">Finishing device connection…</string>
+    <string name="folder_sync_pair_failure">Could not connect this phone. Check that the other device is open and its address is correct, then try again.</string>
+    <string name="folder_sync_pair_waiting">Starting this phone…</string>
+    <string name="folder_sync_discovery_empty">No nearby devices found. Enter the other device’s address to connect.</string>
 </resources>

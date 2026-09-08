@@ -88,6 +88,7 @@ pub struct ManagedEngineSession {
     configuration: DesiredEngineConfig,
     installation: Arc<EngineInstallation>,
     roots: Arc<Vec<FolderRootLease>>,
+    reset_gate: bool,
 }
 
 /// One controller-owned, cancellable initial scan. Dropping this value aborts
@@ -222,6 +223,43 @@ impl ManagedEngineSession {
         runtime_parent: &Path,
         settings: EngineSessionSettings,
     ) -> Result<Self, EngineSessionError> {
+        Self::start_with_gate(
+            installation,
+            guardian,
+            engine,
+            runtime_parent,
+            settings,
+            false,
+        )
+        .await
+    }
+
+    pub(super) async fn start_reset_gate(
+        installation: Arc<EngineInstallation>,
+        guardian: &VerifiedEngineExecutable,
+        engine: &VerifiedEngineExecutable,
+        runtime_parent: &Path,
+        settings: EngineSessionSettings,
+    ) -> Result<Self, EngineSessionError> {
+        Self::start_with_gate(
+            installation,
+            guardian,
+            engine,
+            runtime_parent,
+            settings,
+            true,
+        )
+        .await
+    }
+
+    async fn start_with_gate(
+        installation: Arc<EngineInstallation>,
+        guardian: &VerifiedEngineExecutable,
+        engine: &VerifiedEngineExecutable,
+        runtime_parent: &Path,
+        settings: EngineSessionSettings,
+        reset_gate: bool,
+    ) -> Result<Self, EngineSessionError> {
         let worker_lease = installation
             .claim_worker()
             .map_err(|_| EngineSessionError::LaunchFailed)?;
@@ -276,9 +314,12 @@ impl ManagedEngineSession {
                 .map(|folder| admit_root(folder.root(), installation.root(), &config_dir))
                 .collect::<Result<Vec<_>, _>>()?,
         );
-        let xml = configuration
-            .render_scan_gate_xml()
-            .map_err(|_| EngineSessionError::InvalidConfiguration)?;
+        let xml = if reset_gate {
+            configuration.render_reset_gate_xml()
+        } else {
+            configuration.render_scan_gate_xml()
+        }
+        .map_err(|_| EngineSessionError::InvalidConfiguration)?;
         let certificate = installation.identity().certificate_pem();
         for (name, bytes, maximum) in [
             ("config.xml", xml.as_bytes(), 4 * 1024 * 1024),
@@ -339,6 +380,7 @@ impl ManagedEngineSession {
             configuration,
             installation,
             roots,
+            reset_gate,
         };
         match tokio::time::timeout(STARTUP_TIMEOUT, session.verify_startup()).await {
             Ok(Ok(())) => Ok(session),
@@ -395,9 +437,12 @@ impl ManagedEngineSession {
             .json(EngineEndpoint::Configuration)
             .await
             .map_err(|_| EngineSessionError::StartupMismatch)?;
-        self.configuration
-            .verify_scan_gate_effective(&effective)
-            .map_err(|_| EngineSessionError::StartupMismatch)?;
+        let verified = if self.reset_gate {
+            self.configuration.verify_reset_gate_effective(&effective)
+        } else {
+            self.configuration.verify_scan_gate_effective(&effective)
+        };
+        verified.map_err(|_| EngineSessionError::StartupMismatch)?;
         self.revalidate_roots()
     }
 
@@ -440,6 +485,106 @@ impl ManagedEngineSession {
             .await
             .map_err(|_| EngineSessionError::EngineUnavailable)?
         }))
+    }
+
+    /// Ask pinned v2.1.3 to drop exactly one paused folder index, then require
+    /// its documented restart exit. The caller retains a durable reset intent
+    /// until this succeeds and the exact worker has been reaped.
+    pub(super) async fn reset_folder_index(
+        &mut self,
+        folder: uuid::Uuid,
+    ) -> Result<(), EngineSessionError> {
+        self.revalidate_roots()?;
+        if !self
+            .configuration
+            .folders()
+            .iter()
+            .any(|configured| configured.id() == folder)
+        {
+            return Err(EngineSessionError::InvalidConfiguration);
+        }
+        if !self.reset_gate {
+            return Err(EngineSessionError::InvalidConfiguration);
+        }
+        self.client
+            .command(EngineEndpoint::ResetFolderIndex(folder))
+            .await
+            .map_err(|_| EngineSessionError::EngineUnavailable)?;
+        let status = tokio::time::timeout(STARTUP_TIMEOUT, async {
+            loop {
+                if let Some(status) = self
+                    .worker
+                    .try_status()
+                    .map_err(|_| EngineSessionError::EngineUnavailable)?
+                {
+                    return Ok(status);
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .map_err(|_| EngineSessionError::EngineUnavailable)??;
+        if status.code() != Some(3) {
+            return Err(EngineSessionError::EngineUnavailable);
+        }
+        self.revalidate_roots()?;
+        self.ensure_folder_marker(folder)?;
+        self.revalidate_roots()
+    }
+
+    fn ensure_folder_marker(&self, folder: uuid::Uuid) -> Result<(), EngineSessionError> {
+        let index = self
+            .configuration
+            .folders()
+            .iter()
+            .position(|configured| configured.id() == folder)
+            .ok_or(EngineSessionError::InvalidConfiguration)?;
+        let root = self
+            .roots
+            .get(index)
+            .ok_or(EngineSessionError::InvalidConfiguration)?;
+        match rustix::fs::mkdirat(
+            &root.file,
+            ".stfolder",
+            rustix::fs::Mode::from_bits_truncate(0o700),
+        ) {
+            Ok(()) | Err(rustix::io::Errno::EXIST) => {}
+            Err(_) => return Err(EngineSessionError::RuntimeUnavailable),
+        }
+        let marker = rustix::fs::openat(
+            &root.file,
+            ".stfolder",
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC
+                | rustix::fs::OFlags::NONBLOCK,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(|_| EngineSessionError::RuntimeUnavailable)?;
+        let before =
+            rustix::fs::fstat(&marker).map_err(|_| EngineSessionError::RuntimeUnavailable)?;
+        if rustix::fs::FileType::from_raw_mode(before.st_mode) != rustix::fs::FileType::Directory {
+            return Err(EngineSessionError::RuntimeUnavailable);
+        }
+        rustix::fs::fsync(&marker).map_err(|_| EngineSessionError::RuntimeUnavailable)?;
+        rustix::fs::fsync(&root.file).map_err(|_| EngineSessionError::RuntimeUnavailable)?;
+        let current = rustix::fs::statat(
+            &root.file,
+            ".stfolder",
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        )
+        .map_err(|_| EngineSessionError::RuntimeUnavailable)?;
+        let after =
+            rustix::fs::fstat(&marker).map_err(|_| EngineSessionError::RuntimeUnavailable)?;
+        if (current.st_dev, current.st_ino, current.st_mode)
+            != (before.st_dev, before.st_ino, before.st_mode)
+            || (after.st_dev, after.st_ino, after.st_mode)
+                != (before.st_dev, before.st_ino, before.st_mode)
+        {
+            return Err(EngineSessionError::RuntimeUnavailable);
+        }
+        Ok(())
     }
 
     /// Promote a successfully scanned, still-network-inert session to its

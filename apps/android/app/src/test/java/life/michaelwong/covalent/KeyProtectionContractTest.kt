@@ -80,7 +80,7 @@ class KeyProtectionContractTest {
             "nativeStart's JNI descriptor must carry token, KEK, exact version, quotas, and protection",
             rust.contains(
                 "\"(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJIZZZLjava/lang/String;" +
-                    "Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)" +
+                    "Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;II)" +
                     "Ljava/lang/String;\"",
             ),
         )
@@ -95,9 +95,9 @@ class KeyProtectionContractTest {
             .filter(String::isNotEmpty)
         assertEquals(
             "The descriptor has nine node parameters, three package/access booleans, five " +
-                "verified package strings, and one test-overridable listener port; " +
+                "verified package strings, and two listener ports; " +
                 "Kotlin declares ${parameters.size}: $parameters",
-            18,
+            19,
             parameters.size,
         )
         assertTrue(parameters[9].endsWith(": Boolean"))
@@ -106,7 +106,7 @@ class KeyProtectionContractTest {
             "The package parameters must be five verified strings: $parameters",
             parameters.slice(12..16).all { it.endsWith(": String") },
         )
-        assertTrue(parameters.last().endsWith(": Int"))
+        assertTrue(parameters.takeLast(2).all { it.endsWith(": Int") })
         assertTrue(
             "Native methods must stay registered from JNI_OnLoad, never exported by name",
             rust.contains("register_native_methods") && !rust.contains("Java_life_michaelwong"),
@@ -120,7 +120,7 @@ class KeyProtectionContractTest {
             rust.contains(
                 "\"(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJI[B[BZZZ" +
                     "Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;" +
-                    "Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;\"",
+                    "Ljava/lang/String;Ljava/lang/String;I)Ljava/lang/String;\"",
             ),
         )
         val kotlin = moduleFile("src/main/java/life/michaelwong/covalent/node/CovalentNative.kt").readText()
@@ -132,14 +132,28 @@ class KeyProtectionContractTest {
             .split(",")
             .map(String::trim)
             .filter(String::isNotEmpty)
-        assertEquals(19, parameters.size)
+        assertEquals(20, parameters.size)
         assertTrue(parameters.slice(9..10).all { it.endsWith(": ByteArray") })
         assertTrue(parameters.slice(11..13).all { it.endsWith(": Boolean") })
-        assertTrue(parameters.takeLast(5).all { it.endsWith(": String") })
+        assertTrue(parameters.slice(14..18).all { it.endsWith(": String") })
+        assertTrue(parameters.last().endsWith(": Int"))
         assertTrue(rust.contains("take_java_secret(environment, &recovery_key)"))
         assertTrue(rust.contains("take_java_secret(environment, &recovery_kit)"))
         assertFalse(rust.contains("COVALENT_RECOVERY_KEY"))
         assertFalse(rust.contains("--recovery-key"))
+    }
+
+    @Test
+    fun productionStartsRetainTheSamePeerListenerAcrossNormalAndRecoveryLaunches() {
+        val kotlin = moduleFile("src/main/java/life/michaelwong/covalent/node/CovalentNative.kt").readText()
+        assertTrue(kotlin.contains("peerListenerPort: Int = PEER_LISTENER_PORT"))
+        assertTrue(kotlin.contains("private const val PEER_LISTENER_PORT = 8_787"))
+        assertTrue(kotlin.contains("BuildConfig.DEBUG || peerListenerPort == PEER_LISTENER_PORT"))
+
+        val rust = rustJniSource()
+        assertTrue(rust.contains("peer_listener: SocketAddr"))
+        assertTrue(rust.contains("NodeRuntimeConfig::new("))
+        assertFalse(rust.contains("wildcard_peer_zero"))
     }
 
     @Test

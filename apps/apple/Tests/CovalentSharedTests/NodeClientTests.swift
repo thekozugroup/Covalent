@@ -1880,10 +1880,16 @@ func realDaemonBackupVerifyAndRestore() async throws {
         case 1:
             #expect(request.url?.path == "/api/v1/sync/accept")
         case 2:
-            #expect(request.url?.path == "/api/v1/sync/pause")
+            #expect(request.url?.path == "/api/v1/sync/repair")
+            let payload = try #require(requestBody(request))
+            let object = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+            #expect(UUID(uuidString: try #require(object["offerId"] as? String)) == offer)
+            #expect(object["selectedRoot"] as? String == "/chosen/by/user")
         case 3:
-            #expect(request.url?.path == "/api/v1/sync/remove")
+            #expect(request.url?.path == "/api/v1/sync/pause")
         case 4:
+            #expect(request.url?.path == "/api/v1/sync/remove")
+        case 5:
             #expect(request.url?.path == "/api/v1/sync/retry")
         default:
             Issue.record("Unexpected folder mutation request")
@@ -1897,6 +1903,7 @@ func realDaemonBackupVerifyAndRestore() async throws {
     let client = try makeClient(recorder: recorder, token: String(repeating: "m", count: 32))
     _ = try await client.offerFolder(FolderOfferRequest(peerId: peer, folderId: folder, label: "Plans", selectedRoot: "/chosen/by/user"))
     _ = try await client.acceptFolder(FolderAcceptRequest(offerId: offer, selectedRoot: "/chosen/by/user"))
+    _ = try await client.repairFolder(FolderRepairRequest(offerId: offer, selectedRoot: "/chosen/by/user"))
     _ = try await client.pauseFolder(FolderPauseRequest(offerId: offer, paused: true))
     _ = try await client.removeFolder(FolderReferenceRequest(offerId: offer))
     _ = try await client.retryFolderSync()

@@ -623,6 +623,13 @@ impl DesiredEngineConfig {
         self.render(RenderMode::ScanGate)
     }
 
+    /// Render an index-reset gate with every configured folder and peer
+    /// paused and the sync listener disabled. The pinned engine requires the
+    /// selected folder runner to be stopped before its scoped index reset.
+    pub fn render_reset_gate_xml(&self) -> Result<Zeroizing<String>, EngineConfigError> {
+        self.render(RenderMode::ResetGate)
+    }
+
     /// Render the complete desired configuration. Folders are active only when
     /// an explicit direct listener, paired peer and membership are all present.
     /// `ignorePerms=true` avoids propagating Unix permission bits across
@@ -649,6 +656,11 @@ impl DesiredEngineConfig {
     /// mandatory initial scan.
     pub fn verify_scan_gate_effective(&self, effective: &Value) -> Result<(), EngineConfigError> {
         self.verify_effective_mode(effective, EffectiveMode::ScanGate)
+    }
+
+    /// Verify the exact network-inert, all-folders-paused reset gate.
+    pub fn verify_reset_gate_effective(&self, effective: &Value) -> Result<(), EngineConfigError> {
+        self.verify_effective_mode(effective, EffectiveMode::ResetGate)
     }
 
     /// Derive the desired configuration payload only from a freshly fetched
@@ -721,7 +733,7 @@ impl DesiredEngineConfig {
                 write_folder(
                     &mut xml,
                     folder,
-                    mode == RenderMode::Desired && folder.paused,
+                    mode == RenderMode::ResetGate || (mode == RenderMode::Desired && folder.paused),
                 )?;
             }
         }
@@ -733,7 +745,7 @@ impl DesiredEngineConfig {
                     &peer.id,
                     &peer.name,
                     Some(peer.address),
-                    mode == RenderMode::ScanGate || peer.paused,
+                    matches!(mode, RenderMode::ScanGate | RenderMode::ResetGate) || peer.paused,
                 )?;
             }
         }
@@ -837,6 +849,7 @@ fn validate_root(path: &Path) -> Result<PathBuf, EngineConfigError> {
 enum RenderMode {
     Initial,
     ScanGate,
+    ResetGate,
     Desired,
 }
 
@@ -850,6 +863,7 @@ impl RenderMode {
 enum EffectiveMode {
     Initial,
     ScanGate,
+    ResetGate,
     Desired,
 }
 
@@ -945,7 +959,9 @@ fn verify_options(
     mode: EffectiveMode,
 ) -> Result<(), EngineConfigError> {
     let listener = match mode {
-        EffectiveMode::Initial | EffectiveMode::ScanGate => String::new(),
+        EffectiveMode::Initial | EffectiveMode::ScanGate | EffectiveMode::ResetGate => {
+            String::new()
+        }
         EffectiveMode::Desired => expected
             .listener
             .map(|address| format!("tcp://{address}"))
@@ -1000,7 +1016,7 @@ fn verify_devices(
                 &peer.id,
                 &peer.name,
                 &[&address],
-                mode == EffectiveMode::ScanGate || peer.paused,
+                matches!(mode, EffectiveMode::ScanGate | EffectiveMode::ResetGate) || peer.paused,
             )?;
         }
     }
@@ -1072,7 +1088,7 @@ fn verify_folders(
         verify_folder(
             actual_folder,
             folder,
-            mode == EffectiveMode::Desired && folder.paused,
+            mode == EffectiveMode::ResetGate || (mode == EffectiveMode::Desired && folder.paused),
         )?;
     }
     Ok(())

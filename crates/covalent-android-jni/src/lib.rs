@@ -195,10 +195,14 @@ fn loopback_zero() -> SocketAddr {
 }
 
 /// Peer traffic is intentionally distinct from the loopback-only management API.
-/// Pairing resolves reachability from the live QUIC path rather than treating this
-/// wildcard bind as a signed, reachable address.
-fn wildcard_peer_zero() -> SocketAddr {
-    SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
+/// The Android host supplies a stable production port because peer grants retain
+/// the reachable endpoint across ordinary service and recovery restarts.
+fn wildcard_peer(port: u16) -> SocketAddr {
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port)
+}
+
+fn peer_listener(port: jint) -> Option<SocketAddr> {
+    u16::try_from(port).ok().map(wildcard_peer)
 }
 
 fn provider_quota(
@@ -245,6 +249,7 @@ struct StartNodeRequest {
     folder_sync: Option<FolderSyncRuntimeConfig>,
     folder_sync_package_invalid: bool,
     folder_sync_access_unavailable: bool,
+    peer_listener: SocketAddr,
 }
 
 fn start_node(request: StartNodeRequest) -> NativeResponse<'static> {
@@ -263,6 +268,7 @@ fn start_node(request: StartNodeRequest) -> NativeResponse<'static> {
         folder_sync,
         folder_sync_package_invalid,
         folder_sync_access_unavailable,
+        peer_listener,
     } = request;
     let recovering = recovery.is_some();
     let result = (|| {
@@ -304,7 +310,7 @@ fn start_node(request: StartNodeRequest) -> NativeResponse<'static> {
         let mut configuration = NodeRuntimeConfig::new(
             PathBuf::from(data_directory),
             loopback_zero(),
-            wildcard_peer_zero(),
+            peer_listener,
         );
         configuration.device_name = device_name;
         configuration.lan_discovery_enabled = lan_discovery_enabled;
@@ -606,6 +612,7 @@ extern "system" fn native_start<'local>(
     sync_worker_sha256: JString<'local>,
     sync_runtime_directory: JString<'local>,
     sync_listener_port: jint,
+    peer_listener_port: jint,
 ) -> jstring {
     with_java_response(unowned, |environment| {
         let data_directory = data_directory.to_string();
@@ -621,8 +628,11 @@ extern "system" fn native_start<'local>(
             sync_runtime_directory.to_string(),
             sync_listener_port,
         );
-        match (token, key) {
-            (Ok(token), Ok(key)) if maximum_total_bytes > 0 && free_space_reserve_bytes >= 0 => {
+        let peer_listener = peer_listener(peer_listener_port);
+        match (token, key, peer_listener) {
+            (Ok(token), Ok(key), Some(peer_listener))
+                if maximum_total_bytes > 0 && free_space_reserve_bytes >= 0 =>
+            {
                 start_node(StartNodeRequest {
                     data_directory,
                     device_name,
@@ -638,6 +648,7 @@ extern "system" fn native_start<'local>(
                     folder_sync,
                     folder_sync_package_invalid,
                     folder_sync_access_unavailable,
+                    peer_listener,
                 })
             }
             _ => NativeResponse::error(
@@ -670,6 +681,7 @@ extern "system" fn native_recover_start<'local>(
     sync_worker_path: JString<'local>,
     sync_worker_sha256: JString<'local>,
     sync_runtime_directory: JString<'local>,
+    peer_listener_port: jint,
 ) -> jstring {
     with_java_response(unowned, |environment| {
         let data_directory = data_directory.to_string();
@@ -689,10 +701,21 @@ extern "system" fn native_recover_start<'local>(
             sync_runtime_directory.to_string(),
             FOLDER_SYNC_PORT.into(),
         );
-        match (token, key_encryption_key, recovery_kit, recovery_key) {
-            (Ok(token), Ok(key_encryption_key), Ok(recovery_kit), Ok(recovery_key))
-                if maximum_total_bytes > 0 && free_space_reserve_bytes >= 0 =>
-            {
+        let peer_listener = peer_listener(peer_listener_port);
+        match (
+            token,
+            key_encryption_key,
+            recovery_kit,
+            recovery_key,
+            peer_listener,
+        ) {
+            (
+                Ok(token),
+                Ok(key_encryption_key),
+                Ok(recovery_kit),
+                Ok(recovery_key),
+                Some(peer_listener),
+            ) if maximum_total_bytes > 0 && free_space_reserve_bytes >= 0 => {
                 let recovery = match recovery_bootstrap(recovery_kit, recovery_key) {
                     Ok(recovery) => recovery,
                     Err(()) => {
@@ -717,6 +740,7 @@ extern "system" fn native_recover_start<'local>(
                     folder_sync,
                     folder_sync_package_invalid,
                     folder_sync_access_unavailable,
+                    peer_listener,
                 })
             }
             _ => NativeResponse::error(
@@ -779,11 +803,11 @@ pub unsafe extern "system" fn JNI_OnLoad(
             let class = environment.find_class(JNIString::from(NATIVE_CLASS))?;
             let native_start_name = JNIString::from("nativeStart");
             let native_start_signature = JNIString::from(
-                "(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJIZZZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)Ljava/lang/String;",
+                "(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJIZZZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;II)Ljava/lang/String;",
             );
             let native_recover_start_name = JNIString::from("nativeRecoverStart");
             let native_recover_start_signature = JNIString::from(
-                "(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJI[B[BZZZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+                "(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJI[B[BZZZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)Ljava/lang/String;",
             );
             let native_stop_name = JNIString::from("nativeStop");
             let native_stop_signature = JNIString::from("(J)Ljava/lang/String;");
@@ -841,8 +865,8 @@ mod tests {
         FOLDER_SYNC_PORT, IdentityProtection, MAX_RECOVERY_KIT_BYTES, NativeRegistry,
         PROTECTION_SOFTWARE, PROTECTION_STRONGBOX, PROTECTION_TRUSTED_ENVIRONMENT,
         PROTECTION_UNAVAILABLE, apply_host_runtime_flags, identity_protection_accepted,
-        loopback_zero, packaged_folder_sync, provider_quota, recovery_bootstrap,
-        valid_listener_port, wildcard_peer_zero,
+        loopback_zero, packaged_folder_sync, peer_listener, provider_quota, recovery_bootstrap,
+        valid_listener_port, wildcard_peer,
     };
     use covalent_node::runtime::NodeRuntimeConfig;
     use std::path::PathBuf;
@@ -908,6 +932,7 @@ mod tests {
             folder_sync: None,
             folder_sync_package_invalid: false,
             folder_sync_access_unavailable: false,
+            peer_listener: wildcard_peer(8_787),
         });
         assert!(!response.ok);
         assert_eq!(response.code, "secure_key_protector_required");
@@ -936,6 +961,7 @@ mod tests {
                 folder_sync: None,
                 folder_sync_package_invalid: false,
                 folder_sync_access_unavailable: false,
+                peer_listener: wildcard_peer(8_787),
             });
             assert!(!response.ok);
             assert_eq!(response.code, "invalid_key_encryption_key");
@@ -1006,6 +1032,19 @@ mod tests {
     }
 
     #[test]
+    fn peer_listener_accepts_debug_ephemeral_and_rejects_invalid_ports() {
+        assert_eq!(peer_listener(0), Some(wildcard_peer(0)));
+        assert_eq!(peer_listener(8_787), Some(wildcard_peer(8_787)));
+        assert_eq!(
+            peer_listener(i32::from(u16::MAX)),
+            Some(wildcard_peer(u16::MAX))
+        );
+        for rejected in [-1, i32::from(u16::MAX) + 1, i32::MAX] {
+            assert_eq!(peer_listener(rejected), None);
+        }
+    }
+
+    #[test]
     fn provider_quota_rejects_unsafe_bounds() {
         assert!(provider_quota(0, 0).is_err());
         assert!(provider_quota(256 * 1_024 * 1_024, 1).is_err());
@@ -1017,7 +1056,7 @@ mod tests {
         let mut configuration = NodeRuntimeConfig::new(
             PathBuf::from("private-node"),
             loopback_zero(),
-            wildcard_peer_zero(),
+            wildcard_peer(8_787),
         );
         apply_host_runtime_flags(&mut configuration, false, true, true);
         assert!(!configuration.local_provider_enabled);

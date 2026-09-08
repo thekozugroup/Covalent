@@ -6,10 +6,12 @@ use std::os::unix::fs::DirBuilderExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use covalent_core::sync::state_dir::PrivateStateInventoryName;
 use covalent_core::{Engine, KeyProtector};
 
 use super::{
-    EngineInstallation, FolderSharingJournal, FolderSyncService, VerifiedEngineExecutable,
+    EngineInstallation, FolderSharingJournal, FolderSyncAccessRecovery, FolderSyncService,
+    VerifiedEngineExecutable,
 };
 
 /// Host-supplied packaged executables and a reachable direct sync endpoint.
@@ -31,11 +33,68 @@ pub(crate) enum FolderSyncRuntimeState {
     #[default]
     NotPackaged,
     NeedsAttention,
-    FolderAccessUnavailable,
+    FolderAccessUnavailable(Option<Arc<FolderSyncAccessRecovery>>),
     Ready(Arc<FolderSyncService>),
 }
 
 impl FolderSyncRuntimeConfig {
+    /// Open only an existing installation and authenticated share journal after
+    /// native folder capabilities were lost. Missing state remains an empty
+    /// unavailable state; damaged incumbent state fails closed.
+    pub(crate) fn prepare_access_recovery(
+        data_directory: &Path,
+        engine: Arc<Engine>,
+        protector: Arc<dyn KeyProtector>,
+    ) -> FolderSyncRuntimeState {
+        let root = data_directory.join("folder-sync");
+        match std::fs::symlink_metadata(&root) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return FolderSyncRuntimeState::FolderAccessUnavailable(None);
+            }
+            Err(_) => return FolderSyncRuntimeState::NeedsAttention,
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+            Ok(_) => return FolderSyncRuntimeState::NeedsAttention,
+        }
+        let installation = match EngineInstallation::open(&root, protector.as_ref()) {
+            Ok(installation) => Arc::new(installation),
+            Err(_) => return FolderSyncRuntimeState::NeedsAttention,
+        };
+        match std::fs::symlink_metadata(root.join("folder-sharing.v1")) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let inventory =
+                    installation
+                        .state_directory()
+                        .inventory(installation.state_lock(), 8, 1024);
+                return match inventory {
+                    Ok(inventory)
+                        if inventory.entries().iter().all(|entry| match entry.name() {
+                            PrivateStateInventoryName::WriterLock => true,
+                            PrivateStateInventoryName::State(key) => {
+                                key.as_str() == "engine-identity.v1"
+                            }
+                        }) =>
+                    {
+                        FolderSyncRuntimeState::FolderAccessUnavailable(None)
+                    }
+                    _ => FolderSyncRuntimeState::NeedsAttention,
+                };
+            }
+            Err(_) => return FolderSyncRuntimeState::NeedsAttention,
+            Ok(_) => {}
+        }
+        let journal = match FolderSharingJournal::open(engine, Arc::clone(&installation), protector)
+        {
+            Ok(journal) => journal,
+            Err(_) => return FolderSyncRuntimeState::NeedsAttention,
+        };
+        match FolderSyncAccessRecovery::new(journal, installation) {
+            Ok(recovery) => {
+                FolderSyncRuntimeState::FolderAccessUnavailable(Some(Arc::new(recovery)))
+            }
+            Err(_) => FolderSyncRuntimeState::NeedsAttention,
+        }
+    }
+
     pub(crate) async fn prepare(
         self,
         data_directory: &Path,

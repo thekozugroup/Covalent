@@ -212,6 +212,22 @@ class CovalentNodeClient(
         ).toFolderSyncMutation()
     }
 
+    fun repairFolder(
+        baseUrl: String,
+        token: String,
+        offerId: String,
+        selectedRoot: String,
+    ): FolderSyncMutation {
+        requireUuid(offerId, "offer")
+        requireSelectedRoot(selectedRoot)
+        return post(
+            baseUrl,
+            token,
+            "/api/v1/sync/repair",
+            JSONObject().put("offerId", offerId).put("selectedRoot", selectedRoot),
+        ).toFolderSyncMutation()
+    }
+
     fun retryFolderSync(baseUrl: String, token: String): FolderSyncMutation =
         post(baseUrl, token, "/api/v1/sync/retry", JSONObject()).toFolderSyncMutation()
 

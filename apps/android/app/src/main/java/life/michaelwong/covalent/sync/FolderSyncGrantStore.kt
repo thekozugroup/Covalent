@@ -21,6 +21,8 @@ internal class FolderSyncGrant(
     val peerId: String?,
     val root: String,
     val label: String?,
+    val pendingRoot: String? = null,
+    val pendingRemoval: Boolean = false,
 ) {
     override fun toString(): String = "FolderSyncGrant(kind=$kind, key=<redacted>, root=<redacted>)"
 }
@@ -30,19 +32,43 @@ internal interface FolderSyncGrantJournal {
     fun prepareOffer(peerId: String, proposedFolderId: UUID, root: String, label: String): UUID
     fun finishOffer(folderId: UUID, offerId: String)
     fun prepareAcceptance(offerId: String, root: String)
-    fun remove(offerId: String)
+    fun prepareRepair(offerId: String, root: String)
+    fun finishRepair(offerId: String, root: String)
+    fun pendingRepairRoot(offerId: String): String?
+    fun prepareRemoval(offerId: String)
+    fun finishRemoval(offerId: String)
     fun reconcile(status: FolderSyncStatus)
 }
 
+internal interface FolderSyncGrantPersistence {
+    val readable: Boolean
+    fun read(): String?
+    fun write(value: String): Boolean
+}
+
+private class AndroidFolderSyncGrantPersistence(context: Context) : FolderSyncGrantPersistence {
+    private val preferences = CredentialProtectedPreferences(context, "covalent_folder_sync_grants")
+    override val readable: Boolean get() = preferences.readable
+    override fun read(): String? = preferences.getString("records_v1", "[]")
+    override fun write(value: String): Boolean = preferences.commit { putString("records_v1", value) }
+}
+
 /** Credential-encrypted marker storage written synchronously before a folder API mutation. */
-internal class FolderSyncGrantStore(context: Context) : FolderSyncGrantJournal {
-    private val preferences = CredentialProtectedPreferences(context, PREFERENCES_NAME)
+internal class FolderSyncGrantStore(
+    private val persistence: FolderSyncGrantPersistence,
+) : FolderSyncGrantJournal {
+    constructor(context: Context) : this(AndroidFolderSyncGrantPersistence(context))
 
     override fun records(): List<FolderSyncGrant> = synchronized(JOURNAL_LOCK) { recordsLocked() }
 
+    /** A prepared capability change keeps the folder worker stopped until exact acknowledgement. */
+    internal fun hasPendingCapabilityChange(): Boolean = synchronized(JOURNAL_LOCK) {
+        recordsLocked().any { it.pendingRoot != null || it.pendingRemoval }
+    }
+
     private fun recordsLocked(): List<FolderSyncGrant> {
-        check(preferences.readable) { "Folder sync choices are unavailable until this phone is unlocked." }
-        val raw = preferences.getString(KEY_RECORDS, "[]") ?: "[]"
+        check(persistence.readable) { "Folder sync choices are unavailable until this phone is unlocked." }
+        val raw = persistence.read() ?: "[]"
         check(raw.length <= MAX_SERIALIZED_CHARS) { "Saved folder sync choices are invalid." }
         return runCatching {
             val values = JSONArray(raw)
@@ -94,26 +120,88 @@ internal class FolderSyncGrantStore(context: Context) : FolderSyncGrantJournal {
             peerId = pending.peerId,
             root = pending.root,
             label = pending.label,
+            pendingRoot = null,
+            pendingRemoval = false,
         ))
     }
 
     override fun prepareAcceptance(offerId: String, root: String) = synchronized(JOURNAL_LOCK) {
         val id = canonicalUuid(offerId)
         val key = "offer:$id"
-        replaceLocked(recordsLocked().filterNot { it.key == key } + FolderSyncGrant(
+        val selectedRoot = validateStoredRoot(root)
+        val grants = recordsLocked()
+        grants.singleOrNull { it.offerId == id }?.let { existing ->
+            check(existing.kind == FolderSyncGrantKind.ACCEPTANCE && existing.root == selectedRoot) {
+                "This invitation already has a saved folder choice. Use folder repair to change it."
+            }
+            check(existing.pendingRoot == null && !existing.pendingRemoval) {
+                "Finish the saved folder change before accepting this invitation again."
+            }
+            return@synchronized
+        }
+        replaceLocked(grants + FolderSyncGrant(
             key = key,
             kind = FolderSyncGrantKind.ACCEPTANCE,
             offerId = id,
             folderId = null,
             peerId = null,
-            root = validateStoredRoot(root),
+            root = selectedRoot,
             label = null,
+            pendingRoot = null,
+            pendingRemoval = false,
         ))
     }
 
-    override fun remove(offerId: String) = synchronized(JOURNAL_LOCK) {
+    override fun prepareRepair(offerId: String, root: String) = synchronized(JOURNAL_LOCK) {
         val id = canonicalUuid(offerId)
-        replaceLocked(recordsLocked().filterNot { it.offerId == id })
+        val selectedRoot = validateStoredRoot(root)
+        val grants = recordsLocked()
+        val existing = grants.singleOrNull { it.offerId == id }
+            ?: throw IllegalStateException("The durable folder choice is missing.")
+        check(!existing.pendingRemoval) { "This folder is already being removed." }
+        existing.pendingRoot?.let {
+            check(it == selectedRoot) { "Finish the saved folder repair before choosing another folder." }
+            return@synchronized
+        }
+        replaceLocked(grants.replace(existing, existing.withPendingRoot(selectedRoot)))
+    }
+
+    override fun finishRepair(offerId: String, root: String) = synchronized(JOURNAL_LOCK) {
+        val id = canonicalUuid(offerId)
+        val selectedRoot = validateStoredRoot(root)
+        val grants = recordsLocked()
+        val existing = grants.singleOrNull { it.offerId == id }
+            ?: throw IllegalStateException("The durable folder choice is missing.")
+        check(!existing.pendingRemoval && existing.pendingRoot == selectedRoot) {
+            "The acknowledged folder repair does not match the durable choice."
+        }
+        replaceLocked(grants.replace(existing, existing.withAcknowledgedRoot(selectedRoot)))
+    }
+
+    override fun pendingRepairRoot(offerId: String): String? = synchronized(JOURNAL_LOCK) {
+        val id = canonicalUuid(offerId)
+        recordsLocked().singleOrNull { it.offerId == id && !it.pendingRemoval }?.pendingRoot
+    }
+
+    override fun prepareRemoval(offerId: String) = synchronized(JOURNAL_LOCK) {
+        val id = canonicalUuid(offerId)
+        val grants = recordsLocked()
+        val existing = grants.singleOrNull { it.offerId == id }
+            // An unaccepted incoming invitation has no local folder capability.
+            // Its removal is still durably recorded by the authenticated node.
+            // This also permits an exact retry after local acknowledgement.
+            ?: return@synchronized
+        if (existing.pendingRemoval) return@synchronized
+        replaceLocked(grants.replace(existing, existing.asPendingRemoval()))
+    }
+
+    override fun finishRemoval(offerId: String) = synchronized(JOURNAL_LOCK) {
+        val id = canonicalUuid(offerId)
+        val grants = recordsLocked()
+        val existing = grants.singleOrNull { it.offerId == id }
+            ?: return@synchronized
+        check(existing.pendingRemoval) { "The folder removal was not durably prepared." }
+        replaceLocked(grants.filterNot { it.offerId == id })
     }
 
     override fun reconcile(status: FolderSyncStatus) = synchronized(JOURNAL_LOCK) {
@@ -132,6 +220,8 @@ internal class FolderSyncGrantStore(context: Context) : FolderSyncGrantJournal {
                 peerId = grant.peerId,
                 root = grant.root,
                 label = grant.label,
+                pendingRoot = grant.pendingRoot,
+                pendingRemoval = grant.pendingRemoval,
             )
         }
         if (grants.map(FolderSyncGrant::key) != original.map(FolderSyncGrant::key)) replaceLocked(grants)
@@ -141,15 +231,17 @@ internal class FolderSyncGrantStore(context: Context) : FolderSyncGrantJournal {
         check(grants.size <= MAX_GRANTS) { "This phone has too many folder sync choices." }
         val encoded = JSONArray().apply { grants.sortedBy(FolderSyncGrant::key).forEach { put(it.toJson()) } }.toString()
         check(encoded.length <= MAX_SERIALIZED_CHARS) { "Saved folder sync choices are too large." }
-        check(preferences.commit { putString(KEY_RECORDS, encoded) }) {
+        check(persistence.write(encoded)) {
             "Android could not durably save the folder choice."
         }
     }
 
     private fun JSONObject.toGrant(): FolderSyncGrant {
-        val expected = setOf("schemaVersion", "key", "kind", "offerId", "folderId", "peerId", "root", "label")
-        check(keys().asSequence().toSet() == expected)
-        check(getInt("schemaVersion") == 1)
+        val schema = getInt("schemaVersion")
+        val expectedV1 = setOf("schemaVersion", "key", "kind", "offerId", "folderId", "peerId", "root", "label")
+        val expectedV2 = expectedV1 + setOf("pendingRoot", "pendingRemoval")
+        check(keys().asSequence().toSet() == if (schema == 1) expectedV1 else expectedV2)
+        check(schema in 1..2)
         val kind = when (getString("kind")) {
             "offer" -> FolderSyncGrantKind.OFFER
             "acceptance" -> FolderSyncGrantKind.ACCEPTANCE
@@ -162,6 +254,8 @@ internal class FolderSyncGrantStore(context: Context) : FolderSyncGrantJournal {
         val label = optionalString("label")?.also {
             check(it.isNotBlank() && it.length <= 256 && it.none(Char::isISOControl))
         }
+        val pendingRoot = if (schema == 2) optionalString("pendingRoot")?.let(::validateStoredRoot) else null
+        val pendingRemoval = schema == 2 && getBoolean("pendingRemoval")
         val key = getString("key")
         check(key == offerId?.let { "offer:$it" } || key == folderId?.let { "folder:$it" })
         when (kind) {
@@ -176,11 +270,23 @@ internal class FolderSyncGrantStore(context: Context) : FolderSyncGrantJournal {
                 check(offerId != null && folderId == null && peerId == null && label == null)
             }
         }
-        return FolderSyncGrant(key, kind, offerId, folderId, peerId, root, label)
+        check(offerId != null || (pendingRoot == null && !pendingRemoval))
+        check(pendingRoot == null || !pendingRemoval)
+        return FolderSyncGrant(
+            key,
+            kind,
+            offerId,
+            folderId,
+            peerId,
+            root,
+            label,
+            pendingRoot,
+            pendingRemoval,
+        )
     }
 
     private fun FolderSyncGrant.toJson(): JSONObject = JSONObject()
-        .put("schemaVersion", 1)
+        .put("schemaVersion", 2)
         .put("key", key)
         .put("kind", kind.name.lowercase())
         .put("offerId", offerId ?: JSONObject.NULL)
@@ -188,13 +294,30 @@ internal class FolderSyncGrantStore(context: Context) : FolderSyncGrantJournal {
         .put("peerId", peerId ?: JSONObject.NULL)
         .put("root", root)
         .put("label", label ?: JSONObject.NULL)
+        .put("pendingRoot", pendingRoot ?: JSONObject.NULL)
+        .put("pendingRemoval", pendingRemoval)
+
+    private fun List<FolderSyncGrant>.replace(
+        existing: FolderSyncGrant,
+        replacement: FolderSyncGrant,
+    ): List<FolderSyncGrant> = map { if (it.key == existing.key) replacement else it }
+
+    private fun FolderSyncGrant.withPendingRoot(value: String) = FolderSyncGrant(
+        key, kind, offerId, folderId, peerId, root, label, value, false,
+    )
+
+    private fun FolderSyncGrant.withAcknowledgedRoot(value: String) = FolderSyncGrant(
+        key, kind, offerId, folderId, peerId, value, label, null, false,
+    )
+
+    private fun FolderSyncGrant.asPendingRemoval() = FolderSyncGrant(
+        key, kind, offerId, folderId, peerId, root, label, null, true,
+    )
 
     private fun JSONObject.optionalString(key: String): String? =
         if (!has(key) || isNull(key)) null else getString(key)
 
     companion object {
-        private const val PREFERENCES_NAME = "covalent_folder_sync_grants"
-        private const val KEY_RECORDS = "records_v1"
         private const val MAX_GRANTS = 128
         private const val MAX_SERIALIZED_CHARS = 1_048_576
         private val JOURNAL_LOCK = Any()

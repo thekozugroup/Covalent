@@ -19,7 +19,7 @@ class FolderSyncClientTest {
     fun authenticatedFolderRoutesUseTheBoundedV1Contract() {
         val server = MockWebServer()
         server.enqueue(MockResponse().setBody(STATUS))
-        repeat(5) { server.enqueue(MockResponse().setBody(MUTATION)) }
+        repeat(6) { server.enqueue(MockResponse().setBody(MUTATION)) }
         server.start()
         try {
             val base = server.url("/").toString().removeSuffix("/")
@@ -34,6 +34,7 @@ class FolderSyncClientTest {
             client.offerFolder(base, "token", PEER, UUID.fromString(FOLDER), "Photos", "/storage/emulated/0/Photos")
             client.acceptFolder(base, "token", OFFER, "/storage/emulated/0/Shared")
             client.pauseFolder(base, "token", OFFER, true)
+            client.repairFolder(base, "token", OFFER, "/storage/emulated/0/Repaired")
             client.removeFolder(base, "token", OFFER)
             client.retryFolderSync(base, "token")
 
@@ -41,6 +42,12 @@ class FolderSyncClientTest {
             assertEquals("/api/v1/sync/folders", server.takeRequest().path)
             assertEquals("/api/v1/sync/accept", server.takeRequest().path)
             assertEquals("/api/v1/sync/pause", server.takeRequest().path)
+            val repair = server.takeRequest()
+            assertEquals("/api/v1/sync/repair", repair.path)
+            assertEquals(
+                """{"offerId":"$OFFER","selectedRoot":"/storage/emulated/0/Repaired"}""",
+                repair.body.readUtf8(),
+            )
             assertEquals("/api/v1/sync/remove", server.takeRequest().path)
             assertEquals("/api/v1/sync/retry", server.takeRequest().path)
         } finally {
@@ -83,6 +90,33 @@ class FolderSyncClientTest {
             )
             assertEquals(FolderSyncLifecycle.INITIAL_SCANNING, status.lifecycle)
             assertEquals(FolderSyncIssue.INITIAL_SCAN, status.issue)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun offlineFolderAccessStatusRetainsRedactedSharesWithoutInventingHealth() {
+        val offline = STATUS
+            .replace("\"availability\":\"available\"", "\"availability\":\"needsAttention\"")
+            .replace("\"issue\":null", "\"issue\":\"folderAccess\"")
+            .replace("\"connectionFreshness\":\"fresh\"", "\"connectionFreshness\":\"neverObserved\"")
+            .replace("\"peerConnection\":\"disconnected\"", "\"peerConnection\":\"unknown\"")
+        val server = MockWebServer().apply {
+            enqueue(MockResponse().setBody(offline))
+            start()
+        }
+        try {
+            val status = CovalentNodeClient().folderSyncStatus(
+                server.url("/").toString().removeSuffix("/"),
+                "token",
+            )
+            assertEquals(FolderSyncLifecycle.STOPPED, status.lifecycle)
+            assertEquals(FolderSyncIssue.FOLDER_ACCESS, status.issue)
+            assertEquals(OFFER, status.shares.single().offerId)
+            assertEquals(PeerConnectionFreshness.NEVER_OBSERVED, status.connectionFreshness)
+            assertEquals(PeerConnectionState.UNKNOWN, status.shares.single().peerConnection)
+            assertTrue(status.folders.isEmpty())
         } finally {
             server.shutdown()
         }

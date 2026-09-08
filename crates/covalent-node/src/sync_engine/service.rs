@@ -207,20 +207,40 @@ enum SessionStop {
 }
 
 impl Launcher {
-    async fn launch(&self, settings: EngineSessionSettings) -> Result<Session, EngineSessionError> {
+    async fn launch(
+        &self,
+        settings: EngineSessionSettings,
+        reset_gate: bool,
+    ) -> Result<Session, EngineSessionError> {
         match self {
-            Self::Production(launcher) => ManagedEngineSession::start(
-                Arc::clone(&launcher.installation),
-                &launcher.guardian,
-                &launcher.engine,
-                &launcher.runtime_parent,
-                settings,
-            )
-            .await
+            Self::Production(launcher) => {
+                if reset_gate {
+                    ManagedEngineSession::start_reset_gate(
+                        Arc::clone(&launcher.installation),
+                        &launcher.guardian,
+                        &launcher.engine,
+                        &launcher.runtime_parent,
+                        settings,
+                    )
+                    .await
+                } else {
+                    ManagedEngineSession::start(
+                        Arc::clone(&launcher.installation),
+                        &launcher.guardian,
+                        &launcher.engine,
+                        &launcher.runtime_parent,
+                        settings,
+                    )
+                    .await
+                }
+            }
             .map(Box::new)
             .map(Session::Production),
             #[cfg(test)]
-            Self::Test(backend) => backend.launch(settings).await.map(Session::Test),
+            Self::Test(backend) => backend
+                .launch(settings, reset_gate)
+                .await
+                .map(Session::Test),
         }
     }
 }
@@ -239,6 +259,14 @@ impl Session {
             Self::Production(session) => session.promote_after_initial_scan().await.map_err(|_| ()),
             #[cfg(test)]
             Self::Test(session) => session.promote_after_initial_scan().await,
+        }
+    }
+
+    async fn reset_folder_index(&mut self, folder: Uuid) -> Result<(), ()> {
+        match self {
+            Self::Production(session) => session.reset_folder_index(folder).await.map_err(|_| ()),
+            #[cfg(test)]
+            Self::Test(session) => session.reset_folder_index(folder).await,
         }
     }
 
@@ -539,6 +567,40 @@ impl FolderSyncService {
         self.mutate(|journal| journal.remove(offer_id)).await
     }
 
+    /// Stop and reap the current worker before changing a retained local root.
+    /// A committed repair is then reconciled through the ordinary full initial
+    /// scan barrier before the replacement worker may become running.
+    pub async fn repair_root(
+        &self,
+        offer_id: Uuid,
+        selected_root: &Path,
+    ) -> Result<CommittedMutation<()>, FolderSyncServiceError> {
+        let mut inner = self.try_inner()?;
+        let before_revision = inner.journal.revision();
+        let prepared = match inner.journal.prepare_root_repair(offer_id, selected_root) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                // Trust reconciliation can durably retire a share during
+                // preflight. Reconcile that changed desired state; an ordinary
+                // invalid root or multi-member move leaves the worker intact.
+                if inner.journal.revision() != before_revision {
+                    let _ = reconcile_committed(&self.shared, &mut inner).await;
+                }
+                return Err(map_journal_error(error));
+            }
+        };
+        quiesce(&mut inner, FolderSyncLifecycle::Stopped, false).await?;
+        inner
+            .journal
+            .commit_root_repair(prepared)
+            .map_err(map_journal_error)?;
+        let lifecycle = reconcile_committed(&self.shared, &mut inner).await;
+        Ok(CommittedMutation {
+            value: (),
+            lifecycle,
+        })
+    }
+
     /// Stop first, persist every share tombstone, revoke Covalent trust, then
     /// launch only the reconciled remainder. `None` means tombstones committed
     /// but peer revocation still needs attention and may be safely retried.
@@ -570,10 +632,11 @@ impl FolderSyncService {
         })
     }
 
-    /// Revalidate worker health and return a secret-free consent snapshot.
+    /// Return consent and the last observation from the owned health task.
+    /// Polling must never perform worker I/O while holding the mutation lock:
+    /// frequent UI requests would otherwise starve durable consent delivery.
     pub async fn status(&self) -> Result<FolderSyncStatus, FolderSyncServiceError> {
-        let mut inner = self.try_inner()?;
-        check_health(&self.shared, &mut inner).await;
+        let inner = self.try_inner()?;
         let shares = inner.journal.summaries().map_err(map_journal_error)?;
         Ok(FolderSyncStatus {
             lifecycle: inner.lifecycle,
@@ -726,43 +789,82 @@ async fn start_desired(
 async fn apply_desired(
     shared: &ServiceShared,
     inner: &mut ServiceInner,
-    settings: EngineSessionSettings,
+    mut settings: EngineSessionSettings,
 ) -> Result<(), FolderSyncIssue> {
     debug_assert!(inner.session.is_none());
-    if settings.folders.is_empty() {
-        inner.applied_settings = None;
+    loop {
+        if settings.folders.is_empty() {
+            inner.applied_settings = None;
+            inner.folder_health.clear();
+            inner.health_freshness = FolderHealthFreshness::NeverObserved;
+            inner.peer_connections.clear();
+            inner.connection_freshness = PeerConnectionFreshness::NeverObserved;
+            inner.lifecycle = FolderSyncLifecycle::Stopped;
+            return Ok(());
+        }
+        let pending_reset = inner
+            .journal
+            .pending_root_reset()
+            .map_err(|_| FolderSyncIssue::Journal)?;
+        let retained_settings = settings.clone();
         inner.folder_health.clear();
         inner.health_freshness = FolderHealthFreshness::NeverObserved;
         inner.peer_connections.clear();
         inner.connection_freshness = PeerConnectionFreshness::NeverObserved;
-        inner.lifecycle = FolderSyncLifecycle::Stopped;
-        return Ok(());
-    }
-    let retained_settings = settings.clone();
-    inner.folder_health.clear();
-    inner.health_freshness = FolderHealthFreshness::NeverObserved;
-    inner.peer_connections.clear();
-    inner.connection_freshness = PeerConnectionFreshness::NeverObserved;
-    // Cancellation leaves a visible retryable problem while the reaper
-    // releases the startup lease; it is not an ordinary stopped session.
-    inner.lifecycle = FolderSyncLifecycle::NeedsAttention(FolderSyncIssue::WorkerLaunch);
-    match shared.launcher.launch(settings).await {
-        Ok(session) => {
-            let initial_scan = session.begin_initial_scan();
-            inner.session = Some(session);
-            inner.initial_scan = Some(initial_scan);
-            inner.applied_settings = Some(retained_settings);
-            inner.lifecycle = FolderSyncLifecycle::InitialScanning;
-            tokio::task::yield_now().await;
-            advance_initial_scan(inner).await;
-            if inner.lifecycle == FolderSyncLifecycle::NeedsAttention(FolderSyncIssue::InitialScan)
-            {
-                Err(FolderSyncIssue::InitialScan)
-            } else {
-                Ok(())
+        // Cancellation leaves a visible retryable problem while the reaper
+        // releases the startup lease; it is not an ordinary stopped session.
+        inner.lifecycle = FolderSyncLifecycle::NeedsAttention(FolderSyncIssue::WorkerLaunch);
+        let mut session = shared
+            .launcher
+            .launch(settings, pending_reset.is_some())
+            .await
+            .map_err(|_| FolderSyncIssue::WorkerLaunch)?;
+        if let Some(folder) = pending_reset {
+            if session.reset_folder_index(folder).await.is_err() {
+                inner.session = Some(session);
+                let _ = quiesce(
+                    inner,
+                    FolderSyncLifecycle::NeedsAttention(FolderSyncIssue::InitialScan),
+                    false,
+                )
+                .await;
+                return Err(FolderSyncIssue::InitialScan);
             }
+            inner.session = Some(session);
+            inner.applied_settings = Some(retained_settings);
+            if quiesce(inner, FolderSyncLifecycle::Stopped, false)
+                .await
+                .is_err()
+            {
+                // The authenticated reset response is not completion. Keep
+                // the durable intent and exact session handle until a later
+                // retry confirms that this owned worker has been reaped.
+                return Ok(());
+            }
+            inner
+                .journal
+                .complete_root_reset(folder)
+                .map_err(|_| FolderSyncIssue::Journal)?;
+            settings = inner
+                .journal
+                .desired_settings()
+                .map_err(|_| FolderSyncIssue::Journal)?;
+            continue;
         }
-        Err(_) => Err(FolderSyncIssue::WorkerLaunch),
+        let initial_scan = session.begin_initial_scan();
+        inner.session = Some(session);
+        inner.initial_scan = Some(initial_scan);
+        inner.applied_settings = Some(retained_settings);
+        inner.lifecycle = FolderSyncLifecycle::InitialScanning;
+        tokio::task::yield_now().await;
+        advance_initial_scan(inner).await;
+        return if inner.lifecycle
+            == FolderSyncLifecycle::NeedsAttention(FolderSyncIssue::InitialScan)
+        {
+            Err(FolderSyncIssue::InitialScan)
+        } else {
+            Ok(())
+        };
     }
 }
 
@@ -1015,10 +1117,8 @@ async fn health_loop(
     mut shutdown: watch::Receiver<bool>,
     cadence: Duration,
 ) {
-    let mut interval = tokio::time::interval(cadence);
-    // Startup performs its own complete verification. Avoid an immediate
-    // duplicate API request from interval's first ready tick.
-    interval.tick().await;
+    // Leave a full cadence after each completed probe. A slow worker must not
+    // trigger catch-up probes that continuously occupy the mutation lock.
     loop {
         tokio::select! {
             changed = shutdown.changed() => {
@@ -1026,7 +1126,7 @@ async fn health_loop(
                     break;
                 }
             }
-            _ = interval.tick() => {
+            _ = tokio::time::sleep(cadence) => {
                 let Some(shared) = shared.upgrade() else {
                     break;
                 };
@@ -1077,6 +1177,7 @@ pub(super) enum TestScanBehavior {
 #[derive(Default)]
 struct TestBackendState {
     fail_launches: usize,
+    fail_resets: usize,
     fail_promotions: usize,
     fail_health: bool,
     health_observation: Vec<FolderHealth>,
@@ -1090,8 +1191,10 @@ struct TestBackendState {
     health_calls: usize,
     connection_calls: usize,
     scan_calls: usize,
+    reset_calls: Vec<Uuid>,
     promotions: usize,
     launched_folder_counts: Vec<usize>,
+    launched_reset_gates: Vec<bool>,
     stops: VecDeque<TestStopBehavior>,
     scans: VecDeque<TestScanBehavior>,
 }
@@ -1112,6 +1215,10 @@ impl TestBackend {
 
     pub(super) fn fail_next_launch(&self) {
         self.state.lock().unwrap().fail_launches += 1;
+    }
+
+    pub(super) fn fail_next_reset(&self) {
+        self.state.lock().unwrap().fail_resets += 1;
     }
 
     pub(super) fn push_scan(&self, behavior: TestScanBehavior) {
@@ -1149,8 +1256,10 @@ impl TestBackend {
             health_calls: state.health_calls,
             connection_calls: state.connection_calls,
             scan_calls: state.scan_calls,
+            reset_calls: state.reset_calls.clone(),
             promotions: state.promotions,
             launched_folder_counts: state.launched_folder_counts.clone(),
+            launched_reset_gates: state.launched_reset_gates.clone(),
         }
     }
 
@@ -1165,6 +1274,7 @@ impl TestBackend {
     async fn launch(
         self: &Arc<Self>,
         settings: EngineSessionSettings,
+        reset_gate: bool,
     ) -> Result<TestSession, EngineSessionError> {
         let mut state = self.state.lock().unwrap();
         if state.fail_launches > 0 {
@@ -1175,6 +1285,7 @@ impl TestBackend {
         state.active += 1;
         state.maximum_active = state.maximum_active.max(state.active);
         state.launched_folder_counts.push(settings.folders.len());
+        state.launched_reset_gates.push(reset_gate);
         Ok(TestSession {
             backend: Arc::clone(self),
             closed: false,
@@ -1197,8 +1308,10 @@ pub(super) struct TestBackendSnapshot {
     pub(super) health_calls: usize,
     pub(super) connection_calls: usize,
     pub(super) scan_calls: usize,
+    pub(super) reset_calls: Vec<Uuid>,
     pub(super) promotions: usize,
     pub(super) launched_folder_counts: Vec<usize>,
+    pub(super) launched_reset_gates: Vec<bool>,
 }
 
 #[cfg(test)]
@@ -1210,6 +1323,17 @@ struct TestSession {
 
 #[cfg(test)]
 impl TestSession {
+    async fn reset_folder_index(&mut self, folder: Uuid) -> Result<(), ()> {
+        let mut state = self.backend.state.lock().unwrap();
+        state.reset_calls.push(folder);
+        if state.fail_resets > 0 {
+            state.fail_resets -= 1;
+            Err(())
+        } else {
+            Ok(())
+        }
+    }
+
     fn begin_initial_scan(&self) -> InitialScanTask {
         let behavior = {
             let mut state = self.backend.state.lock().unwrap();
@@ -1329,6 +1453,11 @@ impl FolderSyncService {
         health_interval: Duration,
     ) -> Self {
         Self::construct(journal, engine, Launcher::Test(backend), health_interval).unwrap()
+    }
+
+    pub(super) async fn observe_health_for_test(&self) {
+        let mut inner = self.shared.inner.lock().await;
+        check_health(&self.shared, &mut inner).await;
     }
 
     pub(super) fn cached_lifecycle_for_test(&self) -> FolderSyncLifecycle {

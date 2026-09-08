@@ -142,6 +142,33 @@ struct Snapshot {
     shares: Vec<Share>,
     tombstones: Vec<Tombstone>,
     freshness_floor_unix_ms: u64,
+    #[serde(default)]
+    pending_root_reset: Option<PendingRootReset>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PendingRootReset {
+    offer_id: Uuid,
+    folder_id: Uuid,
+    replacement: LocalRoot,
+}
+
+/// One instance- and revision-bound root selection prepared before a worker is
+/// stopped. Its path and inode remain private to the journal.
+pub(crate) struct PreparedRootRepair {
+    journal: Arc<()>,
+    expected_revision: u64,
+    offer_id: Uuid,
+    folder_id: Uuid,
+    replacement: LocalRoot,
+    changes_root: bool,
+}
+
+impl fmt::Debug for PreparedRootRepair {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PreparedRootRepair([PRIVATE])")
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -163,6 +190,7 @@ pub struct FolderSharingJournal {
     installation: Arc<EngineInstallation>,
     store: EngineStateStore,
     snapshot: Snapshot,
+    preparation_identity: Arc<()>,
 }
 
 impl fmt::Debug for FolderSharingJournal {
@@ -196,6 +224,7 @@ impl FolderSharingJournal {
             shares: Vec::new(),
             tombstones: Vec::new(),
             freshness_floor_unix_ms: 0,
+            pending_root_reset: None,
         };
         validate_snapshot(&snapshot, &engine, &installation)?;
         let payload = serde_json::to_vec(&snapshot).map_err(|_| SharingError::InvalidState)?;
@@ -206,6 +235,7 @@ impl FolderSharingJournal {
             installation,
             store,
             snapshot,
+            preparation_identity: Arc::new(()),
         })
     }
 
@@ -227,6 +257,7 @@ impl FolderSharingJournal {
             installation,
             store,
             snapshot,
+            preparation_identity: Arc::new(()),
         };
         journal.reconcile_trust()?;
         Ok(journal)
@@ -338,6 +369,14 @@ impl FolderSharingJournal {
             expires_at_unix_ms: None,
         }));
         Ok(summaries)
+    }
+
+    /// Reconcile current Covalent trust before an offline, worker-free status
+    /// view. Root availability is deliberately not required merely to list or
+    /// remove consent after native capability loss.
+    pub(crate) fn reconciled_summaries(&mut self) -> Result<Vec<ShareSummary>, SharingError> {
+        self.reconcile_trust()?;
+        self.summaries()
     }
 
     /// Map each active engine peer identity back to the authenticated Covalent
@@ -650,6 +689,154 @@ impl FolderSharingJournal {
         self.persist(next)
     }
 
+    /// Validate and capture a replacement root before the lifecycle owner
+    /// stops a healthy worker. The returned value is valid only for this exact
+    /// journal instance and revision.
+    pub(crate) fn prepare_root_repair(
+        &mut self,
+        offer_id: Uuid,
+        selected_root: &Path,
+    ) -> Result<PreparedRootRepair, SharingError> {
+        self.reconcile_trust()?;
+        let index = self.index(offer_id)?;
+        if self.snapshot.shares[index].commit.is_none() {
+            return Err(SharingError::InvalidState);
+        }
+        let old_root = self.snapshot.shares[index]
+            .root
+            .as_ref()
+            .ok_or(SharingError::FolderUnavailable)?;
+        let replacement = capture_root(selected_root, &self.installation)?;
+        let folder_id = self.snapshot.shares[index].offer.folder_id;
+        let changes_root = !same_root(old_root, &replacement);
+        // Renewing filesystem capability for the exact retained inode does
+        // not activate a paused share or change its engine configuration.
+        // Moving a paused share still requires an explicit resume first so a
+        // root-reset transition cannot be hidden behind administrative pause.
+        if self.snapshot.shares[index].paused && changes_root {
+            return Err(SharingError::InvalidState);
+        }
+        if let Some(pending) = &self.snapshot.pending_root_reset {
+            if pending.offer_id != offer_id
+                || pending.folder_id != folder_id
+                || !same_root(&pending.replacement, &replacement)
+                || changes_root
+            {
+                return Err(SharingError::InvalidState);
+            }
+        } else if changes_root
+            && self
+                .snapshot
+                .shares
+                .iter()
+                .enumerate()
+                .any(|(other, share)| {
+                    other != index && !share.removed && share.offer.folder_id == folder_id
+                })
+        {
+            return Err(SharingError::AlreadyShared);
+        }
+        Ok(PreparedRootRepair {
+            journal: Arc::clone(&self.preparation_identity),
+            expected_revision: self.store.revision(),
+            offer_id,
+            folder_id,
+            replacement,
+            changes_root,
+        })
+    }
+
+    /// Persist a prepared root change and its per-folder index-reset intent.
+    /// Replaying the exact pending selection is allocation-free and does not
+    /// advance the durable revision.
+    pub(crate) fn commit_root_repair(
+        &mut self,
+        prepared: PreparedRootRepair,
+    ) -> Result<Option<Uuid>, SharingError> {
+        if !Arc::ptr_eq(&prepared.journal, &self.preparation_identity)
+            || prepared.expected_revision != self.store.revision()
+        {
+            return Err(SharingError::InvalidState);
+        }
+        let index = self.index(prepared.offer_id)?;
+        if self.snapshot.shares[index].offer.folder_id != prepared.folder_id {
+            return Err(SharingError::InvalidState);
+        }
+        let observed = capture_root(&prepared.replacement.path, &self.installation)?;
+        if !same_root(&observed, &prepared.replacement) {
+            return Err(SharingError::FolderUnavailable);
+        }
+        if let Some(pending) = &self.snapshot.pending_root_reset {
+            if pending.offer_id != prepared.offer_id
+                || pending.folder_id != prepared.folder_id
+                || !same_root(&pending.replacement, &prepared.replacement)
+                || self.snapshot.shares[index]
+                    .root
+                    .as_ref()
+                    .is_none_or(|root| !same_root(root, &prepared.replacement))
+            {
+                return Err(SharingError::InvalidState);
+            }
+            return Ok(Some(pending.folder_id));
+        }
+        if !prepared.changes_root {
+            return Ok(None);
+        }
+        let mut next = self.snapshot.clone();
+        next.shares[index].root = Some(prepared.replacement.clone());
+        next.pending_root_reset = Some(PendingRootReset {
+            offer_id: prepared.offer_id,
+            folder_id: prepared.folder_id,
+            replacement: prepared.replacement,
+        });
+        self.persist(next)?;
+        Ok(Some(prepared.folder_id))
+    }
+
+    /// Prepare and persist an offline repair. This method never launches a
+    /// worker; the retained reset intent is completed only by the lifecycle
+    /// coordinator after an authenticated engine reset and exact reap.
+    pub fn repair_root(
+        &mut self,
+        offer_id: Uuid,
+        selected_root: &Path,
+    ) -> Result<(), SharingError> {
+        let prepared = self.prepare_root_repair(offer_id, selected_root)?;
+        self.commit_root_repair(prepared).map(|_| ())
+    }
+
+    pub(crate) fn pending_root_reset(&self) -> Result<Option<Uuid>, SharingError> {
+        self.store
+            .payload()
+            .map_err(|_| SharingError::PersistenceUncertain)?;
+        Ok(self
+            .snapshot
+            .pending_root_reset
+            .as_ref()
+            .map(|pending| pending.folder_id))
+    }
+
+    /// Clear the reset intent only after the authenticated reset response and
+    /// exact owned worker reap. Root identity is checked again at this durable
+    /// boundary.
+    pub(crate) fn complete_root_reset(&mut self, folder_id: Uuid) -> Result<(), SharingError> {
+        let pending = self
+            .snapshot
+            .pending_root_reset
+            .as_ref()
+            .ok_or(SharingError::InvalidState)?;
+        if pending.folder_id != folder_id {
+            return Err(SharingError::InvalidState);
+        }
+        let observed = capture_root(&pending.replacement.path, &self.installation)?;
+        if !same_root(&observed, &pending.replacement) {
+            return Err(SharingError::FolderUnavailable);
+        }
+        let mut next = self.snapshot.clone();
+        next.pending_root_reset = None;
+        self.persist(next)
+    }
+
     /// Durable revocation barrier, called before revoking the Covalent peer and
     /// after closing the worker lifeline. Restart cannot restore these offers.
     pub fn remove_peer(&mut self, peer_id: DeviceId) -> Result<(), SharingError> {
@@ -826,6 +1013,19 @@ impl FolderSharingJournal {
     }
 
     fn persist(&mut self, mut candidate: Snapshot) -> Result<(), SharingError> {
+        if candidate
+            .pending_root_reset
+            .as_ref()
+            .is_some_and(|pending| {
+                candidate
+                    .shares
+                    .iter()
+                    .find(|share| share.offer.offer_id == pending.offer_id)
+                    .is_none_or(|share| share.removed)
+            })
+        {
+            candidate.pending_root_reset = None;
+        }
         compact_removed(&mut candidate);
         validate_snapshot(&candidate, &self.engine, &self.installation)?;
         let payload = serde_json::to_vec(&candidate).map_err(|_| SharingError::InvalidState)?;
@@ -997,6 +1197,36 @@ fn validate_snapshot(
     }
     if roots.len() > 128 || peer_engines.len() > 128 {
         return Err(SharingError::LimitExceeded);
+    }
+    if let Some(pending) = &snapshot.pending_root_reset {
+        let Some((index, share)) = snapshot
+            .shares
+            .iter()
+            .enumerate()
+            .find(|(_, share)| share.offer.offer_id == pending.offer_id)
+        else {
+            return Err(SharingError::InvalidState);
+        };
+        if pending.folder_id != share.offer.folder_id
+            || share.removed
+            || share.paused
+            || share.commit.is_none()
+            || share
+                .root
+                .as_ref()
+                .is_none_or(|root| !same_root(root, &pending.replacement))
+            || snapshot
+                .shares
+                .iter()
+                .enumerate()
+                .any(|(other, candidate)| {
+                    other != index
+                        && !candidate.removed
+                        && candidate.offer.folder_id == pending.folder_id
+                })
+        {
+            return Err(SharingError::InvalidState);
+        }
     }
     Ok(())
 }

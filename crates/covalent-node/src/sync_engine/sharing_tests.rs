@@ -1,4 +1,5 @@
 use super::*;
+use crate::sync_engine::FolderSyncAccessRecovery;
 use crate::transport::TlsIdentity;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -658,4 +659,196 @@ fn durable_delivery_records_resume_exactly_and_stop_after_removal_or_revocation(
     b.engine.revoke_peer(a.engine.device_id()).unwrap();
     assert!(second.outbound_records().unwrap().is_empty());
     assert_eq!(second.summaries().unwrap()[0].phase, SharingPhase::Removed);
+}
+
+#[test]
+fn repaired_root_is_idempotent_durable_and_preserves_signed_records() {
+    let a = Device::new("Mac", 43381);
+    let b = Device::new("Docker", 43382);
+    pair(&a, &b);
+    let mut first = a.journal();
+    let mut second = b.journal();
+    let (offer, acceptance, commit) = share(&a, &b, &mut first, &mut second);
+    let replacement = a.root.join("replacement");
+    std::fs::create_dir(&replacement).unwrap();
+
+    first.repair_root(offer.offer_id, &replacement).unwrap();
+    let revision = first.revision();
+    first.repair_root(offer.offer_id, &replacement).unwrap();
+    assert_eq!(first.revision(), revision);
+    assert_eq!(first.snapshot.shares[0].offer, offer);
+    assert_eq!(first.snapshot.shares[0].acceptance, Some(acceptance));
+    assert_eq!(first.snapshot.shares[0].commit, Some(commit));
+
+    drop(first);
+    let mut reopened = a.reopen();
+    assert_eq!(
+        reopened.desired_settings().unwrap().folders[0].root(),
+        replacement
+    );
+}
+
+#[test]
+fn paused_share_can_renew_exact_root_but_cannot_move_it() {
+    let a = Device::new("Mac", 43392);
+    let b = Device::new("Docker", 43393);
+    pair(&a, &b);
+    let mut first = a.journal();
+    let mut second = b.journal();
+    let (offer, acceptance, commit) = share(&a, &b, &mut first, &mut second);
+    first.set_paused(offer.offer_id, true).unwrap();
+    let paused_revision = first.revision();
+
+    first.repair_root(offer.offer_id, &a.files()).unwrap();
+    assert_eq!(first.revision(), paused_revision);
+    assert!(first.snapshot.shares[0].paused);
+    assert!(first.snapshot.pending_root_reset.is_none());
+    assert_eq!(first.snapshot.shares[0].offer, offer);
+    assert_eq!(first.snapshot.shares[0].acceptance, Some(acceptance));
+    assert_eq!(first.snapshot.shares[0].commit, Some(commit));
+
+    let replacement = a.root.join("paused-replacement");
+    std::fs::create_dir(&replacement).unwrap();
+    assert_eq!(
+        first.repair_root(offer.offer_id, &replacement).unwrap_err(),
+        SharingError::InvalidState
+    );
+    assert_eq!(first.revision(), paused_revision);
+    assert!(first.snapshot.pending_root_reset.is_none());
+    assert!(same_root(
+        first.snapshot.shares[0].root.as_ref().unwrap(),
+        &capture_root(&a.files(), &a.installation).unwrap()
+    ));
+}
+
+#[test]
+fn changed_root_repair_refuses_implicit_multi_peer_capability() {
+    let a = Device::new("Mac", 43383);
+    let b = Device::new("Docker", 43384);
+    let c = Device::new("Phone", 43385);
+    pair(&a, &b);
+    pair(&a, &c);
+    let mut first = a.journal();
+    let mut second = b.journal();
+    let (offer, _, _) = share(&a, &b, &mut first, &mut second);
+    first
+        .offer(
+            c.engine.device_id(),
+            offer.folder_id,
+            "Documents",
+            &a.files(),
+            3000,
+        )
+        .unwrap();
+    let replacement = a.root.join("replacement");
+    std::fs::create_dir(&replacement).unwrap();
+    let revision = first.revision();
+
+    assert_eq!(
+        first.repair_root(offer.offer_id, &replacement).unwrap_err(),
+        SharingError::AlreadyShared
+    );
+    assert_eq!(first.revision(), revision);
+    assert!(same_root(
+        first.snapshot.shares[0].root.as_ref().unwrap(),
+        first.snapshot.shares[1].root.as_ref().unwrap()
+    ));
+}
+
+#[test]
+fn root_reset_intent_is_revision_bound_durable_and_revalidates_selection() {
+    let a = Device::new("Mac", 43390);
+    let b = Device::new("Docker", 43391);
+    pair(&a, &b);
+    let mut first = a.journal();
+    let mut second = b.journal();
+    let (offer, _, _) = share(&a, &b, &mut first, &mut second);
+    let replacement = a.root.join("replacement-reset");
+    std::fs::create_dir(&replacement).unwrap();
+
+    let stale = first
+        .prepare_root_repair(offer.offer_id, &replacement)
+        .unwrap();
+    first.set_paused(offer.offer_id, true).unwrap();
+    assert_eq!(
+        first.commit_root_repair(stale).unwrap_err(),
+        SharingError::InvalidState
+    );
+    first.set_paused(offer.offer_id, false).unwrap();
+
+    let prepared = first
+        .prepare_root_repair(offer.offer_id, &replacement)
+        .unwrap();
+    assert_eq!(
+        first.commit_root_repair(prepared).unwrap(),
+        Some(offer.folder_id)
+    );
+    let pending_revision = first.revision();
+    drop(first);
+
+    let mut reopened = a.reopen();
+    assert_eq!(
+        reopened.pending_root_reset().unwrap(),
+        Some(offer.folder_id)
+    );
+    assert_eq!(
+        reopened.desired_settings().unwrap().folders[0].root(),
+        replacement
+    );
+    reopened.repair_root(offer.offer_id, &replacement).unwrap();
+    assert_eq!(reopened.revision(), pending_revision);
+
+    let competing = a.root.join("competing-reset");
+    std::fs::create_dir(&competing).unwrap();
+    assert_eq!(
+        reopened
+            .prepare_root_repair(offer.offer_id, &competing)
+            .unwrap_err(),
+        SharingError::InvalidState
+    );
+    assert_eq!(reopened.revision(), pending_revision);
+
+    std::fs::remove_dir(&replacement).unwrap();
+    std::fs::create_dir(&replacement).unwrap();
+    assert_eq!(
+        reopened.complete_root_reset(offer.folder_id).unwrap_err(),
+        SharingError::FolderUnavailable
+    );
+    assert_eq!(
+        reopened.pending_root_reset().unwrap(),
+        Some(offer.folder_id)
+    );
+}
+
+#[tokio::test]
+async fn worker_free_access_recovery_lists_repairs_and_removes_across_reopen() {
+    let a = Device::new("Mac", 43386);
+    let b = Device::new("Docker", 43387);
+    pair(&a, &b);
+    let mut first = a.journal();
+    let mut second = b.journal();
+    let (offer, _, _) = share(&a, &b, &mut first, &mut second);
+    let recovery = FolderSyncAccessRecovery::new(first, Arc::clone(&a.installation)).unwrap();
+    assert_eq!(
+        recovery.summaries().await.unwrap()[0].phase,
+        SharingPhase::Ready
+    );
+
+    let replacement = a.root.join("repaired");
+    std::fs::create_dir(&replacement).unwrap();
+    recovery
+        .repair_root(offer.offer_id, &replacement)
+        .await
+        .unwrap();
+    recovery.remove(offer.offer_id).await.unwrap();
+    recovery.remove(offer.offer_id).await.unwrap();
+    drop(recovery);
+
+    let mut reopened = a.reopen();
+    assert_eq!(
+        reopened.summaries().unwrap()[0].phase,
+        SharingPhase::Removed
+    );
+    assert!(reopened.desired_settings().unwrap().folders.is_empty());
+    assert!(replacement.is_dir());
 }

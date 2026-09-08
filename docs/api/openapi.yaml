@@ -165,6 +165,29 @@ paths:
           $ref: "#/components/responses/Conflict"
         "503":
           $ref: "#/components/responses/Conflict"
+  /api/v1/sync/repair:
+    post:
+      summary: Restore local access for an existing folder share
+      operationId: repairFolderAccess
+      description: >-
+        Rebinds one existing live share to a newly selected local directory.
+        This does not change the signed invitation, peer, folder identifier,
+        pause state, or user files. A worker is reaped before an active repair.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FolderRepairRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/FolderSyncMutation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Conflict"
   /api/v1/discovery:
     get:
       summary: List untrusted discovery candidates
@@ -1518,7 +1541,7 @@ components:
           enum: [stopped, initialScanning, running, stillStopping, needsAttention]
         issue:
           type: [string, "null"]
-          enum: [null, journal, workerLaunch, initialScan, workerHealth, workerStop, peerRevocation]
+          enum: [null, journal, workerLaunch, initialScan, workerHealth, workerStop, peerRevocation, folderAccess]
     FolderReference:
       type: object
       additionalProperties: false
@@ -1559,6 +1582,19 @@ components:
           minLength: 1
           maxLength: 4096
           description: Absolute destination selected by the recipient; never sent to another peer.
+    FolderRepairRequest:
+      type: object
+      additionalProperties: false
+      required: [offerId, selectedRoot]
+      properties:
+        offerId:
+          type: string
+          format: uuid
+        selectedRoot:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          description: Newly authorized absolute local root; never sent to another peer.
     FolderPauseRequest:
       type: object
       additionalProperties: false

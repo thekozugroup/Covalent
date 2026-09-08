@@ -7,6 +7,8 @@ private final class FolderGrantBootstrapper: LocalNodeBootstrapping {
     let configuration: NodeConnectionConfiguration
     var restartFailuresRemaining = 0
     private(set) var restartCalls = 0
+    private(set) var pendingRepairRestartCalls = 0
+    private(set) var lastPendingRepairGrants: [SelectedDirectoryGrant] = []
 
     init(configuration: NodeConnectionConfiguration) {
         self.configuration = configuration
@@ -25,6 +27,295 @@ private final class FolderGrantBootstrapper: LocalNodeBootstrapping {
             throw FolderGrantTestError.restartFailed
         }
         return configuration
+    }
+
+    func restartForPendingFolderRepairDirectoryGrants(
+        _ grants: [SelectedDirectoryGrant]
+    ) async throws -> NodeConnectionConfiguration {
+        pendingRepairRestartCalls += 1
+        lastPendingRepairGrants = grants
+        return configuration
+    }
+}
+
+@Test @MainActor func folderRepairPersistsCandidateBeforeRequestThenPromotesExactBinding() async throws {
+    let fixture = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let oldRoot = fixture.appending(path: "old", directoryHint: .isDirectory)
+    let replacementRoot = fixture.appending(path: "replacement", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: oldRoot, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: replacementRoot, withIntermediateDirectories: true)
+    let offer = UUID()
+    let peer = UUID()
+    let folder = UUID()
+    let replacement = try SelectedDirectoryGrant.capture(url: replacementRoot, purpose: .folderSync)
+    let persistence = AppleAppPersistence(directoryURL: fixture.appending(path: "state", directoryHint: .isDirectory))
+
+    let sequence = RequestSequence()
+    let recorder = RequestRecorder(removeAfterRequest: false) { request in
+        switch sequence.next() {
+        case 0:
+            #expect(request.url?.path == "/api/v1/sync/status")
+            return TestResponse.response(request, status: 200, json: folderStatusJSON(
+                offer: offer, folder: folder, peer: peer, issue: "folderAccess"
+            ))
+        case 1:
+            #expect(request.url?.path == "/api/v1/sync/repair")
+            let saved = try awaitValue { try await persistence.loadPendingFolderRepairs() }
+            #expect(saved.count == 1)
+            #expect(saved.first?.offerId == offer)
+            let payload = try #require(folderRepairRequestBody(request))
+            let object = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+            #expect(UUID(uuidString: try #require(object["offerId"] as? String)) == offer)
+            #expect((object["selectedRoot"] as? String)?.hasSuffix("/replacement") == true)
+            return TestResponse.response(request, status: 200, json: mutationJSON(offer: offer))
+        case 2:
+            #expect(request.url?.path == "/api/v1/sync/status")
+            return TestResponse.response(request, status: 200, json: folderStatusJSON(
+                offer: offer, folder: folder, peer: peer, issue: nil
+            ))
+        default:
+            Issue.record("Unexpected folder repair request")
+            return TestResponse.response(request, status: 500, json: "{}")
+        }
+    }
+    let port = RecordingURLProtocol.recorder.install(recorder)
+    let configuration = try NodeConnectionConfiguration(
+        baseURL: URL(string: "http://127.0.0.1:\(port)")!,
+        apiToken: String(repeating: "r", count: 32)
+    )
+    let sessionConfiguration = URLSessionConfiguration.ephemeral
+    sessionConfiguration.protocolClasses = [RecordingURLProtocol.self]
+    let bootstrapper = FolderGrantBootstrapper(configuration: configuration)
+    let model = CovalentAppModel(
+        persistence: persistence,
+        client: NodeClient(configuration: configuration, session: URLSession(configuration: sessionConfiguration)),
+        configuration: configuration,
+        localNodeBootstrapper: bootstrapper
+    )
+
+    let oldGrantResult = await model.addDirectoryGrant(
+        url: oldRoot,
+        purpose: DirectoryAccessPurpose.folderSync
+    )
+    _ = try #require(oldGrantResult)
+    await model.refreshFolders()
+    let repaired = await model.repairFolderAccess(offerId: offer, grant: replacement)
+    #expect(repaired)
+    #expect(bootstrapper.pendingRepairRestartCalls == 1)
+    #expect(bootstrapper.restartCalls == 1)
+    #expect(bootstrapper.lastPendingRepairGrants.count == 1)
+    #expect(bootstrapper.lastPendingRepairGrants.first?.folderOfferId == offer)
+    #expect(model.directoryGrants.count == 1)
+    #expect(model.directoryGrants.first?.id == replacement.id)
+    #expect(model.directoryGrants.first?.folderOfferId == offer)
+    #expect(model.pendingFolderRepairs.isEmpty)
+    #expect(try await persistence.loadPendingFolderRepairs().isEmpty)
+}
+
+@Test @MainActor func uncertainFolderRepairRetainsExactPendingChoiceForRetry() async throws {
+    let fixture = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let oldRoot = fixture.appending(path: "old", directoryHint: .isDirectory)
+    let replacementRoot = fixture.appending(path: "replacement", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: oldRoot, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: replacementRoot, withIntermediateDirectories: true)
+    let offer = UUID()
+    let peer = UUID()
+    let folder = UUID()
+    let replacement = try SelectedDirectoryGrant.capture(url: replacementRoot, purpose: .folderSync)
+    let persistence = AppleAppPersistence(directoryURL: fixture.appending(path: "state", directoryHint: .isDirectory))
+    let sequence = RequestSequence()
+    let requestRoots = FolderRepairRequestRoots()
+    let recorder = RequestRecorder(removeAfterRequest: false) { request in
+        switch sequence.next() {
+        case 0:
+            return TestResponse.response(request, status: 200, json: folderStatusJSON(
+                offer: offer, folder: folder, peer: peer, issue: "folderAccess"
+            ))
+        case 1:
+            #expect(request.url?.path == "/api/v1/sync/repair")
+            requestRoots.append(try selectedRoot(from: request))
+            throw URLError(.networkConnectionLost)
+        case 2:
+            #expect(request.url?.path == "/api/v1/sync/repair")
+            requestRoots.append(try selectedRoot(from: request))
+            return TestResponse.response(request, status: 200, json: mutationJSON(offer: offer))
+        case 3:
+            return TestResponse.response(request, status: 200, json: folderStatusJSON(
+                offer: offer, folder: folder, peer: peer, issue: nil
+            ))
+        default:
+            Issue.record("Unexpected folder repair retry request")
+            return TestResponse.response(request, status: 500, json: "{}")
+        }
+    }
+    let port = RecordingURLProtocol.recorder.install(recorder)
+    let configuration = try NodeConnectionConfiguration(
+        baseURL: URL(string: "http://127.0.0.1:\(port)")!,
+        apiToken: String(repeating: "u", count: 32)
+    )
+    let sessionConfiguration = URLSessionConfiguration.ephemeral
+    sessionConfiguration.protocolClasses = [RecordingURLProtocol.self]
+    let bootstrapper = FolderGrantBootstrapper(configuration: configuration)
+    let model = CovalentAppModel(
+        persistence: persistence,
+        client: NodeClient(configuration: configuration, session: URLSession(configuration: sessionConfiguration)),
+        configuration: configuration,
+        localNodeBootstrapper: bootstrapper
+    )
+    let oldGrantResult = await model.addDirectoryGrant(
+        url: oldRoot,
+        purpose: DirectoryAccessPurpose.folderSync
+    )
+    let oldGrant = try #require(oldGrantResult)
+    await model.refreshFolders()
+
+    #expect(!(await model.repairFolderAccess(offerId: offer, grant: replacement)))
+    #expect(model.directoryGrants == [oldGrant])
+    let pending = try #require(model.pendingFolderRepairs.first)
+    #expect(pending.offerId == offer)
+    #expect(pending.replacementGrant.id == replacement.id)
+    #expect((await model.retryFolderAccessRepair(offerId: offer)))
+    #expect(requestRoots.values.count == 2)
+    #expect(requestRoots.values[0] == requestRoots.values[1])
+    #expect(model.pendingFolderRepairs.isEmpty)
+    #expect(model.directoryGrants.first?.id == replacement.id)
+}
+
+@Test @MainActor func ambiguousLegacyFolderRepairMakesNoDurableOrNodeMutation() async throws {
+    let fixture = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let roots = ["first", "second", "replacement"].map {
+        fixture.appending(path: $0, directoryHint: .isDirectory)
+    }
+    for root in roots {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+    let offer = UUID()
+    let secondOffer = UUID()
+    let peer = UUID()
+    let secondPeer = UUID()
+    let folder = UUID()
+    let secondFolder = UUID()
+    let persistence = AppleAppPersistence(directoryURL: fixture.appending(path: "state", directoryHint: .isDirectory))
+    let sequence = RequestSequence()
+    let recorder = RequestRecorder(removeAfterRequest: false) { request in
+        #expect(sequence.next() == 0)
+        #expect(request.url?.path == "/api/v1/sync/status")
+        let shares = [
+            folderShareJSON(offer: offer, folder: folder, peer: peer, label: "Plans"),
+            folderShareJSON(offer: secondOffer, folder: secondFolder, peer: secondPeer, label: "Photos"),
+        ].joined(separator: ",")
+        return TestResponse.response(
+            request,
+            status: 200,
+            json: "{\"schemaVersion\":1,\"availability\":\"unavailable\",\"lifecycle\":\"stopped\",\"issue\":\"folderAccess\",\"healthFreshness\":\"unknown\",\"connectionFreshness\":\"unknown\",\"peers\":[],\"shares\":[\(shares)],\"folders\":[]}"
+        )
+    }
+    let port = RecordingURLProtocol.recorder.install(recorder)
+    let configuration = try NodeConnectionConfiguration(
+        baseURL: URL(string: "http://127.0.0.1:\(port)")!,
+        apiToken: String(repeating: "a", count: 32)
+    )
+    let sessionConfiguration = URLSessionConfiguration.ephemeral
+    sessionConfiguration.protocolClasses = [RecordingURLProtocol.self]
+    let bootstrapper = FolderGrantBootstrapper(configuration: configuration)
+    let model = CovalentAppModel(
+        persistence: persistence,
+        client: NodeClient(configuration: configuration, session: URLSession(configuration: sessionConfiguration)),
+        configuration: configuration,
+        localNodeBootstrapper: bootstrapper
+    )
+    for root in roots.prefix(2) {
+        let grant = await model.addDirectoryGrant(url: root, purpose: .folderSync)
+        #expect(grant != nil)
+    }
+    await model.refreshFolders()
+    let replacement = try SelectedDirectoryGrant.capture(url: roots[2], purpose: .folderSync)
+
+    #expect(!(await model.repairFolderAccess(offerId: offer, grant: replacement)))
+    #expect(sequence.count == 1)
+    #expect(bootstrapper.pendingRepairRestartCalls == 0)
+    #expect(model.pendingFolderRepairs.isEmpty)
+    #expect(model.directoryGrants.count == 2)
+    #expect(try await persistence.loadPendingFolderRepairs().isEmpty)
+}
+
+private func folderStatusJSON(
+    offer: UUID,
+    folder: UUID,
+    peer: UUID,
+    issue: String?
+) -> String {
+    let issueJSON = issue.map { "\"\($0)\"" } ?? "null"
+    return "{\"schemaVersion\":1,\"availability\":\"available\",\"lifecycle\":\"needsAttention\",\"issue\":\(issueJSON),\"healthFreshness\":\"unknown\",\"connectionFreshness\":\"fresh\",\"peers\":[{\"peerId\":\"\(peer.uuidString.lowercased())\",\"displayName\":\"Peer Mac\"}],\"shares\":[{\"offerId\":\"\(offer.uuidString.lowercased())\",\"folderId\":\"\(folder.uuidString.lowercased())\",\"label\":\"Plans\",\"peerId\":\"\(peer.uuidString.lowercased())\",\"incoming\":true,\"phase\":\"ready\",\"expiresAtUnixMs\":null,\"expired\":false,\"peerConnection\":\"connected\"}],\"folders\":[]}"
+}
+
+private func mutationJSON(offer: UUID) -> String {
+    "{\"offerId\":\"\(offer.uuidString.lowercased())\",\"lifecycle\":\"stopped\",\"issue\":\"folderAccess\"}"
+}
+
+private func folderShareJSON(
+    offer: UUID,
+    folder: UUID,
+    peer: UUID,
+    label: String
+) -> String {
+    "{\"offerId\":\"\(offer.uuidString.lowercased())\",\"folderId\":\"\(folder.uuidString.lowercased())\",\"label\":\"\(label)\",\"peerId\":\"\(peer.uuidString.lowercased())\",\"incoming\":true,\"phase\":\"ready\",\"expiresAtUnixMs\":null,\"expired\":false,\"peerConnection\":\"unknown\"}"
+}
+
+private func folderRepairRequestBody(_ request: URLRequest) -> Data? {
+    if let body = request.httpBody { return body }
+    guard let stream = request.httpBodyStream else { return nil }
+    stream.open()
+    defer { stream.close() }
+    var data = Data()
+    let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 4_096)
+    defer { buffer.deallocate() }
+    while stream.hasBytesAvailable {
+        let count = stream.read(buffer, maxLength: 4_096)
+        guard count >= 0 else { return nil }
+        if count == 0 { break }
+        data.append(buffer, count: count)
+    }
+    return data
+}
+
+private func selectedRoot(from request: URLRequest) throws -> String {
+    let payload = try #require(folderRepairRequestBody(request))
+    let object = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+    return try #require(object["selectedRoot"] as? String)
+}
+
+private final class FolderRepairRequestRoots: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [String] = []
+    var values: [String] { lock.withLock { stored } }
+    func append(_ value: String) { lock.withLock { stored.append(value) } }
+}
+
+/// Bridges the actor read needed inside the synchronous URLProtocol recorder.
+private func awaitValue<Value: Sendable>(
+    _ operation: @escaping @Sendable () async throws -> Value
+) throws -> Value {
+    let semaphore = DispatchSemaphore(value: 0)
+    let box = FolderRepairResultBox<Value>()
+    Task {
+        do { box.result = .success(try await operation()) }
+        catch { box.result = .failure(error) }
+        semaphore.signal()
+    }
+    semaphore.wait()
+    return try #require(box.result).get()
+}
+
+private final class FolderRepairResultBox<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Result<Value, Error>?
+    var result: Result<Value, Error>? {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
     }
 }
 
@@ -104,4 +395,5 @@ private enum FolderGrantTestError: Error { case restartFailed }
     let retriedOffer = await model.offerFolder(peerId: peer, folderId: folder, label: "Plans", grant: grant)
     #expect(retriedOffer)
     #expect(bootstrapper.restartCalls == 2)
+    #expect(try await persistence.loadDirectoryGrants().first?.folderOfferId == offer)
 }

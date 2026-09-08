@@ -31,6 +31,7 @@ internal object CovalentNative {
         syncWorkerSha256: String,
         syncRuntimeDirectory: String,
         syncListenerPort: Int,
+        peerListenerPort: Int,
     ): String
 
     @JvmStatic
@@ -54,6 +55,7 @@ internal object CovalentNative {
         syncWorkerPath: String,
         syncWorkerSha256: String,
         syncRuntimeDirectory: String,
+        peerListenerPort: Int,
     ): String
 
     @JvmStatic
@@ -86,10 +88,14 @@ internal object CovalentNative {
         backupProviderEnabled: Boolean = true,
         folderSyncAccessUnavailable: Boolean = false,
         folderSyncListenerPort: Int = FOLDER_SYNC_LISTENER_PORT,
+        peerListenerPort: Int = PEER_LISTENER_PORT,
     ): NativeNodeResponse {
         if (!libraryLoaded) return NativeNodeResponse.unavailable()
         require(BuildConfig.DEBUG || folderSyncListenerPort == FOLDER_SYNC_LISTENER_PORT) {
             "Release builds use Covalent's fixed folder-sync listener port."
+        }
+        require(peerListenerPort in 0..0xffff && (BuildConfig.DEBUG || peerListenerPort == PEER_LISTENER_PORT)) {
+            "Release builds use Covalent's fixed peer listener port."
         }
         return parse(runCatching {
             val packaged = syncEngine.verifiedOrNull()
@@ -112,6 +118,7 @@ internal object CovalentNative {
                 packaged?.workerSha256.orEmpty(),
                 packaged?.runtimeDirectory.orEmpty(),
                 folderSyncListenerPort,
+                peerListenerPort,
             )
         }.getOrElse { NativeNodeResponse.unavailable().toJson() })
     }
@@ -136,8 +143,12 @@ internal object CovalentNative {
         syncEngine: PackagedSyncEnginePackage,
         backupProviderEnabled: Boolean = true,
         folderSyncAccessUnavailable: Boolean = false,
+        peerListenerPort: Int = PEER_LISTENER_PORT,
     ): NativeNodeResponse {
         if (!libraryLoaded) return NativeNodeResponse.unavailable()
+        require(peerListenerPort in 0..0xffff && (BuildConfig.DEBUG || peerListenerPort == PEER_LISTENER_PORT)) {
+            "Release builds use Covalent's fixed peer listener port."
+        }
         return parse(runCatching {
             val packaged = syncEngine.verifiedOrNull()
             nativeRecoverStart(
@@ -160,6 +171,7 @@ internal object CovalentNative {
                 packaged?.workerPath.orEmpty(),
                 packaged?.workerSha256.orEmpty(),
                 packaged?.runtimeDirectory.orEmpty(),
+                peerListenerPort,
             )
         }.getOrElse { NativeNodeResponse.unavailable().toJson() })
     }
@@ -187,6 +199,7 @@ internal object CovalentNative {
     }.getOrElse { NativeNodeResponse.unavailable() }
 
     private const val FOLDER_SYNC_LISTENER_PORT = 8_789
+    private const val PEER_LISTENER_PORT = 8_787
 }
 
 private fun PackagedSyncEnginePackage.verifiedOrNull(): VerifiedPackagedSyncEngine? =

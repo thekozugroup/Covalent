@@ -144,12 +144,41 @@ async fn make_ready(
     target: &FolderSyncService,
 ) -> (Uuid, FolderShareCommit) {
     let folder = Uuid::new_v4();
+    make_ready_folder(first, second, source, target, folder).await
+}
+
+async fn make_ready_folder(
+    first: &Device,
+    second: &Device,
+    source: &FolderSyncService,
+    target: &FolderSyncService,
+    folder: Uuid,
+) -> (Uuid, FolderShareCommit) {
+    make_ready_folder_at(
+        second,
+        source,
+        target,
+        folder,
+        &first.files(),
+        &second.files(),
+    )
+    .await
+}
+
+async fn make_ready_folder_at(
+    second: &Device,
+    source: &FolderSyncService,
+    target: &FolderSyncService,
+    folder: Uuid,
+    source_root: &std::path::Path,
+    target_root: &std::path::Path,
+) -> (Uuid, FolderShareCommit) {
     let offer = source
         .offer(
             second.engine.device_id(),
             folder,
             "Documents",
-            &first.files(),
+            source_root,
             2000,
         )
         .await
@@ -157,7 +186,7 @@ async fn make_ready(
         .into_value();
     target.receive_offer(offer.clone(), 2001).await.unwrap();
     let acceptance = target
-        .accept(offer.offer_id, &second.files(), 2002)
+        .accept(offer.offer_id, target_root, 2002)
         .await
         .unwrap()
         .into_value();
@@ -185,6 +214,7 @@ async fn disconnect_reconnect_and_unknown_do_not_stop_a_healthy_worker() {
     make_ready(&first, &second, &first_service, &second_service).await;
 
     first_backend.set_connection_states(vec![EnginePeerConnectionState::Disconnected]);
+    first_service.observe_health_for_test().await;
     let disconnected = first_service.status().await.unwrap();
     assert_eq!(disconnected.lifecycle(), FolderSyncLifecycle::Running);
     assert_eq!(
@@ -197,6 +227,7 @@ async fn disconnect_reconnect_and_unknown_do_not_stop_a_healthy_worker() {
     );
 
     first_backend.set_connection_states(vec![EnginePeerConnectionState::Connected]);
+    first_service.observe_health_for_test().await;
     let connected = first_service.status().await.unwrap();
     assert_eq!(
         connected.peer_connection(second.engine.device_id()),
@@ -204,6 +235,7 @@ async fn disconnect_reconnect_and_unknown_do_not_stop_a_healthy_worker() {
     );
 
     first_backend.set_connection_failure(true);
+    first_service.observe_health_for_test().await;
     let unavailable = first_service.status().await.unwrap();
     assert_eq!(unavailable.lifecycle(), FolderSyncLifecycle::Running);
     assert_eq!(
@@ -219,6 +251,286 @@ async fn disconnect_reconnect_and_unknown_do_not_stop_a_healthy_worker() {
     assert_eq!(calls.connection_calls, 3);
     assert_eq!(calls.stop_calls, 0);
     assert_eq!(calls.close_calls, 0);
+}
+
+#[tokio::test]
+async fn root_repair_reaps_old_worker_then_runs_a_new_full_initial_scan() {
+    let first = Device::new("Mac", 44207);
+    let second = Device::new("Server", 44208);
+    pair(&first, &second);
+    let first_backend = Arc::new(TestBackend::default());
+    let second_backend = Arc::new(TestBackend::default());
+    let first_service = first.service(first.journal(), Arc::clone(&first_backend));
+    let second_service = second.service(second.journal(), Arc::clone(&second_backend));
+    let (offer_id, _) = make_ready(&first, &second, &first_service, &second_service).await;
+    let before = first_backend.snapshot();
+    let replacement = first.root.join("replacement");
+    std::fs::create_dir(&replacement).unwrap();
+
+    let committed = first_service
+        .repair_root(offer_id, &replacement)
+        .await
+        .unwrap();
+    assert_eq!(committed.lifecycle(), FolderSyncLifecycle::Running);
+    let after = first_backend.snapshot();
+    assert_eq!(after.close_calls, before.close_calls + 2);
+    assert_eq!(after.stop_calls, before.stop_calls + 2);
+    assert_eq!(after.launches, before.launches + 2);
+    assert_eq!(after.scan_calls, before.scan_calls + 1);
+    assert_eq!(after.reset_calls.len(), 1);
+    assert_eq!(
+        after.launched_reset_gates[after.launches - 2..],
+        [true, false]
+    );
+    assert_eq!(after.maximum_active, 1);
+
+    drop(first_service);
+    assert_eq!(
+        first.reopen().desired_settings().unwrap().folders[0].root(),
+        replacement
+    );
+}
+
+#[tokio::test]
+async fn scoped_root_reset_retains_unrelated_folder_settings_and_index_gate() {
+    let first = Device::new("Mac", 44277);
+    let second = Device::new("Server", 44278);
+    pair(&first, &second);
+    let first_backend = Arc::new(TestBackend::default());
+    let second_backend = Arc::new(TestBackend::default());
+    let first_service = first.service(first.journal(), Arc::clone(&first_backend));
+    let second_service = second.service(second.journal(), second_backend);
+    let repaired_folder = Uuid::new_v4();
+    let (offer_id, _) = make_ready_folder(
+        &first,
+        &second,
+        &first_service,
+        &second_service,
+        repaired_folder,
+    )
+    .await;
+    let first_other = first.root.join("other");
+    let second_other = second.root.join("other");
+    std::fs::create_dir(&first_other).unwrap();
+    std::fs::create_dir(&second_other).unwrap();
+    let unrelated_folder = Uuid::new_v4();
+    make_ready_folder_at(
+        &second,
+        &first_service,
+        &second_service,
+        unrelated_folder,
+        &first_other,
+        &second_other,
+    )
+    .await;
+    let before = first_backend.snapshot();
+    let replacement = first.root.join("replacement-scoped");
+    std::fs::create_dir(&replacement).unwrap();
+
+    assert_eq!(
+        first_service
+            .repair_root(offer_id, &replacement)
+            .await
+            .unwrap()
+            .lifecycle(),
+        FolderSyncLifecycle::Running
+    );
+    let after = first_backend.snapshot();
+    assert_eq!(after.reset_calls, [repaired_folder]);
+    assert_eq!(after.launched_folder_counts[after.launches - 2..], [2, 2]);
+    assert_eq!(
+        after.launched_reset_gates[after.launches - 2..],
+        [true, false]
+    );
+    assert_eq!(after.scan_calls, before.scan_calls + 1);
+    let settings = first.reopen().desired_settings().unwrap();
+    assert_eq!(settings.folders.len(), 2);
+    assert!(settings.folders.iter().any(|folder| {
+        folder.id() == unrelated_folder && folder.root() == first_other.as_path()
+    }));
+}
+
+#[tokio::test]
+async fn invalid_root_repair_does_not_stop_a_healthy_worker() {
+    let first = Device::new("Mac", 44213);
+    let second = Device::new("Server", 44214);
+    pair(&first, &second);
+    let first_backend = Arc::new(TestBackend::default());
+    let second_backend = Arc::new(TestBackend::default());
+    let first_service = first.service(first.journal(), Arc::clone(&first_backend));
+    let second_service = second.service(second.journal(), second_backend);
+    let (offer_id, _) = make_ready(&first, &second, &first_service, &second_service).await;
+    let before = first_backend.snapshot();
+
+    assert_eq!(
+        first_service
+            .repair_root(offer_id, &first.root.join("absent"))
+            .await
+            .unwrap_err(),
+        FolderSyncServiceError::Journal
+    );
+    assert_eq!(
+        first_service.status().await.unwrap().lifecycle(),
+        FolderSyncLifecycle::Running
+    );
+    let after = first_backend.snapshot();
+    assert_eq!(after.close_calls, before.close_calls);
+    assert_eq!(after.stop_calls, before.stop_calls);
+    assert_eq!(after.launches, before.launches);
+    assert_eq!(after.active, 1);
+}
+
+#[tokio::test]
+async fn multi_peer_root_repair_is_rejected_before_stopping_worker() {
+    let first = Device::new("Mac", 44217);
+    let second = Device::new("Server", 44218);
+    let third = Device::new("Laptop", 44219);
+    pair(&first, &second);
+    pair(&first, &third);
+    let first_backend = Arc::new(TestBackend::default());
+    let second_backend = Arc::new(TestBackend::default());
+    let third_backend = Arc::new(TestBackend::default());
+    let first_service = first.service(first.journal(), Arc::clone(&first_backend));
+    let second_service = second.service(second.journal(), second_backend);
+    let third_service = third.service(third.journal(), third_backend);
+    let folder = Uuid::new_v4();
+    let (offer_id, _) =
+        make_ready_folder(&first, &second, &first_service, &second_service, folder).await;
+    make_ready_folder(&first, &third, &first_service, &third_service, folder).await;
+    let before = first_backend.snapshot();
+    let replacement = first.root.join("multi-peer-replacement");
+    std::fs::create_dir(&replacement).unwrap();
+
+    assert_eq!(
+        first_service
+            .repair_root(offer_id, &replacement)
+            .await
+            .unwrap_err(),
+        FolderSyncServiceError::Journal
+    );
+    let after = first_backend.snapshot();
+    assert_eq!(after.close_calls, before.close_calls);
+    assert_eq!(after.stop_calls, before.stop_calls);
+    assert_eq!(after.launches, before.launches);
+    assert_eq!(after.active, 1);
+}
+
+#[tokio::test]
+async fn failed_index_reset_stays_durable_and_retries_before_scanning() {
+    let first = Device::new("Mac", 44215);
+    let second = Device::new("Server", 44216);
+    pair(&first, &second);
+    let first_backend = Arc::new(TestBackend::default());
+    let second_backend = Arc::new(TestBackend::default());
+    let first_service = first.service(first.journal(), Arc::clone(&first_backend));
+    let second_service = second.service(second.journal(), second_backend);
+    let (offer_id, _) = make_ready(&first, &second, &first_service, &second_service).await;
+    let before = first_backend.snapshot();
+    let replacement = first.root.join("replacement-retry");
+    std::fs::create_dir(&replacement).unwrap();
+    first_backend.fail_next_reset();
+
+    let committed = first_service
+        .repair_root(offer_id, &replacement)
+        .await
+        .unwrap();
+    assert_eq!(
+        committed.lifecycle(),
+        FolderSyncLifecycle::NeedsAttention(FolderSyncIssue::InitialScan)
+    );
+    let failed = first_backend.snapshot();
+    assert_eq!(failed.reset_calls.len(), 1);
+    assert_eq!(failed.scan_calls, before.scan_calls);
+    assert_eq!(failed.active, 0);
+    assert_eq!(failed.launched_reset_gates.last(), Some(&true));
+
+    assert_eq!(
+        first_service.start().await.unwrap(),
+        FolderSyncLifecycle::Running
+    );
+    let retried = first_backend.snapshot();
+    assert_eq!(retried.reset_calls.len(), 2);
+    assert_eq!(retried.scan_calls, before.scan_calls + 1);
+    assert_eq!(retried.maximum_active, 1);
+    assert_eq!(
+        retried.launched_reset_gates[retried.launches - 2..],
+        [true, false]
+    );
+}
+
+#[tokio::test]
+async fn successful_reset_is_not_cleared_until_the_exact_worker_is_reaped() {
+    let first = Device::new("Mac", 44279);
+    let second = Device::new("Server", 44280);
+    pair(&first, &second);
+    let first_backend = Arc::new(TestBackend::default());
+    let second_backend = Arc::new(TestBackend::default());
+    let first_service = first.service(first.journal(), Arc::clone(&first_backend));
+    let second_service = second.service(second.journal(), second_backend);
+    let (offer_id, _) = make_ready(&first, &second, &first_service, &second_service).await;
+    let replacement = first.root.join("replacement-unreaped-reset");
+    std::fs::create_dir(&replacement).unwrap();
+    first_backend.push_stop(TestStopBehavior::Exited);
+    first_backend.push_stop(TestStopBehavior::StillStopping);
+
+    let committed = first_service
+        .repair_root(offer_id, &replacement)
+        .await
+        .unwrap();
+    assert_eq!(committed.lifecycle(), FolderSyncLifecycle::StillStopping);
+    assert!(first.reopen().pending_root_reset().unwrap().is_some());
+    let unreaped = first_backend.snapshot();
+    assert_eq!(unreaped.active, 1);
+    assert_eq!(unreaped.reset_calls.len(), 1);
+    assert_eq!(unreaped.scan_calls, 1);
+
+    assert_eq!(
+        first_service.start().await.unwrap(),
+        FolderSyncLifecycle::Running
+    );
+    let recovered = first_backend.snapshot();
+    assert_eq!(recovered.active, 1);
+    assert_eq!(recovered.maximum_active, 1);
+    assert_eq!(recovered.reset_calls.len(), 2);
+    assert_eq!(recovered.scan_calls, 2);
+    assert_eq!(first.reopen().pending_root_reset().unwrap(), None);
+}
+
+#[tokio::test]
+async fn root_repair_cannot_commit_while_the_old_worker_is_still_stopping() {
+    let first = Device::new("Mac", 44205);
+    let second = Device::new("Server", 44206);
+    pair(&first, &second);
+    let first_backend = Arc::new(TestBackend::default());
+    let second_backend = Arc::new(TestBackend::default());
+    let first_service = first.service(first.journal(), Arc::clone(&first_backend));
+    let second_service = second.service(second.journal(), second_backend);
+    let (offer_id, _) = make_ready(&first, &second, &first_service, &second_service).await;
+    let replacement = first.root.join("replacement");
+    std::fs::create_dir(&replacement).unwrap();
+    first_backend.push_stop(TestStopBehavior::StillStopping);
+
+    assert_eq!(
+        first_service
+            .repair_root(offer_id, &replacement)
+            .await
+            .unwrap_err(),
+        FolderSyncServiceError::WorkerStillStopping
+    );
+    assert_eq!(
+        first.reopen().desired_settings().unwrap().folders[0].root(),
+        first.files()
+    );
+
+    let committed = first_service
+        .repair_root(offer_id, &replacement)
+        .await
+        .unwrap();
+    assert_eq!(committed.lifecycle(), FolderSyncLifecycle::Running);
+    assert_eq!(
+        first.reopen().desired_settings().unwrap().folders[0].root(),
+        replacement
+    );
 }
 
 #[tokio::test]
@@ -747,10 +1059,12 @@ async fn health_failure_closes_and_reaps_before_reporting_attention() {
         watch_error: false,
     };
     first_backend.set_health_observation(vec![observed.clone()]);
+    first_service.observe_health_for_test().await;
     let healthy = first_service.status().await.unwrap();
     assert_eq!(healthy.health_freshness(), FolderHealthFreshness::Fresh);
     assert_eq!(healthy.folder_health(), std::slice::from_ref(&observed));
     first_backend.set_health_failure(true);
+    first_service.observe_health_for_test().await;
     let status = first_service.status().await.unwrap();
     assert_eq!(
         status.lifecycle(),
@@ -795,6 +1109,7 @@ async fn reported_folder_error_is_retained_and_reaps_worker() {
         watch_error: false,
     };
     first_backend.set_health_observation(vec![observed.clone()]);
+    first_service.observe_health_for_test().await;
     let status = first_service.status().await.unwrap();
     assert_eq!(
         status.lifecycle(),
@@ -938,6 +1253,7 @@ async fn out_of_band_revocation_reconciles_and_reaps_stale_membership() {
     make_ready(&first, &second, &first_service, &second_service).await;
 
     first.engine.revoke_peer(second.engine.device_id()).unwrap();
+    first_service.observe_health_for_test().await;
     let status = first_service.status().await.unwrap();
     assert_eq!(status.lifecycle(), FolderSyncLifecycle::Stopped);
     assert_eq!(status.shares()[0].phase, SharingPhase::Removed);
@@ -1045,4 +1361,73 @@ fn reopen_helper_confirms_test_state_is_durable() {
     let journal = device.journal();
     drop(journal);
     assert!(device.reopen().summaries().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn sustained_status_polling_does_not_probe_or_block_a_second_folder_offer() {
+    let first = Device::new("Mac", 44301);
+    let second = Device::new("Server", 44302);
+    pair(&first, &second);
+    let first_backend = Arc::new(TestBackend::default());
+    let second_backend = Arc::new(TestBackend::default());
+    let first_service = Arc::new(first.service(first.journal(), Arc::clone(&first_backend)));
+    let second_service = Arc::new(second.service(second.journal(), Arc::clone(&second_backend)));
+    make_ready(&first, &second, &first_service, &second_service).await;
+    first_service.observe_health_for_test().await;
+    second_service.observe_health_for_test().await;
+    let before = (
+        first_backend.snapshot().health_calls,
+        second_backend.snapshot().health_calls,
+    );
+    let poll_source = Arc::clone(&first_service);
+    let poll_target = Arc::clone(&second_service);
+    let polling = tokio::spawn(async move {
+        for _ in 0..500 {
+            for service in [&poll_source, &poll_target] {
+                match service.status().await {
+                    Ok(_) | Err(FolderSyncServiceError::Busy) => {}
+                    Err(error) => panic!("unexpected polling failure: {error:?}"),
+                }
+            }
+            tokio::task::yield_now().await;
+        }
+    });
+    let another_root = first.root.join("another-folder");
+    std::fs::create_dir(&another_root).unwrap();
+    let offer = first_service
+        .offer(
+            second.engine.device_id(),
+            Uuid::new_v4(),
+            "Second folder",
+            &another_root,
+            4000,
+        )
+        .await
+        .unwrap()
+        .into_value();
+    second_service
+        .receive_offer(offer.clone(), 4001)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), polling)
+        .await
+        .unwrap()
+        .unwrap();
+    let snapshot = second_service.status().await.unwrap();
+    assert_eq!(snapshot.shares().len(), 2);
+    assert!(
+        snapshot
+            .shares()
+            .iter()
+            .any(|share| share.offer_id == offer.offer_id)
+    );
+    assert_eq!(
+        (
+            first_backend.snapshot().health_calls,
+            second_backend.snapshot().health_calls
+        ),
+        before
+    );
+    assert_eq!(first_backend.snapshot().launches, 1);
+    assert_eq!(second_backend.snapshot().launches, 1);
 }

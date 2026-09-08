@@ -89,6 +89,9 @@ pub enum EngineEndpoint {
     FolderVersions(Uuid),
     /// Ask the engine to scan one configured folder.
     ScanFolder(Uuid),
+    /// Erase one paused folder's local index and request the pinned worker's
+    /// documented restart. Used only for a durably pending root replacement.
+    ResetFolderIndex(Uuid),
     /// Stop the engine gracefully.
     Shutdown,
 }
@@ -96,7 +99,7 @@ pub enum EngineEndpoint {
 impl EngineEndpoint {
     fn method(self) -> Method {
         match self {
-            Self::ScanFolder(_) | Self::Shutdown => Method::POST,
+            Self::ScanFolder(_) | Self::ResetFolderIndex(_) | Self::Shutdown => Method::POST,
             _ => Method::GET,
         }
     }
@@ -119,6 +122,7 @@ impl EngineEndpoint {
             Self::FolderErrors(id) => format!("/rest/folder/errors?folder={id}&page=1&perpage=128"),
             Self::FolderVersions(id) => format!("/rest/folder/versions?folder={id}"),
             Self::ScanFolder(id) => format!("/rest/db/scan?folder={id}"),
+            Self::ResetFolderIndex(id) => format!("/rest/system/reset?folder={id}"),
             Self::Shutdown => "/rest/system/shutdown".to_owned(),
         }
     }
@@ -249,7 +253,9 @@ impl EngineApiClient {
     pub async fn command(&self, endpoint: EngineEndpoint) -> Result<(), EngineApiError> {
         if !matches!(
             endpoint,
-            EngineEndpoint::ScanFolder(_) | EngineEndpoint::Shutdown
+            EngineEndpoint::ScanFolder(_)
+                | EngineEndpoint::ResetFolderIndex(_)
+                | EngineEndpoint::Shutdown
         ) {
             return Err(EngineApiError::InvalidConfiguration);
         }

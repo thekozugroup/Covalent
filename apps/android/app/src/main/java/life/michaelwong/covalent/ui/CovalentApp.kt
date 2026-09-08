@@ -176,8 +176,9 @@ private const val UI_LOG_TAG = "CovalentUi"
 
 internal enum class Screen { HOME, SETUP, PAIR, FOLDERS, BACKUP, RESTORE, SETTINGS }
 
-internal fun Screen.systemBackTarget(): Screen? = when (this) {
-    Screen.PAIR, Screen.FOLDERS, Screen.BACKUP, Screen.RESTORE, Screen.SETTINGS -> Screen.HOME
+internal fun Screen.systemBackTarget(hasBackupConnection: Boolean = true): Screen? = when (this) {
+    Screen.FOLDERS -> if (hasBackupConnection) Screen.HOME else Screen.SETUP
+    Screen.PAIR, Screen.BACKUP, Screen.RESTORE, Screen.SETTINGS -> Screen.HOME
     Screen.HOME, Screen.SETUP -> null
 }
 
@@ -845,6 +846,9 @@ internal fun CovalentApp(
 
     LaunchedEffect(store, state) {
         state.initialize(store)
+        if (state.screen == Screen.SETUP && embeddedManager.folderSyncRequested()) {
+            state.screen = Screen.FOLDERS
+        }
     }
     LaunchedEffect(state.screen) {
         if (state.screen != Screen.SETTINGS && recoveryExportSession != null) {
@@ -904,7 +908,9 @@ internal fun CovalentApp(
             }.onFailure { error ->
                 state.connectionHealth = ConnectionHealth.STALE
                 state.connectionError = nodeFailureMessage(context, error, R.string.error_connection_failed)
-                if (shouldReturnToSetupAfterRefreshFailure(error)) state.screen = Screen.SETUP
+                if (state.screen != Screen.FOLDERS && shouldReturnToSetupAfterRefreshFailure(error)) {
+                    state.screen = Screen.SETUP
+                }
             }
             delay(STATUS_POLL_MILLIS)
         }
@@ -950,7 +956,7 @@ internal fun CovalentApp(
                                 it.state != NetworkPairingState.FAILED
                         }
                     }
-                    if (state.activeNetworkPairing != null && state.screen != Screen.SETUP) {
+                    if (state.activeNetworkPairing != null && state.screen != Screen.SETUP && state.screen != Screen.FOLDERS) {
                         state.screen = Screen.PAIR
                     }
                 }
@@ -975,8 +981,8 @@ internal fun CovalentApp(
         snackbar.showSnackbar(notice)
         state.notice = null
     }
-    BackHandler(enabled = state.screen.systemBackTarget() != null) {
-        state.screen.systemBackTarget()?.let { state.screen = it }
+    BackHandler(enabled = state.screen.systemBackTarget(activeConnection != null) != null) {
+        state.screen.systemBackTarget(activeConnection != null)?.let { state.screen = it }
     }
 
     val compactActions = LocalDensity.current.fontScale >= 1.3f
@@ -987,7 +993,9 @@ internal fun CovalentApp(
                 title = { Text(stringResource(R.string.app_name)) },
                 navigationIcon = if (state.screen != Screen.HOME && state.screen != Screen.SETUP) {
                     {
-                        IconButton(onClick = { state.screen = Screen.HOME }) {
+                        IconButton(onClick = {
+                            state.screen = state.screen.systemBackTarget(activeConnection != null) ?: Screen.HOME
+                        }) {
                             Icon(
                                 Icons.AutoMirrored.Rounded.ArrowBack,
                                 stringResource(R.string.action_back),
@@ -1029,6 +1037,7 @@ internal fun CovalentApp(
                     state,
                     page,
                     ::requestSetup,
+                    openFolders = { state.screen = Screen.FOLDERS },
                     pickTokenFile = { tokenPicker.launch(arrayOf("text/plain", "application/octet-stream")) },
                     pickCaCertificate = { caCertificatePicker.launch(arrayOf("application/x-x509-ca-cert", "application/pkix-cert", "text/plain")) },
                     recoverPhone = {
@@ -1534,6 +1543,7 @@ private fun Setup(
     state: CovalentViewModel,
     modifier: Modifier,
     connect: () -> Unit,
+    openFolders: () -> Unit,
     pickTokenFile: () -> Unit,
     pickCaCertificate: () -> Unit,
     recoverPhone: () -> Unit,
@@ -1549,6 +1559,11 @@ private fun Setup(
         stringResource(R.string.setup_title),
         stringResource(R.string.setup_subtitle),
     ) {
+        Button(onClick = openFolders, modifier = Modifier.fillMaxWidth().testTag("setup.folderSync")) {
+            Text(stringResource(R.string.folder_sync_setup_action))
+        }
+        Text(stringResource(R.string.folder_sync_setup_detail))
+        SectionTitle(stringResource(R.string.setup_backup_section))
         OnboardingChoice(
             icon = Icons.Rounded.Search,
             title = stringResource(R.string.setup_nearby_title),
@@ -1973,12 +1988,13 @@ private fun DiscoveryCandidateRow(candidate: DiscoveryCandidate, select: () -> U
 }
 
 @Composable
-private fun NetworkPairingCard(
+internal fun NetworkPairingCard(
     pairing: NetworkPairing,
     providerPersisted: Boolean,
     busy: Boolean,
     confirm: () -> Unit,
     dismiss: () -> Unit,
+    forFolderSync: Boolean = false,
 ) {
     val direction = stringResource(
         if (pairing.direction == NetworkPairingDirection.INCOMING) {
@@ -2016,7 +2032,10 @@ private fun NetworkPairingCard(
                 }
             }
             Text(
-                stringResource(R.string.network_pairing_compare),
+                stringResource(
+                    if (forFolderSync) R.string.folder_sync_pair_compare
+                    else R.string.network_pairing_compare,
+                ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -2047,7 +2066,10 @@ private fun NetworkPairingCard(
                         modifier = Modifier.testTag("pair.confirmNetwork"),
                     ) {
                         Icon(Icons.Rounded.CheckCircle, contentDescription = null)
-                        Text(stringResource(R.string.action_confirm_backup_device), Modifier.padding(start = 8.dp))
+                        Text(
+                            stringResource(if (forFolderSync) R.string.folder_sync_confirm_device else R.string.action_confirm_backup_device),
+                            Modifier.padding(start = 8.dp),
+                        )
                     }
                 }
                 NetworkPairingState.AWAITING_PEER_CONFIRMATION -> {
@@ -2060,12 +2082,15 @@ private fun NetworkPairingCard(
                     if (providerPersisted) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                            Text(stringResource(R.string.network_pairing_complete), fontWeight = FontWeight.SemiBold)
+                            Text(
+                                stringResource(if (forFolderSync) R.string.folder_sync_pair_complete else R.string.network_pairing_complete),
+                                fontWeight = FontWeight.SemiBold,
+                            )
                         }
                     } else {
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                             CircularProgressIndicator()
-                            Text(stringResource(R.string.network_pairing_securing_provider))
+                            Text(stringResource(if (forFolderSync) R.string.folder_sync_pair_finishing else R.string.network_pairing_securing_provider))
                         }
                     }
                 }

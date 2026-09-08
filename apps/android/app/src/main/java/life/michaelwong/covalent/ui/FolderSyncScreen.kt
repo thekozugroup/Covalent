@@ -17,11 +17,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -30,6 +32,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -38,13 +41,16 @@ import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import life.michaelwong.covalent.R
 import life.michaelwong.covalent.data.CovalentNodeClient
 import life.michaelwong.covalent.model.FolderShare
 import life.michaelwong.covalent.model.FolderSharePhase
 import life.michaelwong.covalent.model.FolderSyncStatus
+import life.michaelwong.covalent.model.FolderSyncAvailability
 import life.michaelwong.covalent.model.FolderSyncLifecycle
+import life.michaelwong.covalent.model.FolderSyncIssue
 import life.michaelwong.covalent.model.FolderShareSummary
 import life.michaelwong.covalent.model.summaryFor
 import life.michaelwong.covalent.model.NodeConnection
@@ -77,12 +83,14 @@ internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier =
     var label by remember { mutableStateOf("") }
     var selectedPeer by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var pendingRepairOffers by remember { mutableStateOf<Set<String>>(emptySet()) }
 
     fun connection(): NodeConnection = manager.localConnectionForFolderSync()
         ?: throw IllegalStateException("The on-phone node is still starting.")
 
     fun refresh() {
-        if (!accessGranted || busy) return
+        if (busy) return
+        accessGranted = FolderSyncSpecialAccess.granted()
         busy = true
         error = null
         scope.launch {
@@ -95,10 +103,15 @@ internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier =
                     throw IllegalStateException("not ready")
                 }
                 withContext(Dispatchers.IO) {
-                    api.status(ready).also(grants::reconcile)
+                    val snapshot = api.status(ready).also(grants::reconcile)
+                    snapshot to grants.records()
+                        .filter { it.pendingRoot != null && !it.pendingRemoval }
+                        .mapNotNull { it.offerId }
+                        .toSet()
                 }
-            }.onSuccess {
-                status = it
+            }.onSuccess { (snapshot, pending) ->
+                status = snapshot
+                pendingRepairOffers = pending
             }.onFailure { error = folderSyncErrorText(it) }
             busy = false
         }
@@ -116,11 +129,24 @@ internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier =
         }
     }
 
+    fun actions() = FolderSyncActions(
+        grants,
+        api,
+        ::connection,
+        browser::select,
+        manager::refreshFolderSyncAccess,
+    )
+
     val localNetworkPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         if (granted) {
-            enableHostAndRefresh()
+            if (hostRequested) {
+                manager.refreshFolderSyncAccess()
+                refresh()
+            } else {
+                enableHostAndRefresh()
+            }
         } else {
             error = localNetworkDeclinedMessage
         }
@@ -139,16 +165,24 @@ internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier =
         ) {
             localNetworkPermission.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
         } else {
-            enableHostAndRefresh()
+            if (hostRequested) {
+                manager.refreshFolderSyncAccess()
+                refresh()
+            } else {
+                enableHostAndRefresh()
+            }
         }
     }
 
-    LaunchedEffect(accessGranted) {
-        if (accessGranted && manager.folderSyncRequested()) refresh()
+    LaunchedEffect(hostRequested) {
+        while (hostRequested && isActive) {
+            refresh()
+            delay(3_000)
+        }
     }
 
     LazyColumn(
-        modifier.fillMaxSize(),
+        modifier.fillMaxSize().testTag("folder-sync-list"),
         contentPadding = PaddingValues(20.dp, 14.dp, 20.dp, 80.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
@@ -189,27 +223,28 @@ internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier =
                     }
                 }
             }
-            return@LazyColumn
         }
         if (!hostRequested) {
-            item {
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(stringResource(R.string.folder_sync_access_title), fontWeight = FontWeight.SemiBold)
-                        Text(stringResource(R.string.folder_sync_access_explanation))
-                        Button(onClick = {
-                            if (
-                                Build.VERSION.SDK_INT >= 37 && ContextCompat.checkSelfPermission(
-                                    context,
-                                    Manifest.permission.ACCESS_LOCAL_NETWORK,
-                                ) != PackageManager.PERMISSION_GRANTED
-                            ) {
-                                localNetworkPermission.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
-                            } else {
-                                enableHostAndRefresh()
+            if (accessGranted) {
+                item {
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text(stringResource(R.string.folder_sync_access_title), fontWeight = FontWeight.SemiBold)
+                            Text(stringResource(R.string.folder_sync_access_explanation))
+                            Button(onClick = {
+                                if (
+                                    Build.VERSION.SDK_INT >= 37 && ContextCompat.checkSelfPermission(
+                                        context,
+                                        Manifest.permission.ACCESS_LOCAL_NETWORK,
+                                    ) != PackageManager.PERMISSION_GRANTED
+                                ) {
+                                    localNetworkPermission.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
+                                } else {
+                                    enableHostAndRefresh()
+                                }
+                            }) {
+                                Text(stringResource(R.string.folder_sync_enable))
                             }
-                        }) {
-                            Text(stringResource(R.string.folder_sync_enable))
                         }
                     }
                 }
@@ -220,10 +255,16 @@ internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier =
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(
                     status?.let {
-                        if (it.lifecycle == FolderSyncLifecycle.INITIAL_SCANNING) {
-                            stringResource(R.string.folder_sync_checking_folders)
-                        } else {
-                            "${it.availability.name.lowercase()} · ${it.lifecycle.name.lowercase()}"
+                        when {
+                            it.issue != null || it.availability == FolderSyncAvailability.NEEDS_ATTENTION ->
+                                stringResource(R.string.folder_sync_connection_attention)
+                            it.lifecycle == FolderSyncLifecycle.INITIAL_SCANNING ->
+                                stringResource(R.string.folder_sync_checking_folders)
+                            it.lifecycle == FolderSyncLifecycle.STILL_STOPPING ->
+                                stringResource(R.string.folder_sync_stopping)
+                            it.lifecycle == FolderSyncLifecycle.RUNNING ->
+                                stringResource(R.string.folder_sync_running)
+                            else -> stringResource(R.string.folder_sync_ready_to_share)
                         }
                     } ?: stringResource(R.string.folder_sync_starting),
                 )
@@ -232,56 +273,63 @@ internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier =
                 }
             }
         }
-        item {
-            FolderChooser(
-                current = currentFolder,
-                entries = entries,
-                selected = selectedFolder,
-                busy = busy,
-                onOpen = { path ->
-                    busy = true
-                    scope.launch {
-                        runCatching { withContext(Dispatchers.IO) { browser.children(path) } }
-                            .onSuccess {
-                                currentFolder = path
-                                entries = it
-                            }
-                            .onFailure { error = folderSyncErrorText(it) }
-                        busy = false
-                    }
-                },
-                onRoot = {
-                    busy = true
-                    scope.launch {
-                        runCatching { withContext(Dispatchers.IO) { browser.roots() } }
-                            .onSuccess {
-                                entries = it
-                                currentFolder = null
-                            }
-                            .onFailure { error = folderSyncErrorText(it) }
-                        busy = false
-                    }
-                },
-                onChoose = { path ->
-                    busy = true
-                    scope.launch {
-                        runCatching { withContext(Dispatchers.IO) { browser.select(path) } }
-                            .onSuccess { selectedFolder = it }
-                            .onFailure { error = folderSyncErrorText(it) }
-                        busy = false
-                    }
-                },
-            )
+        if (accessGranted) {
+            item(key = "phone-pairing") {
+                FolderSyncPairing(manager = manager, onPeersChanged = ::refresh)
+            }
+            item {
+                FolderChooser(
+                    current = currentFolder,
+                    entries = entries,
+                    selected = selectedFolder,
+                    busy = busy,
+                    onOpen = { path ->
+                        busy = true
+                        scope.launch {
+                            runCatching { withContext(Dispatchers.IO) { browser.children(path) } }
+                                .onSuccess {
+                                    currentFolder = path
+                                    entries = it
+                                }
+                                .onFailure { error = folderSyncErrorText(it) }
+                            busy = false
+                        }
+                    },
+                    onRoot = {
+                        busy = true
+                        scope.launch {
+                            runCatching { withContext(Dispatchers.IO) { browser.roots() } }
+                                .onSuccess {
+                                    entries = it
+                                    currentFolder = null
+                                }
+                                .onFailure { error = folderSyncErrorText(it) }
+                            busy = false
+                        }
+                    },
+                    onChoose = { path ->
+                        busy = true
+                        scope.launch {
+                            runCatching { withContext(Dispatchers.IO) { browser.select(path) } }
+                                .onSuccess { selectedFolder = it }
+                                .onFailure { error = folderSyncErrorText(it) }
+                            busy = false
+                        }
+                    },
+                )
+            }
         }
         val snapshot = status
         if (snapshot != null) {
-            item {
-                OutlinedTextField(
-                    value = label,
-                    onValueChange = { if (it.length <= 256) label = it },
-                    label = { Text(stringResource(R.string.folder_sync_label)) },
-                    modifier = Modifier.fillMaxWidth(),
-                )
+            if (accessGranted && snapshot.issue != FolderSyncIssue.FOLDER_ACCESS) {
+                item {
+                    OutlinedTextField(
+                        value = label,
+                        onValueChange = { if (it.length <= 256) label = it },
+                        label = { Text(stringResource(R.string.folder_sync_label)) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
             if (
                 snapshot.lifecycle == FolderSyncLifecycle.NEEDS_ATTENTION ||
@@ -295,7 +343,7 @@ internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier =
                             scope.launch {
                                 runCatching {
                                     withContext(Dispatchers.IO) {
-                                        FolderSyncActions(grants, api, ::connection).retry()
+                                        actions().retry()
                                     }
                                 }.onFailure { error = folderSyncErrorText(it) }
                                 busy = false
@@ -305,36 +353,38 @@ internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier =
                     ) { Text(stringResource(R.string.action_retry)) }
                 }
             }
-            if (snapshot.peers.isEmpty()) {
-                item { Text(stringResource(R.string.folder_sync_pair_first)) }
-            } else {
-                item { Text(stringResource(R.string.folder_sync_choose_peer), fontWeight = FontWeight.SemiBold) }
-                items(snapshot.peers, key = { it.peerId }) { peer ->
-                    OutlinedButton(onClick = { selectedPeer = peer.peerId }, Modifier.fillMaxWidth()) {
-                        Text(if (selectedPeer == peer.peerId) "✓ ${peer.displayName}" else peer.displayName)
+            if (accessGranted && snapshot.issue != FolderSyncIssue.FOLDER_ACCESS) {
+                if (snapshot.peers.isEmpty()) {
+                    item { Text(stringResource(R.string.folder_sync_pair_first)) }
+                } else {
+                    item { Text(stringResource(R.string.folder_sync_choose_peer), fontWeight = FontWeight.SemiBold) }
+                    items(snapshot.peers, key = { it.peerId }) { peer ->
+                        OutlinedButton(onClick = { selectedPeer = peer.peerId }, Modifier.fillMaxWidth()) {
+                            Text(if (selectedPeer == peer.peerId) "✓ ${peer.displayName}" else peer.displayName)
+                        }
                     }
-                }
-                item {
-                    Button(
-                        enabled = !busy && selectedFolder != null && selectedPeer != null && label.isNotBlank(),
-                        onClick = {
-                            busy = true
-                            scope.launch {
-                                runCatching {
-                                    withContext(Dispatchers.IO) {
-                                        FolderSyncActions(grants, api, ::connection).offer(
-                                            checkNotNull(selectedPeer),
-                                            UUID.randomUUID(),
-                                            label.trim(),
-                                            checkNotNull(selectedFolder),
-                                        )
-                                    }
-                                }.onFailure { error = folderSyncErrorText(it) }
-                                busy = false
-                                refresh()
-                            }
-                        },
-                    ) { Text(stringResource(R.string.folder_sync_offer)) }
+                    item {
+                        Button(
+                            enabled = !busy && selectedFolder != null && selectedPeer != null && label.isNotBlank(),
+                            onClick = {
+                                busy = true
+                                scope.launch {
+                                    runCatching {
+                                        withContext(Dispatchers.IO) {
+                                            actions().offer(
+                                                checkNotNull(selectedPeer),
+                                                UUID.randomUUID(),
+                                                label.trim(),
+                                                checkNotNull(selectedFolder),
+                                            )
+                                        }
+                                    }.onFailure { error = folderSyncErrorText(it) }
+                                    busy = false
+                                    refresh()
+                                }
+                            },
+                        ) { Text(stringResource(R.string.folder_sync_offer)) }
+                    }
                 }
             }
             items(snapshot.shares, key = FolderShare::offerId) { share ->
@@ -344,17 +394,21 @@ internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier =
                     peerName = snapshot.peers.firstOrNull { it.peerId == share.peerId }?.displayName
                         ?: pairedDeviceName,
                     hasFolder = selectedFolder != null,
+                    accessGranted = accessGranted,
+                    hasPendingRepair = share.offerId in pendingRepairOffers,
                     busy = busy,
                     mutate = { action ->
                         busy = true
                         scope.launch {
                             runCatching {
                                 withContext(Dispatchers.IO) {
-                                    val actions = FolderSyncActions(grants, api, ::connection)
+                                    val actions = actions()
                                     when (action) {
                                         "accept" -> actions.accept(share.offerId, checkNotNull(selectedFolder))
                                         "pause" -> actions.pause(share.offerId, true)
                                         "resume" -> actions.pause(share.offerId, false)
+                                        "repair" -> actions.repair(share.offerId, checkNotNull(selectedFolder))
+                                        "retry-repair" -> actions.retryRepair(share.offerId)
                                         "remove" -> actions.remove(share.offerId)
                                         else -> throw IllegalArgumentException("unknown action")
                                     }
@@ -413,9 +467,33 @@ private fun FolderShareCard(
     share: FolderShare,
     peerName: String,
     hasFolder: Boolean,
+    accessGranted: Boolean,
+    hasPendingRepair: Boolean,
     busy: Boolean,
     mutate: (String) -> Unit,
 ) {
+    var showingRemovalConfirmation by remember(share.offerId) { mutableStateOf(false) }
+    if (showingRemovalConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showingRemovalConfirmation = false },
+            title = { Text(stringResource(R.string.folder_sync_stop_title, share.label)) },
+            text = { Text(stringResource(R.string.folder_sync_stop_detail, peerName)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showingRemovalConfirmation = false
+                        mutate("remove")
+                    },
+                    enabled = !busy,
+                ) { Text(stringResource(R.string.folder_sync_remove)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showingRemovalConfirmation = false }) {
+                    Text(stringResource(R.string.folder_sync_keep_sharing))
+                }
+            },
+        )
+    }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(share.label, fontWeight = FontWeight.SemiBold)
@@ -433,20 +511,47 @@ private fun FolderShareCard(
             }
             Text(summary)
             if (share.expired) Text(stringResource(R.string.folder_sync_invitation_expired), color = MaterialTheme.colorScheme.error)
+            if (status.issue == FolderSyncIssue.FOLDER_ACCESS && share.phase != FolderSharePhase.REMOVED) {
+                Text(
+                    stringResource(
+                        if (accessGranted) R.string.folder_sync_choose_again_detail
+                        else R.string.folder_sync_restore_access_detail,
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (accessGranted) {
+                    Button(
+                        onClick = { mutate(if (hasPendingRepair) "retry-repair" else "repair") },
+                        enabled = !busy && (hasPendingRepair || hasFolder),
+                    ) {
+                        Text(
+                            stringResource(
+                                if (hasPendingRepair) R.string.folder_sync_retry_saved_repair
+                                else R.string.folder_sync_use_selected_again,
+                            ),
+                        )
+                    }
+                }
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (share.incoming && share.phase == FolderSharePhase.OFFERED) {
+                if (
+                    status.issue != FolderSyncIssue.FOLDER_ACCESS &&
+                    share.incoming && share.phase == FolderSharePhase.OFFERED
+                ) {
                     Button(onClick = { mutate("accept") }, enabled = hasFolder && !share.expired && !busy) {
                         Text(stringResource(R.string.action_accept_invitation))
                     }
                 }
-                if (share.phase == FolderSharePhase.READY) {
+                if (status.issue != FolderSyncIssue.FOLDER_ACCESS && share.phase == FolderSharePhase.READY) {
                     OutlinedButton(onClick = { mutate("pause") }, enabled = !busy) { Text(stringResource(R.string.action_pause)) }
                 }
-                if (share.phase == FolderSharePhase.PAUSED) {
+                if (status.issue != FolderSyncIssue.FOLDER_ACCESS && share.phase == FolderSharePhase.PAUSED) {
                     OutlinedButton(onClick = { mutate("resume") }, enabled = !busy) { Text(stringResource(R.string.action_resume)) }
                 }
                 if (share.phase != FolderSharePhase.REMOVED) {
-                    OutlinedButton(onClick = { mutate("remove") }, enabled = !busy) { Text(stringResource(R.string.folder_sync_remove)) }
+                    OutlinedButton(onClick = { showingRemovalConfirmation = true }, enabled = !busy) {
+                        Text(stringResource(R.string.folder_sync_remove))
+                    }
                 }
             }
         }
@@ -456,5 +561,5 @@ private fun FolderShareCard(
 private fun folderSyncErrorText(error: Throwable): String = when (error) {
     is SecurityException -> "Android denied access to that folder."
     is IllegalArgumentException -> "That folder or request is not valid for sync."
-    else -> "Folder sync needs attention. No folder choice or existing file was removed."
+    else -> "Folder sync needs attention. Refresh to check the latest status."
 }

@@ -1187,6 +1187,16 @@ public struct FolderAcceptRequest: Codable, Equatable, Sendable {
     }
 }
 
+public struct FolderRepairRequest: Codable, Equatable, Sendable {
+    public let offerId: UUID
+    public let selectedRoot: String
+
+    public init(offerId: UUID, selectedRoot: String) {
+      self.offerId = offerId
+      self.selectedRoot = selectedRoot
+    }
+}
+
 public struct FolderPauseRequest: Codable, Equatable, Sendable {
     public let offerId: UUID
     public let paused: Bool

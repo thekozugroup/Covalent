@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import life.michaelwong.covalent.data.RecoveryBootstrapMaterial
 import life.michaelwong.covalent.model.NodeConnection
+import life.michaelwong.covalent.sync.FolderSyncGrantStore
 import life.michaelwong.covalent.sync.FolderSyncSpecialAccess
 
 /** Visible provider state for a future explicit Android-device storage toggle. */
@@ -46,6 +47,15 @@ internal fun nodeServiceConfigurationChanged(
     currentAccessUnavailable: Boolean,
     currentDemand: NodeServiceDemand,
 ): Boolean = launchedAccessUnavailable != currentAccessUnavailable || launchedDemand != currentDemand
+
+/** Fail closed when Android cannot prove that the durable capability journal is clear. */
+internal fun folderSyncAccessUnavailable(
+    requested: Boolean,
+    specialAccessGranted: Boolean,
+    hasPendingCapabilityChange: () -> Boolean,
+): Boolean = requested && (
+    !specialAccessGranted || runCatching(hasPendingCapabilityChange).getOrDefault(true)
+)
 
 /**
  * Explicit opt-in local-node owner. It never replaces a configured external node.
@@ -252,7 +262,10 @@ class EmbeddedNodeManager(context: Context) {
 
     /** Records the explicit personal/debug folder-sync opt-in and starts the private node. */
     fun enableFolderSyncHost(): Boolean {
-        if (!preferences.readable || !FolderSyncSpecialAccess.supported()) return false
+        if (
+            !preferences.readable || !FolderSyncSpecialAccess.supported() ||
+            !FolderSyncSpecialAccess.granted()
+        ) return false
         if (!preferences.commit { putBoolean(KEY_FOLDER_SYNC_REQUESTED, true) }) return false
         startService()
         return true
@@ -270,8 +283,13 @@ class EmbeddedNodeManager(context: Context) {
         folderSyncRequested = folderSyncRequested(),
     )
 
-    internal fun folderSyncAccessUnavailable(): Boolean =
-        folderSyncRequested() && !FolderSyncSpecialAccess.granted()
+    internal fun folderSyncAccessUnavailable(): Boolean = folderSyncAccessUnavailable(
+        requested = folderSyncRequested(),
+        specialAccessGranted = FolderSyncSpecialAccess.granted(),
+        hasPendingCapabilityChange = {
+            FolderSyncGrantStore(applicationContext).hasPendingCapabilityChange()
+        },
+    )
 
     /** Local credentials stay private and are usable by the in-process Folders screen only. */
     fun localConnectionForFolderSync(): NodeConnection? =

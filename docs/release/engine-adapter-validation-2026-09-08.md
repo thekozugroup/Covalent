@@ -573,3 +573,147 @@ parent-death guard. Personal-use macOS ad-hoc and Android debug signing remain
 the accepted scope; Developer ID/notarization and production Android signing
 are deferred. Atlas is offline and the user accepted Docker validation in its
 place. No physical Atlas installation or completed release is claimed.
+
+
+## Checkpoint 31: complete Docker execution and native repair integration
+
+Acceptance is now **70%: 14 of 20 verified milestones**. Both Docker jobs in
+run `34270349326` pass all seven complete packaged-runtime checks at commit
+`04a2d0c80edc5b812daf76bc9011fae42c9df327` (tested merge
+`0f9872fd4d260a11b17868549f2cd2b20079e829`). Jobs `102210076000` (arm64)
+and `102210076621` (amd64) verify hardened nodes, signed pairing, explicit
+folder consent and full scan, forward transfer, pause/resume, full retained
+transport identity on cold restart and reverse transfer, removal with files
+preserved, and complete cleanup. The compact acceptance record SHA-256 is
+`86d963f4773561ba2b3fc2612f611c9601a9d6cb72fb40a3ae654b944455c097`.
+Atlas remains offline; this is the user's accepted Docker/Unraid path.
+
+Checkpoint 30 also passes Android foundation and the existing API 37 device
+suite, Mac integration/UI, the Mac bundle, Rust/contracts and dependency review.
+Its optional iOS UI job ran both tests: the workflow passed, while the Home
+contrast audit failed. XCTest provided no element identity. The failure image
+makes the light-accent Refresh glyph the narrowest candidate; a Refresh-only
+label-adaptive tint is included for a fresh exact audit. This is a hypothesis
+until that hosted audit passes. No finding is suppressed. The release-candidate
+aggregate passing does not erase the failure or establish full completion.
+
+### Default secure storage for personal macOS builds
+
+The default production key store now identifies actual ad-hoc signing through
+the Security framework and uses the login Keychain's default application ACL
+for new personal keys. Provisioned builds prefer data protection for new keys;
+existing keys from either implementation are retained. Conflicting records,
+locked or denied access, and missing keys for existing protected state fail
+closed. No plaintext persistence fallback or broadened Keychain ACL is used.
+The platform distinction follows Apple's
+[TN3137](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains).
+
+An owned, persistent, secret-free file lock covers complete load/create,
+legacy migration and rotation operations across app processes. The lock is held
+from reading both Keychains through deriving and persisting any change.
+A blocked-rotation regression uses two independent file-lock handles: the
+second caller receives Busy before generating a key, then retries against the
+first caller's durable history. Descriptor-relative
+no-follow traversal rejects redirected lock paths; nonblocking contention
+returns an actionable error. Unused and error-path secret buffers are erased.
+Regression tests exercise differently signed concurrent first launches,
+independent file-lock handles, symlink rejection, denied downgrade access and
+actual deallocator-observed buffer erasure.
+
+A fresh ad-hoc signed App Sandbox test compiled the exact production source,
+without injecting persistence. It provisioned and reused the hierarchy, rotated
+while retaining old keys and the API token, and retained the exact complete
+hierarchy after a second LaunchServices process. It then deleted only its own
+fixture item and verified it absent. Current production source SHA-256 is
+`d205160146d501371dfab56c534450a7fe57f5919157cbd688550d10dae83808`;
+sealed signed app SHA-256 is
+`74e9b045d65130453af550cbec50fece90790b89233bdf41a9c1232af0a5dab6`.
+The integrated Swift suite passes **140 tests**; strict Swift formatting passes. Sources, bounded boolean
+results and cleanup receipts are retained under the ignored
+`mac-keychain-transaction-proof-e7a318cd` evidence directory. Its owned Keychain
+item was removed by the signed fixture, and the app/results/lock were cleaned
+after both fixture processes exited; the sealed app and bounded evidence remain.
+
+The earlier raw Keychain probe also confirmed that a changed ad-hoc executable
+cannot silently read the prior executable's item. Actual authorized upgrade
+and complete default-manager startup/repair remain separate acceptance gates.
+
+### Recover folder access without forgetting consent
+
+The backend now retains an authenticated worker-free coordinator when folder
+access is unavailable. It can list redacted consent, remove a share while
+preserving files, and journal one exact replacement root without starting a
+worker. Preparing a healthy-runtime repair validates the selection before
+stopping its worker. The journal binds preparation to its instance and revision,
+refuses implicit multi-peer root changes, and retains uncertain repair state.
+
+A changed root requires a scoped index reset. Covalent starts a distinct
+network-inert worker with all folders and peers paused, verifies its exact
+configuration, requests the selected folder's reset through the authenticated
+private API, and requires successful response plus owned exit code 3. It creates
+and fsyncs the marker through the retained root descriptor only afterward.
+After exact reaping and revalidation, it clears the durable intent and repeats
+the normal full initial scan before allowing exchange. Lost responses, failed
+reaping, wrong exits and root replacement retain a retryable intent.
+
+The real pinned v2.1.3 two-runtime proof passes **35 checks**, including an empty
+replacement root receiving both original peer files without propagating
+removals, unchanged signed consent and folder identity, no further old-root
+writes, active repair, worker-free idempotent removal and cleanup. Result
+SHA-256 is
+`b6afb93b88a389fabe19d063d304195ccc6ae19a074128b20787d2d0b7565482`.
+The exact nine-file reset-delta manifest is
+`5c3d69e4fea94c4e1e811dd9288b5ff62413bab2c744a5bc37f182b60a64dd0c`.
+
+The initial live proof used one folder. Investigation of a stalled second
+invitation found that status requests performed worker health I/O while holding
+the same mutex used for delivery and consent. Status now reads the owned health
+task's last observation. The health task waits a full cadence after each probe,
+preventing slow-probe catch-up from continuously occupying that mutex.
+
+A new real two-runtime proof, with 150 ms status polling and no diagnostic
+pause, passes **43 checks**: both same-peer folder invitations, both transfers,
+empty-root repair, continued unrelated-folder operation, offline removal and
+cleanup. Result SHA-256 is
+`871bfd89e95564008cb793caa15146079de5d8063ee97cd0d311c6f4b91b8b43`;
+the exact two-file delta manifest is
+`8a4f71d0b81d845e02182dfa1244f82d1e61a734962bd17d03ab7a1520e1a239`.
+A 500-poll service regression also verifies second-offer delivery without extra
+worker probes. The service suite passes **33 tests**. This bounded liveness
+result does not complete invitation renewal or address-change journeys.
+Paused shares can renew the identical retained root without changing pause,
+consent, revision or index state. Moving a paused share to a different root
+still requires a separate supported transition. The two-file follow-up manifest
+is `d2f8f11d1b09bd664f50bc3adf5f6504e92aa4e55281e735e1a72a583b84a567`.
+The final integrated node suite passes **277 tests**, including paused same-root
+repair. Strict workspace Clippy and the complete foundation checks also pass.
+
+### Native flows and cleanup
+
+Android now offers folder sync directly from first launch and pairs the phone's
+own node without changing backup-server credentials. The pairing flow displays
+and confirms the signed comparison code. Its device test uses actual local UI
+address entry and confirmation, with an isolated second node accepting through
+its API, before testing bidirectional files, pause/resume, cold restart, revoked
+access and file-preserving offline removal. The derived suite contains **76
+named device tests**; Kotlin compilation, lint and this expanded device suite
+still require fresh hosted execution. No local Android SDK execution is claimed.
+
+The Mac repair UI uses a native grouped Form with independent, share-specific
+Choose Again and Remove buttons, a system folder-only picker and a confirmation
+sheet that states files are kept. Native accessibility inspection confirms
+separate actions; Command-4 opens Folders. XcodeGen's source now retains the
+bookmark entitlement when regenerating the project. Full actual repair,
+keyboard/VoiceOver, resizing and appearance acceptance remain open.
+
+Cleanup continues only after resource ownership and inactivity checks. In
+addition to the checkpoint 30 cleanup receipts, the repair agent removed two
+owned Rust caches totaling 8,630,750,708 logical bytes, the Keychain test removed
+151,843,910 logical bytes of fixtures/cache, and isolated Mac source-build
+work removed 245,597,469 logical bytes of superseded outputs. The follow-up
+source-integration verification removed another 2,251,173,285 logical bytes
+of its own completed build caches and temporary outputs. iOS diagnosis removed
+149,297,416 logical bytes of downloaded/extracted intermediates after retaining
+the failure image and bounded test evidence. Proof artifacts,
+source manifests and current build inputs remain. Existing Atmos services were
+not changed. Logical bytes are not a claim of physical APFS space recovered.

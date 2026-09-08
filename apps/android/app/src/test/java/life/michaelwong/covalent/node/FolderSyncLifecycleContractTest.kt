@@ -7,6 +7,22 @@ import org.junit.Test
 
 class FolderSyncLifecycleContractTest {
     @Test
+    fun pendingOrUnreadableCapabilityChangeKeepsFolderExchangeUnavailable() {
+        var consulted = false
+        assertFalse(
+            folderSyncAccessUnavailable(false, false) {
+                consulted = true
+                true
+            },
+        )
+        assertFalse(consulted)
+        assertTrue(folderSyncAccessUnavailable(true, false) { false })
+        assertTrue(folderSyncAccessUnavailable(true, true) { true })
+        assertFalse(folderSyncAccessUnavailable(true, true) { false })
+        assertTrue(folderSyncAccessUnavailable(true, true) { error("unreadable journal") })
+    }
+
+    @Test
     fun folderSyncAndBackupDemandRemainIndependent() {
         assertFalse(NodeServiceDemand(false, false).needsService)
         assertTrue(NodeServiceDemand(true, false).needsService)

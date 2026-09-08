@@ -403,6 +403,10 @@ fn folder_endpoints_use_canonical_uuid_query_values_only() {
             EngineEndpoint::FolderVersions(id),
             "/rest/folder/versions?folder=52f06d0f-8ff6-4c72-ae3a-d7817b34d853",
         ),
+        (
+            EngineEndpoint::ResetFolderIndex(id),
+            "/rest/system/reset?folder=52f06d0f-8ff6-4c72-ae3a-d7817b34d853",
+        ),
     ] {
         let path = endpoint.path();
         assert_eq!(path, expected);

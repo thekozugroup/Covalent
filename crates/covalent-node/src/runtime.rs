@@ -490,7 +490,11 @@ impl NodeRuntime {
         #[cfg(unix)]
         if folder_sync_access_unavailable {
             state = state.with_folder_sync(
-                crate::sync_engine::FolderSyncRuntimeState::FolderAccessUnavailable,
+                crate::sync_engine::FolderSyncRuntimeConfig::prepare_access_recovery(
+                    &data_directory,
+                    Arc::clone(&engine),
+                    Arc::clone(&key_protector),
+                ),
             );
         } else if folder_sync_package_invalid {
             state =
@@ -1001,6 +1005,81 @@ mod tests {
             assert!(health.contains(" 200 "));
             runtime.stop().await.unwrap();
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn access_unavailable_opens_only_existing_authenticated_journal() {
+        let directory = TempDir::new().unwrap();
+        let runtime = NodeRuntime::start(sync_configuration(&directory))
+            .await
+            .unwrap();
+        runtime.stop().await.unwrap();
+        drop(runtime);
+
+        let mut configuration = sync_configuration(&directory);
+        configuration.folder_sync_access_unavailable = true;
+        let runtime = NodeRuntime::start(configuration).await.unwrap();
+        let status = sync_status(&runtime).await;
+        assert_eq!(status["availability"], "needsAttention");
+        assert_eq!(status["issue"], "folderAccess");
+        assert_eq!(status["shares"], serde_json::json!([]));
+        let body = r#"{"offerId":"00000000-0000-0000-0000-000000000001","selectedRoot":"/"}"#;
+        let unauthenticated = request(
+            runtime.ready_info().api_address(),
+            &format!(
+                "POST /api/v1/sync/repair HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len(),
+            ),
+        )
+        .await;
+        assert!(unauthenticated.contains(" 401 "));
+        let denied = request(
+            runtime.ready_info().api_address(),
+            &format!(
+                "POST /api/v1/sync/repair HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                runtime.ready_info().api_token().expose(),
+                body.len(),
+            ),
+        )
+        .await;
+        assert!(denied.contains(" 409 "));
+        runtime.stop().await.unwrap();
+        drop(runtime);
+
+        fs::write(
+            directory.path().join("folder-sync/folder-sharing.v1"),
+            b"damaged",
+        )
+        .unwrap();
+        let mut configuration = sync_configuration(&directory);
+        configuration.folder_sync_access_unavailable = true;
+        let runtime = NodeRuntime::start(configuration).await.unwrap();
+        let status = sync_status(&runtime).await;
+        assert_eq!(status["availability"], "needsAttention");
+        assert_eq!(status["issue"], "installation");
+        runtime.stop().await.unwrap();
+
+        let initialization = TempDir::new().unwrap();
+        let runtime = NodeRuntime::start(sync_configuration(&initialization))
+            .await
+            .unwrap();
+        runtime.stop().await.unwrap();
+        drop(runtime);
+        fs::remove_file(initialization.path().join("folder-sync/folder-sharing.v1")).unwrap();
+        let mut configuration = sync_configuration(&initialization);
+        configuration.folder_sync_access_unavailable = true;
+        let runtime = NodeRuntime::start(configuration).await.unwrap();
+        let status = sync_status(&runtime).await;
+        assert_eq!(status["issue"], "folderAccess");
+        assert_eq!(status["shares"], serde_json::json!([]));
+        assert!(
+            !initialization
+                .path()
+                .join("folder-sync/folder-sharing.v1")
+                .exists()
+        );
+        runtime.stop().await.unwrap();
     }
 
     #[cfg(unix)]

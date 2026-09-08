@@ -14,6 +14,12 @@ public protocol LocalNodeBootstrapping: AnyObject {
     /// process inherits the complete retained security scopes.
     func restartForFolderSyncDirectoryGrants(_ grants: [SelectedDirectoryGrant]) async throws
       -> NodeConnectionConfiguration
+    /// Restarts backup-only while inheriting a replacement capability. The
+    /// node must not start folder sync until its repair journal acknowledges
+    /// the exact selected root.
+    func restartForPendingFolderRepairDirectoryGrants(
+      _ grants: [SelectedDirectoryGrant]
+    ) async throws -> NodeConnectionConfiguration
 }
 
 extension LocalNodeBootstrapping {
@@ -22,6 +28,12 @@ extension LocalNodeBootstrapping {
     public func restartForFolderSyncDirectoryGrants(_ grants: [SelectedDirectoryGrant]) async throws
       -> NodeConnectionConfiguration
     {
+      throw NodeClientError.invalidResponse
+    }
+
+    public func restartForPendingFolderRepairDirectoryGrants(
+      _ grants: [SelectedDirectoryGrant]
+    ) async throws -> NodeConnectionConfiguration {
       throw NodeClientError.invalidResponse
     }
 }
@@ -204,6 +216,7 @@ public final class CovalentAppModel: ObservableObject {
     @Published public private(set) var startingPairingCandidateID: String?
     @Published public private(set) var startingPairingAddress: String?
     @Published public private(set) var directoryGrants: [SelectedDirectoryGrant] = []
+    @Published public private(set) var pendingFolderRepairs: [PendingFolderAccessRepair] = []
     @Published public private(set) var snapshots: [SnapshotRecord] = []
     @Published public private(set) var activeTask: ActiveTask?
     @Published public var restoreSetupRequest: RestoreSetupRequest?
@@ -439,8 +452,10 @@ public final class CovalentAppModel: ObservableObject {
         didStart = true
         do {
             async let grants = persistence.loadDirectoryGrants()
+            async let pendingRepairs = persistence.loadPendingFolderRepairs()
             async let history = persistence.loadSnapshots()
             directoryGrants = try await grants
+            pendingFolderRepairs = try await pendingRepairs
             snapshots = try await history.sorted { $0.createdAt > $1.createdAt }
         } catch {
             report(error, title: "Saved access could not be loaded")
@@ -571,11 +586,11 @@ public final class CovalentAppModel: ObservableObject {
       defer { folderSyncMutationInFlight = false }
 
       do {
-        _ = try await persistFolderSyncGrant(grant)
+        let savedGrant = try await persistFolderSyncGrant(grant)
         try await restartForFolderSyncDirectoryGrants()
-        let root = try grant.resolve()
+        let root = try savedGrant.resolve()
         let client = self.client
-        _ = try await root.withCoordinatedRead { url in
+        let mutation = try await root.withCoordinatedRead { url in
           try await client.offerFolder(
             FolderOfferRequest(
               peerId: peerId,
@@ -585,6 +600,8 @@ public final class CovalentAppModel: ObservableObject {
             )
           )
         }
+        guard let offerId = mutation.offerId else { throw NodeClientError.invalidResponse }
+        try await bindFolderSyncGrant(savedGrant, to: offerId)
         await refreshFolders()
         return true
       } catch {
@@ -599,9 +616,10 @@ public final class CovalentAppModel: ObservableObject {
       defer { folderSyncMutationInFlight = false }
 
       do {
-        _ = try await persistFolderSyncGrant(grant)
+        let boundGrant = grant.bound(toFolderOfferId: offerId)
+        let savedGrant = try await persistFolderSyncGrant(boundGrant)
         try await restartForFolderSyncDirectoryGrants()
-        let root = try grant.resolve()
+        let root = try savedGrant.resolve()
         let client = self.client
         _ = try await root.withCoordinatedWrite { url in
           try await client.acceptFolder(
@@ -614,6 +632,88 @@ public final class CovalentAppModel: ObservableObject {
         report(error, title: "Folder couldn't be accepted")
         return false
       }
+    }
+
+    /// Repairs one exact durable share after the user explicitly chooses its
+    /// local folder again. The replacement is journaled locally first, then a
+    /// backup-only helper inherits the scope, and only the authenticated node
+    /// may authorize folder sync for that root.
+    @discardableResult
+    public func repairFolderAccess(
+      offerId: UUID,
+      grant selectedGrant: SelectedDirectoryGrant
+    ) async -> Bool {
+      guard beginFolderMutation() else { return false }
+      defer { folderSyncMutationInFlight = false }
+
+      do {
+        guard folderSyncStatus?.issue == "folderAccess" else {
+          throw FolderAccessRepairError.repairNotRequired
+        }
+        guard folderSyncStatus?.shares.contains(where: {
+          $0.offerId == offerId && $0.phase != .removed
+        }) == true else {
+          throw FolderAccessRepairError.shareMissing
+        }
+        let proposedReplacement = selectedGrant.bound(toFolderOfferId: offerId)
+        // Validate identity and legacy migration before writing even the local
+        // pending journal. An ambiguous multi-share state changes nothing.
+        _ = try await folderRepairCandidates(
+          offerId: offerId,
+          replacement: proposedReplacement
+        )
+        let pending = try await preparePendingFolderRepair(
+          offerId: offerId,
+          selectedGrant: proposedReplacement
+        )
+        let candidates = try await folderRepairCandidates(
+          offerId: offerId,
+          replacement: pending.replacementGrant
+        )
+        let launchGrants = try await folderRepairLaunchGrants(
+          from: candidates,
+          replacementGrantId: pending.replacementGrant.id
+        )
+        try await restartForPendingFolderRepairDirectoryGrants(launchGrants)
+        let root = try pending.replacementGrant.resolve()
+        let client = self.client
+        let mutation = try await root.withCoordinatedWrite { url in
+          guard url.path == pending.selectedRoot else {
+            throw FolderAccessRepairError.invalidSavedRepair
+          }
+          return try await client.repairFolder(
+            FolderRepairRequest(offerId: offerId, selectedRoot: pending.selectedRoot)
+          )
+        }
+        guard mutation.offerId == offerId else { throw NodeClientError.invalidResponse }
+
+        // Promotion follows node acknowledgement. Keeping the pending record
+        // through the normal restart makes every crash point retryable.
+        try await persistence.saveDirectoryGrants(candidates)
+        directoryGrants = candidates
+        try await restartForFolderSyncDirectoryGrants()
+        try await removePendingFolderRepair(offerId: offerId)
+        await refreshFolders()
+        return true
+      } catch {
+        report(error, title: "Folder access couldn't be restored") { [weak self] in
+          await self?.retryFolderAccessRepair(offerId: offerId)
+        }
+        return false
+      }
+    }
+
+    @discardableResult
+    public func retryFolderAccessRepair(offerId: UUID) async -> Bool {
+      guard let pending = pendingFolderRepairs.first(where: { $0.offerId == offerId }) else {
+        report(FolderAccessRepairError.pendingRepairMissing, title: "Choose the folder again")
+        return false
+      }
+      return await repairFolderAccess(offerId: offerId, grant: pending.replacementGrant)
+    }
+
+    public func hasPendingFolderAccessRepair(for offerId: UUID) -> Bool {
+      pendingFolderRepairs.contains { $0.offerId == offerId }
     }
 
     public func setFolderPaused(_ offerId: UUID, paused: Bool) async {
@@ -634,6 +734,13 @@ public final class CovalentAppModel: ObservableObject {
 
       do {
         _ = try await client.removeFolder(FolderReferenceRequest(offerId: offerId))
+        let retained = directoryGrants.filter { $0.folderOfferId != offerId }
+        if retained != directoryGrants {
+          try await persistence.saveDirectoryGrants(retained)
+          directoryGrants = retained
+          try await restartForFolderSyncDirectoryGrants()
+        }
+        try await removePendingFolderRepair(offerId: offerId)
         await refreshFolders()
       } catch {
         report(error, title: "Folder couldn't be removed")
@@ -813,28 +920,36 @@ public final class CovalentAppModel: ObservableObject {
     /// Persist the sandbox bookmark before asking the local node to start a
     /// worker. If the request outcome is uncertain, retaining the grant lets a
     /// subsequent helper restart regain the same user-authorized folder.
-    private func persistFolderSyncGrant(_ grant: SelectedDirectoryGrant) async throws -> Bool {
+    private func persistFolderSyncGrant(
+      _ grant: SelectedDirectoryGrant
+    ) async throws -> SelectedDirectoryGrant {
       guard grant.purpose == .folderSync else {
         throw SelectedDirectoryError.notAFileURL
       }
       let selectedRoot = try await grant.resolve().withCoordinatedRead { url in
         url.standardizedFileURL.resolvingSymlinksInPath()
       }
-      var hasEquivalentRoot = false
-      for existing in directoryGrants where existing.purpose == .folderSync {
+      for (index, existing) in directoryGrants.enumerated()
+        where existing.purpose == .folderSync {
         try Task.checkCancellation()
         guard let existingRoot = try? await existing.resolve().withCoordinatedRead({ url in
           url.standardizedFileURL.resolvingSymlinksInPath()
         }) else { continue }
         if existingRoot == selectedRoot {
-          hasEquivalentRoot = true
-          break
+          guard let offerId = grant.folderOfferId else { return existing }
+          guard existing.folderOfferId == nil || existing.folderOfferId == offerId else {
+            throw FolderAccessRepairError.folderAlreadyUsed
+          }
+          let bound = existing.bound(toFolderOfferId: offerId)
+          guard bound != existing else { return existing }
+          var updatedGrants = directoryGrants
+          updatedGrants[index] = bound
+          try await persistence.saveDirectoryGrants(updatedGrants)
+          directoryGrants = updatedGrants
+          return bound
         }
       }
       try Task.checkCancellation()
-      if hasEquivalentRoot {
-        return false
-      }
       guard directoryGrants.filter({ $0.purpose == .folderSync }).count < 128 else {
         throw SelectedDirectoryError.tooManyFolderSyncGrants
       }
@@ -842,7 +957,7 @@ public final class CovalentAppModel: ObservableObject {
       updatedGrants.append(grant)
       try await persistence.saveDirectoryGrants(updatedGrants)
       directoryGrants = updatedGrants
-      return true
+      return grant
     }
 
     private func restartForFolderSyncDirectoryGrants() async throws {
@@ -853,6 +968,121 @@ public final class CovalentAppModel: ObservableObject {
         configuration = replacement
         client = NodeClient(configuration: replacement)
       }
+    }
+
+    private func restartForPendingFolderRepairDirectoryGrants(
+      _ grants: [SelectedDirectoryGrant]
+    ) async throws {
+      guard let localNodeBootstrapper else { return }
+      let replacement = try await localNodeBootstrapper
+        .restartForPendingFolderRepairDirectoryGrants(grants)
+      if replacement != configuration {
+        configuration = replacement
+        client = NodeClient(configuration: replacement)
+      }
+    }
+
+    private func bindFolderSyncGrant(
+      _ grant: SelectedDirectoryGrant,
+      to offerId: UUID
+    ) async throws {
+      guard let index = directoryGrants.firstIndex(where: { $0.id == grant.id }) else {
+        throw FolderAccessRepairError.savedGrantMissing
+      }
+      var updated = directoryGrants
+      updated[index] = updated[index].bound(toFolderOfferId: offerId)
+      try await persistence.saveDirectoryGrants(updated)
+      directoryGrants = updated
+    }
+
+    private func preparePendingFolderRepair(
+      offerId: UUID,
+      selectedGrant: SelectedDirectoryGrant
+    ) async throws -> PendingFolderAccessRepair {
+      guard selectedGrant.purpose == .folderSync else {
+        throw SelectedDirectoryError.notAFileURL
+      }
+      let selectedRoot = try await canonicalRoot(for: selectedGrant)
+      if let existing = pendingFolderRepairs.first(where: { $0.offerId == offerId }),
+         let existingRoot = try? await canonicalRoot(for: existing.replacementGrant) {
+        guard existingRoot == selectedRoot else {
+          throw FolderAccessRepairError.differentRepairAlreadyPending
+        }
+        return existing
+      }
+      var updated = pendingFolderRepairs.filter { $0.offerId != offerId }
+      guard updated.count < 128 else { throw SelectedDirectoryError.tooManyFolderSyncGrants }
+      let pending = PendingFolderAccessRepair(
+        offerId: offerId,
+        replacementGrant: selectedGrant,
+        selectedRoot: try await selectedGrant.resolve().withCoordinatedRead { $0.path }
+      )
+      updated.append(pending)
+      try await persistence.savePendingFolderRepairs(updated)
+      pendingFolderRepairs = updated
+      return pending
+    }
+
+    private func folderRepairCandidates(
+      offerId: UUID,
+      replacement: SelectedDirectoryGrant
+    ) async throws -> [SelectedDirectoryGrant] {
+      let folderGrants = directoryGrants.filter { $0.purpose == .folderSync }
+      let bound = folderGrants.filter { $0.folderOfferId == offerId }
+      guard bound.count <= 1 else { throw FolderAccessRepairError.ambiguousSavedAccess }
+
+      var replacedIDs = Set(bound.map(\.id))
+      if bound.isEmpty {
+        let liveShares = folderSyncStatus?.shares.filter { $0.phase != .removed } ?? []
+        let legacy = folderGrants.filter { $0.folderOfferId == nil }
+        guard liveShares.count == 1, legacy.count == 1 else {
+          throw FolderAccessRepairError.ambiguousSavedAccess
+        }
+        replacedIDs.insert(legacy[0].id)
+      }
+
+      let selectedRoot = try await canonicalRoot(for: replacement)
+      for existing in folderGrants where !replacedIDs.contains(existing.id) {
+        try Task.checkCancellation()
+        if let existingRoot = try? await canonicalRoot(for: existing), existingRoot == selectedRoot {
+          throw FolderAccessRepairError.folderAlreadyUsed
+        }
+      }
+      return directoryGrants.filter { !replacedIDs.contains($0.id) }
+        + [replacement.bound(toFolderOfferId: offerId)]
+    }
+
+    private func canonicalRoot(for grant: SelectedDirectoryGrant) async throws -> URL {
+      try await grant.resolve().withCoordinatedRead { url in
+        url.standardizedFileURL.resolvingSymlinksInPath()
+      }
+    }
+
+    /// Other shares may have invalid bookmarks too. They stay durably bound,
+    /// but cannot be required to open the newly selected scope or call the
+    /// access-unavailable repair API for this exact share.
+    private func folderRepairLaunchGrants(
+      from candidates: [SelectedDirectoryGrant],
+      replacementGrantId: UUID
+    ) async throws -> [SelectedDirectoryGrant] {
+      var launchGrants = candidates.filter { $0.purpose != .folderSync }
+      for grant in candidates where grant.purpose == .folderSync {
+        try Task.checkCancellation()
+        if grant.id == replacementGrantId {
+          _ = try await canonicalRoot(for: grant)
+          launchGrants.append(grant)
+        } else if (try? await canonicalRoot(for: grant)) != nil {
+          launchGrants.append(grant)
+        }
+      }
+      return launchGrants
+    }
+
+    private func removePendingFolderRepair(offerId: UUID) async throws {
+      let updated = pendingFolderRepairs.filter { $0.offerId != offerId }
+      guard updated != pendingFolderRepairs else { return }
+      try await persistence.savePendingFolderRepairs(updated)
+      pendingFolderRepairs = updated
     }
 
     public func addDirectoryGrant(url: URL, purpose: DirectoryAccessPurpose) async -> SelectedDirectoryGrant? {

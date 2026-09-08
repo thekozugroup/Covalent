@@ -4,6 +4,7 @@
 //! Engine control uses an owner-only Unix socket or pinned loopback TLS; native
 //! clients must use Covalent's own authorization and folder-sharing workflow.
 
+mod access_recovery;
 mod client;
 pub mod config;
 mod connection;
@@ -28,6 +29,7 @@ mod sharing;
 mod state;
 mod supervisor;
 
+pub use access_recovery::FolderSyncAccessRecovery;
 pub use client::{EngineApiClient, EngineApiError, EngineEndpoint};
 pub use connection::{
     EnginePeerConnection, EnginePeerConnectionState, PeerConnectionError, collect_peer_connections,

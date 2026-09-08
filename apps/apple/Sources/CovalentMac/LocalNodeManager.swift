@@ -167,6 +167,24 @@ final class LocalNodeManager: LocalNodeBootstrapping {
         return try await startNormal()
     }
 
+    /// Give a replacement bookmark to a backup-only helper before the node
+    /// records the repair. This transfers the sandbox extension without
+    /// allowing an unjournaled root to begin syncing.
+    func restartForPendingFolderRepairDirectoryGrants(
+        _ grants: [SelectedDirectoryGrant]
+    ) async throws -> NodeConnectionConfiguration {
+        let prepared = try startFolderSyncScopes(grants)
+        do {
+            try await stopManagedNodeAndWait()
+        } catch {
+            stopFolderSyncScopes(prepared)
+            throw error
+        }
+        replaceFolderSyncScopes(with: prepared)
+        folderSyncAccessUnavailable = true
+        return try await startNormal()
+    }
+
     private func startNormal() async throws -> NodeConnectionConfiguration {
         if managedStopRequested {
             try await stopManagedNodeAndWait()
