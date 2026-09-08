@@ -38,11 +38,11 @@ Close every known release-blocking finding; do not remove a gate to raise a scor
 | Area | Required evidence | Current state |
 | --- | --- | --- |
 | Product scope | Explicit backup/sync semantics and a matching acceptance scenario | Automatic two-way sync is required. Signed records, causal/conflict checks, protected installation keys, private storage, read-only Unix inventories, bootstrap-backed membership replay and content-gated durable publication, protected authority pins, journaled Unix creation and verified incumbent adoption, and bounded Android metadata observation are implemented. Write-loss reconciliation, the full folder coordinator, peer exchange, replacement/deletion, native setup and multi-device acceptance remain outstanding. |
-| Core correctness | Unit, property, adversarial, migration, concurrency, corruption, interrupted-job and source-loss tests; strict lint | At `f80c375`, hosted Rust/contracts passed 610 tests across 22 suites with zero failed/ignored, strict workspace Clippy and 89 web tests. All release-candidate software and CodeQL gates passed on that checkpoint. The newer combined authority/adoption/controlled-replay slice passes 640 local Rust tests across 22 suites, zero failed/ignored, strict Clippy and foundation checks; its hosted gates and final artifacts still require their own checks. |
+| Core correctness | Unit, property, adversarial, migration, concurrency, corruption, interrupted-job and source-loss tests; strict lint | At `f80c375`, hosted Rust/contracts passed 610 tests across 22 suites with zero failed/ignored, strict workspace Clippy and 89 web tests. All release-candidate software and CodeQL gates passed on that checkpoint. Checkpoint `d13955a` exposed a Linux adoption inode-reuse failure despite 640 local passing tests. The subsequent descriptor-lifetime and retry fixes pass 643 local Rust tests across 22 suites with zero failed/ignored; Linux and final platform confirmation remain required. |
 | Owner-device loss | A user can export a protected recovery kit, replace a lost owner device, discover its authenticated catalogs, see partial availability, and restore | API, CLI/runtime, web and native recovery flows pass. At source content matching `1839796`, the real Mac–Atmos Docker drill passed protected export, deletion of the entire original owner state, automatic catalog import and exact provider-only restore. Native UI also passes. Final artifacts and large-catalog memory evidence remain required. |
 | Beginner workflow | Install → connect → choose folder → protect → verify → restore through real UI; clear errors and recovery; no manual IDs in ordinary flows | Real browser unlock, automatic snapshot/name defaults, named backup selection, preview invalidation, restore and Verify passed with disposable files. Preview now explains individual file actions and renamed conflict destinations instead of raw JSON. Full cross-device onboarding pending. |
 | macOS | Shared tests, live helper integration, native UI/accessibility, verified arm64 app package, install and upgrade | At `1839796`, the app bundle, all 105 shared tests, live helper integration, and all four native UI tests passed. The native gate requires exactly four passed, zero failed/skipped, including first-launch setup/recovery cancellation and the system accessibility audit. Final artifact install/upgrade remains required. Local Xcode license and CLT Testing limitations remain. |
-| Android | JVM, instrumented SAF and process-death tests, TalkBack/large text, install and upgrade of stable personal artifact | At `e5a622c`, arm64 JNI is 8,384,224 bytes and x86_64 is 9,918,032 bytes; both pass the unchanged budget. At `1839796`, Android foundation and API 37 device gates passed: 103 JVM tests and all 65 named instrumentation tests, with no skipped device tests. Recovery plural resources pass lint. The new metadata observer adds nine JVM and six device tests (71 required device tests by name); these new tests are unrun locally without a working JDK/SDK. Hosted and personal-artifact validation remain required. |
+| Android | JVM, instrumented SAF and process-death tests, TalkBack/large text, install and upgrade of stable personal artifact | At `e5a622c`, arm64 JNI is 8,384,224 bytes and x86_64 is 9,918,032 bytes; both pass the unchanged budget. At `1839796`, Android foundation and API 37 device gates passed: 103 JVM tests and all 65 named instrumentation tests, with no skipped device tests. Recovery plural resources pass lint. At `d13955a`, hosted Android compilation, lint and packaging passed, and the saved JUnit report proves all 112 JVM tests passed (including nine metadata tests), zero failures/errors/skips. All 71 expected API 37 tests also passed by name, including six new real-provider tests. Final-revision and personal-artifact validation remain required. |
 | Docker | Both CPU architectures; TLS and key-protection contracts; rootless/read-only runtime; bounded storage/memory; three-node recovery | Both image architectures and container runtime/e2e passed on checkpoint `f80c375`; repeat on final revision. |
 | Atmos network drill | Mac ↔ Ubuntu pairing, explicitly selected replica, interrupted/restarted operation, source-loss restore, exact hashes, cleanup | Passed with a 64 MiB incompressible payload: same-job pause/resume, provider container restart preserving identity, local source/cache loss, provider-only restore and exact content checks. Dedicated resources removed; pre-existing container/image IDs survived. See [drill evidence](atmos-drill-2026-09-07.md). |
 | Atlas/Unraid | Docker deployment, Unraid template/mount contracts, exact-image install/upgrade and backup/restore; on-host Atlas check deferred by the user | Atlas is offline. The user accepted Docker validation in its place on 2026-09-07. Preflight fixtures, both Docker architectures and the full owner-loss Atmos Docker drill pass. Final-image install/upgrade remains required. No physical Atlas install is claimed. |
@@ -380,6 +380,43 @@ packages, credentials, private server inventories, or raw diagnostic bundles.
   authority, replay control and strict reopen found no remaining issues.
   These checks validate implemented boundaries; network folder sync and final
   platform/release acceptance remain open.
+
+- Checkpoint `d13955a` failed the hosted Linux Rust gate: 445 core tests passed,
+  but the existing inode-race adoption regression returned Applied instead of
+  Conflict. The sync helper consumed and closed the verified descriptor before
+  the final named check, permitting immediate Linux inode-number reuse for an
+  unlinked replacement with identical bytes/mode. This is a production lifetime
+  defect, not a test expectation to relax. The fix retains the exact synced
+  file or directory descriptor through the durable Applied append. The original
+  file regression is unchanged; an equivalent directory regression is added.
+- An adjacent create-path review found that temporary read/stat errors could
+  become permanent conflicts. Only concrete filesystem mismatches now conflict;
+  I/O, resource limits and interruption preserve StageReady for exact retry.
+  A new regression covers all four validation boundaries, file and directory
+  creation, and each of those three failure classes. Every case closes/reopens,
+  reuses the original transaction, preserves exact bytes/type and finishes once.
+- The same descriptor-lifetime fix also covers file/directory creation: sync
+  checks the expected target identity and retains that descriptor through the
+  final named check and durable outcome. A post-sync unlink/recreate regression
+  preserves replacements as conflicts. The final source passes 449 core tests
+  and 643 all-feature workspace tests across 22 suites, zero failed or ignored,
+  strict workspace Clippy and formatting; foundation checks also passed. The
+  26 focused Unix tests include a 24-case retry matrix. Independent read-only
+  review found no issue in the adoption/initial retry delta; the later create
+  lifetime extension remains subject to the next combined review. Eager inode
+  reuse is filesystem-dependent, so a new Linux run remains decisive evidence;
+  the preceding failing Linux checkpoint is not recorded as passing.
+- Android foundation at `d13955a` passed compilation, lint and packaging. Saved
+  JUnit reports prove all 112 JVM tests across 12 suites passed, including all
+  nine new metadata observer tests, with zero failures/errors/skips. The report
+  archive SHA-256 is `686e82d9d02143174f50a918d822961a91c5edede4340ec2c9071d4f7363496d`.
+  JNI sizes are 8,385,760 bytes for arm64 and 9,919,696 bytes for x86_64, both
+  within the unchanged budget. API 37 instrumentation subsequently proved all
+  71 expected tests passed by name at 09:07:07 UTC, including all six new real-
+  provider metadata tests. Both Docker architectures, macOS integration/UI/bundle,
+  iOS and dependency-delta checks also passed. The overall software gate remains
+  failed because of the Linux Rust defect described above; Swift CodeQL is still
+  pending at this point.
 
 ## Work order
 

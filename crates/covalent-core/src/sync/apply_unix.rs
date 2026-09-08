@@ -173,6 +173,8 @@ pub struct DurableFolderApplier {
     adoption_sync_hook: Option<Box<dyn FnOnce(EntryIdentity)>>,
     #[cfg(test)]
     adoption_io_hook: Option<AdoptionIoHook>,
+    #[cfg(test)]
+    create_validation_error: Option<(CreateValidationPoint, ApplyError)>,
     root: UserRoot,
     outer: Arc<PrivateStateDir>,
     outer_lock: Arc<PrivateStateLock>,
@@ -221,6 +223,8 @@ impl DurableFolderApplier {
             adoption_sync_hook: None,
             #[cfg(test)]
             adoption_io_hook: None,
+            #[cfg(test)]
+            create_validation_error: None,
         })
     }
 
@@ -265,6 +269,8 @@ impl DurableFolderApplier {
             adoption_sync_hook: None,
             #[cfg(test)]
             adoption_io_hook: None,
+            #[cfg(test)]
+            create_validation_error: None,
         };
         applier.validate_replayed_history(events, control)?;
         applier.validate_replayed_filesystem(events, control)?;
@@ -713,7 +719,7 @@ impl DurableFolderApplier {
             }
             return Err(error);
         }
-        let target_identity = match (action, expected, desired) {
+        let (target_identity, held_descriptor) = match (action, expected, desired) {
             (
                 ApplyAction::EnsureExisting,
                 ExpectedTarget::Directory(expected),
@@ -777,7 +783,7 @@ impl DurableFolderApplier {
                     }
                     return Err(error);
                 }
-                expected
+                (expected, opened.descriptor)
             }
             (
                 ApplyAction::AdoptExisting,
@@ -790,7 +796,7 @@ impl DurableFolderApplier {
                 if content.byte_length() > self.limits.maximum_revalidation_bytes {
                     return Err(ApplyError::ResourceLimit);
                 }
-                let opened = match parent.open_adoption_file(
+                let mut opened = match parent.open_adoption_file(
                     parent.name.as_str(),
                     Some(identity),
                     content,
@@ -855,7 +861,7 @@ impl DurableFolderApplier {
                     }
                     return Err(error);
                 }
-                identity
+                (identity, OwnedFd::from(opened.file))
             }
             _ => return Err(ApplyError::Changed),
         };
@@ -869,6 +875,10 @@ impl DurableFolderApplier {
             desired,
         )?;
         self.append(ApplyRecord::Applied(applied))?;
+        // Keep the synchronized inode alive through the final named check and
+        // durable receipt. Closing it earlier lets an unlinked inode number be
+        // immediately reused by a same-content replacement on Linux.
+        drop(held_descriptor);
         Ok(ApplyOutcome::Applied)
     }
 
@@ -983,10 +993,10 @@ impl DurableFolderApplier {
                     }
                     Some(_) => {}
                 }
-                if let Err(error) =
+                if let Err(error) = self.validate_create_at(CreateValidationPoint::Stage, || {
                     parent.validate_stage(&stage_name, stage_identity, desired, control)
-                {
-                    if matches!(error, ApplyError::Interrupted) {
+                }) {
+                    if !is_observed_create_mismatch(&error) {
                         return Err(error);
                     }
                     return self.conflict(
@@ -1001,10 +1011,12 @@ impl DurableFolderApplier {
                 self.run_mutation_hook(ApplyMutationPoint::BeforePromotion);
                 self.root
                     .revalidate_parent(&path, parent.identity, self.limits, control)?;
-                if let Err(error) =
-                    parent.validate_stage(&stage_name, stage_identity, desired, control)
+                if let Err(error) = self
+                    .validate_create_at(CreateValidationPoint::Promotion, || {
+                        parent.validate_stage(&stage_name, stage_identity, desired, control)
+                    })
                 {
-                    if matches!(error, ApplyError::Interrupted | ApplyError::ResourceLimit) {
+                    if !is_observed_create_mismatch(&error) {
                         return Err(error);
                     }
                     return self.conflict(
@@ -1032,8 +1044,10 @@ impl DurableFolderApplier {
                 self.fail_if(ApplyFailpoint::Promoted)?;
             }
         }
-        if let Err(error) = parent.validate_target(stage_identity, desired, control) {
-            if matches!(error, ApplyError::Interrupted | ApplyError::ResourceLimit) {
+        if let Err(error) = self.validate_create_at(CreateValidationPoint::Target, || {
+            parent.validate_target(stage_identity, desired, control)
+        }) {
+            if !is_observed_create_mismatch(&error) {
                 return Err(error);
             }
             return self.conflict(
@@ -1045,8 +1059,32 @@ impl DurableFolderApplier {
                 parent.target_identity()?,
             );
         }
-        parent.sync_target_and_parent(desired)?;
-        self.revalidate_promoted_target(&path, parent.identity, stage_identity, desired, control)?;
+        let held_descriptor = parent.sync_target_and_parent(stage_identity, desired)?;
+        self.run_mutation_hook(ApplyMutationPoint::BeforeCreateReceipt);
+        let final_result = self
+            .create_validation_failure(CreateValidationPoint::FinalTarget)
+            .and_then(|()| {
+                self.revalidate_promoted_target(
+                    &path,
+                    parent.identity,
+                    stage_identity,
+                    desired,
+                    control,
+                )
+            });
+        if let Err(error) = final_result {
+            if !is_observed_create_mismatch(&error) {
+                return Err(error);
+            }
+            return self.conflict(
+                transaction,
+                intent_digest,
+                operation,
+                &path,
+                ConflictReason::FinalChanged,
+                parent.target_identity()?,
+            );
+        }
         self.fail_if(ApplyFailpoint::TargetSynced)?;
         require_bound_active(events, operation, &path, desired)?;
         check_control(control)?;
@@ -1058,6 +1096,7 @@ impl DurableFolderApplier {
             desired,
         )?;
         self.append(ApplyRecord::Applied(applied))?;
+        drop(held_descriptor);
         Ok(ApplyOutcome::Applied)
     }
 
@@ -1306,6 +1345,36 @@ impl DurableFolderApplier {
         }
     }
 
+    fn validate_create_at(
+        &mut self,
+        point: CreateValidationPoint,
+        validate: impl FnOnce() -> Result<(), ApplyError>,
+    ) -> Result<(), ApplyError> {
+        self.create_validation_failure(point)?;
+        validate()
+    }
+
+    fn create_validation_failure(
+        &mut self,
+        point: CreateValidationPoint,
+    ) -> Result<(), ApplyError> {
+        #[cfg(not(test))]
+        let _ = point;
+        #[cfg(test)]
+        if self
+            .create_validation_error
+            .as_ref()
+            .is_some_and(|(selected, _)| *selected == point)
+        {
+            let (_, error) = self
+                .create_validation_error
+                .take()
+                .expect("checked create validation error");
+            return Err(error);
+        }
+        Ok(())
+    }
+
     fn take_adoption_verify_hooks(&mut self) -> AdoptionVerifyHooks {
         #[cfg(not(test))]
         {
@@ -1319,6 +1388,24 @@ impl DurableFolderApplier {
             }
         }
     }
+}
+
+// An unsuccessful inspection is not evidence that an object changed. Keep
+// I/O failures, cancellation and resource limits retryable, including after
+// promotion; the durable StageReady identity allows exact reconciliation.
+fn is_observed_create_mismatch(error: &ApplyError) -> bool {
+    matches!(
+        error,
+        ApplyError::Changed | ApplyError::NameCollision | ApplyError::UnsafeParent
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CreateValidationPoint {
+    Stage,
+    Promotion,
+    Target,
+    FinalTarget,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1335,6 +1422,7 @@ enum ApplyMutationPoint {
     BeforeStageCreate,
     BeforePromotion,
     AfterPromotionValidation,
+    BeforeCreateReceipt,
     BeforeAdoptionVerification,
     BeforeAdoptionDescriptorSync,
     BeforeAdoptionReceipt,
@@ -1913,7 +2001,11 @@ impl TargetParent {
         })
     }
 
-    fn sync_target_and_parent(&self, desired: EntryValue) -> Result<(), ApplyError> {
+    fn sync_target_and_parent(
+        &self,
+        expected: EntryIdentity,
+        desired: EntryValue,
+    ) -> Result<OwnedFd, ApplyError> {
         let flags = match desired {
             EntryValue::Directory => OFlags::RDONLY | OFlags::DIRECTORY,
             EntryValue::File(_) => OFlags::RDONLY,
@@ -1923,14 +2015,27 @@ impl TargetParent {
             | OFlags::NONBLOCK;
         let fd = openat(&self.descriptor, self.name.as_str(), flags, Mode::empty())
             .map_err(|error| os_error("open applied target for sync", error))?;
+        let stat =
+            fstat(&fd).map_err(|error| os_error("inspect applied target for sync", error))?;
+        let expected_kind = match desired {
+            EntryValue::Directory => FileType::Directory,
+            EntryValue::File(_) => FileType::RegularFile,
+            EntryValue::Tombstone => return Err(ApplyError::InvalidConfiguration),
+        };
+        if identity(&stat) != expected || FileType::from_raw_mode(stat.st_mode) != expected_kind {
+            return Err(ApplyError::Changed);
+        }
         fsync(&fd).map_err(|error| os_error("sync applied target", error))?;
-        fsync(&self.descriptor).map_err(|error| os_error("sync applied parent", error))
+        fsync(&self.descriptor).map_err(|error| os_error("sync applied parent", error))?;
+        // The caller retains this exact inode through final validation and the
+        // durable outcome, preventing reuse of a removed target's inode number.
+        Ok(fd)
     }
 }
 
 impl OpenedAdoptionFile {
     fn verify(
-        mut self,
+        &mut self,
         parent: &TargetParent,
         name: &str,
         content: FileContent,
@@ -2000,7 +2105,7 @@ impl OpenedAdoptionFile {
 
 impl OpenedAdoptionDirectory {
     fn sync_and_revalidate(
-        self,
+        &self,
         parent: &TargetParent,
         control: &JobControl,
         mut hooks: AdoptionVerifyHooks,
@@ -2654,6 +2759,51 @@ mod tests {
     }
 
     #[test]
+    fn directory_adoption_holds_the_synced_inode_through_receipt() {
+        let mut fixture = Fixture::new();
+        let target = fixture.user.path().join("directory-reuse");
+        fs::create_dir(&target).unwrap();
+        let original_inode = fs::metadata(&target).unwrap().ino();
+        let operation = fixture
+            .events
+            .publish_local(&OperationBody::new(
+                SyncPath::from_wire("directory-reuse").unwrap(),
+                EntryValue::Directory,
+            ))
+            .unwrap();
+        let hook_target = target.clone();
+        let mut applier = fixture.applier();
+        applier.mutation_hook = Some((
+            ApplyMutationPoint::BeforeAdoptionReceipt,
+            Box::new(move || {
+                fs::remove_dir(&hook_target).unwrap();
+                fs::create_dir(&hook_target).unwrap();
+            }),
+        ));
+        assert_eq!(
+            applier
+                .adopt_existing(
+                    &fixture.events,
+                    operation.id(),
+                    operation.event_bytes(),
+                    &JobControl::new(),
+                )
+                .unwrap(),
+            ApplyOutcome::Conflict
+        );
+        assert_ne!(fs::metadata(&target).unwrap().ino(), original_inode);
+        assert!(target.is_dir());
+        drop(applier);
+        assert_eq!(
+            fixture
+                .reopen_applier()
+                .existing_outcome(operation.id())
+                .unwrap(),
+            Some(ApplyOutcome::Conflict)
+        );
+    }
+
+    #[test]
     fn adoption_syncs_the_exact_verified_inode_across_an_a_b_a_name_swap() {
         let mut fixture = Fixture::new();
         let operation =
@@ -3209,6 +3359,199 @@ mod tests {
         ));
         assert!(fixture.user.path().join("cafe\u{301}").is_dir());
         assert_eq!(fs::read_dir(fixture.user.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn interrupted_create_inspections_remain_retryable_after_reopen() {
+        for point in [
+            CreateValidationPoint::Stage,
+            CreateValidationPoint::Promotion,
+            CreateValidationPoint::Target,
+            CreateValidationPoint::FinalTarget,
+        ] {
+            for file in [false, true] {
+                for failure in 0..3 {
+                    let mut fixture = Fixture::new();
+                    let path = SyncPath::from_wire("retry-inspection").unwrap();
+                    let bytes = b"retained before create";
+                    let operation = if file {
+                        let content = FileContent::new(
+                            ContentDigest::from_bytes(*blake3::hash(bytes).as_bytes()),
+                            bytes.len() as u64,
+                            false,
+                        )
+                        .unwrap();
+                        let receipt = fixture
+                            .store
+                            .retain_stream(content, Cursor::new(bytes), &JobControl::new())
+                            .unwrap();
+                        fixture
+                            .events
+                            .publish_retained(
+                                &OperationBody::new(path, EntryValue::File(content)),
+                                &receipt,
+                            )
+                            .unwrap()
+                    } else {
+                        fixture
+                            .events
+                            .publish_local(&OperationBody::new(path, EntryValue::Directory))
+                            .unwrap()
+                    };
+                    let mut applier = fixture.applier();
+                    let before = applier.log.committed_records().unwrap();
+                    applier.create_validation_error = Some((
+                        point,
+                        match failure {
+                            0 => ApplyError::Io {
+                                operation: "injected create inspection I/O",
+                                errno: Some(5),
+                            },
+                            1 => ApplyError::ResourceLimit,
+                            _ => ApplyError::Interrupted,
+                        },
+                    ));
+                    let result = applier.apply(
+                        &fixture.events,
+                        &fixture.store,
+                        operation.id(),
+                        operation.event_bytes(),
+                        &JobControl::new(),
+                    );
+                    assert!(match failure {
+                        0 => matches!(result, Err(ApplyError::Io { .. })),
+                        1 => matches!(result, Err(ApplyError::ResourceLimit)),
+                        _ => matches!(result, Err(ApplyError::Interrupted)),
+                    });
+                    assert_eq!(applier.log.committed_records().unwrap(), before + 2);
+                    let transaction = applier
+                        .log
+                        .machine()
+                        .unwrap()
+                        .pending_operation(operation.id())
+                        .unwrap();
+                    assert!(applier.existing_outcome(operation.id()).unwrap().is_none());
+                    let target = fixture.user.path().join("retry-inspection");
+                    assert_eq!(
+                        target.exists(),
+                        matches!(
+                            point,
+                            CreateValidationPoint::Target | CreateValidationPoint::FinalTarget
+                        )
+                    );
+                    assert_eq!(fs::read_dir(fixture.user.path()).unwrap().count(), 1);
+                    drop(applier);
+
+                    let mut reopened = fixture.reopen_applier();
+                    assert_eq!(
+                        reopened
+                            .log
+                            .machine()
+                            .unwrap()
+                            .pending_operation(operation.id()),
+                        Some(transaction)
+                    );
+                    assert_eq!(
+                        reopened
+                            .apply(
+                                &fixture.events,
+                                &fixture.store,
+                                operation.id(),
+                                operation.event_bytes(),
+                                &JobControl::new(),
+                            )
+                            .unwrap(),
+                        ApplyOutcome::Applied
+                    );
+                    assert_eq!(reopened.log.committed_records().unwrap(), before + 3);
+                    assert_eq!(fs::read_dir(fixture.user.path()).unwrap().count(), 1);
+                    if file {
+                        assert_eq!(fs::read(&target).unwrap(), bytes);
+                    } else {
+                        assert!(target.is_dir());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn create_holds_the_synced_inode_through_the_final_receipt() {
+        for file in [false, true] {
+            let mut fixture = Fixture::new();
+            let path = SyncPath::from_wire("create-inode-reuse").unwrap();
+            let bytes = b"exact created content";
+            let operation = if file {
+                let content = FileContent::new(
+                    ContentDigest::from_bytes(*blake3::hash(bytes).as_bytes()),
+                    bytes.len() as u64,
+                    false,
+                )
+                .unwrap();
+                let receipt = fixture
+                    .store
+                    .retain_stream(content, Cursor::new(bytes), &JobControl::new())
+                    .unwrap();
+                fixture
+                    .events
+                    .publish_retained(
+                        &OperationBody::new(path, EntryValue::File(content)),
+                        &receipt,
+                    )
+                    .unwrap()
+            } else {
+                fixture
+                    .events
+                    .publish_local(&OperationBody::new(path, EntryValue::Directory))
+                    .unwrap()
+            };
+            let target = fixture.user.path().join("create-inode-reuse");
+            let hook_target = target.clone();
+            let mut applier = fixture.applier();
+            applier.mutation_hook = Some((
+                ApplyMutationPoint::BeforeCreateReceipt,
+                Box::new(move || {
+                    let original_inode = fs::metadata(&hook_target).unwrap().ino();
+                    if file {
+                        fs::remove_file(&hook_target).unwrap();
+                        fs::write(&hook_target, bytes).unwrap();
+                        fs::set_permissions(&hook_target, fs::Permissions::from_mode(0o600))
+                            .unwrap();
+                    } else {
+                        fs::remove_dir(&hook_target).unwrap();
+                        fs::create_dir(&hook_target).unwrap();
+                        fs::set_permissions(&hook_target, fs::Permissions::from_mode(0o700))
+                            .unwrap();
+                    }
+                    assert_ne!(fs::metadata(&hook_target).unwrap().ino(), original_inode);
+                }),
+            ));
+            assert_eq!(
+                applier
+                    .apply(
+                        &fixture.events,
+                        &fixture.store,
+                        operation.id(),
+                        operation.event_bytes(),
+                        &JobControl::new()
+                    )
+                    .unwrap(),
+                ApplyOutcome::Conflict
+            );
+            if file {
+                assert_eq!(fs::read(&target).unwrap(), bytes);
+            } else {
+                assert!(target.is_dir());
+            }
+            drop(applier);
+            assert_eq!(
+                fixture
+                    .reopen_applier()
+                    .existing_outcome(operation.id())
+                    .unwrap(),
+                Some(ApplyOutcome::Conflict)
+            );
+        }
     }
 
     #[test]

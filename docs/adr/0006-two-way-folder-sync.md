@@ -279,8 +279,10 @@ These are logical accounting bounds, not measured RSS guarantees.
 
 Existing-file adoption now verifies a matching incumbent without rewriting its
 bytes or permissions. The intent records its exact inode and ordinary permission
-bits. Hashing and sync use the same held no-follow descriptor; named identity,
-parent and current projection are checked before durable success. Matching
+bits. Hashing and sync use the same held no-follow descriptor; that descriptor
+stays alive through final named-identity checks and the durable success record,
+preventing inode-number reuse after unlink. The parent and current projection
+are also checked before success. Matching
 existing directories can also be adopted, but a missing directory is never
 created by adoption. Observed content, mode or identity changes become durable
 conflicts; transient read/stat/sync failures keep the original intent retryable.
@@ -291,7 +293,11 @@ not that its content is retained for a peer or bootstrap acknowledgement.
 Create promotion rechecks staging immediately before the no-replace operation
 and verifies the promoted object afterward. This is not an inode compare-and-swap;
 an observed substitution in the syscall window becomes a preserved conflict.
-The applier reports tombstones as unsupported. Missing/unsafe parents and portable-name
+Creation also retains the exact synchronized target descriptor through its final
+named check and durable outcome. Transient inspection I/O, resource exhaustion
+and cancellation leave the original StageReady transaction retryable, even if
+promotion already happened; they do not establish a permanent content conflict. The applier reports tombstones as
+unsupported. Missing/unsafe parents and portable-name
 collisions discovered before an intent are visible errors, not durable conflict
 records. The applier now uses controlled encrypted-log replay with pause/cancel
 checks between bounded frame reads and state transitions, followed by cancellable
