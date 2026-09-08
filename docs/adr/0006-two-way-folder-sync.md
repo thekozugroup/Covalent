@@ -240,6 +240,17 @@ an obsolete projection; the applier must still check current registers and all
 desired journal fields. A bounded ordered lookup detects live descendants so
 creating an ancestor file cannot hide child entries absent from disk.
 
+Committed event history can now be read in pages of at most 256 records and
+4 MiB plaintext, with one bounded frame of read/decryption scratch. Opaque local
+cursors are bound to one open handle and cannot survive reopen or cross into
+another log. Reads authenticate each frame and require exact accepted-history
+duplicates, recheck the lifetime lock and file length, and return no partial
+page on failure. Apply journals are excluded. The continuation can read later
+appends after reaching the current end. The runtime must separately authorize
+each transmission; these local cursors and page ordinals are neither wire
+tokens nor peer acknowledgements. Future write-loss replay must retain exact
+historical duplicate classification even after changing a writer's live grant.
+
 Network folder sync remains unshipped. Write-loss/freeze transitions and their
 history reconciliation still fail closed. Authority configuration and the full
 folder coordinator, peer exchange, safe user-folder apply, native setup, SAF

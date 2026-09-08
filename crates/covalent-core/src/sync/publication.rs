@@ -15,7 +15,10 @@ use zeroize::Zeroizing;
 use super::body::{EntryValue, OperationBody};
 use super::content_store::VerifiedContentReceipt;
 use super::event::{EncodedEventEnvelope, EventEnvelope, EventKind};
-use super::event_log::{DurableEventLog, EventAppendOutcome, EventLogError};
+use super::event_log::{
+    DurableEventLog, EventAppendOutcome, EventLogCursor, EventLogError, EventLogPage,
+    EventLogPageLimits,
+};
 use super::ids::WriterId;
 use super::log_frame::{LogBinding, LogFileKind};
 use super::machine::FolderEventMachine;
@@ -130,6 +133,24 @@ impl DurableFolderLog {
     pub fn binding(&self) -> Result<LogBinding, PublicationError> {
         self.ensure_usable()?;
         Ok(self.log.binding()?)
+    }
+
+    /// Creates an opaque local cursor for bounded accepted-history reads.
+    /// It cannot be serialized as a peer cursor or reused after reopen.
+    pub fn start_cursor(&self) -> Result<EventLogCursor, PublicationError> {
+        self.ensure_usable()?;
+        Ok(self.log.start_cursor()?)
+    }
+
+    /// Reads committed history for a future authorized session. Page contents
+    /// prove neither peer permission, local file application nor acknowledgement.
+    pub fn read_page(
+        &mut self,
+        cursor: &EventLogCursor,
+        limits: EventLogPageLimits,
+    ) -> Result<EventLogPage, PublicationError> {
+        self.ensure_usable()?;
+        Ok(self.log.read_page(cursor, limits)?)
     }
 
     /// Appends a received event after the concrete machine validates it.
@@ -400,6 +421,69 @@ mod tests {
             .retain_stream(expected, plaintext, &JobControl::new())
             .unwrap();
         (temp, store, receipt)
+    }
+
+    #[test]
+    fn paged_committed_history_reconstructs_an_independent_folder_log() {
+        let (source_temp, mut source) = fixture(128, true);
+        let first = source
+            .publish_local(&body("shared", EntryValue::Directory))
+            .unwrap();
+        let second = source
+            .publish_local(&body("shared", EntryValue::Tombstone))
+            .unwrap();
+        let bounds = EventLogPageLimits {
+            maximum_records: 1,
+            maximum_plaintext_bytes: super::super::log_frame::MAX_LOG_PLAINTEXT_BYTES,
+        };
+        let cursor_before_reopen = source.start_cursor().unwrap();
+        drop(source);
+        let mut source = reopen(&source_temp, 128);
+        assert!(matches!(
+            source.read_page(&cursor_before_reopen, bounds),
+            Err(PublicationError::Log(EventLogError::InvalidCursor))
+        ));
+        let (receiver_temp, mut receiver) = fixture(128, false);
+        let mut cursor = source.start_cursor().unwrap();
+        let mut ordinals = Vec::new();
+        loop {
+            let page = source.read_page(&cursor, bounds).unwrap();
+            for event in page.events() {
+                assert!(matches!(
+                    receiver.ingest(event.event_bytes()).unwrap(),
+                    EventAppendOutcome::Committed { .. }
+                ));
+                assert_eq!(
+                    receiver.ingest(event.event_bytes()).unwrap(),
+                    EventAppendOutcome::Duplicate
+                );
+                ordinals.push(event.ordinal());
+            }
+            cursor = page.next_cursor().clone();
+            if page.at_end() {
+                break;
+            }
+        }
+        assert_eq!(ordinals, vec![1, first.ordinal(), second.ordinal()]);
+        drop(receiver);
+        let receiver = reopen(&receiver_temp, 128);
+        assert_eq!(
+            source.machine().unwrap().current_frontier(),
+            receiver.machine().unwrap().current_frontier()
+        );
+        let path = SyncPath::from_wire("shared").unwrap();
+        let register = receiver.machine().unwrap().register(&path).unwrap();
+        assert_eq!(register.active_count(), 1);
+        let current = register.active().next().unwrap();
+        assert_eq!(current.id(), second.id());
+        assert_eq!(*current.value(), EntryValue::Tombstone);
+        assert!(
+            receiver
+                .machine()
+                .unwrap()
+                .accepted_operation(first.id(), first.event_bytes())
+                .is_ok()
+        );
     }
 
     #[test]

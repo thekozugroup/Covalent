@@ -23,7 +23,10 @@ class EntrypointTests(unittest.TestCase):
             executable = self.root / "bin" / name
             executable.write_text(
                 '#!/bin/sh\nset -eu\n'
-                'printf "%s\\n" "$@" > "$FIXTURE_ROOT/' + name + '.args"\n'
+                # Existence is the parent's readiness signal. Publish the
+                # complete argument vector atomically, after printf closes it.
+                'printf "%s\\n" "$@" > "$FIXTURE_ROOT/' + name + '.args.tmp"\n'
+                'mv "$FIXTURE_ROOT/' + name + '.args.tmp" "$FIXTURE_ROOT/' + name + '.args"\n'
                 'case "${1:-}" in provision-key) exit 0 ;; esac\n'
                 'exec sleep 30\n'
             )

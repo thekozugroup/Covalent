@@ -255,6 +255,25 @@ packages, credentials, private server inventories, or raw diagnostic bundles.
   mapping, admitted-view and descendant regressions. Authority configuration,
   the folder coordinator and safe user-folder mutation remain outstanding;
   hosted checks must still run on this new checkpoint and the final release.
+- The following history-read slice exposes authenticated committed events in
+  pages capped at 256 records and 4 MiB plaintext, plus bounded scratch space.
+  Opaque cursors reject other handles and reopen, preserve retry positions, and
+  can continue after later appends. Every returned event must match accepted
+  history; read errors, corruption or external changes invalidate the handle
+  without exposing a partial page. Apply-journal plaintext is never exported
+  through this API. Live session authorization and wire cursors remain future
+  runtime work. A real second private log reconstructs the same current state
+  from pages while retaining superseded operation history.
+- Local validation of the history-read slice passes 588 all-feature workspace
+  tests across 22 suites, zero failed or ignored, strict workspace Clippy,
+  formatting and foundation checks. Nine focused page tests cover byte/count
+  boundaries, mid-page faults, authenticated-but-unaccepted replacements,
+  uncertain writes, stale cursors, private-lock replacement and redaction.
+  The foundation run also exposed a stub readiness race in the Docker entrypoint
+  fixture: checking file existence could read partially written arguments. The
+  fixture now atomically renames the completed argument record before signalling
+  readiness; all four entrypoint tests and the full foundation check pass.
+  Production container behavior was not changed by this fixture correction.
 
 ## Work order
 

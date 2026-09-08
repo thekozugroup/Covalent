@@ -7,7 +7,15 @@
 //! A single lifetime folder lock serializes cooperative writers. Whole-state
 //! rollback and hostile same-user writers remain outside that lock's guarantee.
 
+use std::sync::Arc;
+
 use thiserror::Error;
+
+mod page;
+pub use page::{
+    CommittedEvent, EventLogCursor, EventLogPage, EventLogPageLimits, MAX_EVENT_PAGE_BYTES,
+    MAX_EVENT_PAGE_RECORDS,
+};
 
 use super::log_frame::{
     self, LogBinding, LogFrameError, LogFrameKey, LogOrdinal, MAX_ENCODED_LOG_FRAME_BYTES,
@@ -78,6 +86,14 @@ pub enum EventLogError {
     Changed,
     #[error("folder event log requires reopen after an uncertain transaction")]
     Poisoned,
+    #[error("folder event page limits are invalid")]
+    InvalidPageLimits,
+    #[error("folder event cursor belongs to a different log handle")]
+    InvalidCursor,
+    #[error("only folder event history can be paged")]
+    WrongPageKind,
+    #[error("folder event frame differs from accepted history")]
+    UnretainedEvent,
     #[error(transparent)]
     State(#[from] StateDirError),
     #[error(transparent)]
@@ -209,6 +225,7 @@ impl LogIo for OsLogIo {
 }
 
 struct LogInner<M: EventMachine, I: LogIo> {
+    cursor_token: Arc<()>,
     io: I,
     binding: LogBinding,
     key: LogFrameKey,
@@ -295,6 +312,7 @@ impl<M: EventMachine, I: LogIo> LogInner<M, I> {
             return Err(EventLogError::Changed);
         }
         Ok(Self {
+            cursor_token: Arc::new(()),
             io,
             binding,
             key,
@@ -374,6 +392,8 @@ fn require_empty_machine(machine: &impl EventMachine) -> Result<(), EventLogErro
 
 #[cfg(test)]
 mod tests {
+    mod page_tests;
+
     use std::cell::RefCell;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
