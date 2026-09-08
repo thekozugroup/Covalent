@@ -31,6 +31,8 @@ public final class TestDocumentsProvider extends DocumentsProvider {
     public static final String ROOT_ID = "root";
     public static final String CHILD_ID = "root/child";
     public static final String CHILD_FILE_ID = "root/child/inside.txt";
+    public static final String RECOVERY_KIT_ID = "root/recovery.covalent-recovery";
+    public static final String RECOVERY_CODE_ID = "root/recovery-code.txt";
     private static final String ROOT_FILE_ID = "root/top.txt";
     private static final String MUTATED_FILE_ID = "root/appeared.txt";
 
@@ -64,6 +66,8 @@ public final class TestDocumentsProvider extends DocumentsProvider {
         if (frameworkResult != null || !METHOD_SET_MODE.equals(method)) return frameworkResult;
         mode = argument == null ? MODE_STABLE : argument;
         childQueries = 0;
+        recoveryFile(RECOVERY_KIT_ID).delete();
+        recoveryFile(RECOVERY_CODE_ID).delete();
         return new Bundle();
     }
 
@@ -73,7 +77,9 @@ public final class TestDocumentsProvider extends DocumentsProvider {
             return CHILD_ID.equals(documentId)
                 || CHILD_FILE_ID.equals(documentId)
                 || ROOT_FILE_ID.equals(documentId)
-                || MUTATED_FILE_ID.equals(documentId);
+                || MUTATED_FILE_ID.equals(documentId)
+                || RECOVERY_KIT_ID.equals(documentId)
+                || RECOVERY_CODE_ID.equals(documentId);
         }
         return CHILD_ID.equals(parentDocumentId) && CHILD_FILE_ID.equals(documentId);
     }
@@ -126,6 +132,19 @@ public final class TestDocumentsProvider extends DocumentsProvider {
     ) throws FileNotFoundException {
         requireKnownDocument(documentId);
         if (isDirectory(documentId)) throw new FileNotFoundException("Cannot open a directory");
+        if (RECOVERY_KIT_ID.equals(documentId) || RECOVERY_CODE_ID.equals(documentId)) {
+            File file = recoveryFile(documentId);
+            if (!file.exists()) {
+                try {
+                    if (!file.createNewFile()) throw new IOException("Could not create recovery fixture");
+                } catch (IOException error) {
+                    FileNotFoundException failure = new FileNotFoundException("Could not create recovery fixture");
+                    failure.initCause(error);
+                    throw failure;
+                }
+            }
+            return ParcelFileDescriptor.open(file, ParcelFileDescriptor.parseMode(mode));
+        }
         Context context = getContext();
         if (context == null) throw new FileNotFoundException("Fixture provider has no context");
         File file = new File(context.getCacheDir(), "saf-fixture-" + documentId.hashCode());
@@ -160,7 +179,11 @@ public final class TestDocumentsProvider extends DocumentsProvider {
         if (Document.COLUMN_MIME_TYPE.equals(column)) {
             return isDirectory(documentId) ? Document.MIME_TYPE_DIR : "application/octet-stream";
         }
-        if (Document.COLUMN_FLAGS.equals(column)) return 0;
+        if (Document.COLUMN_FLAGS.equals(column)) {
+            return RECOVERY_KIT_ID.equals(documentId) || RECOVERY_CODE_ID.equals(documentId)
+                ? Document.FLAG_SUPPORTS_WRITE
+                : 0;
+        }
         if (Document.COLUMN_SIZE.equals(column)) {
             return isDirectory(documentId) ? 0L : ("fixture:" + documentId).getBytes(StandardCharsets.UTF_8).length;
         }
@@ -191,12 +214,20 @@ public final class TestDocumentsProvider extends DocumentsProvider {
                 && !CHILD_ID.equals(documentId)
                 && !ROOT_FILE_ID.equals(documentId)
                 && !CHILD_FILE_ID.equals(documentId)
-                && !MUTATED_FILE_ID.equals(documentId)) {
+                && !MUTATED_FILE_ID.equals(documentId)
+                && !RECOVERY_KIT_ID.equals(documentId)
+                && !RECOVERY_CODE_ID.equals(documentId)) {
             throw new FileNotFoundException("Unknown document: " + documentId);
         }
     }
 
     private boolean isDirectory(String documentId) {
         return ROOT_ID.equals(documentId) || CHILD_ID.equals(documentId);
+    }
+
+    private File recoveryFile(String documentId) {
+        Context context = getContext();
+        if (context == null) throw new IllegalStateException("Fixture provider has no context");
+        return new File(context.getCacheDir(), "saf-recovery-" + documentId.hashCode());
     }
 }

@@ -75,6 +75,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -129,6 +130,8 @@ import life.michaelwong.covalent.R
 import life.michaelwong.covalent.data.CovalentNodeClient
 import life.michaelwong.covalent.data.EnrolledTrust
 import life.michaelwong.covalent.data.NodeApiException
+import life.michaelwong.covalent.data.RecoveryExportMaterial
+import life.michaelwong.covalent.data.RecoverySafFiles
 import life.michaelwong.covalent.data.SafTransferBridge
 import life.michaelwong.covalent.data.SafSourceAccessException
 import life.michaelwong.covalent.data.SafTargetAccessException
@@ -149,6 +152,8 @@ import life.michaelwong.covalent.model.PeerTransport
 import life.michaelwong.covalent.model.Provider
 import life.michaelwong.covalent.model.ProviderReachability
 import life.michaelwong.covalent.model.RememberedBackup
+import life.michaelwong.covalent.model.RecoveryPhase
+import life.michaelwong.covalent.model.RecoveryStatus
 import life.michaelwong.covalent.model.RestorePlanPage
 import life.michaelwong.covalent.model.RestoreConflictPolicy
 import life.michaelwong.covalent.model.TransferKind
@@ -395,6 +400,22 @@ internal fun CovalentApp(
     val node = remember(store, state) { CovalentNodeClient(state::pendingEnrolledTrust) }
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
+    var recoveryKitDestination by remember { mutableStateOf<Uri?>(null) }
+    var recoveryCodeDestination by remember { mutableStateOf<Uri?>(null) }
+    var recoveryExportSession by remember { mutableStateOf<RecoveryExportMaterial?>(null) }
+    var confirmRecoveryExport by remember { mutableStateOf(false) }
+    var recoveryKitSource by remember { mutableStateOf<Uri?>(null) }
+    var recoveryCodeSource by remember { mutableStateOf<Uri?>(null) }
+    var confirmRecoveryBootstrap by remember { mutableStateOf(false) }
+    var pendingRecoveryPermission by remember { mutableStateOf(false) }
+
+    DisposableEffect(recoveryExportSession) {
+        val ownedSession = recoveryExportSession
+        onDispose { ownedSession?.close() }
+    }
+    DisposableEffect(embeddedManager) {
+        onDispose { embeddedManager.cancelPendingRecovery() }
+    }
 
     LaunchedEffect(embeddedProvider.maxBytes, embeddedProvider.keepFreeBytes, embeddedProvider.lanDiscoveryRequested) {
         state.loadProviderDraft(
@@ -448,6 +469,64 @@ internal fun CovalentApp(
             state.discovered = node.discovery(connection.baseUrl, connection.token)
             state.discoveryRunning = false
             state.discoveryCompleted = true
+        }
+    }
+
+    fun beginSelectedRecovery() {
+        val kitUri = recoveryKitSource ?: return
+        val codeUri = recoveryCodeSource ?: return
+        val capacity = providerCapacityBytes(state.providerMaximumGiB, state.providerKeepFreeGiB)
+        if (capacity == null) {
+            state.notice = resources.getString(R.string.phone_provider_invalid_capacity)
+            return
+        }
+        api(context, state, scope, onError = {
+            state.notice = resources.getString(R.string.recovery_bootstrap_failed)
+        }) {
+            val material = RecoverySafFiles.readBootstrap(context, kitUri, codeUri)
+            if (embeddedManager.recover(material, capacity.first, capacity.second, state.providerLanDiscovery)) {
+                recoveryKitSource = null
+                recoveryCodeSource = null
+                state.notice = resources.getString(R.string.recovery_bootstrap_started)
+            }
+        }
+    }
+
+    fun missingProviderPermissions(): Array<String> = buildList {
+        if (
+            Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.POST_NOTIFICATIONS,
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            add(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+        if (
+            Build.VERSION.SDK_INT >= 37 &&
+            ContextCompat.checkSelfPermission(context, LOCAL_NETWORK_PERMISSION) != PackageManager.PERMISSION_GRANTED
+        ) {
+            add(LOCAL_NETWORK_PERMISSION)
+        }
+    }.toTypedArray()
+
+    val recoveryProviderPermissions = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { grants ->
+        if (!pendingRecoveryPermission) return@rememberLauncherForActivityResult
+        pendingRecoveryPermission = false
+        if (grants.values.all { it }) beginSelectedRecovery()
+        else state.notice = resources.getString(R.string.phone_provider_permission_denied)
+    }
+
+    fun requestSelectedRecovery() {
+        if (!embeddedProvider.supported || !embeddedProvider.keyProtectionAvailable) {
+            state.notice = resources.getString(R.string.phone_provider_locked)
+            return
+        }
+        val missing = missingProviderPermissions()
+        if (missing.isEmpty()) beginSelectedRecovery() else {
+            pendingRecoveryPermission = true
+            recoveryProviderPermissions.launch(missing)
         }
     }
 
@@ -657,8 +736,133 @@ internal fun CovalentApp(
         }
     }
 
+    fun saveRecoveryExport() {
+        val connection = activeConnection ?: return
+        val kitUri = recoveryKitDestination ?: return
+        val codeUri = recoveryCodeDestination ?: return
+        api(context, state, scope, onError = {
+            state.notice = resources.getString(R.string.recovery_export_failed)
+        }) {
+            val session = recoveryExportSession ?: node.exportRecoveryKit(
+                connection.baseUrl,
+                connection.token,
+            ).also { recoveryExportSession = it }
+            session.save(context, kitUri, codeUri)
+            if (session.complete) {
+                session.close()
+                recoveryExportSession = null
+                recoveryKitDestination = null
+                recoveryCodeDestination = null
+                state.notice = resources.getString(R.string.recovery_export_saved)
+            }
+        }
+    }
+
+    val recoveryCodeDestinationPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain"),
+    ) { uri ->
+        recoveryCodeDestination = uri
+        confirmRecoveryExport = uri != null && recoveryKitDestination != null
+        if (uri == null) recoveryKitDestination = null
+    }
+    val recoveryKitDestinationPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream"),
+    ) { uri ->
+        recoveryKitDestination = uri
+        if (uri == null) {
+            recoveryCodeDestination = null
+        } else {
+            recoveryCodeDestinationPicker.launch("covalent-recovery-code.txt")
+        }
+    }
+    val recoveryCodeSourcePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        recoveryCodeSource = uri
+        confirmRecoveryBootstrap = uri != null && recoveryKitSource != null
+        if (uri == null) recoveryKitSource = null
+    }
+    val recoveryKitSourcePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        recoveryKitSource = uri
+        if (uri == null) {
+            recoveryCodeSource = null
+        } else {
+            recoveryCodeSourcePicker.launch(arrayOf("text/plain", "application/octet-stream"))
+        }
+    }
+
+    if (confirmRecoveryExport) {
+        AlertDialog(
+            onDismissRequest = {
+                confirmRecoveryExport = false
+                recoveryKitDestination = null
+                recoveryCodeDestination = null
+            },
+            title = { Text(stringResource(R.string.recovery_export_confirm_title)) },
+            text = { Text(stringResource(R.string.recovery_export_confirm_detail)) },
+            confirmButton = {
+                FilledTonalButton(onClick = {
+                    confirmRecoveryExport = false
+                    saveRecoveryExport()
+                }) { Text(stringResource(R.string.action_create_recovery_kit)) }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    confirmRecoveryExport = false
+                    recoveryKitDestination = null
+                    recoveryCodeDestination = null
+                }) { Text(stringResource(R.string.action_cancel)) }
+            },
+        )
+    }
+    if (confirmRecoveryBootstrap) {
+        AlertDialog(
+            onDismissRequest = {
+                confirmRecoveryBootstrap = false
+                recoveryKitSource = null
+                recoveryCodeSource = null
+            },
+            title = { Text(stringResource(R.string.recovery_bootstrap_confirm_title)) },
+            text = { Text(stringResource(R.string.recovery_bootstrap_confirm_detail)) },
+            confirmButton = {
+                FilledTonalButton(onClick = {
+                    confirmRecoveryBootstrap = false
+                    requestSelectedRecovery()
+                }) { Text(stringResource(R.string.action_recover_phone)) }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    confirmRecoveryBootstrap = false
+                    recoveryKitSource = null
+                    recoveryCodeSource = null
+                }) { Text(stringResource(R.string.action_cancel)) }
+            },
+        )
+    }
+
     LaunchedEffect(store, state) {
         state.initialize(store)
+    }
+    LaunchedEffect(state.screen) {
+        if (state.screen != Screen.SETTINGS && recoveryExportSession != null) {
+            recoveryExportSession?.close()
+            recoveryExportSession = null
+            recoveryKitDestination = null
+            recoveryCodeDestination = null
+        }
+    }
+    LaunchedEffect(state.screen, activeConnection?.baseUrl, activeConnection?.token) {
+        val connection = activeConnection
+        state.recoveryStatus = null
+        if (state.screen == Screen.SETTINGS && connection != null) {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    node.recoveryStatus(connection.baseUrl, connection.token)
+                }
+            }.onSuccess { state.recoveryStatus = it }
+        }
     }
     LaunchedEffect(state.pendingSetupLink) {
         val link = state.pendingSetupLink
@@ -826,6 +1030,18 @@ internal fun CovalentApp(
                     ::requestSetup,
                     pickTokenFile = { tokenPicker.launch(arrayOf("text/plain", "application/octet-stream")) },
                     pickCaCertificate = { caCertificatePicker.launch(arrayOf("application/x-x509-ca-cert", "application/pkix-cert", "text/plain")) },
+                    recoverPhone = {
+                        recoveryKitSourcePicker.launch(
+                            arrayOf("application/octet-stream", "application/vnd.covalent.recovery"),
+                        )
+                    },
+                    recoveredPhoneReady = embeddedProvider.enabled && embeddedProvider.running,
+                    useRecoveredPhone = {
+                        if (embeddedManager.selectLocalMode()) {
+                            state.connectionHealth = ConnectionHealth.CONNECTING
+                            state.screen = Screen.HOME
+                        }
+                    },
                 )
                 Screen.PAIR -> Pair(state, node, activeConnection, scope, page) {
                     if (
@@ -851,6 +1067,22 @@ internal fun CovalentApp(
                     page,
                     createSettings::launch,
                     importSettings::launch,
+                    exportRecovery = { recoveryKitDestinationPicker.launch("covalent-recovery.covalent-recovery") },
+                    retryRecoveryExport = if (recoveryExportSession != null) ::saveRecoveryExport else null,
+                    discardRecoveryExport = if (recoveryExportSession != null) ({
+                        recoveryExportSession?.close()
+                        recoveryExportSession = null
+                        recoveryKitDestination = null
+                        recoveryCodeDestination = null
+                    }) else null,
+                    retryRecovery = {
+                        activeConnection?.let { connection ->
+                            api(context, state, scope) {
+                                state.recoveryStatus = node.retryRecovery(connection.baseUrl, connection.token)
+                                state.notice = resources.getString(R.string.recovery_retry_finished)
+                            }
+                        }
+                    },
                     onLanChange = { enabled ->
                         if (
                             enabled && Build.VERSION.SDK_INT >= 37 &&
@@ -1297,6 +1529,9 @@ private fun Setup(
     connect: () -> Unit,
     pickTokenFile: () -> Unit,
     pickCaCertificate: () -> Unit,
+    recoverPhone: () -> Unit,
+    recoveredPhoneReady: Boolean,
+    useRecoveredPhone: () -> Unit,
 ) {
     val nameFocus = remember { FocusRequester() }
     val addressFocus = remember { FocusRequester() }
@@ -1464,6 +1699,30 @@ private fun Setup(
         }) {
             if (state.busy) CircularProgressIndicator(Modifier.padding(end = 8.dp))
             Text(stringResource(if (state.busy) R.string.action_checking else R.string.action_connect))
+        }
+        HorizontalDivider()
+        SectionTitle(stringResource(R.string.recovery_bootstrap_title))
+        Text(
+            stringResource(R.string.recovery_bootstrap_detail),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedButton(
+            enabled = canSubmit,
+            onClick = recoverPhone,
+            modifier = Modifier.testTag("setup.recovery.start"),
+        ) {
+            Icon(Icons.Rounded.Security, contentDescription = null)
+            Text(stringResource(R.string.action_choose_recovery_files), Modifier.padding(start = 8.dp))
+        }
+        if (recoveredPhoneReady) {
+            FilledTonalButton(
+                enabled = canSubmit,
+                onClick = useRecoveredPhone,
+                modifier = Modifier.testTag("setup.recovery.use_phone"),
+            ) {
+                Text(stringResource(R.string.action_use_recovered_phone))
+            }
         }
     }
 }
@@ -2863,6 +3122,10 @@ private fun Settings(
     modifier: Modifier,
     export: (String) -> Unit,
     import: (Array<String>) -> Unit,
+    exportRecovery: () -> Unit,
+    retryRecoveryExport: (() -> Unit)?,
+    discardRecoveryExport: (() -> Unit)?,
+    retryRecovery: () -> Unit,
     onLanChange: (Boolean) -> Unit,
     onSelectExternal: () -> Unit,
     onSelectLocal: () -> Unit,
@@ -2872,6 +3135,7 @@ private fun Settings(
     val resources = LocalResources.current
     val lanEnabled = state.status?.lanDiscovery == true
     var confirmImport by remember { mutableStateOf(false) }
+    var confirmRecoveryRetry by remember { mutableStateOf(false) }
     FormPage(
         modifier,
         stringResource(R.string.settings_title),
@@ -2935,6 +3199,52 @@ private fun Settings(
             state.setImportCandidate(null)
             import(arrayOf("application/json", "text/json"))
         }) { Text(stringResource(R.string.action_import_settings)) }
+        HorizontalDivider()
+        SectionTitle(stringResource(R.string.recovery_settings_title))
+        Text(
+            stringResource(R.string.recovery_settings_detail),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedButton(
+            enabled = !state.busy && connection != null && retryRecoveryExport == null,
+            onClick = exportRecovery,
+            modifier = Modifier.testTag("settings.recovery.export"),
+        ) { Text(stringResource(R.string.action_create_recovery_kit)) }
+        if (retryRecoveryExport != null && discardRecoveryExport != null) {
+            InlineError(stringResource(R.string.recovery_export_incomplete))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilledTonalButton(enabled = !state.busy, onClick = retryRecoveryExport) {
+                    Text(stringResource(R.string.action_retry_save))
+                }
+                TextButton(enabled = !state.busy, onClick = discardRecoveryExport) {
+                    Text(stringResource(R.string.action_discard))
+                }
+            }
+        }
+        state.recoveryStatus?.let { status ->
+            RecoveryStatusPanel(status, !state.busy && connection != null) {
+                confirmRecoveryRetry = true
+            }
+        }
+        if (confirmRecoveryRetry) {
+            AlertDialog(
+                onDismissRequest = { confirmRecoveryRetry = false },
+                title = { Text(stringResource(R.string.recovery_retry_confirm_title)) },
+                text = { Text(stringResource(R.string.recovery_retry_confirm_detail)) },
+                confirmButton = {
+                    FilledTonalButton(onClick = {
+                        confirmRecoveryRetry = false
+                        retryRecovery()
+                    }) { Text(stringResource(R.string.action_retry_recovery)) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { confirmRecoveryRetry = false }) {
+                        Text(stringResource(R.string.action_cancel))
+                    }
+                },
+            )
+        }
         state.importCandidate?.let { candidate ->
             val preview = settingsPreview(state.currentExportedSettings, candidate)
             val removedBackups = (preview.oldBackups - preview.newBackups).coerceAtLeast(0)
@@ -2995,6 +3305,73 @@ private fun Settings(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+@Composable
+private fun RecoveryStatusPanel(
+    status: RecoveryStatus,
+    enabled: Boolean,
+    retry: () -> Unit,
+) {
+    var showDetails by remember(status) { mutableStateOf(false) }
+    val phase = when (status.phase) {
+        RecoveryPhase.NOT_CONFIGURED -> stringResource(R.string.recovery_phase_not_configured)
+        RecoveryPhase.PENDING -> stringResource(R.string.recovery_phase_pending)
+        RecoveryPhase.IMPORTED -> stringResource(R.string.recovery_phase_imported)
+        RecoveryPhase.PARTIAL -> stringResource(R.string.recovery_phase_partial)
+        RecoveryPhase.BLOCKED -> stringResource(R.string.recovery_phase_blocked)
+        RecoveryPhase.NO_CATALOGS -> stringResource(R.string.recovery_phase_no_catalogs)
+    }
+    OutlinedCard(Modifier.fillMaxWidth().testTag("settings.recovery.status")) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(phase, fontWeight = FontWeight.SemiBold)
+            Text(
+                stringResource(
+                    R.string.recovery_status_counts,
+                    status.recoveredBackups.size,
+                    status.queriedProviderIds.size,
+                    status.configuredProviderIds.size,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (status.newerSnapshotMayExist) {
+                Text(
+                    stringResource(R.string.recovery_newer_snapshot_warning),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            if (status.failures.isNotEmpty()) {
+                TextButton(onClick = { showDetails = !showDetails }) {
+                    Text(stringResource(if (showDetails) R.string.recovery_hide_details else R.string.recovery_show_details))
+                }
+            }
+            if (showDetails) {
+                status.failures.take(3).forEach { failure ->
+                    Text(
+                        stringResource(
+                            R.string.recovery_provider_failure,
+                            failure.providerId.take(8),
+                            failure.reason,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (status.failures.size > 3) {
+                    Text(
+                        stringResource(R.string.recovery_more_failures, status.failures.size - 3),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+            if (status.phase.canRetry) {
+                OutlinedButton(enabled = enabled, onClick = retry) {
+                    Text(stringResource(R.string.action_retry_recovery))
+                }
+            }
+        }
     }
 }
 

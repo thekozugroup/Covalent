@@ -275,6 +275,8 @@ import Testing
         "claim_window_exhausted",
         "claim_window_expired",
         "confirmation_required",
+        "recovery_confirmation_required",
+        "recovery_not_configured",
         "duplicate_archive_entry",
         "insufficient_storage",
         "internal_error",

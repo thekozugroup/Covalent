@@ -107,6 +107,31 @@ class KeyProtectionContractTest {
     }
 
     @Test
+    fun theNativeRecoveryDescriptorCarriesRawKitAndKeyWithoutProcessArguments() {
+        val rust = rustJniSource()
+        assertTrue(
+            rust.contains(
+                "\"(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJI[B[B)Ljava/lang/String;\"",
+            ),
+        )
+        val kotlin = moduleFile("src/main/java/life/michaelwong/covalent/node/CovalentNative.kt").readText()
+        val declaration = Regex(
+            "private external fun nativeRecoverStart\\(([^)]*)\\)",
+            RegexOption.DOT_MATCHES_ALL,
+        ).find(kotlin) ?: error("nativeRecoverStart is not declared in CovalentNative.kt")
+        val parameters = declaration.groupValues[1]
+            .split(",")
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+        assertEquals(11, parameters.size)
+        assertTrue(parameters.takeLast(2).all { it.endsWith(": ByteArray") })
+        assertTrue(rust.contains("take_java_secret(environment, &recovery_key)"))
+        assertTrue(rust.contains("take_java_secret(environment, &recovery_kit)"))
+        assertFalse(rust.contains("COVALENT_RECOVERY_KEY"))
+        assertFalse(rust.contains("--recovery-key"))
+    }
+
+    @Test
     fun everyProtectionLevelGetsItsOwnHonestSentence() {
         assertNull(
             "A device that cannot protect its identity must not be given reassuring copy",

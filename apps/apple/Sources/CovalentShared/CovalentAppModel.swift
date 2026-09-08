@@ -4,7 +4,9 @@ import Foundation
 
 @MainActor
 public protocol LocalNodeBootstrapping: AnyObject {
-    func start() async throws -> NodeConnectionConfiguration
+    /// Must not create a directory, Keychain item, process, or identity.
+    func startupDisposition() throws -> LocalNodeStartupDisposition
+    func start(mode: LocalNodeStartupMode) async throws -> NodeConnectionConfiguration
 }
 
 public enum ServicePhase: Equatable, Sendable {
@@ -47,6 +49,7 @@ public enum AppPresentation: String, Identifiable, Sendable {
     case pairDevice
     case networkPairing
     case importSettings
+    case firstLaunchSetup
 
     public var id: String { rawValue }
 }
@@ -182,6 +185,8 @@ public final class CovalentAppModel: ObservableObject {
     @Published public private(set) var lastRestoreResult: RestoreResponse?
     @Published public private(set) var lastRefreshedAt: Date?
     @Published public var alert: AppAlert?
+    @Published public private(set) var recoveryStatus: RecoveryStatus?
+    @Published public private(set) var needsFirstLaunchChoice = false
 
     /// The operation "Try Again" re-runs. Held outside ``AppAlert`` so the
     /// alert itself stays `Equatable` and `Sendable`.
@@ -196,6 +201,8 @@ public final class CovalentAppModel: ObservableObject {
     private var configuration: NodeConnectionConfiguration
     private var client: NodeClient
     private var didStart = false
+    private var recoveryCheckInFlight = false
+    private var recoveryExportInFlight = false
 
     public init(
         connectionStore: SecureNodeConnectionStore = SecureNodeConnectionStore(),
@@ -412,6 +419,19 @@ public final class CovalentAppModel: ObservableObject {
         } catch {
             report(error, title: "Saved access could not be loaded")
         }
+        do {
+            if let localNodeBootstrapper,
+               try localNodeBootstrapper.startupDisposition() != .existingIdentity {
+                needsFirstLaunchChoice = true
+                phase = .needsAuthorization
+                presentation = .firstLaunchSetup
+                return
+            }
+        } catch {
+            report(error, title: "Local recovery state could not be checked")
+            phase = .offline
+            return
+        }
         await refresh()
         if phase == .ready {
             await reconcilePendingBackups(reportFailures: true)
@@ -420,10 +440,22 @@ public final class CovalentAppModel: ObservableObject {
     }
 
     public func refresh() async {
+        guard !needsFirstLaunchChoice else {
+            presentation = .firstLaunchSetup
+            phase = .needsAuthorization
+            return
+        }
+        _ = await refreshManaged(mode: .normal)
+    }
+
+    /// Creates or adopts the managed local service only after the initial
+    /// setup choice has explicitly selected a path.
+    @discardableResult
+    private func refreshManaged(mode: LocalNodeStartupMode) async -> Bool {
         phase = .starting
         do {
             if let localNodeBootstrapper {
-                let managedConfiguration = try await localNodeBootstrapper.start()
+                let managedConfiguration = try await localNodeBootstrapper.start(mode: mode)
                 if managedConfiguration != configuration {
                     configuration = managedConfiguration
                     client = NodeClient(configuration: managedConfiguration)
@@ -437,7 +469,7 @@ public final class CovalentAppModel: ObservableObject {
                 backups = []
                 discoveryCandidates = []
                 phase = .needsAuthorization
-                return
+                return false
             }
             async let exportedSettings = client.exportSettings()
             async let providerConnections = client.providers()
@@ -448,11 +480,15 @@ public final class CovalentAppModel: ObservableObject {
             discoveryCandidates = (try? await client.discoveryCandidates()) ?? []
             lastRefreshedAt = Date()
             phase = .ready
+            needsFirstLaunchChoice = false
+            return true
         } catch NodeClientError.missingToken {
             phase = .needsAuthorization
+            return false
         } catch NodeClientError.unauthorized {
             phase = .needsAuthorization
             report(NodeClientError.unauthorized, title: "Reconnect this app")
+            return false
         } catch {
             phase = .offline
             report(
@@ -463,6 +499,92 @@ public final class CovalentAppModel: ObservableObject {
             ) { [weak self] in
                 await self?.refresh()
             }
+            return false
+        }
+    }
+
+    public func beginNormalFirstLaunch() async {
+        guard needsFirstLaunchChoice else { return }
+        presentation = nil
+        let succeeded = await refreshManaged(mode: .normal)
+        guard !succeeded, let localNodeBootstrapper else { return }
+        // A normal launch may have created its identity before a later
+        // readiness failure. Do not offer recovery over that identity.
+        if (try? localNodeBootstrapper.startupDisposition()) == .existingIdentity {
+            needsFirstLaunchChoice = false
+        }
+    }
+
+    public func beginRecoveryFirstLaunch(recoveryKitFile: URL, recoveryKeyFile: URL) async {
+        guard needsFirstLaunchChoice else { return }
+        presentation = nil
+        let succeeded = await refreshManaged(
+            mode: .recover(recoveryKitFile: recoveryKitFile, recoveryKeyFile: recoveryKeyFile)
+        )
+        guard !succeeded, let localNodeBootstrapper else { return }
+        // A cancelled/failed bootstrap must leave a visible way to retry. Do
+        // not create an identity merely to escape this state.
+        do {
+            switch try localNodeBootstrapper.startupDisposition() {
+            case .existingIdentity:
+                // Core may have durably published the recovered identity before a
+                // later readiness error. Resume normal startup; recovery cannot
+                // overwrite that state.
+                needsFirstLaunchChoice = false
+                await refresh()
+            case .resumableRecovery, .needsFirstLaunchChoice:
+                needsFirstLaunchChoice = true
+                phase = .needsAuthorization
+                presentation = .firstLaunchSetup
+            }
+        } catch {
+            // We cannot safely infer that an identity exists. Leave the
+            // recovery choice reachable so a transient inspection failure
+            // cannot strand the owner after a cancelled recovery.
+            needsFirstLaunchChoice = true
+            phase = .needsAuthorization
+            presentation = .firstLaunchSetup
+            report(error, title: "Local recovery state could not be checked")
+        }
+    }
+
+    public func loadRecoveryStatus() async {
+        guard configuration.apiToken != nil, !recoveryCheckInFlight else { return }
+        recoveryCheckInFlight = true
+        defer { recoveryCheckInFlight = false }
+        do {
+            recoveryStatus = try await client.recoveryStatus()
+        } catch {
+            recoveryStatus = nil
+            report(error, title: "Recovery status could not be checked")
+        }
+    }
+
+    public func retryRecovery() async {
+        guard !recoveryCheckInFlight else { return }
+        recoveryCheckInFlight = true
+        defer { recoveryCheckInFlight = false }
+        do {
+            recoveryStatus = try await client.retryRecovery(confirmed: true)
+            if recoveryStatus?.phase == .imported || recoveryStatus?.phase == .noCatalogs {
+                await refresh()
+            }
+        } catch {
+            report(error, title: "Recovery check did not finish") { [weak self] in
+                await self?.retryRecovery()
+            }
+        }
+    }
+
+    public func exportRecoveryKit() async -> RecoveryKitExport? {
+        guard !recoveryExportInFlight else { return nil }
+        recoveryExportInFlight = true
+        defer { recoveryExportInFlight = false }
+        do {
+            return try await client.exportRecoveryKit(confirmed: true)
+        } catch {
+            report(error, title: "Recovery kit could not be created")
+            return nil
         }
     }
 
@@ -524,6 +646,7 @@ public final class CovalentAppModel: ObservableObject {
         providers = []
         backups = []
         discoveryCandidates = []
+        recoveryStatus = nil
         phase = .needsAuthorization
         presentation = .connection
     }

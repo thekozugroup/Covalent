@@ -26,29 +26,39 @@ class NodeProviderService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = when (intent?.action) {
         ACTION_STOP -> {
+            RecoveryBootstrapHandoff.cancel()
             stopProvider()
             START_NOT_STICKY
+        }
+        ACTION_RECOVER -> {
+            startAsConnectedDeviceForeground("Recovering this phone's Covalent identity")
+            val request = RecoveryBootstrapHandoff.take()
+            val response = try {
+                request?.let(manager::serviceRecover) ?: NativeNodeResponse(
+                    ok = false,
+                    code = "recovery_request_unavailable",
+                    message = "The recovery selection expired. Choose both files again.",
+                    handle = null,
+                    apiBaseUrl = null,
+                    peerAddress = null,
+                    state = "stopped",
+                )
+            } finally {
+                request?.close()
+                RecoveryBootstrapHandoff.finish()
+            }
+            finishStart(response, startId)
         }
         else -> {
             startAsConnectedDeviceForeground("Android may pause this provider when it needs resources.")
             val response = manager.serviceStart()
-            handle = response.handle ?: 0L
-            manager.report(response)
-            if (response.ok && handle > 0L) {
-                if (Build.VERSION.SDK_INT < 33 || checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
-                    NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, notification("Android provider is available"))
-                }
-                START_STICKY
-            } else {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf(startId)
-                START_NOT_STICKY
-            }
+            finishStart(response, startId)
         }
     }
 
     override fun onDestroy() {
-        stopProvider()
+        if (handle > 0L) stopProvider() else stopForeground(STOP_FOREGROUND_REMOVE)
+        RecoveryBootstrapHandoff.finish()
         super.onDestroy()
     }
 
@@ -60,6 +70,25 @@ class NodeProviderService : Service() {
         manager.report(response)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    private fun finishStart(response: NativeNodeResponse, startId: Int): Int {
+        handle = response.handle ?: 0L
+        manager.report(response)
+        return if (response.ok && handle > 0L) {
+            if (
+                Build.VERSION.SDK_INT < 33 ||
+                checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+            ) {
+                NotificationManagerCompat.from(this)
+                    .notify(NOTIFICATION_ID, notification("Android provider is available"))
+            }
+            START_STICKY
+        } else {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf(startId)
+            START_NOT_STICKY
+        }
     }
 
     private fun createChannel() {
@@ -109,6 +138,7 @@ class NodeProviderService : Service() {
 
     companion object {
         const val ACTION_START = "life.michaelwong.covalent.node.START"
+        const val ACTION_RECOVER = "life.michaelwong.covalent.node.RECOVER"
         const val ACTION_STOP = "life.michaelwong.covalent.node.STOP"
         private const val CHANNEL_ID = "covalent_node_provider"
         private const val NOTIFICATION_ID = 3107

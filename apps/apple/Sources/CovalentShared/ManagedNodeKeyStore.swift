@@ -16,6 +16,7 @@ struct ManagedNodeKeyMaterial: ~Copyable {
     static let maximumSerializedLength = 1_104
     private static let legacyMagic = Array("CVKEK001".utf8)
     private static let magic = Array("CVSEC002".utf8)
+    private static let recoveryMagic = Array("CVSEC003".utf8)
     private static let legacyHeaderLength = legacyMagic.count + 4 + 2
     private static let headerLength = magic.count + 4 + 2 + 2
     private static let entryLength = 4 + keyLength
@@ -124,6 +125,83 @@ struct ManagedNodeKeyMaterial: ~Copyable {
             guard var address = rawBuffer.baseAddress else {
                 throw ManagedNodeKeyStoreError.pipeWriteFailed
             }
+            var remaining = rawBuffer.count
+            while remaining > 0 {
+                let count = Darwin.write(descriptor, address, remaining)
+                if count > 0 {
+                    remaining -= count
+                    address = address.advanced(by: count)
+                } else if count < 0, errno == EINTR {
+                    continue
+                } else {
+                    throw ManagedNodeKeyStoreError.pipeWriteFailed
+                }
+            }
+        }
+    }
+
+    /// `CVSEC003` is accepted only by the helper's recovery command. It
+    /// deliberately leaves the V1/V2 Keychain serialization unchanged: an
+    /// ordinary service start can never receive owner-loss material.
+    mutating func writeRecoveryEnvelopeAndErase(
+        kit: inout Data,
+        recoveryKey: inout Data,
+        to descriptor: Int32
+    ) throws {
+        defer {
+            erase()
+            kit.withUnsafeMutableBytes { buffer in
+                if let base = buffer.baseAddress { bzero(base, buffer.count) }
+            }
+            kit.removeAll(keepingCapacity: false)
+            recoveryKey.withUnsafeMutableBytes { buffer in
+                if let base = buffer.baseAddress { bzero(base, buffer.count) }
+            }
+            recoveryKey.removeAll(keepingCapacity: false)
+        }
+        guard !isLegacy,
+              kit.count > 0, kit.count <= 16 * 1_024 * 1_024,
+              recoveryKey.count == 43,
+              recoveryKey.allSatisfy({ byte in
+                  (48...57).contains(byte) || (65...90).contains(byte)
+                      || (97...122).contains(byte) || byte == 45 || byte == 95
+              }),
+              let token = apiToken,
+              token.count >= Self.minimumTokenLength,
+              token.count <= Self.maximumTokenLength
+        else { throw ManagedNodeKeyStoreError.corruptHierarchy }
+
+        var entries = entries()
+        defer {
+            for index in entries.indices {
+                entries[index].bytes.withUnsafeMutableBytes { buffer in
+                    if let base = buffer.baseAddress { bzero(base, buffer.count) }
+                }
+            }
+        }
+        var envelope = Self.recoveryMagic
+        envelope.append(contentsOf: Self.encode(currentVersion))
+        envelope.append(contentsOf: Self.encode(UInt16(keyCount)))
+        envelope.append(contentsOf: Self.encode(UInt16(token.count)))
+        envelope.append(contentsOf: Self.encode(UInt32(kit.count)))
+        envelope.append(contentsOf: Self.encode(UInt16(recoveryKey.count)))
+        for entry in entries {
+            envelope.append(contentsOf: Self.encode(entry.version))
+            envelope.append(contentsOf: entry.bytes)
+        }
+        envelope.append(contentsOf: token)
+        envelope.append(contentsOf: kit)
+        envelope.append(contentsOf: recoveryKey)
+        defer {
+            envelope.withUnsafeMutableBytes { buffer in
+                if let base = buffer.baseAddress { bzero(base, buffer.count) }
+            }
+        }
+        guard Darwin.fcntl(descriptor, F_SETNOSIGPIPE, 1) == 0 else {
+            throw ManagedNodeKeyStoreError.pipeWriteFailed
+        }
+        try envelope.withUnsafeBytes { rawBuffer in
+            guard var address = rawBuffer.baseAddress else { throw ManagedNodeKeyStoreError.pipeWriteFailed }
             var remaining = rawBuffer.count
             while remaining > 0 {
                 let count = Darwin.write(descriptor, address, remaining)

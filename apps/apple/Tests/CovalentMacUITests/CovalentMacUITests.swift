@@ -20,6 +20,26 @@ final class CovalentMacUITests: XCTestCase {
     /// is several times the largest transition that has ever been observed.
     private let uiTransitionTimeout: TimeInterval = 10
 
+    func testFirstLaunchChoiceCanSetUpAndRecoveryCancelLeavesChoiceVisible() throws {
+        let app = try launchApp(firstLaunch: true)
+        XCTAssertTrue(app.staticTexts["Set up this Mac"].waitForExistence(timeout: uiTransitionTimeout))
+        XCTAssertTrue(app.buttons["firstLaunch.setup"].isHittable)
+        XCTAssertTrue(app.buttons["firstLaunch.chooseKit"].isHittable)
+        XCTAssertTrue(app.buttons["firstLaunch.chooseCode"].isHittable)
+        XCTAssertFalse(app.buttons["firstLaunch.recover"].isEnabled)
+
+        // Cancelling before selection must not start a service or create an
+        // identity; the choice remains the only visible path.
+        app.buttons["firstLaunch.chooseKit"].click()
+        let cancel = app.buttons["Cancel"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: uiTransitionTimeout))
+        cancel.click()
+        XCTAssertTrue(app.staticTexts["Set up this Mac"].exists)
+
+        app.buttons["firstLaunch.setup"].click()
+        XCTAssertTrue(app.staticTexts["Apple UI Test Node is protected here"].waitForExistence(timeout: uiTransitionTimeout))
+    }
+
     func testTierOneNavigationAndPrimaryWorkflowsAreReachable() throws {
         let app = try launchApp()
         continueAfterFailure = false
@@ -348,7 +368,7 @@ final class CovalentMacUITests: XCTestCase {
         }
     }
 
-    private func launchApp() throws -> XCUIApplication {
+    private func launchApp(firstLaunch: Bool = false) throws -> XCUIApplication {
         let environment = ProcessInfo.processInfo.environment
         let app = XCUIApplication()
         let testBundle = Bundle(for: CovalentMacUITests.self)
@@ -358,6 +378,7 @@ final class CovalentMacUITests: XCTestCase {
             ?? testBundle.object(forInfoDictionaryKey: "CovalentUITestTokenFile") as? String
         app.launchEnvironment["COVALENT_UI_TEST_BASE_URL"] = "http://127.0.0.1:\(try XCTUnwrap(port))"
         app.launchEnvironment["COVALENT_UI_TEST_TOKEN_FILE"] = try XCTUnwrap(tokenFile)
+        if firstLaunch { app.launchEnvironment["COVALENT_UI_TEST_FIRST_LAUNCH"] = "1" }
         app.launch()
         return app
     }

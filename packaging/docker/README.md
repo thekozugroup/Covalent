@@ -73,7 +73,7 @@ The published v0.1.0 immutable GHCR digest predates this KEK contract and does n
 
 The image is rootless (`65532:65532`), has a read-only root filesystem, drops every Linux capability, enables `no-new-privileges`, and uses a `noexec,nosuid` temporary filesystem. `/data` is the durable encrypted engine state, identity, keys, and local API token. `/config` is sensitive Caddy state: it contains the local CA certificate and its signing key. Back it up with `/data`, but never treat the directory itself as a settings export or a source share.
 
-Compose deliberately fixes the runtime UID/GID at `65532:65532`: Docker Compose mounts file-backed secrets with host ownership, so a configurable `PUID` would make a `0400` KEK unreadable or tempt an unsafe permission change. Create `/config`, `/data`, and the KEK as `65532:65532`; the key file stays `0600` on the host and appears as `0400` in the container. `PUID` and `PGID` overrides are explicitly rejected at startup. `UMASK` accepts a three-digit octal value and defaults to `027`. For a different identity, use an explicit `docker run --user UID:GID` provisioning and runtime contract with a separately owner-readable KEK; do not override the supplied Compose service.
+Compose deliberately fixes the runtime UID/GID at `65532:65532`: Docker Compose mounts file-backed secrets with host ownership, so a configurable `PUID` would make an owner-only KEK unreadable or tempt an unsafe permission change. Create `/config`, `/data`, and the KEK as `65532:65532`; keep the key file `0600` on the host. The secret declaration requests `0400`, but local Compose bind mounts can retain the host's `0600` mode; the read-only mount still prevents writes. `PUID` and `PGID` overrides are explicitly rejected at startup. `UMASK` accepts a three-digit octal value and defaults to `027`. For a different identity, use an explicit `docker run --user UID:GID` provisioning and runtime contract with a separately owner-readable KEK; do not override the supplied Compose service.
 
 `COVALENT_BACKUP_SOURCE` mounts one selected directory at `/source` read-only. Set it to a specific share, never `/mnt/user`. `COVALENT_RESTORE_TARGET` is the only writable example bind mount and appears at `/restore`. Preview first, choose a conflict policy, then explicitly authorize the signed plan in the console or API.
 
@@ -161,6 +161,59 @@ This local-only test proves setup, not source-loss protection. Pair another
 device, explicitly enable it as a backup device, select it on a later backup,
 and Verify from Android or macOS. The complete success checklist is in
 [Back up your first folder](../../docs/getting-started.md#you-are-protected-when).
+
+## Replace a lost owner device
+
+Before a loss, open **Settings → Recover after losing this device** in the
+unlocked console. Explicitly create and download both files. Keep the recovery
+code separately, outside this server and its backup folders. A new backup or
+change to trusted devices requires a fresh pair. Recovery still needs an
+intact copy on an available, previously authorized backup device.
+
+For a replacement server, follow the directory preparation and KEK provisioning
+steps above using a **new, empty** host root. Stop before the ordinary
+`docker compose … up` step: that would create a new identity. Do not reuse or
+clear an existing installation's data. The replacement KEK protects the new
+installation; the separate recovery code unlocks the saved identity.
+
+Copy your two saved files into that new root's secrets directory. The recovery
+file contains raw encrypted bytes, not the API's JSON response. The code file
+contains its matching 43-character code, optionally with a final newline.
+Set the two source variables to the saved files before running:
+
+```sh
+: "${saved_recovery_kit:?Set the path to your saved .covalent-recovery file}"
+: "${saved_recovery_code:?Set the path to its separate .covalent-recovery-key file}"
+: "${covalent_host_root:?Set the newly prepared, empty replacement host root}"
+test ! -e "$covalent_host_root/secrets/owner.covalent-recovery"
+test ! -e "$covalent_host_root/secrets/owner.covalent-recovery-key"
+sudo install -o 65532 -g 65532 -m 600 "$saved_recovery_kit" \
+  "$covalent_host_root/secrets/owner.covalent-recovery"
+sudo install -o 65532 -g 65532 -m 600 "$saved_recovery_code" \
+  "$covalent_host_root/secrets/owner.covalent-recovery-key"
+export COVALENT_RECOVERY_KIT_FILE="$covalent_host_root/secrets/owner.covalent-recovery"
+export COVALENT_RECOVERY_KEY_FILE="$covalent_host_root/secrets/owner.covalent-recovery-key"
+docker compose -f packaging/docker/compose.yaml \
+  -f packaging/docker/compose.recovery.yaml up -d --no-build
+```
+
+The explicit recovery command restores only a fresh or matching interrupted
+recovery root. It refuses unrelated existing identity data. It uses the same
+TLS proxy and process supervision as normal startup. Claim this replacement
+server using a new claim output directory, then open **Settings → Check
+recovery progress**. Partial recovery means newer backups may still exist;
+bring the expected backup devices online and explicitly retry. Once a backup
+appears, use the ordinary named-backup restore preview and choose a new target.
+
+After successful bootstrap, stop this Compose service and start it with only
+`compose.yaml`. This keeps the recovered identity and durable progress while
+removing the recovery-file mounts from the running container. Keep the saved
+pair offline; never include it in a source share. A crash during bootstrap can
+be retried with the exact same pair; do not replace or erase the target state.
+
+This development workflow needs the current source build. The unpublished
+release and Atlas/Unraid hardware gates remain listed in the
+[completion plan](../../docs/release/completion-plan.md).
 
 ## LAN and Tailscale
 

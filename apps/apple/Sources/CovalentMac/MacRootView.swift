@@ -105,6 +105,8 @@ struct MacRootView: View {
                 }
             case .importSettings:
                 MacSettingsImportView(model: model)
+            case .firstLaunchSetup:
+                MacFirstLaunchRecoveryView(model: model)
             }
         }
         .sheet(

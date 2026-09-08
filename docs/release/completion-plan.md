@@ -10,10 +10,12 @@ connect their own devices, choose a folder, understand its protection state,
 and recover a file without learning internal identifiers or reading maintainer
 documentation. Reliability and recovery gates come before performance tuning.
 
-The current implementation is backup and restore. The request also describes
-Syncthing-like use; automatic two-way folder synchronization is a pending scope
-decision and must not be advertised as implemented. Existing backup tests do
-not prove synchronization, conflict convergence, or delete propagation.
+The current implementation is backup and restore. Given the requested
+Syncthing-like behavior, this completion goal assumes automatic two-way folder
+synchronization, safe conflict handling, and recoverable history are required.
+It must not be advertised as implemented until separately validated. Existing
+backup tests do not prove synchronization, conflict convergence, or delete
+propagation.
 
 Atmos is a separate Ubuntu test server, authorized through `ssh Atmos` for
 isolated temporary-folder validation. Passing an Atmos drill does not count
@@ -31,13 +33,13 @@ Close every known release-blocking finding; do not remove a gate to raise a scor
 
 | Area | Required evidence | Current state |
 | --- | --- | --- |
-| Product scope | Explicit backup/sync semantics and a matching acceptance scenario | Two-way sync decision pending |
-| Core correctness | Unit, property, adversarial, migration, concurrency, corruption, interrupted-job and source-loss tests; strict lint | Revised stability patch: 275 Rust tests passed, zero failed/ignored; format and strict Clippy passed. |
-| Owner-device loss | A user can export a protected recovery kit, replace a lost owner device, discover its authenticated catalogs, see partial availability, and restore | Release blocker: core recovery primitives exist, but no production CLI/API/native workflow invokes recovery bootstrap and catalog import. |
+| Product scope | Explicit backup/sync semantics and a matching acceptance scenario | Automatic two-way sync is required by the working interpretation of this goal; implementation and acceptance evidence remain outstanding. |
+| Core correctness | Unit, property, adversarial, migration, concurrency, corruption, interrupted-job and source-loss tests; strict lint | Recovery checkpoint: all 307 Rust tests across 22 suites passed, zero failed/ignored; strict workspace Clippy and 89 web tests passed. Hosted native and final artifact checks remain required. |
+| Owner-device loss | A user can export a protected recovery kit, replace a lost owner device, discover its authenticated catalogs, see partial availability, and restore | API, CLI/runtime, web and native recovery flows implemented in the working tree. Real owner-loss HTTP/QUIC restore and web-downloaded kit roundtrip pass. Native compilation/UI, final artifacts and large-catalog memory evidence remain required. |
 | Beginner workflow | Install → connect → choose folder → protect → verify → restore through real UI; clear errors and recovery; no manual IDs in ordinary flows | Real browser unlock, automatic snapshot/name defaults, named backup selection, preview invalidation, restore and Verify passed with disposable files. Preview now explains individual file actions and renamed conflict destinations instead of raw JSON. Full cross-device onboarding pending. |
-| macOS | Shared tests, live helper integration, native UI/accessibility, verified arm64 app package, install and upgrade | Full Xcode blocked on license acceptance; CLT-only tests lack the Testing module |
-| Android | JVM, instrumented SAF and process-death tests, TalkBack/large text, install and upgrade of stable personal artifact | Fresh SDK/JDK setup and device evidence pending |
-| Docker | Both CPU architectures; TLS and key-protection contracts; rootless/read-only runtime; bounded storage/memory; three-node recovery | Both image architectures and container runtime/e2e passed on checkpoint `1eaaae8`; repeat on final revision. |
+| macOS | Shared tests, live helper integration, native UI/accessibility, verified arm64 app package, install and upgrade | Hosted app, shared/integration and UI checks passed at `1d02192`. New recovery UI needs a fresh hosted run. Local Xcode license and CLT Testing limitations remain. |
+| Android | JVM, instrumented SAF and process-death tests, TalkBack/large text, install and upgrade of stable personal artifact | Foundation build/lint/JVM passed at `1d02192`; emulator ran 62 tests with five fixture-permission failures before product assertions. The fixture is corrected; recovery additions and the device lane need a new hosted run. |
+| Docker | Both CPU architectures; TLS and key-protection contracts; rootless/read-only runtime; bounded storage/memory; three-node recovery | Both image architectures and container runtime/e2e passed on checkpoint `1d02192`; repeat on final revision. |
 | Atmos network drill | Mac ↔ Ubuntu pairing, explicitly selected replica, interrupted/restarted operation, source-loss restore, exact hashes, cleanup | Passed with a 64 MiB incompressible payload: same-job pause/resume, provider container restart preserving identity, local source/cache loss, provider-only restore and exact content checks. Dedicated resources removed; pre-existing container/image IDs survived. See [drill evidence](atmos-drill-2026-09-07.md). |
 | Atlas/Unraid | Trusted preflight, exact-image install/upgrade, selected-share permissions, real backup/restore | Preflight strengthened and fixtures pass. A trusted-key read-only SSH attempt to Atlas timed out; actual host evidence pending. |
 | Security and supply chain | Dependency audits, CodeQL, immutable image scans/signatures/SBOMs, safe secret storage, exact release commit provenance | cargo-audit (289 dependencies, warnings denied) and cargo-deny advisories/bans/licenses/sources passed. Hosted and artifact evidence pending; current main signature is unknown_key and account has no registered signing key. |
@@ -93,7 +95,19 @@ packages, credentials, private server inventories, or raw diagnostic bundles.
   uses the AndroidX `toUri` extension; a fresh run is required.
 - Browser testing of the readable preview passed normal restore and renamed
   conflict explanations. It also reproduced a missing target folder reporting
-  a generic server error; the root error mapping is being corrected before release.
+  a generic server error; the error now maps to a clear invalid-folder response and passed a browser retest.
+
+- The third checkpoint `1d0219280dd06688ee062a08916716a86c0005d6`
+  passed Rust, both macOS lanes, both container architectures and Android
+  foundation. The emulator's five failing SAF tests could not reset their test
+  provider because of its MANAGE_DOCUMENTS protection; the fixture now adopts
+  that permission only around test setup/control and drops it in `finally`.
+- Recovery through the web console produced two real downloaded files. A fresh
+  disposable node recovered the original identity from those files; the exact
+  generated downloads and all temporary state were then removed.
+- [Recovery audit](core-audit-2026-09-07.md) records streaming memory limits,
+  crash-safe snapshot watermarks, runtime handoff repair and bounded shutdown.
+  These improvements still require final native and artifact evidence.
 
 ## Work order
 

@@ -55,6 +55,8 @@ struct IOSRootView: View {
                 }
             case .importSettings:
                 IOSSettingsImportView(model: model)
+            case .firstLaunchSetup:
+                EmptyView()
             }
         }
         .sheet(item: $model.restoreSetupRequest) { request in

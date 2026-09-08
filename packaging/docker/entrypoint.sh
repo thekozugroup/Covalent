@@ -18,9 +18,10 @@ esac
 
 # Provisioning a KEK is an explicit, one-time operator action. It does not need
 # the daemon mounts and must never accidentally start Caddy or generate state.
-if [ "${1:-serve}" != "serve" ]; then
-  exec covalent-node "$@"
-fi
+case "${1:-serve}" in
+  serve|recover) : ;; # Recovery also starts a long-lived, TLS-protected node.
+  *) exec covalent-node "$@" ;;
+esac
 
 for directory in "${COVALENT_CONFIG_DIR:-/config}" "${COVALENT_DATA_DIR:-/data}"; do
   if [ ! -d "$directory" ] || [ ! -w "$directory" ]; then

@@ -892,6 +892,68 @@ pub struct NodeStatus {
     pub state: String,
 }
 
+/// Durable progress of an explicitly started owner-loss recovery.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryPhase {
+    /// This state root was opened normally and has no recovery attempt.
+    NotConfigured,
+    /// The signed kit was restored, but provider catalogs have not been queried yet.
+    Pending,
+    /// Catalogs were imported and every configured provider answered cleanly.
+    Imported,
+    /// At least one authenticated catalog was imported with incomplete provider evidence.
+    Partial,
+    /// No catalog was imported because available authenticated evidence was unsafe or unusable.
+    Blocked,
+    /// Every configured provider answered, but none held a catalog for this owner.
+    NoCatalogs,
+}
+
+/// One backup recovered from an authenticated provider catalog.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecoveredBackupStatus {
+    /// Stable logical backup identifier.
+    pub backup_id: BackupId,
+    /// Authenticated snapshot selected by timestamp and stable identifier.
+    pub snapshot_id: String,
+    /// Exact providers that supplied an identical authenticated capsule.
+    pub source_provider_ids: BTreeSet<DeviceId>,
+}
+
+/// One non-secret provider failure retained for a recovery warning.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecoveryProviderFailure {
+    /// Provider that was unavailable or returned rejected evidence.
+    pub provider_id: DeviceId,
+    /// Affected snapshot identifier, when an authenticated request supplied one.
+    pub snapshot_id: Option<String>,
+    /// Stable non-secret failure category.
+    pub reason: String,
+}
+
+/// Secret-free owner-loss recovery status returned by the local management API.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecoveryStatus {
+    /// Active protocol version.
+    pub protocol_version: u16,
+    /// Conservative progress state for this recovery attempt.
+    pub phase: RecoveryPhase,
+    /// Authenticated snapshots committed by the most recent attempt.
+    pub recovered_backups: Vec<RecoveredBackupStatus>,
+    /// Providers from which a complete bounded listing was received.
+    pub queried_provider_ids: BTreeSet<DeviceId>,
+    /// Providers expected from the signed recovery kit.
+    pub configured_provider_ids: BTreeSet<DeviceId>,
+    /// Safe failure evidence from the most recent attempt.
+    pub failures: Vec<RecoveryProviderFailure>,
+    /// True whenever missing or rejected evidence means a newer snapshot may exist.
+    pub newer_snapshot_may_exist: bool,
+}
+
 /// Contract validation error.
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum ContractError {

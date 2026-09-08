@@ -117,6 +117,32 @@ import Testing
     #expect(Array(received.prefix(8)) == Array("CVSEC002".utf8))
 }
 
+@Test func recoveryPipeUsesDedicatedV3EnvelopeAndErasesEveryInput() throws {
+    var descriptors = [Int32](repeating: -1, count: 2)
+    #expect(Darwin.pipe(&descriptors) == 0)
+    defer {
+        Darwin.close(descriptors[0])
+        Darwin.close(descriptors[1])
+    }
+    var material = try ManagedNodeKeyMaterial(
+        currentVersion: 1,
+        keys: [(1, [UInt8](repeating: 0x33, count: 32))],
+        apiToken: testTokenBytes
+    )
+    var kit = Data("authenticated encrypted recovery kit".utf8)
+    var code = Data(String(repeating: "A", count: 43).utf8)
+    try material.writeRecoveryEnvelopeAndErase(kit: &kit, recoveryKey: &code, to: descriptors[1])
+    #expect(material.bytes.allSatisfy { $0 == 0 })
+    #expect(kit.isEmpty)
+    #expect(code.isEmpty)
+
+    var received = [UInt8](repeating: 0, count: 1_024)
+    let count = received.withUnsafeMutableBytes { Darwin.read(descriptors[0], $0.baseAddress, $0.count) }
+    #expect(count > 0)
+    #expect(Array(received.prefix(8)) == Array("CVSEC003".utf8))
+    #expect(!Array(received.prefix(Int(count))).starts(with: Array("CVSEC002".utf8)))
+}
+
 @Test func childExitBeforePipeHandoffCannotTerminateTheAppProcess() throws {
     let keyPipe = Pipe()
     let child = Process()
@@ -162,6 +188,9 @@ import Testing
     #expect(reconnect.lowerBound < keyLoad.lowerBound, "Crash adoption must not depend on a fresh Keychain read")
     #expect(manager.contains("process.standardInput = keyPipe"))
     #expect(manager.contains("\"--key-encryption-key-stdin\""))
+    #expect(manager.contains("writeRecoveryEnvelopeAndErase"))
+    #expect(!manager.contains("\"--recovery-kit-file\""))
+    #expect(!manager.contains("\"--recovery-key-file\""))
     #expect(manager.contains("keyMaterial.writeAndErase"))
     #expect(manager.contains("hasProtectedLocalSecret"))
     #expect(manager.contains("keyStore.loadExisting()"))

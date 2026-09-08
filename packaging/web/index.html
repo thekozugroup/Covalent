@@ -12,6 +12,7 @@
     <script src="/assets/backup-terminal-flow.js" defer></script>
     <script src="/assets/backup-verification-flow.js" defer></script>
     <script src="/assets/backup-selection-flow.js" defer></script>
+    <script src="/assets/recovery-flow.js" defer></script>
     <script src="/assets/tab-flow.js" defer></script>
     <script src="/assets/app.js" defer></script>
   </head>
@@ -185,6 +186,32 @@
 
       <section id="settings-panel" role="tabpanel" aria-labelledby="settings-tab" tabindex="0" data-panel="settings" hidden>
         <div class="panel-heading"><div><h2>Settings and reachability</h2><p class="muted">LAN discovery is <strong data-discovery>Unknown</strong>. It can remain off when you use explicit LAN addresses or Tailscale; neither method bypasses pairing.</p></div></div>
+        <section class="card" aria-labelledby="recovery-heading">
+          <h3 id="recovery-heading">Recover after losing this device</h3>
+          <p>Save a recovery file and its separate recovery code somewhere safe, away from this backup server. You need both to recover its identity and find backups on your other devices. Anyone with both can access those backups.</p>
+          <p class="muted">Create a fresh pair after adding backups or changing trusted devices. Safe settings alone cannot recover your files.</p>
+          <form data-recovery-export>
+            <label class="confirmation"><input type="checkbox" name="confirmed" required /> I want to create recovery files and will keep both safe.</label>
+            <button data-recovery-create>Create recovery files</button>
+          </form>
+          <div data-recovery-downloads hidden>
+            <p data-recovery-save-status aria-live="polite">Preparing recovery files…</p>
+            <div class="button-row">
+              <button type="button" data-recovery-kit disabled>Save recovery file</button>
+              <button type="button" data-recovery-code disabled>Save recovery code</button>
+              <button type="button" data-recovery-close>Close and discard this copy</button>
+            </div>
+            <p class="muted">Check that both downloads finished before closing. Keep the code separately from the recovery file. This tab does not remember them after you close it.</p>
+          </div>
+          <h4>Last recovery attempt</h4>
+          <p data-recovery-status>Unlock the console, then check recovery progress.</p>
+          <p data-recovery-warning role="status" hidden></p>
+          <button type="button" data-recovery-refresh>Check recovery progress</button>
+          <form data-recovery-retry hidden>
+            <label class="confirmation"><input type="checkbox" name="confirmed" required /> Check my backup devices again for recoverable backups.</label>
+            <button>Retry recovery</button>
+          </form>
+        </section>
         <div class="two-column">
           <section class="card"><h3>Export safe settings</h3><p class="muted">Exports name, discovery preference, and remembered backups. It excludes identity keys, backup keys, grants, and provider credentials.</p><button type="button" data-settings-export>Download settings</button></section>
           <form class="card" data-settings-import><h3>Import safe settings</h3><label>Settings JSON <textarea name="settings" rows="5" required></textarea></label><label class="confirmation"><input type="checkbox" name="confirmed" required /> I understand this replaces safe settings, not identity keys.</label><button>Import settings</button></form>

@@ -71,6 +71,8 @@ require_text 'OpenSSL libraries are upgraded to the exact signed Alpine security
 require_text '`linux/amd64` and `linux/arm64`' "$documentation"
 require_text 'COVALENT_KEY_ENCRYPTION_KEY_FILE:=/run/secrets/covalent-kek' "$entrypoint"
 require_text 'Covalent never generates a replacement KEK' "$entrypoint"
+require_text 'serve|recover)' "$entrypoint"
+python3 "$repo_root/scripts/test-container-entrypoint.py"
 require_text 'COVALENT_KEY_ENCRYPTION_KEY_FILE: /run/secrets/covalent-kek' "$compose"
 require_text 'COVALENT_ADVERTISED_PEER_ADDRESS: "${COVALENT_ADVERTISED_PEER_ADDRESS:-}"' "$compose"
 require_text '${COVALENT_HTTPS_BIND_IP:-127.0.0.1}:${COVALENT_HTTPS_PORT:-8443}:8443/tcp' "$compose"

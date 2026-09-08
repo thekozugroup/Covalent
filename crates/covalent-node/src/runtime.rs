@@ -6,21 +6,26 @@
 //! call [`NodeRuntime::stop`] or let the handle drop.
 
 use std::fmt;
+use std::fs::File;
+use std::io::Read as _;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
-use covalent_core::{Engine, EngineOptions, KeyProtector, ProviderQuotaPolicy, RecoveryUnlockKey};
+use covalent_core::{
+    CoreError, Engine, EngineOptions, KeyProtector, ProviderQuotaPolicy, RecoveryUnlockKey,
+};
 use covalent_protocol::PlatformTier;
 use tokio::sync::{Mutex, watch};
-use tracing::info;
+use tracing::{info, warn};
 use zeroize::Zeroizing;
 
 use crate::advertised_address;
 use crate::discovery::DiscoveryController;
 use crate::first_run_claim::{self, ClaimCode, FirstRunClaim};
 use crate::pairing_transport::NetworkPairingService;
+use crate::recovery_state::RecoveryStateStore;
 use crate::transport::{QuicNode, TlsIdentity};
 use crate::{
     AppState, ArchiveLimits, NodeReadyInfo, load_or_create_local_api_token, remove_node_ready_file,
@@ -46,9 +51,93 @@ pub enum LocalApiTokenSource {
 /// Explicit owner-loss input consumed only while creating a fresh state root.
 pub struct RecoveryBootstrap {
     /// Stable signed recovery kit bytes.
-    pub kit: Vec<u8>,
+    pub kit: Zeroizing<Vec<u8>>,
     /// High-entropy secret held outside the lost node state.
     pub unlock: RecoveryUnlockKey,
+}
+
+const MAX_RECOVERY_KIT_FILE_BYTES: u64 = 16 * 1_024 * 1_024;
+
+/// Loads the canonical raw kit and base64url key files without following symlinks.
+///
+/// Both files must be owner-only regular files on Unix. The kit file contains decoded
+/// serialized kit bytes, while the key file contains exactly the printable 256-bit key.
+pub fn load_recovery_bootstrap_files(
+    kit_path: &Path,
+    key_path: &Path,
+) -> std::result::Result<RecoveryBootstrap, CoreError> {
+    let kit = read_private_recovery_file(kit_path, MAX_RECOVERY_KIT_FILE_BYTES, "recovery kit")?;
+    let key = read_private_recovery_file(key_path, 512, "recovery key")?;
+    let key_text = std::str::from_utf8(key.as_ref()).map_err(|_| CoreError::InvalidKeyMaterial)?;
+    let unlock = RecoveryUnlockKey::from_base64(key_text.trim())?;
+    Ok(RecoveryBootstrap { kit, unlock })
+}
+
+fn read_private_recovery_file(
+    path: &Path,
+    maximum: u64,
+    label: &'static str,
+) -> std::result::Result<Zeroizing<Vec<u8>>, CoreError> {
+    #[cfg(unix)]
+    let (file, length) = {
+        use rustix::fs::{FileType, Mode, OFlags, fstat, open};
+        let descriptor = open(
+            path,
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::empty(),
+        )
+        .map_err(|error| CoreError::Io {
+            operation: "open private recovery file without following links",
+            path: path.to_path_buf(),
+            source: std::io::Error::from_raw_os_error(error.raw_os_error()),
+        })?;
+        let stat = fstat(&descriptor).map_err(|error| CoreError::Io {
+            operation: "inspect open private recovery file",
+            path: path.to_path_buf(),
+            source: std::io::Error::from_raw_os_error(error.raw_os_error()),
+        })?;
+        if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
+            || stat.st_mode & 0o077 != 0
+            || stat.st_size < 0
+            || stat.st_size as u64 > maximum
+        {
+            return Err(CoreError::InvalidState(format!(
+                "{label} must be an owner-only regular file no larger than {maximum} bytes"
+            )));
+        }
+        (File::from(descriptor), stat.st_size as u64)
+    };
+    #[cfg(not(unix))]
+    let (file, length) = {
+        let metadata = std::fs::symlink_metadata(path).map_err(|source| CoreError::Io {
+            operation: "inspect private recovery file",
+            path: path.to_path_buf(),
+            source,
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > maximum {
+            return Err(CoreError::InvalidState(format!(
+                "{label} must be a regular file no larger than {maximum} bytes"
+            )));
+        }
+        let file = File::open(path).map_err(|source| CoreError::Io {
+            operation: "open private recovery file",
+            path: path.to_path_buf(),
+            source,
+        })?;
+        (file, metadata.len())
+    };
+    let mut bytes = Zeroizing::new(Vec::with_capacity(length as usize));
+    file.take(maximum.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|source| CoreError::Io {
+            operation: "read private recovery file",
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if bytes.len() as u64 > maximum {
+        return Err(CoreError::ResourceLimit(label));
+    }
+    Ok(bytes)
 }
 
 /// A local API secret that can only be borrowed by the node-owning process.
@@ -185,6 +274,7 @@ impl NodeRuntimeReadyInfo {
 }
 
 struct RuntimeControl {
+    recovery: Arc<RecoveryStateStore>,
     shutdown: watch::Sender<bool>,
     completion: Mutex<Option<tokio::task::JoinHandle<Result<()>>>>,
 }
@@ -244,17 +334,33 @@ impl NodeRuntime {
         let recovered = recovery.is_some();
         let engine = Arc::new(match recovery {
             Some(recovery) => {
-                Engine::recover_from_kit(engine_options, &recovery.kit, &recovery.unlock)
+                Engine::recover_from_kit(engine_options, recovery.kit.as_ref(), &recovery.unlock)
                     .context("recover Covalent engine")?
             }
             None => Engine::open(engine_options).context("open Covalent engine")?,
         });
-        if recovered {
+        let recovery_state = Arc::new(
+            RecoveryStateStore::open(data_directory.join("recovery-state.json"))
+                .context("open recovery progress")?,
+        );
+        // The marker is published atomically with the recovered identity. A normal
+        // restart repairs this handoff if the process stopped before runtime setup.
+        let bootstrap_pending = engine.config()?.recovery_bootstrap_pending
+            || (recovered
+                && recovery_state.status()?.phase
+                    == covalent_protocol::RecoveryPhase::NotConfigured);
+        if bootstrap_pending {
             persist_recovered_provider_connections(
                 &engine,
                 &data_directory.join("provider-connections.json"),
             )
             .context("restore signed provider transports")?;
+            recovery_state
+                .begin(&engine)
+                .context("record pending catalog recovery")?;
+            engine
+                .acknowledge_recovery_bootstrap()
+                .context("complete runtime recovery handoff")?;
         }
         let token_path = data_directory.join("local-api-token");
         // Commit the explicit unclaimed/claimed lifecycle before token loading
@@ -342,6 +448,11 @@ impl NodeRuntime {
             .with_discovery_controller(Arc::clone(&discovery))
             .with_provider_state(data_directory.join("provider-connections.json"))
             .context("load remembered provider connections")?;
+        let startup_recovery = recovery_state
+            .should_retry()
+            .context("inspect recovery progress")?
+            .then(|| (Arc::clone(&recovery_state), Arc::clone(&engine)));
+        state = state.with_recovery_state(Arc::clone(&recovery_state));
         if let Some(address) = static_advertised_peer_address {
             state = state.with_peer_address(address);
         }
@@ -379,6 +490,7 @@ impl NodeRuntime {
         let runtime_token = RuntimeApiToken::new(api_token);
         let task_ready_file = ready_file.clone();
         let supervisor_shutdown = shutdown.clone();
+        let supervisor_recovery = Arc::clone(&recovery_state);
         let completion = tokio::spawn(async move {
             supervise_runtime(
                 listener,
@@ -387,7 +499,11 @@ impl NodeRuntime {
                 discovery,
                 shutdown_receiver,
                 supervisor_shutdown,
-                task_ready_file,
+                SupervisorStartup {
+                    ready_file: task_ready_file,
+                    recovery: startup_recovery,
+                    recovery_control: supervisor_recovery,
+                },
             )
             .await
         });
@@ -401,6 +517,7 @@ impl NodeRuntime {
                 api_token: runtime_token,
             },
             control: Arc::new(RuntimeControl {
+                recovery: recovery_state,
                 shutdown,
                 completion: Mutex::new(Some(completion)),
             }),
@@ -418,6 +535,7 @@ impl NodeRuntime {
     /// Repeated calls are safe.  The first caller owns the completion result;
     /// later calls observe that shutdown has already been requested.
     pub async fn stop(&self) -> Result<()> {
+        self.control.recovery.cancel();
         let _ = self.control.shutdown.send(true);
         let completion = self.control.completion.lock().await.take();
         match completion {
@@ -429,8 +547,15 @@ impl NodeRuntime {
 
 impl Drop for NodeRuntime {
     fn drop(&mut self) {
+        self.control.recovery.cancel();
         let _ = self.control.shutdown.send(true);
     }
+}
+
+struct SupervisorStartup {
+    recovery_control: Arc<RecoveryStateStore>,
+    ready_file: Option<PathBuf>,
+    recovery: Option<(Arc<RecoveryStateStore>, Arc<Engine>)>,
 }
 
 async fn supervise_runtime(
@@ -440,7 +565,7 @@ async fn supervise_runtime(
     discovery: Arc<DiscoveryController>,
     shutdown: watch::Receiver<bool>,
     shutdown_sender: watch::Sender<bool>,
-    ready_file: Option<PathBuf>,
+    startup: SupervisorStartup,
 ) -> Result<()> {
     let mut http_task = tokio::spawn(async move {
         axum::serve(listener, router(state))
@@ -450,23 +575,36 @@ async fn supervise_runtime(
     });
     let quic_shutdown = quic_node.shutdown_handle();
     let mut quic_task = tokio::spawn(quic_node.run());
+    let recovery_task = startup
+        .recovery
+        .map(|(store, engine)| tokio::task::spawn_blocking(move || store.retry(&engine)));
 
     let result = tokio::select! {
         result = &mut http_task => {
-            let result = result.context("join local API task")?;
+            startup.recovery_control.cancel();
+            let result = result.context("join local API task").and_then(|result| result);
             quic_shutdown.close();
-            quic_task.await.context("join QUIC peer task")?;
-            result
+            let quic_result = quic_task.await.context("join QUIC peer task");
+            result.and(quic_result)
         },
         result = &mut quic_task => {
-            result.context("join QUIC peer task")?;
+            startup.recovery_control.cancel();
+            let quic_result = result.context("join QUIC peer task");
             let _ = shutdown_sender.send(true);
-            http_task.await.context("join local API task")?
+            let http_result = http_task.await.context("join local API task").and_then(|result| result);
+            quic_result.and(http_result)
         }
     };
 
     let discovery_result = discovery.set_enabled(false).context("stop LAN discovery");
-    let readiness_result = match ready_file {
+    if let Some(task) = recovery_task {
+        match task.await {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => warn!(%error, "provider catalog recovery remains pending"),
+            Err(error) => warn!(%error, "provider catalog recovery worker failed"),
+        }
+    }
+    let readiness_result = match startup.ready_file {
         Some(path) => {
             remove_node_ready_file(&path, std::process::id()).context("remove node readiness")
         }
@@ -614,6 +752,7 @@ mod tests {
     use sha2::{Digest as _, Sha256};
     use tempfile::TempDir;
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    use zeroize::Zeroizing;
 
     use super::{NodeRuntime, NodeRuntimeConfig, RecoveryBootstrap};
 
@@ -898,7 +1037,10 @@ mod tests {
         let mut configuration =
             NodeRuntimeConfig::new(&recovered_path, loopback_zero(), loopback_zero());
         configuration.key_protector = Some(protector());
-        configuration.recovery = Some(RecoveryBootstrap { kit, unlock });
+        configuration.recovery = Some(RecoveryBootstrap {
+            kit: Zeroizing::new(kit),
+            unlock,
+        });
         let runtime = NodeRuntime::start(configuration)
             .await
             .expect("recover node runtime");
@@ -926,6 +1068,29 @@ mod tests {
         assert_eq!(tls["schemaVersion"], 2);
         assert!(tls.get("privateKeyDer").is_none());
         assert!(tls.get("protectedPrivateKey").is_some());
+        let recovery_status = request(
+            runtime.ready_info().api_address(),
+            &format!(
+                "GET /api/v1/recovery/status HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {}\r\nConnection: close\r\n\r\n",
+                runtime.ready_info().api_token().expose()
+            ),
+        )
+        .await;
+        assert!(recovery_status.contains(" 200 "), "{recovery_status}");
+        assert!(recovery_status.contains("\"phase\":"), "{recovery_status}");
         runtime.stop().await.expect("stop recovered runtime");
+        let durable_recovery: serde_json::Value = serde_json::from_slice(
+            &fs::read(recovered_path.join("recovery-state.json")).expect("recovery state"),
+        )
+        .expect("recovery JSON");
+        assert_eq!(durable_recovery["schemaVersion"], 1);
+        assert_eq!(durable_recovery["status"]["phase"], "blocked");
+        assert_eq!(
+            durable_recovery["status"]["configuredProviderIds"],
+            serde_json::json!([provider_id])
+        );
+        let encoded = serde_json::to_string(&durable_recovery).expect("serialize status");
+        assert!(!encoded.contains("recoveryKey"));
+        assert!(!encoded.contains("recoveryKit"));
     }
 }

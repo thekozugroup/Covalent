@@ -4,11 +4,21 @@ import SwiftUI
 @main
 struct CovalentMacApp: App {
     @StateObject private var model: CovalentAppModel
-    private let localNodeManager: LocalNodeManager?
+    private let localNodeManager: (any LocalNodeBootstrapping)?
 
     init() {
         let isUITest = ProcessInfo.processInfo.environment["COVALENT_UI_TEST_BASE_URL"] != nil
-        let manager = isUITest ? nil : LocalNodeManager()
+        let manager: (any LocalNodeBootstrapping)?
+        #if DEBUG
+        if isUITest,
+           ProcessInfo.processInfo.environment["COVALENT_UI_TEST_FIRST_LAUNCH"] == "1" {
+            manager = FirstLaunchUITestBootstrapper()
+        } else {
+            manager = isUITest ? nil : LocalNodeManager()
+        }
+        #else
+        manager = isUITest ? nil : LocalNodeManager()
+        #endif
         localNodeManager = manager
         _model = StateObject(wrappedValue: CovalentAppModel(localNodeBootstrapper: manager))
     }
@@ -105,6 +115,24 @@ struct CovalentMacApp: App {
         }
     }
 }
+
+#if DEBUG
+@MainActor
+private final class FirstLaunchUITestBootstrapper: LocalNodeBootstrapping {
+    func startupDisposition() throws -> LocalNodeStartupDisposition { .needsFirstLaunchChoice }
+
+    func start(mode: LocalNodeStartupMode) async throws -> NodeConnectionConfiguration {
+        let environment = ProcessInfo.processInfo.environment
+        guard let address = environment["COVALENT_UI_TEST_BASE_URL"],
+              let url = URL(string: address),
+              let tokenFile = environment["COVALENT_UI_TEST_TOKEN_FILE"]
+        else { throw CocoaError(.fileNoSuchFile) }
+        let token = try String(contentsOfFile: tokenFile, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return try NodeConnectionConfiguration(baseURL: url, apiToken: token)
+    }
+}
+#endif
 
 private struct MacMenuBarMenu: View {
     @ObservedObject var model: CovalentAppModel

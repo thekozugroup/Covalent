@@ -35,6 +35,179 @@ import Testing
     #expect(settings.deviceName == "Home Mac")
 }
 
+@Test func recoveryKitExportUsesExplicitConfirmationAndDecodesRawKit() async throws {
+    let token = String(repeating: "r", count: 32)
+    let rawKit = Data("encrypted-kit-bytes".utf8)
+    let recoveryKey = Data(repeating: 0x42, count: 32)
+        .base64EncodedString()
+        .replacingOccurrences(of: "+", with: "-")
+        .replacingOccurrences(of: "/", with: "_")
+        .replacingOccurrences(of: "=", with: "")
+    let recorder = RequestRecorder { request in
+        #expect(request.url?.path == "/api/v1/recovery/kit")
+        #expect(request.httpMethod == "POST")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(token)")
+        let body = try #require(requestBody(request))
+        let payload = try #require(JSONSerialization.jsonObject(with: body) as? [String: Bool])
+        #expect(payload == ["confirmed": true])
+        return TestResponse.response(
+            request,
+            status: 200,
+            json: #"{"protocolVersion":1,"recoveryKit":"\#(rawKit.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: ""))","recoveryKey":"\#(recoveryKey)"}"#
+        )
+    }
+    let exported = try await makeClient(recorder: recorder, token: token).exportRecoveryKit(confirmed: true)
+    #expect(exported.kit == rawKit)
+    #expect(exported.recoveryKey == Data(recoveryKey.utf8))
+}
+
+@Test func recoveryStatusAndRetryUseStableSecretFreeContract() async throws {
+    let token = String(repeating: "s", count: 32)
+    let provider = UUID()
+    let backup = UUID()
+    let sequence = RequestSequence()
+    let status = #"{"protocolVersion":1,"phase":"partial","recoveredBackups":[{"backupId":"\#(backup.uuidString.lowercased())","snapshotId":"s-1","sourceProviderIds":["\#(provider.uuidString.lowercased())"]}],"queriedProviderIds":["\#(provider.uuidString.lowercased())"],"configuredProviderIds":["\#(provider.uuidString.lowercased())"],"failures":[],"newerSnapshotMayExist":true}"#
+    let recorder = RequestRecorder(removeAfterRequest: false) { request in
+        switch sequence.next() {
+        case 0:
+            #expect(request.url?.path == "/api/v1/recovery/status")
+            #expect(request.httpMethod == "GET")
+            return TestResponse.response(request, status: 200, json: status)
+        case 1:
+            #expect(request.url?.path == "/api/v1/recovery/retry")
+            #expect(request.httpMethod == "POST")
+            let body = try #require(requestBody(request))
+            let payload = try #require(JSONSerialization.jsonObject(with: body) as? [String: Bool])
+            #expect(payload == ["confirmed": true])
+            return TestResponse.response(request, status: 200, json: status)
+        default:
+            Issue.record("Unexpected recovery request")
+            return TestResponse.response(request, status: 500, json: "{}")
+        }
+    }
+    let client = try makeClient(recorder: recorder, token: token)
+    #expect(try await client.recoveryStatus().phase == .partial)
+    #expect(try await client.retryRecovery(confirmed: true).recoveredBackups.count == 1)
+}
+
+@Test func recoveryStatusRejectsContradictoryOrDuplicateProviderEvidence() async throws {
+    let token = String(repeating: "q", count: 32)
+    let provider = UUID().uuidString.lowercased()
+    let response = "{\"protocolVersion\":1,\"phase\":\"imported\",\"recoveredBackups\":[],\"queriedProviderIds\":[\"\(provider)\",\"\(provider)\"],\"configuredProviderIds\":[\"\(provider)\"],\"failures\":[],\"newerSnapshotMayExist\":true}"
+    let recorder = RequestRecorder { request in
+        TestResponse.response(
+            request,
+            status: 200,
+            json: response
+        )
+    }
+    await #expect(throws: NodeClientError.invalidResponse) {
+        _ = try await makeClient(recorder: recorder, token: token).recoveryStatus()
+    }
+}
+
+@Test func recoveryStatusRejectsForeignAndDuplicateBackupSources() async throws {
+    let token = String(repeating: "f", count: 32)
+    let configured = UUID().uuidString.lowercased()
+    let foreign = UUID().uuidString.lowercased()
+    let backup = UUID().uuidString.lowercased()
+    let responses = [
+        "{\"protocolVersion\":1,\"phase\":\"partial\",\"recoveredBackups\":[{\"backupId\":\"\(backup)\",\"snapshotId\":\"snapshot-1\",\"sourceProviderIds\":[\"\(foreign)\"]}],\"queriedProviderIds\":[\"\(configured)\"],\"configuredProviderIds\":[\"\(configured)\"],\"failures\":[],\"newerSnapshotMayExist\":true}",
+        "{\"protocolVersion\":1,\"phase\":\"partial\",\"recoveredBackups\":[{\"backupId\":\"\(backup)\",\"snapshotId\":\"snapshot-1\",\"sourceProviderIds\":[\"\(configured)\",\"\(configured)\"]}],\"queriedProviderIds\":[\"\(configured)\"],\"configuredProviderIds\":[\"\(configured)\"],\"failures\":[],\"newerSnapshotMayExist\":true}"
+    ]
+    for response in responses {
+        let recorder = RequestRecorder { request in
+            TestResponse.response(request, status: 200, json: response)
+        }
+        await #expect(throws: NodeClientError.invalidResponse) {
+            _ = try await makeClient(recorder: recorder, token: token).recoveryStatus()
+        }
+    }
+}
+
+@Test func recoveryStatusRejectsContradictoryPhaseShapesAndInvalidFailureReasons() async throws {
+    let token = String(repeating: "c", count: 32)
+    let provider = UUID().uuidString.lowercased()
+    let backup = UUID().uuidString.lowercased()
+    let recovered = "{\"backupId\":\"\(backup)\",\"snapshotId\":\"snapshot-1\",\"sourceProviderIds\":[\"\(provider)\"]}"
+    let responses = [
+        "{\"protocolVersion\":1,\"phase\":\"imported\",\"recoveredBackups\":[],\"queriedProviderIds\":[\"\(provider)\"],\"configuredProviderIds\":[\"\(provider)\"],\"failures\":[],\"newerSnapshotMayExist\":false}",
+        "{\"protocolVersion\":1,\"phase\":\"no_catalogs\",\"recoveredBackups\":[\(recovered)],\"queriedProviderIds\":[\"\(provider)\"],\"configuredProviderIds\":[\"\(provider)\"],\"failures\":[],\"newerSnapshotMayExist\":false}",
+        "{\"protocolVersion\":1,\"phase\":\"partial\",\"recoveredBackups\":[],\"queriedProviderIds\":[],\"configuredProviderIds\":[\"\(provider)\"],\"failures\":[],\"newerSnapshotMayExist\":true}",
+        "{\"protocolVersion\":1,\"phase\":\"blocked\",\"recoveredBackups\":[\(recovered)],\"queriedProviderIds\":[],\"configuredProviderIds\":[\"\(provider)\"],\"failures\":[],\"newerSnapshotMayExist\":true}",
+        "{\"protocolVersion\":1,\"phase\":\"pending\",\"recoveredBackups\":[],\"queriedProviderIds\":[],\"configuredProviderIds\":[\"\(provider)\"],\"failures\":[],\"newerSnapshotMayExist\":false}",
+        "{\"protocolVersion\":1,\"phase\":\"not_configured\",\"recoveredBackups\":[],\"queriedProviderIds\":[],\"configuredProviderIds\":[\"\(provider)\"],\"failures\":[],\"newerSnapshotMayExist\":false}",
+        "{\"protocolVersion\":1,\"phase\":\"blocked\",\"recoveredBackups\":[],\"queriedProviderIds\":[],\"configuredProviderIds\":[\"\(provider)\"],\"failures\":[{\"providerId\":\"\(provider)\",\"snapshotId\":null,\"reason\":\"Uppercase_Reason\"}],\"newerSnapshotMayExist\":true}"
+    ]
+    for response in responses {
+        let recorder = RequestRecorder { request in
+            TestResponse.response(request, status: 200, json: response)
+        }
+        await #expect(throws: NodeClientError.invalidResponse) {
+            _ = try await makeClient(recorder: recorder, token: token).recoveryStatus()
+        }
+    }
+}
+
+@Test func recoveryStatusAllowsPartialSourceThatFailedAfterDeliveringCapsules() async throws {
+    let token = String(repeating: "v", count: 32)
+    let source = UUID()
+    let queried = UUID()
+    let backup = UUID()
+    let response = #"{"protocolVersion":1,"phase":"partial","recoveredBackups":[{"backupId":"\#(backup.uuidString.lowercased())","snapshotId":"snapshot-1","sourceProviderIds":["\#(source.uuidString.lowercased())"]}],"queriedProviderIds":["\#(queried.uuidString.lowercased())"],"configuredProviderIds":["\#(source.uuidString.lowercased())","\#(queried.uuidString.lowercased())"],"failures":[{"providerId":"\#(source.uuidString.lowercased())","snapshotId":null,"reason":"recovery_catalog_transport"}],"newerSnapshotMayExist":true}"#
+    let recorder = RequestRecorder { request in
+        TestResponse.response(request, status: 200, json: response)
+    }
+    let status = try await makeClient(recorder: recorder, token: token).recoveryStatus()
+    #expect(status.phase == .partial)
+    #expect(status.recoveredBackups.first?.sourceProviderIds == Set([source]))
+    #expect(status.queriedProviderIds == Set([queried]))
+    #expect(status.failures.first?.providerId == source)
+}
+
+@Test func recoveryStatusRejectsOversizedDeclaredResponseBeforeDecoding() async throws {
+    let token = String(repeating: "o", count: 32)
+    let stopped = RequestSequence()
+    let recorder = RequestRecorder(
+        removeAfterRequest: false,
+        streamChunkBytes: 64 * 1_024,
+        onStop: { _ = stopped.next() }
+    ) { request in
+        TestResponse.data(
+            request,
+            status: 200,
+            body: Data(repeating: 0x20, count: 1_024 * 1_024),
+            headers: ["Content-Length": "25165825"]
+        )
+    }
+    await #expect(throws: NodeClientError.invalidResponse) {
+        _ = try await makeClient(recorder: recorder, token: token).recoveryStatus()
+    }
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(stopped.count > 0)
+}
+
+@Test func recoveryStatusCancelsChunkedResponseAtReceiveLimit() async throws {
+    let token = String(repeating: "x", count: 32)
+    let stopped = RequestSequence()
+    let recorder = RequestRecorder(
+        removeAfterRequest: false,
+        streamChunkBytes: 64 * 1_024,
+        onStop: { _ = stopped.next() }
+    ) { request in
+        TestResponse.data(
+            request,
+            status: 200,
+            body: Data(repeating: 0x20, count: 24 * 1_024 * 1_024 + 1)
+        )
+    }
+    await #expect(throws: NodeClientError.invalidResponse) {
+        _ = try await makeClient(recorder: recorder, token: token).recoveryStatus()
+    }
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(stopped.count > 0)
+}
+
 @Test func networkPairingUsesOneStepSASContract() async throws {
     let token = String(repeating: "9", count: 32)
     let peerId = UUID()
@@ -1988,13 +2161,19 @@ private func requestBody(_ request: URLRequest) -> Data? {
 
 private struct RequestRecorder: @unchecked Sendable {
     let removeAfterRequest: Bool
+    let streamChunkBytes: Int?
+    let onStop: (@Sendable () -> Void)?
     let handler: (URLRequest) throws -> (HTTPURLResponse, Data)
 
     init(
         removeAfterRequest: Bool = true,
+        streamChunkBytes: Int? = nil,
+        onStop: (@Sendable () -> Void)? = nil,
         handler: @escaping (URLRequest) throws -> (HTTPURLResponse, Data)
     ) {
         self.removeAfterRequest = removeAfterRequest
+        self.streamChunkBytes = streamChunkBytes
+        self.onStop = onStop
         self.handler = handler
     }
 }
@@ -2046,6 +2225,9 @@ private final class RecorderBox: @unchecked Sendable {
 
 private final class RecordingURLProtocol: URLProtocol, @unchecked Sendable {
     static let recorder = RecorderBox()
+    private let stateLock = NSLock()
+    private var stopped = false
+    private var activeRecorder: RequestRecorder?
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -2055,19 +2237,44 @@ private final class RecordingURLProtocol: URLProtocol, @unchecked Sendable {
             client?.urlProtocol(self, didFailWithError: NodeClientError.invalidResponse)
             return
         }
+        stateLock.withLock { activeRecorder = recorder }
         do {
             let (response, data) = try recorder.handler(request)
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: data)
-            client?.urlProtocolDidFinishLoading(self)
-            if recorder.removeAfterRequest { Self.recorder.remove(for: request) }
+            if let chunkBytes = recorder.streamChunkBytes {
+                precondition(chunkBytes > 0)
+                DispatchQueue.global().async { [weak self] in
+                    guard let self else { return }
+                    var offset = 0
+                    while offset < data.count {
+                        if self.stateLock.withLock({ self.stopped }) { return }
+                        let end = min(offset + chunkBytes, data.count)
+                        self.client?.urlProtocol(self, didLoad: data.subdata(in: offset..<end))
+                        offset = end
+                        Thread.sleep(forTimeInterval: 0.001)
+                    }
+                    if self.stateLock.withLock({ self.stopped }) { return }
+                    self.client?.urlProtocolDidFinishLoading(self)
+                    if recorder.removeAfterRequest { Self.recorder.remove(for: self.request) }
+                }
+            } else {
+                client?.urlProtocol(self, didLoad: data)
+                client?.urlProtocolDidFinishLoading(self)
+                if recorder.removeAfterRequest { Self.recorder.remove(for: request) }
+            }
         } catch {
             client?.urlProtocol(self, didFailWithError: error)
             if recorder.removeAfterRequest { Self.recorder.remove(for: request) }
         }
     }
 
-    override func stopLoading() {}
+    override func stopLoading() {
+        let recorder = stateLock.withLock { () -> RequestRecorder? in
+            stopped = true
+            return activeRecorder
+        }
+        recorder?.onStop?()
+    }
 }
 
 private enum TestResponse {

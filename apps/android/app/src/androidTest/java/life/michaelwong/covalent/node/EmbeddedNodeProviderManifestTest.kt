@@ -11,6 +11,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import life.michaelwong.covalent.data.SecureNodeStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 
 /** API 37 contract checks for the explicit, user-stoppable provider service. */
@@ -62,10 +63,13 @@ class EmbeddedNodeProviderManifestTest {
     @Test
     fun providerStartAndStopUseExplicitServiceActions() {
         val start = Intent(context, NodeProviderService::class.java).setAction(NodeProviderService.ACTION_START)
+        val recover = Intent(context, NodeProviderService::class.java).setAction(NodeProviderService.ACTION_RECOVER)
         val stop = Intent(context, NodeProviderService::class.java).setAction(NodeProviderService.ACTION_STOP)
         assertEquals(NodeProviderService.ACTION_START, start.action)
+        assertEquals(NodeProviderService.ACTION_RECOVER, recover.action)
         assertEquals(NodeProviderService.ACTION_STOP, stop.action)
         assertEquals(ComponentName(context, NodeProviderService::class.java), start.component)
+        assertEquals(ComponentName(context, NodeProviderService::class.java), recover.component)
         assertEquals(ComponentName(context, NodeProviderService::class.java), stop.component)
     }
 
@@ -212,5 +216,31 @@ class EmbeddedNodeProviderManifestTest {
         val manager = EmbeddedNodeManager(context)
         assertTrue(manager.capacityValidationMessage(511L * 1024L * 1024L, 0L) != null)
         assertTrue(manager.capacityValidationMessage(Long.MAX_VALUE, 0L) != null)
+    }
+
+    @Test
+    fun nativeRecoveryClearsEveryJvmSecretArrayBeforeRejectingInvalidStartup() {
+        assumeTrue("The hosted native lane supplies the JNI library", CovalentNative.isAvailable)
+        val token = ByteArray(43) { 'a'.code.toByte() }
+        val kek = ByteArray(32) { 4.toByte() }
+        val kit = byteArrayOf(1, 2, 3)
+        val recoveryKey = ByteArray(32) { 7.toByte() }
+        val response = CovalentNative.recoverStart(
+            dataDirectory = "",
+            deviceName = "Android test",
+            lanDiscoveryEnabled = false,
+            apiToken = token,
+            keyEncryptionKey = kek,
+            keyVersion = 1,
+            maximumTotalBytes = 1L,
+            freeSpaceReserveBytes = 0L,
+            keyProtectionLevel = KeyProtectionLevel.SOFTWARE,
+            recoveryKit = kit,
+            recoveryKey = recoveryKey,
+        )
+        assertTrue(!response.ok)
+        listOf(token, kek, kit, recoveryKey).forEach { bytes ->
+            assertTrue(bytes.all { it == 0.toByte() })
+        }
     }
 }

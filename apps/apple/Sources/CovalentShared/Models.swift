@@ -39,6 +39,83 @@ public struct NodeStatus: Codable, Equatable, Sendable {
     }
 }
 
+/// Secret-free progress reported while a recovered owner identity reconnects
+/// to its signed storage providers.
+public enum RecoveryPhase: String, Codable, Equatable, Sendable {
+    case notConfigured = "not_configured"
+    case pending
+    case imported
+    case partial
+    case blocked
+    case noCatalogs = "no_catalogs"
+}
+
+public struct RecoveredBackupStatus: Codable, Equatable, Identifiable, Sendable {
+    public let backupId: UUID
+    public let snapshotId: String
+    public let sourceProviderIds: Set<UUID>
+
+    public var id: UUID { backupId }
+}
+
+public struct RecoveryProviderFailure: Codable, Equatable, Identifiable, Sendable {
+    public let providerId: UUID
+    public let snapshotId: String?
+    public let reason: String
+
+    public var id: String { "\(providerId.uuidString.lowercased()):\(snapshotId ?? ""):\(reason)" }
+}
+
+/// The recovery endpoints deliberately return progress only. Neither recovery
+/// kit nor recovery key is ever represented by this type.
+public struct RecoveryStatus: Codable, Equatable, Sendable {
+    public let protocolVersion: UInt16
+    public let phase: RecoveryPhase
+    public let recoveredBackups: [RecoveredBackupStatus]
+    public let queriedProviderIds: Set<UUID>
+    public let configuredProviderIds: Set<UUID>
+    public let failures: [RecoveryProviderFailure]
+    public let newerSnapshotMayExist: Bool
+}
+
+/// A secret-bearing one-time export. It intentionally has no debug or text
+/// representation, and callers must consume it without persisting it.
+public struct RecoveryKitExport: Sendable {
+    public let protocolVersion: UInt16
+    public private(set) var kit: Data
+    public private(set) var recoveryKey: Data
+
+    public init(protocolVersion: UInt16, kit: Data, recoveryKey: Data) {
+        self.protocolVersion = protocolVersion
+        self.kit = kit
+        self.recoveryKey = recoveryKey
+    }
+
+    public mutating func discard() {
+        kit.withUnsafeMutableBytes { if let base = $0.baseAddress { bzero(base, $0.count) } }
+        recoveryKey.withUnsafeMutableBytes { if let base = $0.baseAddress { bzero(base, $0.count) } }
+        kit.removeAll(keepingCapacity: false)
+        recoveryKey.removeAll(keepingCapacity: false)
+    }
+}
+
+/// A read-only result used before the managed local service is allowed to
+/// create identity state.
+public enum LocalNodeStartupDisposition: Equatable, Sendable {
+    case existingIdentity
+    case needsFirstLaunchChoice
+    /// The core recovery journal and identity are present. Only the same
+    /// kit/code pair may resume it; the helper re-authenticates both.
+    case resumableRecovery
+}
+
+/// Recovery input is passed only from the selected owner-only files to the
+/// inherited helper pipe. The URLs, not secret bytes, are the app boundary.
+public enum LocalNodeStartupMode: Sendable {
+    case normal
+    case recover(recoveryKitFile: URL, recoveryKeyFile: URL)
+}
+
 public struct TransportIdentity: Codable, Equatable, Sendable {
     public let deviceId: UUID
     public let peerPort: UInt16

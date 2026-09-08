@@ -48,7 +48,47 @@ final class LocalNodeManager: LocalNodeBootstrapping {
         }
     }
 
-    func start() async throws -> NodeConnectionConfiguration {
+    func startupDisposition() throws -> LocalNodeStartupDisposition {
+        let paths = try managedPaths(createApplicationSupport: false)
+        var metadata = stat()
+        if Darwin.lstat(paths.dataDirectory.path, &metadata) != 0 {
+            guard errno == ENOENT else { throw LocalNodeError.insecurePrivateFile }
+            return .needsFirstLaunchChoice
+        }
+        guard metadata.st_mode & S_IFMT == S_IFDIR,
+              metadata.st_uid == getuid(),
+              metadata.st_mode & 0o077 == 0
+        else { return .existingIdentity }
+
+        // A normal root is fresh only when it is literally empty. This keeps
+        // recovery from deleting, replacing, or interpreting any unrelated
+        // durable state, including a failed recovery journal.
+        let entries = try fileManager.contentsOfDirectory(
+            at: paths.dataDirectory,
+            includingPropertiesForKeys: nil,
+            options: []
+        )
+        guard !entries.isEmpty else { return .needsFirstLaunchChoice }
+        let names = Set(entries.map(\.lastPathComponent))
+        if names.contains("recovery-bootstrap.json"), names.contains("identity.json") {
+            return .resumableRecovery
+        }
+        return .existingIdentity
+    }
+
+    func start(mode: LocalNodeStartupMode) async throws -> NodeConnectionConfiguration {
+        switch mode {
+        case .normal:
+            return try await startNormal()
+        case let .recover(recoveryKitFile, recoveryKeyFile):
+            return try await startRecovery(
+                recoveryKitFile: recoveryKitFile,
+                recoveryKeyFile: recoveryKeyFile
+            )
+        }
+    }
+
+    private func startNormal() async throws -> NodeConnectionConfiguration {
         let paths = try managedPaths()
         try preparePrivateDirectory(paths.dataDirectory)
 
@@ -80,6 +120,100 @@ final class LocalNodeManager: LocalNodeBootstrapping {
         }
 
         let details = readLogTail(paths.logFile)
+        try await stopManagedNodeAndWait()
+        throw LocalNodeError.startupTimedOut(details)
+    }
+
+    private func startRecovery(
+        recoveryKitFile: URL,
+        recoveryKeyFile: URL
+    ) async throws -> NodeConnectionConfiguration {
+        let paths = try managedPaths(createApplicationSupport: false)
+        let disposition = try startupDisposition()
+        guard disposition == .needsFirstLaunchChoice || disposition == .resumableRecovery else {
+            throw LocalNodeError.recoveryTargetNotFresh
+        }
+        guard fileManager.isExecutableFile(atPath: paths.helper.path) else {
+            throw LocalNodeError.helperMissing(paths.helper.path)
+        }
+
+        var kit = try readPrivateRecoveryFile(recoveryKitFile, maximumBytes: 16 * 1_024 * 1_024)
+        var key = Data()
+        defer { Self.erase(&kit); Self.erase(&key) }
+        key = try readPrivateRecoveryFile(recoveryKeyFile, maximumBytes: 64)
+        if key.last == 10 { key.removeLast() }
+        if key.last == 13 { key.removeLast() }
+        guard key.count == 43,
+              key.allSatisfy({ byte in
+                  (48...57).contains(byte) || (65...90).contains(byte)
+                      || (97...122).contains(byte) || byte == 45 || byte == 95
+              })
+        else { throw LocalNodeError.invalidRecoveryMaterial }
+
+        // Creating the parent is safe: the normal `Node` root remains absent
+        // until the recovery engine publishes the authenticated identity.
+        let recoveryLog = try recoveryLogFile(paths: paths)
+        let logHandle = try FileHandle(forWritingTo: recoveryLog)
+        try logHandle.seekToEnd()
+        let process = Process()
+        let keyPipe = Pipe()
+        process.executableURL = paths.helper
+        process.arguments = [
+            "recover",
+            "--listen", "127.0.0.1:0",
+            "--peer-listen", "0.0.0.0:0",
+            "--data-dir", paths.dataDirectory.path,
+            "--device-name", Host.current().localizedName ?? "This Mac",
+            "--lan-discovery",
+            "--platform-tier", "tier1",
+            "--ready-file", paths.readyFile.path,
+            "--key-encryption-key-stdin",
+        ]
+        process.standardInput = keyPipe
+        process.standardOutput = logHandle
+        process.standardError = logHandle
+        process.terminationHandler = { _ in }
+        var material = try keyStore.loadOrCreate()
+        let apiToken = material.token
+        do {
+            try process.run()
+            try keyPipe.fileHandleForReading.close()
+            defer { try? keyPipe.fileHandleForWriting.close() }
+            try material.writeRecoveryEnvelopeAndErase(
+                kit: &kit,
+                recoveryKey: &key,
+                to: keyPipe.fileHandleForWriting.fileDescriptor
+            )
+            managedAPIToken = apiToken
+        } catch {
+            material.erase()
+            try? keyPipe.fileHandleForReading.close()
+            try? keyPipe.fileHandleForWriting.close()
+            if process.isRunning { process.terminate() }
+            try? logHandle.close()
+            throw LocalNodeError.launchFailed(error.localizedDescription)
+        }
+        ownedProcess = process
+        managedProcessID = process.processIdentifier
+        managedReadyFile = paths.readyFile
+        self.logHandle = logHandle
+
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: Self.startupTimeout)
+        while clock.now < deadline {
+            if !process.isRunning {
+                let details = readLogTail(recoveryLog)
+                try await stopManagedNodeAndWait()
+                throw LocalNodeError.exitedDuringStartup(details)
+            }
+            if let configuration = try await healthyExistingConfiguration(paths: paths),
+               let ready = try? readReadyFile(paths.readyFile),
+               ready.processId == process.processIdentifier {
+                return configuration
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        let details = readLogTail(recoveryLog)
         try await stopManagedNodeAndWait()
         throw LocalNodeError.startupTimedOut(details)
     }
@@ -248,7 +382,7 @@ final class LocalNodeManager: LocalNodeBootstrapping {
         }
     }
 
-    private func managedPaths() throws -> ManagedPaths {
+    private func managedPaths(createApplicationSupport: Bool = true) throws -> ManagedPaths {
         guard let executableDirectory = Bundle.main.executableURL?.deletingLastPathComponent() else {
             throw LocalNodeError.helperMissing("Covalent.app/Contents/MacOS/covalent-node")
         }
@@ -259,10 +393,10 @@ final class LocalNodeManager: LocalNodeBootstrapping {
            override != "/" {
             dataDirectory = URL(fileURLWithPath: override, isDirectory: true).standardizedFileURL
         } else {
-            dataDirectory = try defaultDataDirectory()
+            dataDirectory = try defaultDataDirectory(create: createApplicationSupport)
         }
         #else
-        dataDirectory = try defaultDataDirectory()
+            dataDirectory = try defaultDataDirectory(create: createApplicationSupport)
         #endif
         return ManagedPaths(
             helper: executableDirectory.appending(path: "covalent-node"),
@@ -272,16 +406,84 @@ final class LocalNodeManager: LocalNodeBootstrapping {
         )
     }
 
-    private func defaultDataDirectory() throws -> URL {
-        let applicationSupport = try fileManager.url(
+    private func defaultDataDirectory(create: Bool) throws -> URL {
+        let applicationSupport: URL
+        if create {
+            applicationSupport = try fileManager.url(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask,
+                appropriateFor: nil,
+                create: true
+            )
+        } else if let existing = fileManager.urls(
             for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
+            in: .userDomainMask
+        ).first {
+            applicationSupport = existing
+        } else {
+            throw LocalNodeError.insecurePrivateFile
+        }
         return applicationSupport
             .appending(path: "Covalent", directoryHint: .isDirectory)
             .appending(path: "Node", directoryHint: .isDirectory)
+    }
+
+    private func recoveryLogFile(paths: ManagedPaths) throws -> URL {
+        let parent = paths.dataDirectory.deletingLastPathComponent()
+        try preparePrivateDirectory(parent)
+        let file = parent.appending(path: "node-recovery.log")
+        if !fileManager.fileExists(atPath: file.path) {
+            guard fileManager.createFile(
+                atPath: file.path,
+                contents: nil,
+                attributes: [.posixPermissions: 0o600]
+            ) else { throw LocalNodeError.logUnavailable(file.path) }
+        }
+        guard try isPrivateRegularFile(file) else { throw LocalNodeError.insecurePrivateFile }
+        try rotateLogIfNeeded(file)
+        return file
+    }
+
+    /// A user explicitly chooses this file, so require its owner and a
+    /// no-follow regular descriptor but do not chmod a downloaded file in
+    /// place. Exports are always 0600; imports may be 0644 and are warned
+    /// about in the UI rather than requiring a Terminal workaround.
+    private func readPrivateRecoveryFile(_ file: URL, maximumBytes: Int) throws -> Data {
+        guard file.isFileURL, maximumBytes > 0 else { throw LocalNodeError.invalidRecoveryMaterial }
+        let descriptor = Darwin.open(file.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { throw LocalNodeError.invalidRecoveryMaterial }
+        defer { Darwin.close(descriptor) }
+        var metadata = stat()
+        guard Darwin.fstat(descriptor, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFREG,
+              metadata.st_uid == getuid(),
+              metadata.st_size > 0
+        else { throw LocalNodeError.invalidRecoveryMaterial }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
+        var data = Data()
+        do {
+            while true {
+                let remaining = maximumBytes + 1 - data.count
+                guard remaining > 0 else { throw LocalNodeError.invalidRecoveryMaterial }
+                let chunk = try handle.read(upToCount: min(64 * 1_024, remaining)) ?? Data()
+                if chunk.isEmpty { break }
+                data.append(chunk)
+                if data.count > maximumBytes { throw LocalNodeError.invalidRecoveryMaterial }
+            }
+            guard !data.isEmpty else { throw LocalNodeError.invalidRecoveryMaterial }
+            return data
+        } catch {
+            Self.erase(&data)
+            throw error
+        }
+    }
+
+    private static func erase(_ data: inout Data) {
+        data.withUnsafeMutableBytes { buffer in
+            guard let base = buffer.baseAddress else { return }
+            bzero(base, buffer.count)
+        }
+        data.removeAll(keepingCapacity: false)
     }
 
     private func preparePrivateDirectory(_ directory: URL) throws {
@@ -393,6 +595,8 @@ private enum LocalNodeError: LocalizedError {
     case shutdownTimedOut
     case invalidReadyFile
     case insecurePrivateFile
+    case recoveryTargetNotFresh
+    case invalidRecoveryMaterial
 
     var errorDescription: String? {
         switch self {
@@ -412,6 +616,10 @@ private enum LocalNodeError: LocalizedError {
             "The local Covalent service produced an invalid readiness record."
         case .insecurePrivateFile:
             "A local Covalent service credential or readiness file has unsafe permissions."
+        case .recoveryTargetNotFresh:
+            "Covalent will not recover over an existing local identity. Choose a Mac without local Covalent data."
+        case .invalidRecoveryMaterial:
+            "The recovery kit or recovery code file must be an owner-only regular file."
         }
     }
 }

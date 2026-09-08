@@ -24,6 +24,21 @@ internal object CovalentNative {
     ): String
 
     @JvmStatic
+    private external fun nativeRecoverStart(
+        dataDirectory: String,
+        deviceName: String,
+        lanDiscoveryEnabled: Boolean,
+        apiToken: ByteArray,
+        keyEncryptionKey: ByteArray,
+        keyVersion: Int,
+        maximumTotalBytes: Long,
+        freeSpaceReserveBytes: Long,
+        keyProtectionLevel: Int,
+        recoveryKit: ByteArray,
+        recoveryKey: ByteArray,
+    ): String
+
+    @JvmStatic
     private external fun nativeStop(handle: Long): String
 
     @JvmStatic
@@ -62,6 +77,42 @@ internal object CovalentNative {
                 maximumTotalBytes,
                 freeSpaceReserveBytes,
                 keyProtectionLevel.wireValue,
+            )
+        }.getOrElse { NativeNodeResponse.unavailable().toJson() })
+    }
+
+    /**
+     * Recovers a node identity into its ordinary private data root before normal opening.
+     * Native code clears all four JVM byte arrays immediately. The caller also clears its
+     * arrays in `finally`, so validation and linkage failures cannot leave an owned copy here.
+     */
+    fun recoverStart(
+        dataDirectory: String,
+        deviceName: String,
+        lanDiscoveryEnabled: Boolean,
+        apiToken: ByteArray,
+        keyEncryptionKey: ByteArray,
+        keyVersion: Int,
+        maximumTotalBytes: Long,
+        freeSpaceReserveBytes: Long,
+        keyProtectionLevel: KeyProtectionLevel,
+        recoveryKit: ByteArray,
+        recoveryKey: ByteArray,
+    ): NativeNodeResponse {
+        if (!libraryLoaded) return NativeNodeResponse.unavailable()
+        return parse(runCatching {
+            nativeRecoverStart(
+                dataDirectory,
+                deviceName,
+                lanDiscoveryEnabled,
+                apiToken,
+                keyEncryptionKey,
+                keyVersion,
+                maximumTotalBytes,
+                freeSpaceReserveBytes,
+                keyProtectionLevel.wireValue,
+                recoveryKit,
+                recoveryKey,
             )
         }.getOrElse { NativeNodeResponse.unavailable().toJson() })
     }

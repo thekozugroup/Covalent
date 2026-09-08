@@ -345,6 +345,12 @@ public enum NodeAPIErrorCopy {
             .retry
         ),
         "confirmation_required": ("This has to be confirmed on the other device before it can finish.", .none),
+        "recovery_confirmation_required": (
+            "Confirm that you want to create or retry this recovery operation before it can continue.", .none
+        ),
+        "recovery_not_configured": (
+            "This local service was not started from an owner-loss recovery kit.", .none
+        ),
 
         // Source folder
         "source_changed": (

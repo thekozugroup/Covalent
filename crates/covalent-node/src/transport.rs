@@ -16,7 +16,7 @@ use covalent_core::{
     ChunkProvider, CoreError, Engine, JobControl, JobState, KeyProtector, ProviderHealth,
     ProviderWriteLeaseIntent, PublicIdentity, RecoveryCapsule, RecoveryCapsuleDescriptor,
     RecoveryCapsuleLeaseIntent, RecoveryCapsuleUploadAttempt, RecoveryCapsuleUploadAttemptPhase,
-    WrappedSecret, state_secret_context,
+    RecoveryCatalogSink, WrappedSecret, state_secret_context,
 };
 use covalent_protocol::{BackupId, DeviceId, PeerRole, SignedRoster, StorageLease};
 use quinn::{
@@ -1544,28 +1544,82 @@ impl ChunkProvider for QuicProvider {
     }
 
     fn list_recovery_capsules(&self) -> Result<Vec<RecoveryCapsule>, CoreError> {
-        let mut all = Vec::new();
+        #[derive(Default)]
+        struct Collector(Vec<RecoveryCapsule>);
+
+        impl RecoveryCatalogSink for Collector {
+            fn reserve(&mut self, _serialized_bytes: u64) -> Result<(), CoreError> {
+                Ok(())
+            }
+
+            fn accept(&mut self, capsule: RecoveryCapsule) -> Result<(), CoreError> {
+                if self.0.len() >= 1_000_000 {
+                    return Err(CoreError::ResourceLimit("recovery capsule listing"));
+                }
+                self.0.push(capsule);
+                Ok(())
+            }
+        }
+
+        let mut collector = Collector::default();
+        self.visit_recovery_capsules(&JobControl::new(), &mut collector)?;
+        Ok(collector.0)
+    }
+
+    fn visit_recovery_capsules(
+        &self,
+        control: &JobControl,
+        sink: &mut dyn RecoveryCatalogSink,
+    ) -> Result<(), CoreError> {
+        const PAGE_SIZE: usize = 128;
+
+        check_job_control(control)?;
+        let expected_signer = self.local_engine()?.device_id();
+        let mut capsule_count = 0_usize;
         let mut cursor = None;
         loop {
-            match self.request(Operation::ListRecoveryCapsules {
-                backup_id: None,
-                cursor: cursor.clone(),
-                limit: 128,
-            })? {
+            check_job_control(control)?;
+            match self.request_controlled(
+                Operation::ListRecoveryCapsules {
+                    backup_id: None,
+                    cursor: cursor.clone(),
+                    limit: PAGE_SIZE as u16,
+                },
+                control,
+            )? {
                 ResponsePayload::RecoveryCapsuleDescriptors {
                     descriptors,
                     next_cursor,
                 } => {
-                    for descriptor in descriptors {
-                        all.push(self.fetch_recovery_capsule(&descriptor)?);
+                    if descriptors.len() > PAGE_SIZE
+                        || (descriptors.is_empty() && next_cursor.is_some())
+                    {
+                        return Err(CoreError::AuthenticationFailed);
                     }
-                    if all.len() > 1_000_000 {
-                        return Err(CoreError::ResourceLimit("recovery capsule listing"));
+                    for descriptor in descriptors {
+                        check_job_control(control)?;
+                        capsule_count = capsule_count
+                            .checked_add(1)
+                            .ok_or(CoreError::ResourceLimit("recovery capsule listing"))?;
+                        if capsule_count > 1_000_000 {
+                            return Err(CoreError::ResourceLimit("recovery capsule listing"));
+                        }
+                        validate_remote_recovery_capsule_descriptor(&descriptor, expected_signer)?;
+                        sink.reserve(descriptor.total_bytes)?;
+                        check_job_control(control)?;
+                        let capsule =
+                            self.fetch_recovery_capsule_controlled(&descriptor, control)?;
+                        check_job_control(control)?;
+                        sink.accept(capsule)?;
                     }
                     let Some(next) = next_cursor else {
-                        return Ok(all);
+                        return check_job_control(control);
                     };
-                    if cursor.as_ref().is_some_and(|previous| previous >= &next) {
+                    if next.is_empty()
+                        || next.len() > 256
+                        || next.chars().any(char::is_control)
+                        || cursor.as_ref().is_some_and(|previous| previous >= &next)
+                    {
                         return Err(CoreError::AuthenticationFailed);
                     }
                     cursor = Some(next);
@@ -2146,9 +2200,10 @@ impl QuicProvider {
         })
     }
 
-    fn fetch_recovery_capsule(
+    fn fetch_recovery_capsule_controlled(
         &self,
         descriptor: &RecoveryCapsuleDescriptor,
+        control: &JobControl,
     ) -> Result<RecoveryCapsule, CoreError> {
         if descriptor.total_bytes == 0 || descriptor.total_bytes > MAX_RECOVERY_CAPSULE_BYTES {
             return Err(CoreError::ResourceLimit("recovery capsule"));
@@ -2161,12 +2216,16 @@ impl QuicProvider {
         let mut hasher = blake3::Hasher::new();
         let mut offset = 0_u64;
         while offset < descriptor.total_bytes {
-            match self.request(Operation::GetRecoveryCapsuleSegment {
-                backup_id: descriptor.backup_id,
-                snapshot_id: descriptor.snapshot_id.clone(),
-                offset,
-                maximum_bytes: RECOVERY_CAPSULE_SEGMENT_BYTES as u32,
-            })? {
+            check_job_control(control)?;
+            match self.request_controlled(
+                Operation::GetRecoveryCapsuleSegment {
+                    backup_id: descriptor.backup_id,
+                    snapshot_id: descriptor.snapshot_id.clone(),
+                    offset,
+                    maximum_bytes: RECOVERY_CAPSULE_SEGMENT_BYTES as u32,
+                },
+                control,
+            )? {
                 ResponsePayload::RecoveryCapsuleSegment {
                     segment,
                     total_bytes,
@@ -2205,6 +2264,7 @@ impl QuicProvider {
                 _ => return Err(CoreError::AuthenticationFailed),
             }
         }
+        check_job_control(control)?;
         if offset != descriptor.total_bytes
             || hasher.finalize().to_hex().as_str() != descriptor.capsule_digest
         {
@@ -2227,6 +2287,42 @@ impl QuicProvider {
         }
         Ok(capsule)
     }
+}
+
+fn check_job_control(control: &JobControl) -> Result<(), CoreError> {
+    match control.state() {
+        JobState::Running => Ok(()),
+        JobState::Paused => Err(CoreError::Paused),
+        JobState::Cancelled => Err(CoreError::Cancelled),
+    }
+}
+
+fn validate_remote_recovery_capsule_descriptor(
+    descriptor: &RecoveryCapsuleDescriptor,
+    expected_signer: DeviceId,
+) -> Result<(), CoreError> {
+    if descriptor.total_bytes == 0 || descriptor.total_bytes > MAX_RECOVERY_CAPSULE_BYTES {
+        return Err(CoreError::ResourceLimit("recovery capsule"));
+    }
+    let valid_snapshot_id = !descriptor.snapshot_id.is_empty()
+        && descriptor.snapshot_id.len() <= 128
+        && descriptor
+            .snapshot_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
+    let valid_digest = descriptor.capsule_digest.len() == 64
+        && descriptor
+            .capsule_digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'));
+    if descriptor.signer_device_id != expected_signer
+        || descriptor.key_epoch == 0
+        || !valid_snapshot_id
+        || !valid_digest
+    {
+        return Err(CoreError::AuthenticationFailed);
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -4324,6 +4420,178 @@ mod tests {
             0
         );
         task.abort();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn recovery_visitor_reservation_refusal_prevents_second_capsule_fetch() {
+        struct RejectSecond {
+            reservations: Vec<u64>,
+            accepted: usize,
+        }
+
+        impl RecoveryCatalogSink for RejectSecond {
+            fn reserve(&mut self, serialized_bytes: u64) -> Result<(), CoreError> {
+                self.reservations.push(serialized_bytes);
+                if self.reservations.len() == 2 {
+                    return Err(CoreError::ResourceLimit("test recovery budget"));
+                }
+                Ok(())
+            }
+
+            fn accept(&mut self, _capsule: RecoveryCapsule) -> Result<(), CoreError> {
+                self.accepted += 1;
+                Ok(())
+            }
+        }
+
+        let owner_data = tempdir().expect("owner");
+        let provider_data = tempdir().expect("provider");
+        let owner = Arc::new(Engine::open(test_options(owner_data.path())).expect("owner"));
+        let remote = Arc::new(Engine::open(test_options(provider_data.path())).expect("provider"));
+        trust_all(&owner, &remote);
+        trust_all(&remote, &owner);
+        let backup_id = BackupId::new();
+        let capsules = [("first", 1), ("second", 2)]
+            .into_iter()
+            .map(|(snapshot_id, committed_at_unix_ms)| RecoveryCapsule {
+                schema_version: 1,
+                cipher_suite: "XCHACHA20-POLY1305-HKDF-SHA256".to_owned(),
+                backup_id,
+                snapshot_id: snapshot_id.to_owned(),
+                key_epoch: 1,
+                committed_at_unix_ms,
+                nonce: "opaque".to_owned(),
+                ciphertext: "opaque".to_owned(),
+                signer_device_id: owner.device_id(),
+                signature: "opaque".to_owned(),
+            })
+            .collect::<Vec<_>>();
+        let tls = test_tls(provider_data.path(), "tls");
+        let node = QuicNode::bind(
+            "127.0.0.1:0".parse().expect("address"),
+            Arc::clone(&remote),
+            &tls,
+        )
+        .expect("node");
+        let address = node.local_addr().expect("local address");
+        let task = tokio::spawn(node.run());
+        let provider = QuicProvider::new(
+            address,
+            remote.public_identity(),
+            tls.certificate_der().to_vec(),
+            Arc::clone(&owner),
+        )
+        .expect("provider");
+
+        tokio::task::spawn_blocking(move || {
+            for capsule in &capsules {
+                provider
+                    .put_recovery_capsule_scoped(backup_id, capsule)
+                    .expect("store capsule");
+            }
+            let operations_before_visit = provider.operation_trace().len();
+            let mut sink = RejectSecond {
+                reservations: Vec::new(),
+                accepted: 0,
+            };
+            let result = provider.visit_recovery_capsules(&JobControl::new(), &mut sink);
+            assert!(
+                matches!(
+                    result,
+                    Err(CoreError::ResourceLimit("test recovery budget"))
+                ),
+                "unexpected visitor result: {result:?}"
+            );
+            assert_eq!(sink.reservations.len(), 2);
+            assert_eq!(sink.accepted, 1);
+            assert_eq!(
+                provider
+                    .operation_trace()
+                    .into_iter()
+                    .skip(operations_before_visit)
+                    .filter(|operation| *operation == OperationType::GetRecoveryCapsuleSegment)
+                    .count(),
+                1
+            );
+        })
+        .await
+        .expect("worker");
+        task.abort();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn recovery_visitor_cancels_in_flight_descriptor_listing() {
+        struct IgnoringSink;
+
+        impl RecoveryCatalogSink for IgnoringSink {
+            fn reserve(&mut self, _serialized_bytes: u64) -> Result<(), CoreError> {
+                Ok(())
+            }
+
+            fn accept(&mut self, _capsule: RecoveryCapsule) -> Result<(), CoreError> {
+                Ok(())
+            }
+        }
+
+        let local_data = tempdir().expect("local");
+        let remote_data = tempdir().expect("remote");
+        let local = Arc::new(Engine::open(test_options(local_data.path())).expect("local"));
+        let remote = Arc::new(Engine::open(test_options(remote_data.path())).expect("remote"));
+        let tls = test_tls(remote_data.path(), "tls");
+        let endpoint = Endpoint::server(
+            tls.server_config().expect("server config"),
+            "127.0.0.1:0".parse().expect("address"),
+        )
+        .expect("endpoint");
+        let address = endpoint.local_addr().expect("local address");
+        let (request_seen_send, request_seen_receive) = tokio::sync::oneshot::channel();
+        let (tail_send, tail_receive) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let incoming = endpoint.accept().await.expect("incoming");
+            let connection = incoming.await.expect("connection");
+            let (send, mut receive) = connection.accept_bi().await.expect("stream");
+            read_frame(&mut receive, MAX_HELLO_FRAME_BYTES)
+                .await
+                .expect("hello");
+            read_frame(&mut receive, MAX_OPERATION_FRAME_BYTES)
+                .await
+                .expect("operation");
+            request_seen_send.send(()).ok();
+            let stopped = tokio::time::timeout(Duration::from_secs(5), send.stopped()).await;
+            tail_send.send(stopped.is_ok()).ok();
+        });
+        let provider = QuicProvider::new(
+            address,
+            remote.public_identity(),
+            tls.certificate_der().to_vec(),
+            Arc::clone(&local),
+        )
+        .expect("provider");
+        let control = JobControl::new();
+        let mut worker = tokio::task::spawn_blocking({
+            let provider = provider.clone();
+            let control = control.clone();
+            move || provider.visit_recovery_capsules(&control, &mut IgnoringSink)
+        });
+        tokio::select! {
+            seen = request_seen_receive => seen.expect("request signal"),
+            result = &mut worker => panic!("client completed before request reached server: {result:?}"),
+            () = tokio::time::sleep(Duration::from_secs(5)) => panic!("request did not reach server within five seconds"),
+        }
+        control.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(5), worker)
+            .await
+            .expect("client cancellation deadline")
+            .expect("client worker");
+        assert!(matches!(result, Err(CoreError::Cancelled)));
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), tail_receive)
+                .await
+                .expect("server tail deadline")
+                .expect("server tail signal")
+        );
+        assert_eq!(provider.metrics().cancellations, 1);
+        server.await.expect("server");
     }
 
     #[tokio::test(flavor = "multi_thread")]

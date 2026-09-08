@@ -9,6 +9,11 @@ struct MacSettingsView: View {
     @State private var lanDiscoveryEnabled = false
     @State private var isSaving = false
     @State private var grantToRemove: SelectedDirectoryGrant?
+    @State private var confirmRecoveryExport = false
+    @State private var isExportingRecovery = false
+    @State private var recoveryExportNotice: String?
+    @State private var confirmRecoveryRetry = false
+    @State private var recoveryExportSession: RecoveryKitExport?
 
     var body: some View {
         ScrollView {
@@ -20,6 +25,7 @@ struct MacSettingsView: View {
                 }
                 general
                 settingsTransfer
+                ownerRecovery
                 folderAccess
                 connection
                 platformLimits
@@ -31,6 +37,12 @@ struct MacSettingsView: View {
         .navigationTitle(compact ? "" : "Settings")
         .onAppear { syncFields() }
         .onChange(of: model.settings) { _, _ in syncFields() }
+        .onDisappear {
+            if var recoveryExportSession {
+                recoveryExportSession.discard()
+            }
+            recoveryExportSession = nil
+        }
         .confirmationDialog(
             "Remove folder access?",
             isPresented: Binding(
@@ -47,6 +59,26 @@ struct MacSettingsView: View {
             Button("Cancel", role: .cancel) { grantToRemove = nil }
         } message: {
             Text("Future backups or restores using this folder will ask you to choose it again. Existing encrypted backups are unchanged.")
+        }
+        .confirmationDialog(
+            "Create a recovery kit?",
+            isPresented: $confirmRecoveryExport,
+            titleVisibility: .visible
+        ) {
+            Button("Create Recovery Kit") { exportRecoveryKit() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Save both recovery files in different safe places. You’ll need both if you lose this device.")
+        }
+        .confirmationDialog(
+            "Retry recovery check?",
+            isPresented: $confirmRecoveryRetry,
+            titleVisibility: .visible
+        ) {
+            Button("Check Again") { Task { await model.retryRecovery() } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Covalent will check your backup devices again. Keep them online while the check runs.")
         }
     }
 
@@ -94,6 +126,42 @@ struct MacSettingsView: View {
                     .secondaryLabelStyle()
             }
         }
+    }
+
+    private var ownerRecovery: some View {
+        settingsSection("Recovery files", systemImage: "key.viewfinder") {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Save recovery files now so you can get your backups back if you lose this Mac.")
+                    .secondaryLabelStyle()
+                HStack {
+                    Button("Create Recovery Kit…") { confirmRecoveryExport = true }
+                        .disabled(!model.isAuthorized || isExportingRecovery)
+                        .accessibilityIdentifier("recovery.export")
+                    if isExportingRecovery { ProgressView().controlSize(.small) }
+                    if let phase = model.recoveryStatus?.phase,
+                       [.pending, .partial, .blocked, .noCatalogs].contains(phase) {
+                        Button("Check Again") { confirmRecoveryRetry = true }
+                        .accessibilityIdentifier("recovery.retry")
+                    }
+                }
+                if let recoveryExportNotice {
+                    Text(recoveryExportNotice)
+                        .font(.caption)
+                        .secondaryLabelStyle()
+                }
+                if let status = model.recoveryStatus {
+                    Text(recoveryStatusCopy(status))
+                        .font(.caption)
+                        .secondaryLabelStyle()
+                    if status.newerSnapshotMayExist {
+                        Label("A newer backup may exist on a device that has not responded yet.", systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.orange)
+                    }
+                }
+            }
+        }
+        .task { await model.loadRecoveryStatus() }
     }
 
     private var folderAccess: some View {
@@ -190,6 +258,65 @@ struct MacSettingsView: View {
                     message: ErrorPresenter.summary(for: error)
                 )
             }
+        }
+    }
+
+    private func exportRecoveryKit() {
+        isExportingRecovery = true
+        recoveryExportNotice = nil
+        Task {
+            defer { isExportingRecovery = false }
+            guard let kitURL = chooseRecoveryDestination(
+                title: "Save Encrypted Recovery Kit",
+                name: "Covalent Recovery Kit.covalent-recovery",
+                prompt: "Save Kit"
+            ) else { return }
+            guard let keyURL = chooseRecoveryDestination(
+                title: "Save Separate Recovery Code",
+                name: "Covalent Recovery Code.covalent-recovery-key",
+                prompt: "Save Code"
+            ) else { return }
+            var export: RecoveryKitExport
+            if let pending = recoveryExportSession {
+                export = pending
+                recoveryExportSession = nil
+            } else {
+                guard let fetched = await model.exportRecoveryKit() else { return }
+                export = fetched
+            }
+            do {
+                try RecoveryFilePair.write(export, kitURL: kitURL, keyURL: keyURL)
+                recoveryExportNotice = "Both recovery files were saved. Keep them in different safe places."
+                export.discard()
+            } catch {
+                // Retain this exact pair only for the next explicit save
+                // attempt; never ask the server to generate a different kit.
+                recoveryExportSession = export
+                model.alert = AppAlert(
+                    title: "Recovery files could not be saved",
+                    message: ErrorPresenter.summary(for: error)
+                )
+            }
+        }
+    }
+
+    private func chooseRecoveryDestination(title: String, name: String, prompt: String) -> URL? {
+        let panel = NSSavePanel()
+        panel.title = title
+        panel.nameFieldStringValue = name
+        panel.prompt = prompt
+        panel.canCreateDirectories = true
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+
+    private func recoveryStatusCopy(_ status: RecoveryStatus) -> String {
+        switch status.phase {
+        case .notConfigured: "No device recovery is in progress."
+        case .pending: "Recovery is waiting to check the selected backup devices."
+        case .imported: "Recovered \(status.recoveredBackups.count) backup\(status.recoveredBackups.count == 1 ? "" : "s") and checked all your backup devices."
+        case .partial: "Some backup devices have not confirmed recovery. Retry after they are reachable."
+        case .blocked: "Covalent could not safely recover a backup yet. Bring your backup devices online and try again."
+        case .noCatalogs: "All your backup devices were checked, but no backups were found."
         }
     }
 }

@@ -54,6 +54,7 @@ public enum RestoreDurabilityCheckpoint: String, Sendable {
 public actor NodeClient {
     private static let maximumRestoreDirectoryEntries = 4_096
     private static let maximumPendingArchiveRestores = 1_024
+    private static let maximumRecoveryResponseBytes = 24 * 1_024 * 1_024
     private let configuration: NodeConnectionConfiguration
     private let session: URLSession
     private let trustDelegate: PinnedServerTrustDelegate?
@@ -153,6 +154,152 @@ public actor NodeClient {
     public func importSettings(_ settings: ExportedDeviceSettings, confirmed: Bool) async throws {
         let body = ConfigImportRequest(confirmed: confirmed, settings: settings)
         try await sendNoContent(path: "api/v1/config/import", body: body)
+    }
+
+    /// Exports a one-time owner-loss recovery kit. The wire response contains
+    /// bearer-grade material, so it is decoded and validated here instead of
+    /// ever being included in an error or a persisted Codable model.
+    public func exportRecoveryKit(confirmed: Bool) async throws -> RecoveryKitExport {
+        let response: RecoveryKitExportResponse = try await sendRecovery(
+            path: "api/v1/recovery/kit",
+            method: "POST",
+            bodyData: try encoder.encode(RecoveryConfirmationRequest(confirmed: confirmed))
+        )
+        guard response.protocolVersion == covalentProtocolVersion else {
+            throw NodeClientError.unsupportedProtocol(response.protocolVersion)
+        }
+        guard let kit = Data(base64URLEncoded: response.recoveryKit),
+              !kit.isEmpty,
+              kit.count <= 16 * 1_024 * 1_024,
+              kit.base64URLEncodedString == response.recoveryKit,
+              response.recoveryKey.utf8.count == 43,
+              response.recoveryKey.utf8.allSatisfy({ byte in
+                  (48...57).contains(byte) || (65...90).contains(byte)
+                      || (97...122).contains(byte) || byte == 45 || byte == 95
+              }),
+              let key = Data(base64URLEncoded: response.recoveryKey),
+              key.count == 32,
+              key.base64URLEncodedString == response.recoveryKey
+        else {
+            throw NodeClientError.invalidResponse
+        }
+        return RecoveryKitExport(
+            protocolVersion: response.protocolVersion,
+            kit: kit,
+            recoveryKey: Data(response.recoveryKey.utf8)
+        )
+    }
+
+    public func recoveryStatus() async throws -> RecoveryStatus {
+        let wire: RecoveryStatusWire = try await sendRecovery(
+            path: "api/v1/recovery/status",
+            maximumResponseBytes: Self.maximumRecoveryResponseBytes
+        )
+        return try validateRecoveryStatus(wire)
+    }
+
+    public func retryRecovery(confirmed: Bool) async throws -> RecoveryStatus {
+        let wire: RecoveryStatusWire = try await sendRecovery(
+            path: "api/v1/recovery/retry",
+            method: "POST",
+            bodyData: try encoder.encode(RecoveryConfirmationRequest(confirmed: confirmed)),
+            maximumResponseBytes: Self.maximumRecoveryResponseBytes
+        )
+        return try validateRecoveryStatus(wire)
+    }
+
+    private func validateRecoveryStatus(_ wire: RecoveryStatusWire) throws -> RecoveryStatus {
+        guard wire.protocolVersion == covalentProtocolVersion else {
+            throw NodeClientError.unsupportedProtocol(wire.protocolVersion)
+        }
+        guard wire.recoveredBackups.count <= 100_000,
+              wire.queriedProviderIds.count <= 128,
+              wire.configuredProviderIds.count <= 128,
+              wire.failures.count <= 256,
+              Set(wire.queriedProviderIds).count == wire.queriedProviderIds.count,
+              Set(wire.configuredProviderIds).count == wire.configuredProviderIds.count,
+              Set(wire.recoveredBackups.map(\.backupId)).count == wire.recoveredBackups.count,
+              wire.recoveredBackups.allSatisfy({ backup in
+                  validRecoverySnapshotId(backup.snapshotId)
+                      && !backup.sourceProviderIds.isEmpty
+                      && backup.sourceProviderIds.count <= 128
+                      && Set(backup.sourceProviderIds).count == backup.sourceProviderIds.count
+              }),
+              wire.failures.allSatisfy({ failure in
+                  failure.snapshotId.map(validRecoverySnapshotId) ?? true
+                      && validRecoveryFailureReason(failure.reason)
+              }),
+              Set(wire.failures.map(\.identity)).count == wire.failures.count
+        else { throw NodeClientError.invalidResponse }
+        let queried = Set(wire.queriedProviderIds)
+        let configured = Set(wire.configuredProviderIds)
+        let recoveredBackups = wire.recoveredBackups.map { backup in
+            RecoveredBackupStatus(
+                backupId: backup.backupId,
+                snapshotId: backup.snapshotId,
+                sourceProviderIds: Set(backup.sourceProviderIds)
+            )
+        }
+        let failures = wire.failures.map { failure in
+            RecoveryProviderFailure(
+                providerId: failure.providerId,
+                snapshotId: failure.snapshotId,
+                reason: failure.reason
+            )
+        }
+        guard queried.isSubset(of: configured),
+              wire.recoveredBackups.allSatisfy({ Set($0.sourceProviderIds).isSubset(of: configured) }),
+              wire.failures.allSatisfy({ configured.contains($0.providerId) })
+        else { throw NodeClientError.invalidResponse }
+        switch wire.phase {
+        case .imported:
+            guard !recoveredBackups.isEmpty,
+                  queried == configured,
+                  failures.isEmpty,
+                  !wire.newerSnapshotMayExist
+            else { throw NodeClientError.invalidResponse }
+        case .noCatalogs:
+            guard recoveredBackups.isEmpty,
+                  queried == configured,
+                  failures.isEmpty,
+                  !wire.newerSnapshotMayExist
+            else { throw NodeClientError.invalidResponse }
+        case .partial:
+            guard !recoveredBackups.isEmpty, wire.newerSnapshotMayExist
+            else { throw NodeClientError.invalidResponse }
+        case .blocked, .pending:
+            guard recoveredBackups.isEmpty, wire.newerSnapshotMayExist
+            else { throw NodeClientError.invalidResponse }
+        case .notConfigured:
+            guard recoveredBackups.isEmpty,
+                  configured.isEmpty,
+                  queried.isEmpty,
+                  failures.isEmpty,
+                  !wire.newerSnapshotMayExist
+            else { throw NodeClientError.invalidResponse }
+        }
+        return RecoveryStatus(
+            protocolVersion: wire.protocolVersion,
+            phase: wire.phase,
+            recoveredBackups: recoveredBackups,
+            queriedProviderIds: queried,
+            configuredProviderIds: configured,
+            failures: failures,
+            newerSnapshotMayExist: wire.newerSnapshotMayExist
+        )
+    }
+
+    private func validRecoverySnapshotId(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= 128 && value.utf8.allSatisfy { byte in
+            (48...57).contains(byte) || (65...90).contains(byte) || (97...122).contains(byte)
+                || byte == 45 || byte == 95
+        }
+    }
+
+    private func validRecoveryFailureReason(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= 128 && value.utf8.allSatisfy { byte in
+            (48...57).contains(byte) || (97...122).contains(byte) || byte == 95
+        }
     }
 
     public func createPairingInvitation(lifetimeMilliseconds: UInt64, endpoints: [String]) async throws -> PairingInvitation {
@@ -1037,6 +1184,62 @@ public actor NodeClient {
             authenticated: authenticated,
             timeout: timeout
         )
+    }
+
+    private func sendRecovery<Response: Decodable & Sendable>(
+        path: String,
+        method: String = "GET",
+        bodyData: Data? = nil,
+        maximumResponseBytes: Int = 24 * 1_024 * 1_024
+    ) async throws -> Response {
+        guard maximumResponseBytes > 0 else { throw NodeClientError.invalidResponse }
+        var request = try authenticatedRequest(
+            path: path,
+            method: method,
+            accept: "application/json"
+        )
+        request.timeoutInterval = 20
+        if let bodyData {
+            request.httpBody = bodyData
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        let bytes: URLSession.AsyncBytes
+        let response: URLResponse
+        do {
+            (bytes, response) = try await session.bytes(for: request)
+        } catch {
+            throw NodeClientError.transport(NodeTransportCopy.describe(error))
+        }
+        let http = try requireHTTPResponse(response)
+        var data = Data()
+        defer {
+            data.resetBytes(in: 0..<data.count)
+            data.removeAll(keepingCapacity: false)
+        }
+        guard response.expectedContentLength < 0
+                || response.expectedContentLength <= Int64(maximumResponseBytes)
+        else {
+            bytes.task.cancel()
+            throw NodeClientError.invalidResponse
+        }
+        if response.expectedContentLength > 0 {
+            data.reserveCapacity(Int(response.expectedContentLength))
+        }
+        do {
+            for try await byte in bytes {
+                guard data.count < maximumResponseBytes else {
+                    bytes.task.cancel()
+                    throw NodeClientError.invalidResponse
+                }
+                data.append(byte)
+            }
+        } catch let error as NodeClientError {
+            throw error
+        } catch {
+            throw NodeClientError.transport(NodeTransportCopy.describe(error))
+        }
+        try validateHTTPResponse(data: data, response: http, expectedStatusCodes: [200])
+        return try decode(Response.self, from: data)
     }
 
     private func send<Response: Decodable & Sendable, Body: Encodable & Sendable>(
@@ -1999,6 +2202,84 @@ private extension URL {
 private struct ConfigImportRequest: Codable, Sendable {
     let confirmed: Bool
     let settings: ExportedDeviceSettings
+}
+
+private struct RecoveryConfirmationRequest: Codable, Sendable {
+    let confirmed: Bool
+}
+
+/// Keep the base64url wire form private so accidental model encoding cannot
+/// write either field into settings or an app-state document.
+private struct RecoveryKitExportResponse: Decodable, Sendable {
+    let protocolVersion: UInt16
+    let recoveryKit: String
+    let recoveryKey: String
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case protocolVersion, recoveryKit, recoveryKey }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guard c.allKeys.count == CodingKeys.allCases.count else { throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "unexpected recovery field")) }
+        protocolVersion = try c.decode(UInt16.self, forKey: .protocolVersion)
+        recoveryKit = try c.decode(String.self, forKey: .recoveryKit)
+        recoveryKey = try c.decode(String.self, forKey: .recoveryKey)
+    }
+}
+
+private struct RecoveryStatusWire: Decodable, Sendable {
+    let protocolVersion: UInt16
+    let phase: RecoveryPhase
+    let recoveredBackups: [RecoveredBackupStatusWire]
+    let queriedProviderIds: [UUID]
+    let configuredProviderIds: [UUID]
+    let failures: [RecoveryProviderFailureWire]
+    let newerSnapshotMayExist: Bool
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case protocolVersion, phase, recoveredBackups, queriedProviderIds, configuredProviderIds, failures, newerSnapshotMayExist }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guard c.allKeys.count == CodingKeys.allCases.count else { throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "unexpected recovery field")) }
+        protocolVersion = try c.decode(UInt16.self, forKey: .protocolVersion)
+        phase = try c.decode(RecoveryPhase.self, forKey: .phase)
+        recoveredBackups = try c.decode([RecoveredBackupStatusWire].self, forKey: .recoveredBackups)
+        queriedProviderIds = try c.decode([UUID].self, forKey: .queriedProviderIds)
+        configuredProviderIds = try c.decode([UUID].self, forKey: .configuredProviderIds)
+        failures = try c.decode([RecoveryProviderFailureWire].self, forKey: .failures)
+        newerSnapshotMayExist = try c.decode(Bool.self, forKey: .newerSnapshotMayExist)
+    }
+}
+
+private struct RecoveredBackupStatusWire: Decodable, Sendable {
+    let backupId: UUID
+    let snapshotId: String
+    let sourceProviderIds: [UUID]
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case backupId, snapshotId, sourceProviderIds }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guard c.allKeys.count == CodingKeys.allCases.count else { throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "unexpected recovered backup field")) }
+        backupId = try c.decode(UUID.self, forKey: .backupId)
+        snapshotId = try c.decode(String.self, forKey: .snapshotId)
+        sourceProviderIds = try c.decode([UUID].self, forKey: .sourceProviderIds)
+    }
+}
+
+private struct RecoveryProviderFailureWire: Decodable, Sendable {
+    let providerId: UUID
+    let snapshotId: String?
+    let reason: String
+
+    var identity: String {
+        "\(providerId.uuidString.lowercased()):\(snapshotId ?? ""):\(reason)"
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case providerId, snapshotId, reason }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guard c.allKeys.count == CodingKeys.allCases.count else { throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "unexpected recovery failure field")) }
+        providerId = try c.decode(UUID.self, forKey: .providerId)
+        snapshotId = try c.decodeIfPresent(String.self, forKey: .snapshotId)
+        reason = try c.decode(String.self, forKey: .reason)
+    }
 }
 
 private struct PairInvitationRequest: Codable, Sendable {

@@ -5,6 +5,7 @@ pub mod discovery;
 pub mod first_run_claim;
 pub mod network_pairing;
 pub mod pairing_transport;
+mod recovery_state;
 pub mod runtime;
 pub mod transport;
 
@@ -28,15 +29,15 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use covalent_core::{
     BackupOptions, ChunkProvider, CoreError, Engine, JobControl, JobState, KeyProtector,
-    PairingConfirmation, PairingSession, PairingSide, PreviewAction, RestoreOptions, RestorePlan,
-    RestorePreviewEntry, RosterCursor, WrappedSecret, canonical_target_inventory_digest,
-    state_secret_context,
+    PairingConfirmation, PairingSession, PairingSide, PreviewAction, RecoveryUnlockKey,
+    RestoreOptions, RestorePlan, RestorePreviewEntry, RosterCursor, WrappedSecret,
+    canonical_target_inventory_digest, state_secret_context,
 };
 use covalent_protocol::{
     ApiErrorBody, BackupId, BackupSummary, ConflictPolicy, DeviceId, EntryKind, NodeStatus,
-    PROTOCOL_VERSION, PairingInvitation, PeerRole, PlatformTier, RelativePath, ReplicaAvailability,
-    ReplicaIntent, SignedRoster, TargetInventory, TargetInventoryBinding, TargetInventoryEntry,
-    TransportBinding,
+    PROTOCOL_VERSION, PairingInvitation, PeerRole, PlatformTier, RecoveryPhase, RecoveryStatus,
+    RelativePath, ReplicaAvailability, ReplicaIntent, SignedRoster, TargetInventory,
+    TargetInventoryBinding, TargetInventoryEntry, TransportBinding,
 };
 use http_body_util::BodyExt as _;
 use network_pairing::{
@@ -45,6 +46,7 @@ use network_pairing::{
 };
 use pairing_transport::PairingConnection;
 use rand_core::{OsRng, RngCore};
+use recovery_state::RecoveryStateStore;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -69,6 +71,7 @@ const BACKUP_VERIFICATION_FLOW_JS: &str =
     include_str!("../../../packaging/web/backup-verification-flow.js");
 const BACKUP_SELECTION_FLOW_JS: &str =
     include_str!("../../../packaging/web/backup-selection-flow.js");
+const RECOVERY_FLOW_JS: &str = include_str!("../../../packaging/web/recovery-flow.js");
 const TAB_FLOW_JS: &str = include_str!("../../../packaging/web/tab-flow.js");
 const MAX_LOCAL_API_BODY_BYTES: usize = 2 * 1_024 * 1_024;
 const MAX_LOCAL_API_TOKEN_FILE_BYTES: u64 = 16 * 1_024;
@@ -539,6 +542,7 @@ pub struct AppState {
     restore_plan_root: Arc<PathBuf>,
     restore_plan_lock: Arc<Mutex<()>>,
     engine_job_permits: Arc<Semaphore>,
+    recovery_state: Option<Arc<RecoveryStateStore>>,
 }
 
 impl AppState {
@@ -593,7 +597,15 @@ impl AppState {
             restore_plan_root: Arc::new(restore_plan_root),
             restore_plan_lock: Arc::new(Mutex::new(())),
             engine_job_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_ENGINE_JOBS)),
+            recovery_state: None,
         })
+    }
+
+    /// Connects durable, secret-free owner-loss recovery progress to the API.
+    #[must_use]
+    pub(crate) fn with_recovery_state(mut self, recovery_state: Arc<RecoveryStateStore>) -> Self {
+        self.recovery_state = Some(recovery_state);
+        self
     }
 
     /// Sets the exact advertised/discovered QUIC endpoint after the daemon binds it.
@@ -1258,6 +1270,7 @@ pub fn router(state: AppState) -> Router {
             "/assets/backup-selection-flow.js",
             get(backup_selection_flow_javascript),
         )
+        .route("/assets/recovery-flow.js", get(recovery_flow_javascript))
         .route("/assets/tab-flow.js", get(tab_flow_javascript))
         .route("/healthz", get(health))
         .route("/api/v1/status", get(status))
@@ -1265,6 +1278,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/discovery", get(discovery_candidates))
         .route("/api/v1/config/export", post(config_export))
         .route("/api/v1/config/import", post(config_import))
+        .route("/api/v1/recovery/kit", post(export_recovery_kit))
+        .route("/api/v1/recovery/status", get(recovery_status))
+        .route("/api/v1/recovery/retry", post(retry_recovery))
         .route("/api/v1/claim", post(claim_ownership))
         .route("/api/v1/pair/invitations", post(pair_invitation))
         .route("/api/v1/pair/network/start", post(pair_network_start))
@@ -1853,6 +1869,16 @@ async fn backup_selection_flow_javascript() -> impl IntoResponse {
     )
 }
 
+async fn recovery_flow_javascript() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        RECOVERY_FLOW_JS,
+    )
+}
+
 async fn tab_flow_javascript() -> impl IntoResponse {
     (
         [
@@ -2054,6 +2080,106 @@ async fn config_import(
         }
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ConfirmedRecoveryRequest {
+    confirmed: bool,
+}
+
+/// Deliberately has no `Debug` implementation: both strings are bearer-grade secrets.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecoveryKitExportResponse {
+    protocol_version: u16,
+    recovery_kit: Zeroizing<String>,
+    recovery_key: Zeroizing<String>,
+}
+
+async fn export_recovery_kit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ContractJson(request): ContractJson<ConfirmedRecoveryRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    if !request.confirmed {
+        return Err(ApiError::recovery_confirmation_required());
+    }
+    let admission = state.admit_engine_job()?;
+    let engine = Arc::clone(&state.engine);
+    let response = tokio::task::spawn_blocking(move || {
+        let _admission = admission;
+        let unlock = RecoveryUnlockKey::generate();
+        let kit = engine.export_recovery_kit(&unlock)?;
+        Ok::<_, CoreError>(RecoveryKitExportResponse {
+            protocol_version: PROTOCOL_VERSION,
+            recovery_kit: Zeroizing::new(URL_SAFE_NO_PAD.encode(kit)),
+            recovery_key: unlock.expose_base64(),
+        })
+    })
+    .await
+    .map_err(|_| ApiError::internal("recovery-kit worker failed"))?
+    .map_err(ApiError::from_core)?;
+    let mut response = axum::Json(response).into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, max-age=0"),
+    );
+    Ok(response)
+}
+
+async fn recovery_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<axum::Json<RecoveryStatus>, ApiError> {
+    authorize(&state, &headers)?;
+    let status = match &state.recovery_state {
+        Some(store) => store.status().map_err(ApiError::from_core)?,
+        None => RecoveryStatus {
+            protocol_version: PROTOCOL_VERSION,
+            phase: RecoveryPhase::NotConfigured,
+            recovered_backups: Vec::new(),
+            queried_provider_ids: BTreeSet::new(),
+            configured_provider_ids: BTreeSet::new(),
+            failures: Vec::new(),
+            newer_snapshot_may_exist: false,
+        },
+    };
+    Ok(axum::Json(status))
+}
+
+async fn retry_recovery(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ContractJson(request): ContractJson<ConfirmedRecoveryRequest>,
+) -> Result<axum::Json<RecoveryStatus>, ApiError> {
+    authorize(&state, &headers)?;
+    if !request.confirmed {
+        return Err(ApiError::recovery_confirmation_required());
+    }
+    let store = state.recovery_state.clone().ok_or_else(|| {
+        ApiError::conflict(
+            "recovery_not_configured",
+            "This node was not started from an owner-loss recovery kit.",
+        )
+    })?;
+    if store.status().map_err(ApiError::from_core)?.phase == RecoveryPhase::NotConfigured {
+        return Err(ApiError::conflict(
+            "recovery_not_configured",
+            "This node was not started from an owner-loss recovery kit.",
+        ));
+    }
+    let admission = state.admit_engine_job()?;
+    let engine = Arc::clone(&state.engine);
+    let status = tokio::task::spawn_blocking(move || {
+        let _admission = admission;
+        store.retry(&engine)
+    })
+    .await
+    .map_err(|_| ApiError::internal("recovery worker failed"))?
+    .map_err(ApiError::from_core)?;
+    Ok(axum::Json(status))
 }
 
 #[derive(Deserialize)]
@@ -2790,6 +2916,20 @@ async fn connect_provider(
     state
         .connect_provider(connection.clone())
         .map_err(ApiError::from_core)?;
+    if let Some(store) = state.recovery_state.clone()
+        && store.should_retry().map_err(ApiError::from_core)?
+    {
+        let engine = Arc::clone(&state.engine);
+        tokio::spawn(async move {
+            match tokio::task::spawn_blocking(move || store.retry(&engine)).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, "provider catalog recovery remains pending");
+                }
+                Err(error) => tracing::warn!(%error, "provider catalog recovery worker failed"),
+            }
+        });
+    }
     Ok(axum::Json(
         probe_provider_connection(state, connection).await?,
     ))
@@ -6249,6 +6389,16 @@ impl ApiError {
         }
     }
 
+    const fn recovery_confirmation_required() -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            code: "recovery_confirmation_required",
+            message: "Explicit local confirmation is required for this recovery action.",
+            retryable: false,
+            upload_offset: None,
+        }
+    }
+
     const fn bad_request(code: &'static str, message: &'static str) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
@@ -6397,6 +6547,208 @@ mod tests {
         ));
         let engine = Arc::new(Engine::open(options).expect("test engine"));
         AppState::new(engine, PlatformTier::Tier1, TEST_TOKEN.to_owned()).expect("state")
+    }
+
+    #[tokio::test]
+    async fn recovery_kit_export_is_authenticated_confirmed_uncached_and_reopenable() {
+        let directory = TempDir::new().expect("directory");
+        let state = test_state(&directory);
+        let expected_device_id = state.engine.device_id();
+        let app = router(state);
+
+        let unconfirmed = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/recovery/kit")
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"confirmed":false}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(unconfirmed.status(), StatusCode::CONFLICT);
+        let unconfirmed_body = unconfirmed
+            .into_body()
+            .collect()
+            .await
+            .expect("unconfirmed body")
+            .to_bytes();
+        let unconfirmed_error: ApiErrorBody =
+            serde_json::from_slice(&unconfirmed_body).expect("API error");
+        assert_eq!(unconfirmed_error.code, "recovery_confirmation_required");
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/recovery/kit")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"confirmed":true}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/recovery/kit")
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"confirmed":true}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store, max-age=0")
+        );
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let exported: serde_json::Value = serde_json::from_slice(&body).expect("JSON");
+        let kit = URL_SAFE_NO_PAD
+            .decode(exported["recoveryKit"].as_str().expect("kit"))
+            .expect("kit base64url");
+        let material_directory = TempDir::new().expect("material directory");
+        let kit_path = material_directory.path().join("owner.covalent-recovery");
+        let key_path = material_directory
+            .path()
+            .join("owner.covalent-recovery-key");
+        fs::write(&kit_path, &kit).expect("write decoded raw kit");
+        fs::write(
+            &key_path,
+            format!(
+                "{}\n",
+                exported["recoveryKey"].as_str().expect("recovery key")
+            ),
+        )
+        .expect("write recovery key");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&kit_path, fs::Permissions::from_mode(0o600)).expect("protect kit");
+            fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600)).expect("protect key");
+        }
+        let bootstrap = crate::runtime::load_recovery_bootstrap_files(&kit_path, &key_path)
+            .expect("load canonical CLI files");
+        let recovered_parent = TempDir::new().expect("recovered parent");
+        let recovered_path = recovered_parent.path().join("fresh-recovered-node");
+        let mut configuration = crate::runtime::NodeRuntimeConfig::new(
+            &recovered_path,
+            "127.0.0.1:0".parse().expect("API address"),
+            "127.0.0.1:0".parse().expect("peer address"),
+        );
+        configuration.key_protector = Some(Arc::new(
+            StaticKeyProtector::new(1, [0x42; 32]).expect("protector"),
+        ));
+        configuration.recovery = Some(bootstrap);
+        configuration.first_run_claim_enabled = true;
+        let recovered = crate::runtime::NodeRuntime::start(configuration)
+            .await
+            .expect("start recovered serving runtime from API files");
+        recovered.stop().await.expect("stop recovered runtime");
+        let identity: serde_json::Value = serde_json::from_slice(
+            &fs::read(recovered_path.join("identity.json")).expect("recovered identity"),
+        )
+        .expect("identity JSON");
+        assert_eq!(identity["deviceId"], expected_device_id.to_string());
+    }
+
+    #[tokio::test]
+    async fn recovery_status_requires_authentication_and_defaults_to_not_configured() {
+        let directory = TempDir::new().expect("directory");
+        let app = router(test_state(&directory));
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/recovery/status")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/recovery/status")
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let status: RecoveryStatus = serde_json::from_slice(&body).expect("status");
+        assert_eq!(status.phase, RecoveryPhase::NotConfigured);
+    }
+
+    #[tokio::test]
+    async fn recovery_export_respects_bounded_engine_job_admission() {
+        let directory = TempDir::new().expect("directory");
+        let state = test_state(&directory);
+        let _active_job = state.admit_engine_job().expect("hold engine admission");
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/recovery/kit")
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"confirmed":true}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn recovery_retry_respects_bounded_engine_job_admission() {
+        let directory = TempDir::new().expect("directory");
+        let mut state = test_state(&directory);
+        let store = Arc::new(
+            RecoveryStateStore::open(directory.path().join("recovery-state.json"))
+                .expect("recovery state"),
+        );
+        store.begin(&state.engine).expect("pending recovery");
+        state = state.with_recovery_state(store);
+        let _active_job = state.admit_engine_job().expect("hold engine admission");
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/recovery/retry")
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"confirmed":true}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[tokio::test]
@@ -6747,6 +7099,7 @@ mod tests {
             "/assets/backup-terminal-flow.js",
             "/assets/backup-verification-flow.js",
             "/assets/backup-selection-flow.js",
+            "/assets/recovery-flow.js",
             "/assets/tab-flow.js",
         ] {
             let response = app

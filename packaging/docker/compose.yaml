@@ -28,7 +28,7 @@ services:
       - "${COVALENT_HTTPS_BIND_IP:-127.0.0.1}:${COVALENT_HTTPS_PORT:-8443}:8443/tcp"
       - "${COVALENT_PEER_BIND_IP:-0.0.0.0}:${COVALENT_PEER_PORT:-8787}:8787/udp"
     tmpfs:
-      - /tmp:size=64m,mode=1777
+      - /tmp:size=64m,mode=1777,noexec,nosuid,nodev
     volumes:
       # Keep the two durable paths explicit so operators know exactly what to
       # back up and can migrate them without hunting through Docker volumes.

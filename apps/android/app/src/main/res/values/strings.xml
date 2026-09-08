@@ -268,7 +268,7 @@
     <string name="error_target_access_revoked">Folder write access was revoked. Choose the restore folder again.</string>
 
     <string name="settings_title">Settings</string>
-    <string name="settings_subtitle">Control discovery, connection, and safe settings. Identity keys and device credentials are never exported.</string>
+    <string name="settings_subtitle">Control discovery and connections. Safe settings omit credentials; encrypted owner-loss recovery files are created separately.</string>
     <string name="node_mode_title">Backup server used by this app</string>
     <string name="node_mode_external">Separate server</string>
     <string name="node_mode_external_detail">Use the Docker, Unraid, or Mac server connection you saved.</string>
@@ -304,6 +304,39 @@
     <string name="settings_backup_removal_warning">This import removes remembered backups from your backup server.</string>
     <string name="settings_import_keys_excluded">Private identity keys, backup keys, permissions, and device credentials are not part of this import.</string>
     <string name="settings_imported">Settings imported after this preview and explicit confirmation.</string>
+    <string name="recovery_settings_title">Recovery files</string>
+    <string name="recovery_settings_detail">Create an encrypted recovery kit and a separate recovery code. Keep the two files in different safe places.</string>
+    <string name="action_create_recovery_kit">Create recovery kit</string>
+    <string name="recovery_export_confirm_title">Create new recovery files?</string>
+    <string name="recovery_export_confirm_detail">Save both recovery files in different safe places. You’ll need both if you lose this device.</string>
+    <string name="recovery_export_saved">Recovery kit and recovery code saved in separate files.</string>
+    <string name="recovery_export_failed">Both files need to be saved. Try saving again, or discard this attempt.</string>
+    <string name="recovery_export_incomplete">One recovery file still needs to be saved. Try again before leaving this screen, or discard this attempt.</string>
+    <string name="action_retry_save">Retry file save</string>
+    <string name="action_discard">Discard</string>
+    <string name="recovery_bootstrap_title">Recover a lost device</string>
+    <string name="recovery_bootstrap_detail">Choose the two recovery files you saved earlier to find your backups on your other devices.</string>
+    <string name="action_choose_recovery_files">Choose recovery files</string>
+    <string name="recovery_bootstrap_confirm_title">Recover your backups on this phone?</string>
+    <string name="recovery_bootstrap_confirm_detail">Covalent will open your recovery files and check your backup devices. Keep those devices online while recovery runs.</string>
+    <string name="action_recover_phone">Recover this phone</string>
+    <string name="action_use_recovered_phone">Use this recovered phone</string>
+    <string name="recovery_bootstrap_started">Recovery started. This phone stays unselected until you choose it as the active server.</string>
+    <string name="recovery_bootstrap_failed">Covalent could not finish recovery. Check the two files and try again.</string>
+    <string name="recovery_phase_not_configured">No device recovery is in progress.</string>
+    <string name="recovery_phase_pending">Covalent is ready to check your backup devices.</string>
+    <string name="recovery_phase_imported">Recovery finished. All your backup devices were checked.</string>
+    <string name="recovery_phase_partial">Some backups were recovered, but other copies could not be checked safely.</string>
+    <string name="recovery_phase_blocked">Covalent could not safely recover a backup yet. Bring your backup devices online and try again.</string>
+    <string name="recovery_phase_no_catalogs">All your backup devices were checked, but no backups were found.</string>
+    <string name="recovery_status_counts">%1$d backups recovered · %2$d of %3$d backup devices checked</string>
+    <string name="recovery_newer_snapshot_warning">A newer backup may still exist on another device.</string>
+    <string name="recovery_provider_failure">Provider %1$s: %2$s</string>
+    <string name="recovery_more_failures">%1$d more device problems</string>
+    <string name="action_retry_recovery">Check again</string>
+    <string name="recovery_retry_confirm_title">Check your backup devices again?</string>
+    <string name="recovery_retry_confirm_detail">Keep your backup devices online while Covalent checks them again.</string>
+    <string name="recovery_retry_finished">The recovery check has finished.</string>
     <string name="folder_revocation_policy">If Android revokes folder access, the transfer stops safely and asks you to select the folder again.</string>
     <string name="error_file_not_writable">The selected file is not writable.</string>
     <string name="error_file_not_readable">The selected file cannot be read.</string>
@@ -443,4 +476,6 @@
         <item quantity="one">%1$d remembered backup</item>
         <item quantity="other">%1$d remembered backups</item>
     </plurals>
+    <string name="recovery_show_details">Show technical details</string>
+    <string name="recovery_hide_details">Hide technical details</string>
 </resources>

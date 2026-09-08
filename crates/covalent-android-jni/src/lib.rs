@@ -12,8 +12,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use covalent_core::{ProviderQuotaPolicy, StaticKeyProtector};
-use covalent_node::runtime::{LocalApiTokenSource, NodeRuntime, NodeRuntimeConfig};
+use covalent_core::{ProviderQuotaPolicy, RecoveryUnlockKey, StaticKeyProtector};
+use covalent_node::runtime::{
+    LocalApiTokenSource, NodeRuntime, NodeRuntimeConfig, RecoveryBootstrap,
+};
 use covalent_protocol::PlatformTier;
 use jni::EnvUnowned;
 use jni::objects::{JByteArray, JClass, JString};
@@ -27,6 +29,7 @@ const NATIVE_CLASS: &str = "life/michaelwong/covalent/node/CovalentNative";
 const MAX_LIVE_NODES: usize = 2;
 const MIN_PROVIDER_BYTES: u64 = 256 * 1_024 * 1_024;
 const MAX_PROVIDER_BYTES: u64 = 8 * 1_024 * 1_024 * 1_024 * 1_024;
+const MAX_RECOVERY_KIT_BYTES: usize = 16 * 1_024 * 1_024;
 // Android Keystore protection levels, mirroring
 // `life.michaelwong.covalent.node.KeyProtectionLevel`.  Kotlin owns the probe
 // because only the platform can answer it: it generates the AES-GCM protector
@@ -224,6 +227,7 @@ struct StartNodeRequest {
     maximum_total_bytes: u64,
     free_space_reserve_bytes: u64,
     key_protection_level: i32,
+    recovery: Option<RecoveryBootstrap>,
 }
 
 fn start_node(request: StartNodeRequest) -> NativeResponse<'static> {
@@ -237,7 +241,9 @@ fn start_node(request: StartNodeRequest) -> NativeResponse<'static> {
         maximum_total_bytes,
         free_space_reserve_bytes,
         key_protection_level,
+        recovery,
     } = request;
+    let recovering = recovery.is_some();
     let result = (|| {
         if !identity_protection_accepted(key_protection_level) {
             return Err("secure_key_protector_required");
@@ -285,13 +291,18 @@ fn start_node(request: StartNodeRequest) -> NativeResponse<'static> {
         configuration.provider_quota_policy = quota;
         configuration.api_token = LocalApiTokenSource::Provided(token);
         configuration.key_protector = Some(Arc::new(protector));
+        configuration.recovery = recovery;
         let node = match runtime.block_on(NodeRuntime::start(configuration)) {
             Ok(node) => node,
             Err(_) => {
                 if let Ok(mut registry) = registry.lock() {
                     registry.reserved_handles.remove(&handle);
                 }
-                return Err("node_start_failed");
+                return Err(if recovering {
+                    "node_recovery_failed"
+                } else {
+                    "node_start_failed"
+                });
             }
         };
         let ready = node.ready_info();
@@ -338,6 +349,10 @@ fn start_node(request: StartNodeRequest) -> NativeResponse<'static> {
         Err("runtime_unavailable") => NativeResponse::error(
             "runtime_unavailable",
             "Storing backups on this phone is unavailable right now.",
+        ),
+        Err("node_recovery_failed") => NativeResponse::error(
+            "node_recovery_failed",
+            "This phone could not recover that Covalent identity. The existing identity was left unchanged.",
         ),
         Err(_) => NativeResponse::error(
             "node_start_failed",
@@ -453,6 +468,23 @@ fn take_java_secret(
     secret
 }
 
+fn recovery_bootstrap(
+    mut kit: Zeroizing<Vec<u8>>,
+    key: Zeroizing<Vec<u8>>,
+) -> Result<RecoveryBootstrap, ()> {
+    if !(1..=MAX_RECOVERY_KIT_BYTES).contains(&kit.len()) || key.len() != 32 {
+        return Err(());
+    }
+    let mut raw_key = [0_u8; 32];
+    raw_key.copy_from_slice(key.as_ref());
+    let unlock = RecoveryUnlockKey::from_bytes(raw_key);
+    raw_key.zeroize();
+    Ok(RecoveryBootstrap {
+        kit: Zeroizing::new(std::mem::take(kit.as_mut())),
+        unlock,
+    })
+}
+
 extern "system" fn native_start<'local>(
     unowned: EnvUnowned<'local>,
     _class: JClass<'local>,
@@ -483,11 +515,70 @@ extern "system" fn native_start<'local>(
                     maximum_total_bytes: maximum_total_bytes as u64,
                     free_space_reserve_bytes: free_space_reserve_bytes as u64,
                     key_protection_level,
+                    recovery: None,
                 })
             }
             _ => NativeResponse::error(
                 "invalid_start_request",
                 "The storage settings for this phone are not valid.",
+            ),
+        }
+    })
+}
+
+extern "system" fn native_recover_start<'local>(
+    unowned: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    data_directory: JString<'local>,
+    device_name: JString<'local>,
+    lan_discovery_enabled: jboolean,
+    api_token: JByteArray<'local>,
+    key_encryption_key: JByteArray<'local>,
+    key_version: jint,
+    maximum_total_bytes: jlong,
+    free_space_reserve_bytes: jlong,
+    key_protection_level: jint,
+    recovery_kit: JByteArray<'local>,
+    recovery_key: JByteArray<'local>,
+) -> jstring {
+    with_java_response(unowned, |environment| {
+        let data_directory = data_directory.to_string();
+        let device_name = device_name.to_string();
+        // Consume every secret array before inspecting any value. A malformed token or
+        // configuration must not leave the recovery key live in the JVM array.
+        let token = take_java_secret(environment, &api_token);
+        let key_encryption_key = take_java_secret(environment, &key_encryption_key);
+        let recovery_kit = take_java_secret(environment, &recovery_kit);
+        let recovery_key = take_java_secret(environment, &recovery_key);
+        match (token, key_encryption_key, recovery_kit, recovery_key) {
+            (Ok(token), Ok(key_encryption_key), Ok(recovery_kit), Ok(recovery_key))
+                if maximum_total_bytes > 0 && free_space_reserve_bytes >= 0 =>
+            {
+                let recovery = match recovery_bootstrap(recovery_kit, recovery_key) {
+                    Ok(recovery) => recovery,
+                    Err(()) => {
+                        return NativeResponse::error(
+                            "invalid_recovery_request",
+                            "The selected recovery kit or recovery code is invalid.",
+                        );
+                    }
+                };
+                start_node(StartNodeRequest {
+                    data_directory,
+                    device_name,
+                    lan_discovery_enabled,
+                    token,
+                    key_encryption_key,
+                    key_version,
+                    maximum_total_bytes: maximum_total_bytes as u64,
+                    free_space_reserve_bytes: free_space_reserve_bytes as u64,
+                    key_protection_level,
+                    recovery: Some(recovery),
+                })
+            }
+            _ => NativeResponse::error(
+                "invalid_recovery_request",
+                "The selected recovery kit or recovery code is invalid.",
             ),
         }
     })
@@ -547,17 +638,29 @@ pub unsafe extern "system" fn JNI_OnLoad(
             let native_start_signature = JNIString::from(
                 "(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJI)Ljava/lang/String;",
             );
+            let native_recover_start_name = JNIString::from("nativeRecoverStart");
+            let native_recover_start_signature = JNIString::from(
+                "(Ljava/lang/String;Ljava/lang/String;Z[B[BIJJI[B[B)Ljava/lang/String;",
+            );
             let native_stop_name = JNIString::from("nativeStop");
             let native_stop_signature = JNIString::from("(J)Ljava/lang/String;");
             let native_state_name = JNIString::from("nativeState");
             let native_state_signature = JNIString::from("(J)Ljava/lang/String;");
             let methods = [
-                // SAFETY: signatures exactly match the three static Kotlin extern declarations.
+                // SAFETY: signature exactly matches the static Kotlin start declaration.
                 unsafe {
                     NativeMethod::from_raw_parts(
                         &native_start_name,
                         &native_start_signature,
                         native_start as *mut c_void,
+                    )
+                },
+                // SAFETY: signature exactly matches the static Kotlin recovery declaration.
+                unsafe {
+                    NativeMethod::from_raw_parts(
+                        &native_recover_start_name,
+                        &native_recover_start_signature,
+                        native_recover_start as *mut c_void,
                     )
                 },
                 // SAFETY: signature exactly matches the static Kotlin extern declaration.
@@ -592,9 +695,9 @@ mod tests {
     use zeroize::Zeroizing;
 
     use super::{
-        IdentityProtection, NativeRegistry, PROTECTION_SOFTWARE, PROTECTION_STRONGBOX,
-        PROTECTION_TRUSTED_ENVIRONMENT, PROTECTION_UNAVAILABLE, identity_protection_accepted,
-        provider_quota,
+        IdentityProtection, MAX_RECOVERY_KIT_BYTES, NativeRegistry, PROTECTION_SOFTWARE,
+        PROTECTION_STRONGBOX, PROTECTION_TRUSTED_ENVIRONMENT, PROTECTION_UNAVAILABLE,
+        identity_protection_accepted, provider_quota, recovery_bootstrap,
     };
 
     #[test]
@@ -653,6 +756,7 @@ mod tests {
             maximum_total_bytes: 2 * 1_024 * 1_024 * 1_024,
             free_space_reserve_bytes: 512 * 1_024 * 1_024,
             key_protection_level: PROTECTION_UNAVAILABLE,
+            recovery: None,
         });
         assert!(!response.ok);
         assert_eq!(response.code, "secure_key_protector_required");
@@ -676,9 +780,24 @@ mod tests {
                 maximum_total_bytes: 2 * 1_024 * 1_024 * 1_024,
                 free_space_reserve_bytes: 512 * 1_024 * 1_024,
                 key_protection_level: PROTECTION_SOFTWARE,
+                recovery: None,
             });
             assert!(!response.ok);
             assert_eq!(response.code, "invalid_key_encryption_key");
+        }
+    }
+
+    #[test]
+    fn recovery_bootstrap_requires_raw_bounded_kit_and_exact_256_bit_key() {
+        assert!(recovery_bootstrap(Zeroizing::new(vec![1]), Zeroizing::new(vec![7; 32])).is_ok());
+        for (kit_size, key_size) in [(0, 32), (1, 31), (1, 33), (MAX_RECOVERY_KIT_BYTES + 1, 32)] {
+            assert!(
+                recovery_bootstrap(
+                    Zeroizing::new(vec![1; kit_size]),
+                    Zeroizing::new(vec![7; key_size]),
+                )
+                .is_err()
+            );
         }
     }
 

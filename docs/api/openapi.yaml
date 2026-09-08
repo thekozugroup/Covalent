@@ -108,6 +108,73 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
+  /api/v1/recovery/kit:
+    post:
+      summary: Create a one-time owner-loss recovery kit and random recovery key
+      description: >-
+        Returns the encrypted signed kit and its independently generated 256-bit key only in
+        this authenticated, explicitly confirmed response. Neither value is persisted in node
+        settings or recovery status. The response must not be cached.
+        For the standalone CLI, decode `recoveryKit` into raw bytes and save the two values in
+        separate files. On Unix set both files to mode 0600; ordinary browser downloads may be
+        created as 0644 and are deliberately refused until their permissions are tightened.
+      operationId: exportRecoveryKit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmedRecoveryRequest"
+      responses:
+        "200":
+          description: Newly generated recovery material. Save both values separately.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: "no-store, max-age=0"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecoveryKitExport"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/recovery/status:
+    get:
+      summary: Read durable owner-loss recovery progress and partial-provider warnings
+      operationId: recoveryStatus
+      responses:
+        "200":
+          description: Secret-free recovery state with exact provider evidence.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecoveryStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/v1/recovery/retry:
+    post:
+      summary: Retry bounded authenticated catalog import from active providers
+      operationId: retryRecovery
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmedRecoveryRequest"
+      responses:
+        "200":
+          description: Durable recovery status after the attempt.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecoveryStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
   /api/v1/claim:
     post:
       summary: Claim ownership of an unclaimed node with its first-run code
@@ -1329,6 +1396,105 @@ components:
       minLength: 1
       maxLength: 128
       pattern: "^[A-Za-z0-9_-]+$"
+    ConfirmedRecoveryRequest:
+      type: object
+      additionalProperties: false
+      required: [confirmed]
+      properties:
+        confirmed:
+          type: boolean
+          description: Must be true after a local user confirms the recovery action.
+    RecoveryKitExport:
+      type: object
+      additionalProperties: false
+      required: [protocolVersion, recoveryKit, recoveryKey]
+      properties:
+        protocolVersion:
+          type: integer
+          const: 1
+        recoveryKit:
+          type: string
+          minLength: 1
+          maxLength: 22369624
+          pattern: "^[A-Za-z0-9_-]+$"
+          description: >-
+            Base64url unpadded encrypted signed recovery-kit bytes. Decode this field and save
+            the raw bytes in an owner-only `.covalent-recovery` file for `covalent-node recover`.
+        recoveryKey:
+          type: string
+          minLength: 43
+          maxLength: 43
+          pattern: "^[A-Za-z0-9_-]{43}$"
+          description: >-
+            Base64url unpadded random 256-bit key; shown only in this response. Save the exact
+            43 characters in a separate owner-only `.covalent-recovery-key` file.
+    RecoveryStatus:
+      type: object
+      additionalProperties: false
+      required:
+        - protocolVersion
+        - phase
+        - recoveredBackups
+        - queriedProviderIds
+        - configuredProviderIds
+        - failures
+        - newerSnapshotMayExist
+      properties:
+        protocolVersion:
+          type: integer
+          const: 1
+        phase:
+          enum: [not_configured, pending, imported, partial, blocked, no_catalogs]
+        recoveredBackups:
+          type: array
+          maxItems: 100000
+          items:
+            type: object
+            additionalProperties: false
+            required: [backupId, snapshotId, sourceProviderIds]
+            properties:
+              backupId:
+                $ref: "#/components/schemas/BackupId"
+              snapshotId:
+                $ref: "#/components/schemas/SnapshotId"
+              sourceProviderIds:
+                type: array
+                maxItems: 128
+                uniqueItems: true
+                items:
+                  $ref: "#/components/schemas/DeviceId"
+        queriedProviderIds:
+          type: array
+          maxItems: 128
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/DeviceId"
+        configuredProviderIds:
+          type: array
+          maxItems: 128
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/DeviceId"
+        failures:
+          type: array
+          maxItems: 256
+          items:
+            type: object
+            additionalProperties: false
+            required: [providerId, snapshotId, reason]
+            properties:
+              providerId:
+                $ref: "#/components/schemas/DeviceId"
+              snapshotId:
+                oneOf:
+                  - $ref: "#/components/schemas/SnapshotId"
+                  - type: "null"
+              reason:
+                type: string
+                minLength: 1
+                maxLength: 128
+        newerSnapshotMayExist:
+          type: boolean
     JobId:
       type: string
       minLength: 1

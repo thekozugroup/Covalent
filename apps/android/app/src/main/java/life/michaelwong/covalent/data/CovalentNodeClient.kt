@@ -38,6 +38,10 @@ import life.michaelwong.covalent.model.PeerTransport
 import life.michaelwong.covalent.model.Provider
 import life.michaelwong.covalent.model.ProviderReachability
 import life.michaelwong.covalent.model.RememberedBackup
+import life.michaelwong.covalent.model.RecoveredBackup
+import life.michaelwong.covalent.model.RecoveryFailure
+import life.michaelwong.covalent.model.RecoveryPhase
+import life.michaelwong.covalent.model.RecoveryStatus
 import life.michaelwong.covalent.model.RestorePlanPage
 import life.michaelwong.covalent.model.RestorePlanReference
 import life.michaelwong.covalent.model.RestorePreviewEntry
@@ -402,6 +406,72 @@ class CovalentNodeClient(
         request(baseUrl, "POST", path, token, payload.toString())
     }
 
+    /** Creates one uncached owner-loss recovery pair. The returned object owns mutable copies. */
+    internal fun exportRecoveryKit(baseUrl: String, token: String): RecoveryExportMaterial {
+        val json = requestBoundedObject(
+            baseUrl,
+            "POST",
+            "/api/v1/recovery/kit",
+            token,
+            JSONObject().put("confirmed", true).toString(),
+            MAX_RECOVERY_EXPORT_RESPONSE_BYTES,
+        )
+        requireExactKeys(json, setOf("protocolVersion", "recoveryKit", "recoveryKey"))
+        requireProtocolVersion(json)
+        val kitText = json.getString("recoveryKit")
+        require(kitText.length in 1..MAX_RECOVERY_KIT_ENCODED_LENGTH && kitText.matches(BASE64URL_PATTERN)) {
+            "The node returned an invalid recovery kit."
+        }
+        val codeText = json.getString("recoveryKey")
+        require(codeText.length == RECOVERY_CODE_TEXT_LENGTH && codeText.matches(BASE64URL_PATTERN)) {
+            "The node returned an invalid recovery code."
+        }
+        var ownedKit: ByteArray? = null
+        var ownedCode: ByteArray? = null
+        var decodedCode: ByteArray? = null
+        var transferred = false
+        return try {
+            val kit = JBase64.getUrlDecoder().decode(kitText)
+            ownedKit = kit
+            require(kit.isNotEmpty() && kit.size <= MAX_RECOVERY_KIT_BYTES) {
+                "The node returned an invalid recovery kit."
+            }
+            val code = codeText.encodeToByteArray()
+            ownedCode = code
+            decodedCode = decodeRecoveryCode(code)
+            require(checkNotNull(decodedCode).size == 32)
+            RecoveryExportMaterial(kit, code).also {
+                transferred = true
+            }
+        } finally {
+            if (!transferred) {
+                ownedKit?.fill(0)
+                ownedCode?.fill(0)
+            }
+            decodedCode?.fill(0)
+        }
+    }
+
+    fun recoveryStatus(baseUrl: String, token: String): RecoveryStatus =
+        requestBoundedObject(
+            baseUrl,
+            "GET",
+            "/api/v1/recovery/status",
+            token,
+            null,
+            MAX_RECOVERY_STATUS_RESPONSE_BYTES,
+        ).toRecoveryStatus()
+
+    fun retryRecovery(baseUrl: String, token: String): RecoveryStatus =
+        requestBoundedObject(
+            baseUrl,
+            "POST",
+            "/api/v1/recovery/retry",
+            token,
+            JSONObject().put("confirmed", true).toString(),
+            MAX_RECOVERY_STATUS_RESPONSE_BYTES,
+        ).toRecoveryStatus()
+
     private fun request(
         baseUrl: String,
         method: String,
@@ -419,6 +489,40 @@ class CovalentNodeClient(
             }
         }
         return NodeResponse(readResponse(connection))
+    }
+
+    private fun requestBoundedObject(
+        baseUrl: String,
+        method: String,
+        path: String,
+        token: String,
+        payload: String?,
+        maximumResponseBytes: Int,
+    ): JSONObject {
+        val connection = openConnection(baseUrl, path, method, token, "application/json").apply {
+            useCaches = false
+            setRequestProperty("Cache-Control", "no-store")
+            if (payload != null) {
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json")
+                val bytes = payload.encodeToByteArray()
+                try {
+                    setFixedLengthStreamingMode(bytes.size)
+                    outputStream.use { it.write(bytes) }
+                } finally {
+                    bytes.fill(0)
+                }
+            }
+        }
+        return try {
+            if (connection.responseCode !in 200..299) readResponse(connection)
+            val body = connection.inputStream.use {
+                it.readBoundedText(maximumResponseBytes, "The node response")
+            }
+            JSONObject(body)
+        } finally {
+            connection.disconnect()
+        }
     }
 
     internal fun openConnection(
@@ -485,8 +589,13 @@ class CovalentNodeClient(
         val uploadOffset = connection.getHeaderField("X-Covalent-Upload-Offset")?.toLongOrNull()
         val inventoryOffset = connection.getHeaderField("X-Covalent-Inventory-Offset")?.toLongOrNull()
         val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-        val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
-        connection.disconnect()
+        val text = try {
+            stream?.use {
+                it.readBoundedText(MAX_NODE_JSON_RESPONSE_BYTES, "The node response")
+            }.orEmpty()
+        } finally {
+            connection.disconnect()
+        }
         if (code !in 200..299) {
             val payload = runCatching { JSONObject(text) }.getOrNull()
             val protocolVersion = payload?.optInt("protocolVersion", COVALENT_PROTOCOL_VERSION)
@@ -524,6 +633,14 @@ internal fun peerTransportConnectPayload(peerTransport: PeerTransport): JSONObje
         .put("certificateFingerprint", peerTransport.certificateFingerprint))
 
 private const val COVALENT_PROTOCOL_VERSION = 1
+private const val MAX_RECOVERY_KIT_ENCODED_LENGTH = 22_369_624
+private const val MAX_RECOVERY_EXPORT_RESPONSE_BYTES = MAX_RECOVERY_KIT_ENCODED_LENGTH + 1_024
+private const val MAX_RECOVERY_STATUS_RESPONSE_BYTES = 24 * 1_024 * 1_024
+private const val MAX_NODE_JSON_RESPONSE_BYTES = 64 * 1_024 * 1_024
+private const val RECOVERY_CODE_TEXT_LENGTH = 43
+private const val MAX_RECOVERED_BACKUPS = 100_000
+private const val MAX_RECOVERY_PROVIDER_IDS = 128
+private const val MAX_RECOVERY_FAILURES = 256
 private const val RESTORE_PREVIEW_PAGE_SIZE = 100
 private const val MAX_RESTORE_PREVIEW_PAGE_SIZE = 1_000
 private const val TARGET_INVENTORY_PAGE_SIZE = 5_000
@@ -533,6 +650,145 @@ private val SAFE_PLAN_ID = Regex("[A-Za-z0-9_-]{16,128}")
 private val SAFE_AUTHENTICATION_STRING = Regex("(?:[0-9]{4}-){3}[0-9]{4}")
 private val SAFE_NETWORK_PAIRING_ID = Regex("[A-Za-z0-9_-]{1,128}")
 private val SAFE_LOWERCASE_DIGEST = Regex("[0-9a-f]{64}")
+private val BASE64URL_PATTERN = Regex("^[A-Za-z0-9_-]+$")
+private val SAFE_RECOVERY_SNAPSHOT_ID = Regex("^[A-Za-z0-9_-]{1,128}$")
+private val SAFE_UUID = Regex(
+    "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+)
+
+private fun requireProtocolVersion(json: JSONObject) {
+    val version = json.getInt("protocolVersion")
+    if (version != COVALENT_PROTOCOL_VERSION) throw NodeProtocolException(version)
+}
+
+private fun requireExactKeys(json: JSONObject, expected: Set<String>) {
+    val actual = buildSet {
+        val iterator = json.keys()
+        while (iterator.hasNext()) add(iterator.next())
+    }
+    require(actual == expected) { "The node returned an unexpected recovery response." }
+}
+
+private fun JSONObject.toRecoveryStatus(): RecoveryStatus {
+    requireExactKeys(
+        this,
+        setOf(
+            "protocolVersion",
+            "phase",
+            "recoveredBackups",
+            "queriedProviderIds",
+            "configuredProviderIds",
+            "failures",
+            "newerSnapshotMayExist",
+        ),
+    )
+    requireProtocolVersion(this)
+    val recoveredValues = getJSONArray("recoveredBackups")
+    require(recoveredValues.length() <= MAX_RECOVERED_BACKUPS) {
+        "The node returned too many recovered backups."
+    }
+    val recovered = List(recoveredValues.length()) { index ->
+        val value = recoveredValues.getJSONObject(index)
+        requireExactKeys(value, setOf("backupId", "snapshotId", "sourceProviderIds"))
+        RecoveredBackup(
+            backupId = requireUuid(value.getString("backupId"), "backup ID"),
+            snapshotId = value.getString("snapshotId").also {
+                require(it.matches(SAFE_RECOVERY_SNAPSHOT_ID)) {
+                    "The node returned an invalid recovery snapshot ID."
+                }
+            },
+            sourceProviderIds = value.getJSONArray("sourceProviderIds").toProviderIdSet(),
+        )
+    }
+    val failureValues = getJSONArray("failures")
+    require(failureValues.length() <= MAX_RECOVERY_FAILURES) {
+        "The node returned too many recovery failures."
+    }
+    val failures = List(failureValues.length()) { index ->
+        val value = failureValues.getJSONObject(index)
+        requireExactKeys(value, setOf("providerId", "snapshotId", "reason"))
+        RecoveryFailure(
+            providerId = requireUuid(value.getString("providerId"), "provider ID"),
+            snapshotId = value.optionalString("snapshotId")?.also {
+                require(it.matches(SAFE_RECOVERY_SNAPSHOT_ID)) {
+                    "The node returned an invalid recovery snapshot ID."
+                }
+            },
+            reason = value.getString("reason").also {
+                require(it.length in 1..128) { "The node returned an invalid recovery failure." }
+            },
+        )
+    }
+    val status = RecoveryStatus(
+        protocolVersion = COVALENT_PROTOCOL_VERSION.toUShort(),
+        phase = RecoveryPhase.fromWire(getString("phase")),
+        recoveredBackups = recovered,
+        queriedProviderIds = getJSONArray("queriedProviderIds").toProviderIdSet(),
+        configuredProviderIds = getJSONArray("configuredProviderIds").toProviderIdSet(),
+        failures = failures,
+        newerSnapshotMayExist = getBoolean("newerSnapshotMayExist"),
+    )
+    require(status.queriedProviderIds.all(status.configuredProviderIds::contains)) {
+        "The node returned recovery results for an unconfigured provider."
+    }
+    require(status.failures.all { it.providerId in status.configuredProviderIds }) {
+        "The node returned a recovery failure for an unconfigured provider."
+    }
+    require(
+        status.recoveredBackups.all { backup ->
+            backup.sourceProviderIds.isNotEmpty() &&
+                backup.sourceProviderIds.all(status.configuredProviderIds::contains)
+        },
+    ) { "The node returned a recovered backup from an unconfigured provider." }
+    require(status.recoveredBackups.map(RecoveredBackup::backupId).toSet().size == status.recoveredBackups.size) {
+        "The node returned duplicate recovered backups."
+    }
+    require(status.hasConsistentRecoveryPhase()) {
+        "The node returned a contradictory recovery status."
+    }
+    return status
+}
+
+private fun RecoveryStatus.hasConsistentRecoveryPhase(): Boolean = when (phase) {
+    RecoveryPhase.NOT_CONFIGURED ->
+        recoveredBackups.isEmpty() &&
+            queriedProviderIds.isEmpty() &&
+            configuredProviderIds.isEmpty() &&
+            failures.isEmpty() &&
+            !newerSnapshotMayExist
+    RecoveryPhase.PENDING ->
+        recoveredBackups.isEmpty() &&
+            queriedProviderIds.isEmpty() &&
+            failures.isEmpty() &&
+            newerSnapshotMayExist
+    RecoveryPhase.IMPORTED ->
+        recoveredBackups.isNotEmpty() &&
+            queriedProviderIds == configuredProviderIds &&
+            failures.isEmpty() &&
+            !newerSnapshotMayExist
+    RecoveryPhase.PARTIAL -> recoveredBackups.isNotEmpty() && newerSnapshotMayExist
+    RecoveryPhase.BLOCKED -> recoveredBackups.isEmpty() && newerSnapshotMayExist
+    RecoveryPhase.NO_CATALOGS ->
+        recoveredBackups.isEmpty() &&
+            queriedProviderIds == configuredProviderIds &&
+            failures.isEmpty() &&
+            !newerSnapshotMayExist
+}
+
+private fun JSONArray.toProviderIdSet(): Set<String> {
+    require(length() <= MAX_RECOVERY_PROVIDER_IDS) { "The node returned too many recovery providers." }
+    val values = List(length()) { index -> requireUuid(getString(index), "provider ID") }
+    require(values.toSet().size == values.size) { "The node returned duplicate recovery providers." }
+    return values.toSet()
+}
+
+private fun requireUuid(value: String, label: String): String {
+    val parsed = runCatching { UUID.fromString(value) }.getOrNull()
+    require(value.matches(SAFE_UUID) && parsed?.toString() == value) {
+        "The node returned an invalid $label."
+    }
+    return value
+}
 
 private data class TargetInventoryUpload(
     val inventoryId: String,

@@ -78,6 +78,8 @@
       RECOVERY.retry,
     ],
     confirmation_required: ["This has to be confirmed on the other device before it can finish.", RECOVERY.none],
+    recovery_confirmation_required: ["Confirm that you want to create recovery files or retry recovery, then continue.", RECOVERY.none],
+    recovery_not_configured: ["This backup server was set up normally. To replace a lost device, start a new installation with its recovery files.", RECOVERY.none],
 
     // Source folder
     source_changed: ["Files changed while Covalent was copying them. Try again once they stop changing.", RECOVERY.retry],
@@ -473,6 +475,10 @@ const restorePreview = globalThis.CovalentRestorePreviewFlow.coordinator();
 const backupTerminal = globalThis.CovalentBackupTerminalFlow;
 const backupVerification = globalThis.CovalentBackupVerification;
 const backupSelection = globalThis.CovalentBackupSelectionFlow;
+const recovery = globalThis.CovalentRecoveryFlow;
+const recoverySession = recovery.session();
+let recoveryGeneration = 0;
+let recoveryStatusInFlight = false;
 const tabFlow = globalThis.CovalentTabFlow;
 const errorCopy = globalThis.CovalentNodeErrorCopy;
 const pairingStorageKey = "covalent.pairing-session.v1";
@@ -521,14 +527,14 @@ function fail(error) {
   message.dataset.recovery = failure.recovery;
 }
 
-async function apiResponse(path, options = {}) {
+async function apiResponse(path, options = {}, readJson = (response) => response.json()) {
   const headers = new Headers(options.headers || {});
   headers.set("Accept", "application/json");
   if (token) headers.set("Authorization", `Bearer ${token}`);
   if (options.body) headers.set("Content-Type", "application/json");
   const response = await fetch(path, { ...options, headers, cache: "no-store" });
   if (!response.ok) {
-    const decoded = await response.json().catch(() => ({}));
+    const decoded = await readJson(response).catch(() => ({}));
     const body = decoded && typeof decoded === "object" ? decoded : {};
     if (body.protocolVersion !== undefined && body.protocolVersion !== PROTOCOL_VERSION) {
       throw new ProtocolMismatchError(body.protocolVersion);
@@ -537,13 +543,13 @@ async function apiResponse(path, options = {}) {
   }
   return {
     status: response.status,
-    body: response.status === 204 ? null : await response.json(),
+    body: response.status === 204 ? null : await readJson(response),
     headers: response.headers,
   };
 }
 
-async function api(path, options = {}) {
-  return (await apiResponse(path, options)).body;
+async function api(path, options = {}, readJson) {
+  return (await apiResponse(path, options, readJson)).body;
 }
 
 async function loadStatus() {
@@ -944,6 +950,7 @@ async function startNetworkPairing(candidateAddress) {
 }
 
 $("[data-token-form]").addEventListener("submit", async (event) => {
+  closeRecoveryFiles();
   event.preventDefault();
   token = formData(event.currentTarget).get("token").trim();
   try {
@@ -1401,6 +1408,101 @@ $("[data-restore-execute]").addEventListener("click", async () => {
     restoreExecutionInFlight = false;
     if (restorePlan === plan) button.disabled = !$("[data-restore-confirm]").checked;
   }
+});
+
+function closeRecoveryFiles() {
+  recoveryGeneration += 1;
+  recoverySession.dispose();
+  $("[data-recovery-downloads]").hidden = true;
+  $("[data-recovery-save-status]").textContent = "";
+  $("[data-recovery-export]").reset();
+  $("[data-recovery-create]").disabled = false;
+  $("[data-recovery-kit]").disabled = true;
+  $("[data-recovery-code]").disabled = true;
+}
+
+function recoveryApi(path, options) {
+  return api(path, options, recovery.readJson);
+}
+
+$("[data-recovery-export]").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (formData(event.currentTarget).get("confirmed") !== "on") return;
+  const generation = recoveryGeneration;
+  $("[data-recovery-create]").disabled = true;
+  $("[data-recovery-downloads]").hidden = false;
+  $("[data-recovery-save-status]").textContent = "Preparing recovery files…";
+  try {
+    if (!await recoverySession.generate(recoveryApi) || generation !== recoveryGeneration) return;
+    $("[data-recovery-kit]").disabled = false;
+    $("[data-recovery-code]").disabled = false;
+    $("[data-recovery-save-status]").textContent = "Ready. Save both files before closing this panel.";
+  } catch (error) {
+    if (generation === recoveryGeneration) { closeRecoveryFiles(); fail(error); }
+  }
+});
+
+function saveRecoveryBytes(bytes, filename, mime) {
+  const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
+  try {
+    const link = Object.assign(document.createElement("a"), { href: url, download: filename });
+    document.body.append(link);
+    try { link.click(); } finally { link.remove(); }
+  } finally {
+    // Give the browser time to acquire the download; never keep the URL around
+    // as session state or put secret bytes into document text/attributes.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+}
+
+for (const [kind, filename, mime] of [
+  ["kit", "covalent.covalent-recovery", "application/octet-stream"],
+  ["code", "covalent.covalent-recovery-key", "text/plain"],
+]) {
+  $("[data-recovery-" + kind + "]").addEventListener("click", () => {
+    try {
+      recoverySession.download(kind, (bytes) => saveRecoveryBytes(bytes, filename, mime));
+      $("[data-recovery-save-status]").textContent = "Download requested. Check that both the recovery file and recovery code were saved successfully.";
+    } catch (error) { fail(error); }
+  });
+}
+$("[data-recovery-close]").addEventListener("click", () => {
+  closeRecoveryFiles();
+  $("[data-recovery-create]").focus();
+  say("Recovery files cleared from this tab. Keep any downloaded copies safe.");
+});
+globalThis.addEventListener("pagehide", closeRecoveryFiles);
+
+async function loadRecoveryStatus(retry = false) {
+  if (recoveryStatusInFlight) return;
+  recoveryStatusInFlight = true;
+  const buttons = [$("[data-recovery-refresh]"), $("[data-recovery-retry] button")];
+  buttons.forEach((button) => { button.disabled = true; });
+  try {
+    const status = retry
+      ? await recoveryApi("/api/v1/recovery/retry", { method: "POST", body: JSON.stringify({ confirmed: true }) })
+      : await recoveryApi("/api/v1/recovery/status");
+    const result = recovery.status(status);
+    $("[data-recovery-status]").textContent = result.summary + " " + result.detail;
+    $("[data-recovery-warning]").textContent = result.warning;
+    $("[data-recovery-warning]").hidden = !result.warning;
+    $("[data-recovery-retry]").hidden = !result.canRetry;
+    $("[data-recovery-retry]").reset();
+    if (retry) await loadBackups();
+  } catch (error) {
+    $("[data-recovery-status]").textContent = "Recovery progress could not be checked. Try again when this server is available.";
+    $("[data-recovery-warning]").hidden = true;
+    $("[data-recovery-retry]").hidden = true;
+    fail(error);
+  } finally {
+    recoveryStatusInFlight = false;
+    buttons.forEach((button) => { button.disabled = false; });
+  }
+}
+$("[data-recovery-refresh]").addEventListener("click", () => { void loadRecoveryStatus(); });
+$("[data-recovery-retry]").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (formData(event.currentTarget).get("confirmed") === "on") void loadRecoveryStatus(true);
 });
 
 $("[data-settings-export]").addEventListener("click", async () => {
