@@ -47,10 +47,10 @@ require_text "github.com/caddyserver/caddy/v2 v2.11.5-0.20260711231708-b2693fb63
 # Eight stdlib advisories are fixed in go1.26.6; GOTOOLCHAIN=local makes this
 # directive the floor the compiler itself enforces. Lowering it re-opens them.
 require_text "go 1.26.7" "$caddy_gomod"
-require_text "google.golang.org/grpc v1.83.1 // indirect" "$caddy_gomod"
-require_text '$2 == "google.golang.org/grpc" && $3 == "v1.83.1"' "$dockerfile"
-require_text "grpc drifted from reviewed v1.83.1" "$dockerfile"
-require_text "golang.org/x/text v0.39.0" "$caddy_gomod"
+require_text "google.golang.org/grpc v1.83.2 // indirect" "$caddy_gomod"
+require_text '$2 == "google.golang.org/grpc" && $3 == "v1.83.2"' "$dockerfile"
+require_text "grpc drifted from reviewed v1.83.2" "$dockerfile"
+require_text "golang.org/x/text v0.41.0" "$caddy_gomod"
 require_text "go.opentelemetry.io/otel v1.44.0" "$caddy_gomod"
 require_text "github.com/google/cel-go v0.30.0" "$caddy_gomod"
 require_text "github.com/go-chi/chi/v5 v5.3.0" "$caddy_gomod"

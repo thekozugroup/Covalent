@@ -47,6 +47,10 @@ internal object PackagedSyncEngine {
     private const val GUARDIAN_MANIFEST = "engine-guardian-sha256.txt"
     private const val MAX_MANIFEST_BYTES = 1024
     private const val MAX_HELPER_BYTES = 64L * 1024L * 1024L
+    private const val FILE_TYPE_MASK = 0xf000
+    private const val DIRECTORY_MODE = 0x4000
+    private const val OWNER_ONLY_MODE = 0x1c0
+    private const val WORLD_WRITE_MODE = 0x2
     // The Java O_CLOEXEC field arrived in API 27; the flag already exists in
     // Android 8's arm64/x86_64 Linux ABI (asm-generic/fcntl.h: 02000000).
     // Pass it atomically to open on API 26 too, avoiding an open/fcntl race.
@@ -134,6 +138,27 @@ internal object PackagedSyncEngine {
         check(rows.map(PackagedHelperHash::abi) == listOf("arm64-v8a", "x86_64"))
         return rows.associateBy(PackagedHelperHash::abi)
     }
+
+    /**
+     * Android creates app-private roots such as `noBackupFilesDir` with mode 0771.
+     * The group is still the app sandbox identity; reject foreign groups and world-write access.
+     * The dedicated engine runtime directory below this root remains exact mode 0700.
+     */
+    internal fun privateRuntimeParentAllowed(
+        mode: Int,
+        uid: Int,
+        gid: Int,
+        appUid: Int,
+    ): Boolean =
+        mode and FILE_TYPE_MASK == DIRECTORY_MODE &&
+            uid == appUid &&
+            gid == appUid &&
+            mode and WORLD_WRITE_MODE == 0
+
+    internal fun privateRuntimeChildAllowed(mode: Int, uid: Int, appUid: Int): Boolean =
+        mode and FILE_TYPE_MASK == DIRECTORY_MODE &&
+            uid == appUid &&
+            mode and 0b111_111_111 == OWNER_ONLY_MODE
 
     internal fun runtimeParentPathFits(value: String): Boolean =
         value.toByteArray(Charsets.UTF_8).size <= MAX_RUNTIME_PATH_BYTES
@@ -242,9 +267,12 @@ internal object PackagedSyncEngine {
         val privateRoot = context.noBackupFilesDir.canonicalFile
         val rootMetadata = Os.lstat(privateRoot.path)
         check(
-            OsConstants.S_ISDIR(rootMetadata.st_mode) &&
-                rootMetadata.st_uid == Process.myUid() &&
-                rootMetadata.st_mode and (OsConstants.S_IWGRP or OsConstants.S_IWOTH) == 0,
+            privateRuntimeParentAllowed(
+                rootMetadata.st_mode,
+                rootMetadata.st_uid,
+                rootMetadata.st_gid,
+                Process.myUid(),
+            ),
         )
         val directory = File(privateRoot, "s").absoluteFile
         check(directory.parentFile == privateRoot)
@@ -255,9 +283,7 @@ internal object PackagedSyncEngine {
         }
         val metadata = Os.lstat(directory.path)
         check(
-            OsConstants.S_ISDIR(metadata.st_mode) &&
-                metadata.st_uid == Process.myUid() &&
-                metadata.st_mode and 0b111_111_111 == OsConstants.S_IRWXU,
+            privateRuntimeChildAllowed(metadata.st_mode, metadata.st_uid, Process.myUid()),
         )
         check(directory.canonicalFile == directory)
         check(runtimeParentPathFits(directory.path))

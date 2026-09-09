@@ -19,9 +19,12 @@ internal object FolderSyncInstrumentationBridge {
         val privateRoot = context.noBackupFilesDir.canonicalFile
         val rootMetadata = Os.lstat(privateRoot.path)
         check(
-            OsConstants.S_ISDIR(rootMetadata.st_mode) &&
-                rootMetadata.st_uid == Process.myUid() &&
-                rootMetadata.st_mode and (OsConstants.S_IWGRP or OsConstants.S_IWOTH) == 0,
+            PackagedSyncEngine.privateRuntimeParentAllowed(
+                rootMetadata.st_mode,
+                rootMetadata.st_uid,
+                rootMetadata.st_gid,
+                Process.myUid(),
+            ),
         )
         repeat(16) {
             val runtime = File(privateRoot, "t" + UUID.randomUUID().toString().take(6)).absoluteFile
@@ -36,9 +39,11 @@ internal object FolderSyncInstrumentationBridge {
             try {
                 val runtimeMetadata = Os.lstat(runtime.path)
                 check(
-                    OsConstants.S_ISDIR(runtimeMetadata.st_mode) &&
-                        runtimeMetadata.st_uid == Process.myUid() &&
-                        runtimeMetadata.st_mode and 0b111_111_111 == OsConstants.S_IRWXU,
+                    PackagedSyncEngine.privateRuntimeChildAllowed(
+                        runtimeMetadata.st_mode,
+                        runtimeMetadata.st_uid,
+                        Process.myUid(),
+                    ),
                 )
                 check(runtime.canonicalFile == runtime)
                 return PackagedSyncEnginePackage.Verified(

@@ -6,6 +6,47 @@ import org.junit.Test
 
 class PackagedSyncEngineTest {
     @Test
+    fun appOwnedAndroidPrivateParentAllowsPlatform0771ButRejectsUnsafeMetadata() {
+        val directory = 0x4000
+        val regularFile = 0x8000
+        val appUid = 10_234
+
+        assertEquals(
+            true,
+            PackagedSyncEngine.privateRuntimeParentAllowed(directory or 0b111_111_001, appUid, appUid, appUid),
+        )
+        assertEquals(
+            true,
+            PackagedSyncEngine.privateRuntimeParentAllowed(directory or 0b111_000_000, appUid, appUid, appUid),
+        )
+        assertEquals(
+            false,
+            PackagedSyncEngine.privateRuntimeParentAllowed(directory or 0b111_111_001, appUid, appUid + 1, appUid),
+        )
+        assertEquals(
+            false,
+            PackagedSyncEngine.privateRuntimeParentAllowed(directory or 0b111_111_011, appUid, appUid, appUid),
+        )
+        assertEquals(
+            false,
+            PackagedSyncEngine.privateRuntimeParentAllowed(regularFile or 0b111_111_001, appUid, appUid, appUid),
+        )
+
+        assertEquals(
+            true,
+            PackagedSyncEngine.privateRuntimeChildAllowed(directory or 0b111_000_000, appUid, appUid),
+        )
+        assertEquals(
+            false,
+            PackagedSyncEngine.privateRuntimeChildAllowed(directory or 0b111_001_000, appUid, appUid),
+        )
+        assertEquals(
+            false,
+            PackagedSyncEngine.privateRuntimeChildAllowed(directory or 0b111_000_000, appUid + 1, appUid),
+        )
+    }
+
+    @Test
     fun runtimeParentReservesTheCompletePrivateSocketSuffix() {
         assertEquals(true, PackagedSyncEngine.runtimeParentPathFits("a".repeat(74)))
         assertEquals(false, PackagedSyncEngine.runtimeParentPathFits("a".repeat(75)))

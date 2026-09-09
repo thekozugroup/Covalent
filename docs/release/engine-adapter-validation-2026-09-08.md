@@ -1677,3 +1677,94 @@ are integrated. Its log SHA-256 is
 Acceptance remains **70%: 14 of 20**. Native address acceptance, the complete
 Android device journey, clean security scans, final dependencies,
 upgrade/accessibility and performance remain open.
+
+
+## Checkpoint 39 final evidence and next corrections
+
+Checkpoint 39 is `6514c05f789e6914828dff658e92abd164122198`. CI run
+`34303240555` tests merge `bc6e0b232ecdb8b5541f415183d196697dec7b6c`.
+Rust/contracts, Android foundation, both Mac jobs, iOS and both Docker jobs pass.
+CodeQL run `34303240584` passes Java/Kotlin, Swift and the zero-open-alert policy.
+Android foundation logs record unit-test task success, not an aggregate test
+count; no count is inferred.
+
+The API 37 device baseline passes `OK (75 tests)`. The separate setup journey
+fails 1/1 at the precise `runtime-directory` verification stage. It never reaches
+permission-denied/restored phases. Android's normal `noBackupFilesDir` mode is
+0771, while the existing verifier rejects its group-write bit. The next narrow
+correction must require both owner and group to be the app UID and reject
+world-write on the platform parent. Its private direct child must remain exact
+0700. Installed helper paths, canonical containment, APK metadata, manifests,
+executable identities and digests remain independently verified. A source fix
+is not credited as a successful device journey before the rerun.
+
+Both exact Docker scans report zero High and three Medium findings, all
+CVE-2025-60876 in busybox, busybox-binsh and ssl_client 1.37.0-r30. The amd64
+image is `sha256:9edc22278fe11b21a589ba4441b64bec47d7bd2aa989515c23eb6b9b0c0d4451`
+at 134,145,536 bytes. The arm64 image is
+`sha256:6878480c81e5574e04fa0e45ec6ab5ede4da1874810daaace778ce8b7d2635e2`
+at 125,030,400 bytes. Both bind Docker source fingerprint
+`d45b319419397f0f3962361e596d58e26b48b5ebeb23aa278fd58f256824979d`.
+Grype 0.117.0 used database v6.1.9 built 2026-09-08T06:30:10Z.
+
+Dependency review separately fails the newer
+[GHSA-2v4p-qf9q-27wj / CVE-2026-84445](https://github.com/advisories/GHSA-2v4p-qf9q-27wj)
+in gRPC 1.83.1. Upstream
+[v1.83.2](https://github.com/grpc/grpc-go/releases/tag/v1.83.2) fixes it. Caddy's
+compiled graph contains Smallstep's gRPC client but no `grpc/xds` server package
+or `xds.NewGRPCServer`; the described crash path is absent. The dependency is
+still being updated, without a waiver or a clean-security claim.
+
+### Real native Mac address journey
+
+The signed native fixture uses the exact 23 production Swift files from
+checkpoint 39 against two real production NodeRuntime instances and the pinned
+worker/guardian. Only the native UI submits the address update; the Rust harness
+contains no address-refresh POST. Eleven checks pass: initial signed pairing and
+consent, new recipient ports with retained identity, signed candidate probing,
+durable routing replacement and full scan, transfer both ways, cold route
+retention and continued transfer, file-preserving revocation, and runtime cleanup.
+The Devices sheet dismisses after save and reports the new address responding.
+This harness does not establish LocalNodeManager sandbox containment, upgrade,
+Escape-key behavior or spoken VoiceOver.
+
+Proof `mac-peer-address-live-two-runtime-01/proof.json` SHA-256 is
+`e788bcab68a5fa0cd0784926509f771098f259516547da64c74088eddbf659e8`;
+runtime result is
+`eeaf359d5b2664df13b250beab8c0524e77c6766e56691daada38f8623f4b63f`;
+source manifest is
+`2c5542c857181cff24e89a00a218f46c86a1b15c320c60099aea4450c45b81b1`.
+Independent root review is
+`1fddcd007ea5cd65fb8a331da21d840384e9ffc5c5954669447d158aaf9aacab`.
+
+The owned fixture app, disposable token and completed build caches are removed:
+779,122,749 logical bytes. Cleanup SHA-256 is
+`b839f7f7e390ba7ca06430f41d21a9c9de817a71e7f23a16ee05b355ccbe3d2e`.
+All three fixture ports are free, both runtimes stop and reap their workers, and
+no Keychain items or global preferences were created or changed. Logical sizes
+do not measure physical APFS space recovery. The separately retained earlier
+ACL-bound test entry and its matching signed app remain unchanged.
+
+
+## Checkpoint 40 narrow corrections
+
+The Android loader and debug journey bridge now share the platform-parent
+permission policy: directory type, owner UID equal to the app UID, group GID
+equal to the app UID, and no world-write bit. This accepts Android's normal
+0771 parent while rejecting a writable foreign group. The private runtime child
+still requires directory type, app ownership and permission bits exactly 0700.
+Canonical paths, direct-child placement and all packaged-helper verification
+conditions remain unchanged. The new JVM regression covers 0771 and 0700,
+foreign group, world-write, regular files, child 0710 and foreign child ownership.
+Local JVM execution is unavailable; hosted tests and the complete API 37 journey
+must confirm the correction.
+
+The separate gRPC patch selects exact 1.83.2 and its required minimal-version
+module graph. Go 1.26.7 module verification, consumer compilation (`go test`
+reports no test files), vet and the local container contract pass. The fresh
+linux/amd64 Caddy binary is 55,165,090 bytes, SHA-256
+`23435840dc97b7e9231900a99e9923b12a02bcee698daa374d838ed3618821b2`,
+8,192 bytes above the checkpoint 39 binary. Its build metadata verifies exact
+gRPC 1.83.2. The image budget remains 128 MiB. New container distribution
+collectors and the pending BusyBox backport are separate work, not part of this
+narrow rerun or a claim that security acceptance has passed.
