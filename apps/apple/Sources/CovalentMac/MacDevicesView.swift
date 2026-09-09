@@ -39,14 +39,14 @@ struct MacDevicesView: View {
             }
             Button("Cancel", role: .cancel) { providerToRevoke = nil }
         } message: {
-            Text("Covalent permanently records that this device is no longer trusted, disconnects it, and blocks any future access. Copies already stored there stay encrypted.")
+            Text("Covalent permanently records that this device is no longer trusted, disconnects it, and blocks any future access. Existing shared files remain on both devices. Stored backup copies stay encrypted.")
         }
     }
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 7) {
-                Text("Your backup network")
+                Text("Your devices")
                     .font(.largeTitle.weight(.semibold))
                     .accessibilityAddTraits(.isHeader)
                 Text("Discovery is only a hint. Trust starts after both devices compare the same code.")
@@ -74,7 +74,7 @@ struct MacDevicesView: View {
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { startTailscalePairing() }
                     .accessibilityHint("Enter the address shown by the other device in Tailscale")
-                Button("Use as Backup Device") { startTailscalePairing() }
+                Button("Pair Device") { startTailscalePairing() }
                     .disabled(
                         tailscaleAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
                         !model.isAuthorized || model.startingPairingAddress != nil
@@ -157,14 +157,14 @@ struct MacDevicesView: View {
     private var providers: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Connected storage devices")
+                Text("Saved connections")
                     .font(.title2.weight(.semibold))
             }
             if model.providers.isEmpty {
                 MacEmptyState(
                     systemImage: "server.rack",
-                    title: "No connected storage devices",
-                    message: "Backups stay on this Mac until you pair a device, connect it, and select it yourself."
+                    title: "No saved connections",
+                    message: "Pair another device, then choose which folders to share or back up."
                 )
                 .frame(maxWidth: .infinity, minHeight: 180)
                 .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
@@ -183,9 +183,18 @@ struct MacDevicesView: View {
                                     .secondaryLabelStyle()
                             }
                             Spacer()
-                            Label("Connected", systemImage: "checkmark.circle.fill")
+                            TimelineView(.periodic(from: .now, by: 1)) { context in
+                                let reachability = provider.displayedReachability(
+                                    atUnixMs: UInt64(max(0, context.date.timeIntervalSince1970 * 1_000))
+                                )
+                                Label(
+                                    reachability.connectionStatusLabel,
+                                    systemImage: reachability.connectionStatusSymbol
+                                )
                                 .font(.caption)
-                                .foregroundStyle(.green)
+                                .foregroundStyle(reachability == .reachable ? Color.green : Color.secondary)
+                                .accessibilityLabel("\(provider.address), \(reachability.connectionStatusLabel)")
+                            }
                             Menu {
                                 Button("Disconnect") {
                                     Task { await model.disconnectProvider(provider) }
@@ -714,7 +723,7 @@ struct MacNetworkPairingView: View {
 
             switch current.state {
             case .awaitingLocalConfirmation:
-                Button("Codes Match — Use as Backup Device") {
+                Button("Codes Match — Pair Device") {
                     isWorking = true
                     Task {
                         await model.confirmNetworkPairing(current)

@@ -18,8 +18,8 @@ use covalent_core::{
     verify_folder_share_commit, verify_folder_share_offer, verify_fresh_folder_share_offer,
 };
 use covalent_protocol::{
-    DeviceId, FolderShareAcceptance, FolderShareCommit, FolderShareOffer, SyncEngineBinding,
-    TransportBinding,
+    DeviceId, FolderShareAcceptance, FolderShareCommit, FolderShareOffer, PeerGrant,
+    SyncEngineBinding, TransportBinding,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -185,6 +185,14 @@ struct Snapshot {
     pending_remote_removals: Vec<PendingRemoteRemoval>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     remote_removal_tombstones: Vec<RemoteRemovalTombstone>,
+    /// Current authenticated engine routes are mutable local routing state;
+    /// the original signed offer and acceptance bytes remain unchanged.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    current_peer_routes: BTreeMap<DeviceId, SyncEngineBinding>,
+    #[serde(default)]
+    pending_peer_address_refresh: Option<PendingPeerAddressRefresh>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    completed_peer_address_refreshes: BTreeMap<DeviceId, CompletedPeerAddressRefresh>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -218,6 +226,45 @@ struct RemoteRemovalTombstone {
     offer_source_id: DeviceId,
     folder_id: Uuid,
     offer_ids: Vec<Uuid>,
+}
+
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PendingPeerAddressRefresh {
+    expected_grant: PeerGrant,
+    peer_identity: PublicIdentity,
+    confirmed_at_unix_ms: u64,
+    expected_transport: TransportBinding,
+    candidate_transport: TransportBinding,
+    candidate_engine: SyncEngineBinding,
+}
+
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CompletedPeerAddressRefresh {
+    expected_transport: TransportBinding,
+    candidate_transport: TransportBinding,
+    candidate_engine: SyncEngineBinding,
+}
+
+/// Exact instance- and revision-bound address transition prepared before reap.
+pub(crate) struct PreparedPeerAddressRefresh {
+    journal: Arc<()>,
+    expected_revision: u64,
+    pending: PendingPeerAddressRefresh,
+    already_complete: bool,
+}
+
+impl fmt::Debug for PreparedPeerAddressRefresh {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PreparedPeerAddressRefresh([REDACTED])")
+    }
+}
+
+impl PreparedPeerAddressRefresh {
+    pub(crate) fn is_already_complete(&self) -> bool {
+        self.already_complete
+    }
 }
 
 /// One instance- and revision-bound root selection prepared before a worker is
@@ -295,6 +342,9 @@ impl FolderSharingJournal {
             pending_root_reset: None,
             pending_remote_removals: Vec::new(),
             remote_removal_tombstones: Vec::new(),
+            current_peer_routes: BTreeMap::new(),
+            pending_peer_address_refresh: None,
+            completed_peer_address_refreshes: BTreeMap::new(),
         };
         validate_snapshot(&snapshot, &engine, &installation)?;
         let payload = serde_json::to_vec(&snapshot).map_err(|_| SharingError::InvalidState)?;
@@ -316,6 +366,32 @@ impl FolderSharingJournal {
         installation: Arc<EngineInstallation>,
         protector: Arc<dyn KeyProtector>,
     ) -> Result<Self, SharingError> {
+        Self::open_inner(engine, installation, protector, None)
+    }
+
+    /// Open existing consent while adopting this installation's current local
+    /// listener route. Historical signed offers remain byte-for-byte intact.
+    pub(crate) fn open_at_route(
+        engine: Arc<Engine>,
+        installation: Arc<EngineInstallation>,
+        protector: Arc<dyn KeyProtector>,
+        listener: SocketAddr,
+        advertised: SocketAddr,
+    ) -> Result<Self, SharingError> {
+        Self::open_inner(
+            engine,
+            installation,
+            protector,
+            Some((listener, advertised)),
+        )
+    }
+
+    fn open_inner(
+        engine: Arc<Engine>,
+        installation: Arc<EngineInstallation>,
+        protector: Arc<dyn KeyProtector>,
+        route: Option<(SocketAddr, SocketAddr)>,
+    ) -> Result<Self, SharingError> {
         let store = EngineStateStore::open(Arc::clone(&installation), protector)
             .map_err(|_| SharingError::InvalidState)?;
         let snapshot =
@@ -329,7 +405,26 @@ impl FolderSharingJournal {
             snapshot,
             preparation_identity: Arc::new(()),
         };
-        journal.reconcile_trust()?;
+        if let Some((listener, advertised)) = route {
+            validate_listener_route(listener, advertised)?;
+            let binding = SyncEngineBinding::new(
+                journal.engine.device_id(),
+                journal.installation.device_id().as_str(),
+                &advertised.to_string(),
+            )
+            .map_err(|_| SharingError::InvalidState)?;
+            if journal.snapshot.listener != listener || journal.snapshot.binding != binding {
+                let mut next = journal.snapshot.clone();
+                next.listener = listener;
+                next.binding = binding;
+                journal.persist(next)?;
+            }
+        }
+        if journal.snapshot.pending_peer_address_refresh.is_none() {
+            journal.reconcile_trust()?;
+        } else {
+            journal.validate_pending_peer_address_refresh()?;
+        }
         Ok(journal)
     }
 
@@ -337,6 +432,13 @@ impl FolderSharingJournal {
     /// authenticated pairing/control transport, never entered by the user.
     pub fn binding(&self) -> &SyncEngineBinding {
         &self.snapshot.binding
+    }
+
+    pub(crate) fn authenticated_binding(&self) -> Result<SyncEngineBinding, SharingError> {
+        self.store
+            .payload()
+            .map_err(|_| SharingError::PersistenceUncertain)?;
+        Ok(self.snapshot.binding.clone())
     }
 
     /// The exact listener retained with this installation's signed address.
@@ -350,12 +452,281 @@ impl FolderSharingJournal {
         self.store.revision()
     }
 
+    /// Validate an authenticated address proof without changing durable state.
+    /// The opaque result is bound to this journal and exact revision.
+    pub(crate) fn prepare_peer_address_refresh(
+        &mut self,
+        peer_id: DeviceId,
+        expected_grant: &PeerGrant,
+        expected_transport: &TransportBinding,
+        candidate_transport: &TransportBinding,
+        candidate_engine: &SyncEngineBinding,
+    ) -> Result<PreparedPeerAddressRefresh, SharingError> {
+        if self.snapshot.pending_peer_address_refresh.is_none() {
+            self.reconcile_trust()?;
+        } else {
+            self.validate_pending_peer_address_refresh()?;
+        }
+        let trust = self.trusted_peer(peer_id)?;
+        let config = self
+            .engine
+            .config()
+            .map_err(|_| SharingError::InvalidState)?;
+        if config.trusted_peers.get(&peer_id) != Some(expected_grant)
+            || expected_grant.revoked
+            || expected_grant.peer_device_id != peer_id
+            || candidate_transport.peer_id != peer_id
+            || candidate_transport.display_name != expected_transport.display_name
+            || candidate_transport.certificate_der != expected_transport.certificate_der
+            || candidate_transport.certificate_fingerprint
+                != expected_transport.certificate_fingerprint
+            || !valid_route(candidate_transport.address.as_str())
+            || candidate_engine.covalent_device_id != peer_id
+            || candidate_engine.validate().is_err()
+        {
+            return Err(SharingError::InvalidRecord);
+        }
+        let known_engine_id = self
+            .snapshot
+            .current_peer_routes
+            .get(&peer_id)
+            .map(|binding| binding.engine_device_id.as_str())
+            .or_else(|| historical_peer_engine(&self.snapshot, self.engine.device_id(), peer_id));
+        if known_engine_id.is_some_and(|known| known != candidate_engine.engine_device_id.as_str())
+        {
+            return Err(SharingError::InvalidRecord);
+        }
+        let pending = PendingPeerAddressRefresh {
+            expected_grant: expected_grant.clone(),
+            peer_identity: trust.identity.clone(),
+            confirmed_at_unix_ms: trust.confirmed_at_unix_ms,
+            expected_transport: expected_transport.clone(),
+            candidate_transport: candidate_transport.clone(),
+            candidate_engine: candidate_engine.clone(),
+        };
+        if self
+            .snapshot
+            .pending_peer_address_refresh
+            .as_ref()
+            .is_some_and(|retained| retained != &pending)
+        {
+            return Err(SharingError::InvalidState);
+        }
+        let already_complete = self
+            .snapshot
+            .completed_peer_address_refreshes
+            .get(&peer_id)
+            .is_some_and(|completed| {
+                completed.expected_transport == *expected_transport
+                    && completed.candidate_transport == *candidate_transport
+                    && completed.candidate_engine == *candidate_engine
+            });
+        if trust.identity.device_id != peer_id
+            || trust.confirmed_at_unix_ms != pending.confirmed_at_unix_ms
+            || if already_complete {
+                trust.transport != *candidate_transport
+            } else {
+                trust.transport != *expected_transport
+            }
+        {
+            return Err(SharingError::InvalidRecord);
+        }
+        Ok(PreparedPeerAddressRefresh {
+            journal: Arc::clone(&self.preparation_identity),
+            expected_revision: self.store.revision(),
+            pending,
+            already_complete,
+        })
+    }
+
+    /// Durably record one prepared transition before any core transport write.
+    /// Returns false only for an exact already-completed retry.
+    pub(crate) fn begin_peer_address_refresh(
+        &mut self,
+        prepared: &PreparedPeerAddressRefresh,
+    ) -> Result<bool, SharingError> {
+        if !Arc::ptr_eq(&prepared.journal, &self.preparation_identity)
+            || prepared.expected_revision != self.store.revision()
+        {
+            return Err(SharingError::InvalidState);
+        }
+        if prepared.already_complete {
+            return Ok(false);
+        }
+        let config = self
+            .engine
+            .config()
+            .map_err(|_| SharingError::InvalidState)?;
+        let peer_id = prepared.pending.peer_identity.device_id;
+        let current = observe_trust(&config, peer_id)?.ok_or(SharingError::UntrustedPeer)?;
+        if config.trusted_peers.get(&peer_id) != Some(&prepared.pending.expected_grant)
+            || current.identity != prepared.pending.peer_identity
+            || current.confirmed_at_unix_ms != prepared.pending.confirmed_at_unix_ms
+            || current.transport != prepared.pending.expected_transport
+        {
+            return Err(SharingError::InvalidState);
+        }
+        if let Some(retained) = &self.snapshot.pending_peer_address_refresh {
+            return if retained == &prepared.pending {
+                Ok(true)
+            } else {
+                Err(SharingError::InvalidState)
+            };
+        }
+        let mut next = self.snapshot.clone();
+        next.pending_peer_address_refresh = Some(prepared.pending.clone());
+        self.persist(next)?;
+        Ok(true)
+    }
+
+    /// Complete the journal half only after core trust contains the exact new
+    /// transport. Original signed invitation records are never rewritten.
+    pub(crate) fn complete_peer_address_refresh(
+        &mut self,
+        peer_id: DeviceId,
+    ) -> Result<(), SharingError> {
+        let pending = self
+            .snapshot
+            .pending_peer_address_refresh
+            .clone()
+            .ok_or(SharingError::InvalidState)?;
+        if pending.peer_identity.device_id != peer_id {
+            return Err(SharingError::InvalidState);
+        }
+        let config = self
+            .engine
+            .config()
+            .map_err(|_| SharingError::InvalidState)?;
+        let current = observe_trust(&config, peer_id)?.ok_or(SharingError::UntrustedPeer)?;
+        if current.identity != pending.peer_identity
+            || current.confirmed_at_unix_ms != pending.confirmed_at_unix_ms
+            || config.trusted_peers.get(&peer_id) != Some(&pending.expected_grant)
+            || current.transport != pending.candidate_transport
+        {
+            return Err(SharingError::InvalidState);
+        }
+        let mut next = self.snapshot.clone();
+        for share in &mut next.shares {
+            if share.peer_identity.device_id == peer_id {
+                share.peer_transport = pending.candidate_transport.clone();
+            }
+        }
+        for removal in &mut next.pending_remote_removals {
+            if removal.peer_identity.device_id == peer_id {
+                removal.peer_transport = pending.candidate_transport.clone();
+            }
+        }
+        next.current_peer_routes
+            .insert(peer_id, pending.candidate_engine.clone());
+        next.completed_peer_address_refreshes.insert(
+            peer_id,
+            CompletedPeerAddressRefresh {
+                expected_transport: pending.expected_transport,
+                candidate_transport: pending.candidate_transport,
+                candidate_engine: pending.candidate_engine,
+            },
+        );
+        next.pending_peer_address_refresh = None;
+        self.persist(next)
+    }
+
+    /// Inspect a durable half-transition without clearing its final provider
+    /// rebuild barrier. `Some((peer, true))` means core contains the candidate;
+    /// `false` means a fresh live proof is still required at the old route.
+    pub(crate) fn pending_peer_address_refresh(
+        &mut self,
+    ) -> Result<Option<(DeviceId, bool)>, SharingError> {
+        let Some(pending) = self.snapshot.pending_peer_address_refresh.clone() else {
+            return Ok(None);
+        };
+        let config = self
+            .engine
+            .config()
+            .map_err(|_| SharingError::InvalidState)?;
+        let current = observe_trust(&config, pending.peer_identity.device_id)?
+            .ok_or(SharingError::UntrustedPeer)?;
+        if current.identity != pending.peer_identity
+            || current.confirmed_at_unix_ms != pending.confirmed_at_unix_ms
+            || config.trusted_peers.get(&pending.peer_identity.device_id)
+                != Some(&pending.expected_grant)
+        {
+            return Err(SharingError::InvalidState);
+        }
+        if current.transport == pending.candidate_transport {
+            Ok(Some((pending.peer_identity.device_id, true)))
+        } else if current.transport == pending.expected_transport {
+            Ok(Some((pending.peer_identity.device_id, false)))
+        } else {
+            Err(SharingError::InvalidState)
+        }
+    }
+
+    /// Whether an old-to-new route pair names the exact pending or latest
+    /// completed transition. Addresses alone are returned only as a retry key;
+    /// all stored grant, pin, identity and engine fields remain private.
+    pub(crate) fn recognizes_peer_address_refresh(
+        &self,
+        peer_id: DeviceId,
+        expected_address: &str,
+        candidate_address: &str,
+    ) -> Result<bool, SharingError> {
+        self.store
+            .payload()
+            .map_err(|_| SharingError::PersistenceUncertain)?;
+        let matches = |expected: &TransportBinding, candidate: &TransportBinding| {
+            expected.address == expected_address && candidate.address == candidate_address
+        };
+        Ok(self
+            .snapshot
+            .pending_peer_address_refresh
+            .as_ref()
+            .is_some_and(|pending| {
+                pending.peer_identity.device_id == peer_id
+                    && matches(&pending.expected_transport, &pending.candidate_transport)
+            })
+            || self
+                .snapshot
+                .completed_peer_address_refreshes
+                .get(&peer_id)
+                .is_some_and(|completed| {
+                    matches(
+                        &completed.expected_transport,
+                        &completed.candidate_transport,
+                    )
+                }))
+    }
+
+    fn validate_pending_peer_address_refresh(&self) -> Result<(), SharingError> {
+        let Some(pending) = &self.snapshot.pending_peer_address_refresh else {
+            return Ok(());
+        };
+        let config = self
+            .engine
+            .config()
+            .map_err(|_| SharingError::InvalidState)?;
+        let current = observe_trust(&config, pending.peer_identity.device_id)?
+            .ok_or(SharingError::UntrustedPeer)?;
+        if current.identity != pending.peer_identity
+            || current.confirmed_at_unix_ms != pending.confirmed_at_unix_ms
+            || config.trusted_peers.get(&pending.peer_identity.device_id)
+                != Some(&pending.expected_grant)
+            || current.transport != pending.expected_transport
+                && current.transport != pending.candidate_transport
+        {
+            return Err(SharingError::InvalidState);
+        }
+        Ok(())
+    }
+
     /// Reconstruct delivery work after a process or network interruption. A
     /// sender may cache acknowledgements in memory; after cold restart it
     /// repeats these exact durable records, never generates a new acceptance.
     /// A completed recipient has no further record to send. The source retains
     /// its commit so loss of the final response cannot strand the recipient.
     pub fn outbound_records(&mut self) -> Result<Vec<FolderShareDelivery>, SharingError> {
+        if self.snapshot.pending_peer_address_refresh.is_some() {
+            return Err(SharingError::PersistenceUncertain);
+        }
         self.reconcile_trust()?;
         let config = self
             .engine
@@ -651,6 +1022,14 @@ impl FolderSharingJournal {
         }
         verify_fresh_folder_share_offer(&offer, &peer.identity, self.engine.device_id(), now)
             .map_err(|_| SharingError::InvalidRecord)?;
+        if self
+            .snapshot
+            .current_peer_routes
+            .get(&peer.identity.device_id)
+            .is_some_and(|current| current != &offer.source_engine)
+        {
+            return Err(SharingError::InvalidRecord);
+        }
         if self.snapshot.tombstones.iter().any(|removed| {
             removed.folder_id == offer.folder_id
                 && removed.peer_id == peer.identity.device_id
@@ -674,7 +1053,7 @@ impl FolderSharingJournal {
                 || offer.issued_at_unix_ms <= previous.offer.issued_at_unix_ms
                 || offer.expires_at_unix_ms <= previous.offer.expires_at_unix_ms
                 || offer.label != previous.offer.label
-                || offer.source_engine != previous.offer.source_engine
+                || !same_engine_identity(&offer.source_engine, &previous.offer.source_engine)
                 || offer.pairing_id != previous.offer.pairing_id
                 || !peer.matches(previous)
             {
@@ -696,6 +1075,9 @@ impl FolderSharingJournal {
             replacement.commit = None;
             replacement.root = None;
             replacement.paused = false;
+            next.current_peer_routes
+                .entry(peer.identity.device_id)
+                .or_insert_with(|| replacement.offer.source_engine.clone());
             self.persist(next)?;
             return Ok(());
         }
@@ -718,6 +1100,8 @@ impl FolderSharingJournal {
         }
         self.check_capacity()?;
         self.check_not_shared(offer.folder_id, peer.identity.device_id)?;
+        let peer_id = peer.identity.device_id;
+        let source_engine = offer.source_engine.clone();
         let mut next = self.snapshot.clone();
         next.shares.push(Share {
             peer_identity: peer.identity,
@@ -731,6 +1115,9 @@ impl FolderSharingJournal {
             removed: false,
             superseded_offers: Vec::new(),
         });
+        next.current_peer_routes
+            .entry(peer_id)
+            .or_insert(source_engine);
         self.persist(next)
     }
 
@@ -866,7 +1253,18 @@ impl FolderSharingJournal {
             .engine
             .commit_folder_share_offer(&share.offer, &acceptance, now)
             .map_err(|_| SharingError::InvalidRecord)?;
+        if self
+            .snapshot
+            .current_peer_routes
+            .get(&share.peer_identity.device_id)
+            .is_some_and(|current| current != &acceptance.target_engine)
+        {
+            return Err(SharingError::InvalidRecord);
+        }
         let mut next = self.snapshot.clone();
+        next.current_peer_routes
+            .entry(share.peer_identity.device_id)
+            .or_insert_with(|| acceptance.target_engine.clone());
         next.shares[index].acceptance = Some(acceptance);
         next.shares[index].commit = Some(commit.clone());
         self.persist(next)?;
@@ -1338,6 +1736,9 @@ impl FolderSharingJournal {
     /// local root-identity check. Pending, paused and removed shares contribute
     /// no engine membership. No raw stored settings may bypass this method.
     pub fn desired_settings(&mut self) -> Result<EngineSessionSettings, SharingError> {
+        if self.snapshot.pending_peer_address_refresh.is_some() {
+            return Err(SharingError::PersistenceUncertain);
+        }
         self.reconcile_trust()?;
         self.store
             .payload()
@@ -1362,7 +1763,7 @@ impl FolderSharingJournal {
             }
             let root = share.root.as_ref().ok_or(SharingError::InvalidState)?;
             validate_current_root(root)?;
-            let peer_binding = if share.offer.source_device_id == self.engine.device_id() {
+            let historical_binding = if share.offer.source_device_id == self.engine.device_id() {
                 &share
                     .acceptance
                     .as_ref()
@@ -1371,6 +1772,11 @@ impl FolderSharingJournal {
             } else {
                 &share.offer.source_engine
             };
+            let peer_binding = self
+                .snapshot
+                .current_peer_routes
+                .get(&share.peer_identity.device_id)
+                .unwrap_or(historical_binding);
             let id = EngineDeviceId::parse(peer_binding.engine_device_id.as_str())
                 .map_err(|_| SharingError::InvalidRecord)?;
             let address = peer_binding
@@ -1430,14 +1836,22 @@ impl FolderSharingJournal {
         self.store
             .payload()
             .map_err(|_| SharingError::PersistenceUncertain)?;
+        if self.snapshot.pending_peer_address_refresh.is_some() {
+            self.validate_pending_peer_address_refresh()?;
+        }
         let mut next = self.snapshot.clone();
         let mut changed = false;
         let config = self
             .engine
             .config()
             .map_err(|_| SharingError::InvalidState)?;
+        let pending_peer = next
+            .pending_peer_address_refresh
+            .as_ref()
+            .map(|pending| pending.peer_identity.device_id);
         for share in &mut next.shares {
             if !share.removed
+                && Some(share.peer_identity.device_id) != pending_peer
                 && !observe_trust(&config, share.peer_identity.device_id)?
                     .is_some_and(|current| current.matches(share))
             {
@@ -1448,16 +1862,36 @@ impl FolderSharingJournal {
         let pending_before = next.pending_remote_removals.len();
         let mut retained = Vec::with_capacity(pending_before);
         for pending in std::mem::take(&mut next.pending_remote_removals) {
-            if observe_trust(&config, pending.peer_identity.device_id)?.is_some_and(|current| {
-                current.identity == pending.peer_identity
-                    && current.transport == pending.peer_transport
-                    && current.confirmed_at_unix_ms == pending.peer_confirmed_at_unix_ms
-            }) {
+            if Some(pending.peer_identity.device_id) == pending_peer
+                || observe_trust(&config, pending.peer_identity.device_id)?.is_some_and(|current| {
+                    current.identity == pending.peer_identity
+                        && current.transport == pending.peer_transport
+                        && current.confirmed_at_unix_ms == pending.peer_confirmed_at_unix_ms
+                })
+            {
                 retained.push(pending);
             }
         }
         next.pending_remote_removals = retained;
         changed |= next.pending_remote_removals.len() != pending_before;
+        let mut trusted_routes = BTreeSet::new();
+        for peer in next
+            .current_peer_routes
+            .keys()
+            .chain(next.completed_peer_address_refreshes.keys())
+        {
+            if Some(*peer) == pending_peer || observe_trust(&config, *peer)?.is_some() {
+                trusted_routes.insert(*peer);
+            }
+        }
+        let routes_before = next.current_peer_routes.len();
+        let completed_before = next.completed_peer_address_refreshes.len();
+        next.current_peer_routes
+            .retain(|peer, _| trusted_routes.contains(peer));
+        next.completed_peer_address_refreshes
+            .retain(|peer, _| trusted_routes.contains(peer));
+        changed |= next.current_peer_routes.len() != routes_before
+            || next.completed_peer_address_refreshes.len() != completed_before;
         if changed {
             self.persist(next)?;
         }
@@ -1575,6 +2009,8 @@ fn validate_snapshot(
         || snapshot.listener.is_ipv4() != advertised.is_ipv4()
         || (!snapshot.listener.ip().is_unspecified() && snapshot.listener.ip() != advertised.ip())
         || snapshot.shares.len() > MAX_SHARES
+        || snapshot.current_peer_routes.len() > 128
+        || snapshot.completed_peer_address_refreshes.len() > 128
         || retained_offer_count(snapshot)? > MAX_RETAINED_OFFERS
     {
         return Err(SharingError::InvalidState);
@@ -1648,13 +2084,15 @@ fn validate_snapshot(
             }
             previous_issued_at = superseded.issued_at_unix_ms;
         }
-        if source_is_owner && share.offer.source_engine != snapshot.binding {
+        if source_is_owner && !same_engine_identity(&share.offer.source_engine, &snapshot.binding) {
             return Err(SharingError::InvalidRecord);
         }
         if let Some(acceptance) = &share.acceptance {
             verify_folder_share_acceptance(&share.offer, acceptance, source, target)
                 .map_err(|_| SharingError::InvalidRecord)?;
-            if target_is_owner && acceptance.target_engine != snapshot.binding {
+            if target_is_owner
+                && !same_engine_identity(&acceptance.target_engine, &snapshot.binding)
+            {
                 return Err(SharingError::InvalidRecord);
             }
         }
@@ -1686,8 +2124,9 @@ fn validate_snapshot(
                 if binding.engine_device_id.as_str() == installation.device_id().as_str() {
                     return Err(SharingError::InvalidRecord);
                 }
-                if let Some(old) = peer_engines.insert(share.peer_identity.device_id, binding)
-                    && old != binding
+                if let Some(old) =
+                    peer_engines.insert(share.peer_identity.device_id, &binding.engine_device_id)
+                    && old != &binding.engine_device_id
                 {
                     return Err(SharingError::InvalidRecord);
                 }
@@ -1836,6 +2275,54 @@ fn validate_snapshot(
     if remote_total > MAX_RETAINED_OFFERS {
         return Err(SharingError::LimitExceeded);
     }
+    for (peer, route) in &snapshot.current_peer_routes {
+        if *peer == engine.device_id()
+            || route.covalent_device_id != *peer
+            || route.validate().is_err()
+            || historical_peer_engine(snapshot, engine.device_id(), *peer)
+                .is_some_and(|known| known != route.engine_device_id.as_str())
+        {
+            return Err(SharingError::InvalidState);
+        }
+    }
+    for (peer, completed) in &snapshot.completed_peer_address_refreshes {
+        if *peer == engine.device_id()
+            || completed.expected_transport.peer_id != *peer
+            || completed.candidate_transport.peer_id != *peer
+            || !same_transport_identity(
+                &completed.expected_transport,
+                &completed.candidate_transport,
+            )
+            || completed.candidate_engine.covalent_device_id != *peer
+            || completed.candidate_engine.validate().is_err()
+            || snapshot.current_peer_routes.get(peer) != Some(&completed.candidate_engine)
+        {
+            return Err(SharingError::InvalidState);
+        }
+    }
+    if let Some(pending) = &snapshot.pending_peer_address_refresh
+        && (pending.peer_identity.device_id == engine.device_id()
+            || pending.confirmed_at_unix_ms == 0
+            || pending.expected_grant.revoked
+            || pending.expected_grant.peer_device_id != pending.peer_identity.device_id
+            || pending.expected_grant.confirmed_at_unix_ms != pending.confirmed_at_unix_ms
+            || pending.expected_grant.display_name != pending.expected_transport.display_name
+            || PublicIdentity::from_encoded(
+                pending.expected_grant.peer_device_id,
+                pending.expected_grant.public_key.clone(),
+            )
+            .ok()
+            .as_ref()
+                != Some(&pending.peer_identity)
+            || pending.expected_transport.peer_id != pending.peer_identity.device_id
+            || pending.candidate_transport.peer_id != pending.peer_identity.device_id
+            || !same_transport_identity(&pending.expected_transport, &pending.candidate_transport)
+            || !valid_route(&pending.candidate_transport.address)
+            || pending.candidate_engine.covalent_device_id != pending.peer_identity.device_id
+            || pending.candidate_engine.validate().is_err())
+    {
+        return Err(SharingError::InvalidState);
+    }
     for (id, root) in &roots {
         if roots.iter().any(|(other, path)| {
             id != other && (root.path.starts_with(&path.path) || path.path.starts_with(&root.path))
@@ -1920,6 +2407,75 @@ fn capture_root(path: &Path, installation: &EngineInstallation) -> Result<LocalR
 
 fn same_root(left: &LocalRoot, right: &LocalRoot) -> bool {
     left.path == right.path && left.device == right.device && left.inode == right.inode
+}
+
+fn validate_listener_route(
+    listener: SocketAddr,
+    advertised: SocketAddr,
+) -> Result<(), SharingError> {
+    if listener.port() == 0
+        || listener.port() != advertised.port()
+        || listener.is_ipv4() != advertised.is_ipv4()
+        || listener.ip().is_multicast()
+        || (!listener.ip().is_unspecified() && listener.ip() != advertised.ip())
+        || !valid_route(&advertised.to_string())
+    {
+        return Err(SharingError::InvalidState);
+    }
+    Ok(())
+}
+
+fn valid_route(value: &str) -> bool {
+    let Some(address) = (value.len() <= 128)
+        .then(|| value.parse::<SocketAddr>().ok())
+        .flatten()
+    else {
+        return false;
+    };
+    let ambiguous_ipv6 = match address {
+        SocketAddr::V6(address) => {
+            address.ip().segments()[0] & 0xffc0 == 0xfe80
+                || address.scope_id() != 0
+                || address.flowinfo() != 0
+        }
+        SocketAddr::V4(_) => false,
+    };
+    address.port() != 0
+        && !address.ip().is_unspecified()
+        && !address.ip().is_multicast()
+        && !matches!(address.ip(), std::net::IpAddr::V4(ip) if ip.is_broadcast())
+        && !ambiguous_ipv6
+        && address.to_string() == value
+}
+
+fn same_transport_identity(left: &TransportBinding, right: &TransportBinding) -> bool {
+    left.peer_id == right.peer_id
+        && left.display_name == right.display_name
+        && left.certificate_der == right.certificate_der
+        && left.certificate_fingerprint == right.certificate_fingerprint
+}
+
+fn same_engine_identity(left: &SyncEngineBinding, right: &SyncEngineBinding) -> bool {
+    left.validate().is_ok()
+        && right.validate().is_ok()
+        && left.covalent_device_id == right.covalent_device_id
+        && left.engine_device_id == right.engine_device_id
+}
+
+fn historical_peer_engine(snapshot: &Snapshot, owner: DeviceId, peer: DeviceId) -> Option<&str> {
+    snapshot.shares.iter().find_map(|share| {
+        if share.peer_identity.device_id != peer {
+            return None;
+        }
+        if share.offer.source_device_id == owner {
+            share
+                .acceptance
+                .as_ref()
+                .map(|acceptance| acceptance.target_engine.engine_device_id.as_str())
+        } else {
+            Some(share.offer.source_engine.engine_device_id.as_str())
+        }
+    })
 }
 
 fn validate_current_root(root: &LocalRoot) -> Result<(), SharingError> {

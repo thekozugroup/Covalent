@@ -481,3 +481,157 @@ async fn pinned_v4_client_uses_one_real_loopback_quic_stream() {
     );
     server.await.expect("server task");
 }
+
+#[test]
+fn address_probe_request_binds_candidate_and_rejects_ambiguous_routes() {
+    let source = test_engine();
+    let target = test_engine();
+    let fingerprint = "c".repeat(64);
+    let operation = FolderControlOperation::ProbeAddress {
+        requester_id: source.engine.device_id(),
+        target_id: target.engine.device_id(),
+        candidate_address: "127.0.0.1:53101".into(),
+    };
+    let request = sign_request(
+        &source.engine,
+        target.engine.device_id(),
+        &fingerprint,
+        operation,
+    )
+    .unwrap();
+    verify_request(
+        &request,
+        target.engine.device_id(),
+        &fingerprint,
+        &source.engine.public_identity(),
+        &mut FolderControlReplay::default(),
+        request.issued_at_unix_ms,
+    )
+    .unwrap();
+
+    for invalid in ["0.0.0.0:1", "255.255.255.255:1", "[fe80::1]:1"] {
+        let mut altered = request.clone();
+        let FolderControlOperation::ProbeAddress {
+            candidate_address, ..
+        } = &mut altered.operation
+        else {
+            unreachable!();
+        };
+        *candidate_address = invalid.into();
+        altered.operation_digest = digest(&altered.operation).unwrap();
+        resign(&source.engine, &mut altered);
+        assert_eq!(
+            verify_request(
+                &altered,
+                target.engine.device_id(),
+                &fingerprint,
+                &source.engine.public_identity(),
+                &mut FolderControlReplay::default(),
+                altered.issued_at_unix_ms,
+            ),
+            Err(FolderControlError::Rejected)
+        );
+    }
+}
+
+#[tokio::test]
+async fn candidate_probe_authenticates_old_pin_at_new_route_and_returns_signed_engine_binding() {
+    let source = test_engine();
+    let target = test_engine();
+    let source_tls = source.tls();
+    let target_tls = target.tls();
+    let endpoint = quinn::Endpoint::server(
+        target_tls
+            .server_config_with_alpns(&[FOLDER_CONTROL_ALPN])
+            .unwrap(),
+        ([127, 0, 0, 1], 0).into(),
+    )
+    .unwrap();
+    let candidate = endpoint.local_addr().unwrap();
+    let old_address: std::net::SocketAddr = ([127, 0, 0, 1], 53099).into();
+    let target_binding = target.transport(&target_tls, old_address);
+    let source_binding = source.transport(&source_tls, ([127, 0, 0, 1], 53100).into());
+    let invitation = source
+        .engine
+        .pairing_manager()
+        .create_invitation_with_transport(
+            1_000,
+            60_000,
+            vec![source_binding.address.clone()],
+            source_binding,
+        )
+        .unwrap();
+    let roles = BTreeSet::from([PeerRole::BackupReader]);
+    let mut session = target
+        .engine
+        .accept_pairing_with_transport(
+            invitation,
+            target_binding.clone(),
+            roles.clone(),
+            roles,
+            1_001,
+        )
+        .unwrap();
+    let code = session.authentication_string().as_str().to_owned();
+    target
+        .engine
+        .confirm_pairing_as_responder(&mut session, &code, 1_002)
+        .unwrap();
+    source
+        .engine
+        .confirm_pairing_as_inviter(&mut session, &code, 1_003)
+        .unwrap();
+    source
+        .engine
+        .finalize_pairing_as_inviter(&session, 1_004)
+        .unwrap();
+
+    let proof = covalent_protocol::SyncEngineBinding::new(
+        target.engine.device_id(),
+        crate::sync_engine::config::EngineDeviceId::from_certificate_der(
+            target_tls.certificate_der(),
+        )
+        .unwrap()
+        .as_str(),
+        "127.0.0.1:22000",
+    )
+    .unwrap();
+    let expected_proof = proof.clone();
+    let server_engine = Arc::clone(&target.engine);
+    let fingerprint = target_binding.certificate_fingerprint.clone();
+    let server = tokio::spawn(async move {
+        let connection = endpoint.accept().await.unwrap().await.unwrap();
+        let (mut send, mut receive) = connection.accept_bi().await.unwrap();
+        let request: FolderControlRequest = serde_json::from_slice(
+            &crate::transport::read_frame(&mut receive, MAX_FRAME_BYTES)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            request.operation,
+            FolderControlOperation::ProbeAddress { .. }
+        ));
+        let response = sign_response(
+            &server_engine,
+            &request,
+            &fingerprint,
+            FolderControlPayload::AddressProof(proof),
+        )
+        .unwrap();
+        crate::transport::write_frame(&mut send, &serde_json::to_vec(&response).unwrap())
+            .await
+            .unwrap();
+        send.finish().unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(2), send.stopped()).await;
+        connection.close(0_u32.into(), b"done");
+        endpoint.close(0_u32.into(), b"done");
+        endpoint.wait_idle().await;
+    });
+
+    assert_eq!(
+        send_peer_address_probe(Arc::clone(&source.engine), target_binding, candidate).await,
+        Ok(expected_proof)
+    );
+    server.await.unwrap();
+}

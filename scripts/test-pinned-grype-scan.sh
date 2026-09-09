@@ -67,14 +67,26 @@ shift
 exec "$@"
 SH
 chmod 700 "$fixture/bin/timeout"
+cat >"$fixture/bin/du" <<'SH'
+#!/bin/sh
+set -eu
+if [ -n "${MOCK_PRIVATE_KIB-}" ]; then
+  printf '%s\t%s\n' "$MOCK_PRIVATE_KIB" "${2-}"
+  exit 0
+fi
+command -p du "$@"
+SH
+chmod 700 "$fixture/bin/du"
 
 image=sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 run_scan() {
   mode=$1
   report=$2
+  private_kib=${3-}
   set +e
   PATH="$fixture/bin:$PATH" CI= GITHUB_ACTIONS= COVALENT_GRYPE_TESTING=1 \
     COVALENT_GRYPE_TEST_BINARY=$mock MOCK_MODE=$mode \
+    MOCK_PRIVATE_KIB=$private_kib \
     RUNNER_TEMP=$fixture "$repo_root/scripts/run-pinned-grype-scan.sh" "$image" "$report"
   status=$?
   set -e
@@ -108,6 +120,24 @@ fi
 [ -f "$fixture/finding.json" ]
 grep -q 'severities=Critical:1' "$fixture/finding.log"
 grep -q 'id=CVE-2099-0001 package=fixture-package version=1.0 type=apk fixed=none' "$fixture/finding.log"
+
+# Independent disk/resource failures remain fatal, but a valid report from a
+# policy-failing scan is validated and summarized before the aggregate exit.
+if run_scan finding "$fixture/disk-excess.json" 2097153 \
+  >"$fixture/disk-excess.log" 2>"$fixture/disk-excess.err"; then
+  echo "disk excess and a high-severity finding did not fail" >&2
+  exit 1
+else
+  status=$?
+  [ "$status" -eq 1 ] || exit 1
+fi
+grep -q 'severities=Critical:1' "$fixture/disk-excess.log"
+grep -q 'id=CVE-2099-0001 package=fixture-package version=1.0 type=apk fixed=none' \
+  "$fixture/disk-excess.log"
+grep -q 'private Grype data exceeded the disk bound (2147484672 > 2147483648 bytes)' \
+  "$fixture/disk-excess.err"
+grep -q 'high or critical vulnerability found' "$fixture/disk-excess.err"
+[ -f "$fixture/disk-excess.json" ]
 
 if run_scan wrong-image "$fixture/wrong-image.json"; then
   echo "wrong image binding was accepted" >&2

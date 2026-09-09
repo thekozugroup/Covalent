@@ -42,6 +42,14 @@ pub(crate) struct PauseRequest {
     paused: bool,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct RefreshPeerAddressRequest {
+    peer_id: covalent_protocol::DeviceId,
+    expected_address: String,
+    candidate_address: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MutationResponse {
@@ -286,15 +294,165 @@ pub(crate) async fn retry(
     authorize(&state, &headers)?;
     #[cfg(unix)]
     {
-        let lifecycle = ready_service(&state)?
-            .start()
+        let service = ready_service(&state)?;
+        state
+            .finish_peer_address_provider_barrier(service)
             .await
-            .map_err(service_error)?;
+            .map_err(ApiError::from_core)?;
+        let lifecycle = service.start().await.map_err(service_error)?;
         Ok(mutation_response(None, lifecycle))
     }
     #[cfg(not(unix))]
     {
         Err(unavailable_error())
+    }
+}
+
+/// Authenticate the same pinned peer certificate and signing identity at a
+/// candidate numeric endpoint before advancing mutable route state. Historical
+/// pairing and folder signatures remain unchanged.
+pub(crate) async fn refresh_peer_address(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ContractJson(request): ContractJson<RefreshPeerAddressRequest>,
+) -> Result<axum::Json<MutationResponse>, ApiError> {
+    authorize(&state, &headers)?;
+    #[cfg(unix)]
+    {
+        let candidate = request
+            .candidate_address
+            .parse::<std::net::SocketAddr>()
+            .map_err(|_| invalid_address_error())?;
+        if candidate.to_string() != request.candidate_address {
+            return Err(invalid_address_error());
+        }
+        let config = state.engine.config().map_err(ApiError::from_core)?;
+        let current = config
+            .trusted_peer_transports
+            .get(&request.peer_id)
+            .cloned()
+            .ok_or_else(untrusted_peer_error)?;
+        let current_grant = config
+            .trusted_peers
+            .get(&request.peer_id)
+            .cloned()
+            .ok_or_else(untrusted_peer_error)?;
+        let service = ready_service(&state)?;
+        if current.address == request.candidate_address
+            && request.expected_address == current.address
+            && service
+                .pending_peer_address_refresh()
+                .await
+                .map_err(service_error)?
+                == Some((request.peer_id, true))
+        {
+            state
+                .finish_peer_address_provider_barrier(service)
+                .await
+                .map_err(ApiError::from_core)?;
+            let lifecycle = service.start().await.map_err(service_error)?;
+            return Ok(mutation_response(None, lifecycle));
+        }
+        if current.address != request.expected_address {
+            if current.address != request.candidate_address
+                || !service
+                    .recognizes_peer_address_refresh(
+                        request.peer_id,
+                        &request.expected_address,
+                        &request.candidate_address,
+                    )
+                    .await
+                    .map_err(service_error)?
+            {
+                return Err(untrusted_peer_error());
+            }
+            state
+                .refresh_provider_from_current_trust(request.peer_id)
+                .map_err(ApiError::from_core)?;
+            if service
+                .pending_peer_address_refresh()
+                .await
+                .map_err(service_error)?
+                .is_some()
+            {
+                service
+                    .finish_peer_address_refresh(request.peer_id)
+                    .await
+                    .map_err(service_error)?;
+            }
+            let lifecycle = service.start().await.map_err(service_error)?;
+            return Ok(mutation_response(None, lifecycle));
+        }
+        let candidate_engine = crate::sync_control::send_peer_address_probe(
+            state.engine(),
+            current.clone(),
+            candidate,
+        )
+        .await
+        .map_err(|_| address_probe_error())?;
+        let mut replacement = current.clone();
+        replacement.address = request.candidate_address;
+        let committed = service
+            .refresh_peer_address(
+                request.peer_id,
+                &current_grant,
+                &current,
+                &replacement,
+                &candidate_engine,
+            )
+            .await
+            .map_err(service_error)?;
+        state
+            .refresh_provider_from_current_trust(request.peer_id)
+            .map_err(ApiError::from_core)?;
+        service
+            .finish_peer_address_refresh(request.peer_id)
+            .await
+            .map_err(service_error)?;
+        let lifecycle = match service.start().await {
+            Ok(lifecycle) => lifecycle,
+            Err(_) => service
+                .status()
+                .await
+                .map(|status| status.lifecycle())
+                .unwrap_or(committed.lifecycle()),
+        };
+        Ok(mutation_response(None, lifecycle))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = request;
+        Err(unavailable_error())
+    }
+}
+
+fn invalid_address_error() -> ApiError {
+    ApiError {
+        status: StatusCode::BAD_REQUEST,
+        code: "invalid_peer_address",
+        message: "The new device address is invalid.",
+        retryable: false,
+        upload_offset: None,
+    }
+}
+
+fn untrusted_peer_error() -> ApiError {
+    ApiError {
+        status: StatusCode::CONFLICT,
+        code: "peer_address_changed",
+        message: "The trusted device address changed before this update.",
+        retryable: false,
+        upload_offset: None,
+    }
+}
+
+fn address_probe_error() -> ApiError {
+    ApiError {
+        status: StatusCode::BAD_GATEWAY,
+        code: "peer_address_unreachable",
+        message: "The device could not be authenticated at the new address.",
+        retryable: true,
+        upload_offset: None,
     }
 }
 

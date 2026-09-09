@@ -341,6 +341,49 @@ import Testing
     ).isEligibleForBackup)
 }
 
+@Test func providerDisplayRequiresCurrentPositiveEvidenceButPreservesLastFailedProbe() throws {
+    let now: UInt64 = 100_000
+    func provider(_ reachability: ProviderReachability?, _ observed: UInt64?, _ expires: UInt64?) -> ProviderConnection {
+        ProviderConnection(
+            peerId: UUID(), address: "100.100.100.12:8788",
+            certificateFingerprint: String(repeating: "c", count: 64),
+            reachability: reachability, observedAtUnixMs: observed, validUntilUnixMs: expires
+        )
+    }
+    #expect(provider(.reachable, now, now + 1).displayedReachability(atUnixMs: now) == .reachable)
+    #expect(provider(.unknown, now - 1, now + 1).displayedReachability(atUnixMs: now) == .unknown)
+    #expect(provider(.reachable, now - 1, now).displayedReachability(atUnixMs: now) == .reachable)
+    #expect(provider(.reachable, now - 2, now - 1).displayedReachability(atUnixMs: now) == .unknown)
+    #expect(provider(.reachable, now + 1, now + 2).displayedReachability(atUnixMs: now) == .unknown)
+    #expect(provider(.reachable, now + 1, now - 1).displayedReachability(atUnixMs: now) == .unknown)
+    #expect(provider(.reachable, nil, now + 1).displayedReachability(atUnixMs: now) == .unknown)
+    #expect(provider(.reachable, now - 1, nil).displayedReachability(atUnixMs: now) == .unknown)
+    #expect(provider(nil, now - 1, now + 1).displayedReachability(atUnixMs: now) == .unknown)
+
+    let unreachableJSON = #"{"peerId":"00000000-0000-0000-0000-000000000001","address":"100.100.100.12:8788","certificateFingerprint":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","reachability":"unreachable","observedAtUnixMs":null,"validUntilUnixMs":null,"usableBytes":null,"allocatedBytes":null,"quotaBytes":null}"#
+    let unreachable = try JSONDecoder().decode(
+        ProviderConnection.self,
+        from: Data(unreachableJSON.utf8)
+    )
+    #expect(unreachable.displayedReachability(atUnixMs: now) == .unreachable)
+    #expect(unreachable.selectionStatus(atUnixMs: now) == "Did not respond on last check — cannot select")
+    #expect(!unreachable.isEligibleForBackup(atUnixMs: now))
+}
+
+@Test func futureAndExpiredProviderObservationsCannotAdvertiseBackupSpace() {
+    let now = UInt64(Date().timeIntervalSince1970 * 1_000)
+    for (observed, expires) in [(now + 60_000, now + 120_000), (now - 120_000, now - 60_000)] {
+        let provider = ProviderConnection(
+            peerId: UUID(), address: "100.100.100.12:8788",
+            certificateFingerprint: String(repeating: "c", count: 64), reachability: .reachable,
+            observedAtUnixMs: observed, validUntilUnixMs: expires,
+            capacity: ProviderCapacity(usableBytes: 1, allocatedBytes: 1, quotaBytes: 2)
+        )
+        #expect(!provider.isEligibleForBackup)
+        #expect(provider.selectionStatus == "Device availability is unknown — cannot select")
+    }
+}
+
 @Test func apiErrorsPreserveServerRecoveryMessage() async throws {
     let recorder = RequestRecorder { request in
         TestResponse.response(

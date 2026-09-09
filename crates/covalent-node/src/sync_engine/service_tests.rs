@@ -4,7 +4,7 @@ use crate::transport::TlsIdentity;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use covalent_core::{Engine, EngineOptions, KeyProtector, StaticKeyProtector};
-use covalent_protocol::{FolderShareCommit, PeerRole, TransportBinding};
+use covalent_protocol::{DeviceId, FolderShareCommit, PeerGrant, PeerRole, TransportBinding};
 use std::collections::BTreeSet;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
@@ -93,6 +93,10 @@ impl Device {
         }
     }
 
+    fn grant(&self, peer: DeviceId) -> PeerGrant {
+        self.engine.config().unwrap().trusted_peers[&peer].clone()
+    }
+
     fn service(
         &self,
         journal: FolderSharingJournal,
@@ -103,6 +107,10 @@ impl Device {
 }
 
 fn pair(first: &Device, second: &Device) {
+    pair_with_roles(first, second, BTreeSet::from([PeerRole::BackupReader]));
+}
+
+fn pair_with_roles(first: &Device, second: &Device, roles: BTreeSet<PeerRole>) {
     let invitation = first
         .engine
         .pairing_manager()
@@ -113,7 +121,6 @@ fn pair(first: &Device, second: &Device) {
             first.transport(),
         )
         .unwrap();
-    let roles = BTreeSet::from([PeerRole::BackupReader]);
     let mut session = second
         .engine
         .accept_pairing_with_transport(invitation, second.transport(), roles.clone(), roles, 1001)
@@ -249,6 +256,339 @@ async fn concurrent_expired_offer_renewals_converge_on_one_durable_replacement()
     assert_eq!(status.shares()[0].offer_id, retried.offer_id);
     assert_eq!(status.shares()[0].phase, SharingPhase::Offered);
     assert_eq!(backend.snapshot().launches, 0);
+}
+
+#[tokio::test]
+async fn peer_address_refresh_is_durable_without_a_folder_or_worker() {
+    let first = Device::new("Mac", 44301);
+    let second = Device::new("Server", 44302);
+    pair(&first, &second);
+    let backend = Arc::new(TestBackend::default());
+    let service = first.service(first.journal(), Arc::clone(&backend));
+    let expected = second.transport();
+    let mut candidate = expected.clone();
+    candidate.address = "127.0.0.1:54302".into();
+    let candidate_engine = covalent_protocol::SyncEngineBinding::new(
+        second.engine.device_id(),
+        second.installation.device_id().as_str(),
+        "127.0.0.1:54303",
+    )
+    .unwrap();
+
+    let committed = service
+        .refresh_peer_address(
+            second.engine.device_id(),
+            &first.grant(second.engine.device_id()),
+            &expected,
+            &candidate,
+            &candidate_engine,
+        )
+        .await
+        .unwrap();
+    assert_eq!(committed.lifecycle(), FolderSyncLifecycle::Stopped);
+    assert_eq!(
+        service.pending_peer_address_refresh().await.unwrap(),
+        Some((second.engine.device_id(), true))
+    );
+    service
+        .finish_peer_address_refresh(second.engine.device_id())
+        .await
+        .unwrap();
+    assert_eq!(backend.snapshot().launches, 0);
+    assert_eq!(
+        first
+            .engine
+            .config()
+            .unwrap()
+            .trusted_peer_transports
+            .get(&second.engine.device_id())
+            .unwrap(),
+        &candidate
+    );
+    drop(service);
+
+    let reopened = first.service(first.reopen(), Arc::clone(&backend));
+    assert_eq!(
+        reopened.start().await.unwrap(),
+        FolderSyncLifecycle::Stopped
+    );
+    assert_eq!(backend.snapshot().launches, 0);
+}
+
+#[tokio::test]
+async fn active_address_refresh_reaps_before_core_change_and_requires_explicit_restart() {
+    let first = Device::new("Mac", 44303);
+    let second = Device::new("Server", 44304);
+    pair(&first, &second);
+    let first_backend = Arc::new(TestBackend::default());
+    let second_backend = Arc::new(TestBackend::default());
+    let source = first.service(first.journal(), Arc::clone(&first_backend));
+    let target = second.service(second.journal(), second_backend);
+    make_ready(&first, &second, &source, &target).await;
+    let before = first_backend.snapshot();
+    let expected = second.transport();
+    let mut candidate = expected.clone();
+    candidate.address = "127.0.0.1:54304".into();
+    let candidate_engine = covalent_protocol::SyncEngineBinding::new(
+        second.engine.device_id(),
+        second.installation.device_id().as_str(),
+        "127.0.0.1:54305",
+    )
+    .unwrap();
+
+    assert_eq!(
+        source
+            .refresh_peer_address(
+                second.engine.device_id(),
+                &first.grant(second.engine.device_id()),
+                &expected,
+                &candidate,
+                &candidate_engine,
+            )
+            .await
+            .unwrap()
+            .lifecycle(),
+        FolderSyncLifecycle::Stopped
+    );
+    let stopped = first_backend.snapshot();
+    assert_eq!(stopped.close_calls, before.close_calls + 1);
+    assert_eq!(stopped.stop_calls, before.stop_calls + 1);
+    assert_eq!(stopped.launches, before.launches);
+    source
+        .finish_peer_address_refresh(second.engine.device_id())
+        .await
+        .unwrap();
+    assert_eq!(source.start().await.unwrap(), FolderSyncLifecycle::Running);
+    let restarted = first_backend.snapshot();
+    assert_eq!(restarted.launches, before.launches + 1);
+    assert_eq!(restarted.scan_calls, before.scan_calls + 1);
+    assert_eq!(restarted.maximum_active, 1);
+}
+
+#[tokio::test]
+async fn invalid_address_refresh_keeps_worker_and_failed_reap_keeps_core_old() {
+    let first = Device::new("Mac", 44305);
+    let second = Device::new("Server", 44306);
+    let stranger = Device::new("Stranger", 44307);
+    pair(&first, &second);
+    let first_backend = Arc::new(TestBackend::default());
+    let second_backend = Arc::new(TestBackend::default());
+    let source = first.service(first.journal(), Arc::clone(&first_backend));
+    let target = second.service(second.journal(), second_backend);
+    make_ready(&first, &second, &source, &target).await;
+    let expected = second.transport();
+    let mut candidate = expected.clone();
+    candidate.address = "127.0.0.1:54306".into();
+    let wrong_owner = covalent_protocol::SyncEngineBinding::new(
+        stranger.engine.device_id(),
+        second.installation.device_id().as_str(),
+        "127.0.0.1:54307",
+    )
+    .unwrap();
+    let before = first_backend.snapshot();
+    assert_eq!(
+        source
+            .refresh_peer_address(
+                second.engine.device_id(),
+                &first.grant(second.engine.device_id()),
+                &expected,
+                &candidate,
+                &wrong_owner,
+            )
+            .await,
+        Err(FolderSyncServiceError::Journal)
+    );
+    let unchanged = first_backend.snapshot();
+    assert_eq!(unchanged.stop_calls, before.stop_calls);
+    assert_eq!(unchanged.active, 1);
+
+    let valid = covalent_protocol::SyncEngineBinding::new(
+        second.engine.device_id(),
+        second.installation.device_id().as_str(),
+        "127.0.0.1:54307",
+    )
+    .unwrap();
+    first_backend.push_stop(TestStopBehavior::StillStopping);
+    assert_eq!(
+        source
+            .refresh_peer_address(
+                second.engine.device_id(),
+                &first.grant(second.engine.device_id()),
+                &expected,
+                &candidate,
+                &valid,
+            )
+            .await,
+        Err(FolderSyncServiceError::WorkerStillStopping)
+    );
+    assert_eq!(
+        first
+            .engine
+            .config()
+            .unwrap()
+            .trusted_peer_transports
+            .get(&second.engine.device_id()),
+        Some(&expected)
+    );
+}
+
+#[tokio::test]
+async fn grant_change_while_worker_reaps_rejects_the_prepared_address_transition() {
+    let first = Device::new("Mac", 44308);
+    let second = Device::new("Server", 44309);
+    pair(&first, &second);
+    let first_backend = Arc::new(TestBackend::default());
+    let second_backend = Arc::new(TestBackend::default());
+    let source = Arc::new(first.service(first.journal(), Arc::clone(&first_backend)));
+    let target = second.service(second.journal(), second_backend);
+    make_ready(&first, &second, &source, &target).await;
+    let expected = second.transport();
+    let expected_grant = first.grant(second.engine.device_id());
+    let mut candidate = expected.clone();
+    candidate.address = "127.0.0.1:54309".into();
+    let candidate_engine = covalent_protocol::SyncEngineBinding::new(
+        second.engine.device_id(),
+        second.installation.device_id().as_str(),
+        "127.0.0.1:54310",
+    )
+    .unwrap();
+    let peer_id = second.engine.device_id();
+    let gate = Arc::new(Notify::new());
+    first_backend.push_stop(TestStopBehavior::Wait(Arc::clone(&gate)));
+    let refresh = {
+        let source = Arc::clone(&source);
+        let expected_grant = expected_grant.clone();
+        let expected = expected.clone();
+        let candidate = candidate.clone();
+        tokio::spawn(async move {
+            source
+                .refresh_peer_address(
+                    peer_id,
+                    &expected_grant,
+                    &expected,
+                    &candidate,
+                    &candidate_engine,
+                )
+                .await
+        })
+    };
+    first_backend.wait_for_stop().await;
+    let mut changed = expected_grant;
+    changed.roles.insert(PeerRole::StorageProvider);
+    first.engine.trust_peer(changed).unwrap();
+    gate.notify_waiters();
+    assert_eq!(refresh.await.unwrap(), Err(FolderSyncServiceError::Journal));
+    assert_eq!(source.pending_peer_address_refresh().await.unwrap(), None);
+    let config = first.engine.config().unwrap();
+    assert_ne!(
+        config
+            .trusted_peer_transports
+            .get(&second.engine.device_id())
+            .map(|binding| binding.address.as_str()),
+        Some(candidate.address.as_str())
+    );
+    assert_eq!(first_backend.snapshot().maximum_active, 1);
+}
+
+#[tokio::test]
+async fn provider_persistence_failure_keeps_the_address_barrier_until_exact_retry() {
+    let first = Device::new("Mac", 44310);
+    let second = Device::new("Server", 44311);
+    pair_with_roles(
+        &first,
+        &second,
+        BTreeSet::from([PeerRole::BackupReader, PeerRole::StorageProvider]),
+    );
+    let provider_path = first.root.join("provider-connections.json");
+    let state = crate::AppState::new(
+        Arc::clone(&first.engine),
+        crate::PlatformTier::Tier1,
+        "provider-barrier-test-token-with-32-bytes".into(),
+    )
+    .unwrap()
+    .with_provider_state(&provider_path)
+    .unwrap();
+    let expected = second.transport();
+    state
+        .connect_provider(crate::ProviderConnection {
+            peer_id: second.engine.device_id(),
+            address: expected.address.parse().unwrap(),
+            certificate_der: expected.certificate_der.clone(),
+        })
+        .unwrap();
+    let service = first.service(first.journal(), Arc::new(TestBackend::default()));
+    let expected_grant = first.grant(second.engine.device_id());
+    let mut candidate = expected.clone();
+    candidate.address = "127.0.0.1:54311".into();
+    let candidate_engine = covalent_protocol::SyncEngineBinding::new(
+        second.engine.device_id(),
+        second.installation.device_id().as_str(),
+        "127.0.0.1:54312",
+    )
+    .unwrap();
+    service
+        .refresh_peer_address(
+            second.engine.device_id(),
+            &expected_grant,
+            &expected,
+            &candidate,
+            &candidate_engine,
+        )
+        .await
+        .unwrap();
+
+    let saved = first.root.join("provider-connections.saved");
+    std::fs::rename(&provider_path, &saved).unwrap();
+    std::fs::create_dir(&provider_path).unwrap();
+    assert!(
+        state
+            .finish_peer_address_provider_barrier(&service)
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .pending_peer_address_refresh()
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(service.start().await, Err(FolderSyncServiceError::Journal));
+
+    std::fs::remove_dir(&provider_path).unwrap();
+    std::fs::rename(&saved, &provider_path).unwrap();
+    drop(service);
+    drop(state);
+    let reopened_state = crate::AppState::new(
+        Arc::clone(&first.engine),
+        crate::PlatformTier::Tier1,
+        "provider-barrier-test-token-with-32-bytes".into(),
+    )
+    .unwrap()
+    .with_provider_state(&provider_path)
+    .unwrap();
+    let reopened_service = first.service(first.reopen(), Arc::new(TestBackend::default()));
+    reopened_state
+        .finish_peer_address_provider_barrier(&reopened_service)
+        .await
+        .unwrap();
+    assert!(
+        reopened_service
+            .pending_peer_address_refresh()
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        reopened_service.start().await.unwrap(),
+        FolderSyncLifecycle::Stopped
+    );
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&provider_path).unwrap()).unwrap();
+    assert_eq!(
+        saved["providers"][second.engine.device_id().to_string()]["address"],
+        candidate.address
+    );
 }
 
 #[tokio::test]

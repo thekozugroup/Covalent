@@ -332,6 +332,22 @@ public enum ProviderReachability: String, Codable, Equatable, Sendable {
     case reachable
     case unreachable
     case unknown
+
+    public var connectionStatusLabel: String {
+        switch self {
+        case .reachable: "Responding"
+        case .unreachable: "Did not respond on last check"
+        case .unknown: "Status unknown"
+        }
+    }
+
+    public var connectionStatusSymbol: String {
+        switch self {
+        case .reachable: "checkmark.circle.fill"
+        case .unreachable: "network.slash"
+        case .unknown: "questionmark.circle"
+        }
+    }
 }
 
 public struct ProviderCapacity: Codable, Equatable, Sendable {
@@ -387,19 +403,40 @@ public struct ProviderConnection: Codable, Equatable, Identifiable, Sendable {
 
     public var id: UUID { peerId }
 
-    public var isEligibleForBackup: Bool {
-        guard reachability == .reachable,
-              let capacity,
-              let observedAtUnixMs,
-              let validUntilUnixMs,
-              validUntilUnixMs >= observedAtUnixMs,
-              validUntilUnixMs >= UInt64(Date().timeIntervalSince1970 * 1_000)
-        else { return false }
-        return capacity.canStoreAnotherCopy
+    /// A saved connection is not proof that the device is still responding.
+    /// Expired, future-dated or incomplete observations must not imply availability.
+    public func displayedReachability(atUnixMs now: UInt64) -> ProviderReachability {
+        switch reachability {
+        case .unreachable:
+            // A failed live probe has no signed capability timestamps. Preserve
+            // it as a last-check result without presenting it as a current proof.
+            return .unreachable
+        case .reachable:
+            guard let observedAtUnixMs,
+                  let validUntilUnixMs,
+                  observedAtUnixMs <= now,
+                  now <= validUntilUnixMs
+            else { return .unknown }
+            return .reachable
+        case .unknown, .none:
+            return .unknown
+        }
     }
 
-    public var selectionStatus: String {
-        switch reachability {
+    public var displayedReachability: ProviderReachability {
+        displayedReachability(atUnixMs: UInt64(max(0, Date().timeIntervalSince1970 * 1_000)))
+    }
+
+    public func isEligibleForBackup(atUnixMs now: UInt64) -> Bool {
+        displayedReachability(atUnixMs: now) == .reachable && capacity?.canStoreAnotherCopy == true
+    }
+
+    public var isEligibleForBackup: Bool {
+        isEligibleForBackup(atUnixMs: UInt64(max(0, Date().timeIntervalSince1970 * 1_000)))
+    }
+
+    public func selectionStatus(atUnixMs now: UInt64) -> String {
+        switch displayedReachability(atUnixMs: now) {
         case .reachable:
             guard let capacity else { return "Capacity could not be checked — cannot select" }
             guard capacity.quotaBytes > 0, capacity.usableBytes > 0 else {
@@ -409,10 +446,14 @@ public struct ProviderConnection: Codable, Equatable, Identifiable, Sendable {
                 + "using \(ByteCountFormatter.string(fromByteCount: Int64(clamping: capacity.allocatedBytes), countStyle: .file)) "
                 + "of \(ByteCountFormatter.string(fromByteCount: Int64(clamping: capacity.quotaBytes), countStyle: .file))"
         case .unreachable:
-            return "This device did not answer — cannot select"
-        case .unknown, .none:
-            return "Capacity is unknown — cannot select"
+            return "Did not respond on last check — cannot select"
+        case .unknown:
+            return "Device availability is unknown — cannot select"
         }
+    }
+
+    public var selectionStatus: String {
+        selectionStatus(atUnixMs: UInt64(max(0, Date().timeIntervalSince1970 * 1_000)))
     }
 }
 

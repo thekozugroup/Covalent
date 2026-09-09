@@ -1440,3 +1440,316 @@ async fn worker_free_access_recovery_lists_repairs_and_removes_across_reopen() {
     assert!(reopened.desired_settings().unwrap().folders.is_empty());
     assert!(replacement.is_dir());
 }
+
+fn refresh_transport(device: &Device, expected: &TransportBinding, candidate: &TransportBinding) {
+    let config = device.engine.config().unwrap();
+    let grant = config.trusted_peers.get(&expected.peer_id).unwrap();
+    assert!(
+        device
+            .engine
+            .refresh_trusted_peer_address(grant, expected, &candidate.address)
+            .unwrap()
+    );
+}
+
+fn peer_grant(device: &Device, peer: DeviceId) -> covalent_protocol::PeerGrant {
+    device.engine.config().unwrap().trusted_peers[&peer].clone()
+}
+
+#[test]
+fn address_refresh_is_revision_bound_and_recovers_without_any_folder() {
+    let a = Device::new("Mac", 43401);
+    let b = Device::new("Docker", 43402);
+    pair(&a, &b);
+    let mut journal = a.journal();
+    let expected = b.transport();
+    let mut candidate = expected.clone();
+    candidate.address = "127.0.0.1:53402".into();
+    let candidate_engine = SyncEngineBinding::new(
+        b.engine.device_id(),
+        b.installation.device_id().as_str(),
+        "127.0.0.1:53403",
+    )
+    .unwrap();
+    let prepared = journal
+        .prepare_peer_address_refresh(
+            b.engine.device_id(),
+            &peer_grant(&a, b.engine.device_id()),
+            &expected,
+            &candidate,
+            &candidate_engine,
+        )
+        .unwrap();
+
+    let mut other = a.reopen();
+    assert_eq!(
+        other.begin_peer_address_refresh(&prepared).unwrap_err(),
+        SharingError::InvalidState
+    );
+    assert!(journal.begin_peer_address_refresh(&prepared).unwrap());
+    assert!(matches!(
+        journal.desired_settings(),
+        Err(SharingError::PersistenceUncertain)
+    ));
+    drop(journal);
+
+    let mut reopened = a.reopen();
+    assert_eq!(
+        reopened.pending_peer_address_refresh().unwrap(),
+        Some((b.engine.device_id(), false))
+    );
+    refresh_transport(&a, &expected, &candidate);
+    assert_eq!(
+        reopened.pending_peer_address_refresh().unwrap(),
+        Some((b.engine.device_id(), true))
+    );
+    reopened
+        .complete_peer_address_refresh(b.engine.device_id())
+        .unwrap();
+    assert!(reopened.desired_settings().unwrap().folders.is_empty());
+    assert_eq!(
+        reopened
+            .snapshot
+            .current_peer_routes
+            .get(&b.engine.device_id()),
+        Some(&candidate_engine)
+    );
+    let revision = reopened.revision();
+    let retry = reopened
+        .prepare_peer_address_refresh(
+            b.engine.device_id(),
+            &peer_grant(&a, b.engine.device_id()),
+            &expected,
+            &candidate,
+            &candidate_engine,
+        )
+        .unwrap();
+    assert!(retry.is_already_complete());
+    assert!(!reopened.begin_peer_address_refresh(&retry).unwrap());
+    assert_eq!(reopened.revision(), revision);
+}
+
+#[test]
+fn refreshed_routes_preserve_signed_share_history_and_drive_settings() {
+    let a = Device::new("Mac", 43411);
+    let b = Device::new("Docker", 43412);
+    pair(&a, &b);
+    let mut first = a.journal();
+    let mut second = b.journal();
+    let (offer, acceptance, _) = share(&a, &b, &mut first, &mut second);
+    let signed_offer = serde_json::to_vec(&first.snapshot.shares[0].offer).unwrap();
+    let signed_acceptance = serde_json::to_vec(&acceptance).unwrap();
+    let expected = b.transport();
+    let mut candidate = expected.clone();
+    candidate.address = "127.0.0.1:53412".into();
+    let candidate_engine = SyncEngineBinding::new(
+        b.engine.device_id(),
+        b.installation.device_id().as_str(),
+        "127.0.0.1:53413",
+    )
+    .unwrap();
+    let prepared = first
+        .prepare_peer_address_refresh(
+            b.engine.device_id(),
+            &peer_grant(&a, b.engine.device_id()),
+            &expected,
+            &candidate,
+            &candidate_engine,
+        )
+        .unwrap();
+    first.begin_peer_address_refresh(&prepared).unwrap();
+    refresh_transport(&a, &expected, &candidate);
+    first
+        .complete_peer_address_refresh(b.engine.device_id())
+        .unwrap();
+
+    assert_eq!(
+        serde_json::to_vec(&first.snapshot.shares[0].offer).unwrap(),
+        signed_offer
+    );
+    assert_eq!(
+        serde_json::to_vec(first.snapshot.shares[0].acceptance.as_ref().unwrap()).unwrap(),
+        signed_acceptance
+    );
+    assert_eq!(first.snapshot.shares[0].offer.offer_id, offer.offer_id);
+    let settings = first.desired_settings().unwrap();
+    assert_eq!(settings.peers[0].address().to_string(), "127.0.0.1:53413");
+}
+
+#[test]
+fn cold_core_new_address_recovery_preserves_and_retargets_removal_outbox() {
+    let a = Device::new("Mac", 43415);
+    let b = Device::new("Docker", 43416);
+    pair(&a, &b);
+    let mut first = a.journal();
+    let mut second = b.journal();
+    let (offer, _, _) = share(&a, &b, &mut first, &mut second);
+    first.remove(offer.offer_id).unwrap();
+    assert_eq!(first.snapshot.pending_remote_removals.len(), 1);
+    let expected = b.transport();
+    let mut candidate = expected.clone();
+    candidate.address = "127.0.0.1:53416".into();
+    let candidate_engine = SyncEngineBinding::new(
+        b.engine.device_id(),
+        b.installation.device_id().as_str(),
+        "127.0.0.1:53417",
+    )
+    .unwrap();
+    let prepared = first
+        .prepare_peer_address_refresh(
+            b.engine.device_id(),
+            &peer_grant(&a, b.engine.device_id()),
+            &expected,
+            &candidate,
+            &candidate_engine,
+        )
+        .unwrap();
+    first.begin_peer_address_refresh(&prepared).unwrap();
+    refresh_transport(&a, &expected, &candidate);
+    drop(first);
+
+    let mut reopened = a.reopen();
+    assert_eq!(
+        reopened.summaries().unwrap()[0].phase,
+        SharingPhase::Removed
+    );
+    assert_eq!(reopened.snapshot.pending_remote_removals.len(), 1);
+    assert_eq!(
+        reopened.pending_peer_address_refresh().unwrap(),
+        Some((b.engine.device_id(), true))
+    );
+    reopened
+        .complete_peer_address_refresh(b.engine.device_id())
+        .unwrap();
+    let delivery = reopened.outbound_records().unwrap();
+    assert_eq!(delivery.len(), 1);
+    assert_eq!(delivery[0].peer_transport, candidate);
+    assert!(matches!(delivery[0].record, FolderShareRecord::Removal(_)));
+}
+
+#[test]
+fn cold_local_route_change_preserves_history_and_updates_listener() {
+    let a = Device::new("Mac", 43421);
+    let b = Device::new("Docker", 43422);
+    pair(&a, &b);
+    let mut first = a.journal();
+    let mut second = b.journal();
+    share(&a, &b, &mut first, &mut second);
+    let historical = first.snapshot.shares[0].offer.clone();
+    drop(first);
+
+    let listener: SocketAddr = "0.0.0.0:53421".parse().unwrap();
+    let advertised: SocketAddr = "127.0.0.2:53421".parse().unwrap();
+    let reopened = FolderSharingJournal::open_at_route(
+        Arc::clone(&a.engine),
+        Arc::clone(&a.installation),
+        Arc::clone(&a.protector),
+        listener,
+        advertised,
+    )
+    .unwrap();
+    assert_eq!(reopened.snapshot.shares[0].offer, historical);
+    assert_eq!(reopened.listener(), listener);
+    assert_eq!(reopened.binding().direct_address, advertised.to_string());
+}
+
+#[test]
+fn signed_probe_can_refresh_engine_listener_without_changing_control_address() {
+    let a = Device::new("Mac", 43425);
+    let b = Device::new("Docker", 43426);
+    pair(&a, &b);
+    let mut journal = a.journal();
+    let transport = b.transport();
+    let candidate_engine = SyncEngineBinding::new(
+        b.engine.device_id(),
+        b.installation.device_id().as_str(),
+        "127.0.0.1:53427",
+    )
+    .unwrap();
+    let grant = peer_grant(&a, b.engine.device_id());
+    let prepared = journal
+        .prepare_peer_address_refresh(
+            b.engine.device_id(),
+            &grant,
+            &transport,
+            &transport,
+            &candidate_engine,
+        )
+        .unwrap();
+    assert!(journal.begin_peer_address_refresh(&prepared).unwrap());
+    assert!(
+        !a.engine
+            .refresh_trusted_peer_address(&grant, &transport, &transport.address)
+            .unwrap()
+    );
+    journal
+        .complete_peer_address_refresh(b.engine.device_id())
+        .unwrap();
+    assert_eq!(
+        journal
+            .snapshot
+            .current_peer_routes
+            .get(&b.engine.device_id()),
+        Some(&candidate_engine)
+    );
+}
+
+#[test]
+fn invitation_renewal_can_carry_the_authenticated_current_route() {
+    let a = Device::new("Mac", 43431);
+    let b = Device::new("Docker", 43432);
+    pair(&a, &b);
+    let mut first = a.journal();
+    let mut second = b.journal();
+    let old = first
+        .offer(
+            b.engine.device_id(),
+            Uuid::new_v4(),
+            "Documents",
+            &a.files(),
+            2_000,
+        )
+        .unwrap();
+    second.receive_offer(old.clone(), 2_001).unwrap();
+    drop(first);
+    let listener: SocketAddr = "0.0.0.0:53431".parse().unwrap();
+    let advertised: SocketAddr = "127.0.0.2:53431".parse().unwrap();
+    let mut first = FolderSharingJournal::open_at_route(
+        Arc::clone(&a.engine),
+        Arc::clone(&a.installation),
+        Arc::clone(&a.protector),
+        listener,
+        advertised,
+    )
+    .unwrap();
+
+    let expected_transport = a.transport();
+    let mut candidate_transport = expected_transport.clone();
+    candidate_transport.address = "127.0.0.2:43431".into();
+    let prepared = second
+        .prepare_peer_address_refresh(
+            a.engine.device_id(),
+            &peer_grant(&b, a.engine.device_id()),
+            &expected_transport,
+            &candidate_transport,
+            first.binding(),
+        )
+        .unwrap();
+    second.begin_peer_address_refresh(&prepared).unwrap();
+    refresh_transport(&b, &expected_transport, &candidate_transport);
+    second
+        .complete_peer_address_refresh(a.engine.device_id())
+        .unwrap();
+
+    let renewed = first
+        .renew_offer(old.offer_id, old.expires_at_unix_ms)
+        .unwrap();
+    assert_ne!(
+        renewed.source_engine.direct_address,
+        old.source_engine.direct_address
+    );
+    second
+        .receive_offer(renewed.clone(), renewed.issued_at_unix_ms)
+        .unwrap();
+    assert_eq!(second.snapshot.shares[0].offer, renewed);
+}

@@ -38,6 +38,7 @@ use crate::{
 };
 
 mod recovery_import;
+mod transport_update;
 
 const NODE_CONFIG_SCHEMA_VERSION: u16 = 1;
 const LEGACY_BACKUP_KEY_SCHEMA_VERSION: u16 = 1;
@@ -205,7 +206,8 @@ pub struct NodeConfig {
     pub remembered_backups: BTreeMap<BackupId, RememberedBackupState>,
     /// Explicitly confirmed peer grants, including revocation tombstones.
     pub trusted_peers: BTreeMap<DeviceId, PeerGrant>,
-    /// Exact peer transport pins retained only from a mutually signed pairing transcript.
+    /// Peer certificate pins retained from mutually signed pairing, with any
+    /// subsequent address-only update authenticated under that same identity.
     #[serde(default)]
     pub trusted_peer_transports: BTreeMap<DeviceId, TransportBinding>,
     /// Highest locally issued roster epoch.
@@ -1930,7 +1932,7 @@ impl Engine {
         Ok(roster)
     }
 
-    /// Returns an exact transport pin retained from a mutually signed pairing transcript.
+    /// Returns the paired certificate pin and its current authenticated address.
     pub fn trusted_peer_transport(
         &self,
         peer_id: DeviceId,

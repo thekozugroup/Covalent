@@ -216,6 +216,31 @@ paths:
           $ref: "#/components/responses/Conflict"
         "503":
           $ref: "#/components/responses/Conflict"
+  /api/v1/sync/peers/refresh-address:
+    post:
+      summary: Authenticate and adopt a paired device's new address
+      operationId: refreshFolderSyncPeerAddress
+      description: >-
+        Proves the retained peer signing identity and TLS certificate at one
+        canonical numeric candidate address before replacing mutable routing
+        state. Signed pairing and folder-consent records remain unchanged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PeerAddressRefreshRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/FolderSyncMutation"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "502":
+          $ref: "#/components/responses/Conflict"
   /api/v1/discovery:
     get:
       summary: List untrusted discovery candidates
@@ -1623,6 +1648,23 @@ components:
           minLength: 1
           maxLength: 4096
           description: Newly authorized absolute local root; never sent to another peer.
+    PeerAddressRefreshRequest:
+      type: object
+      additionalProperties: false
+      required: [peerId, expectedAddress, candidateAddress]
+      properties:
+        peerId:
+          $ref: "#/components/schemas/DeviceId"
+        expectedAddress:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Exact currently displayed numeric peer-control endpoint.
+        candidateAddress:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Canonical unicast numeric endpoint to authenticate before use.
     FolderPauseRequest:
       type: object
       additionalProperties: false

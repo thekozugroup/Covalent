@@ -511,6 +511,14 @@ impl NodeRuntime {
                     .await,
             );
         }
+        #[cfg(unix)]
+        if let crate::sync_engine::FolderSyncRuntimeState::Ready(service) = &state.folder_sync {
+            // Provider state was loaded and normalized from current core trust
+            // before the folder journal opened. This is the sole cold-start
+            // hook allowed to clear a core-new address transition barrier.
+            let _ = state.finish_peer_address_provider_barrier(service).await;
+            let _ = service.start().await;
+        }
         if let Some(address) = static_advertised_peer_address {
             state = state.with_peer_address(address);
         }

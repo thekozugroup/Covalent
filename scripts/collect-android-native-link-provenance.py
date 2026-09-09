@@ -24,7 +24,9 @@ MAX_BINARY_BYTES = 256 * 1024 * 1024
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_RESPONSE_ARGUMENTS = 65536
 MAX_INPUTS = 4096
+MAX_LIBRARY_REQUESTS = 1024
 SAFE_ABI = re.compile(r"[a-z0-9_-]{1,32}")
+SAFE_LIBRARY_NAME = re.compile(r"[A-Za-z0-9_+.-]{1,128}")
 NDK_PATH = re.compile(r"(/[^\n\r]+?\.(?:a|o|so)(?:\([^\n\r()]+\))?)(?=:\()")
 NEEDED = re.compile(r"Shared library: \[([^\]]+)\]")
 
@@ -282,7 +284,26 @@ def _classify_input(ndk_root: pathlib.Path, raw_path: str) -> dict[str, str]:
     return result
 
 
-def _driver_inputs(trace: str, ndk_root: pathlib.Path) -> list[dict[str, str]]:
+def _library_request(argument: str) -> tuple[str, tuple[str, ...]] | None:
+    if argument.startswith("-l:"):
+        name = argument[3:]
+        if SAFE_LIBRARY_NAME.fullmatch(name) is None:
+            raise ProvenanceError("Clang trace contains an unsafe library request")
+        return (argument, (name,))
+    if argument.startswith("-l") and len(argument) > 2:
+        name = argument[2:]
+        if SAFE_LIBRARY_NAME.fullmatch(name) is None:
+            raise ProvenanceError("Clang trace contains an unsafe library request")
+        return (argument, (f"lib{name}.a", f"lib{name}.so"))
+    if argument.startswith("--library="):
+        value = argument.partition("=")[2]
+        return _library_request("-l" + value)
+    return None
+
+
+def _driver_inputs(
+    trace: str, ndk_root: pathlib.Path
+) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
     invocations: list[list[str]] = []
     for line in trace.splitlines():
         try:
@@ -295,13 +316,33 @@ def _driver_inputs(trace: str, ndk_root: pathlib.Path) -> list[dict[str, str]]:
         raise ProvenanceError("Clang trace must contain exactly one linker invocation")
     root = str(ndk_root) + os.sep
     values: list[dict[str, str]] = []
-    for token in invocations[0][1:]:
+    requests: list[dict[str, Any]] = []
+    tokens = invocations[0][1:]
+    for index, token in enumerate(tokens):
         if token.startswith(root):
             values.append(_classify_input(ndk_root, token))
+        request = None
+        if token == "-l":
+            if index + 1 >= len(tokens):
+                raise ProvenanceError("Clang trace contains an incomplete library request")
+            request = _library_request("-l" + tokens[index + 1])
+        else:
+            request = _library_request(token)
+        if request is not None:
+            argument, candidates = request
+            requests.append({"argument": argument, "candidateFiles": list(candidates)})
+            if len(requests) > MAX_LIBRARY_REQUESTS:
+                raise ProvenanceError("Clang trace exceeds its library request bound")
     if not values:
         raise ProvenanceError("Clang trace contains no concrete NDK link inputs")
     unique = {(row["path"], row.get("archiveMember"), row["kind"]): row for row in values}
-    return [unique[key] for key in sorted(unique)]
+    unique_requests = {
+        (row["argument"], tuple(row["candidateFiles"])): row for row in requests
+    }
+    return (
+        [unique[key] for key in sorted(unique)],
+        [unique_requests[key] for key in sorted(unique_requests)],
+    )
 
 
 def _map_inputs(link_map: str, ndk_root: pathlib.Path) -> list[dict[str, str]]:
@@ -377,7 +418,7 @@ def collect(
     except UnicodeDecodeError as error:
         raise ProvenanceError("link evidence is not UTF-8") from error
 
-    requested = _driver_inputs(trace, ndk_root)
+    requested, library_requests = _driver_inputs(trace, ndk_root)
     contributing = _map_inputs(link_map, ndk_root)
     requested_crt = {pathlib.PurePosixPath(row["path"]).name for row in requested if row["kind"] == "android-crt"}
     expected_crt = (
@@ -392,11 +433,27 @@ def collect(
     if not any(row["kind"] == "compiler-rt-builtins" for row in requested):
         raise ProvenanceError("Clang trace does not name compiler-rt builtins")
     requested_paths = {row["path"] for row in requested}
-    if any(
-        row["kind"] != "android-platform-stub" and row["path"] not in requested_paths
+    requested_library_files = {
+        candidate
+        for request in library_requests
+        for candidate in request["candidateFiles"]
+    }
+    absent = [
+        row
         for row in contributing
-    ):
-        raise ProvenanceError("link map contains an NDK input absent from the driver trace")
+        if row["kind"] != "android-platform-stub"
+        and row["path"] not in requested_paths
+        and pathlib.PurePosixPath(row["path"]).name not in requested_library_files
+    ]
+    if absent:
+        summary = ", ".join(
+            f'{row["kind"]}:{row["path"]}' for row in absent[:16]
+        )
+        if len(absent) > 16:
+            summary += f", and {len(absent) - 16} more"
+        raise ProvenanceError(
+            "link map contains an NDK input absent from the driver trace: " + summary
+        )
 
     return {
         "schemaVersion": 1,
@@ -406,6 +463,7 @@ def collect(
         "ndk": {"revision": expected_revision, "files": metadata},
         "dynamicLibraries": _dynamic_libraries(dynamic, component),
         "requestedNdkInputs": requested,
+        "requestedLinkLibraries": library_requests,
         "contributingNdkInputs": contributing,
         "evidence": {
             "binary": {"bytes": len(binary_raw), "sha256": _sha256(binary_raw)},

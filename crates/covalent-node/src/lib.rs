@@ -1204,6 +1204,12 @@ impl AppState {
             .peer_transport
             .as_ref()
             .ok_or(CoreError::AuthenticationFailed)?;
+        // Completed pairing receipts are historical evidence. A later
+        // authenticated address refresh advances current mutable trust; an old
+        // receipt must never roll the provider endpoint back.
+        if !self.pairing_transport_is_current(transport)? {
+            return Ok(());
+        }
         let address = transport
             .address
             .parse::<SocketAddr>()
@@ -1237,6 +1243,77 @@ impl AppState {
             }
         }
         self.connect_provider(connection)
+    }
+
+    fn pairing_transport_is_current(
+        &self,
+        historical: &TransportBinding,
+    ) -> Result<bool, CoreError> {
+        Ok(self
+            .engine
+            .config()?
+            .trusted_peer_transports
+            .get(&historical.peer_id)
+            .is_some_and(|current| current == historical))
+    }
+
+    #[cfg(unix)]
+    fn refresh_provider_from_current_trust(&self, peer_id: DeviceId) -> Result<(), CoreError> {
+        let retained = self
+            .provider_connections
+            .lock()
+            .map_err(|_| CoreError::Synchronization)?
+            .contains_key(&peer_id);
+        if !retained {
+            return Ok(());
+        }
+        let binding = self
+            .engine
+            .trusted_peer_transport(peer_id, PeerRole::StorageProvider)?;
+        let address = binding
+            .address
+            .parse::<SocketAddr>()
+            .map_err(|_| CoreError::AuthenticationFailed)?;
+        let certificate = URL_SAFE_NO_PAD
+            .decode(&binding.certificate_der)
+            .map_err(|_| CoreError::AuthenticationFailed)?;
+        if certificate.is_empty()
+            || certificate.len() > 64 * 1_024
+            || sha256_hex(&certificate) != binding.certificate_fingerprint
+        {
+            return Err(CoreError::AuthenticationFailed);
+        }
+        self.connect_provider(ProviderConnection {
+            peer_id,
+            address,
+            certificate_der: binding.certificate_der,
+        })
+    }
+
+    /// Finish a crash-recovered route transition only after remembered backup
+    /// provider state has been rebuilt from the already durable core pin.
+    #[cfg(unix)]
+    async fn finish_peer_address_provider_barrier(
+        &self,
+        service: &sync_engine::FolderSyncService,
+    ) -> Result<(), CoreError> {
+        let pending = service
+            .pending_peer_address_refresh()
+            .await
+            .map_err(|_| CoreError::InvalidState("peer address recovery is incomplete".into()))?;
+        let Some((peer_id, core_has_candidate)) = pending else {
+            return Ok(());
+        };
+        if !core_has_candidate {
+            return Err(CoreError::InvalidState(
+                "peer address requires a fresh authenticated proof".into(),
+            ));
+        }
+        self.refresh_provider_from_current_trust(peer_id)?;
+        service
+            .finish_peer_address_refresh(peer_id)
+            .await
+            .map_err(|_| CoreError::InvalidState("peer address recovery is incomplete".into()))
     }
 }
 
@@ -1306,6 +1383,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/sync/pause", post(sync_api::pause))
         .route("/api/v1/sync/remove", post(sync_api::remove))
         .route("/api/v1/sync/repair", post(sync_api::repair))
+        .route(
+            "/api/v1/sync/peers/refresh-address",
+            post(sync_api::refresh_peer_address),
+        )
         .route("/api/v1/sync/retry", post(sync_api::retry))
         .route("/api/v1/transport/identity", get(transport_identity))
         .route("/api/v1/discovery", get(discovery_candidates))
@@ -7223,6 +7304,26 @@ mod tests {
             .await
             .expect("response");
         assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        let address_refresh = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/sync/peers/refresh-address")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "peerId": DeviceId::new(),
+                            "expectedAddress": "127.0.0.1:8789",
+                            "candidateAddress": "127.0.0.1:8790"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("address refresh response");
+        assert_eq!(address_refresh.status(), StatusCode::UNAUTHORIZED);
         let authorized = app
             .oneshot(
                 Request::builder()
@@ -7304,6 +7405,92 @@ mod tests {
                 .expect("connections")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn historical_pairing_transport_cannot_revert_a_refreshed_provider_route() {
+        let first_directory = TempDir::new().expect("first directory");
+        let second_directory = TempDir::new().expect("second directory");
+        let first_protector: Arc<dyn KeyProtector> =
+            Arc::new(StaticKeyProtector::new(1, [0x31; 32]).expect("first protector"));
+        let second_protector: Arc<dyn KeyProtector> =
+            Arc::new(StaticKeyProtector::new(1, [0x32; 32]).expect("second protector"));
+        let first = Arc::new(
+            Engine::open(
+                EngineOptions::new(first_directory.path().join("node"))
+                    .with_key_protector(Arc::clone(&first_protector)),
+            )
+            .unwrap(),
+        );
+        let second = Arc::new(
+            Engine::open(
+                EngineOptions::new(second_directory.path().join("node"))
+                    .with_key_protector(Arc::clone(&second_protector)),
+            )
+            .unwrap(),
+        );
+        let first_tls = crate::transport::TlsIdentity::load_or_create(
+            first_directory.path().join("tls"),
+            first_directory.path(),
+            first_protector.as_ref(),
+        )
+        .unwrap();
+        let second_tls = crate::transport::TlsIdentity::load_or_create(
+            second_directory.path().join("tls"),
+            second_directory.path(),
+            second_protector.as_ref(),
+        )
+        .unwrap();
+        let transport = |engine: &Engine, tls: &crate::transport::TlsIdentity, address: &str| {
+            TransportBinding {
+                peer_id: engine.device_id(),
+                display_name: engine.config().unwrap().device_name,
+                address: address.into(),
+                certificate_der: URL_SAFE_NO_PAD.encode(tls.certificate_der()),
+                certificate_fingerprint: tls.certificate_fingerprint(),
+            }
+        };
+        let first_transport = transport(&first, &first_tls, "127.0.0.1:55101");
+        let historical = transport(&second, &second_tls, "127.0.0.1:55102");
+        let invitation = first
+            .pairing_manager()
+            .create_invitation_with_transport(
+                1_000,
+                60_000,
+                vec![first_transport.address.clone()],
+                first_transport,
+            )
+            .unwrap();
+        let roles = BTreeSet::from([PeerRole::BackupReader, PeerRole::StorageProvider]);
+        let mut session = second
+            .accept_pairing_with_transport(
+                invitation,
+                historical.clone(),
+                roles.clone(),
+                roles,
+                1_001,
+            )
+            .unwrap();
+        let code = session.authentication_string().as_str().to_owned();
+        second
+            .confirm_pairing_as_responder(&mut session, &code, 1_002)
+            .unwrap();
+        first
+            .confirm_pairing_as_inviter(&mut session, &code, 1_003)
+            .unwrap();
+        first.finalize_pairing_as_inviter(&session, 1_004).unwrap();
+        let config = first.config().unwrap();
+        let grant = config.trusted_peers.get(&second.device_id()).unwrap();
+        first
+            .refresh_trusted_peer_address(grant, &historical, "127.0.0.1:55112")
+            .unwrap();
+
+        let mut state = test_state(&TempDir::new().unwrap());
+        state.engine = first;
+        assert!(!state.pairing_transport_is_current(&historical).unwrap());
+        let mut current = historical;
+        current.address = "127.0.0.1:55112".into();
+        assert!(state.pairing_transport_is_current(&current).unwrap());
     }
 
     #[test]

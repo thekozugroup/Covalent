@@ -58,7 +58,7 @@ final class CovalentMacUITests: XCTestCase {
         app.buttons["Cancel"].click()
 
         app.staticTexts["Devices"].click()
-        XCTAssertTrue(app.staticTexts["Your backup network"].waitForExistence(timeout: uiTransitionTimeout))
+        XCTAssertTrue(app.staticTexts["Your devices"].waitForExistence(timeout: uiTransitionTimeout))
         let advanced = app.descendants(matching: .any)["devices.advancedRecovery"]
         XCTAssertTrue(advanced.waitForExistence(timeout: uiTransitionTimeout))
         scrollTo(advanced, in: app)

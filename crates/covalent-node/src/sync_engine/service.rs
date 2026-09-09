@@ -13,7 +13,8 @@ use std::time::Duration;
 
 use covalent_core::Engine;
 use covalent_protocol::{
-    DeviceId, FolderShareAcceptance, FolderShareCommit, FolderShareOffer, SignedRoster,
+    DeviceId, FolderShareAcceptance, FolderShareCommit, FolderShareOffer, PeerGrant, SignedRoster,
+    SyncEngineBinding, TransportBinding,
 };
 use tokio::sync::{Mutex, watch};
 use tokio::task::JoinHandle;
@@ -417,6 +418,22 @@ impl FolderSyncService {
     /// Reconcile trust and desired state, launching no helper for an empty set.
     pub async fn start(&self) -> Result<FolderSyncLifecycle, FolderSyncServiceError> {
         let mut inner = self.try_inner()?;
+        match inner.journal.pending_peer_address_refresh() {
+            Ok(None) => {}
+            Ok(Some(_)) | Err(_) => {
+                if inner.session.is_some() {
+                    let _ = quiesce(
+                        &mut inner,
+                        FolderSyncLifecycle::NeedsAttention(FolderSyncIssue::Journal),
+                        false,
+                    )
+                    .await;
+                } else {
+                    inner.lifecycle = FolderSyncLifecycle::NeedsAttention(FolderSyncIssue::Journal);
+                }
+                return Err(FolderSyncServiceError::Journal);
+            }
+        }
         let desired = match inner.journal.desired_settings() {
             Ok(desired) => desired,
             Err(error) => {
@@ -660,6 +677,115 @@ impl FolderSyncService {
             value: roster,
             lifecycle,
         })
+    }
+
+    /// Commit one already live-authenticated address-only peer transition.
+    /// Validation happens before worker reap; no core or journal mutation
+    /// occurs when the proof is stale or names a different retained identity.
+    pub(crate) async fn refresh_peer_address(
+        &self,
+        peer_id: DeviceId,
+        expected_grant: &PeerGrant,
+        expected_transport: &TransportBinding,
+        candidate_transport: &TransportBinding,
+        candidate_engine: &SyncEngineBinding,
+    ) -> Result<CommittedMutation<()>, FolderSyncServiceError> {
+        let mut inner = self.try_inner()?;
+        let before_revision = inner.journal.revision();
+        let prepared = match inner.journal.prepare_peer_address_refresh(
+            peer_id,
+            expected_grant,
+            expected_transport,
+            candidate_transport,
+            candidate_engine,
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                if inner.journal.revision() != before_revision {
+                    let _ = reconcile_committed(&self.shared, &mut inner).await;
+                }
+                return Err(map_journal_error(error));
+            }
+        };
+        if prepared.is_already_complete() {
+            return Ok(CommittedMutation {
+                value: (),
+                lifecycle: inner.lifecycle,
+            });
+        }
+        quiesce(&mut inner, FolderSyncLifecycle::Stopped, false).await?;
+        if let Err(error) = inner.journal.begin_peer_address_refresh(&prepared) {
+            inner.lifecycle = FolderSyncLifecycle::NeedsAttention(FolderSyncIssue::Journal);
+            return Err(map_journal_error(error));
+        }
+        match self.shared.engine.refresh_trusted_peer_address(
+            expected_grant,
+            expected_transport,
+            &candidate_transport.address,
+        ) {
+            Ok(_) => {}
+            Err(_) => {
+                inner.lifecycle = FolderSyncLifecycle::NeedsAttention(FolderSyncIssue::Journal);
+                return Err(FolderSyncServiceError::Journal);
+            }
+        }
+        Ok(CommittedMutation {
+            value: (),
+            lifecycle: inner.lifecycle,
+        })
+    }
+
+    /// Return a pending address transition only after checking whether core is
+    /// still old or already contains the candidate. No journal state changes.
+    pub(crate) async fn pending_peer_address_refresh(
+        &self,
+    ) -> Result<Option<(DeviceId, bool)>, FolderSyncServiceError> {
+        let mut inner = self.try_inner()?;
+        inner
+            .journal
+            .pending_peer_address_refresh()
+            .map_err(map_journal_error)
+    }
+
+    /// Confirm that an API retry names the exact pending/latest transition.
+    pub(crate) async fn recognizes_peer_address_refresh(
+        &self,
+        peer_id: DeviceId,
+        expected_address: &str,
+        candidate_address: &str,
+    ) -> Result<bool, FolderSyncServiceError> {
+        let inner = self.try_inner()?;
+        inner
+            .journal
+            .recognizes_peer_address_refresh(peer_id, expected_address, candidate_address)
+            .map_err(map_journal_error)
+    }
+
+    /// Clear the final journal barrier only after AppState durably rebuilt any
+    /// remembered provider route from current core trust.
+    pub(crate) async fn finish_peer_address_refresh(
+        &self,
+        peer_id: DeviceId,
+    ) -> Result<(), FolderSyncServiceError> {
+        let mut inner = self.try_inner()?;
+        inner
+            .journal
+            .complete_peer_address_refresh(peer_id)
+            .map_err(|_| {
+                inner.lifecycle = FolderSyncLifecycle::NeedsAttention(FolderSyncIssue::Journal);
+                FolderSyncServiceError::Journal
+            })
+    }
+
+    /// Current public local engine route for an authenticated peer challenge.
+    pub(crate) async fn current_binding(
+        &self,
+    ) -> Result<SyncEngineBinding, FolderSyncServiceError> {
+        let inner = self.try_inner()?;
+        inner
+            .journal
+            .authenticated_binding()
+            .map_err(map_journal_error)
     }
 
     /// Return consent and the last observation from the owned health task.

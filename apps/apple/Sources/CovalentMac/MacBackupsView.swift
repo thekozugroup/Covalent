@@ -222,14 +222,23 @@ private struct MacSnapshotDetail: View {
                                 .lineLimit(1)
                         }
                         Spacer()
-                        if model.providers.contains(where: { $0.peerId == providerId }) {
-                            Label("Connected", systemImage: "checkmark.circle.fill")
+                        if let provider = model.providers.first(where: { $0.peerId == providerId }) {
+                            TimelineView(.periodic(from: .now, by: 1)) { context in
+                                let reachability = provider.displayedReachability(
+                                    atUnixMs: UInt64(max(0, context.date.timeIntervalSince1970 * 1_000))
+                                )
+                                Label(
+                                    reachability.connectionStatusLabel,
+                                    systemImage: reachability.connectionStatusSymbol
+                                )
                                 .font(.caption)
-                                .foregroundStyle(.green)
+                                .foregroundStyle(reachability == .reachable ? Color.green : Color.secondary)
+                                .accessibilityLabel("\(providerName(providerId)), \(reachability.connectionStatusLabel)")
+                            }
                         } else {
-                            Label("Offline", systemImage: "bolt.slash")
+                            Label("No saved connection", systemImage: "questionmark.circle")
                                 .font(.caption)
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(.secondary)
                         }
                     }
                     .padding(12)

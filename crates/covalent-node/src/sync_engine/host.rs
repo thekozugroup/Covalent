@@ -108,12 +108,7 @@ impl FolderSyncRuntimeConfig {
             return FolderSyncRuntimeState::NeedsAttention;
         };
         match self.prepare_inner(data_directory, engine, protector, advertised) {
-            Ok(service) => {
-                // A launch failure is retained in the service for a visible,
-                // explicit retry; no failure rolls back durable consent.
-                let _ = service.start().await;
-                FolderSyncRuntimeState::Ready(Arc::new(service))
-            }
+            Ok(service) => FolderSyncRuntimeState::Ready(Arc::new(service)),
             Err(()) => FolderSyncRuntimeState::NeedsAttention,
         }
     }
@@ -125,8 +120,9 @@ impl FolderSyncRuntimeConfig {
         protector: Arc<dyn KeyProtector>,
         advertised_address: SocketAddr,
     ) -> Result<FolderSyncService, ()> {
-        // Validate before creating state. An existing signed endpoint cannot
-        // silently move: its peers retain the old signed address.
+        // Validate before creating state. Existing historical invitations keep
+        // their signed bytes; the journal separately advances the mutable
+        // current local route peers can authenticate through a live proof.
         if self.listener.port() == 0
             || self.listener.port() != advertised_address.port()
             || self.listener.is_ipv4() != advertised_address.is_ipv4()
@@ -163,14 +159,15 @@ impl FolderSyncRuntimeConfig {
                 advertised_address,
             )
         } else {
-            FolderSharingJournal::open(Arc::clone(&engine), Arc::clone(&installation), protector)
+            FolderSharingJournal::open_at_route(
+                Arc::clone(&engine),
+                Arc::clone(&installation),
+                protector,
+                self.listener,
+                advertised_address,
+            )
         }
         .map_err(|_| ())?;
-        if journal.binding().direct_address != advertised_address.to_string()
-            || journal.listener() != self.listener
-        {
-            return Err(());
-        }
         FolderSyncService::new(
             journal,
             installation,

@@ -1219,3 +1219,101 @@ The first share runs; retrying the second restarts the helper and recreates the
 initial-scan barrier. A narrow native correction and real signed-app rerun are
 active isolated work, not included in this build-evidence checkpoint. This is a
 remaining daily-use limitation; passing hosted UI fixtures does not close it.
+
+
+## Checkpoint 37: verified address refresh, truthful device status and build diagnostics
+
+Base commit: `55732b847c252c6828bcc8da7ca8a66bf8571fce`. Checkpoint 36
+run `34295214789` tested merge `9e1a9a4087d52a94ac4238ef4367f38a877363b6`.
+Rust/contracts, dependency review, both Mac jobs, iOS Tier 2, all CodeQL
+languages/policy and release-version checks pass. Both complete Docker architectures pass package contracts, evidence extraction,
+artifact budgets and all nine actual hardened-runtime checks. Jobs
+`102290243409` (arm64) and `102290243603` (amd64) execute signed pairing, consent,
+full scan and two-way transfer, pause/resume, identity-preserving cold restart,
+local removal, durable offline removal retry, signed remote acknowledgement,
+recipient cold restart, preserved files and exact-resource cleanup.
+
+The exact scanned images are arm64
+`sha256:2c16f12e7cf20b17ae64152d03ba157fe60a27e9da66875433d27f6d4fd1296e`
+and amd64
+`sha256:7c8339336c50e95bb26f2c6d097e5e7743b1a0fa281acd1c0fbf774bdea22c1d`.
+Both scans report vulnerabilities at or above the high threshold. The old
+1 GiB private-directory bound then aborts before the JSON verifier prints the
+bounded finding summary. No specific CVE or exemption is inferred from that
+message. The two-file correction validates and summarizes the exact-image
+report before aggregating report, disk, timeout and scanner failures. Every
+failure remains fatal. The private cap is now 2 GiB, with finite headroom over
+the current complete vulnerability database. A regression combines disk excess
+and scanner exit 2, and verifies diagnostics plus cleanup. Scanner fixtures,
+release guardrails and shell syntax pass. Manifest SHA-256:
+`b9f1b7dc81be83ed1eebe30baa7de428dea36969b494f56bf9f576296402f517`;
+patch `519d51f55c5295024a62b689385c25acc2e65417f980cc45c251e9d1bcdaba9c`.
+Successful real image scans remain required.
+
+Both Android checkpoint-36 jobs link JNI for both ABIs, then fail in the
+final-link provenance collector before JVM or device tests. The collector
+compares concrete map paths with concrete driver paths but omits a linker's
+named-library requests. The two-file correction records exact `-l:filename`,
+`-lname` and `--library=name` requests and accepts only a classified, resolved,
+regular in-NDK input with the corresponding requested basename or concrete
+path. Unknown inputs remain rejected, and missing rows are reported in a
+bounded normalized form. Eleven focused tests, JNI contract and foundation
+validation pass. Manifest SHA-256:
+`5f4ec5cedcdd26900ebee76f0374c57e10bbc552c3e9ce458afba05c5c9e5614`;
+patch `78fcf3b4db7ab19dbb08c342fd2cebdf074ca6cc66f37aa8c9ee552b3d5fbbba`.
+The exact missing hosted map row is unavailable through current artifact access;
+this correction still requires the actual pinned NDK rerun.
+
+The reviewed 13-file address-refresh slice adds authenticated
+`POST /api/v1/sync/peers/refresh-address` with an exact peer, expected address and
+candidate address. A fresh signed challenge and pinned TLS leaf authenticate
+that the candidate is the retained device. The old address is bound locally by
+the retained transport and complete grant compare-and-swap, not a field in the
+signed probe. The journal prepares and rechecks the full grant before and after
+worker reap. Core advances durable route state; remembered providers rebuild
+from current authorized trust; only then does the journal finalize and permit
+another full initial scan. Historical signed offers and acceptances are never
+rewritten. Pending provider/journal state cannot be bypassed through generic
+start or retry; cold recovery handles the completed core transition. Pending
+remote removals survive and use the new verified route.
+
+Validation includes 303 node library tests, five core transport-update tests,
+strict all-target/all-feature Clippy and OpenAPI route checks. The real
+10-check proof uses two NodeRuntime instances and the pinned worker to verify
+signed pairing, consent, route movement, two-way transfer, cold reopen,
+revocation, file preservation and owned cleanup. The final provider-role
+recheck is covered by a focused test and strict Clippy after the live proof.
+Manifest SHA-256:
+`04dc980f8018452c72825aaa3dbf559eae8d4c2e176d8a1a27eb8199672bd756`;
+patch `526f16c4246f81a75490b52db2375706a1d997c962a405a08c94986d7b27a3ea`;
+live result `b1e5749b45973cf2e317bded17a38261ac848790bbcd01d296b308eadf16f278`.
+Native and web address-entry journeys are not implemented by this backend slice.
+
+The six-file Mac status correction stops presenting every saved provider as
+connected. Device and backup-detail rows use consistent native labels and
+symbols for responding, failed last check and unknown state. Positive evidence
+must include non-future timestamps and an unexpired signed window. A real
+backend negative response has null timestamps, so it remains a last-check
+failure without implying current reachability. Timelines age device labels and
+backup-selection controls; final submission still checks current eligibility.
+Revocation copy states that existing shared files remain on both devices.
+All 154 shared Swift tests pass, with two endpoint integration tests skipped;
+a standalone package compiles the exact full current Mac and shared source.
+Native visual and spoken verification of the changed rows remain pending.
+Manifest SHA-256:
+`d8bfa39e45d3453e3cd86db349352781a4133745d18846da58c8f75d132d3328`;
+patch `54dbdf7b2f32b08f3164e6162dbbdaf746db803e52de02aef4c3e3fba5499ed8`.
+
+Cleanup removes only exact completed task-owned resources. Mac status work
+removes another 1,046,845,005 logical bytes of completed build caches after
+retaining source and test proof. A root audit separately confirms with all
+active agents that 15 old Cargo targets are unused, verifies they contain no
+tracked files and have Cargo cache markers, preserves historical diagnostic
+logs, then removes 109,197,375,028 logical bytes across 297,167 items. These are
+file sizes, not a claim about physical APFS space recovered. Current Mac proof
+apps/caches, pinned worker/guardian, source worktrees and compact evidence remain.
+Cleanup receipt SHA-256:
+`1d0ddbc5b18bc84e78b6a434ee6c19673bbd31ecd36de25e46e504891aaadece`.
+Acceptance remains **70%: 14 of 20**; second-folder Mac repair, full Android
+execution, client address changes, vulnerability fixes, final accessibility,
+upgrade and performance acceptance remain open.

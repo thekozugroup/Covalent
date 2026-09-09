@@ -222,19 +222,23 @@ struct MacNewBackupView: View {
                             .secondaryLabelStyle()
                     } else {
                         ForEach(model.providers, id: \.peerId) { (provider: ProviderConnection) in
-                            Toggle(isOn: providerSelection(provider.peerId)) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(provider.address)
-                                    Text(provider.peerId.uuidString)
-                                        .font(.caption.monospaced())
-                                        .secondaryLabelStyle()
-                                        .lineLimit(1)
-                                    Text(provider.selectionStatus)
-                                        .font(.caption)
-                                        .foregroundStyle(provider.isEligibleForBackup ? Color.secondary : Color.red)
+                            TimelineView(.periodic(from: .now, by: 1)) { context in
+                                let now = UInt64(max(0, context.date.timeIntervalSince1970 * 1_000))
+                                let eligible = provider.isEligibleForBackup(atUnixMs: now)
+                                Toggle(isOn: providerSelection(provider.peerId)) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(provider.address)
+                                        Text(provider.peerId.uuidString)
+                                            .font(.caption.monospaced())
+                                            .secondaryLabelStyle()
+                                            .lineLimit(1)
+                                        Text(provider.selectionStatus(atUnixMs: now))
+                                            .font(.caption)
+                                            .foregroundStyle(eligible ? Color.secondary : Color.red)
+                                    }
                                 }
+                                .disabled(!eligible)
                             }
-                            .disabled(!provider.isEligibleForBackup)
                         }
                         Text("Covalent sends copies to exactly the devices you selected. It never substitutes another device.")
                             .font(.caption)

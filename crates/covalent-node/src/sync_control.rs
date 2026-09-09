@@ -10,7 +10,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use covalent_core::{CoreError, Engine, PublicIdentity};
-use covalent_protocol::{DeviceId, FolderShareAcceptance, FolderShareCommit, FolderShareOffer};
+use covalent_protocol::{
+    DeviceId, FolderShareAcceptance, FolderShareCommit, FolderShareOffer, SyncEngineBinding,
+};
 use rand_core::{OsRng, RngCore as _};
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
@@ -69,6 +71,11 @@ pub enum FolderControlOperation {
         commit: FolderShareCommit,
     },
     SendRemoval(crate::sync_engine::FolderRemovalNotice),
+    ProbeAddress {
+        requester_id: DeviceId,
+        target_id: DeviceId,
+        candidate_address: String,
+    },
 }
 impl FolderControlOperation {
     fn requester(&self) -> DeviceId {
@@ -77,6 +84,7 @@ impl FolderControlOperation {
             Self::SendAcceptance { acceptance, .. } => acceptance.target_device_id,
             Self::SendCommit { commit, .. } => commit.source_device_id,
             Self::SendRemoval(notice) => notice.requester_id,
+            Self::ProbeAddress { requester_id, .. } => *requester_id,
         }
     }
 
@@ -87,6 +95,7 @@ impl FolderControlOperation {
             Self::SendOffer(offer) => Some(offer.target_device_id),
             Self::SendAcceptance { .. } | Self::SendCommit { .. } => None,
             Self::SendRemoval(notice) => Some(notice.target_id),
+            Self::ProbeAddress { target_id, .. } => Some(*target_id),
         }
     }
 }
@@ -114,6 +123,7 @@ pub enum FolderControlPayload {
     Busy,
     Rejected,
     NeedsAttention,
+    AddressProof(SyncEngineBinding),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -279,6 +289,15 @@ pub fn verify_request(
             .declared_target()
             .is_some_and(|declared| declared != server)
     {
+        return Err(FolderControlError::Rejected);
+    }
+    if matches!(
+        &request.operation,
+        FolderControlOperation::ProbeAddress {
+            candidate_address,
+            ..
+        } if !valid_socket_address(candidate_address)
+    ) {
         return Err(FolderControlError::Rejected);
     }
     requester
@@ -449,9 +468,56 @@ pub async fn send_folder_control(
     binding: covalent_protocol::TransportBinding,
     operation: FolderControlOperation,
 ) -> Result<FolderControlPayload, FolderControlError> {
+    send_folder_control_to(engine, binding, None, operation).await
+}
+
+/// Authenticate the retained peer at one candidate endpoint and obtain its
+/// signed current engine route. The candidate is not trusted or persisted by
+/// this exchange; the caller must commit it through the serialized journal.
+/// The signed request binds requester, target, candidate, nonce and digest.
+/// Its old route is instead the exact current grant/certificate pin checked
+/// before dialing and checked again by journal preparation and core CAS after
+/// the response. This permits the peer to answer from a newly reachable route
+/// without treating that unauthenticated route as retained state.
+pub(crate) async fn send_peer_address_probe(
+    engine: std::sync::Arc<Engine>,
+    binding: covalent_protocol::TransportBinding,
+    candidate_address: std::net::SocketAddr,
+) -> Result<SyncEngineBinding, FolderControlError> {
+    if !valid_socket_address(&candidate_address.to_string()) {
+        return Err(FolderControlError::Invalid);
+    }
+    let operation = FolderControlOperation::ProbeAddress {
+        requester_id: engine.device_id(),
+        target_id: binding.peer_id,
+        candidate_address: candidate_address.to_string(),
+    };
+    let expected_peer = binding.peer_id;
+    match send_folder_control_to(engine, binding, Some(candidate_address), operation).await? {
+        FolderControlPayload::AddressProof(binding) => {
+            binding
+                .validate()
+                .map_err(|_| FolderControlError::Rejected)?;
+            if binding.covalent_device_id != expected_peer {
+                return Err(FolderControlError::Rejected);
+            }
+            Ok(binding)
+        }
+        _ => Err(FolderControlError::Rejected),
+    }
+}
+
+async fn send_folder_control_to(
+    engine: std::sync::Arc<Engine>,
+    binding: covalent_protocol::TransportBinding,
+    address_override: Option<std::net::SocketAddr>,
+    operation: FolderControlOperation,
+) -> Result<FolderControlPayload, FolderControlError> {
     // This is deliberately one config read. The same observed grant supplies
     // the response signer and the exact retained endpoint/certificate pin.
-    let (target, address, certificate, target_identity) = current_binding(&engine, &binding)?;
+    let (target, retained_address, certificate, target_identity) =
+        current_binding(&engine, &binding)?;
+    let address = address_override.unwrap_or(retained_address);
     let request = sign_request(&engine, target, &binding.certificate_fingerprint, operation)?;
     tokio::time::timeout(EXCHANGE_TIMEOUT, async move {
         use quinn::{ClientConfig, Endpoint};
@@ -634,6 +700,11 @@ async fn apply_remote(
                 Err(_) => FolderControlPayload::NeedsAttention,
             }
         }
+        FolderControlOperation::ProbeAddress { .. } => match service.current_binding().await {
+            Ok(binding) => FolderControlPayload::AddressProof(binding),
+            Err(crate::sync_engine::FolderSyncServiceError::Busy) => FolderControlPayload::Busy,
+            Err(_) => FolderControlPayload::NeedsAttention,
+        },
     }
 }
 
@@ -677,11 +748,7 @@ fn current_binding(
         .address
         .parse()
         .map_err(|_| FolderControlError::Rejected)?;
-    if address.port() == 0
-        || address.ip().is_unspecified()
-        || address.ip().is_multicast()
-        || address.to_string() != expected.address
-    {
+    if !valid_socket_address(&expected.address) {
         return Err(FolderControlError::Rejected);
     }
     let certificate = URL_SAFE_NO_PAD
@@ -703,6 +770,29 @@ fn current_binding(
     let identity = PublicIdentity::from_encoded(grant.peer_device_id, grant.public_key.clone())
         .map_err(|_| FolderControlError::Rejected)?;
     Ok((expected.peer_id, address, certificate, identity))
+}
+
+fn valid_socket_address(value: &str) -> bool {
+    let Some(address) = (value.len() <= 128)
+        .then(|| value.parse::<std::net::SocketAddr>().ok())
+        .flatten()
+    else {
+        return false;
+    };
+    let ambiguous_ipv6 = match address {
+        std::net::SocketAddr::V6(address) => {
+            address.ip().segments()[0] & 0xffc0 == 0xfe80
+                || address.scope_id() != 0
+                || address.flowinfo() != 0
+        }
+        std::net::SocketAddr::V4(_) => false,
+    };
+    address.port() != 0
+        && !address.ip().is_unspecified()
+        && !address.ip().is_multicast()
+        && !matches!(address.ip(), std::net::IpAddr::V4(ip) if ip.is_broadcast())
+        && !ambiguous_ipv6
+        && address.to_string() == value
 }
 
 fn map_connection_error(error: quinn::ConnectionError) -> FolderControlError {

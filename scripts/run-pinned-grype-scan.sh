@@ -7,7 +7,10 @@ GRYPE_LINUX_AMD64_SHA256=38525dab1e06f162ebaa02f94d82d1f807076b011a44180cf2777ed
 GRYPE_LINUX_ARM64_SHA256=935f628bdf9331ffdd946931ea5fdb50045d3970ba52670cbeb44a88f127291b
 MAX_ARCHIVE_BYTES=67108864
 MAX_ARCHIVE_CONTENT_BYTES=134217728
-MAX_PRIVATE_BYTES=1073741824
+# Grype's complete v6 database is currently about 1.6 GB uncompressed. Keep a
+# finite allowance for that database plus the pinned scanner and update files.
+# Source: https://github.com/anchore/grype/issues/3245
+MAX_PRIVATE_BYTES=2147483648
 SCAN_TIMEOUT=12m
 
 fail() {
@@ -156,15 +159,51 @@ timeout "$SCAN_TIMEOUT" "$scanner" --config "$config" --fail-on high \
 scan_status=$?
 set -e
 
-private_bytes=$(du -sk "$work" | awk '{print $1 * 1024}')
-[ "$private_bytes" -le "$MAX_PRIVATE_BYTES" ] || fail "private Grype data exceeded the disk bound"
-[ -f "$report" ] && [ ! -L "$report" ] || fail "Grype did not produce a regular JSON report"
-python3 -B "$repo_root/scripts/verify-grype-report.py" "$report" "$image_id" \
-  || fail "Grype report validation failed"
+private_kib=
+if private_usage=$(du -sk "$work" 2>/dev/null); then
+  private_kib=$(printf '%s\n' "$private_usage" | awk 'NR == 1 { print $1 }')
+  case "$private_kib" in *[!0-9]*|'') private_kib= ;; esac
+fi
+failure_status=0
+
+# A scanner policy failure can still leave a complete, useful report. Validate
+# and summarize it before evaluating independent scanner-resource failures so
+# CI logs retain bounded vulnerability diagnostics from the exact image.
+if [ -f "$report" ] && [ ! -L "$report" ]; then
+  if ! python3 -B "$repo_root/scripts/verify-grype-report.py" "$report" "$image_id"; then
+    echo "pinned Grype scan: Grype report validation failed" >&2
+    failure_status=1
+  fi
+else
+  echo "pinned Grype scan: Grype did not produce a regular JSON report" >&2
+  failure_status=1
+fi
+
+if [ -z "$private_kib" ]; then
+  echo "pinned Grype scan: could not measure private Grype data" >&2
+  failure_status=1
+else
+  private_bytes=$((private_kib * 1024))
+  if [ "$private_bytes" -gt "$MAX_PRIVATE_BYTES" ]; then
+    echo "pinned Grype scan: private Grype data exceeded the disk bound ($private_bytes > $MAX_PRIVATE_BYTES bytes)" >&2
+    failure_status=1
+  fi
+fi
 
 case "$scan_status" in
-  0) exit 0 ;;
-  2) echo "pinned Grype scan: high or critical vulnerability found" >&2; exit 2 ;;
-  124) fail "Grype scan exceeded the bounded deadline" ;;
-  *) fail "Grype scan failed with status $scan_status" ;;
+  0) ;;
+  2)
+    echo "pinned Grype scan: high or critical vulnerability found" >&2
+    [ "$failure_status" -ne 0 ] || failure_status=2
+    ;;
+  124)
+    echo "pinned Grype scan: Grype scan exceeded the bounded deadline" >&2
+    failure_status=1
+    ;;
+  *)
+    echo "pinned Grype scan: Grype scan failed with status $scan_status" >&2
+    failure_status=1
+    ;;
 esac
+
+exit "$failure_status"

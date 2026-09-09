@@ -130,7 +130,7 @@ class LinkProvenanceTests(unittest.TestCase):
         trace = self.fixture.trace.read_text()
         trace = trace.replace(
             f'"{self.fixture.end}"',
-            f'"{runtime / "libunwind.a"}" "{runtime / "libc++_static.a"}" "{self.fixture.end}"',
+            f'"-l:libunwind.a" "-lc++_static" "{self.fixture.end}"',
         )
         self.fixture.trace.write_text(trace + "ignored compiler diagnostic\n")
         self.fixture.map.write_text(
@@ -143,6 +143,37 @@ class LinkProvenanceTests(unittest.TestCase):
             {row["kind"] for row in value["contributingNdkInputs"]},
             {"android-crt", "compiler-rt-builtins", "llvm-cxx-runtime", "llvm-unwind"},
         )
+        self.assertEqual(
+            {row["argument"] for row in value["requestedLinkLibraries"]},
+            {"-l:libunwind.a", "-lc", "-lc++_static"},
+        )
+
+    def test_named_library_request_matches_only_the_exact_resolved_basename(self) -> None:
+        runtime = self.fixture.ndk / "toolchains/llvm/prebuilt/linux/lib/clang/18/lib/linux/aarch64"
+        unwind = runtime / "libunwind.a"
+        unwind.parent.mkdir(parents=True, exist_ok=True)
+        unwind.write_bytes(b"fixture")
+        self.fixture.trace.write_text(
+            self.fixture.trace.read_text().replace('"-lc"', '"-lunwind" "-lc"')
+        )
+        self.fixture.map.write_text(
+            self.fixture.map.read_text()
+            + f"  0x1030 0x1030 10 4 {unwind}(UnwindLevel1.c.o):(.text)\n"
+        )
+        value = self.fixture.collect()
+        self.assertIn(
+            {"argument": "-lunwind", "candidateFiles": ["libunwind.a", "libunwind.so"]},
+            value["requestedLinkLibraries"],
+        )
+
+        self.fixture.trace.write_text(
+            self.fixture.trace.read_text().replace('"-lunwind"', '"-l:libc++_static.a"')
+        )
+        with self.assertRaisesRegex(
+            provenance.ProvenanceError,
+            r"absent from the driver trace: llvm-unwind:\$\{NDK\}/",
+        ):
+            self.fixture.collect()
 
     def test_wrong_crt_unknown_ndk_input_and_missing_builtins_fail_closed(self) -> None:
         self.fixture.end.with_name("crtend_so.o").write_bytes(b"fixture")
