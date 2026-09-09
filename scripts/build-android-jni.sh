@@ -125,6 +125,7 @@ test -f "$version_script" || {
 }
 provenance_directory="$output_root/provenance"
 mkdir "$provenance_directory"
+llvm_bin=""
 
 for abi in arm64-v8a x86_64; do
   case "$abi" in
@@ -150,6 +151,12 @@ for abi in arm64-v8a x86_64; do
     echo "The pinned NDK clang driver for $triple$android_api is required" >&2
     exit 1
   }
+  candidate_llvm_bin=$(dirname -- "$clang_bin")
+  test -z "$llvm_bin" || test "$candidate_llvm_bin" = "$llvm_bin" || {
+    echo "Both Android ABI drivers must use one pinned NDK host toolchain" >&2
+    exit 1
+  }
+  llvm_bin=$candidate_llvm_bin
   link_map="$provenance_directory/jni-link-$abi.map"
   driver_trace="$provenance_directory/jni-driver-$abi.txt"
 
@@ -199,8 +206,12 @@ for abi in arm64-v8a x86_64; do
   }
 done
 
-llvm_readobj=$(find "$ndk_root/toolchains/llvm/prebuilt" -type f -path '*/bin/llvm-readobj' -print -quit)
-llvm_readelf=$(find "$ndk_root/toolchains/llvm/prebuilt" -type f -path '*/bin/llvm-readelf' -print -quit)
+# Use the same pinned host toolchain directory that supplied both ABI drivers.
+# NDK r27b installs llvm-readelf as a symlink to llvm-readobj, so a `find
+# -type f` lookup incorrectly rejects the official tool after both links have
+# already completed. `test -x` below still rejects a missing or broken link.
+llvm_readobj="$llvm_bin/llvm-readobj"
+llvm_readelf="$llvm_bin/llvm-readelf"
 test -x "$llvm_readobj" || {
   echo "The pinned NDK llvm-readobj is required to verify Android JNI libraries" >&2
   exit 1

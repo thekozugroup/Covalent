@@ -782,6 +782,7 @@ jobs:
       - run: docker buildx build --platform linux/amd64 --load --build-arg VCS_REF=${{ github.sha }} --build-arg COVALENT_SOURCE_FINGERPRINT=${{ steps.docker-source.outputs.fingerprint }} -f packaging/docker/Dockerfile -t covalent:ci .
       - run: ./scripts/check-container-contract.sh covalent:ci "${GITHUB_SHA}" development "${{ steps.docker-source.outputs.fingerprint }}"
       - name: Retain the exact amd64 engine distribution evidence
+        id: container-evidence
         run: |
           set -euo pipefail
           image_id=$(docker image inspect --format '{{.Id}}' covalent:ci)
@@ -789,10 +790,14 @@ jobs:
           container_id=$(docker create --network none --read-only --entrypoint /bin/true "$image_id")
           [[ "$container_id" =~ ^[0-9a-f]{64}$ ]]
           trap 'docker rm -v "$container_id" >/dev/null' EXIT
+          echo "image_id=$image_id" >> "$GITHUB_OUTPUT"
           output="$RUNNER_TEMP/covalent-linux-engine-evidence-amd64"
           test ! -e "$output"
-          mkdir "$output"
-          docker cp "$container_id:/usr/local/share/covalent/sync-engine/." "$output/"
+          mkdir "$output" "$output/engine"
+          # Docker's directory copier applies 0555 before writing children.
+          # GNU tar restores directory permissions after extracting their files.
+          docker cp "$container_id:/usr/local/share/covalent/sync-engine/." - \
+            | tar --extract --file - --no-same-owner --delay-directory-restore --directory "$output/engine"
           docker image inspect "$image_id" > "$output/image-metadata.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -806,6 +811,20 @@ jobs:
       - name: Validate packaged folder sync with isolated writable volumes
         run: python3 -B scripts/container-folder-sync-e2e.py covalent:ci
       - run: ./scripts/docker-compose-e2e.sh covalent:ci
+      - name: Scan the exact amd64 runtime image
+        id: container-vulnerabilities
+        run: >-
+          ./scripts/run-pinned-grype-scan.sh
+          '${{ steps.container-evidence.outputs.image_id }}'
+          '${{ runner.temp }}/covalent-container-vulnerabilities-amd64.json'
+      - name: Retain the amd64 vulnerability report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: container-vulnerabilities-amd64-${{ github.sha }}
+          path: ${{ runner.temp }}/covalent-container-vulnerabilities-amd64.json
+          if-no-files-found: error
+          retention-days: 14
 
   container-arm64:
     name: Container arm64 image
@@ -832,6 +851,7 @@ jobs:
       - run: docker buildx build --platform linux/arm64 --load --build-arg VCS_REF=${{ github.sha }} --build-arg COVALENT_SOURCE_FINGERPRINT=${{ steps.docker-source.outputs.fingerprint }} -f packaging/docker/Dockerfile -t covalent:ci-arm64 .
       - run: ./scripts/check-container-contract.sh covalent:ci-arm64 "${GITHUB_SHA}" development "${{ steps.docker-source.outputs.fingerprint }}"
       - name: Retain the exact arm64 engine distribution evidence
+        id: container-evidence
         run: |
           set -euo pipefail
           image_id=$(docker image inspect --format '{{.Id}}' covalent:ci-arm64)
@@ -839,10 +859,14 @@ jobs:
           container_id=$(docker create --network none --read-only --entrypoint /bin/true "$image_id")
           [[ "$container_id" =~ ^[0-9a-f]{64}$ ]]
           trap 'docker rm -v "$container_id" >/dev/null' EXIT
+          echo "image_id=$image_id" >> "$GITHUB_OUTPUT"
           output="$RUNNER_TEMP/covalent-linux-engine-evidence-arm64"
           test ! -e "$output"
-          mkdir "$output"
-          docker cp "$container_id:/usr/local/share/covalent/sync-engine/." "$output/"
+          mkdir "$output" "$output/engine"
+          # Docker's directory copier applies 0555 before writing children.
+          # GNU tar restores directory permissions after extracting their files.
+          docker cp "$container_id:/usr/local/share/covalent/sync-engine/." - \
+            | tar --extract --file - --no-same-owner --delay-directory-restore --directory "$output/engine"
           docker image inspect "$image_id" > "$output/image-metadata.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -852,6 +876,20 @@ jobs:
       - run: ./scripts/check-artifact-budgets.sh --image-only covalent:ci-arm64 --platform linux/arm64
       - name: Validate packaged arm64 folder sync with isolated writable volumes
         run: python3 -B scripts/container-folder-sync-e2e.py covalent:ci-arm64
+      - name: Scan the exact arm64 runtime image
+        id: container-vulnerabilities
+        run: >-
+          ./scripts/run-pinned-grype-scan.sh
+          '${{ steps.container-evidence.outputs.image_id }}'
+          '${{ runner.temp }}/covalent-container-vulnerabilities-arm64.json'
+      - name: Retain the arm64 vulnerability report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: container-vulnerabilities-arm64-${{ github.sha }}
+          path: ${{ runner.temp }}/covalent-container-vulnerabilities-arm64.json
+          if-no-files-found: error
+          retention-days: 14
 
   ios-tier2:
     name: iOS Tier 2

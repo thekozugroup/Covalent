@@ -1143,3 +1143,79 @@ Exact cleanup reaped two processes, closed the listener and removed 338,072,685
 logical bytes across 3,804 items, retaining only compact evidence and one empty
 OS-managed container shell. Independent review found no preflight defect;
 actual Android installed-path/hash execution remains required.
+
+
+## Checkpoint 36: repair build-evidence gates and scan both complete images
+
+Base commit: `9a1c632edbf24252730ed0ef2fabe2a3aad2ba32`. Checkpoint 35 CI
+run `34290941016` tested merge `2ce61306eff1038a883fd5ec197f05402b31554f`.
+Rust/contracts, dependency review, Mac bundle, Mac integration/UI and iOS Tier 2
+pass. Both Android jobs fail after successful JNI links for both ABIs, before
+JVM/device tests, because the official NDK r27b `llvm-readelf` symlink is excluded
+by `find -type f`. Both Docker jobs build the complete image and pass package
+contracts, then fail while copying evidence into read-only directories. Their
+new runtime removal checks do not execute. Earlier successful Docker acceptance
+remains separately recorded. All CodeQL languages and the final alert-policy
+gate pass, as do release-version checks.
+
+The one-file Android fix uses the exact pinned host toolchain directory already
+selected for both ABI Clang drivers. It accepts executable `llvm-readelf`
+symlinks while rejecting missing/broken tools and mixed host toolchains. Local
+shell, JNI build-command, native-package, JNI contract and whitespace checks
+pass. The manifest SHA-256 is
+`6f7cd2f55018c7af9b56bd73fe671a462e8b478c27dbb47ff013958f74706d9b`;
+patch `253c124824d2b197640ad2759735bf1052183a4feab7d6807673a34d2fb22313`.
+Actual NDK provenance and complete API 37 execution still require hosted gates.
+
+Docker evidence now streams from the exact unstarted, network-disabled container
+through GNU tar with delayed directory permission restoration into `engine/`.
+The outer evidence directory stays writable for image metadata. An isolated
+ordinary-user Atmos fixture passes exact bytes, restored 0555/0444 modes and
+outer metadata creation with GNU tar 1.35. It executes no Docker container and
+touches no service. Its exact temporary root is removed in a finally block.
+The final eight-file CI/security proof SHA-256 is
+`218271d6e25e1fe9d4070e169315c49344ac7f130744e0ca2ad2ebdda5bde79e`;
+file manifest `da4407017c24e3ee021d45212fc74335017a8882adcf369fb4082f7edb9cd78d`;
+patch `73fbecf3e55f24c7a7b3a433d917b18ccd244989123356a86787bc5a430ba4ae`.
+
+Both CI architectures additionally scan their exact local image ID using
+checksum-pinned Grype v0.117.0 release archives, matching the release lane. Review
+found that the previously pinned action still executed an installer from mutable
+upstream main; that action is now removed. Both official Linux archives and
+member sizes were inspected, with compressed SHA-256 amd64
+`38525dab1e06f162ebaa02f94d82d1f807076b011a44180cf2777edf1a7b9c26`
+and arm64 `935f628bdf9331ffdd946931ea5fdb50045d3970ba52670cbeb44a88f127291b`.
+Temporary downloads were deleted after inspection.
+
+High and critical findings fail even without an available fix. The current
+vulnerability database must pass update, age and hash checks. Strict bounded JSON
+validation requires the exact image ID, scanner version and no suppressed
+findings. Logs include bounded severity/DB summaries and up to 30 high/critical
+findings; exact reports remain retained. The private release lane attempts and
+uploads both architecture reports before a final gate; either failed outcome or
+missing/invalid report blocks promotion. No registry publication, exemption or
+ignore list is introduced by this checkpoint. Mock scanner/finalizer fixtures
+and release guardrails pass under CI=true and GITHUB_ACTIONS=true, including
+production rejection of the explicit test hook. Workflow/shell/Python parsing
+and diff checks pass. Real current image scans and live database behavior still
+require hosted execution.
+
+Artifact metadata and normal job logs remain available. Materialized connector
+artifact URLs returned HTTP 403 locally; an authenticated browser download
+reached a storage page blocked by the client. No blocked storage-host retry or
+alternate access was attempted. The owned browser tab was closed. Current ZIP
+bytes are therefore not claimed as reviewed; retained local evidence and hosted
+logs have their stated narrower scope.
+
+Checkpoint 35 publication cleanup verified all 49 published file bytes and modes
+before deleting 80 temporary payload files totaling 2,837,012 logical bytes.
+Compact publication, extraction and validation receipts remain. Acceptance
+stays **70%: 14 of 20**, with no credit for unexecuted fixes.
+
+
+A separate real Mac manager proof of checkpoint 35 finds a repeated restart/busy
+cycle when adding a second folder while an existing committed share is scanning.
+The first share runs; retrying the second restarts the helper and recreates the
+initial-scan barrier. A narrow native correction and real signed-app rerun are
+active isolated work, not included in this build-evidence checkpoint. This is a
+remaining daily-use limitation; passing hosted UI fixtures does not close it.

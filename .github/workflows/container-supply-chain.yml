@@ -157,12 +157,14 @@ jobs:
     permissions:
       contents: read
     steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           pattern: container-*-archive
           path: ${{ runner.temp }}/container-archives
           merge-multiple: true
       - name: Load private architecture archives
+        id: private-images
         run: |
           set -euo pipefail
           docker load --input "${RUNNER_TEMP}/container-archives/covalent-amd64.tar"
@@ -180,20 +182,58 @@ jobs:
           test "${amd64_fingerprint}" = "${expected_fingerprint}"
           test "${arm64_fingerprint}" = "${expected_fingerprint}"
           test "${amd64_fingerprint}" = "${arm64_fingerprint}"
+          amd64_image_id=$(docker image inspect --format '{{.Id}}' covalent-private:amd64)
+          arm64_image_id=$(docker image inspect --format '{{.Id}}' covalent-private:arm64)
+          [[ "${amd64_image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "${arm64_image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "${amd64_image_id}" != "${arm64_image_id}"
+          {
+            echo "amd64_image_id=${amd64_image_id}"
+            echo "arm64_image_id=${arm64_image_id}"
+          } >> "${GITHUB_OUTPUT}"
       # These gates have no package-write or OIDC credential. A rejected image
       # is therefore neither pullable from GHCR nor reachable by a release tag.
       - name: Scan private linux/amd64 image
-        uses: anchore/scan-action@1638637db639e0ade3258b51db49a9a137574c3e # v6
-        with:
-          image: covalent-private:amd64
-          fail-build: true
-          severity-cutoff: high
+        id: scan-amd64
+        continue-on-error: true
+        run: >-
+          ./scripts/run-pinned-grype-scan.sh
+          '${{ steps.private-images.outputs.amd64_image_id }}'
+          '${{ runner.temp }}/covalent-container-vulnerabilities-amd64.json'
       - name: Scan private linux/arm64 image
-        uses: anchore/scan-action@1638637db639e0ade3258b51db49a9a137574c3e # v6
+        id: scan-arm64
+        if: always()
+        continue-on-error: true
+        run: >-
+          ./scripts/run-pinned-grype-scan.sh
+          '${{ steps.private-images.outputs.arm64_image_id }}'
+          '${{ runner.temp }}/covalent-container-vulnerabilities-arm64.json'
+      - name: Retain the private linux/amd64 vulnerability report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          image: covalent-private:arm64
-          fail-build: true
-          severity-cutoff: high
+          name: private-container-vulnerabilities-amd64-${{ github.sha }}
+          path: ${{ runner.temp }}/covalent-container-vulnerabilities-amd64.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain the private linux/arm64 vulnerability report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: private-container-vulnerabilities-arm64-${{ github.sha }}
+          path: ${{ runner.temp }}/covalent-container-vulnerabilities-arm64.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Require both exact-image vulnerability scans
+        if: always()
+        run: >-
+          ./scripts/finalize-container-vulnerability-scans.sh
+          '${{ steps.scan-amd64.outcome }}'
+          '${{ steps.private-images.outputs.amd64_image_id }}'
+          '${{ runner.temp }}/covalent-container-vulnerabilities-amd64.json'
+          '${{ steps.scan-arm64.outcome }}'
+          '${{ steps.private-images.outputs.arm64_image_id }}'
+          '${{ runner.temp }}/covalent-container-vulnerabilities-arm64.json'
       # A multi-architecture reference resolves to the verifier runner's native
       # platform unless a platform is selected. Generate evidence from each
       # already-scanned single-platform image instead, so arm64 cannot disappear

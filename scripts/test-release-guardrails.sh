@@ -123,8 +123,46 @@ fi
 # locally reconstructed index digest.
 container_workflow=.github/workflows/container-supply-chain.yml
 grep -q 'outputs: type=docker,dest=${{ runner.temp }}/covalent-' "$container_workflow"
-grep -q 'image: covalent-private:amd64' "$container_workflow"
-grep -q 'image: covalent-private:arm64' "$container_workflow"
+grep -Fq "'\${{ steps.private-images.outputs.amd64_image_id }}'" "$container_workflow"
+grep -Fq "'\${{ steps.private-images.outputs.arm64_image_id }}'" "$container_workflow"
+if rg -q 'anchore/scan-action|curl[^\n]*\|[^\n]*(sh|bash)' \
+  .github/workflows/ci.yml "$container_workflow"; then
+  echo "container scanning must not execute an action-owned or piped installer" >&2
+  exit 1
+fi
+test "$(grep -Fc './scripts/run-pinned-grype-scan.sh' .github/workflows/ci.yml)" -eq 2
+test "$(grep -Fc './scripts/run-pinned-grype-scan.sh' "$container_workflow")" -eq 2
+test "$(grep -Fc 'continue-on-error: true' "$container_workflow")" -ge 2
+grep -Fq './scripts/finalize-container-vulnerability-scans.sh' "$container_workflow"
+test "$(grep -Fc 'private-container-vulnerabilities-' "$container_workflow")" -eq 2
+grep -Fq 'GRYPE_LINUX_AMD64_SHA256=38525dab1e06f162ebaa02f94d82d1f807076b011a44180cf2777edf1a7b9c26' scripts/run-pinned-grype-scan.sh
+grep -Fq 'GRYPE_LINUX_ARM64_SHA256=935f628bdf9331ffdd946931ea5fdb50045d3970ba52670cbeb44a88f127291b' scripts/run-pinned-grype-scan.sh
+test -x scripts/run-pinned-grype-scan.sh
+test -x scripts/finalize-container-vulnerability-scans.sh
+test -x scripts/verify-grype-report.py
+test -x scripts/test-pinned-grype-scan.sh
+./scripts/test-pinned-grype-scan.sh
+scan_amd64_line=$(grep -n 'Scan private linux/amd64 image' "$container_workflow" | cut -d: -f1)
+scan_arm64_line=$(grep -n 'Scan private linux/arm64 image' "$container_workflow" | cut -d: -f1)
+upload_amd64_line=$(grep -n 'Retain the private linux/amd64 vulnerability report' "$container_workflow" | cut -d: -f1)
+upload_arm64_line=$(grep -n 'Retain the private linux/arm64 vulnerability report' "$container_workflow" | cut -d: -f1)
+scan_gate_line=$(grep -n 'Require both exact-image vulnerability scans' "$container_workflow" | cut -d: -f1)
+sbom_line=$(grep -n 'Generate private linux/amd64 SBOM' "$container_workflow" | cut -d: -f1)
+if [ -z "$scan_amd64_line" ] || [ -z "$scan_arm64_line" ] \
+  || [ -z "$upload_amd64_line" ] || [ -z "$upload_arm64_line" ] \
+  || [ -z "$scan_gate_line" ] || [ -z "$sbom_line" ] \
+  || [ "$scan_amd64_line" -ge "$scan_arm64_line" ] \
+  || [ "$scan_arm64_line" -ge "$upload_amd64_line" ] \
+  || [ "$upload_amd64_line" -ge "$upload_arm64_line" ] \
+  || [ "$upload_arm64_line" -ge "$scan_gate_line" ] \
+  || [ "$scan_gate_line" -ge "$sbom_line" ]; then
+  echo "both private scans and reports must complete before the combined release gate and SBOMs" >&2
+  exit 1
+fi
+sed -n "${scan_arm64_line},$((scan_arm64_line + 3))p" "$container_workflow" | grep -Fq 'if: always()'
+sed -n "${upload_amd64_line},$((upload_amd64_line + 3))p" "$container_workflow" | grep -Fq 'if: always()'
+sed -n "${upload_arm64_line},$((upload_arm64_line + 3))p" "$container_workflow" | grep -Fq 'if: always()'
+sed -n "${scan_gate_line},$((scan_gate_line + 3))p" "$container_workflow" | grep -Fq 'if: always()'
 test "$(grep -Fc 'uses: anchore/sbom-action@' "$container_workflow")" -eq 2
 grep -Fq 'output-file: covalent-container-linux-amd64.spdx.json' "$container_workflow"
 grep -Fq 'output-file: covalent-container-linux-arm64.spdx.json' "$container_workflow"
@@ -153,7 +191,7 @@ if ! printf '%s\n' "$scan_job" | grep -q 'contents: read' \
 fi
 if ! printf '%s\n' "$promote_job" | grep -q 'packages: write' \
   || ! printf '%s\n' "$promote_job" | grep -q 'id-token: write' \
-  || printf '%s\n' "$promote_job" | grep -Eq 'anchore/scan-action|anchore/sbom-action'; then
+  || printf '%s\n' "$promote_job" | grep -Eq 'run-pinned-grype-scan|anchore/scan-action|anchore/sbom-action'; then
   echo "promotion job must have publish credentials but no scan action" >&2
   exit 1
 fi

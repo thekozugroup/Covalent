@@ -294,21 +294,33 @@ package contract prevents the remediation from silently regressing.
 
 ## Process gaps
 
-**Grype ran only in the release lane.** `ci.yml`'s `container-foundation` did not
-scan, which let dependency findings wait until tag time. With both image
-blockers resolved, the same pinned high-severity scan belongs in ordinary CI
-after `docker-compose-e2e.sh`:
+**Container scans now run before release.** Both ordinary CI architecture
+jobs scan their exact locally built image ID after runtime acceptance, retaining
+JSON evidence even when the scan fails. High and critical findings fail the job;
+findings without an available fix remain included. A missing report also fails.
+No image is published by these jobs. The evidence-copy step streams Docker's
+archive through GNU tar so read-only image directories regain their final modes
+only after their files are extracted. Distribution files have their own `engine/`
+subdirectory, leaving the outer evidence directory writable for image metadata.
+An ordinary-user isolated Atmos fixture
+verifies exact bytes and restored 0555/0444 modes; its temporary root was removed.
+This fixes checkpoint 35's copy failure without changing image permissions.
 
-```yaml
-      - uses: anchore/scan-action@1638637db639e0ade3258b51db49a9a137574c3e # v6
-        with:
-          image: covalent:ci
-          fail-build: true
-          severity-cutoff: high
-```
-
-Same action, pin, cutoff and failure mode as the release lane, so CI and the
-release gate cannot disagree about what is acceptable.
+CI and release scans use `scripts/run-pinned-grype-scan.sh`, which downloads the
+official Grype v0.117.0 release archive for the runner architecture and checks an
+exact hard-coded SHA-256 before extracting only its bounded regular-file contents.
+The pinned hashes are `38525dab...9c26` for Linux amd64 and
+`935f628b...91b` for Linux arm64, matching the release's
+[official checksum asset](https://github.com/anchore/grype/releases/download/v0.117.0/grype_0.117.0_checksums.txt).
+The workflow does not execute an installer or a GitHub action's mutable bundled
+download code. The scanner verifies the database hash and age, requires a live
+update check, includes findings without fixes, and uses no ignore rules or VEX.
+Grype's documented `docker:` source selects the local Docker daemon, and a
+bounded validator rejects a JSON report unless both its requested input and
+resolved image ID equal the immutable ID recorded before the scan. The release
+lane attempts both architectures and uploads each JSON report before a combined
+gate can permit SBOM generation or publishing. These changes require a fresh
+hosted run before claiming the current complete images pass.
 
 **The SBOM outran its own gate.** `anchore/sbom-action` defaults
 `upload-release-assets` to `true`, and it ran *before* `anchore/scan-action`.
