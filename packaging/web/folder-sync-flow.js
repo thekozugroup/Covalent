@@ -97,6 +97,23 @@
     return path;
   }
 
+  function peerAddress(value, message = "Enter a numeric IP address and port, such as 192.0.2.10:8787 or [2001:db8::10]:8787.") {
+    const text = string(value, 128, message);
+    if (text !== text.trim()) throw guidance(message);
+    let port;
+    const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3}):(\d{1,5})$/.exec(text);
+    if (ipv4) {
+      if (ipv4.slice(1, 5).some((part) => Number(part) > 255)) throw guidance(message);
+      port = Number(ipv4[5]);
+    } else {
+      const ipv6 = /^\[([0-9a-f:.]+)\]:(\d{1,5})$/i.exec(text);
+      if (!ipv6 || !ipv6[1].includes(":")) throw guidance(message);
+      port = Number(ipv6[2]);
+    }
+    if (!Number.isSafeInteger(port) || port < 1 || port > 65535) throw guidance(message);
+    return text;
+  }
+
   function offerBody(value) {
     const body = object(value, "This folder offer is invalid.");
     return Object.freeze({
@@ -122,6 +139,10 @@
       return Object.freeze({
         peerId: uuid(peer.peerId, "The node returned an invalid paired device."),
         displayName: string(peer.displayName, 120, "The node returned an invalid paired-device name."),
+        // Address was added to schema v1 after the first clients shipped.
+        address: Object.hasOwn(peer, "address")
+          ? peerAddress(peer.address, "The node returned an invalid paired-device address.")
+          : null,
       });
     });
     const shares = boundedArray(status.shares, "The node returned too many shared folders.").map((value) => {
@@ -209,6 +230,22 @@
       lifecycle: response.lifecycle,
       issue: response.issue,
     });
+  }
+
+  async function refreshPeerAddressAndProviders(controller, peerId, candidateAddress, refreshProviders) {
+    if (!controller || typeof controller.refreshPeerAddress !== "function"
+      || typeof refreshProviders !== "function") {
+      throw new TypeError("address refresh requires a controller and provider refresh");
+    }
+    const result = await controller.refreshPeerAddress(peerId, candidateAddress);
+    try {
+      await refreshProviders();
+      return Object.freeze({ result, providerError: null });
+    } catch (providerError) {
+      // The address transition is already confirmed. Preserve that outcome and
+      // report the independent provider-list refresh failure separately.
+      return Object.freeze({ result, providerError });
+    }
   }
 
   function statusSummary(status) {
@@ -354,13 +391,17 @@
     let pollingEnabled = false;
     let mutationLocked = false;
     let generation = 0;
+    let accessEpoch = 0;
     let currentStatus = null;
+    let pendingAddressRefresh = null;
 
     function setAccess(value) {
       const next = object(value, "Folder access context is invalid.");
       const nextDeviceId = next.deviceId === null ? null : uuid(next.deviceId, "The server identity is invalid.");
       generation += 1;
+      accessEpoch += 1;
       currentStatus = null;
+      pendingAddressRefresh = null;
       deviceId = nextDeviceId;
       unlocked = next.unlocked === true && deviceId !== null;
     }
@@ -368,6 +409,11 @@
     function setPollingEnabled(enabled) {
       pollingEnabled = enabled === true;
       if (!pollingEnabled) generation += 1;
+    }
+
+    function requireMutationAvailable() {
+      if (!unlocked || deviceId === null) throw guidance("Unlock this console before changing folder sync.");
+      if (mutationLocked) throw guidance("Another folder change is still in progress.");
     }
 
     async function refresh() {
@@ -378,6 +424,10 @@
         return Object.freeze({ applied: false, status: decoded });
       }
       currentStatus = decoded;
+      if (pendingAddressRefresh
+        && !decoded.peers.some((peer) => peer.peerId === pendingAddressRefresh.peerId)) {
+        pendingAddressRefresh = null;
+      }
       onStatus(decoded);
       return Object.freeze({ applied: true, status: decoded });
     }
@@ -387,8 +437,9 @@
       body,
       expectedDeviceId = deviceId,
       staleMessage = "This folder change finished for a previous server. Its result was not applied; refresh the current server before continuing.",
+      confirm = null,
     ) {
-      if (!unlocked || deviceId === null) throw guidance("Unlock this console before changing folder sync.");
+      requireMutationAvailable();
       if (expectedDeviceId === null || deviceId !== expectedDeviceId) {
         throw guidance("The folder server changed before this request started. Refresh folders before trying again.");
       }
@@ -401,6 +452,7 @@
         if (!unlocked || deviceId !== expectedDeviceId) {
           throw guidance(staleMessage);
         }
+        if (confirm !== null) await confirm(result, expectedDeviceId);
         return result;
       } finally {
         mutationLocked = false;
@@ -472,6 +524,95 @@
       return mutate("/api/v1/sync/retry", {});
     }
 
+    async function sendPeerAddressRefresh(request) {
+      const expectedDeviceId = deviceId;
+      const expectedAccessEpoch = accessEpoch;
+      const staleMessage = "Console access changed while this address update was running. Refresh paired devices before continuing.";
+      try {
+        const result = await mutate(
+          "/api/v1/sync/peers/refresh-address",
+          request,
+          expectedDeviceId,
+          staleMessage,
+          async () => {
+            if (accessEpoch !== expectedAccessEpoch) throw guidance(staleMessage);
+            const decoded = requireStatus(await options.api("/api/v1/sync/status"));
+            if (!unlocked || deviceId !== expectedDeviceId || accessEpoch !== expectedAccessEpoch) {
+              throw guidance(staleMessage);
+            }
+            currentStatus = decoded;
+            onStatus(decoded);
+            const peer = decoded.peers.find((item) => item.peerId === request.peerId);
+            if (!peer || peer.address !== request.candidateAddress) {
+              throw guidance("The address request finished, but its saved address is not confirmed yet. Retry the exact request or cancel it.");
+            }
+          },
+        );
+        if (accessEpoch !== expectedAccessEpoch) throw guidance(staleMessage);
+        if (pendingAddressRefresh === request) pendingAddressRefresh = null;
+        return result;
+      } catch (error) {
+        if (error?.code !== "peer_address_changed") throw error;
+        if (accessEpoch !== expectedAccessEpoch) throw guidance(staleMessage);
+        // The server authoritatively rejected the old-address comparison, so
+        // this exact request is not ambiguous and must not be retried forever.
+        if (pendingAddressRefresh === request) pendingAddressRefresh = null;
+        currentStatus = null;
+        const conflictGeneration = ++generation;
+        try {
+          const decoded = requireStatus(await options.api("/api/v1/sync/status"));
+          if (unlocked && deviceId === expectedDeviceId && accessEpoch === expectedAccessEpoch
+            && generation === conflictGeneration && !mutationLocked) {
+            currentStatus = decoded;
+            onStatus(decoded);
+          }
+        } catch (_) {
+          // Preserve the fixed conflict result below. A later normal poll can
+          // reload the current address without exposing transport diagnostics.
+        }
+        if (accessEpoch !== expectedAccessEpoch) throw guidance(staleMessage);
+        throw guidance("That paired device's saved address changed. Review its current address and submit a new update.");
+      }
+    }
+
+    function refreshPeerAddress(peerId, candidateAddress) {
+      const id = uuid(peerId, "Choose a currently paired device.");
+      const candidate = peerAddress(candidateAddress);
+      if (pendingAddressRefresh !== null) {
+        if (pendingAddressRefresh.peerId !== id
+          || pendingAddressRefresh.candidateAddress !== candidate) {
+          throw guidance("Retry or cancel the saved address update before entering a different address.");
+        }
+        return sendPeerAddressRefresh(pendingAddressRefresh);
+      }
+      const peer = currentStatus?.peers.find((item) => item.peerId === id);
+      if (!peer) throw guidance("That paired device is no longer available. Refresh devices first.");
+      if (peer.address === null) {
+        throw guidance("This server version cannot safely update that paired device's address.");
+      }
+      if (peer.address === candidate) throw guidance("Enter a different address for this paired device.");
+      requireMutationAvailable();
+      pendingAddressRefresh = Object.freeze({
+        peerId: id,
+        expectedAddress: peer.address,
+        candidateAddress: candidate,
+      });
+      return sendPeerAddressRefresh(pendingAddressRefresh);
+    }
+
+    function retryPeerAddressRefresh(peerId) {
+      const id = uuid(peerId, "Choose a currently paired device.");
+      if (pendingAddressRefresh === null || pendingAddressRefresh.peerId !== id) {
+        throw guidance("There is no saved address update to retry for that device.");
+      }
+      return sendPeerAddressRefresh(pendingAddressRefresh);
+    }
+
+    function cancelPeerAddressRefresh(peerId) {
+      const id = uuid(peerId, "Choose a currently paired device.");
+      if (pendingAddressRefresh?.peerId === id) pendingAddressRefresh = null;
+    }
+
     function discardPendingOffer() {
       if (!unlocked || deviceId === null) throw guidance("Unlock this console before clearing a saved folder offer.");
       clearPending(options.storage, deviceId);
@@ -484,14 +625,18 @@
       isMutationLocked: () => mutationLocked,
       loadPending: () => deviceId === null ? null : loadPending(options.storage, deviceId),
       pause,
+      pendingPeerAddressRefresh: () => pendingAddressRefresh,
       refresh,
+      refreshPeerAddress,
       remove,
       renew,
       retryPendingOffer,
+      retryPeerAddressRefresh,
       retryService,
       sendOffer,
       setAccess,
       setPollingEnabled,
+      cancelPeerAddressRefresh,
     });
   }
 
@@ -502,9 +647,11 @@
     guidance,
     lazySessionStorage,
     offerBody,
+    peerAddress,
     pending: Object.freeze({ clear: clearPending, load: loadPending, save: savePending, storageKey }),
     requireStatus,
     readJson,
+    refreshPeerAddressAndProviders,
     shareView,
     statusSummary,
   });

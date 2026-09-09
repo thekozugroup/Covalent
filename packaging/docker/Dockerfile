@@ -98,8 +98,8 @@ RUN set -eu; \
       || { echo 'caddy was linked with a toolchain older than go1.26.6' >&2; exit 1; }; \
     grep -q 'github.com/caddyserver/caddy/v2[[:space:]]\+v2\.11\.5-0\.20260711231708-b2693fb63a30' /tmp/buildinfo \
       || { echo 'caddy source snapshot drifted from v2.11.5-0.20260711231708-b2693fb63a30' >&2; exit 1; }; \
-    grep -q 'google.golang.org/grpc[[:space:]]\+v1\.8[2-9]\.' /tmp/buildinfo \
-      || { echo 'grpc regressed below v1.82.1 (GHSA-hrxh-6v49-42gf)' >&2; exit 1; }; \
+    awk '$1 == "dep" && $2 == "google.golang.org/grpc" && $3 == "v1.83.1" { found = 1 } END { exit !found }' /tmp/buildinfo \
+      || { echo 'grpc drifted from reviewed v1.83.1 (GHSA-hrxh-6v49-42gf, GHSA-vp52-pcj8-j9qc)' >&2; exit 1; }; \
     grep -q 'golang.org/x/text[[:space:]]\+v0\.\(39\|[4-9][0-9]\)\.' /tmp/buildinfo \
       || { echo 'x/text regressed below v0.39.0 (GO-2026-5970)' >&2; exit 1; }; \
     grep -q 'go.opentelemetry.io/otel[[:space:]]\+v1\.\(4[4-9]\|[5-9][0-9]\)\.' /tmp/buildinfo \

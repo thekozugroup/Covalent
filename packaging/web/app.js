@@ -602,11 +602,13 @@ async function loadStatus() {
 }
 
 function folderPollingEligible() {
+  const foldersSelected = $("[data-tab=folders]").getAttribute("aria-selected") === "true";
+  const pairSelected = $("[data-tab=pair]").getAttribute("aria-selected") === "true";
   return Boolean(
     token
     && folderDeviceId
     && document.visibilityState === "visible"
-    && $("[data-tab=folders]").getAttribute("aria-selected") === "true",
+    && (foldersSelected || pairSelected),
   );
 }
 
@@ -760,6 +762,141 @@ function renderFolderPeers(status) {
   select.disabled = status.peers.length === 0;
 }
 
+function pairedDeviceItem(peer) {
+  const item = document.createElement("li");
+  item.dataset.pairedPeerId = peer.peerId;
+  const details = document.createElement("div");
+  const name = document.createElement("strong");
+  const address = document.createElement("span");
+  details.append(name, address);
+
+  const update = folderActionButton("Update address", () => {
+    const current = folderController.current()?.peers.find((entry) => entry.peerId === peer.peerId);
+    if (!current || current.address === null) return;
+    const pending = folderController.pendingPeerAddressRefresh();
+    if (form.hidden) {
+      input.value = pending?.peerId === peer.peerId ? pending.candidateAddress : current.address;
+    }
+    form.hidden = false;
+    update.setAttribute("aria-expanded", "true");
+    input.focus();
+  });
+  update.setAttribute("aria-expanded", "false");
+
+  const form = document.createElement("form");
+  form.className = "inline-form";
+  form.hidden = true;
+  form.id = `paired-address-form-${peer.peerId}`;
+  update.setAttribute("aria-controls", form.id);
+  const inputId = `paired-address-${peer.peerId}`;
+  const label = document.createElement("label");
+  label.htmlFor = inputId;
+  label.textContent = "New numeric IP address and port";
+  const input = document.createElement("input");
+  input.id = inputId;
+  input.name = "candidateAddress";
+  input.maxLength = 128;
+  input.placeholder = "192.0.2.10:8787 or [2001:db8::10]:8787";
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  input.required = true;
+  label.append(input);
+  const explanation = document.createElement("p");
+  explanation.className = "muted";
+  explanation.textContent = "Covalent will contact this address and require the same paired identity and certificate before saving it.";
+  const state = document.createElement("p");
+  state.className = "muted";
+  state.setAttribute("role", "status");
+  state.setAttribute("aria-live", "polite");
+  const submit = document.createElement("button");
+  submit.dataset.folderMutation = "";
+  submit.disabled = folderController.isMutationLocked();
+  submit.textContent = "Verify and save";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "quiet";
+  cancel.dataset.folderMutation = "";
+  cancel.disabled = folderController.isMutationLocked();
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => {
+    folderController.cancelPeerAddressRefresh(peer.peerId);
+    form.hidden = true;
+    update.setAttribute("aria-expanded", "false");
+    state.textContent = "";
+    update.focus();
+  });
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!requireUnlocked()) return;
+    state.textContent = folderController.pendingPeerAddressRefresh() === null
+      ? "Verifying this address with the paired device…"
+      : "Retrying the exact saved address request…";
+    input.disabled = true;
+    try {
+      const completion = await folderSync.refreshPeerAddressAndProviders(
+        folderController,
+        peer.peerId,
+        input.value,
+        loadProviders,
+      );
+      state.textContent = "Address verified and saved. Checking whether the device is reachable.";
+      submit.textContent = "Verify and save";
+      form.hidden = true;
+      update.setAttribute("aria-expanded", "false");
+      update.focus();
+      say("Address verified and saved. Covalent is checking the device connection.");
+      if (completion.providerError !== null) {
+        const failure = errorCopy.describe(completion.providerError);
+        console.debug("Covalent provider refresh failed after saving an address", completion.providerError);
+        say(`Address verified and saved. ${failure.summary}`, true, failure.detail);
+      }
+    } catch (error) {
+      if (folderController.pendingPeerAddressRefresh()?.peerId === peer.peerId) {
+        submit.textContent = "Retry saved update";
+        state.textContent = "The update is not confirmed. Retry this exact address, or cancel it before entering another one.";
+      } else if (/saved address changed/.test(error?.covalentGuidance ?? "")) {
+        state.textContent = "The saved address changed. Review the current address before submitting again.";
+      } else {
+        state.textContent = "The update is not confirmed. Refresh paired devices before trying again.";
+      }
+      fail(error);
+    } finally {
+      input.disabled = false;
+    }
+  });
+  form.append(label, explanation, state, submit, cancel);
+  item.append(details, update, form);
+  return item;
+}
+
+function renderPairedDevices(status) {
+  const list = $("[data-paired-devices]");
+  const retained = new Map(Array.from(list.children).map((item) => [item.dataset.pairedPeerId, item]));
+  const visible = new Set(status.peers.map((peer) => peer.peerId));
+  for (const [id, item] of retained) {
+    if (!visible.has(id)) item.remove();
+  }
+  for (const [index, peer] of status.peers.entries()) {
+    let item = retained.get(peer.peerId);
+    if (!item) item = pairedDeviceItem(peer);
+    const [details, update, form] = item.children;
+    const [name, address] = details.children;
+    name.textContent = peer.displayName;
+    address.textContent = peer.address === null
+      ? " — Address unavailable from this server version"
+      : ` — ${peer.address}`;
+    update.hidden = peer.address === null;
+    if (peer.address === null) {
+      form.hidden = true;
+      update.setAttribute("aria-expanded", "false");
+    }
+    if (list.children[index] !== item) list.insertBefore(item, list.children[index] ?? null);
+  }
+  const empty = $("[data-paired-devices-empty]");
+  empty.hidden = status.peers.length > 0;
+  if (status.peers.length === 0) empty.textContent = "No confirmed paired devices are available.";
+}
+
 function renderFolderStatus(status) {
   const summary = folderSync.statusSummary(status);
   const statusCopy = $("[data-folders-status]");
@@ -767,6 +904,7 @@ function renderFolderStatus(status) {
   statusCopy.className = "folder-state";
   statusCopy.dataset.kind = summary.kind;
   renderFolderPeers(status);
+  renderPairedDevices(status);
 
   const retry = $("[data-folders-retry-service]");
   retry.hidden = !(status.lifecycle === "needsAttention" || status.issue !== null);
@@ -859,6 +997,10 @@ function clearFolderSyncAccess() {
   folderDeviceId = null;
   folderController.setAccess({ deviceId: null, unlocked: false });
   folderController.setPollingEnabled(false);
+  $("[data-paired-devices]").replaceChildren();
+  const empty = $("[data-paired-devices-empty]");
+  empty.hidden = false;
+  empty.textContent = "Unlock the console to load paired devices.";
 }
 
 function backupSummaryCopy(backup) {

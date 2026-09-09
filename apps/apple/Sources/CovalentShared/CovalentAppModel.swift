@@ -874,6 +874,213 @@ public final class CovalentAppModel: ObservableObject {
       }
     }
 
+    /// Authenticates and adopts a paired device's new numeric endpoint.
+    ///
+    /// The returned state deliberately keeps an uncertain request intact. A
+    /// concurrency conflict instead returns the newly observed address and
+    /// requires a fresh confirmation, so the old expectation is never retried
+    /// against a different routing record.
+    public func refreshPeerAddress(
+      _ request: PeerAddressRefreshRequest
+    ) async -> PeerAddressRefreshOutcome {
+      guard beginFolderMutation() else {
+        return .failed(ErrorPresenter.present(AppModelError.operationInProgress))
+      }
+      defer { folderSyncMutationInFlight = false }
+      let expectsProvider = providers.contains { $0.peerId == request.peerId }
+
+      do {
+        _ = try await client.refreshPeerAddress(request)
+        return await confirmPeerAddressRefresh(request, expectsProvider: expectsProvider)
+      } catch let error as NodeClientError {
+        if case let .api(_, code, _, _) = error, code == "peer_address_changed" {
+          return await reloadPeerAddressAfterConflict(request, error: error)
+        }
+        if isUncertainPeerAddressResult(error) {
+          return await recoverUncertainPeerAddressRefresh(request, error: error)
+        }
+        let failure = ErrorPresenter.present(error)
+        if failure.recovery == .retry {
+          return .retryExact(request, failure: failure)
+        }
+        return .failed(failure)
+      } catch {
+        return .retryExact(request, failure: ErrorPresenter.present(error))
+      }
+    }
+
+    private func confirmPeerAddressRefresh(
+      _ request: PeerAddressRefreshRequest,
+      expectsProvider: Bool
+    ) async -> PeerAddressRefreshOutcome {
+      do {
+        let snapshot = try await reconciledFolderStatus()
+        folderSyncStatus = snapshot
+        folderSyncError = nil
+        guard let peer = snapshot.peers.first(where: { $0.peerId == request.peerId }),
+              let address = peer.address
+        else { throw NodeClientError.invalidResponse }
+        guard address == request.candidateAddress else {
+          markProviderAddressUnknown(peerId: request.peerId, address: address)
+          return .requiresConfirmation(
+            currentPeer: peer,
+            candidateAddress: request.candidateAddress,
+            failure: NodeClientFailure(
+              summary: "The saved device address changed again. Review the current address before saving.",
+              recovery: .none
+            )
+          )
+        }
+        return await finishPeerAddressRefresh(peer: peer, expectsProvider: expectsProvider)
+      } catch {
+        folderSyncStatus = nil
+        folderSyncError = "The address update was accepted, but current device status needs to be reloaded."
+        markProviderAddressUnknown(peerId: request.peerId, address: request.candidateAddress)
+        return .savedNeedsReload(
+          peerId: request.peerId,
+          acceptedAddress: request.candidateAddress,
+          failure: NodeClientFailure(
+            summary: "The address update was accepted, but Covalent couldn't reload current device status.",
+            detail: ErrorPresenter.detail(for: error),
+            recovery: .retry
+          )
+        )
+      }
+    }
+
+    private func finishPeerAddressRefresh(
+      peer: FolderSyncPeer,
+      expectsProvider: Bool
+    ) async -> PeerAddressRefreshOutcome {
+      guard let address = peer.address else {
+        return .failed(ErrorPresenter.present(NodeClientError.invalidResponse))
+      }
+      guard expectsProvider else { return .saved(peer) }
+      do {
+        let refreshedProviders = try await client.providers()
+        guard refreshedProviders.contains(where: {
+          $0.peerId == peer.peerId && $0.address == address
+        }) else { throw NodeClientError.invalidResponse }
+        providers = refreshedProviders
+        return .saved(peer)
+      } catch {
+        markProviderAddressUnknown(peerId: peer.peerId, address: address)
+        return .savedNeedsReload(
+          peerId: peer.peerId,
+          acceptedAddress: address,
+          failure: NodeClientFailure(
+            summary: "The new address was saved, but Covalent couldn't reload this device's connection status.",
+            detail: ErrorPresenter.detail(for: error),
+            recovery: .retry
+          )
+        )
+      }
+    }
+
+    private func reloadPeerAddressAfterConflict(
+      _ request: PeerAddressRefreshRequest,
+      error: NodeClientError
+    ) async -> PeerAddressRefreshOutcome {
+      let failure = ErrorPresenter.present(error)
+      do {
+        let snapshot = try await reconciledFolderStatus()
+        folderSyncStatus = snapshot
+        folderSyncError = nil
+        guard let peer = snapshot.peers.first(where: { $0.peerId == request.peerId }),
+              let address = peer.address
+        else { throw NodeClientError.invalidResponse }
+        markProviderAddressUnknown(peerId: peer.peerId, address: address)
+        return .requiresConfirmation(
+          currentPeer: peer,
+          candidateAddress: request.candidateAddress,
+          failure: NodeClientFailure(
+            summary: "The saved device address changed before this update. Review the current address and confirm again.",
+            detail: failure.detail,
+            recovery: .none
+          )
+        )
+      } catch {
+        folderSyncStatus = nil
+        folderSyncError = "The saved device address changed, and current device status couldn't be reloaded."
+        return .failed(NodeClientFailure(
+          summary: "Covalent couldn't reload the current device address. Close this sheet and refresh Devices before trying again.",
+          detail: ErrorPresenter.detail(for: error),
+          recovery: .none
+        ))
+      }
+    }
+
+    private func recoverUncertainPeerAddressRefresh(
+      _ request: PeerAddressRefreshRequest,
+      error: NodeClientError
+    ) async -> PeerAddressRefreshOutcome {
+      var candidateObserved = false
+      do {
+        let snapshot = try await reconciledFolderStatus()
+        folderSyncStatus = snapshot
+        folderSyncError = nil
+        guard let peer = snapshot.peers.first(where: { $0.peerId == request.peerId }),
+              let address = peer.address
+        else { throw NodeClientError.invalidResponse }
+        if address == request.candidateAddress {
+          // Core can expose the candidate route before the provider/journal
+          // barrier is durably finalized. Only an acknowledged idempotent POST
+          // can complete that transition and release this exact request.
+          candidateObserved = true
+          markProviderAddressUnknown(peerId: peer.peerId, address: address)
+        } else {
+          markProviderAddressUnknown(peerId: peer.peerId, address: address)
+          if address != request.expectedAddress {
+            return .requiresConfirmation(
+              currentPeer: peer,
+              candidateAddress: request.candidateAddress,
+              failure: NodeClientFailure(
+                summary: "The saved device address changed while Covalent was checking the update. Review it and confirm again.",
+                detail: ErrorPresenter.detail(for: error),
+                recovery: .none
+              )
+            )
+          }
+        }
+      } catch {
+        folderSyncStatus = nil
+        folderSyncError = "The device address update has an uncertain result. Retry the same update or reload Devices."
+      }
+      return .retryExact(
+        request,
+        failure: NodeClientFailure(
+          summary: candidateObserved
+            ? "The new address is visible, but Covalent couldn't confirm that saving finished. Try the same update again."
+            : "Covalent couldn't confirm whether the address changed. Try the same update again.",
+          detail: ErrorPresenter.detail(for: error),
+          recovery: .retry
+        )
+      )
+    }
+
+    private func isUncertainPeerAddressResult(_ error: NodeClientError) -> Bool {
+      switch error {
+      case .transport, .invalidResponse, .invalidPayload:
+        true
+      default:
+        false
+      }
+    }
+
+    /// An acknowledged address without a fresh provider probe must never keep
+    /// displaying a prior green reachability result. Preserve the signed
+    /// certificate identity while making address and freshness truthful.
+    private func markProviderAddressUnknown(peerId: UUID, address: String) {
+      providers = providers.map { provider in
+        guard provider.peerId == peerId else { return provider }
+        return ProviderConnection(
+          peerId: provider.peerId,
+          address: address,
+          certificateFingerprint: provider.certificateFingerprint
+        )
+      }
+    }
+
     public func beginNormalFirstLaunch() async {
         guard needsFirstLaunchChoice else { return }
         presentation = nil

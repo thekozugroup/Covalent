@@ -126,6 +126,30 @@ class FolderSyncActionsTest {
         assertEquals(confirmed, journal.reconciledStatus)
     }
 
+    @Test
+    fun addressRefreshUsesTheExactCapturedRequestAndRequiresANonShareResponse() {
+        val events = mutableListOf<String>()
+        val request = PeerAddressRefreshRequest(
+            OTHER_OFFER,
+            "192.0.2.10:8787",
+            "192.0.2.11:8787",
+        )
+        val api = RecordingApi(events)
+
+        val result = actions(events, RecordingJournal(events), api).refreshPeerAddress(request)
+
+        assertEquals(listOf("node", "api-refresh-address"), events)
+        assertEquals(request, api.addressRequest)
+        assertEquals(null, result.offerId)
+
+        events.clear()
+        val invalid = RecordingApi(events, addressResponseOffer = OFFER)
+        assertThrows(IllegalStateException::class.java) {
+            actions(events, RecordingJournal(events), invalid).refreshPeerAddress(request)
+        }
+        assertEquals(listOf("node", "api-refresh-address"), events)
+    }
+
     private fun actions(
         events: MutableList<String>,
         journal: RecordingJournal,
@@ -200,8 +224,11 @@ class FolderSyncActionsTest {
         private val failRepair: Boolean = false,
         private val responseOffer: String = OFFER,
         private val responseStatus: FolderSyncStatus = STATUS,
+        private val addressResponseOffer: String? = null,
     ) : FolderSyncApi {
         var offeredRoot: String? = null
+            private set
+        var addressRequest: PeerAddressRefreshRequest? = null
             private set
         override fun status(connection: NodeConnection) = responseStatus
         override fun offer(connection: NodeConnection, peerId: String, folderId: UUID, label: String, selectedRoot: String): FolderSyncMutation {
@@ -229,13 +256,21 @@ class FolderSyncActionsTest {
             return mutation(responseOffer)
         }
         override fun retry(connection: NodeConnection) = MUTATION
+        override fun refreshPeerAddress(
+            connection: NodeConnection,
+            request: PeerAddressRefreshRequest,
+        ): FolderSyncMutation {
+            events += "api-refresh-address"
+            addressRequest = request
+            return mutation(addressResponseOffer)
+        }
     }
 
     private companion object {
         val CONNECTION = NodeConnection("http://127.0.0.1:8787", "token")
         const val OFFER = "33333333-3333-4333-8333-333333333333"
         const val OTHER_OFFER = "44444444-4444-4444-8444-444444444444"
-        fun mutation(offerId: String) = FolderSyncMutation(
+        fun mutation(offerId: String?) = FolderSyncMutation(
             offerId,
             FolderSyncLifecycle.STOPPED,
             null,

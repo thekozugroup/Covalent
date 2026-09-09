@@ -1858,9 +1858,82 @@ func realDaemonBackupVerifyAndRestore() async throws {
 
     let status = try await makeClient(recorder: recorder, token: String(repeating: "s", count: 32)).folderSyncStatus()
     #expect(status.peers == [FolderSyncPeer(peerId: peer, displayName: "Kitchen Mac")])
+    #expect(status.peers.first?.address == nil)
     #expect(status.shares[0].expired)
     #expect(status.shares[0].expiresAtUnixMs == 1234)
     #expect(status.displayState(for: status.shares[0]) == .invitationExpired)
+}
+
+@Test func peerAddressRefreshUsesExactAuthenticatedContract() async throws {
+    let peer = UUID()
+    let expected = "192.0.2.10:8787"
+    let candidate = "[2001:db8::20]:8787"
+    let recorder = RequestRecorder { request in
+        #expect(request.url?.path == "/api/v1/sync/peers/refresh-address")
+        #expect(request.httpMethod == "POST")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(String(repeating: "p", count: 32))")
+        let body = try #require(requestBody(request))
+        let payload = try #require(JSONSerialization.jsonObject(with: body) as? [String: String])
+        #expect(Set(payload.keys) == Set(["peerId", "expectedAddress", "candidateAddress"]))
+        #expect(UUID(uuidString: try #require(payload["peerId"])) == peer)
+        #expect(payload["expectedAddress"] == expected)
+        #expect(payload["candidateAddress"] == candidate)
+        return TestResponse.response(
+            request,
+            status: 200,
+            json: #"{"offerId":null,"lifecycle":"running","issue":null}"#
+        )
+    }
+    let request = PeerAddressRefreshRequest(
+        peerId: peer,
+        expectedAddress: expected,
+        candidateAddress: candidate
+    )
+    let result = try await makeClient(
+        recorder: recorder,
+        token: String(repeating: "p", count: 32)
+    ).refreshPeerAddress(request)
+    #expect(result == FolderSyncMutation(offerId: nil, lifecycle: "running", issue: nil))
+}
+
+@Test func folderStatusValidatesAdditivePeerAddresses() async throws {
+    let peer = UUID()
+    let valid = "192.0.2.10:8787"
+    let validRecorder = RequestRecorder { request in
+        TestResponse.response(
+            request,
+            status: 200,
+            json: "{\"schemaVersion\":1,\"availability\":\"available\",\"lifecycle\":\"running\",\"issue\":null,\"healthFreshness\":\"fresh\",\"connectionFreshness\":\"fresh\",\"peers\":[{\"peerId\":\"\(peer.uuidString)\",\"displayName\":\"Kitchen Mac\",\"address\":\"\(valid)\"}],\"shares\":[],\"folders\":[]}"
+        )
+    }
+    let status = try await makeClient(
+        recorder: validRecorder,
+        token: String(repeating: "v", count: 32)
+    ).folderSyncStatus()
+    #expect(status.peers.first?.address == valid)
+
+    for invalid in ["", "192.0.2.10: 8787", String(repeating: "1", count: 129)] {
+        let invalidRecorder = RequestRecorder { request in
+            let encoded = try JSONSerialization.data(withJSONObject: [
+                "schemaVersion": 1,
+                "availability": "available",
+                "lifecycle": "running",
+                "issue": NSNull(),
+                "healthFreshness": "fresh",
+                "connectionFreshness": "fresh",
+                "peers": [["peerId": peer.uuidString, "displayName": "Kitchen Mac", "address": invalid]],
+                "shares": [],
+                "folders": [],
+            ])
+            return TestResponse.data(request, status: 200, body: encoded)
+        }
+        await #expect(throws: NodeClientError.invalidResponse) {
+            _ = try await makeClient(
+                recorder: invalidRecorder,
+                token: String(repeating: "i", count: 32)
+            ).folderSyncStatus()
+        }
+    }
 }
 
 @Test func signedPairingInvitationPreservesTransportBindingAcrossNativeRoundTrip() throws {

@@ -21,7 +21,7 @@ enum class FolderSyncIssue {
     INSTALLATION, FOLDER_ACCESS, INITIAL_SCAN, JOURNAL, WORKER_LAUNCH, WORKER_HEALTH, WORKER_STOP, PEER_REVOCATION,
 }
 
-data class FolderSyncPeer(val peerId: String, val displayName: String)
+data class FolderSyncPeer(val peerId: String, val displayName: String, val address: String? = null)
 
 data class FolderShare(
     val offerId: String,

@@ -55,6 +55,7 @@ ignored='[]'
 [ "${MOCK_MODE:-success}" != ignored ] || ignored='[{"reason":"fixture suppression"}]'
 matches='[]'
 [ "${MOCK_MODE:-success}" != finding ] || matches='[{"vulnerability":{"id":"CVE-2099-0001","severity":"Critical","fix":{"versions":[]}},"artifact":{"name":"fixture-package","version":"1.0","type":"apk"}}]'
+[ "${MOCK_MODE:-success}" != medium ] || matches='[{"vulnerability":{"id":"CVE-2099-0002","severity":"Medium","fix":{"versions":["1.1"]}},"artifact":{"name":"fixture-medium","version":"1.0","type":"go-module"}}]'
 cat >"$report" <<EOF
 {"matches":$matches,"ignoredMatches":$ignored,"source":{"type":"image","target":{"userInput":"$reported_input","imageID":"$reported_id"}},"descriptor":{"name":"grype","version":"0.117.0","db":{"built":"fixture"}}}
 EOF
@@ -122,6 +123,13 @@ fi
 [ -f "$fixture/finding.json" ]
 grep -q 'severities=Critical:1' "$fixture/finding.log"
 grep -q 'id=CVE-2099-0001 package=fixture-package version=1.0 type=apk fixed=none' "$fixture/finding.log"
+
+# Nonblocking findings still need concrete IDs for review; aggregate counts
+# alone are insufficient when the report artifact is unavailable locally.
+run_scan medium "$fixture/medium.json" >"$fixture/medium.log"
+grep -q 'severities=Medium:1' "$fixture/medium.log"
+grep -q 'Grype medium: id=CVE-2099-0002 package=fixture-medium version=1.0 type=go-module fixed=1.1' \
+  "$fixture/medium.log"
 
 # Independent disk/resource failures remain fatal, but a valid report from a
 # policy-failing scan is validated and summarized before the aggregate exit.

@@ -13,11 +13,14 @@ the *set* of distinct findings is the same.
 | --- | --- |
 | Caddy 2.10.2-alpine | **49** — 47 in the vendored Caddy binary, 2 in the Alpine base |
 | Caddy 2.11.4-alpine | **12** — 10 in the vendored Caddy binary, 2 in the Alpine base |
-| Caddy upstream snapshot `v2.11.5-0.20260711231708-b2693fb63a30` built from source, with exact Alpine security revisions (current) | **0** |
+| Caddy upstream snapshot `v2.11.5-0.20260711231708-b2693fb63a30` built from source, with exact Alpine security revisions (checkpoint 38) | **1** — `GHSA-vp52-pcj8-j9qc` in gRPC v1.82.1 |
+| Same source and toolchain with gRPC v1.83.1 (candidate) | **pending exact-image rescan** |
 
-Measured with Grype 0.117.0 against locally built images. The final current-row
-measurement is the local `linux/arm64` candidate; the release workflow repeats
-the same strict scan independently on both architectures before promotion.
+The checkpoint 38 row is from Grype 0.117.0 database v6.1.9, built
+2026-09-08T06:30:10Z, against the exact CI images for both architectures. The
+candidate has passed source, module, binary-build-info, and Caddy configuration
+validation. It is not recorded as clear until the release workflow repeats the
+strict scan against both rebuilt exact images.
 
 The bump cleared 39 findings and introduced 2 (both Go stdlib, superseded by the
 same toolchain gap described below). Notably cleared: both step-ca criticals,
@@ -27,10 +30,33 @@ because the docs instruct operators to enrol the local CA from Caddy's PKI.
 Also cleared: all 9 Caddy auth/path-bypass CVEs, all 6 `x/crypto`, both `grpc`
 criticals, `quic-go`, both `go-jose`, `otel`, `nebula`, `x/net`, and 16 stdlib.
 
-Both blockers below are now **cleared**. Later database refreshes also exposed
+The two original blockers below remain **cleared**. Later database refreshes also exposed
 GO-2026-5158 in OpenTelemetry v1.43.0 and GO-2026-6094 in cel-go v0.29.2;
 the consumer module pins patched v1.44.0 and v0.30.0 respectively, and the
 Dockerfile verifies both selections from the built Caddy binary.
+
+## Checkpoint 38 gRPC advisory — upgrade awaiting exact-image rescan
+
+The checkpoint 38 scans found
+[`GHSA-vp52-pcj8-j9qc`](https://github.com/advisories/GHSA-vp52-pcj8-j9qc) /
+CVE-2026-84304 in `google.golang.org/grpc` v1.82.1. The advisory affects
+versions through v1.83.0 and identifies
+[v1.83.1](https://github.com/grpc/grpc-go/releases/tag/v1.83.1) as the patched
+release. The Caddy consumer therefore selects exact v1.83.1 and the Docker
+build rejects every other gRPC version in the built binary metadata. This is a
+dependency update, not a scanner suppression or severity-policy change.
+
+Ordinary Go minimal-version selection also advances the exact transitive graph
+required by gRPC v1.83.1: `cel.dev/expr` v0.25.2, OpenTelemetry SDK and SDK
+metric v1.44.0, and the Google API/RPC genproto snapshots from
+2026-05-26. The checked-in `go.sum` authenticates the complete selected graph.
+The exact module diff and local before/after binary measurements are retained
+in the checkpoint validation artifacts. With identical Go 1.26.7 Linux build
+flags, the stripped amd64 Caddy binary grows 57,344 bytes and the arm64 binary
+size is unchanged. Applied alone to the checkpoint 38 amd64 image, that leaves
+88,576 bytes under the existing 128 MiB image budget; the rebuilt image remains
+the authoritative measurement. Both release architectures still need an exact
+rebuilt-image Grype result before this finding can be marked cleared.
 
 ## Blocker 1 — Caddy's Go toolchain (10 findings) — CLEARED
 

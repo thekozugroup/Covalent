@@ -12,8 +12,10 @@ import java.util.UUID
 /** Debug-only construction of a second, isolated packaged-engine runtime for device tests. */
 internal object FolderSyncInstrumentationBridge {
     fun isolatedPackage(context: Context): PackagedSyncEnginePackage.Verified {
-        val installed = PackagedSyncEngine.load(context) as? PackagedSyncEnginePackage.Verified
-            ?: error("The packaged folder-sync engine is unavailable.")
+        var invalidStage = "not-started"
+        val installed = PackagedSyncEngine.load(context) { invalidStage = it }
+            as? PackagedSyncEnginePackage.Verified
+            ?: error("The packaged folder-sync engine failed verification at $invalidStage.")
         val privateRoot = context.noBackupFilesDir.canonicalFile
         val rootMetadata = Os.lstat(privateRoot.path)
         check(

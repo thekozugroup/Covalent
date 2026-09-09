@@ -5,6 +5,7 @@ struct MacDevicesView: View {
     @ObservedObject var model: CovalentAppModel
     @State private var showingConnectProvider = false
     @State private var providerToRevoke: ProviderConnection?
+    @State private var peerAddressEditor: PeerAddressEditorContext?
     @State private var tailscaleAddress = ""
     @State private var isAdvancedRecoveryExpanded = false
 
@@ -23,6 +24,13 @@ struct MacDevicesView: View {
         .navigationTitle("Devices")
         .sheet(isPresented: $showingConnectProvider) {
             MacProviderConnectionView(model: model)
+        }
+        .sheet(item: $peerAddressEditor) { context in
+            MacPeerAddressEditor(
+                model: model,
+                peer: context.peer,
+                expectsProvider: context.expectsProvider
+            )
         }
         .confirmationDialog(
             "Revoke this device?",
@@ -160,7 +168,7 @@ struct MacDevicesView: View {
                 Text("Saved connections")
                     .font(.title2.weight(.semibold))
             }
-            if model.providers.isEmpty {
+            if savedDeviceRows.isEmpty {
                 MacEmptyState(
                     systemImage: "server.rack",
                     title: "No saved connections",
@@ -170,48 +178,89 @@ struct MacDevicesView: View {
                 .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
             } else {
                 VStack(spacing: 0) {
-                    ForEach(model.providers) { provider in
+                    ForEach(savedDeviceRows) { row in
                         HStack(spacing: 14) {
                             Image(systemName: "server.rack")
                                 .font(.title2)
                                 .foregroundStyle(MacLabelColor.accentGlyph)
                                 .frame(width: 34)
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(provider.address).font(.headline)
-                                Text("Certificate \(provider.certificateFingerprint.prefix(16))…")
-                                    .font(.caption.monospaced())
-                                    .secondaryLabelStyle()
+                                Text(row.displayName ?? row.address).font(.headline)
+                                if row.displayName != nil {
+                                    Text(row.address)
+                                        .font(.subheadline.monospaced())
+                                        .textSelection(.enabled)
+                                }
+                                if let provider = row.provider {
+                                    Text("Certificate \(provider.certificateFingerprint.prefix(16))…")
+                                        .font(.caption.monospaced())
+                                        .secondaryLabelStyle()
+                                } else {
+                                    Text("Paired device")
+                                        .font(.caption)
+                                        .secondaryLabelStyle()
+                                }
                             }
                             Spacer()
-                            TimelineView(.periodic(from: .now, by: 1)) { context in
-                                let reachability = provider.displayedReachability(
-                                    atUnixMs: UInt64(max(0, context.date.timeIntervalSince1970 * 1_000))
-                                )
+                            if let provider = row.provider {
+                                TimelineView(.periodic(from: .now, by: 1)) { context in
+                                    let addressMatchesStatus = row.peer?.address == nil
+                                        || row.peer?.address == provider.address
+                                    let reachability = addressMatchesStatus
+                                        ? provider.displayedReachability(
+                                            atUnixMs: UInt64(max(0, context.date.timeIntervalSince1970 * 1_000))
+                                        )
+                                        : ProviderReachability.unknown
+                                    Label(
+                                        reachability.connectionStatusLabel,
+                                        systemImage: reachability.connectionStatusSymbol
+                                    )
+                                    .font(.caption)
+                                    .foregroundStyle(reachability == .reachable ? Color.green : Color.secondary)
+                                    .accessibilityLabel("\(row.accessibilityName), \(reachability.connectionStatusLabel)")
+                                }
+                            } else {
                                 Label(
-                                    reachability.connectionStatusLabel,
-                                    systemImage: reachability.connectionStatusSymbol
+                                    ProviderReachability.unknown.connectionStatusLabel,
+                                    systemImage: ProviderReachability.unknown.connectionStatusSymbol
                                 )
                                 .font(.caption)
-                                .foregroundStyle(reachability == .reachable ? Color.green : Color.secondary)
-                                .accessibilityLabel("\(provider.address), \(reachability.connectionStatusLabel)")
+                                .foregroundStyle(.secondary)
+                                .accessibilityLabel("\(row.accessibilityName), status unknown")
                             }
                             Menu {
-                                Button("Disconnect") {
-                                    Task { await model.disconnectProvider(provider) }
+                                Button("Change Address…") {
+                                    if let peer = row.peer {
+                                        peerAddressEditor = PeerAddressEditorContext(
+                                            peer: peer,
+                                            expectsProvider: row.provider != nil
+                                        )
+                                    }
                                 }
-                                Divider()
-                                Button("Revoke Access…", role: .destructive) {
-                                    providerToRevoke = provider
+                                .disabled(row.peer?.address == nil)
+                                .help(
+                                    row.peer?.address == nil
+                                        ? "Refresh Devices to load current saved addresses. If they remain unavailable, update Covalent."
+                                        : "Authenticate and save a new numeric address for this paired device."
+                                )
+                                if let provider = row.provider {
+                                    Button("Disconnect") {
+                                        Task { await model.disconnectProvider(provider) }
+                                    }
+                                    Divider()
+                                    Button("Revoke Access…", role: .destructive) {
+                                        providerToRevoke = provider
+                                    }
                                 }
                             } label: {
                                 Image(systemName: "ellipsis.circle")
                             }
                             .menuStyle(.borderlessButton)
-                            .accessibilityLabel("Actions for \(provider.address)")
+                            .accessibilityLabel("Actions for \(row.accessibilityName)")
                         }
                         .padding(.vertical, 13)
                         .padding(.horizontal, 15)
-                        if provider.id != model.providers.last?.id { Divider().padding(.leading, 62) }
+                        if row.id != savedDeviceRows.last?.id { Divider().padding(.leading, 62) }
                     }
                 }
                 .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
@@ -256,6 +305,21 @@ struct MacDevicesView: View {
             EmptyView()
         }
     }
+
+    private var savedDeviceRows: [SavedPeerDevice] {
+        let peers = model.folderSyncStatus?.peers ?? []
+        return SavedPeerDevice.merge(peers: peers, providers: model.providers)
+    }
+}
+
+private struct PeerAddressEditorContext: Identifiable {
+    let peer: FolderSyncPeer
+    let expectsProvider: Bool
+    var id: UUID { peer.peerId }
+}
+
+private extension SavedPeerDevice {
+    var accessibilityName: String { displayName ?? address }
 }
 
 struct MacProviderConnectionView: View {

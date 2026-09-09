@@ -74,6 +74,11 @@ internal class FolderSyncActions(
 
     fun retry(): FolderSyncMutation = api.retry(ensureNodeReady())
 
+    fun refreshPeerAddress(request: PeerAddressRefreshRequest): FolderSyncMutation =
+        api.refreshPeerAddress(ensureNodeReady(), request).also { mutation ->
+            check(mutation.offerId == null) { "The node returned an unexpected folder share." }
+        }
+
     private fun requireMutationOffer(mutation: FolderSyncMutation, expected: String) {
         check(mutation.offerId == expected) { "The node acknowledged a different folder share." }
     }

@@ -473,6 +473,416 @@ private func mutationJSON(offer: UUID) -> String {
     "{\"offerId\":\"\(offer.uuidString.lowercased())\",\"lifecycle\":\"stopped\",\"issue\":\"folderAccess\"}"
 }
 
+@Test func savedPeerRowsIncludeStatusOnlyPeersAndDeduplicateProviders() throws {
+    let providerPeer = UUID()
+    let statusOnlyPeer = UUID()
+    let provider = ProviderConnection(
+        peerId: providerPeer,
+        address: "192.0.2.40:8787",
+        certificateFingerprint: String(repeating: "a", count: 64)
+    )
+    let rows = SavedPeerDevice.merge(
+        peers: [
+            FolderSyncPeer(
+                peerId: providerPeer,
+                displayName: "Kitchen Mac",
+                address: "192.0.2.41:8787"
+            ),
+            FolderSyncPeer(
+                peerId: statusOnlyPeer,
+                displayName: "Studio Mac",
+                address: "192.0.2.50:8787"
+            ),
+        ],
+        providers: [provider]
+    )
+    #expect(rows.count == 2)
+    #expect(rows.map(\.id) == [providerPeer, statusOnlyPeer])
+    #expect(rows[0].peer?.displayName == "Kitchen Mac")
+    #expect(rows[0].provider == provider)
+    #expect(rows[0].address == "192.0.2.41:8787")
+    #expect(rows[1].peer?.displayName == "Studio Mac")
+    #expect(rows[1].provider == nil)
+    #expect(rows[1].address == "192.0.2.50:8787")
+}
+
+@Test @MainActor func statusOnlyPeerAddressRefreshDoesNotRequireProviderRecord() async throws {
+    let fixture = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let peer = UUID()
+    let request = PeerAddressRefreshRequest(
+        peerId: peer,
+        expectedAddress: "192.0.2.10:8787",
+        candidateAddress: "192.0.2.11:8787"
+    )
+    let sequence = RequestSequence()
+    let recorder = RequestRecorder(removeAfterRequest: false) { urlRequest in
+        switch sequence.next() {
+        case 0:
+            try expectPeerAddressRequest(urlRequest, equals: request)
+            return TestResponse.response(
+                urlRequest, status: 200,
+                json: #"{"offerId":null,"lifecycle":"running","issue":null}"#
+            )
+        case 1:
+            #expect(urlRequest.url?.path == "/api/v1/sync/status")
+            return TestResponse.response(
+                urlRequest, status: 200,
+                json: peerAddressStatusJSON(peer: peer, address: request.candidateAddress)
+            )
+        default:
+            Issue.record("A status-only peer must not require a provider reload")
+            return TestResponse.response(urlRequest, status: 500, json: "{}")
+        }
+    }
+    let model = try peerAddressModel(recorder: recorder, fixture: fixture)
+    let outcome = await model.refreshPeerAddress(request)
+    guard case let .saved(savedPeer) = outcome else {
+        Issue.record("Expected the authenticated status-only peer to save")
+        return
+    }
+    #expect(savedPeer.address == request.candidateAddress)
+    #expect(model.folderSyncStatus?.peers.first == savedPeer)
+    #expect(model.providers.isEmpty)
+    #expect(sequence.count == 2)
+}
+
+@Test @MainActor func ambiguousPeerAddressResponseRetainsExactRequestWhenCandidateIsVisible() async throws {
+    let fixture = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let peer = UUID()
+    let request = PeerAddressRefreshRequest(
+        peerId: peer,
+        expectedAddress: "192.0.2.20:8787",
+        candidateAddress: "192.0.2.21:8787"
+    )
+    let sequence = RequestSequence()
+    let recorder = RequestRecorder(removeAfterRequest: false) { urlRequest in
+        switch sequence.next() {
+        case 0:
+            try expectPeerAddressRequest(urlRequest, equals: request)
+            throw URLError(.networkConnectionLost)
+        case 1:
+            return TestResponse.response(
+                urlRequest, status: 200,
+                json: peerAddressStatusJSON(peer: peer, address: request.candidateAddress)
+            )
+        case 2:
+            try expectPeerAddressRequest(urlRequest, equals: request)
+            return TestResponse.response(
+                urlRequest, status: 200,
+                json: #"{"offerId":null,"lifecycle":"running","issue":null}"#
+            )
+        case 3:
+            return TestResponse.response(
+                urlRequest, status: 200,
+                json: peerAddressStatusJSON(peer: peer, address: request.candidateAddress)
+            )
+        default:
+            Issue.record("Unexpected exact address retry request")
+            return TestResponse.response(urlRequest, status: 500, json: "{}")
+        }
+    }
+    let model = try peerAddressModel(recorder: recorder, fixture: fixture)
+    let first = await model.refreshPeerAddress(request)
+    guard case let .retryExact(retained, failure) = first else {
+        Issue.record("Expected an exact retry after an ambiguous response")
+        return
+    }
+    #expect(retained == request)
+    #expect(failure.recovery == .retry)
+    #expect(failure.summary.contains("visible"))
+    let second = await model.refreshPeerAddress(retained)
+    guard case let .saved(savedPeer) = second else {
+        Issue.record("Expected the exact retry to confirm the saved address")
+        return
+    }
+    #expect(savedPeer.address == request.candidateAddress)
+    #expect(sequence.count == 4)
+}
+
+@Test func freshPeerAddressRequestRequiresMatchingAuthoritativeStatus() {
+    let peerID = UUID()
+    let peer = FolderSyncPeer(
+        peerId: peerID,
+        displayName: "Studio Mac",
+        address: "192.0.2.70:8787"
+    )
+    let matchingStatus = peerAddressStatus(peer: peer)
+    #expect(PeerAddressRefreshPolicy.permitsFreshRequest(
+        peer: peer,
+        status: matchingStatus,
+        candidateAddress: "192.0.2.71:8787"
+    ))
+    #expect(!PeerAddressRefreshPolicy.permitsFreshRequest(
+        peer: peer,
+        status: nil,
+        candidateAddress: "192.0.2.71:8787"
+    ))
+    #expect(!PeerAddressRefreshPolicy.permitsFreshRequest(
+        peer: peer,
+        status: peerAddressStatus(peer: FolderSyncPeer(
+            peerId: peerID,
+            displayName: "Studio Mac",
+            address: "192.0.2.72:8787"
+        )),
+        candidateAddress: "192.0.2.71:8787"
+    ))
+    #expect(!PeerAddressRefreshPolicy.permitsFreshRequest(
+        peer: peer,
+        status: peerAddressStatus(peer: FolderSyncPeer(
+            peerId: UUID(),
+            displayName: "Another Mac",
+            address: peer.address
+        )),
+        candidateAddress: "192.0.2.71:8787"
+    ))
+}
+
+@Test @MainActor func failedConflictReloadCannotReuseCapturedExpectedAddress() async throws {
+    let fixture = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let peer = FolderSyncPeer(
+        peerId: UUID(),
+        displayName: "Studio Mac",
+        address: "192.0.2.80:8787"
+    )
+    let request = PeerAddressRefreshRequest(
+        peerId: peer.peerId,
+        expectedAddress: try #require(peer.address),
+        candidateAddress: "192.0.2.81:8787"
+    )
+    let sequence = RequestSequence()
+    let recorder = RequestRecorder(removeAfterRequest: false) { urlRequest in
+        switch sequence.next() {
+        case 0:
+            try expectPeerAddressRequest(urlRequest, equals: request)
+            return TestResponse.response(
+                urlRequest, status: 409,
+                json: #"{"protocolVersion":1,"code":"peer_address_changed","message":"stale","retryable":false}"#
+            )
+        case 1:
+            #expect(urlRequest.url?.path == "/api/v1/sync/status")
+            return TestResponse.response(
+                urlRequest, status: 503,
+                json: #"{"protocolVersion":1,"code":"temporarily_unavailable","message":"retry","retryable":true}"#
+            )
+        default:
+            Issue.record("A failed conflict reload must not send another request")
+            return TestResponse.response(urlRequest, status: 500, json: "{}")
+        }
+    }
+    let model = try peerAddressModel(recorder: recorder, fixture: fixture)
+    guard case .failed = await model.refreshPeerAddress(request) else {
+        Issue.record("Expected the failed authoritative reload to stop this edit")
+        return
+    }
+    #expect(model.folderSyncStatus == nil)
+    #expect(!PeerAddressRefreshPolicy.permitsFreshRequest(
+        peer: peer,
+        status: model.folderSyncStatus,
+        candidateAddress: request.candidateAddress
+    ))
+    #expect(sequence.count == 2)
+}
+
+@Test @MainActor func peerAddressConflictReloadsAndRequiresNewConfirmation() async throws {
+    let fixture = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let peer = UUID()
+    let stale = PeerAddressRefreshRequest(
+        peerId: peer,
+        expectedAddress: "192.0.2.30:8787",
+        candidateAddress: "192.0.2.31:8787"
+    )
+    let currentAddress = "192.0.2.32:8787"
+    let confirmed = PeerAddressRefreshRequest(
+        peerId: peer,
+        expectedAddress: currentAddress,
+        candidateAddress: stale.candidateAddress
+    )
+    let sequence = RequestSequence()
+    let recorder = RequestRecorder(removeAfterRequest: false) { urlRequest in
+        switch sequence.next() {
+        case 0:
+            try expectPeerAddressRequest(urlRequest, equals: stale)
+            return TestResponse.response(
+                urlRequest, status: 409,
+                json: #"{"protocolVersion":1,"code":"peer_address_changed","message":"stale","retryable":false}"#
+            )
+        case 1:
+            return TestResponse.response(
+                urlRequest, status: 200,
+                json: peerAddressStatusJSON(peer: peer, address: currentAddress)
+            )
+        case 2:
+            try expectPeerAddressRequest(urlRequest, equals: confirmed)
+            return TestResponse.response(
+                urlRequest, status: 200,
+                json: #"{"offerId":null,"lifecycle":"running","issue":null}"#
+            )
+        case 3:
+            return TestResponse.response(
+                urlRequest, status: 200,
+                json: peerAddressStatusJSON(peer: peer, address: confirmed.candidateAddress)
+            )
+        default:
+            Issue.record("Unexpected address conflict request")
+            return TestResponse.response(urlRequest, status: 500, json: "{}")
+        }
+    }
+    let model = try peerAddressModel(recorder: recorder, fixture: fixture)
+    let first = await model.refreshPeerAddress(stale)
+    guard case let .requiresConfirmation(currentPeer, candidate, failure) = first else {
+        Issue.record("A stale expected address must require new confirmation")
+        return
+    }
+    #expect(currentPeer.address == currentAddress)
+    #expect(candidate == stale.candidateAddress)
+    #expect(failure.recovery == .none)
+    #expect(sequence.count == 2)
+
+    let second = await model.refreshPeerAddress(confirmed)
+    guard case let .saved(savedPeer) = second else {
+        Issue.record("Expected a separately confirmed current address to save")
+        return
+    }
+    #expect(savedPeer.address == confirmed.candidateAddress)
+    #expect(sequence.count == 4)
+}
+
+@Test @MainActor func acknowledgedProviderAddressClearsStaleReachabilityWhenReloadFails() async throws {
+    let fixture = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let peer = UUID()
+    let expected = "192.0.2.60:8787"
+    let candidate = "192.0.2.61:8787"
+    let fingerprint = String(repeating: "b", count: 64)
+    let providerCalls = RequestSequence()
+    let statusCalls = RequestSequence()
+    let recorder = RequestRecorder(removeAfterRequest: false) { request in
+        switch request.url?.path {
+        case "/api/v1/status":
+            return TestResponse.response(
+                request, status: 200,
+                json: #"{"deviceName":"Test Mac","protocolVersion":1,"lanDiscovery":false,"platformTier":"tier1","state":"ready"}"#
+            )
+        case "/api/v1/config/export":
+            return TestResponse.response(
+                request, status: 200,
+                json: #"{"schemaVersion":1,"deviceName":"Test Mac","lanDiscoveryEnabled":false,"rememberedBackups":[]}"#
+            )
+        case "/api/v1/backups", "/api/v1/discovery":
+            return TestResponse.response(request, status: 200, json: "[]")
+        case "/api/v1/providers":
+            if providerCalls.next() == 0 {
+                return TestResponse.response(
+                    request, status: 200,
+                    json: "[{\"peerId\":\"\(peer.uuidString)\",\"address\":\"\(expected)\",\"certificateFingerprint\":\"\(fingerprint)\",\"reachability\":\"reachable\",\"observedAtUnixMs\":1,\"validUntilUnixMs\":4102444800000,\"usableBytes\":1,\"allocatedBytes\":1,\"quotaBytes\":2}]"
+                )
+            }
+            return TestResponse.response(
+                request, status: 503,
+                json: #"{"protocolVersion":1,"code":"temporarily_unavailable","message":"retry","retryable":true}"#
+            )
+        case "/api/v1/sync/status":
+            let address = statusCalls.next() == 0 ? expected : candidate
+            return TestResponse.response(
+                request, status: 200,
+                json: peerAddressStatusJSON(peer: peer, address: address)
+            )
+        case "/api/v1/sync/peers/refresh-address":
+            try expectPeerAddressRequest(
+                request,
+                equals: PeerAddressRefreshRequest(
+                    peerId: peer,
+                    expectedAddress: expected,
+                    candidateAddress: candidate
+                )
+            )
+            return TestResponse.response(
+                request, status: 200,
+                json: #"{"offerId":null,"lifecycle":"running","issue":null}"#
+            )
+        default:
+            Issue.record("Unexpected provider address request: \(request.url?.path ?? "missing")")
+            return TestResponse.response(request, status: 500, json: "{}")
+        }
+    }
+    let model = try peerAddressModel(recorder: recorder, fixture: fixture)
+    await model.start()
+    #expect(model.providers.first?.reachability == .reachable)
+    let outcome = await model.refreshPeerAddress(PeerAddressRefreshRequest(
+        peerId: peer,
+        expectedAddress: expected,
+        candidateAddress: candidate
+    ))
+    guard case let .savedNeedsReload(savedPeer, savedAddress, failure) = outcome else {
+        Issue.record("Expected a truthful saved-but-needs-reload result")
+        return
+    }
+    #expect(savedPeer == peer)
+    #expect(savedAddress == candidate)
+    #expect(failure.recovery == .retry)
+    #expect(model.folderSyncStatus?.peers.first?.address == candidate)
+    #expect(model.providers.first?.address == candidate)
+    #expect(model.providers.first?.reachability == nil)
+    #expect(model.providers.first?.observedAtUnixMs == nil)
+    #expect(model.providers.first?.validUntilUnixMs == nil)
+}
+
+@MainActor private func peerAddressModel(
+    recorder: RequestRecorder,
+    fixture: URL
+) throws -> CovalentAppModel {
+    let port = RecordingURLProtocol.recorder.install(recorder)
+    let configuration = try NodeConnectionConfiguration(
+        baseURL: URL(string: "http://127.0.0.1:\(port)")!,
+        apiToken: String(repeating: "d", count: 32)
+    )
+    let sessionConfiguration = URLSessionConfiguration.ephemeral
+    sessionConfiguration.protocolClasses = [RecordingURLProtocol.self]
+    return CovalentAppModel(
+        persistence: AppleAppPersistence(directoryURL: fixture.appending(path: "state")),
+        client: NodeClient(
+            configuration: configuration,
+            session: URLSession(configuration: sessionConfiguration)
+        ),
+        configuration: configuration
+    )
+}
+
+private func peerAddressStatusJSON(peer: UUID, address: String) -> String {
+    "{\"schemaVersion\":1,\"availability\":\"available\",\"lifecycle\":\"running\",\"issue\":null,\"healthFreshness\":\"fresh\",\"connectionFreshness\":\"fresh\",\"peers\":[{\"peerId\":\"\(peer.uuidString)\",\"displayName\":\"Studio Mac\",\"address\":\"\(address)\"}],\"shares\":[],\"folders\":[]}"
+}
+
+private func peerAddressStatus(peer: FolderSyncPeer) -> FolderSyncStatus {
+    FolderSyncStatus(
+        availability: "available",
+        lifecycle: "running",
+        issue: nil,
+        healthFreshness: "fresh",
+        connectionFreshness: "fresh",
+        peers: [peer],
+        shares: [],
+        folders: []
+    )
+}
+
+private func expectPeerAddressRequest(
+    _ request: URLRequest,
+    equals expected: PeerAddressRefreshRequest
+) throws {
+    #expect(request.url?.path == "/api/v1/sync/peers/refresh-address")
+    #expect(request.httpMethod == "POST")
+    let body = try #require(folderRepairRequestBody(request))
+    let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: String])
+    #expect(Set(object.keys) == Set(["peerId", "expectedAddress", "candidateAddress"]))
+    #expect(UUID(uuidString: try #require(object["peerId"])) == expected.peerId)
+    #expect(object["expectedAddress"] == expected.expectedAddress)
+    #expect(object["candidateAddress"] == expected.candidateAddress)
+}
+
 private func folderShareJSON(
     offer: UUID,
     folder: UUID,

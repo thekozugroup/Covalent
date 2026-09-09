@@ -1064,7 +1064,20 @@ internal fun CovalentApp(
                         discover()
                     }
                 }
-                Screen.FOLDERS -> FolderSyncScreen(embeddedManager, page)
+                Screen.FOLDERS -> FolderSyncScreen(
+                    embeddedManager,
+                    page,
+                    onProviderConnectionsChanged = {
+                        val connection = activeConnection
+                        val local = embeddedManager.localConnectionForFolderSync()
+                        if (connection != null && local == connection) {
+                            val providers = withContext(Dispatchers.IO) {
+                                node.providers(connection.baseUrl, connection.token)
+                            }
+                            state.providers = providers
+                        }
+                    },
+                )
                 Screen.BACKUP -> Backup(state, node, store, activeConnection, scope, page) { sourcePicker.launch(null) }
                 Screen.RESTORE -> Restore(state, node, store, activeConnection, scope, page) { targetPicker.launch(null) }
                 Screen.SETTINGS -> Settings(

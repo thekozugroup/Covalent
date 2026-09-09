@@ -403,6 +403,289 @@ test("older status safely defaults new reachability fields to unknown", () => {
   const decoded = folders.requireStatus(legacy);
   assert.equal(decoded.connectionFreshness, "neverObserved");
   assert.equal(decoded.shares[0].peerConnection, "unknown");
+  assert.equal(decoded.peers[0].address, null);
+});
+
+test("paired addresses accept bounded numeric endpoints and reject ambiguous input", () => {
+  for (const address of ["192.0.2.10:8787", "[2001:db8::10]:8787"]) {
+    const decoded = folders.requireStatus(status({
+      peers: [{ peerId, displayName: "Kitchen server", address }],
+    }));
+    assert.equal(decoded.peers[0].address, address);
+    assert.equal(folders.peerAddress(address), address);
+  }
+  for (const address of [
+    "host.example:8787", "192.0.2.999:8787", "192.0.2.1:0",
+    "[fe80::1%en0]:8787", "2001:db8::1:8787", " 192.0.2.1:8787",
+  ]) {
+    assert.throws(() => folders.peerAddress(address), /folder sync guidance/);
+  }
+});
+
+test("address refresh freezes the exact old and new endpoint until status confirms it", async () => {
+  const oldAddress = "192.0.2.10:8787";
+  const newAddress = "[2001:db8::10]:8787";
+  const calls = [];
+  let statusCount = 0;
+  const controller = folders.coordinator({
+    storage: new MemoryStorage(),
+    api: async (path, options) => {
+      calls.push({ path, method: options?.method, body: options?.body && JSON.parse(options.body) });
+      if (path === "/api/v1/sync/status") {
+        statusCount += 1;
+        return status({ peers: [{ peerId, displayName: "Kitchen server", address: statusCount === 1 ? oldAddress : newAddress }] });
+      }
+      return { schemaVersion: 1, lifecycle: "stopped", issue: null };
+    },
+  });
+  enable(controller);
+  await controller.refresh();
+  await controller.refreshPeerAddress(peerId, newAddress);
+  assert.deepEqual(calls[1], {
+    path: "/api/v1/sync/peers/refresh-address",
+    method: "POST",
+    body: { peerId, expectedAddress: oldAddress, candidateAddress: newAddress },
+  });
+  assert.equal(controller.current().peers[0].address, newAddress);
+  assert.equal(controller.pendingPeerAddressRefresh(), null);
+});
+
+test("a lost address response preserves only the exact retry and survives polling", async () => {
+  const oldAddress = "192.0.2.10:8787";
+  const candidateAddress = "192.0.2.20:8787";
+  const posts = [];
+  let fail = true;
+  const controller = folders.coordinator({
+    storage: new MemoryStorage(),
+    api: async (path, options) => {
+      if (path === "/api/v1/sync/status") {
+        return status({ peers: [{ peerId, displayName: "Kitchen server", address: fail ? oldAddress : candidateAddress }] });
+      }
+      posts.push(JSON.parse(options.body));
+      if (fail) throw new TypeError("response lost");
+      return { schemaVersion: 1, lifecycle: "stopped", issue: null };
+    },
+  });
+  enable(controller);
+  await controller.refresh();
+  await assert.rejects(controller.refreshPeerAddress(peerId, candidateAddress), TypeError);
+  const exact = { peerId, expectedAddress: oldAddress, candidateAddress };
+  assert.deepEqual(controller.pendingPeerAddressRefresh(), exact);
+  await controller.refresh();
+  assert.deepEqual(controller.pendingPeerAddressRefresh(), exact);
+  assert.throws(() => controller.refreshPeerAddress(peerId, "192.0.2.30:8787"), /folder sync guidance/);
+  fail = false;
+  await controller.retryPeerAddressRefresh(peerId);
+  assert.deepEqual(posts, [exact, exact]);
+  assert.equal(controller.pendingPeerAddressRefresh(), null);
+});
+
+test("a known changed-address rejection reloads status and requires a new submission", async () => {
+  const oldAddress = "192.0.2.10:8787";
+  const currentAddress = "192.0.2.15:8787";
+  let statuses = 0;
+  let posts = 0;
+  const controller = folders.coordinator({
+    storage: new MemoryStorage(),
+    api: async (path) => {
+      if (path === "/api/v1/sync/status") {
+        statuses += 1;
+        return status({ peers: [{ peerId, displayName: "Kitchen server", address: statuses === 1 ? oldAddress : currentAddress }] });
+      }
+      posts += 1;
+      const conflict = new Error("redacted API failure");
+      conflict.code = "peer_address_changed";
+      throw conflict;
+    },
+  });
+  enable(controller);
+  await controller.refresh();
+  await assert.rejects(controller.refreshPeerAddress(peerId, "192.0.2.20:8787"),
+    (error) => /Review its current address/.test(error.covalentGuidance));
+  assert.equal(posts, 1);
+  assert.equal(statuses, 2);
+  assert.equal(controller.current().peers[0].address, currentAddress);
+  assert.equal(controller.pendingPeerAddressRefresh(), null);
+});
+
+test("a failed conflict reload leaves no stale address available for resubmission", async () => {
+  let statusCalls = 0;
+  const controller = folders.coordinator({
+    storage: new MemoryStorage(),
+    api: async (path) => {
+      if (path === "/api/v1/sync/status") {
+        statusCalls += 1;
+        if (statusCalls === 2) throw new TypeError("status unavailable");
+        return status({ peers: [{ peerId, displayName: "Kitchen server", address: "192.0.2.10:8787" }] });
+      }
+      const conflict = new Error("redacted API failure");
+      conflict.code = "peer_address_changed";
+      throw conflict;
+    },
+  });
+  enable(controller);
+  await controller.refresh();
+  await assert.rejects(controller.refreshPeerAddress(peerId, "192.0.2.20:8787"),
+    (error) => /Review its current address/.test(error.covalentGuidance));
+  assert.equal(controller.current(), null);
+  assert.throws(() => controller.refreshPeerAddress(peerId, "192.0.2.20:8787"),
+    (error) => /no longer available/.test(error.covalentGuidance));
+  assert.equal((await controller.refresh()).applied, true);
+  assert.equal(controller.current().peers[0].address, "192.0.2.10:8787");
+});
+
+test("a delayed conflict reload cannot overwrite a newer normal poll", async () => {
+  const oldAddress = "192.0.2.10:8787";
+  const newerAddress = "192.0.2.18:8787";
+  let statusCalls = 0;
+  let finishConflictReload;
+  const controller = folders.coordinator({
+    storage: new MemoryStorage(),
+    api: async (path) => {
+      if (path !== "/api/v1/sync/status") {
+        const conflict = new Error("redacted API failure");
+        conflict.code = "peer_address_changed";
+        throw conflict;
+      }
+      statusCalls += 1;
+      if (statusCalls === 1) {
+        return status({ peers: [{ peerId, displayName: "Kitchen server", address: oldAddress }] });
+      }
+      if (statusCalls === 2) {
+        return new Promise((resolve) => { finishConflictReload = resolve; });
+      }
+      return status({ peers: [{ peerId, displayName: "Kitchen server", address: newerAddress }] });
+    },
+  });
+  enable(controller);
+  await controller.refresh();
+  const rejected = controller.refreshPeerAddress(peerId, "192.0.2.20:8787");
+  while (finishConflictReload === undefined) await Promise.resolve();
+  assert.equal((await controller.refresh()).applied, true);
+  finishConflictReload(status({ peers: [{ peerId, displayName: "Kitchen server", address: oldAddress }] }));
+  await assert.rejects(rejected, (error) => /Review its current address/.test(error.covalentGuidance));
+  assert.equal(controller.current().peers[0].address, newerAddress);
+});
+
+test("same-device access reset during address POST rejects the obsolete completion", async () => {
+  let finishPost;
+  const controller = folders.coordinator({
+    storage: new MemoryStorage(),
+    api: async (path) => {
+      if (path === "/api/v1/sync/status") {
+        return status({ peers: [{ peerId, displayName: "Kitchen server", address: "192.0.2.10:8787" }] });
+      }
+      return new Promise((resolve) => { finishPost = resolve; });
+    },
+  });
+  enable(controller);
+  await controller.refresh();
+  const request = controller.refreshPeerAddress(peerId, "192.0.2.20:8787");
+  controller.setAccess({ deviceId, unlocked: true });
+  finishPost({ schemaVersion: 1, lifecycle: "stopped", issue: null });
+  await assert.rejects(request, (error) => /Console access changed/.test(error.covalentGuidance));
+  assert.equal(controller.current(), null);
+  assert.equal(controller.pendingPeerAddressRefresh(), null);
+});
+
+test("same-device access reset during confirmation cannot apply the old session status", async () => {
+  let statusCalls = 0;
+  let finishConfirmation;
+  let applied = 0;
+  const controller = folders.coordinator({
+    storage: new MemoryStorage(),
+    onStatus: () => { applied += 1; },
+    api: async (path) => {
+      if (path !== "/api/v1/sync/status") {
+        return { schemaVersion: 1, lifecycle: "stopped", issue: null };
+      }
+      statusCalls += 1;
+      if (statusCalls === 1) {
+        return status({ peers: [{ peerId, displayName: "Kitchen server", address: "192.0.2.10:8787" }] });
+      }
+      return new Promise((resolve) => { finishConfirmation = resolve; });
+    },
+  });
+  enable(controller);
+  await controller.refresh();
+  const request = controller.refreshPeerAddress(peerId, "192.0.2.20:8787");
+  while (finishConfirmation === undefined) await Promise.resolve();
+  controller.setAccess({ deviceId, unlocked: true });
+  finishConfirmation(status({ peers: [{ peerId, displayName: "Kitchen server", address: "192.0.2.20:8787" }] }));
+  await assert.rejects(request, (error) => /Console access changed/.test(error.covalentGuidance));
+  assert.equal(applied, 1);
+  assert.equal(controller.current(), null);
+  assert.equal(controller.pendingPeerAddressRefresh(), null);
+});
+
+test("a busy mutation cannot fabricate a pending address request", async () => {
+  let finish;
+  const controller = folders.coordinator({
+    storage: new MemoryStorage(),
+    api: async (path) => {
+      if (path === "/api/v1/sync/status") {
+        return status({ peers: [{ peerId, displayName: "Kitchen server", address: "192.0.2.10:8787" }] });
+      }
+      return new Promise((resolve) => { finish = resolve; });
+    },
+  });
+  enable(controller);
+  await controller.refresh();
+  const active = controller.retryService();
+  assert.throws(() => controller.refreshPeerAddress(peerId, "192.0.2.20:8787"),
+    (error) => /still in progress/.test(error.covalentGuidance));
+  assert.equal(controller.pendingPeerAddressRefresh(), null);
+  finish({ schemaVersion: 1, lifecycle: "stopped", issue: null });
+  await active;
+});
+
+test("provider refresh failure cannot turn a confirmed address save into failure", async () => {
+  const committed = { schemaVersion: 1, lifecycle: "stopped", issue: null };
+  const providerFailure = new TypeError("provider response lost");
+  const calls = [];
+  const completion = await folders.refreshPeerAddressAndProviders({
+    async refreshPeerAddress(id, candidate) {
+      calls.push({ id, candidate });
+      return committed;
+    },
+  }, peerId, "192.0.2.20:8787", async () => { throw providerFailure; });
+  assert.deepEqual(calls, [{ id: peerId, candidate: "192.0.2.20:8787" }]);
+  assert.equal(completion.result, committed);
+  assert.equal(completion.providerError, providerFailure);
+});
+
+test("address refresh rejects unknown or legacy peers and cancellation clears its retry", async () => {
+  let calls = 0;
+  const controller = folders.coordinator({
+    storage: new MemoryStorage(),
+    api: async (path, options) => {
+      calls += 1;
+      if (path === "/api/v1/sync/status") return status();
+      return { schemaVersion: 1, lifecycle: "stopped", issue: null };
+    },
+  });
+  enable(controller);
+  await controller.refresh();
+  assert.throws(() => controller.refreshPeerAddress(peerId, "192.0.2.20:8787"),
+    (error) => /server version/.test(error.covalentGuidance));
+  assert.throws(() => controller.refreshPeerAddress(folderId, "192.0.2.20:8787"),
+    (error) => /no longer available/.test(error.covalentGuidance));
+  assert.equal(calls, 1);
+
+  // Reload a status carrying the additive address before exercising cancel.
+  const addressed = folders.coordinator({
+    storage: new MemoryStorage(),
+    api: async (path) => {
+      if (path === "/api/v1/sync/status") return status({ peers: [{ peerId, displayName: "Kitchen server", address: "192.0.2.10:8787" }] });
+      throw new TypeError("response lost");
+    },
+  });
+  enable(addressed);
+  await addressed.refresh();
+  await assert.rejects(addressed.refreshPeerAddress(peerId, "192.0.2.20:8787"), TypeError);
+  addressed.cancelPeerAddressRefresh(peerId);
+  assert.equal(addressed.pendingPeerAddressRefresh(), null);
+  assert.throws(() => addressed.retryPeerAddressRefresh(peerId), /folder sync guidance/);
 });
 
 test("initial scanning reports local checking before offered or ready phases", () => {
@@ -425,12 +708,21 @@ test("the primary Folders tab uses server paths, confirmed names, and visible un
   assert.ok(html.indexOf('data-tab="folders"') < html.indexOf('data-tab="pair"'));
   assert.match(html, /Advanced server folder path/);
   assert.match(html, /name="selectedRoot" value="\/sync"/);
+  assert.match(html, /data-paired-devices/);
+  assert.match(html, /Paired devices/);
   assert.match(html, /browser folder picker would select files on the computer running the browser/i);
   assert.match(app, /folderApi\("\/api\/v1\/transport\/identity"\)/);
   assert.match(app, /document\.visibilityState === "visible"/);
   assert.match(app, /getAttribute\("aria-selected"\) === "true"/);
   assert.match(app, /setInterval\([\s\S]*?5000\)/);
   assert.match(app, /option\.textContent = peer\.displayName/);
+  assert.match(app, /Update address/);
+  assert.match(app, /pendingPeerAddressRefresh/);
+  assert.match(app, /update\.focus\(\)/);
+  assert.match(app, /if \(form\.hidden\) \{\s*input\.value/);
+  assert.match(app, /input\.disabled = true;[\s\S]*?finally \{\s*input\.disabled = false;/);
+  assert.match(app, /foldersSelected \|\| pairSelected/);
+  assert.doesNotMatch(app, /\[data-paired-devices\]"\)\.replaceChildren\([^)]/);
   assert.match(app, /const form = event\.currentTarget;[\s\S]*?await folderController\.sendOffer\(body\);[\s\S]*?form\.reset\(\)/);
   assert.match(app, /folderSync\.lazySessionStorage\(globalThis\)/);
   assert.doesNotMatch(app, /storage: globalThis\.sessionStorage/);

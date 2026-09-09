@@ -57,31 +57,49 @@ internal object PackagedSyncEngine {
     private val packagedAbis = setOf("arm64-v8a", "x86_64")
     private val hashPattern = Regex("[0-9a-f]{64}")
 
-    fun load(context: Context): PackagedSyncEnginePackage {
+    fun load(context: Context): PackagedSyncEnginePackage = load(context) { }
+
+    /** Debug-only callers use [onInvalidStage] to identify a fixed, nonsecret verification stage. */
+    internal fun load(
+        context: Context,
+        onInvalidStage: (String) -> Unit,
+    ): PackagedSyncEnginePackage {
         if (!life.michaelwong.covalent.BuildConfig.COVALENT_SYNC_ENGINE_PACKAGED) {
             return PackagedSyncEnginePackage.Absent
         }
+        var stage = "extraction-metadata"
         return runCatching {
             val applicationContext = context.applicationContext
             check(
                 applicationContext.applicationInfo.flags and
                     ApplicationInfo.FLAG_EXTRACT_NATIVE_LIBS != 0,
             )
-            val workerHashes = readManifest(applicationContext, WORKER_MANIFEST)
-            val guardianHashes = readManifest(applicationContext, GUARDIAN_MANIFEST)
+            val workerHashes = readManifest(applicationContext, WORKER_MANIFEST) {
+                stage = "worker-manifest-$it"
+            }
+            val guardianHashes = readManifest(applicationContext, GUARDIAN_MANIFEST) {
+                stage = "guardian-manifest-$it"
+            }
+            stage = "device-abi"
             val abi = Build.SUPPORTED_ABIS.firstOrNull {
                 workerHashes.containsKey(it) && guardianHashes.containsKey(it)
             } ?: error("No packaged ABI matches this device.")
+            stage = "native-directory"
             val nativeDirectory = File(
                 checkNotNull(applicationContext.applicationInfo.nativeLibraryDir),
             ).canonicalFile
             check(nativeDirectory.isDirectory)
-            val worker = verifyHelper(nativeDirectory, WORKER, checkNotNull(workerHashes[abi]))
+            val worker = verifyHelper(
+                nativeDirectory,
+                WORKER,
+                checkNotNull(workerHashes[abi]),
+            ) { stage = "worker-helper-$it" }
             val guardian = verifyHelper(
                 nativeDirectory,
                 GUARDIAN,
                 checkNotNull(guardianHashes[abi]),
-            )
+            ) { stage = "guardian-helper-$it" }
+            stage = "runtime-directory"
             val runtime = privateRuntimeDirectory(applicationContext)
             PackagedSyncEnginePackage.Verified(
                 VerifiedPackagedSyncEngine(
@@ -92,7 +110,10 @@ internal object PackagedSyncEngine {
                     runtimeDirectory = runtime.path,
                 ),
             )
-        }.getOrElse { PackagedSyncEnginePackage.Invalid }
+        }.getOrElse {
+            onInvalidStage(stage)
+            PackagedSyncEnginePackage.Invalid
+        }
     }
 
     internal fun parseHashManifest(value: String): Map<String, PackagedHelperHash> {
@@ -120,8 +141,11 @@ internal object PackagedSyncEngine {
     private fun readManifest(
         context: Context,
         name: String,
+        onStage: (String) -> Unit,
     ): Map<String, PackagedHelperHash> {
+        onStage("open")
         val bytes = context.assets.open(name).use { input ->
+            onStage("bounded-read")
             val retained = ByteArray(MAX_MANIFEST_BYTES + 1)
             var offset = 0
             while (offset < retained.size) {
@@ -133,6 +157,7 @@ internal object PackagedSyncEngine {
             check(offset <= MAX_MANIFEST_BYTES && input.read() < 0)
             retained.copyOf(offset)
         }
+        onStage("parse")
         return parseHashManifest(bytes.toString(Charsets.US_ASCII))
     }
 
@@ -140,16 +165,25 @@ internal object PackagedSyncEngine {
         nativeDirectory: File,
         name: String,
         expected: PackagedHelperHash,
+        onStage: (String) -> Unit,
     ): File {
         val helper = File(nativeDirectory, name).absoluteFile
+        onStage("direct-child")
         check(helper.parentFile == nativeDirectory)
+        onStage("lstat")
         val before = Os.lstat(helper.path)
+        onStage("regular")
         check(OsConstants.S_ISREG(before.st_mode))
+        onStage("canonical")
         check(helper.canonicalFile == helper)
+        onStage("size")
         check(before.st_size == expected.bytes)
+        onStage("mode")
         check(before.st_mode and (OsConstants.S_IWGRP or OsConstants.S_IWOTH) == 0)
+        onStage("executable")
         check(Os.access(helper.path, OsConstants.X_OK))
         val digest = MessageDigest.getInstance("SHA-256")
+        onStage("open")
         val descriptor = Os.open(
             helper.path,
             OsConstants.O_RDONLY or OPEN_CLOSE_ON_EXEC or
@@ -160,8 +194,10 @@ internal object PackagedSyncEngine {
             // The atomic open flag is supported on every packaged ABI. Android
             // exposes this additional descriptor assertion only from API 30.
             if (Build.VERSION.SDK_INT >= 30) {
+                onStage("close-on-exec")
                 check(Os.fcntlInt(input.fd, OsConstants.F_GETFD, 0) and OsConstants.FD_CLOEXEC != 0)
             }
+            onStage("fstat-identity")
             val opened = Os.fstat(input.fd)
             check(
                 opened.st_dev == before.st_dev &&
@@ -170,6 +206,7 @@ internal object PackagedSyncEngine {
             )
             val buffer = ByteArray(64 * 1024)
             var retained = 0L
+            onStage("bounded-read")
             while (true) {
                 val count = input.read(buffer)
                 if (count < 0) break
@@ -179,14 +216,18 @@ internal object PackagedSyncEngine {
                 digest.update(buffer, 0, count)
             }
             check(retained == expected.bytes)
+            onStage("post-read-identity")
             val afterRead = Os.fstat(input.fd)
             check(
                 afterRead.st_dev == opened.st_dev &&
                     afterRead.st_ino == opened.st_ino &&
                     afterRead.st_size == opened.st_size,
             )
+            onStage("close")
         }
+        onStage("hash")
         check(digest.digest().toHex() == expected.sha256)
+        onStage("post-read-path-identity")
         val after = Os.lstat(helper.path)
         check(
             after.st_dev == before.st_dev &&

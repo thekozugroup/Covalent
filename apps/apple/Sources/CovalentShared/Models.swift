@@ -1058,12 +1058,54 @@ public struct FolderHealth: Codable, Equatable, Identifiable, Sendable {
 public struct FolderSyncPeer: Codable, Equatable, Identifiable, Sendable {
     public let peerId: UUID
     public let displayName: String
+    /// The currently trusted numeric control endpoint. Older protocol-1
+    /// servers omitted this additive field, so clients must tolerate `nil`
+    /// while withholding address-editing controls.
+    public let address: String?
 
     public var id: UUID { peerId }
 
-    public init(peerId: UUID, displayName: String) {
+    public init(peerId: UUID, displayName: String, address: String? = nil) {
       self.peerId = peerId
       self.displayName = displayName
+      self.address = address
+    }
+}
+
+/// One deduplicated row in the native saved-devices list. A peer can exist
+/// without a storage-provider connection and must still remain reachable for
+/// trusted address maintenance.
+public struct SavedPeerDevice: Equatable, Identifiable, Sendable {
+    public let id: UUID
+    public let peer: FolderSyncPeer?
+    public let provider: ProviderConnection?
+
+    public var address: String { peer?.address ?? provider?.address ?? "" }
+    public var displayName: String? { peer?.displayName }
+
+    private init(peer: FolderSyncPeer?, provider: ProviderConnection?) {
+      if let peer {
+        id = peer.peerId
+      } else if let provider {
+        id = provider.peerId
+      } else {
+        preconditionFailure()
+      }
+      self.peer = peer
+      self.provider = provider
+    }
+
+    public static func merge(
+      peers: [FolderSyncPeer],
+      providers: [ProviderConnection]
+    ) -> [SavedPeerDevice] {
+      let peersByID = Dictionary(uniqueKeysWithValues: peers.map { ($0.peerId, $0) })
+      let providerIDs = Set(providers.map(\.peerId))
+      return providers.map { provider in
+        SavedPeerDevice(peer: peersByID[provider.peerId], provider: provider)
+      } + peers.filter { !providerIDs.contains($0.peerId) }.map { peer in
+        SavedPeerDevice(peer: peer, provider: nil)
+      }
     }
 }
 
@@ -1239,6 +1281,55 @@ public struct FolderSyncMutation: Codable, Equatable, Sendable {
       self.lifecycle = lifecycle
       self.issue = issue
     }
+}
+
+/// The exact optimistic-concurrency request accepted by the local node when
+/// moving a paired device to a new control endpoint.
+public struct PeerAddressRefreshRequest: Codable, Equatable, Sendable {
+    public let peerId: UUID
+    public let expectedAddress: String
+    public let candidateAddress: String
+
+    public init(peerId: UUID, expectedAddress: String, candidateAddress: String) {
+      self.peerId = peerId
+      self.expectedAddress = expectedAddress
+      self.candidateAddress = candidateAddress
+    }
+}
+
+/// A fresh address request is safe only while the editor's expected address
+/// still matches the latest authenticated local status. An exact retry is
+/// governed separately because it must survive an unavailable status reload.
+public enum PeerAddressRefreshPolicy {
+    public static func permitsFreshRequest(
+      peer: FolderSyncPeer,
+      status: FolderSyncStatus?,
+      candidateAddress: String
+    ) -> Bool {
+      guard let expectedAddress = peer.address,
+            let currentAddress = status?.peers.first(where: { $0.peerId == peer.peerId })?.address,
+            currentAddress == expectedAddress
+      else { return false }
+      return !candidateAddress.isEmpty
+        && candidateAddress.utf8.count <= 128
+        && candidateAddress != expectedAddress
+    }
+}
+
+/// A native address editor needs more precision than a Boolean result. In
+/// particular, a lost response retains the byte-equivalent request, while an
+/// optimistic-concurrency conflict replaces the expected address and requires
+/// fresh confirmation from the person using the Mac.
+public enum PeerAddressRefreshOutcome: Equatable, Sendable {
+    case saved(FolderSyncPeer)
+    case savedNeedsReload(peerId: UUID, acceptedAddress: String, failure: NodeClientFailure)
+    case retryExact(PeerAddressRefreshRequest, failure: NodeClientFailure)
+    case requiresConfirmation(
+      currentPeer: FolderSyncPeer,
+      candidateAddress: String,
+      failure: NodeClientFailure
+    )
+    case failed(NodeClientFailure)
 }
 
 public struct FolderOfferRequest: Codable, Equatable, Sendable {

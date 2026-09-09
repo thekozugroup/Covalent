@@ -21,6 +21,7 @@ internal interface FolderSyncApi {
     fun renew(connection: NodeConnection, offerId: String): FolderSyncMutation
     fun repair(connection: NodeConnection, offerId: String, selectedRoot: String): FolderSyncMutation
     fun retry(connection: NodeConnection): FolderSyncMutation
+    fun refreshPeerAddress(connection: NodeConnection, request: PeerAddressRefreshRequest): FolderSyncMutation
 }
 
 internal class NodeFolderSyncApi(private val client: CovalentNodeClient) : FolderSyncApi {
@@ -52,4 +53,7 @@ internal class NodeFolderSyncApi(private val client: CovalentNodeClient) : Folde
 
     override fun retry(connection: NodeConnection) =
         client.retryFolderSync(connection.baseUrl, connection.token)
+
+    override fun refreshPeerAddress(connection: NodeConnection, request: PeerAddressRefreshRequest) =
+        client.refreshFolderPeerAddress(connection.baseUrl, connection.token, request)
 }

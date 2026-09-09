@@ -22,12 +22,14 @@ class FolderSyncClientTest {
         val server = MockWebServer()
         server.enqueue(MockResponse().setBody(STATUS))
         repeat(7) { server.enqueue(MockResponse().setBody(MUTATION)) }
+        server.enqueue(MockResponse().setBody(ADDRESS_MUTATION))
         server.start()
         try {
             val base = server.url("/").toString().removeSuffix("/")
             val client = CovalentNodeClient()
             val status = client.folderSyncStatus(base, "token")
             assertEquals("Phone", status.peers.single().displayName)
+            assertEquals("192.0.2.10:8787", status.peers.single().address)
             assertEquals(FolderSharePhase.OFFERED, status.shares.single().phase)
             assertFalse(status.shares.single().expired)
             assertEquals(PeerConnectionFreshness.FRESH, status.connectionFreshness)
@@ -40,6 +42,11 @@ class FolderSyncClientTest {
             client.removeFolder(base, "token", OFFER)
             client.retryFolderSync(base, "token")
             client.renewFolder(base, "token", OFFER)
+            client.refreshFolderPeerAddress(
+                base,
+                "token",
+                PeerAddressRefreshRequest(PEER, "192.0.2.10:8787", "[2001:db8::20]:8787"),
+            )
 
             assertEquals("/api/v1/sync/status", server.takeRequest().path)
             assertEquals("/api/v1/sync/folders", server.takeRequest().path)
@@ -62,6 +69,18 @@ class FolderSyncClientTest {
             val renewalBody = JSONObject(renewal.body.readUtf8())
             assertEquals(setOf("offerId"), renewalBody.keys().asSequence().toSet())
             assertEquals(OFFER, renewalBody.getString("offerId"))
+            val address = server.takeRequest()
+            assertEquals("/api/v1/sync/peers/refresh-address", address.path)
+            assertEquals("POST", address.method)
+            assertEquals("Bearer token", address.getHeader("Authorization"))
+            val addressBody = JSONObject(address.body.readUtf8())
+            assertEquals(
+                setOf("peerId", "expectedAddress", "candidateAddress"),
+                addressBody.keys().asSequence().toSet(),
+            )
+            assertEquals(PEER, addressBody.getString("peerId"))
+            assertEquals("192.0.2.10:8787", addressBody.getString("expectedAddress"))
+            assertEquals("[2001:db8::20]:8787", addressBody.getString("candidateAddress"))
         } finally {
             server.shutdown()
         }
@@ -139,6 +158,7 @@ class FolderSyncClientTest {
         val legacy = STATUS
             .replace(",\"connectionFreshness\":\"fresh\"", "")
             .replace(",\"peerConnection\":\"disconnected\"", "")
+            .replace(",\"address\":\"192.0.2.10:8787\"", "")
         val server = MockWebServer().apply {
             enqueue(MockResponse().setBody(legacy))
             enqueue(MockResponse().setBody(STATUS.replace("\"disconnected\"", "\"invented\"")))
@@ -149,7 +169,56 @@ class FolderSyncClientTest {
             val old = CovalentNodeClient().folderSyncStatus(base, "token")
             assertEquals(PeerConnectionFreshness.NEVER_OBSERVED, old.connectionFreshness)
             assertEquals(PeerConnectionState.UNKNOWN, old.shares.single().peerConnection)
+            assertEquals(null, old.peers.single().address)
             assertTrue(runCatching { CovalentNodeClient().folderSyncStatus(base, "token") }.isFailure)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun peerAddressIsOptionalButPresentValuesAreStrictlyTypedAndNumeric() {
+        val variants = listOf<Any?>(
+            JSONObject.NULL,
+            true,
+            8787,
+            "peer.example:8787",
+            "192.0.2.10:0",
+            "192.0.2.010:8787",
+            "192.0.2.10:8787\n",
+            "a".repeat(129),
+        )
+        val server = MockWebServer()
+        variants.forEach { value ->
+            val json = JSONObject(STATUS)
+            json.getJSONArray("peers").getJSONObject(0).put("address", value)
+            server.enqueue(MockResponse().setBody(json.toString()))
+        }
+        server.start()
+        try {
+            val base = server.url("/").toString().removeSuffix("/")
+            repeat(variants.size) {
+                assertTrue(runCatching { CovalentNodeClient().folderSyncStatus(base, "token") }.isFailure)
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun malformedAddressRefreshInputsAreRejectedBeforeAnyRequest() {
+        val server = MockWebServer().apply { start() }
+        try {
+            val base = server.url("/").toString().removeSuffix("/")
+            val client = CovalentNodeClient()
+            for (request in listOf(
+                PeerAddressRefreshRequest(PEER, "peer.example:8787", "192.0.2.20:8787"),
+                PeerAddressRefreshRequest(PEER, "192.0.2.10:8787", "192.0.2.20:0"),
+                PeerAddressRefreshRequest("not-a-peer", "192.0.2.10:8787", "192.0.2.20:8787"),
+            )) {
+                assertTrue(runCatching { client.refreshFolderPeerAddress(base, "token", request) }.isFailure)
+            }
+            assertEquals(0, server.requestCount)
         } finally {
             server.shutdown()
         }
@@ -219,10 +288,11 @@ class FolderSyncClientTest {
         const val STATUS = """{
           "schemaVersion":1,"availability":"available","lifecycle":"stopped","issue":null,
           "healthFreshness":"neverObserved","connectionFreshness":"fresh",
-          "peers":[{"peerId":"$PEER","displayName":"Phone"}],
+          "peers":[{"peerId":"$PEER","displayName":"Phone","address":"192.0.2.10:8787"}],
           "shares":[{"offerId":"$OFFER","folderId":"$FOLDER","label":"Photos","peerId":"$PEER","incoming":true,"phase":"offered","expiresAtUnixMs":4102444800000,"expired":false,"peerConnection":"disconnected"}],
           "folders":[]
         }"""
         const val MUTATION = """{"schemaVersion":1,"offerId":"$OFFER","lifecycle":"stopped","issue":null}"""
+        const val ADDRESS_MUTATION = """{"schemaVersion":1,"offerId":null,"lifecycle":"initialScanning","issue":"initialScan"}"""
     }
 }

@@ -65,6 +65,8 @@ import life.michaelwong.covalent.model.TransferKind
 import life.michaelwong.covalent.model.TransferRecord
 import life.michaelwong.covalent.model.TransferState
 import life.michaelwong.covalent.model.TransportIdentity
+import life.michaelwong.covalent.sync.PeerAddressRefreshRequest
+import life.michaelwong.covalent.sync.requireNumericPeerAddress
 
 data class EnrolledTrust(
     val caCertificateDerBase64: String? = null,
@@ -236,6 +238,25 @@ class CovalentNodeClient(
 
     fun retryFolderSync(baseUrl: String, token: String): FolderSyncMutation =
         post(baseUrl, token, "/api/v1/sync/retry", JSONObject()).toFolderSyncMutation()
+
+    internal fun refreshFolderPeerAddress(
+        baseUrl: String,
+        token: String,
+        request: PeerAddressRefreshRequest,
+    ): FolderSyncMutation {
+        requireUuid(request.peerId, "folder-sync peer ID")
+        requireNumericPeerAddress(request.expectedAddress)
+        requireNumericPeerAddress(request.candidateAddress)
+        return post(
+            baseUrl,
+            token,
+            "/api/v1/sync/peers/refresh-address",
+            JSONObject()
+                .put("peerId", request.peerId)
+                .put("expectedAddress", request.expectedAddress)
+                .put("candidateAddress", request.candidateAddress),
+        ).toFolderSyncMutation()
+    }
 
     fun peerGrants(baseUrl: String, token: String): List<PeerGrant> {
         val roster = request(baseUrl, "GET", "/api/v1/rosters/current", token, null).nullableBody
@@ -929,12 +950,16 @@ private fun JSONObject.toFolderSyncStatus(): FolderSyncStatus {
     check(folderValues.length() <= MAX_FOLDER_SYNC_FOLDERS)
     val peers = List(peerValues.length()) { index ->
         peerValues.getJSONObject(index).let { peer ->
-            requireJsonKeys(peer, setOf("peerId", "displayName"))
+            requireJsonKeys(peer, setOf("peerId", "displayName"), setOf("address"))
             FolderSyncPeer(
                 requireUuid(peer.getString("peerId"), "folder-sync peer ID"),
                 peer.getString("displayName").also {
                     check(it.isNotBlank() && it.length <= 128 && it.none(Char::isISOControl))
                 },
+                if (peer.has("address")) {
+                    (peer.get("address") as? String)?.also { requireNumericPeerAddress(it) }
+                        ?: error("The node returned an invalid folder-sync peer address.")
+                } else null,
             )
         }
     }

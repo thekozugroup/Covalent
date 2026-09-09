@@ -36,7 +36,10 @@ def summarize(report: dict[str, object]) -> None:
     assert isinstance(matches, list)
 
     counts: dict[str, int] = {}
-    important: list[tuple[object, object, object, object, object]] = []
+    findings: dict[str, list[tuple[object, object, object, object, object]]] = {
+        "high/critical": [],
+        "medium": [],
+    }
     for match in matches:
         if not isinstance(match, dict):
             severity = "Malformed"
@@ -57,12 +60,13 @@ def summarize(report: dict[str, object]) -> None:
                 "unknown": "Unknown",
             }.get(raw_severity, "Other")
         counts[severity] = counts.get(severity, 0) + 1
-        if severity.lower() in {"high", "critical"}:
+        if severity.lower() in {"medium", "high", "critical"}:
             fix = vulnerability.get("fix")
             fix = fix if isinstance(fix, dict) else {}
             versions = fix.get("versions", [])
             versions = versions if isinstance(versions, list) else []
-            important.append(
+            group = "medium" if severity == "Medium" else "high/critical"
+            findings[group].append(
                 (
                     vulnerability.get("id"),
                     artifact.get("name"),
@@ -78,18 +82,21 @@ def summarize(report: dict[str, object]) -> None:
         f"scanner=grype/0.117.0 dbSchema={safe_field(schema)} dbBuilt={safe_field(built)} "
         f"matches={len(matches)} severities={count_text}"
     )
-    for vulnerability_id, name, version, package_type, versions in important[:30]:
-        fixed_values = [safe_field(item, 48) for item in versions[:5]]
-        fixed = ",".join(fixed_values) if fixed_values else "none"
-        if len(versions) > 5:
-            fixed += f",...(+{len(versions) - 5})"
-        print(
-            "Grype high/critical: "
-            f"id={safe_field(vulnerability_id)} package={safe_field(name)} "
-            f"version={safe_field(version)} type={safe_field(package_type)} fixed={fixed}"
-        )
-    if len(important) > 30:
-        print(f"Grype high/critical: omitted={len(important) - 30}")
+    # Bound each severity group independently so medium diagnostics cannot
+    # crowd a blocking finding out of the retained job log.
+    for group, items in findings.items():
+        for vulnerability_id, name, version, package_type, versions in items[:30]:
+            fixed_values = [safe_field(item, 48) for item in versions[:5]]
+            fixed = ",".join(fixed_values) if fixed_values else "none"
+            if len(versions) > 5:
+                fixed += f",...(+{len(versions) - 5})"
+            print(
+                f"Grype {group}: "
+                f"id={safe_field(vulnerability_id)} package={safe_field(name)} "
+                f"version={safe_field(version)} type={safe_field(package_type)} fixed={fixed}"
+            )
+        if len(items) > 30:
+            print(f"Grype {group}: omitted={len(items) - 30}")
 
 
 def validate(path: Path, expected_image_id: str) -> dict[str, object]:

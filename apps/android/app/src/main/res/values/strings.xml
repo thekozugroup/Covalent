@@ -552,6 +552,15 @@
     <string name="folder_sync_pair_compare">Compare this code on both physical devices. Continue only if every group matches. Pairing copies nothing now; choose a folder separately after pairing.</string>
     <string name="folder_sync_pair_address">Device address</string>
     <string name="folder_sync_pair_address_example">192.168.1.20:8787</string>
+    <string name="folder_sync_update_address">Update address</string>
+    <string name="folder_sync_update_address_title">Update address for %1$s</string>
+    <string name="folder_sync_update_address_detail">Enter the device’s new numeric IP address and port. Covalent will verify the same trusted device before saving it.</string>
+    <string name="folder_sync_saved_address">Saved address: %1$s</string>
+    <string name="folder_sync_new_address">New numeric IP address and port</string>
+    <string name="folder_sync_verify_address">Verify and update</string>
+    <string name="folder_sync_retry_address_update">Retry exact update</string>
+    <string name="folder_sync_address_updated_checking">Address updated. Checking this device…</string>
+    <string name="folder_sync_address_saved_refresh_needed">Address saved, but Covalent couldn’t reload current status. Refresh before making another change.</string>
     <string name="folder_sync_pair_start">Pair device</string>
     <string name="folder_sync_confirm_device">Codes match — pair device</string>
     <string name="folder_sync_pair_complete">Device paired. You can now share a folder.</string>

@@ -151,6 +151,15 @@ public actor NodeClient {
       let status: FolderSyncStatus = try await send(path: "api/v1/sync/status")
       guard ["neverObserved", "fresh", "stale"].contains(status.connectionFreshness)
       else { throw NodeClientError.invalidResponse }
+      guard status.peers.count <= 1_024,
+            Set(status.peers.map(\.peerId)).count == status.peers.count,
+            status.peers.allSatisfy({ peer in
+              guard let address = peer.address else { return true }
+              return !address.isEmpty
+                && address.utf8.count <= 128
+                && !address.contains(where: \Character.isWhitespace)
+            })
+      else { throw NodeClientError.invalidResponse }
       _ = try status.invitationReplacements()
       return status
     }
@@ -181,6 +190,18 @@ public actor NodeClient {
 
     public func retryFolderSync() async throws -> FolderSyncMutation {
       try await send(path: "api/v1/sync/retry", method: "POST", body: FolderRetryRequest())
+    }
+
+    public func refreshPeerAddress(
+      _ request: PeerAddressRefreshRequest
+    ) async throws -> FolderSyncMutation {
+      let result: FolderSyncMutation = try await send(
+        path: "api/v1/sync/peers/refresh-address",
+        method: "POST",
+        body: request
+      )
+      guard result.offerId == nil else { throw NodeClientError.invalidResponse }
+      return result
     }
 
     public func exportSettings() async throws -> ExportedDeviceSettings {

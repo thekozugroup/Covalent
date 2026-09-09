@@ -16,8 +16,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -35,6 +37,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import java.util.UUID
@@ -45,6 +49,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import life.michaelwong.covalent.R
 import life.michaelwong.covalent.data.CovalentNodeClient
+import life.michaelwong.covalent.data.NodeApiException
 import life.michaelwong.covalent.model.FolderShare
 import life.michaelwong.covalent.model.FolderSharePhase
 import life.michaelwong.covalent.model.FolderSyncStatus
@@ -59,16 +64,33 @@ import life.michaelwong.covalent.sync.FolderSyncActions
 import life.michaelwong.covalent.sync.FolderSyncGrantStore
 import life.michaelwong.covalent.sync.FolderSyncSpecialAccess
 import life.michaelwong.covalent.sync.NodeFolderSyncApi
+import life.michaelwong.covalent.sync.PeerAddressUpdateDraft
+import life.michaelwong.covalent.sync.PeerAddressUpdateOutcome
 import life.michaelwong.covalent.sync.RawFolderAccess
 import life.michaelwong.covalent.sync.RawFolderEntry
+import life.michaelwong.covalent.sync.completePeerAddressUpdate
+
+private data class LoadedFolderSyncStatus(
+    val status: FolderSyncStatus,
+    val pendingRepairOffers: Set<String>,
+    val retiredFolderChoice: Boolean,
+)
 
 @Composable
-internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier = Modifier) {
+internal fun FolderSyncScreen(
+    manager: EmbeddedNodeManager,
+    modifier: Modifier = Modifier,
+    onProviderConnectionsChanged: suspend () -> Unit = {},
+) {
     val context = LocalContext.current
     val hostUnavailableMessage = stringResource(R.string.folder_sync_host_unavailable)
     val localNetworkDeclinedMessage = stringResource(R.string.folder_sync_local_network_declined)
     val accessDeclinedMessage = stringResource(R.string.folder_sync_access_declined)
     val pairedDeviceName = stringResource(R.string.folder_sync_paired_device)
+    val invalidPeerAddressMessage = stringResource(R.string.node_error_invalid_peer_address)
+    val peerAddressChangedMessage = stringResource(R.string.node_error_peer_address_changed)
+    val addressUpdatedMessage = stringResource(R.string.folder_sync_address_updated_checking)
+    val addressSavedRefreshNeededMessage = stringResource(R.string.folder_sync_address_saved_refresh_needed)
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val grants = remember(context) { FolderSyncGrantStore(context.applicationContext) }
     val api = remember { NodeFolderSyncApi(CovalentNodeClient()) }
@@ -84,9 +106,52 @@ internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier =
     var selectedPeer by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var pendingRepairOffers by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var addressEditor by remember { mutableStateOf<PeerAddressUpdateDraft?>(null) }
+    var addressEditorError by remember { mutableStateOf<String?>(null) }
+    var addressUpdateNotice by remember { mutableStateOf<String?>(null) }
 
     fun connection(): NodeConnection = manager.localConnectionForFolderSync()
         ?: throw IllegalStateException("The on-phone node is still starting.")
+
+    suspend fun loadStatus(): LoadedFolderSyncStatus {
+        val ready = withContext(Dispatchers.IO) {
+            repeat(32) {
+                manager.localConnectionForFolderSync()?.let { return@withContext it }
+                delay(250)
+            }
+            throw IllegalStateException("not ready")
+        }
+        return withContext(Dispatchers.IO) {
+            val previousChoices = grants.records().mapNotNull { it.offerId }.toSet()
+            val snapshot = api.status(ready).also(grants::reconcile)
+            val retiredChoice = snapshot.shares.any { share ->
+                if (share.phase == FolderSharePhase.REMOVED) {
+                    share.offerId in previousChoices || share.supersededOfferIds.any { it in previousChoices }
+                } else share.incoming && share.supersededOfferIds.any { it in previousChoices }
+            }
+            LoadedFolderSyncStatus(
+                snapshot,
+                grants.records()
+                    .filter { it.pendingRoot != null && !it.pendingRemoval }
+                    .mapNotNull { it.offerId }
+                    .toSet(),
+                retiredChoice,
+            )
+        }
+    }
+
+    fun applyStatus(loaded: LoadedFolderSyncStatus) {
+        status = loaded.status
+        pendingRepairOffers = loaded.pendingRepairOffers
+        if (loaded.retiredFolderChoice) selectedFolder = null
+        if (
+            addressUpdateNotice == addressSavedRefreshNeededMessage ||
+            addressUpdateNotice == addressUpdatedMessage &&
+            loaded.status.lifecycle != FolderSyncLifecycle.INITIAL_SCANNING
+        ) {
+            addressUpdateNotice = null
+        }
+    }
 
     fun refresh() {
         if (busy) return
@@ -94,32 +159,9 @@ internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier =
         busy = true
         error = null
         scope.launch {
-            runCatching {
-                val ready = withContext(Dispatchers.IO) {
-                    repeat(32) {
-                        manager.localConnectionForFolderSync()?.let { return@withContext it }
-                        delay(250)
-                    }
-                    throw IllegalStateException("not ready")
-                }
-                withContext(Dispatchers.IO) {
-                    val previousChoices = grants.records().mapNotNull { it.offerId }.toSet()
-                    val snapshot = api.status(ready).also(grants::reconcile)
-                    val retiredChoice = snapshot.shares.any { share ->
-                        if (share.phase == FolderSharePhase.REMOVED) {
-                            share.offerId in previousChoices || share.supersededOfferIds.any { it in previousChoices }
-                        } else share.incoming && share.supersededOfferIds.any { it in previousChoices }
-                    }
-                    Triple(snapshot, grants.records()
-                        .filter { it.pendingRoot != null && !it.pendingRemoval }
-                        .mapNotNull { it.offerId }
-                        .toSet(), retiredChoice)
-                }
-            }.onSuccess { (snapshot, pending, retiredChoice) ->
-                status = snapshot
-                pendingRepairOffers = pending
-                if (retiredChoice) selectedFolder = null
-            }.onFailure { error = folderSyncErrorText(it) }
+            runCatching { loadStatus() }
+                .onSuccess { applyStatus(it) }
+                .onFailure { error = folderSyncErrorText(it) }
             busy = false
         }
     }
@@ -143,6 +185,68 @@ internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier =
         browser::select,
         manager::refreshFolderSyncAccess,
     )
+
+    fun submitAddressUpdate() {
+        if (busy) return
+        val captured = runCatching { checkNotNull(addressEditor).capture() }
+            .getOrElse {
+                addressEditorError = invalidPeerAddressMessage
+                return
+            }
+        addressEditor = captured
+        addressEditorError = null
+        addressUpdateNotice = null
+        error = null
+        busy = true
+        scope.launch {
+            when (val outcome = completePeerAddressUpdate(
+                captured,
+                submit = { request ->
+                    withContext(Dispatchers.IO) { actions().refreshPeerAddress(request) }
+                    Unit
+                },
+                reloadStatus = { loadStatus() },
+                refreshProviders = onProviderConnectionsChanged,
+                errorCode = { (it as? NodeApiException)?.code },
+            )) {
+                is PeerAddressUpdateOutcome.Updated -> {
+                    addressEditor = null
+                    addressEditorError = null
+                    if (outcome.freshStatus == null) {
+                        status = null
+                        pendingRepairOffers = emptySet()
+                        addressUpdateNotice = addressSavedRefreshNeededMessage
+                        error = outcome.statusFailure?.let {
+                            nodeFailureMessage(context, it, R.string.error_node_action_failed)
+                        }
+                    } else {
+                        applyStatus(outcome.freshStatus)
+                        addressUpdateNotice = addressUpdatedMessage
+                        error = outcome.providerFailure?.let {
+                            nodeFailureMessage(context, it, R.string.error_connection_failed)
+                        }
+                    }
+                }
+                is PeerAddressUpdateOutcome.Changed -> {
+                    addressEditor = null
+                    addressEditorError = null
+                    status = null
+                    pendingRepairOffers = emptySet()
+                    outcome.freshStatus?.let { applyStatus(it) }
+                    error = peerAddressChangedMessage
+                }
+                is PeerAddressUpdateOutcome.Failed -> {
+                    addressEditor = outcome.draft
+                    addressEditorError = nodeFailureMessage(
+                        context,
+                        outcome.failure,
+                        R.string.error_node_action_failed,
+                    )
+                }
+            }
+            busy = false
+        }
+    }
 
     val localNetworkPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -188,6 +292,80 @@ internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier =
         }
     }
 
+    LaunchedEffect(status?.peers, addressEditor?.peerId) {
+        val editor = addressEditor ?: return@LaunchedEffect
+        val current = status?.peers?.firstOrNull { it.peerId == editor.peerId }
+        if (editor.afterStatus(current?.peerId, current?.address) == null) {
+            addressEditor = null
+            addressEditorError = null
+            error = peerAddressChangedMessage
+        }
+    }
+
+    addressEditor?.let { editor ->
+        AlertDialog(
+            onDismissRequest = {
+                if (!busy) {
+                    addressEditor = null
+                    addressEditorError = null
+                }
+            },
+            title = { Text(stringResource(R.string.folder_sync_update_address_title, editor.displayName)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(stringResource(R.string.folder_sync_update_address_detail))
+                    Text(stringResource(R.string.folder_sync_saved_address, editor.savedAddress))
+                    OutlinedTextField(
+                        value = editor.candidateAddress,
+                        onValueChange = { candidate ->
+                            val updated = editor.edit(candidate)
+                            if (updated == null) {
+                                addressEditorError = invalidPeerAddressMessage
+                            } else {
+                                addressEditor = updated
+                                addressEditorError = null
+                            }
+                        },
+                        label = { Text(stringResource(R.string.folder_sync_new_address)) },
+                        placeholder = { Text(stringResource(R.string.folder_sync_pair_address_example)) },
+                        singleLine = true,
+                        enabled = !busy,
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.None,
+                            autoCorrectEnabled = false,
+                            keyboardType = KeyboardType.Uri,
+                            imeAction = ImeAction.Done,
+                        ),
+                        keyboardActions = KeyboardActions(onDone = { submitAddressUpdate() }),
+                        modifier = Modifier.fillMaxWidth().testTag("folder-peer-address-input"),
+                    )
+                    addressEditorError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = ::submitAddressUpdate,
+                    enabled = !busy && editor.candidateAddress.isNotBlank(),
+                    modifier = Modifier.testTag("folder-peer-address-confirm"),
+                ) {
+                    Text(stringResource(
+                        if (editor.pendingRequest == null) R.string.folder_sync_verify_address
+                        else R.string.folder_sync_retry_address_update,
+                    ))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        addressEditor = null
+                        addressEditorError = null
+                    },
+                    enabled = !busy,
+                ) { Text(stringResource(R.string.action_cancel)) }
+            },
+        )
+    }
+
     LazyColumn(
         modifier.fillMaxSize().testTag("folder-sync-list"),
         contentPadding = PaddingValues(20.dp, 14.dp, 20.dp, 80.dp),
@@ -203,6 +381,7 @@ internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier =
             Text(stringResource(R.string.folder_sync_subtitle))
         }
         error?.let { message -> item { Text(message, color = MaterialTheme.colorScheme.error) } }
+        addressUpdateNotice?.let { message -> item { Text(message) } }
         if (!FolderSyncSpecialAccess.supported()) {
             item {
                 Card(Modifier.fillMaxWidth()) {
@@ -366,8 +545,32 @@ internal fun FolderSyncScreen(manager: EmbeddedNodeManager, modifier: Modifier =
                 } else {
                     item { Text(stringResource(R.string.folder_sync_choose_peer), fontWeight = FontWeight.SemiBold) }
                     items(snapshot.peers, key = { it.peerId }) { peer ->
-                        OutlinedButton(onClick = { selectedPeer = peer.peerId }, Modifier.fillMaxWidth()) {
-                            Text(if (selectedPeer == peer.peerId) "✓ ${peer.displayName}" else peer.displayName)
+                        Card(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                OutlinedButton(
+                                    onClick = { selectedPeer = peer.peerId },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    enabled = !busy,
+                                ) {
+                                    Text(if (selectedPeer == peer.peerId) "✓ ${peer.displayName}" else peer.displayName)
+                                }
+                                peer.address?.let { address ->
+                                    Text(stringResource(R.string.folder_sync_saved_address, address))
+                                    TextButton(
+                                        onClick = {
+                                            addressEditor = PeerAddressUpdateDraft(
+                                                peer.peerId,
+                                                peer.displayName,
+                                                address,
+                                            )
+                                            addressEditorError = null
+                                            addressUpdateNotice = null
+                                        },
+                                        enabled = !busy,
+                                        modifier = Modifier.testTag("folder-peer-address-${peer.peerId}"),
+                                    ) { Text(stringResource(R.string.folder_sync_update_address)) }
+                                }
+                            }
                         }
                     }
                     item {

@@ -1466,3 +1466,214 @@ changes; new address-entry UI is not part of this checkpoint.
 Acceptance remains **70%: 14 of 20**. The core is functional; complete daily-use
 readiness still requires native/device address and folder journeys, vulnerability
 fixes, final dependency review, upgrade/accessibility and performance acceptance.
+
+## Checkpoint 39: address-entry journeys and concrete security findings
+
+Base commit: `c4be5c504f458398eb13dbe052b7b5e6496aecf0`. Checkpoint 38 run
+`34299573349` tests merge `fdf06aa6bcd54c8ff89fae36dd2bb10e89cbfef7`.
+Rust/contracts, Android foundation, both Mac jobs, iOS Tier 2, dependency review
+and release versions pass. Android foundation executes JVM tests, lint and all
+debug/release/test package tasks successfully; the log does not report an
+aggregate executed JVM count. Its JNI objects measure 9,481,632 bytes on arm64
+and 11,159,376 on x86_64, below the reviewed 12,517,376-byte limit.
+The API 37 device run passes 75 non-journey instrumentation tests. Its separate
+setup phase executes one test and fails at `FolderSyncJourneyInstrumentedTest.kt:121`
+when `PackagedSyncEngine.load` reports the packaged engine unavailable. Installed
+native-directory, executable and exact-hash preflight passes before this failure.
+Permission-denied and restored journey phases never execute. Both CodeQL languages
+and repository policy pass. The aggregate software gate correctly fails.
+
+Both Docker architectures pass all nine complete packaged sync checks,
+including signed offline withdrawal, sender restart, durable acknowledgement,
+recipient restart, preserved copies and exact-resource cleanup. The amd64
+three-node backup/source-loss/corruption/repair/restore scenario also passes.
+Exact-image Grype report verification now works and identifies four findings
+on each image: one High and three Medium. The High is
+[GHSA-vp52-pcj8-j9qc / CVE-2026-84304](https://github.com/advisories/GHSA-vp52-pcj8-j9qc)
+in `google.golang.org/grpc v1.82.1`; the upstream advisory identifies 1.83.1 as
+patched. The reviewed Caddy consumer dependency update is integrated below;
+exact rebuilt-image rescans remain required. No scan exception is added.
+
+The exact amd64 image is
+`sha256:9e37ef11e0218daf46ebecb5bb6c866feed2a4007f2d9ee4667b82617a258a5f`,
+134,071,808 bytes against the 134,217,728-byte limit. The arm64 image is
+`sha256:49621c71ce6c23020b06da78f0840ba87bed594b87708c7f0eb87c7f94d54664`,
+125,030,400 bytes. Grype 0.117.0 uses database v6.1.9 built
+`2026-09-08T06:30:10Z`. The private-data and exact-image checks pass; the
+vulnerability finding itself fails both jobs. Bounded Medium diagnostics are
+now added alongside the existing High/Critical details so remaining findings
+can be reviewed from job logs. Each group has its own 30-entry bound; Medium
+rows cannot displace blocking rows. The original fatal threshold and all
+report/identity checks remain. Scanner fixtures and release guardrails pass.
+Manifest SHA-256:
+`54001cc0b978adb4eea3685a9350526d989753701a60fbd5184363fdb62882cb`.
+
+### Caddy selects the patched gRPC version exactly
+
+The five-file Caddy slice updates `google.golang.org/grpc` to 1.83.1 and the
+transitive versions required by its module graph. Docker inspects the built
+binary metadata and requires the exact version; a synthetic 1.83.10 value is
+rejected. Go 1.26.7 module verification, consumer compilation, vet, host
+Caddyfile validation, container contracts, release guardrails and source
+fingerprint mutation checks pass. `go test ./...` reports no consumer test
+files; it is not the upstream gRPC suite.
+
+Host and cross-built Linux binary metadata all select 1.83.1. With identical
+stripping and trimpath flags, Linux amd64 grows from 55,099,554 to 55,156,898
+bytes; arm64 remains 51,445,922 bytes. The amd64 image would retain 88,576 bytes
+of budget headroom if Caddy were the only change. The exact rebuilt image,
+including web changes, remains authoritative. No budget is raised.
+Source manifest SHA-256:
+`5f02ee1e58f91d0e0d394c576b01d1b19267e154f99824fde24ca09001c8f701`;
+patch `9e30c9cd5c5837651687d8f309d2a54c647059b986de31f66693562011b9dac8`.
+
+After retaining build metadata, graph diffs and review manifests, the owned Go
+module/build caches, temporary XDG roots, baseline copies and six binaries are
+removed: 67,088 files and 5,624,059,343 logical bytes. The private toolchain and
+other worktrees remain. Cleanup SHA-256:
+`e8f0f9ddc3b19616d64a558c3b5e2ae07cf2b712ed69d3ebc58bb1289596370b`.
+
+### A real browser updates a real paired device
+
+The four-file web slice adds saved device addresses to the Pair panel and a
+labelled inline editor. Polling preserves the current input and focus. The
+coordinator captures exact `peerId`, `expectedAddress` and `candidateAddress`
+values, preserves them after ambiguous failure, and requires current status
+to confirm the saved route. A typed changed-address conflict invalidates old
+status and requires another explicit confirmation after refresh. Separate
+access and request generations prevent logout/relogin or a delayed conflict
+response from applying obsolete status. A failed provider refresh cannot turn
+an already confirmed save into a claim that nothing changed. Input is disabled
+while its request runs, and reopening an already-open editor preserves edits.
+
+All 119 combined web tests pass. Deterministic asynchronous cases cover lost
+responses, same-device access reset at both await boundaries, stale conflict
+reload, unavailable fresh status and independent provider failure. A separate
+six-check Chrome fixture verifies labels, focus, polling preservation, exact
+request fields and truthful saved-address copy after provider refresh fails.
+Final source manifest SHA-256:
+`08685e874b82eb9ecbf04a4367e0f8ca9471d17480abb554e4a6f4487c4dd0ee`;
+patch `0ac2f6f4deff89bcfa2937a96dc6cd1481aad27a28dde861fdfa605b046c2f1c`.
+The integrated `app.js` keeps the checkpoint-38 error-copy header and has hash
+`3449fdd3c8cb856f04bbdcb98c1731c288eb1288e2e2cd2ebad7fc2c99a17fe8`.
+
+The final 17-check live proof uses the exact integrated web source and two
+production NodeRuntime instances. After signed pairing and folder consent,
+the second node stops and reopens with the same identity at new control and
+worker ports. Chrome alone submits the address update; the harness contains no
+address-refresh call. The real signed candidate probe, complete grant/pin
+comparison, durable provider update and full scan succeed. Exact file bytes
+converge both ways; a cold source reopen retains the new route. Revocation
+preserves both selected copies. Browser focus and the candidate survive a
+5.6-second real status poll, and success copy reports saved/checking without
+claiming transfer completion from the HTTP response.
+
+The first harness attempt encounters an expected transient 503 before browser
+execution; the fixture is corrected to wait with a bounded retry and a fresh
+run passes. During the successful browser run, the first immediate folder
+status load also meets reconciliation. A second explicit unlock after three
+seconds is a fixture action; this does not demonstrate token loss. Both first
+and final fixtures are removed, both runtimes and their workers/guardians stop,
+all owned ports are released and the browser tab closes. Scope is host
+loopback; no Atlas, Atmos, Docker or internet-route proof is claimed.
+Live manifest SHA-256:
+`6847b76083040b0baa68754957a15f4c613aff056e219a269b206dadf2acc112`;
+result `af9a72811d061fab964d6f9319f8063c6f56863e8526d8d6624bb4f139c58d9c`;
+browser observation `e6876d83cb27070ba343a02b3bacae5312ec93a9d7355e27dda8e26d59eddfc7`.
+
+### Android captures explicit retries and clears stale state
+
+The 11-file Android slice exposes optional saved addresses, keeps older-server
+omission compatible and validates present values. Its native Material dialog
+shows the saved address, accepts bounded numeric input and offers explicit
+verification, retry and cancellation. Invalid pasted control characters retain
+the previous input and display an error instead of throwing from the UI
+callback. IPv4-mapped IPv6 literals are accepted by the numeric precheck; the
+backend remains the canonical authority.
+
+A testable awaited coordinator keeps mutation, status reload and provider
+refresh serialized. Ambiguous failure retains the exact old expected address
+and candidate, including when status already exposes the candidate but the
+durable transition still needs its exact retry. An explicit conflict clears
+stale rows and requires a new selection after authoritative reload. A
+successful save with failed follow-up says refresh is needed and clears stale
+status. No address result asserts that the peer is connected, and no helper
+restart is introduced by the client.
+
+Eight JVM tests are added; XML, static contracts, exact-baseline patch checks
+and combined foundation validation pass. Local Gradle/JVM/lint/device execution
+is unavailable and is not claimed for these new files. This is separate from
+the successful checkpoint-38 Android foundation run. Manifest SHA-256:
+`ed20d1afa75003388b9e7e2c3eed26c16ea3372b21f3d0703a6e3c03a629db50`;
+patch `387cf3ced5a89737f6029954e2e062773039b19a51f793f710aa3b15f55a18c3`.
+
+### Android identifies the exact packaged-engine check on the next run
+
+The checkpoint-38 setup failure is generic; timing alone does not identify its
+cause. A two-file diagnostic slice keeps every extraction, manifest, ABI,
+canonical path, regular-file, mode, executable, no-follow, descriptor/inode,
+size, hash and private-runtime assertion in the same order. Only the debug
+instrumentation bridge prints a fixed nonsecret stage from that same loader.
+Manifest opening, bounded reading and parsing are distinct; helper checks
+identify the precise open, identity, mode, read or digest stage. Production
+still reports only absent, invalid or verified. No assertion is removed and
+no fix is claimed before the next actual API 37 result.
+
+Static stage contracts and diff checks pass. Kotlin compilation and the real
+device journey remain required. Manifest SHA-256:
+`cce9b6fc22312671cd998fee57d9487ef4c714db2b02d472c2e106321f02006a`;
+patch `7464b8703c17495da627504b1a7d62b6db79c9dc821810e9db69b49fc133aaf2`.
+
+### macOS uses a native address sheet with precise retry state
+
+The seven-file Mac slice presents every saved peer in Devices, including a
+paired peer without a storage-provider row. A native grouped Form exposes the
+current address, a focused labelled field, adjacent trailing Cancel and Verify
+and Save actions, and explicit failure/retry state. Saving is serialized with
+folder mutations. Lost responses retain the exact request even if status
+already exposes the candidate; only an acknowledged idempotent POST completes
+the save. A changed-address conflict requires authoritative reload and another
+confirmation. If reload fails, the captured stale address cannot be submitted.
+Provider refresh failure retains accepted/reload-needed state and clears old
+reachability. The editor never declares a peer connected from an address save.
+
+All 171 Swift tests in six suites pass; the combined production Shared and Mac
+sources compile with Swift 6. The exact final ad-hoc sandbox fixture opens a
+provider-free peer, exposes distinct accessible controls, sends the exact three
+request keys, dismisses after the acknowledged response and renders the new
+address with Status unknown. Its HTTP server is synthetic: this is native UI
+and client execution, not a NodeRuntime or signed-peer transfer proof. The CUA
+Escape key attempt is unsupported, so no executed Escape or spoken VoiceOver
+claim is made. Source manifest SHA-256:
+`c34d0f81c8d51fa4f44505c173308b7faae69c86b07b8afcf6138c095f2d5299`;
+patch `03428687915b1224b9692dbcc4d46200e17a01b3e4758f1ec6b190b5b2582398`;
+result `f9e8d5374673f8bb82f2d4d13e896cae72394bf4ce7e4a405cbab3076648fa07`.
+
+The owned app and listener stop. Completed Swift caches and combined-source
+copies account for 1,416,589,615 removed logical bytes. A clean extraction of
+the retained local signed fixture archive passes strict codesign verification;
+LaunchServices added FinderInfo to the launched directory, so the directory's
+later metadata is not used to claim an unchanged signature check. Archive
+SHA-256 `2ecc34fbcbbb0c9d35e49d9bf585907d85eb98bb3fd85a92e4fe71e688f89b70`;
+cleanup `44f6b90b80d64fe3785d6ec1356a37896ab5eb53a02bad077f98cb0d8095f2dc`.
+
+### Completed nested caches are removed
+
+A second cache audit confirms with owning agents that four old nested Cargo
+targets and two old Swift build directories are unused. It verifies cache
+markers, no tracked files, no command-line process references and no visible
+open descriptors before removing 7,521,910,925 logical bytes across 23,505
+items. Sibling source, logs, manifests and active build resources remain. This
+is a logical-size count, not physical APFS space reclaimed. Receipt SHA-256:
+`d2936835da873c60110f6c6dca4743911a2bfbac2b620faa83037e0e286b793c`.
+The retained Mac test Keychain entry and matching signed binary are unchanged.
+An Atmos tool-availability read finds no Java or Android SDK and changes no
+files or services.
+
+The final combined current-worktree foundation gate passes after all 33 files
+are integrated. Its log SHA-256 is
+`845ec2671418d5764d692464939ee9b2656e088a25e66bcaae24c655792387f6`.
+
+Acceptance remains **70%: 14 of 20**. Native address acceptance, the complete
+Android device journey, clean security scans, final dependencies,
+upgrade/accessibility and performance remain open.
