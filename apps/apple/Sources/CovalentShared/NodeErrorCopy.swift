@@ -362,6 +362,30 @@ public enum NodeAPIErrorCopy {
         "invalid_authorized_root": (
             "The folder you chose is no longer available to Covalent. Choose it again.", .chooseFolderAgain
         ),
+        "folder_sync_unavailable": (
+            "Folder sync is unavailable on this device. Check that folder sync is installed and the shared folder is available, then try again.",
+            .retry
+        ),
+        "folder_sync_busy": (
+            "Another folder change is still in progress. Try again shortly.", .retry
+        ),
+        "folder_sync_needs_attention": (
+            "Folder sync needs attention before it can continue. Check the folder status, then try again.",
+            .retry
+        ),
+        "invalid_peer_address": (
+            "Enter the device address as a numeric IP address and port, such as 192.168.1.20:8787, then try again.",
+            .none
+        ),
+        "peer_address_changed": (
+            "The saved device address changed before this update finished. Refresh the saved device, then try again.",
+            .retry
+        ),
+        "peer_address_unreachable": (
+            "Covalent could not authenticate the trusted device at the new address. "
+                + "Check the address and network connection, then try again.",
+            .retry
+        ),
 
         // Restore
         "unsafe_restore_path": (

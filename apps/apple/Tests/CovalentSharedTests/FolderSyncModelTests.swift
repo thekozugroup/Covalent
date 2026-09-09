@@ -538,6 +538,302 @@ private final class FolderRepairResultBox<Value: Sendable>: @unchecked Sendable 
 
 private enum FolderGrantTestError: Error { case restartFailed }
 
+@Test @MainActor func folderOfferRetriesTypedBusyInPlaceWithoutRestartingAgain() async throws {
+    let fixture = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let source = fixture.appending(path: "source")
+    try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+    let grant = try SelectedDirectoryGrant.capture(url: source, purpose: .folderSync)
+    let offer = UUID()
+    let sequence = RequestSequence()
+    let bodies = FolderRepairRequestRoots()
+    let recorder = RequestRecorder(removeAfterRequest: false) { request in
+        switch sequence.next() {
+        case 0:
+            #expect(request.url?.path == "/api/v1/sync/folders")
+            bodies.append(String(decoding: try #require(folderRepairRequestBody(request)), as: UTF8.self))
+            return TestResponse.response(
+                request,
+                status: 503,
+                json: #"{"protocolVersion":1,"code":"folder_sync_busy","message":"scan","retryable":true}"#
+            )
+        case 1:
+            #expect(request.url?.path == "/api/v1/sync/folders")
+            bodies.append(String(decoding: try #require(folderRepairRequestBody(request)), as: UTF8.self))
+            return TestResponse.response(
+                request,
+                status: 200,
+                json: "{\"offerId\":\"\(offer.uuidString)\",\"lifecycle\":\"running\",\"issue\":null}"
+            )
+        case 2:
+            return TestResponse.response(
+                request,
+                status: 200,
+                json: #"{"availability":"available","lifecycle":"running","issue":null,"healthFreshness":"fresh","peers":[],"shares":[],"folders":[]}"#
+            )
+        default:
+            Issue.record("Unexpected in-place offer retry")
+            return TestResponse.response(request, status: 500, json: "{}")
+        }
+    }
+    let (model, bootstrapper) = try folderMutationModel(
+        recorder: recorder, persistence: AppleAppPersistence(directoryURL: fixture.appending(path: "state")))
+
+    #expect(await model.offerFolder(peerId: UUID(), folderId: UUID(), label: "Plans", grant: grant))
+    #expect(sequence.count == 3)
+    #expect(bodies.values.count == 2)
+    #expect(bodies.values[0] == bodies.values[1])
+    #expect(bootstrapper.restartCalls == 1)
+}
+
+@Test @MainActor func folderAcceptRetriesTypedBusyInPlaceWithoutRestartingAgain() async throws {
+    let fixture = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let destination = fixture.appending(path: "destination")
+    try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+    let grant = try SelectedDirectoryGrant.capture(url: destination, purpose: .folderSync)
+    let offer = UUID()
+    let folder = UUID()
+    let peer = UUID()
+    let sequence = RequestSequence()
+    let bodies = FolderRepairRequestRoots()
+    let recorder = RequestRecorder(removeAfterRequest: false) { request in
+        switch sequence.next() {
+        case 0:
+            #expect(request.url?.path == "/api/v1/sync/accept")
+            bodies.append(String(decoding: try #require(folderRepairRequestBody(request)), as: UTF8.self))
+            return TestResponse.response(
+                request,
+                status: 503,
+                json: #"{"protocolVersion":1,"code":"folder_sync_busy","message":"scan","retryable":true}"#
+            )
+        case 1:
+            #expect(request.url?.path == "/api/v1/sync/accept")
+            bodies.append(String(decoding: try #require(folderRepairRequestBody(request)), as: UTF8.self))
+            return TestResponse.response(request, status: 200, json: mutationJSON(offer: offer))
+        case 2:
+            return TestResponse.response(
+                request,
+                status: 200,
+                json: folderStatusJSON(offer: offer, folder: folder, peer: peer, issue: nil)
+            )
+        default:
+            Issue.record("Unexpected in-place accept retry")
+            return TestResponse.response(request, status: 500, json: "{}")
+        }
+    }
+    let (model, bootstrapper) = try folderMutationModel(
+        recorder: recorder, persistence: AppleAppPersistence(directoryURL: fixture.appending(path: "state")))
+
+    #expect(await model.acceptFolder(offerId: offer, grant: grant))
+    #expect(sequence.count == 3)
+    #expect(bodies.values.count == 2)
+    #expect(bodies.values[0] == bodies.values[1])
+    #expect(bootstrapper.restartCalls == 1)
+}
+
+@Test @MainActor func otherRetryableOfferFailureInvalidatesCachedLaunchBeforeAlertRetry() async throws {
+    let fixture = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let source = fixture.appending(path: "source")
+    try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+    let grant = try SelectedDirectoryGrant.capture(url: source, purpose: .folderSync)
+    let peer = UUID()
+    let folder = UUID()
+    let offer = UUID()
+    let sequence = RequestSequence()
+    let recorder = RequestRecorder(removeAfterRequest: false) { request in
+        switch sequence.next() {
+        case 0:
+            return TestResponse.response(
+                request,
+                status: 409,
+                json: #"{"protocolVersion":1,"code":"folder_offer_rejected","message":"retry manually","retryable":true}"#
+            )
+        case 1:
+            return TestResponse.response(
+                request,
+                status: 200,
+                json: "{\"offerId\":\"\(offer.uuidString)\",\"lifecycle\":\"running\",\"issue\":null}"
+            )
+        case 2:
+            return TestResponse.response(
+                request,
+                status: 200,
+                json: #"{"availability":"available","lifecycle":"running","issue":null,"healthFreshness":"fresh","peers":[],"shares":[],"folders":[]}"#
+            )
+        default:
+            Issue.record("Unexpected explicit offer retry")
+            return TestResponse.response(request, status: 500, json: "{}")
+        }
+    }
+    let (model, bootstrapper) = try folderMutationModel(
+        recorder: recorder, persistence: AppleAppPersistence(directoryURL: fixture.appending(path: "state")))
+
+    #expect(!(await model.offerFolder(peerId: peer, folderId: folder, label: "Plans", grant: grant)))
+    #expect(sequence.count == 1)
+    let retry = try #require(model.takeAlertRecovery())
+    await retry()
+    #expect(sequence.count == 3)
+    #expect(bootstrapper.restartCalls == 2)
+}
+
+@Test @MainActor func otherRetryableAcceptFailureInvalidatesCachedLaunchBeforeAlertRetry() async throws {
+    let fixture = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let destination = fixture.appending(path: "destination")
+    try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+    let grant = try SelectedDirectoryGrant.capture(url: destination, purpose: .folderSync)
+    let offer = UUID()
+    let folder = UUID()
+    let peer = UUID()
+    let sequence = RequestSequence()
+    let recorder = RequestRecorder(removeAfterRequest: false) { request in
+        switch sequence.next() {
+        case 0:
+            return TestResponse.response(
+                request,
+                status: 503,
+                json: #"{"protocolVersion":1,"code":"folder_topology_busy","message":"retry manually","retryable":true}"#
+            )
+        case 1:
+            return TestResponse.response(request, status: 200, json: mutationJSON(offer: offer))
+        case 2:
+            return TestResponse.response(
+                request,
+                status: 200,
+                json: folderStatusJSON(offer: offer, folder: folder, peer: peer, issue: nil)
+            )
+        default:
+            Issue.record("Unexpected explicit accept retry")
+            return TestResponse.response(request, status: 500, json: "{}")
+        }
+    }
+    let (model, bootstrapper) = try folderMutationModel(
+        recorder: recorder, persistence: AppleAppPersistence(directoryURL: fixture.appending(path: "state")))
+
+    #expect(!(await model.acceptFolder(offerId: offer, grant: grant)))
+    #expect(sequence.count == 1)
+    let retry = try #require(model.takeAlertRecovery())
+    await retry()
+    #expect(sequence.count == 3)
+    #expect(bootstrapper.restartCalls == 2)
+}
+
+@Test @MainActor func identicalGrantRetryRevalidatesLiveFolderServiceBeforeSkippingRestart() async throws {
+    let fixture = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let source = fixture.appending(path: "source")
+    try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+    let grant = try SelectedDirectoryGrant.capture(url: source, purpose: .folderSync)
+    let offer = UUID()
+    let peer = UUID()
+    let folder = UUID()
+    let sequence = RequestSequence()
+    let recorder = RequestRecorder(removeAfterRequest: false) { request in
+        switch sequence.next() {
+        case 0, 3:
+            #expect(request.url?.path == "/api/v1/sync/folders")
+            return TestResponse.response(
+                request,
+                status: 200,
+                json: "{\"offerId\":\"\(offer.uuidString)\",\"lifecycle\":\"running\",\"issue\":null}"
+            )
+        case 1, 2, 4:
+            #expect(request.url?.path == "/api/v1/sync/status")
+            return TestResponse.response(
+                request,
+                status: 200,
+                json: #"{"availability":"available","lifecycle":"running","issue":null,"healthFreshness":"fresh","peers":[],"shares":[],"folders":[]}"#
+            )
+        default:
+            Issue.record("Unexpected identical-grant retry request")
+            return TestResponse.response(request, status: 500, json: "{}")
+        }
+    }
+    let (model, bootstrapper) = try folderMutationModel(
+        recorder: recorder, persistence: AppleAppPersistence(directoryURL: fixture.appending(path: "state")))
+
+    #expect(await model.offerFolder(peerId: peer, folderId: folder, label: "Plans", grant: grant))
+    #expect(await model.offerFolder(peerId: peer, folderId: folder, label: "Plans", grant: grant))
+    #expect(sequence.count == 5)
+    #expect(bootstrapper.restartCalls == 1)
+}
+
+@Test @MainActor func unavailableFolderServiceInvalidatesIdenticalGrantLaunchAndRestarts() async throws {
+    let fixture = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let source = fixture.appending(path: "source")
+    try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+    let grant = try SelectedDirectoryGrant.capture(url: source, purpose: .folderSync)
+    let offer = UUID()
+    let peer = UUID()
+    let folder = UUID()
+    let sequence = RequestSequence()
+    let recorder = RequestRecorder(removeAfterRequest: false) { request in
+        switch sequence.next() {
+        case 0, 3:
+            #expect(request.url?.path == "/api/v1/sync/folders")
+            return TestResponse.response(
+                request,
+                status: 200,
+                json: "{\"offerId\":\"\(offer.uuidString)\",\"lifecycle\":\"running\",\"issue\":null}"
+            )
+        case 1, 4:
+            #expect(request.url?.path == "/api/v1/sync/status")
+            return TestResponse.response(
+                request,
+                status: 200,
+                json: #"{"availability":"available","lifecycle":"running","issue":null,"healthFreshness":"fresh","peers":[],"shares":[],"folders":[]}"#
+            )
+        case 2:
+            #expect(request.url?.path == "/api/v1/sync/status")
+            return TestResponse.response(
+                request,
+                status: 200,
+                json: #"{"availability":"unavailable","lifecycle":"stopped","issue":"folderAccess","healthFreshness":"unknown","connectionFreshness":"unknown","peers":[],"shares":[],"folders":[]}"#
+            )
+        default:
+            Issue.record("Unexpected unavailable-service retry request")
+            return TestResponse.response(request, status: 500, json: "{}")
+        }
+    }
+    let (model, bootstrapper) = try folderMutationModel(
+        recorder: recorder, persistence: AppleAppPersistence(directoryURL: fixture.appending(path: "state")))
+
+    #expect(await model.offerFolder(peerId: peer, folderId: folder, label: "Plans", grant: grant))
+    #expect(await model.offerFolder(peerId: peer, folderId: folder, label: "Plans", grant: grant))
+    #expect(sequence.count == 5)
+    #expect(bootstrapper.restartCalls == 2)
+}
+
+@MainActor
+private func folderMutationModel(
+    recorder: RequestRecorder,
+    persistence: AppleAppPersistence
+) throws -> (CovalentAppModel, FolderGrantBootstrapper) {
+    let port = RecordingURLProtocol.recorder.install(recorder)
+    let configuration = try NodeConnectionConfiguration(
+        baseURL: URL(string: "http://127.0.0.1:\(port)")!,
+        apiToken: String(repeating: "m", count: 32)
+    )
+    let sessionConfiguration = URLSessionConfiguration.ephemeral
+    sessionConfiguration.protocolClasses = [RecordingURLProtocol.self]
+    let bootstrapper = FolderGrantBootstrapper(configuration: configuration)
+    return (
+        CovalentAppModel(
+            persistence: persistence,
+            client: NodeClient(
+                configuration: configuration,
+                session: URLSession(configuration: sessionConfiguration)
+            ),
+            configuration: configuration,
+            localNodeBootstrapper: bootstrapper
+        ),
+        bootstrapper
+    )
+}
+
 @Test @MainActor func folderGrantIsNotRetainedInMemoryWhenDurableSaveFails() async throws {
     let source = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
     defer { try? FileManager.default.removeItem(at: source) }

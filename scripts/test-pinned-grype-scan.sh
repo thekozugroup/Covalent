@@ -47,6 +47,8 @@ case "${MOCK_MODE:-success}" in
   missing) exit 17 ;;
 esac
 image_id=${target#docker:}
+reported_input=$image_id
+[ "${MOCK_MODE:-success}" != wrong-input ] || reported_input=sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
 reported_id=$image_id
 [ "${MOCK_MODE:-success}" != wrong-image ] || reported_id=sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 ignored='[]'
@@ -54,7 +56,7 @@ ignored='[]'
 matches='[]'
 [ "${MOCK_MODE:-success}" != finding ] || matches='[{"vulnerability":{"id":"CVE-2099-0001","severity":"Critical","fix":{"versions":[]}},"artifact":{"name":"fixture-package","version":"1.0","type":"apk"}}]'
 cat >"$report" <<EOF
-{"matches":$matches,"ignoredMatches":$ignored,"source":{"type":"image","target":{"userInput":"$target","imageID":"$reported_id"}},"descriptor":{"name":"grype","version":"0.117.0","db":{"built":"fixture"}}}
+{"matches":$matches,"ignoredMatches":$ignored,"source":{"type":"image","target":{"userInput":"$reported_input","imageID":"$reported_id"}},"descriptor":{"name":"grype","version":"0.117.0","db":{"built":"fixture"}}}
 EOF
 [ "${MOCK_MODE:-success}" != finding ] || exit 2
 exit 0
@@ -123,7 +125,7 @@ grep -q 'id=CVE-2099-0001 package=fixture-package version=1.0 type=apk fixed=non
 
 # Independent disk/resource failures remain fatal, but a valid report from a
 # policy-failing scan is validated and summarized before the aggregate exit.
-if run_scan finding "$fixture/disk-excess.json" 2097153 \
+if run_scan finding "$fixture/disk-excess.json" 3145729 \
   >"$fixture/disk-excess.log" 2>"$fixture/disk-excess.err"; then
   echo "disk excess and a high-severity finding did not fail" >&2
   exit 1
@@ -134,10 +136,17 @@ fi
 grep -q 'severities=Critical:1' "$fixture/disk-excess.log"
 grep -q 'id=CVE-2099-0001 package=fixture-package version=1.0 type=apk fixed=none' \
   "$fixture/disk-excess.log"
-grep -q 'private Grype data exceeded the disk bound (2147484672 > 2147483648 bytes)' \
+grep -q 'private Grype data exceeded the disk bound (3221226496 > 3221225472 bytes)' \
   "$fixture/disk-excess.err"
 grep -q 'high or critical vulnerability found' "$fixture/disk-excess.err"
 [ -f "$fixture/disk-excess.json" ]
+
+# Syft preserves the selector-free digest. A different recorded input must
+# fail even if the resolved imageID happens to match the requested image.
+if run_scan wrong-input "$fixture/wrong-input.json"; then
+  echo "wrong image input was accepted" >&2
+  exit 1
+fi
 
 if run_scan wrong-image "$fixture/wrong-image.json"; then
   echo "wrong image binding was accepted" >&2

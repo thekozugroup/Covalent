@@ -211,6 +211,10 @@ public final class CovalentAppModel: ObservableObject {
     /// A failed helper restart must retry releasing retired sandbox scopes even
     /// after their bookmarks have already been removed from persistence.
     private var folderSyncScopeRefreshRequired = false
+    /// The last folder-capability launch request that subsequently produced
+    /// authenticated folder-service evidence. Revalidate it before skipping a
+    /// restart so a dead helper or backup-only fallback cannot strand access.
+    private var folderSyncLaunchState: FolderSyncLaunchState?
     @Published public private(set) var backups: [BackupSummary] = []
     @Published public private(set) var discoveryCandidates: [DiscoveryCandidate] = []
     @Published public var backupDraftBackupId: UUID?
@@ -501,6 +505,7 @@ public final class CovalentAppModel: ObservableObject {
             if let localNodeBootstrapper {
                 try await localNodeBootstrapper.prepareFolderSyncDirectoryGrants(directoryGrants)
                 let managedConfiguration = try await localNodeBootstrapper.start(mode: mode)
+                folderSyncLaunchState = nil
                 if managedConfiguration != configuration {
                     configuration = managedConfiguration
                     client = NodeClient(configuration: managedConfiguration)
@@ -525,19 +530,30 @@ public final class CovalentAppModel: ObservableObject {
             providers = try await providerConnections
             backups = try await backupSummaries
             await refreshFolders()
+            if folderSyncStatus?.availability == "available" {
+                folderSyncLaunchState = folderSyncLaunchState(
+                  grants: directoryGrants,
+                  mode: .normal
+                )
+            } else {
+                folderSyncLaunchState = nil
+            }
             discoveryCandidates = (try? await client.discoveryCandidates()) ?? []
             lastRefreshedAt = Date()
             phase = .ready
             needsFirstLaunchChoice = false
             return true
         } catch NodeClientError.missingToken {
+            folderSyncLaunchState = nil
             phase = .needsAuthorization
             return false
         } catch NodeClientError.unauthorized {
+            folderSyncLaunchState = nil
             phase = .needsAuthorization
             report(NodeClientError.unauthorized, title: "Reconnect this app")
             return false
         } catch {
+            folderSyncLaunchState = nil
             phase = .offline
             report(
                 error,
@@ -569,9 +585,19 @@ public final class CovalentAppModel: ObservableObject {
       defer { folderSyncLoading = false }
 
       do {
-        folderSyncStatus = try await reconciledFolderStatus()
+        let snapshot = try await reconciledFolderStatus()
+        folderSyncStatus = snapshot
+        if snapshot.availability == "available", localNodeBootstrapper != nil {
+          folderSyncLaunchState = folderSyncLaunchState(
+            grants: directoryGrants,
+            mode: .normal
+          )
+        } else {
+          folderSyncLaunchState = nil
+        }
         folderSyncError = nil
       } catch {
+        folderSyncLaunchState = nil
         folderSyncStatus = nil
         folderSyncError = "Folder sync status is unavailable. Try again."
       }
@@ -582,7 +608,7 @@ public final class CovalentAppModel: ObservableObject {
       // Fetch again afterward so the UI never publishes pre-restart health.
       for _ in 0...128 {
         if folderSyncScopeRefreshRequired {
-          try await restartForFolderSyncDirectoryGrants()
+          try await restartForFolderSyncDirectoryGrants(force: true)
           folderSyncScopeRefreshRequired = false
         }
         let snapshot = try await client.folderSyncStatus()
@@ -633,22 +659,32 @@ public final class CovalentAppModel: ObservableObject {
         try await restartForFolderSyncDirectoryGrants()
         let root = try savedGrant.resolve()
         let client = self.client
+        let request = FolderOfferRequest(
+          peerId: peerId,
+          folderId: folderId,
+          label: label,
+          selectedRoot: try await root.withCoordinatedRead { $0.path }
+        )
         let mutation = try await root.withCoordinatedRead { url in
-          try await client.offerFolder(
-            FolderOfferRequest(
-              peerId: peerId,
-              folderId: folderId,
-              label: label,
-              selectedRoot: url.path
-            )
-          )
+          guard url.path == request.selectedRoot else { throw NodeClientError.invalidResponse }
+          return try await Self.retryFolderSyncBusy {
+            try await client.offerFolder(request)
+          }
         }
         guard let offerId = mutation.offerId else { throw NodeClientError.invalidResponse }
         try await bindFolderSyncGrant(savedGrant, to: offerId)
         await refreshFoldersDuringMutation()
         return true
       } catch {
-        report(error, title: "Folder couldn't be shared")
+        invalidateFolderSyncLaunchState(unlessInitialScanBusy: error)
+        report(error, title: "Folder couldn't be shared") { [weak self] in
+          _ = await self?.offerFolder(
+            peerId: peerId,
+            folderId: folderId,
+            label: label,
+            grant: grant
+          )
+        }
         return false
       }
     }
@@ -664,15 +700,23 @@ public final class CovalentAppModel: ObservableObject {
         try await restartForFolderSyncDirectoryGrants()
         let root = try savedGrant.resolve()
         let client = self.client
+        let request = FolderAcceptRequest(
+          offerId: offerId,
+          selectedRoot: try await root.withCoordinatedRead { $0.path }
+        )
         _ = try await root.withCoordinatedWrite { url in
-          try await client.acceptFolder(
-            FolderAcceptRequest(offerId: offerId, selectedRoot: url.path)
-          )
+          guard url.path == request.selectedRoot else { throw NodeClientError.invalidResponse }
+          return try await Self.retryFolderSyncBusy {
+            try await client.acceptFolder(request)
+          }
         }
         await refreshFoldersDuringMutation()
         return true
       } catch {
-        report(error, title: "Folder couldn't be accepted")
+        invalidateFolderSyncLaunchState(unlessInitialScanBusy: error)
+        report(error, title: "Folder couldn't be accepted") { [weak self] in
+          _ = await self?.acceptFolder(offerId: offerId, grant: grant)
+        }
         return false
       }
     }
@@ -808,7 +852,7 @@ public final class CovalentAppModel: ObservableObject {
           directoryGrants = retained
           folderSyncScopeRefreshRequired = true
           folderSyncStatus = nil
-          try await restartForFolderSyncDirectoryGrants()
+          try await restartForFolderSyncDirectoryGrants(force: true)
           folderSyncScopeRefreshRequired = false
         }
         try await removePendingFolderRepair(offerId: offerId)
@@ -1031,14 +1075,73 @@ public final class CovalentAppModel: ObservableObject {
       return grant
     }
 
-    private func restartForFolderSyncDirectoryGrants() async throws {
+    private struct FolderSyncAccessFingerprint: Equatable {
+      let id: UUID
+      let bookmarkData: Data
+    }
+
+    private enum FolderSyncLaunchMode: Equatable {
+      case normal
+      case pendingRepair
+    }
+
+    private struct FolderSyncLaunchState: Equatable {
+      let mode: FolderSyncLaunchMode
+      let grants: [FolderSyncAccessFingerprint]
+    }
+
+    private func folderSyncLaunchState(
+      grants: [SelectedDirectoryGrant],
+      mode: FolderSyncLaunchMode
+    ) -> FolderSyncLaunchState {
+      FolderSyncLaunchState(
+        mode: mode,
+        grants: grants.filter { $0.purpose == .folderSync }
+          .map { FolderSyncAccessFingerprint(id: $0.id, bookmarkData: $0.bookmarkData) }
+          .sorted { $0.id.uuidString < $1.id.uuidString }
+      )
+    }
+
+    private func restartForFolderSyncDirectoryGrants(force: Bool = false) async throws {
       guard let localNodeBootstrapper else { return }
+      let desired = folderSyncLaunchState(grants: directoryGrants, mode: .normal)
+      if !force, await revalidatedFolderSyncLaunchState(desired) { return }
       let replacement = try await localNodeBootstrapper.restartForFolderSyncDirectoryGrants(
         directoryGrants)
+      folderSyncLaunchState = desired
       if replacement != configuration {
         configuration = replacement
         client = NodeClient(configuration: replacement)
       }
+    }
+
+    private func revalidatedFolderSyncLaunchState(_ desired: FolderSyncLaunchState) async -> Bool {
+      guard folderSyncLaunchState == desired else { return false }
+      do {
+        let snapshot = try await client.folderSyncStatus()
+        guard snapshot.availability == "available" else {
+          folderSyncLaunchState = nil
+          return false
+        }
+        return true
+      } catch let error as NodeClientError where Self.isInitialScanBusy(error) {
+        // This authenticated response proves that the existing helper is live
+        // and has started the safety scan for the requested capability set.
+        return true
+      } catch {
+        folderSyncLaunchState = nil
+        return false
+      }
+    }
+
+    private func invalidateFolderSyncLaunchState(unlessInitialScanBusy error: Error) {
+      guard !Self.isInitialScanBusy(error) else { return }
+      folderSyncLaunchState = nil
+    }
+
+    private nonisolated static func isInitialScanBusy(_ error: Error) -> Bool {
+      guard case let NodeClientError.api(_, code, _, retryable) = error else { return false }
+      return code == "folder_sync_busy" && retryable
     }
 
     private func restartForPendingFolderRepairDirectoryGrants(
@@ -1047,9 +1150,32 @@ public final class CovalentAppModel: ObservableObject {
       guard let localNodeBootstrapper else { return }
       let replacement = try await localNodeBootstrapper
         .restartForPendingFolderRepairDirectoryGrants(grants)
+      folderSyncLaunchState = folderSyncLaunchState(grants: grants, mode: .pendingRepair)
       if replacement != configuration {
         configuration = replacement
         client = NodeClient(configuration: replacement)
+      }
+    }
+
+    /// The initial scan deliberately rejects mutations. Retry only that typed,
+    /// pre-mutation response against the same request and running helper. A
+    /// later user retry reuses the installed launch state instead of creating
+    /// another scan gate.
+    private nonisolated static func retryFolderSyncBusy<Value: Sendable>(
+      _ operation: @escaping @Sendable () async throws -> Value
+    ) async throws -> Value {
+      let clock = ContinuousClock()
+      let deadline = clock.now.advanced(by: .seconds(30))
+      while true {
+        try Task.checkCancellation()
+        do {
+          return try await operation()
+        } catch let error as NodeClientError {
+          guard isInitialScanBusy(error),
+                clock.now < deadline
+          else { throw error }
+          try await Task.sleep(for: .milliseconds(250))
+        }
       }
     }
 

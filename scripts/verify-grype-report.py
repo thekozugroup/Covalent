@@ -119,7 +119,12 @@ def validate(path: Path, expected_image_id: str) -> dict[str, object]:
     target = source.get("target") if isinstance(source, dict) else None
     if not isinstance(source, dict) or source.get("type") != "image" or not isinstance(target, dict):
         fail("Grype report source is not an image")
-    if target.get("userInput") != f"docker:{expected_image_id}":
+    # Grype v0.117.0 strips the explicit docker: source selector before it
+    # passes the reference to Syft, which preserves that reference as userInput.
+    # The source selector is enforced by our invocation; both recorded values
+    # must still be the exact immutable Docker image ID.
+    # https://github.com/anchore/grype/blob/v0.117.0/grype/pkg/syft_provider.go
+    if target.get("userInput") != expected_image_id:
         fail("Grype report input does not match the exact requested image ID")
     if target.get("imageID") != expected_image_id:
         fail("Grype report resolved a different image ID")

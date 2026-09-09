@@ -234,13 +234,27 @@ paths:
         "200":
           $ref: "#/components/responses/FolderSyncMutation"
         "400":
-          $ref: "#/components/responses/BadRequest"
+          description: The candidate is not a canonical numeric device address.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
         "502":
-          $ref: "#/components/responses/Conflict"
+          description: The retained device could not be authenticated at the candidate address.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "503":
+          description: Folder sync is busy or unavailable; the error says whether retry is possible.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /api/v1/discovery:
     get:
       summary: List untrusted discovery candidates
@@ -1716,13 +1730,21 @@ components:
     FolderSharingPeer:
       type: object
       additionalProperties: false
-      required: [peerId, displayName]
+      required: [peerId, displayName, address]
       properties:
         peerId:
           type: string
           format: uuid
         displayName:
           type: string
+        address:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >-
+            Exact current authenticated numeric peer-control endpoint retained
+            with this confirmed peer's transport pin. It is not inferred from
+            discovery and does not describe folder convergence.
     FolderShareSummary:
       type: object
       additionalProperties: false

@@ -51,23 +51,31 @@
 #      8,222,272 (-146,976, -1.8%) and x86_64 9,942,680 -> 9,790,600
 #      (-152,080, -1.5%).
 #
-# The numbers below are measured *after* both reductions.
+# The numbers below were measured *after* both reductions.
 #
 #   toolchain: rustc 1.97.1, Android NDK 27.1.12297006, cargo-ndk 4.1.2
 #   arm64-v8a  8,222,272 bytes
 #   x86_64     9,790,600 bytes   <- worst ABI, the budget is derived from this
 #
-# Ceiling = worst measured ABI + 12%, rounded up to the next 64 KiB. It was
-# derived when the worst ABI was 9,942,680:
-#   9,942,680 * 1.12 = 11,135,802 -> ceil to 64 KiB -> 170 * 65536 = 11,141,120
+# Checkpoint 37 added the authenticated peer-address refresh and durable folder
+# sharing paths to the runtime linked into JNI. Both hosted Android jobs built
+# the same release objects before the old ceiling stopped them (run
+# 34297173842, jobs 102296207486 and 102296207553):
 #
-# The env-filter trim moved the worst ABI down to 9,790,600 and the ceiling was
-# deliberately left where it is, so the margin today is 11,141,120 - 9,790,600 =
-# 1,350,520 bytes, or 13.8%. Re-deriving the ceiling downwards after every
-# saving would ratchet it onto whatever the last build happened to measure and
-# make an ordinary, deliberate increase fail; 12% is the minimum margin this
-# gate is willing to leave, not a figure to re-round to. A saving widens the
-# margin, a regression still has to be measured and argued for.
+#   arm64-v8a  9,481,568 bytes
+#   x86_64    11,154,960 bytes   <- worst ABI, the ceiling is derived from this
+#
+# This is an intended production capability, not code-generation drift or
+# debug information. The size-focused node/JNI profiles, fat LTO, one codegen
+# unit, packed relocations, stripping and export audit all remain enabled.
+# Rebase the finite ceiling on the measured worst ABI plus the same 12% margin,
+# rounded up to the next 64 KiB:
+#
+#   11,154,960 * 1.12 = 12,493,555.2
+#   ceil to 64 KiB = 191 * 65,536 = 12,517,376
+#
+# The resulting headroom is 1,362,416 bytes (12.2%) over the measured x86_64
+# object. Future growth must still be measured and argued for.
 #
 # Why 12% and not a rounder, more comfortable number: the thin -> fat LTO swing
 # measured on this exact artefact was 9.2-9.6%. That is a real, observed bound
@@ -83,7 +91,7 @@
 # So there is also a floor, at 4 MiB: 5.6x above the broken artefact and 1.96x
 # below the smallest real one, which is wide enough that no legitimate build
 # lands in between by accident.
-COVALENT_JNI_MAX_BYTES=11141120
+COVALENT_JNI_MAX_BYTES=12517376
 COVALENT_JNI_MIN_BYTES=4194304
 
 # Official Syncthing v2.1.3 Android helpers measured by the isolated API-37
@@ -130,7 +138,7 @@ COVALENT_ENGINE_GUARDIAN_MIN_BYTES=8192
 # + 2 * COVALENT_SYNC_ENGINE_MAX_BYTES
 # + 2 * COVALENT_ENGINE_GUARDIAN_MAX_BYTES
 # + 4 MiB for dex/resources/manifests/signing
-# = 99,655,680 bytes
+# = 102,408,192 bytes
 #
 # The 4 MiB non-native allowance is 2.4x the 1,728,600 bytes of non-native
 # content measured today, which is room for real feature growth in the Compose

@@ -84,6 +84,12 @@ internal fun nodeErrorCodeMessageRes(code: String): Int? = when (code) {
     "source_changed" -> R.string.node_error_source_changed
     "source_unreadable" -> R.string.node_error_source_unreadable
     "invalid_authorized_root" -> R.string.node_error_invalid_authorized_root
+    "folder_sync_unavailable" -> R.string.node_error_folder_sync_unavailable
+    "folder_sync_busy" -> R.string.node_error_folder_sync_busy
+    "folder_sync_needs_attention" -> R.string.node_error_folder_sync_needs_attention
+    "invalid_peer_address" -> R.string.node_error_invalid_peer_address
+    "peer_address_changed" -> R.string.node_error_peer_address_changed
+    "peer_address_unreachable" -> R.string.node_error_peer_address_unreachable
     "unsafe_restore_path" -> R.string.node_error_unsafe_restore_path
     "restore_conflict" -> R.string.node_error_restore_conflict
     "restore_plan_mismatch" -> R.string.node_error_restore_plan_mismatch

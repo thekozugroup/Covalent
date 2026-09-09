@@ -405,6 +405,12 @@
     <string name="node_error_source_changed">Files changed while Covalent was copying them. Try again once they stop changing.</string>
     <string name="node_error_source_unreadable">Covalent couldn’t read part of the folder you chose. Choose the folder again.</string>
     <string name="node_error_invalid_authorized_root">The folder you chose is no longer available to Covalent. Choose it again.</string>
+    <string name="node_error_folder_sync_unavailable">Folder sync is unavailable on this device. Check that folder sync is installed and the shared folder is available, then try again.</string>
+    <string name="node_error_folder_sync_busy">Another folder change is still in progress. Try again shortly.</string>
+    <string name="node_error_folder_sync_needs_attention">Folder sync needs attention before it can continue. Check the folder status, then try again.</string>
+    <string name="node_error_invalid_peer_address">Enter the device address as a numeric IP address and port, such as 192.168.1.20:8787, then try again.</string>
+    <string name="node_error_peer_address_changed">The saved device address changed before this update finished. Refresh the saved device, then try again.</string>
+    <string name="node_error_peer_address_unreachable">Covalent could not authenticate the trusted device at the new address. Check the address and network connection, then try again.</string>
     <string name="node_error_unsafe_restore_path">This backup holds a file that would land outside the folder you chose, so Covalent stopped the restore to keep your files safe.</string>
     <string name="node_error_restore_conflict">Some files already exist in the folder you’re restoring into. Preview the restore again and choose how to handle them.</string>
     <string name="node_error_restore_plan_mismatch">This restore changed after you previewed it. Preview it again before restoring.</string>

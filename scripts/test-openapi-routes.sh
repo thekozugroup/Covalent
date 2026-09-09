@@ -5,11 +5,30 @@ repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 fixture_root=$(mktemp -d "${TMPDIR:-/tmp}/covalent-openapi-routes.XXXXXX")
 trap 'rm -rf "$fixture_root"' EXIT HUP INT TERM
 
-# Copy the tracked repository without build products, then overlay this working
-# tree's checker and the deliberately tiny Android sources below. Initializing a
-# fresh index keeps the checker's fail-closed `git ls-files` inventory active.
-git -C "$repo_root" checkout-index --all --prefix="$fixture_root/"
-cp "$repo_root/scripts/check-openapi-routes.mjs" "$fixture_root/scripts/check-openapi-routes.mjs"
+# Copy current tracked files, including unstaged changes, without build products.
+# checkout-index would silently test stale staged bytes during local validation.
+# A missing tracked file is an error. The fresh index keeps the checker's
+# fail-closed `git ls-files` inventory active in every fixture below.
+python3 - "$repo_root" "$fixture_root" <<'PY_COPY'
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+source = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+tracked = subprocess.check_output(["git", "-C", str(source), "ls-files", "-z"])
+for raw in tracked.split(b"\0"):
+    if not raw:
+        continue
+    relative = Path(os.fsdecode(raw))
+    if relative.is_absolute() or ".." in relative.parts:
+        raise SystemExit("Invalid tracked path in route fixture")
+    target = destination / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source / relative, target, follow_symlinks=False)
+PY_COPY
 mkdir -p "$fixture_root/fixtures/openapi-routes"
 cp "$repo_root"/fixtures/openapi-routes/*.kt "$fixture_root/fixtures/openapi-routes/"
 git -C "$fixture_root" init --quiet

@@ -100,6 +100,18 @@
       "Folder sync needs attention before it can continue. Check the folder status, then try again.",
       RECOVERY.retry,
     ],
+    invalid_peer_address: [
+      "Enter the device address as a numeric IP address and port, such as 192.168.1.20:8787, then try again.",
+      RECOVERY.none,
+    ],
+    peer_address_changed: [
+      "The saved device address changed before this update finished. Refresh the saved device, then try again.",
+      RECOVERY.retry,
+    ],
+    peer_address_unreachable: [
+      "Covalent could not authenticate the trusted device at the new address. Check the address and network connection, then try again.",
+      RECOVERY.retry,
+    ],
 
     // Restore
     unsafe_restore_path: [

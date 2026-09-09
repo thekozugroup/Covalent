@@ -500,7 +500,12 @@ fn peer_connection_field(
 
 #[cfg(all(test, unix))]
 mod lifecycle_tests {
-    use super::{lifecycle_fields, peer_connection_field};
+    use std::collections::BTreeSet;
+
+    use covalent_core::{DeviceIdentity, NodeConfig};
+    use covalent_protocol::{PeerGrant, TransportBinding};
+
+    use super::{lifecycle_fields, peer_connection_field, peer_responses};
     use crate::sync_engine::{
         FolderSyncIssue, FolderSyncLifecycle, PeerConnectionState, SharingPhase,
     };
@@ -540,6 +545,71 @@ mod lifecycle_tests {
             "disconnected"
         );
     }
+
+    #[test]
+    fn peer_status_uses_only_the_current_trusted_pin_address() {
+        let current = DeviceIdentity::generate().public_identity();
+        let unpinned = DeviceIdentity::generate().public_identity();
+        let revoked = DeviceIdentity::generate().public_identity();
+        let grant = |identity: &covalent_core::PublicIdentity, name: &str, revoked| PeerGrant {
+            peer_device_id: identity.device_id,
+            public_key: identity.public_key.clone(),
+            display_name: name.to_owned(),
+            roles: BTreeSet::new(),
+            confirmed_at_unix_ms: 1,
+            revoked,
+        };
+        let binding = |identity: &covalent_core::PublicIdentity, name: &str, address: &str| {
+            TransportBinding {
+                peer_id: identity.device_id,
+                display_name: name.to_owned(),
+                address: address.to_owned(),
+                certificate_der: "not-returned-by-status".to_owned(),
+                certificate_fingerprint: "also-not-returned".to_owned(),
+            }
+        };
+        let mut config = NodeConfig::new("local", false).expect("config");
+        config
+            .trusted_peers
+            .insert(current.device_id, grant(&current, "Current peer", false));
+        config
+            .trusted_peers
+            .insert(unpinned.device_id, grant(&unpinned, "Unpinned peer", false));
+        config
+            .trusted_peers
+            .insert(revoked.device_id, grant(&revoked, "Revoked peer", true));
+        config.trusted_peer_transports.insert(
+            current.device_id,
+            binding(&current, "Current peer", "127.0.0.1:55101"),
+        );
+        config.trusted_peer_transports.insert(
+            revoked.device_id,
+            binding(&revoked, "Revoked peer", "127.0.0.1:55103"),
+        );
+
+        let before = serde_json::to_value(peer_responses(&config)).expect("status peers");
+        assert_eq!(before.as_array().expect("peers").len(), 1);
+        assert_eq!(before[0]["peerId"], current.device_id.to_string());
+        assert_eq!(before[0]["displayName"], "Current peer");
+        assert_eq!(before[0]["address"], "127.0.0.1:55101");
+        assert!(before[0].get("certificateDer").is_none());
+        assert!(before[0].get("certificateFingerprint").is_none());
+        assert!(before[0].get("publicKey").is_none());
+
+        // The address-refresh transaction replaces only this current pin. The
+        // status projection must immediately use that durable value rather
+        // than a historical pairing receipt, provider cache or discovery row.
+        config
+            .trusted_peer_transports
+            .get_mut(&current.device_id)
+            .expect("current pin")
+            .address = "127.0.0.1:55112".to_owned();
+        let after = serde_json::to_value(peer_responses(&config)).expect("refreshed peers");
+        assert_eq!(after[0]["address"], "127.0.0.1:55112");
+
+        config.trusted_peer_transports.remove(&current.device_id);
+        assert!(peer_responses(&config).is_empty());
+    }
 }
 
 #[derive(Serialize)]
@@ -561,6 +631,7 @@ pub(crate) struct SyncStatusResponse {
 struct PeerResponse {
     peer_id: covalent_protocol::DeviceId,
     display_name: String,
+    address: String,
 }
 
 #[derive(Serialize)]
@@ -760,18 +831,17 @@ fn peer_responses(config: &covalent_core::NodeConfig) -> Vec<PeerResponse> {
     config
         .trusted_peers
         .iter()
-        .filter(|(id, grant)| {
-            !grant.revoked
+        .filter_map(|(id, grant)| {
+            let pin = config.trusted_peer_transports.get(id)?;
+            (!grant.revoked
                 && grant.confirmed_at_unix_ms != 0
-                && grant.peer_device_id == **id
-                && config
-                    .trusted_peer_transports
-                    .get(id)
-                    .is_some_and(|pin| pin.peer_id == **id)
-        })
-        .map(|(id, grant)| PeerResponse {
-            peer_id: *id,
-            display_name: grant.display_name.clone(),
+                && grant.peer_device_id == *id
+                && pin.peer_id == *id)
+                .then(|| PeerResponse {
+                    peer_id: *id,
+                    display_name: grant.display_name.clone(),
+                    address: pin.address.clone(),
+                })
         })
         .collect()
 }

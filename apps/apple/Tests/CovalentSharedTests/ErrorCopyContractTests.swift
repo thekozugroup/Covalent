@@ -126,7 +126,7 @@ import Testing
             unmapped.isEmpty,
             "These codes fall through to status-shaped copy instead of being authored: \(unmapped)"
         )
-        #expect(Self.engineErrorCodes.count == 71, "The reference set changed; reconcile it deliberately.")
+        #expect(Self.engineErrorCodes.count == 77, "The reference set changed; reconcile it deliberately.")
     }
 
     /// Negative control for the mapping probe: a code that is definitely not
@@ -169,6 +169,93 @@ import Testing
             NodeAPIErrorCopy.describe(status: 503, code: "claim_certificate_unavailable", message: "", retryable: true)
                 .recovery == .retry
         )
+    }
+
+    @Test func folderSyncAndAddressRefreshFailuresGiveExactNextSteps() {
+        let cases: [(Int, String, Bool, String, RecoveryHint)] = [
+            (
+                400,
+                "invalid_peer_address",
+                false,
+                "Enter the device address as a numeric IP address and port, such as 192.168.1.20:8787, then try again.",
+                .none
+            ),
+            (
+                409,
+                "peer_address_changed",
+                false,
+                "The saved device address changed before this update finished. Refresh the saved device, then try again.",
+                .retry
+            ),
+            (
+                502,
+                "peer_address_unreachable",
+                true,
+                "Covalent could not authenticate the trusted device at the new address. Check the address and network connection, then try again.",
+                .retry
+            ),
+            (
+                409,
+                "folder_sync_unavailable",
+                false,
+                "Folder sync is unavailable on this device. Check that folder sync is installed and the shared folder is available, then try again.",
+                .retry
+            ),
+            (
+                503,
+                "folder_sync_busy",
+                true,
+                "Another folder change is still in progress. Try again shortly.",
+                .retry
+            ),
+            (
+                409,
+                "folder_sync_needs_attention",
+                false,
+                "Folder sync needs attention before it can continue. Check the folder status, then try again.",
+                .retry
+            ),
+        ]
+        for (status, code, retryable, summary, recovery) in cases {
+            let failure = NodeAPIErrorCopy.describe(
+                status: status,
+                code: code,
+                message: "untrusted machine detail",
+                retryable: retryable
+            )
+            #expect(failure.summary == summary)
+            #expect(failure.recovery == recovery)
+            #expect(!failure.summary.contains("untrusted machine detail"))
+        }
+    }
+
+    @Test func folderSyncAPIProductionCodesStayInTheAuthoredCatalog() throws {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let repository = testFile
+            .deletingLastPathComponent()   // CovalentSharedTests
+            .deletingLastPathComponent()   // Tests
+            .deletingLastPathComponent()   // apps/apple
+            .deletingLastPathComponent()   // apps
+            .deletingLastPathComponent()   // repository
+        let source = try String(
+            contentsOf: repository.appending(path: "crates/covalent-node/src/sync_api.rs"),
+            encoding: .utf8
+        )
+        let direct = try Self.captures(#"code:\s*"([a-z0-9_]+)""#, in: source)
+        var emitted = Set(direct)
+        for block in try Self.captures(#"code:\s*if\b([\s\S]*?),\s*message:"#, in: source) {
+            emitted.formUnion(try Self.captures(#""([a-z0-9_]+)""#, in: block))
+        }
+        let expected: Set<String> = [
+            "folder_sync_unavailable",
+            "folder_sync_busy",
+            "folder_sync_needs_attention",
+            "invalid_peer_address",
+            "peer_address_changed",
+            "peer_address_unreachable",
+        ]
+        #expect(emitted == expected, "Reconcile new folder-sync API error codes deliberately.")
+        #expect(emitted.allSatisfy(Self.isMapped))
     }
 
     /// The first-run codes are what a person meets before anything else works,
@@ -244,6 +331,15 @@ import Testing
         return probe.summary != fallback.summary
     }
 
+    private static func captures(_ pattern: String, in source: String) throws -> [String] {
+        let expression = try NSRegularExpression(pattern: pattern)
+        let range = NSRange(source.startIndex..., in: source)
+        return expression.matches(in: source, range: range).compactMap { result in
+            guard let capture = Range(result.range(at: 1), in: source) else { return nil }
+            return String(source[capture])
+        }
+    }
+
     private static func appleSources() throws -> [URL] {
         let sources = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()   // CovalentSharedTests
@@ -276,6 +372,9 @@ import Testing
         "claim_window_expired",
         "confirmation_required",
         "duplicate_archive_entry",
+        "folder_sync_busy",
+        "folder_sync_needs_attention",
+        "folder_sync_unavailable",
         "insufficient_storage",
         "internal_error",
         "invalid_archive",
@@ -289,6 +388,7 @@ import Testing
         "invalid_json",
         "invalid_page_cursor",
         "invalid_page_limit",
+        "invalid_peer_address",
         "invalid_provider_address",
         "invalid_restore_execute_request",
         "invalid_restore_plan_id",
@@ -312,6 +412,8 @@ import Testing
         "pairing_peer_unreachable",
         "pairing_rejected",
         "peer_endpoint_unavailable",
+        "peer_address_changed",
+        "peer_address_unreachable",
         "protocol_incompatible",
         "provider_binding_mismatch",
         "recovery_confirmation_required",

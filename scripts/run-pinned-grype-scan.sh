@@ -7,10 +7,10 @@ GRYPE_LINUX_AMD64_SHA256=38525dab1e06f162ebaa02f94d82d1f807076b011a44180cf2777ed
 GRYPE_LINUX_ARM64_SHA256=935f628bdf9331ffdd946931ea5fdb50045d3970ba52670cbeb44a88f127291b
 MAX_ARCHIVE_BYTES=67108864
 MAX_ARCHIVE_CONTENT_BYTES=134217728
-# Grype's complete v6 database is currently about 1.6 GB uncompressed. Keep a
-# finite allowance for that database plus the pinned scanner and update files.
-# Source: https://github.com/anchore/grype/issues/3245
-MAX_PRIVATE_BYTES=2147483648
+# Exact checkpoint-37 scans used 2,273,193,984 bytes (amd64) and 2,264,055,808
+# bytes (arm64) for the database, scanner and update files. Retain a finite
+# 3 GiB allowance above those observed complete scans; excess still fails.
+MAX_PRIVATE_BYTES=3221225472
 SCAN_TIMEOUT=12m
 
 fail() {

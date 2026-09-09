@@ -1317,3 +1317,152 @@ Cleanup receipt SHA-256:
 Acceptance remains **70%: 14 of 20**; second-folder Mac repair, full Android
 execution, client address changes, vulnerability fixes, final accessibility,
 upgrade and performance acceptance remain open.
+
+## Checkpoint 38: real Mac removal, current-file validation and measured build fixes
+
+Base commit: `87c322f6df85d929474be8ab0f83fe03afdf07d7`. Checkpoint 37 run
+`34297173842` tested merge `0b6df2822940df1aac37e3f29af506fe7eea966d`.
+Mac bundle, Mac integration/UI, iOS Tier 2, dependency review and release
+versions pass. CodeQL run `34297173819` passes Swift, Java/Kotlin and policy.
+Both Docker architectures pass complete packaging, extraction and all nine
+actual hardened-runtime checks, including offline removal, signed delivery and
+acknowledgement, both cold restarts, retained files and owned-resource cleanup.
+The overall workflow fails; the following failures remain visible.
+
+### Validate the files that will actually be published
+
+Hosted foundation finds an undefined OpenAPI `BadRequest` response introduced
+with address refresh. The initial checkpoint-37 local foundation result is
+invalidated: its route-test fixture used `git checkout-index`, which copied the
+old staged files and omitted the current unstaged edits. The corrected script
+copies the current bytes and modes of every tracked file into its private
+fixture, preserves symlink semantics, rejects missing or unsafe tracked paths,
+and removes the fixture on exit. The response now uses the actual API error
+schema and documents the 502 and 503 outcomes.
+
+A valid unstaged correction passes while the original bad reference remains in
+the index. A deliberately injected unstaged missing response then fails the
+fixture; restoring the exact corrected file passes. Direct OpenAPI validation,
+route fixtures and foundation validation pass on the corrected current tree.
+Manifest SHA-256:
+`2abc6f1e4b2da91a674f4a917b095bcfb6917a269f99cab7323db9f23e7d1959`;
+patch `d89d07ed237e394fb16aeaf572618d131c6498f21aafe636ea7593403b999920`.
+
+### Keep a live Mac helper through its initial scan
+
+The two-file Mac correction retains a fingerprint of the launched folder
+bookmarks and launch mode. It rechecks authenticated folder-service liveness
+before reusing that launch; missing service, failed requests and backup-only
+fallback invalidate it. Binding a bookmark to an invitation does not restart
+the same capability set. Removing access still forces a restart. Offer and
+accept retry only the typed retryable initial-scan response for at most
+30 seconds, using the same request and helper. Other failures require the
+normal explicit recovery flow.
+
+All 158 shared Swift tests pass in the isolated checkpoint-35-based slice.
+The sealed `g95c34f8` proof executes the production AppModel and manager with
+that exact correction, two real NodeRuntime instances and signed sandbox
+helpers. Two roots are selected through real NSOpenPanel dialogs. A removal
+requested on the second node reaches the Mac over authenticated QUIC. The Mac
+retires only the removed grant, replaces and reaps its old helper tree, and
+continues transferring the unrelated folder. An unchanged-binary cold launch
+restores only the unrelated grant and preserves the removal tombstone. A
+direct inherited child probe is denied access to the removed root and retains
+access to the unrelated root. The peer certificate and UDP 8787 remain stable.
+
+An outer fixture observer records exact PID, PPID and executable paths because
+the sandboxed app cannot enumerate its worker descendants. All owned processes
+are eventually absent. The second node's internal stop does not complete; the
+outer fixture stops that exact process. This is evidence for checkpoint 35 plus
+the frozen busy correction, not a claim that the entire checkpoint-38 app has
+executed the same journey.
+
+Review manifest SHA-256:
+`ef778b6ffd2880dd8feb523861e139843c84fc455fed0ed6837c2a8991ae3a32`;
+patch `c1ee6c17a2f3c3f52a301dca140d3ae48e899deaae301e3fe71589b925505693`;
+result `9c447672fb5738ac021b71905606c9051f0820a77ac77cc503ab7f4ce6252fe1`;
+process snapshots `e5d8cdeee4921ad978e19955b1c56b262724e9268ba09fe35d3339aba8ff446e`.
+The exact production AppModel hash is
+`af782e6d797a426a9c8e48d683139cbece46b183e9c508d3e22c7ee762cde803`.
+
+### Rebase the Android limit on the measured production objects
+
+Both checkpoint-37 Android jobs pass final-link provenance and produce identical
+release JNI sizes: arm64 9,481,568 bytes and x86_64 11,154,960 bytes. The latter
+exceeds the old 11,141,120-byte limit by 13,840 bytes. Jobs `102296207486` and
+`102296207553` stop before JVM, lint, APK creation or device execution. The later
+emulator boot does not constitute instrumentation evidence: its APK is absent.
+
+The one-file correction records those measurements and uses the established
+worst-ABI-plus-12% policy rounded to 64 KiB: 12,517,376 bytes. The derived
+universal package limit becomes 102,408,192 bytes. Size-focused release
+profiles, fat LTO, stripping, export auditing, floors, per-ABI checks and the
+separate helper limits remain enabled. Shell syntax and native package fixtures
+pass. A complete hosted rebuild is still required.
+Manifest SHA-256:
+`36a3e7edbadbf25e0de14ef494b769988cc1c5dfcfd1f8bac4ed99d8bc111db5`;
+patch `191e5920693324a9290d7f7a8de05fc115f0bc072444f414f10f5e621c56f286`.
+
+### Bind vulnerability reports to the actual scanner format
+
+The exact checkpoint-37 images are amd64
+`sha256:51f3b372f0efacafc04b067c31bf0437820bc3088be0714d0b0139227a0b90da`
+and arm64
+`sha256:3061519cfd04bca661fba7876753e9d70a8e8e0c16f3079dc3325b149a2516b1`.
+Both Grype scans report high/critical findings. Report verification then fails
+because it expects a `docker:` prefix in `userInput`. The pinned
+[Grype 0.117.0 provider](https://github.com/anchore/grype/blob/v0.117.0/grype/pkg/syft_provider.go)
+removes that selector before passing the reference to Syft 1.51.0;
+[Syft image metadata](https://github.com/anchore/syft/blob/v1.51.0/syft/source/stereoscopesource/image_source.go)
+preserves the selector-free reference. The verifier now requires both
+`userInput` and `imageID` to equal the exact requested immutable image ID.
+The invocation still explicitly selects Docker. Different input, different
+resolved image, wrong scanner and suppressed findings remain rejected.
+
+Complete private scan data measures 2,273,193,984 bytes on amd64 and
+2,264,055,808 on arm64. The finite bound is now 3 GiB. Exceeding it still fails
+and still prints valid report diagnostics before aggregating fatal outcomes.
+The regression combines a vulnerability and excess disk use, and separately
+rejects incorrect input even when the resolved image ID matches. Scanner
+fixtures and full release guardrails pass. Manifest SHA-256:
+`c9aac71e2ac1b254f0420cec75197c5255c7dcde96b2dc68c0021ba7e2a17011`.
+Actual CVE details, remediation and clean rescans remain open; no exemption or
+successful actual-image scan is claimed.
+
+### Expose saved addresses and retain evidence while cleaning up
+
+The additive status field `peers[].address` projects only current confirmed,
+unrevoked, identity-matching pinned peers, including peers without an active
+folder share. Revoked and unpinned records are excluded. No private key or
+certificate is returned. The two-file slice passes 304 node tests and strict
+Clippy. Its manifest SHA-256 is
+`1c23b548a16e2eaf4a77c923eb27b9e8a8ef36edc9f2818175150aa3ef8d5677`.
+The OpenAPI field is merged with the response correction above. Seven client
+files add precise address/folder error messages; web tests and 154 isolated
+Swift tests pass. Android mappings and XML pass static checks; JVM execution is
+not claimed for that isolated copy slice. Manifest SHA-256:
+`afb574f838b34e1678f4c15a026994214ee235e8f64c34948a11d8160aacf8cb`.
+Native and web address-entry interfaces remain separate ongoing work.
+
+The Mac fixture removes its owned processes and filesystem data, retains compact
+evidence and keeps one ACL-bound test Keychain entry with its matching signed
+binary. The service is
+`life.michaelwong.covalent.remote-removal-proof.g95c34f8.node-key`, account
+`managed-node-kek-hierarchy`; no test API token or certificate entry remains.
+No SecurityAgent interaction, ACL change or alternate identity is attempted.
+Cleanup receipt SHA-256:
+`8f3e6201b42e3ff91d1d9094f971f0453265a9d2ad16bc9528e4f508f682454f`.
+Other completed scratch caches are removed after preserving manifests and logs.
+The earlier 109,197,375,028-byte cleanup remains a logical-byte count, not an
+APFS physical-space measurement. Atmos services remain untouched.
+
+The combined checkpoint-38 source passes all 162 shared Swift tests in six
+suites and current-worktree foundation validation. The combined Swift log
+SHA-256 is `d37f7ebe2315cd6a6823acf29802cafaca59c73a1f800f2f8553857379ca9e63`.
+This adds integration evidence without replacing the narrower source scope
+of the real sandbox proof above. The 108 web tests pass with the error-copy
+changes; new address-entry UI is not part of this checkpoint.
+
+Acceptance remains **70%: 14 of 20**. The core is functional; complete daily-use
+readiness still requires native/device address and folder journeys, vulnerability
+fixes, final dependency review, upgrade/accessibility and performance acceptance.

@@ -52,6 +52,48 @@ class NodeErrorCodeCopyTest {
         assertNull(nodeErrorCodeMessageRes(""))
     }
 
+    @Test
+    fun folderSyncAndAddressRefreshCodesAreCoveredFromTheBackendSource() {
+        val expected = setOf(
+            "folder_sync_unavailable",
+            "folder_sync_busy",
+            "folder_sync_needs_attention",
+            "invalid_peer_address",
+            "peer_address_changed",
+            "peer_address_unreachable",
+        )
+        val source = repositoryFile("crates/covalent-node/src/sync_api.rs").readText()
+        val direct = Regex("""code:\s*"([a-z0-9_]+)"""")
+            .findAll(source)
+            .map { it.groupValues[1] }
+        val conditional = Regex("""code:\s*if\b(.*?),\s*message:""", RegexOption.DOT_MATCHES_ALL)
+            .findAll(source)
+            .flatMap { block ->
+                Regex(""""([a-z0-9_]+)"""").findAll(block.groupValues[1]).map { it.groupValues[1] }
+            }
+        val emitted = (direct + conditional).toSet()
+        assertEquals("Reconcile new folder-sync API error codes deliberately", expected, emitted)
+        emitted.forEach { code ->
+            assertNotNull("node_error_$code is not mapped", nodeErrorCodeMessageRes(code))
+        }
+        val copy = strings()
+        assertEquals(
+            "Enter the device address as a numeric IP address and port, such as " +
+                "192.168.1.20:8787, then try again.",
+            copy["node_error_invalid_peer_address"],
+        )
+        assertEquals(
+            "The saved device address changed before this update finished. " +
+                "Refresh the saved device, then try again.",
+            copy["node_error_peer_address_changed"],
+        )
+        assertEquals(
+            "Covalent could not authenticate the trusted device at the new address. " +
+                "Check the address and network connection, then try again.",
+            copy["node_error_peer_address_unreachable"],
+        )
+    }
+
     /**
      * These are the first words a new person reads from Covalent, so each one has to say
      * what happened and what to do next rather than only naming the failure.
@@ -176,6 +218,16 @@ class NodeErrorCodeCopyTest {
             .associate { it.groupValues[1] to it.groupValues[2] }
 
     private companion object {
+        fun repositoryFile(relative: String): File {
+            var candidate: File? = File("").absoluteFile
+            while (candidate != null) {
+                val resolved = File(candidate, relative)
+                if (resolved.isFile) return resolved
+                candidate = candidate.parentFile
+            }
+            error("Unable to locate $relative from ${File("").absolutePath}")
+        }
+
         fun moduleFile(relative: String): File {
             val direct = File(relative)
             if (direct.isFile) return direct
