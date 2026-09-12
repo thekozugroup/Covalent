@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Process
 import android.os.ParcelFileDescriptor
+import android.os.storage.StorageManager
 import android.system.ErrnoException
 import android.system.Os
 import androidx.compose.runtime.mutableStateOf
@@ -728,6 +729,7 @@ class FolderSyncJourneyInstrumentedTest {
         val shared = RawFolderAccess(context).roots().firstOrNull()?.absolutePath
             ?.let(::File)?.canonicalFile
             ?: error("The emulator exposes no shared-storage root.")
+        check(shared == fixtureStorageRoot())
         val fixture = File(shared, "$FIXTURE_PREFIX$runId").absoluteFile
         check(fixture.parentFile == shared)
         val first = File(fixture, "first")
@@ -883,13 +885,18 @@ class FolderSyncJourneyInstrumentedTest {
     }
 
     private fun fixtureDirectory(runId: String): File {
-        val shared = RawFolderAccess(context).roots().firstOrNull()?.absolutePath
-            ?.let(::File)?.canonicalFile
-            ?: error("The emulator exposes no shared-storage root.")
+        val shared = fixtureStorageRoot()
         return File(shared, "$FIXTURE_PREFIX${requireRunId(runId)}").absoluteFile.also {
             check(it.parentFile == shared)
         }
     }
+
+    // Volume metadata remains available after all-files access is revoked. This
+    // reconstructs only the exact owned fixture path; it grants no file access.
+    private fun fixtureStorageRoot(): File =
+        checkNotNull(context.getSystemService(StorageManager::class.java))
+            .primaryStorageVolume.directory?.canonicalFile
+            ?: error("The emulator exposes no primary shared-storage root.")
 
     private fun secondDataDirectory(runId: String): File =
         File(context.noBackupFilesDir.canonicalFile, "$SECOND_DATA_PREFIX${requireRunId(runId)}")
