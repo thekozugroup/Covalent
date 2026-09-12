@@ -636,7 +636,9 @@
     }
     let firstFinished = DispatchGroup()
     firstFinished.enter()
-    DispatchQueue.global().async {
+    // This operation intentionally blocks while holding the file lock. Give it
+    // a dedicated thread so parallel tests cannot starve its readiness signal.
+    let firstThread = Thread {
       defer { firstFinished.leave() }
       do {
         let rotated = try first.rotate()
@@ -645,12 +647,17 @@
         Issue.record(error)
       }
     }
+    firstThread.start()
+    defer {
+      releaseFirstRotation.signal()
+      firstFinished.wait()
+    }
 
-    #expect(firstEnteredRandomGeneration.wait(timeout: .now() + 5) == .success)
+    try #require(firstEnteredRandomGeneration.wait(timeout: .now() + 5) == .success)
     #expect(throws: ManagedNodeKeyStoreError.keychainBusy) { _ = try second.rotate() }
     #expect(secondRandom.current == 0)
     releaseFirstRotation.signal()
-    #expect(firstFinished.wait(timeout: .now() + 5) == .success)
+    try #require(firstFinished.wait(timeout: .now() + 5) == .success)
     #expect(firstResults.versions == [2])
 
     let final = try second.rotate()
