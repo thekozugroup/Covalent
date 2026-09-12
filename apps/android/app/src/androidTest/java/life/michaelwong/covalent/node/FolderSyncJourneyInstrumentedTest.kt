@@ -19,9 +19,11 @@ import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
@@ -406,15 +408,45 @@ class FolderSyncJourneyInstrumentedTest {
         assertFalse(secondDataDirectory(runId).exists())
     }
 
-    private fun visibleScreenText(value: String): SemanticsNodeInteraction {
-        compose.waitUntil(timeoutMillis = DEFAULT_TIMEOUT_MILLIS) {
-            runCatching {
-                compose.onNodeWithTag("folder-sync-list").performScrollToNode(hasText(value))
-                compose.onNodeWithText(value).assertIsDisplayed()
-                true
-            }.getOrDefault(false)
+    private fun visibleScreenText(
+        value: String,
+        failureContext: (() -> String)? = null,
+    ): SemanticsNodeInteraction {
+        val list = compose.onNodeWithTag("folder-sync-list")
+        val target = compose.onNodeWithText(value)
+        var lastFailure: Throwable? = null
+        try {
+            compose.waitUntil(timeoutMillis = DEFAULT_TIMEOUT_MILLIS) {
+                runCatching {
+                    // A lazy item can be taller than the viewport. First compose its matching item,
+                    // then ask the scrollable ancestor to expose the exact descendant within it.
+                    list.performScrollToNode(hasText(value))
+                    target.performScrollTo()
+                    target.assertIsDisplayed()
+                    true
+                }.onFailure { lastFailure = it }.getOrDefault(false)
+            }
+        } catch (timeout: Exception) {
+            val nodes = runCatching {
+                compose.onAllNodesWithText(value).fetchSemanticsNodes()
+            }.getOrDefault(emptyList())
+            val bounds = nodes.take(MAX_DIAGNOSTIC_NODES).joinToString(prefix = "[", postfix = "]") {
+                val rect = it.boundsInRoot
+                "(${rect.left.toInt()},${rect.top.toInt()},${rect.right.toInt()},${rect.bottom.toInt()})"
+            }
+            val context = failureContext?.let { diagnostic ->
+                runCatching { diagnostic() }.getOrElse { error ->
+                    "diagnosticError=${error.javaClass.name}"
+                }
+            } ?: ""
+            throw AssertionError(
+                "Screen text did not become visible: expectedNodeCount=1 " +
+                    "actualNodeCount=${nodes.size} boundsInRoot=$bounds " +
+                    "lastError=${lastFailure?.javaClass?.name ?: "none"} $context",
+                timeout,
+            )
         }
-        return compose.onNodeWithText(value)
+        return target
     }
 
     private fun clickScreenText(value: String) {
@@ -568,7 +600,14 @@ class FolderSyncJourneyInstrumentedTest {
                 ?.takeIf { it.state == NetworkPairingState.COMPLETE }
         }
         assertEquals(peerAddressB, checkNotNull(completed.peerTransport).address)
-        visibleScreenText(context.getString(R.string.folder_sync_pair_complete)).assertIsDisplayed()
+        val expectedPeerId = checkNotNull(completed.peerTransport).peerId
+        visibleScreenText(context.getString(R.string.folder_sync_pair_complete)) {
+            val requests = client.pendingNetworkPairings(connectionA.baseUrl, connectionA.token)
+            val peers = client.folderSyncStatus(connectionA.baseUrl, connectionA.token).peers
+            "apiPairingCount=${requests.size} " +
+                "apiCompletedPairingCount=${requests.count { it.state == NetworkPairingState.COMPLETE }} " +
+                "apiPeerCount=${peers.size} expectedPeerPresent=${peers.any { it.peerId == expectedPeerId }}"
+        }.assertIsDisplayed()
         clickScreenText(context.getString(R.string.action_done))
         await("completed phone pairing request dismissed") {
             client.pendingNetworkPairings(connectionA.baseUrl, connectionA.token)
@@ -1072,6 +1111,7 @@ class FolderSyncJourneyInstrumentedTest {
         )
         const val POLL_MILLIS = 250L
         const val DEFAULT_TIMEOUT_MILLIS = 90_000L
+        const val MAX_DIAGNOSTIC_NODES = 2
         const val TRANSFER_TIMEOUT_MILLIS = 120_000L
         const val STOP_TIMEOUT_MILLIS = 30_000L
         const val NEGATIVE_WINDOW_MILLIS = 7_000L
