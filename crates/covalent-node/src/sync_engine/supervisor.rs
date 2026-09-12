@@ -86,7 +86,7 @@ impl fmt::Debug for VerifiedEngineExecutable {
 }
 
 impl VerifiedEngineExecutable {
-    /// Open and verify an absolute, owner-only executable against the pinned
+    /// Verify an absolute executable's trusted owner, safe mode and pinned
     /// manifest digest. The caller must retain this value until launch.
     pub fn open(
         path: impl Into<PathBuf>,
