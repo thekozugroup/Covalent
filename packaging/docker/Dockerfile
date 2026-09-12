@@ -281,7 +281,8 @@ RUN --mount=type=bind,from=busybox-package-test,source=/packages,target=/tmp/bus
       | grep -Fx '/bin/sh is owned by busybox-binsh-1.37.0-r1000' \
     && apk info --who-owns /usr/bin/ssl_client \
       | grep -Fx '/usr/bin/ssl_client is owned by ssl_client-1.37.0-r1000' \
-    && sha256sum -c /tmp/busybox-backport/runtime-payload.sha256
+    && sha256sum -c /tmp/busybox-backport/runtime-payload.sha256 \
+    && cat /tmp/busybox-backport/runtime-payload.sha256
 
 # Bind the source and notices to the actual installed runtime database. The
 # copied CA comes from the unmodified Caddy builder; Python remains build-only.

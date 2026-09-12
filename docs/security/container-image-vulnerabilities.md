@@ -48,9 +48,29 @@ The final build includes the reviewed request-target patch, verifies all
 45 recipe patches, passes all 13 wire checks and binds installed payloads to
 the tested binaries. Its complete original/modified recipe and corresponding
 source pass the packaged verifier; see [Alpine source evidence](alpine-runtime-source.md).
-The scanner report lists no fixed Alpine version for this advisory. These
-observations require a final applicability review of both exact images; the
-findings remain visible and no ignore rule or VEX filter is introduced.
+The scanner report lists no fixed Alpine version for this advisory. Independent
+review of this immutable arm64 image concludes that the applicable request-target
+behavior is remediated by the local backport. `busybox-binsh` is a symlink package
+depending on the same patched executable. `ssl_client` forwards TLS bytes and
+does not construct HTTP request targets; its finding comes from the shared
+BusyBox package origin. This is an image-specific technical assessment, not a
+claim of an Alpine or upstream fixed release. All three scanner rows remain
+visible and no ignore rule or VEX filter is introduced.
+
+The review binds the frozen upstream source and original/modified Alpine recipe
+to all 45 applied patches, the 13 direct/proxy wire checks, and the final runtime's
+successful comparison with the tested payload digests. The final image inherits
+that runtime without replacing its BusyBox files. Ordinary job console evidence
+is retained at `artifacts/validation-2026-09-12/checkpoint44-hosted/103575517205.log`;
+the independent review is `checkpoint44-busybox-applicability-review/result.json`.
+Its SHA-256 is `2f60d884cfb1fcf4eaca0237fa6aff1025844d59a2dcf4f0f752828e315969f1`.
+
+The earlier console reports successful digest comparisons without printing their
+values. The build now prints the verified digest list, allowing a subsequent
+clean builder's unsigned payloads to be compared numerically. That reproducibility
+comparison and the amd64 applicability review remain open. No new runtime files,
+package versions, image-size limits or scanner policy are introduced by logging
+the existing checked digest list.
 
 The current amd64 image passes its source and basic runtime checks but exceeds
 the unchanged 128 MiB size cap, so its later scan does not run. The next CI
