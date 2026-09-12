@@ -562,9 +562,13 @@
     <string name="folder_sync_address_updated_checking">Address updated. Checking this device…</string>
     <string name="folder_sync_address_saved_refresh_needed">Address saved, but Covalent couldn’t reload current status. Refresh before making another change.</string>
     <string name="folder_sync_pair_start">Pair device</string>
+    <string name="folder_sync_pair_incoming">Incoming folder sync device request</string>
+    <string name="folder_sync_pair_outgoing">Outgoing folder sync device request</string>
     <string name="folder_sync_confirm_device">Codes match — pair device</string>
     <string name="folder_sync_pair_complete">Device paired. You can now share a folder.</string>
     <string name="folder_sync_pair_finishing">Finishing device connection…</string>
+    <string name="folder_sync_pair_installation">This device is paired, but folder sync could not start on this phone. Check the installation, then retry folder sync.</string>
+    <string name="folder_sync_pair_needs_attention">This device is paired, but folder sync needs attention on this phone. Check the status above, then try again.</string>
     <string name="folder_sync_pair_failure">Could not connect this phone. Check that the other device is open and its address is correct, then try again.</string>
     <string name="folder_sync_pair_waiting">Starting this phone…</string>
     <string name="folder_sync_discovery_empty">No nearby devices found. Enter the other device’s address to connect.</string>

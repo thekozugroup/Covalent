@@ -127,17 +127,51 @@ class CovalentAppTest {
             }
         }
 
+        compose.onNodeWithText("Outgoing backup-device request").assertIsDisplayed()
         compose.onNodeWithText("Codes match — use as backup device").assertIsDisplayed()
         compose.onNodeWithText(
             "Compare this code on both physical devices. Continue only if every group matches. " +
                 "Pairing copies nothing now; you choose this device separately when creating a backup.",
         ).assertIsDisplayed()
         compose.runOnIdle { folderMode.value = true }
+        compose.onNodeWithText("Outgoing folder sync device request").assertIsDisplayed()
+        compose.onNodeWithText("Outgoing backup-device request").assertDoesNotExist()
         compose.onNodeWithText("Codes match — pair device").assertIsDisplayed()
         compose.onNodeWithText(
             "Compare this code on both physical devices. Continue only if every group matches. " +
                 "Pairing copies nothing now; choose a folder separately after pairing.",
         ).assertIsDisplayed()
+    }
+
+    @Test
+    fun completedFolderPairingShowsSyncFailureInsteadOfFinishingForever() {
+        val pairing = NetworkPairing(
+            pairingId = "11111111-1111-4111-8111-111111111111",
+            direction = NetworkPairingDirection.OUTGOING,
+            peerName = "Nearby device",
+            authenticationString = "alpha-bravo-charlie",
+            expiresAtUnixMs = System.currentTimeMillis() + 60_000,
+            state = NetworkPairingState.COMPLETE,
+            failureCode = null,
+            failureMessage = null,
+            peerTransport = null,
+        )
+        compose.setContent {
+            CovalentTheme {
+                NetworkPairingCard(
+                    pairing,
+                    providerPersisted = false,
+                    busy = false,
+                    confirm = {},
+                    dismiss = {},
+                    forFolderSync = true,
+                    completionFailure = "This device is paired, but folder sync could not start.",
+                )
+            }
+        }
+
+        compose.onNodeWithText("This device is paired, but folder sync could not start.").assertIsDisplayed()
+        compose.onNodeWithText("Finishing device connection…").assertDoesNotExist()
     }
 
     @Test

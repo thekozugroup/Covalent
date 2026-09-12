@@ -37,10 +37,25 @@ import kotlinx.coroutines.withContext
 import life.michaelwong.covalent.R
 import life.michaelwong.covalent.data.CovalentNodeClient
 import life.michaelwong.covalent.model.DiscoveryCandidate
+import life.michaelwong.covalent.model.FolderSyncAvailability
+import life.michaelwong.covalent.model.FolderSyncIssue
+import life.michaelwong.covalent.model.FolderSyncLifecycle
+import life.michaelwong.covalent.model.FolderSyncStatus
 import life.michaelwong.covalent.model.NetworkPairing
 import life.michaelwong.covalent.model.NetworkPairingState
 import life.michaelwong.covalent.model.NodeConnection
 import life.michaelwong.covalent.node.EmbeddedNodeManager
+
+internal enum class FolderSyncPairingBlocker { INSTALLATION, NEEDS_ATTENTION }
+
+internal fun FolderSyncStatus.pairingBlocker(): FolderSyncPairingBlocker? = when {
+    availability == FolderSyncAvailability.NOT_PACKAGED || issue == FolderSyncIssue.INSTALLATION ->
+        FolderSyncPairingBlocker.INSTALLATION
+    availability == FolderSyncAvailability.NEEDS_ATTENTION ||
+        lifecycle == FolderSyncLifecycle.NEEDS_ATTENTION || issue != null ->
+        FolderSyncPairingBlocker.NEEDS_ATTENTION
+    else -> null
+}
 
 /** Pair only the on-phone sync identity; the separate backup connection is never selected or changed. */
 @Composable
@@ -50,10 +65,13 @@ internal fun FolderSyncPairing(manager: EmbeddedNodeManager, onPeersChanged: () 
     val scope = rememberCoroutineScope()
     val peersChanged by rememberUpdatedState(onPeersChanged)
     val failureMessage = stringResource(R.string.folder_sync_pair_failure)
+    val installationMessage = stringResource(R.string.folder_sync_pair_installation)
+    val needsAttentionMessage = stringResource(R.string.folder_sync_pair_needs_attention)
     var address by remember { mutableStateOf("") }
     var pending by remember { mutableStateOf<List<NetworkPairing>>(emptyList()) }
     var candidates by remember { mutableStateOf<List<DiscoveryCandidate>>(emptyList()) }
     var pairedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var blocker by remember { mutableStateOf<FolderSyncPairingBlocker?>(null) }
     var discoveryFinished by remember { mutableStateOf(false) }
     var ready by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
@@ -62,12 +80,14 @@ internal fun FolderSyncPairing(manager: EmbeddedNodeManager, onPeersChanged: () 
     fun localConnection(): NodeConnection = checkNotNull(manager.localConnectionForFolderSync())
 
     suspend fun refreshPairing() {
-        val (requests, ids) = withContext(Dispatchers.IO) {
+        val (requests, status) = withContext(Dispatchers.IO) {
             val connection = localConnection()
             val requests = client.pendingNetworkPairings(connection.baseUrl, connection.token)
-            requests to client.folderSyncStatus(connection.baseUrl, connection.token).peers.map { it.peerId }.toSet()
+            requests to client.folderSyncStatus(connection.baseUrl, connection.token)
         }
+        val ids = status.peers.map { it.peerId }.toSet()
         pending = requests.sortedBy { it.expiresAtUnixMs }
+        blocker = status.pairingBlocker()
         ready = true
         if (pairedIds != ids) {
             pairedIds = ids
@@ -194,6 +214,11 @@ internal fun FolderSyncPairing(manager: EmbeddedNodeManager, onPeersChanged: () 
                         }
                     },
                     forFolderSync = true,
+                    completionFailure = when (blocker) {
+                        FolderSyncPairingBlocker.INSTALLATION -> installationMessage
+                        FolderSyncPairingBlocker.NEEDS_ATTENTION -> needsAttentionMessage
+                        null -> null
+                    },
                 )
             }
         }

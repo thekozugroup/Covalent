@@ -2008,9 +2008,16 @@ internal fun NetworkPairingCard(
     confirm: () -> Unit,
     dismiss: () -> Unit,
     forFolderSync: Boolean = false,
+    completionFailure: String? = null,
 ) {
     val direction = stringResource(
-        if (pairing.direction == NetworkPairingDirection.INCOMING) {
+        if (forFolderSync) {
+            if (pairing.direction == NetworkPairingDirection.INCOMING) {
+                R.string.folder_sync_pair_incoming
+            } else {
+                R.string.folder_sync_pair_outgoing
+            }
+        } else if (pairing.direction == NetworkPairingDirection.INCOMING) {
             R.string.network_pairing_incoming
         } else {
             R.string.network_pairing_outgoing
@@ -2100,6 +2107,8 @@ internal fun NetworkPairingCard(
                                 fontWeight = FontWeight.SemiBold,
                             )
                         }
+                    } else if (completionFailure != null) {
+                        InlineError(completionFailure)
                     } else {
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                             CircularProgressIndicator()
