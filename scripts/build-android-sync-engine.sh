@@ -561,6 +561,79 @@ python3 "$notice_tool" \
   --source-archive-suffix .tgz \
   --output "$notices"
 
+# The Settings notice viewer renders this combined file. Add the exact prebuilt
+# AndroidX component attribution here so recipients can associate the already
+# bundled Apache-2.0 terms with the native library in their APK.
+python3 - "$notices/THIRD-PARTY-NOTICES.txt" "$notices/manifest.json" <<'PY'
+import hashlib
+import json
+import os
+import pathlib
+import stat
+import sys
+
+combined_path = pathlib.Path(sys.argv[1])
+manifest_path = pathlib.Path(sys.argv[2])
+for path in (combined_path, manifest_path):
+    metadata = path.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        raise SystemExit("generated Android notice output is unsafe")
+attribution = (
+    b"\n===== Android Graphics Path runtime dependency =====\n"
+    b"androidx.graphics:graphics-path:1.0.1\n"
+    b"Publisher: The Android Open Source Project\n"
+    b"License: Apache-2.0 (full terms included in this combined notice)\n"
+    b"License metadata: https://dl.google.com/dl/android/maven2/androidx/graphics/graphics-path/1.0.1/graphics-path-1.0.1.pom\n"
+    b"AAR SHA-256: 8ca4032b6d79b351f0b59ad4b580eddbb9423e1652f7c958830687f1eee2ec03\n"
+)
+combined = combined_path.read_bytes()
+manifest = json.loads(manifest_path.read_text())
+descriptor = manifest.get("combinedNotice", {})
+if descriptor != {
+    "bundlePath": "THIRD-PARTY-NOTICES.txt",
+    "bytes": len(combined),
+    "sha256": hashlib.sha256(combined).hexdigest(),
+}:
+    raise SystemExit("generated Android notice descriptor differs before attribution")
+if attribution in combined:
+    raise SystemExit("generated Android notice already contains the runtime attribution")
+combined += attribution
+if len(combined) > 8 * 1024 * 1024:
+    raise SystemExit("attributed Android notice exceeds the viewer bound")
+manifest["recipientAttributions"] = [{
+    "artifactSha256": "8ca4032b6d79b351f0b59ad4b580eddbb9423e1652f7c958830687f1eee2ec03",
+    "coordinate": "androidx.graphics:graphics-path:1.0.1",
+    "license": "Apache-2.0",
+    "licenseEvidence": "https://dl.google.com/dl/android/maven2/androidx/graphics/graphics-path/1.0.1/graphics-path-1.0.1.pom",
+    "name": "Android Graphics Path",
+    "publisher": "The Android Open Source Project",
+}]
+manifest["combinedNotice"] = {
+    "bundlePath": "THIRD-PARTY-NOTICES.txt",
+    "bytes": len(combined),
+    "sha256": hashlib.sha256(combined).hexdigest(),
+}
+bounds = manifest.get("bounds")
+if not isinstance(bounds, dict) or not isinstance(bounds.get("bytes"), int):
+    raise SystemExit("generated Android notice bounds are malformed")
+bounds["bytes"] += len(attribution)
+if bounds["bytes"] > 64 * 1024 * 1024:
+    raise SystemExit("attributed Android notice bundle exceeds its bound")
+manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
+if len(manifest_bytes) > 4 * 1024 * 1024:
+    raise SystemExit("attributed Android notice manifest exceeds the viewer bound")
+
+def replace_read_only(path, data):
+    os.chmod(path, 0o644)
+    try:
+        path.write_bytes(data)
+    finally:
+        os.chmod(path, 0o444)
+
+replace_read_only(combined_path, combined)
+replace_read_only(manifest_path, manifest_bytes)
+PY
+
 python3 - "$reports_root" "$notices/manifest.json" "$hash_file" "$guardian_hash_file" <<'PY'
 import hashlib
 import json

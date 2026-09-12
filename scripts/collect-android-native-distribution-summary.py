@@ -17,6 +17,7 @@ import re
 import stat
 import sys
 import zipfile
+import xml.etree.ElementTree as ET
 from collections import Counter
 from typing import Any, Iterable
 
@@ -28,6 +29,20 @@ LIBRARIES = {
     "jni": "libcovalent_android_jni.so",
     "syncthing": "libsyncthing.so",
 }
+GRAPHICS_PATH_COORDINATE = ("androidx.graphics", "graphics-path", "1.0.1")
+GRAPHICS_PATH_LIBRARY = "libandroidx.graphics.path.so"
+GRAPHICS_PATH_LICENSE = "Apache-2.0"
+GRAPHICS_PATH_LICENSE_EVIDENCE = (
+    "https://dl.google.com/dl/android/maven2/androidx/graphics/graphics-path/1.0.1/"
+    "graphics-path-1.0.1.pom"
+)
+GRAPHICS_PATH_ATTRIBUTION = (
+    b"\n===== Android Graphics Path runtime dependency =====\n"
+    b"androidx.graphics:graphics-path:1.0.1\n"
+    b"Publisher: The Android Open Source Project\n"
+    b"License: Apache-2.0 (full terms included in this combined notice)\n"
+    b"License metadata: " + GRAPHICS_PATH_LICENSE_EVIDENCE.encode("ascii") + b"\n"
+)
 EXPECTED_NDK = "27.1.12297006"
 EXPECTED_RECORDS = {(component, abi) for component in COMPONENTS for abi in ABIS}
 EXPECTED_NOTICE_NAMES = {"NOTICE", "NOTICE.toolchain"}
@@ -49,6 +64,9 @@ MAX_PACKAGE_ENTRIES = 100_000
 MAX_LINK_INPUTS = 4_096
 MAX_DYNAMIC_LIBRARIES = 64
 MAX_SUMMARY_BYTES = 1024 * 1024
+MAX_DEPENDENCY_EVIDENCE_BYTES = 16 * 1024 * 1024
+NATIVE_ENTRY = re.compile(r"lib/([^/]+)/([^/]+\.so)")
+DEPENDENCY_NATIVE_ENTRY = re.compile(r"jni/([^/]+)/([^/]+\.so)")
 
 
 class SummaryError(Exception):
@@ -324,9 +342,175 @@ def _declared_notice_files(manifest: dict[str, Any]) -> dict[str, tuple[int | No
     return declared
 
 
+def _single_sha256(rows: Any, label: str) -> str:
+    if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+        raise SummaryError(f"{label} SHA-256 evidence is malformed")
+    row = rows[0]
+    digest = row.get("content")
+    if row.get("alg") != "SHA-256" or not isinstance(digest, str) or HEX_SHA256.fullmatch(digest) is None:
+        raise SummaryError(f"{label} SHA-256 evidence is malformed")
+    return digest
+
+
+def _named_properties(rows: Any, label: str) -> dict[str, str]:
+    if not isinstance(rows, list) or len(rows) > 1_024:
+        raise SummaryError(f"{label} properties are malformed")
+    result: dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != {"name", "value"}:
+            raise SummaryError(f"{label} properties are malformed")
+        name, value = row["name"], row["value"]
+        if not isinstance(name, str) or not isinstance(value, str) or name in result:
+            raise SummaryError(f"{label} properties are malformed")
+        result[name] = value
+    return result
+
+
+def _runtime_dependency_evidence(
+    sbom_raw: bytes,
+    license_raw: bytes,
+    verification_raw: bytes,
+) -> tuple[dict[str, Any], dict[str, tuple[int, str]]]:
+    sbom = _decode_json(sbom_raw, "Android runtime SBOM")
+    license_inventory = _decode_json(license_raw, "Android runtime license inventory")
+    group, name, version = GRAPHICS_PATH_COORDINATE
+    if sbom.get("bomFormat") != "CycloneDX" or sbom.get("specVersion") != "1.5":
+        raise SummaryError("Android runtime SBOM schema is unsupported")
+    components = sbom.get("components")
+    if not isinstance(components, list) or not components or len(components) > 4_096:
+        raise SummaryError("Android runtime SBOM components are malformed")
+    selected = [
+        row for row in components
+        if isinstance(row, dict)
+        and (row.get("group"), row.get("name"), row.get("version")) == GRAPHICS_PATH_COORDINATE
+    ]
+    if len(selected) != 1:
+        raise SummaryError("Android runtime SBOM omits the exact graphics-path dependency")
+    sbom_component = selected[0]
+    aar_digest = _single_sha256(sbom_component.get("hashes"), "graphics-path AAR")
+    properties = _named_properties(sbom_component.get("properties"), "graphics-path SBOM")
+    if properties.get("covalent:artifact-file") != f"{name}-{version}.aar":
+        raise SummaryError("Android runtime SBOM graphics-path artifact differs")
+    licenses = sbom_component.get("licenses")
+    if (
+        not isinstance(licenses, list)
+        or len(licenses) != 1
+        or not isinstance(licenses[0], dict)
+        or not isinstance(licenses[0].get("license"), dict)
+        or licenses[0]["license"].get("id") != GRAPHICS_PATH_LICENSE
+    ):
+        raise SummaryError("Android runtime SBOM graphics-path license differs")
+
+    if license_inventory.get("schemaVersion") != 1:
+        raise SummaryError("Android runtime license inventory schema is unsupported")
+    license_rows = license_inventory.get("components")
+    if not isinstance(license_rows, list) or not license_rows or len(license_rows) > 4_096:
+        raise SummaryError("Android runtime license inventory is malformed")
+    coordinate = ":".join(GRAPHICS_PATH_COORDINATE)
+    selected_licenses = [
+        row for row in license_rows
+        if isinstance(row, dict) and row.get("coordinate") == coordinate
+    ]
+    if len(selected_licenses) != 1:
+        raise SummaryError("Android runtime license inventory omits graphics-path")
+    license_row = selected_licenses[0]
+    if (
+        license_row.get("artifact") != f"{name}-{version}.aar"
+        or license_row.get("sha256") != aar_digest
+        or license_row.get("spdxId") != GRAPHICS_PATH_LICENSE
+        or license_row.get("reviewEvidence") != GRAPHICS_PATH_LICENSE_EVIDENCE
+    ):
+        raise SummaryError("Android runtime graphics-path attribution differs")
+    native_rows = license_row.get("nativeObjects")
+    if not isinstance(native_rows, list) or len(native_rows) > 64:
+        raise SummaryError("Android runtime graphics-path native inventory is malformed")
+    native: dict[str, tuple[int, str]] = {}
+    for row in native_rows:
+        path = row.get("path") if isinstance(row, dict) else None
+        size = row.get("bytes") if isinstance(row, dict) else None
+        digest = row.get("sha256") if isinstance(row, dict) else None
+        match = DEPENDENCY_NATIVE_ENTRY.fullmatch(path) if isinstance(path, str) else None
+        if (
+            match is None
+            or match.group(2) != GRAPHICS_PATH_LIBRARY
+            or path in native
+            or not isinstance(size, int)
+            or isinstance(size, bool)
+            or not 0 < size <= MAX_NATIVE_BYTES
+            or not isinstance(digest, str)
+            or HEX_SHA256.fullmatch(digest) is None
+        ):
+            raise SummaryError("Android runtime graphics-path native inventory is malformed")
+        native[path] = (size, digest)
+    expected_native = {f"jni/{abi}/{GRAPHICS_PATH_LIBRARY}" for abi in ABIS}
+    if not expected_native.issubset(native):
+        raise SummaryError("Android runtime graphics-path native inventory is incomplete")
+    for path, (size, digest) in native.items():
+        if properties.get(f"covalent:native-object:{path}") != f"{size} {digest}":
+            raise SummaryError("Android runtime SBOM and license native evidence differ")
+
+    if b"<!DOCTYPE" in verification_raw or b"<!ENTITY" in verification_raw:
+        raise SummaryError("Gradle dependency verification metadata is malformed")
+    try:
+        root = ET.fromstring(verification_raw)
+    except ET.ParseError as error:
+        raise SummaryError("Gradle dependency verification metadata is malformed") from error
+    namespace = {"v": "https://schema.gradle.org/dependency-verification"}
+    matches = [
+        component for component in root.findall(".//v:component", namespace)
+        if (
+            component.get("group"),
+            component.get("name"),
+            component.get("version"),
+        ) == GRAPHICS_PATH_COORDINATE
+    ]
+    if len(matches) != 1:
+        raise SummaryError("Gradle verification omits the exact graphics-path dependency")
+    verified: dict[str, str] = {}
+    for artifact in matches[0].findall("v:artifact", namespace):
+        artifact_name = artifact.get("name")
+        hashes = artifact.findall("v:sha256", namespace)
+        if (
+            not isinstance(artifact_name, str)
+            or artifact_name in verified
+            or len(hashes) != 1
+            or not isinstance(hashes[0].get("value"), str)
+            or HEX_SHA256.fullmatch(hashes[0].get("value", "")) is None
+        ):
+            raise SummaryError("Gradle graphics-path verification hashes are malformed")
+        verified[artifact_name] = hashes[0].get("value", "")
+    required_verification = {
+        f"{name}-{version}.aar",
+        f"{name}-{version}.module",
+        f"{name}-{version}.pom",
+    }
+    if set(verified) != required_verification or verified[f"{name}-{version}.aar"] != aar_digest:
+        raise SummaryError("Gradle graphics-path verification hashes differ")
+    return (
+        {
+            "artifact": {"sha256": aar_digest},
+            "coordinate": coordinate,
+            "license": {
+                "evidence": GRAPHICS_PATH_LICENSE_EVIDENCE,
+                "spdxId": GRAPHICS_PATH_LICENSE,
+            },
+            "runtimeEvidence": {
+                "licenseInventory": {"bytes": len(license_raw), "sha256": _digest(license_raw)},
+                "sbom": {"bytes": len(sbom_raw), "sha256": _digest(sbom_raw)},
+            },
+            "verification": {
+                artifact: verified[artifact] for artifact in sorted(verified)
+            },
+        },
+        {f"lib/{abi}/{GRAPHICS_PATH_LIBRARY}": native[f"jni/{abi}/{GRAPHICS_PATH_LIBRARY}"] for abi in ABIS},
+    )
+
+
 def _package_summary(
     path: pathlib.Path,
     records: dict[tuple[str, str], dict[str, Any]],
+    dependency: dict[str, Any],
+    dependency_native: dict[str, tuple[int, str]],
     variant: str,
 ) -> tuple[dict[str, Any], bytes, dict[str, tuple[int, str]]]:
     flags = (
@@ -356,6 +540,20 @@ def _package_summary(
         os.lseek(package_fd, 0, os.SEEK_SET)
         with os.fdopen(os.dup(package_fd), "rb") as package_file, zipfile.ZipFile(package_file) as archive:
             index = _zip_index(archive)
+            packaged_library_files = {
+                name for name, info in index.items()
+                if not info.is_dir() and name.startswith("lib/")
+            }
+            if any(NATIVE_ENTRY.fullmatch(name) is None for name in packaged_library_files):
+                raise SummaryError("Android package contains an unclassified native object set")
+            packaged_native = packaged_library_files
+            expected_native = {
+                f"lib/{abi}/{LIBRARIES[component]}"
+                for component in COMPONENTS
+                for abi in ABIS
+            } | set(dependency_native)
+            if packaged_native != expected_native:
+                raise SummaryError("Android package contains an unclassified native object set")
             binary_manifests = {
                 component: _native_manifest(
                     _read_zip_entry(archive, index, f"assets/{asset}", 1024)
@@ -387,6 +585,22 @@ def _package_summary(
                         "component": component,
                         "sha256": observed[1],
                     })
+            for entry, expected in sorted(dependency_native.items()):
+                data = _read_zip_entry(archive, index, entry, MAX_NATIVE_BYTES)
+                observed = (len(data), _digest(data))
+                if observed != expected:
+                    raise SummaryError(
+                        "packaged runtime-dependency native object differs from dependency evidence: "
+                        f"variant={variant} entry={entry} "
+                        f"expected_bytes={expected[0]} expected_sha256={expected[1]} "
+                        f"actual_bytes={observed[0]} actual_sha256={observed[1]}"
+                    )
+                native.append({
+                    "abi": NATIVE_ENTRY.fullmatch(entry).group(1),
+                    "bytes": observed[0],
+                    "component": ":".join(GRAPHICS_PATH_COORDINATE),
+                    "sha256": observed[1],
+                })
             manifest_raw = _read_zip_entry(
                 archive, index, "assets/sync-engine-notices/manifest.json", MAX_MANIFEST_BYTES
             )
@@ -438,6 +652,32 @@ def _package_summary(
                     raise SummaryError("packaged notice index is malformed")
                 indexed[label] = (size, digest, relative)
             combined = verified["THIRD-PARTY-NOTICES.txt"]
+            combined_raw = _read_zip_entry(
+                archive,
+                index,
+                "assets/sync-engine-notices/THIRD-PARTY-NOTICES.txt",
+                MAX_NOTICE_FILE_BYTES,
+            )
+            if b"Apache License\nVersion 2.0" not in combined_raw:
+                raise SummaryError("packaged notices omit the graphics-path license terms")
+            expected_attribution = [{
+                "artifactSha256": dependency["artifact"]["sha256"],
+                "coordinate": ":".join(GRAPHICS_PATH_COORDINATE),
+                "license": GRAPHICS_PATH_LICENSE,
+                "licenseEvidence": GRAPHICS_PATH_LICENSE_EVIDENCE,
+                "name": "Android Graphics Path",
+                "publisher": "The Android Open Source Project",
+            }]
+            if manifest.get("recipientAttributions") != expected_attribution:
+                raise SummaryError("packaged notices omit the graphics-path attribution")
+            expected_attribution_text = (
+                GRAPHICS_PATH_ATTRIBUTION
+                + b"AAR SHA-256: "
+                + dependency["artifact"]["sha256"].encode("ascii")
+                + b"\n"
+            )
+            if combined_raw.count(expected_attribution_text) != 1:
+                raise SummaryError("packaged notices omit the graphics-path attribution")
             expected_index = {
                 "combined": (combined[0], combined[1], "sync-engine-notices/THIRD-PARTY-NOTICES.txt"),
                 "manifest": (len(manifest_raw), _digest(manifest_raw), "sync-engine-notices/manifest.json"),
@@ -491,7 +731,13 @@ def _package_summary(
     )
 
 
-def collect(record_paths: list[pathlib.Path], package_paths: list[pathlib.Path]) -> dict[str, Any]:
+def collect(
+    record_paths: list[pathlib.Path],
+    package_paths: list[pathlib.Path],
+    sbom_path: pathlib.Path,
+    license_path: pathlib.Path,
+    verification_path: pathlib.Path,
+) -> dict[str, Any]:
     if len(record_paths) != 6 or len(package_paths) != 2:
         raise SummaryError("exactly six provenance records and two Android packages are required")
     records: dict[tuple[str, str], dict[str, Any]] = {}
@@ -508,10 +754,18 @@ def collect(record_paths: list[pathlib.Path], package_paths: list[pathlib.Path])
     if set(records) != EXPECTED_RECORDS or ndk_files is None:
         raise SummaryError("native provenance record set is incomplete")
 
+    dependency, dependency_native = _runtime_dependency_evidence(
+        _read_regular(sbom_path, MAX_DEPENDENCY_EVIDENCE_BYTES),
+        _read_regular(license_path, MAX_DEPENDENCY_EVIDENCE_BYTES),
+        _read_regular(verification_path, MAX_DEPENDENCY_EVIDENCE_BYTES),
+    )
+
     packages: list[dict[str, Any]] = []
     notice_manifest: bytes | None = None
     for variant, path in zip(("debug", "release"), package_paths, strict=True):
-        package, observed_manifest, observed_notices = _package_summary(path, records, variant)
+        package, observed_manifest, observed_notices = _package_summary(
+            path, records, dependency, dependency_native, variant
+        )
         package["variant"] = variant
         if notice_manifest is not None and observed_manifest != notice_manifest:
             raise SummaryError("Android packages contain different notice manifests")
@@ -521,6 +775,15 @@ def collect(record_paths: list[pathlib.Path], package_paths: list[pathlib.Path])
         packages.append(package)
     if packages[0]["nativeObjects"] != packages[1]["nativeObjects"]:
         raise SummaryError("Android packages contain different native objects")
+    dependency["license"]["packagedTerms"] = {
+        "path": "assets/sync-engine-notices/THIRD-PARTY-NOTICES.txt",
+        **packages[0]["notices"]["combined"],
+    }
+    dependency["license"]["recipientAttribution"] = {
+        "coordinate": dependency["coordinate"],
+        "path": "assets/sync-engine-notices/THIRD-PARTY-NOTICES.txt",
+        **packages[0]["notices"]["combined"],
+    }
 
     requested = Counter()
     contributing = Counter()
@@ -531,11 +794,12 @@ def collect(record_paths: list[pathlib.Path], package_paths: list[pathlib.Path])
         contributing.update(record["contributingCategories"])
         dynamics.update(record["dynamicLibraries"])
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "status": "packaged-native-evidence-bound-review-required",
         "scope": (
-            "Exact debug/release native object bytes, six final-link records, and packaged notice "
-            "digests; classification evidence only, with no license or release approval."
+            "Every debug/release native object, six final-link records, the pinned graphics-path "
+            "runtime dependency, runtime SBOM/license evidence, and packaged notice digests; "
+            "classification evidence only, with no license or release approval."
         ),
         "ndk": {
             "files": {
@@ -546,6 +810,7 @@ def collect(record_paths: list[pathlib.Path], package_paths: list[pathlib.Path])
         },
         "packages": packages,
         "records": ordered_records,
+        "runtimeDependency": dependency,
         "totals": {
             "contributingCategories": dict(sorted(contributing.items())),
             "dynamicLibraries": dict(sorted(dynamics.items())),
@@ -583,6 +848,7 @@ def _print_receipt(value: dict[str, Any], encoded: bytes) -> None:
     for record in value["records"]:
         print("ANDROID_NATIVE_RECORD " + compact(record))
     print("ANDROID_NDK_EVIDENCE " + compact(value["ndk"]))
+    print("ANDROID_RUNTIME_DEPENDENCY " + compact(value["runtimeDependency"]))
     packages = [
         {
             "bytes": package["bytes"],
@@ -607,12 +873,21 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--record", action="append", required=True, type=pathlib.Path)
     parser.add_argument("--debug-package", required=True, type=pathlib.Path)
     parser.add_argument("--release-package", required=True, type=pathlib.Path)
+    parser.add_argument("--android-sbom", required=True, type=pathlib.Path)
+    parser.add_argument("--android-license-inventory", required=True, type=pathlib.Path)
+    parser.add_argument("--dependency-verification", required=True, type=pathlib.Path)
     destination = parser.add_mutually_exclusive_group(required=True)
     destination.add_argument("--output", type=pathlib.Path)
     destination.add_argument("--verify-output", type=pathlib.Path)
     arguments = parser.parse_args(argv)
     try:
-        value = collect(arguments.record, [arguments.debug_package, arguments.release_package])
+        value = collect(
+            arguments.record,
+            [arguments.debug_package, arguments.release_package],
+            arguments.android_sbom,
+            arguments.android_license_inventory,
+            arguments.dependency_verification,
+        )
         encoded = _encoded(value)
         if arguments.output is not None:
             _write_new(arguments.output, encoded)

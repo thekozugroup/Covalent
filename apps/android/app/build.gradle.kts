@@ -1,6 +1,7 @@
 import groovy.json.JsonOutput
 import org.gradle.api.GradleException
 import java.security.MessageDigest
+import java.util.zip.ZipFile
 
 plugins {
     id("com.android.application")
@@ -330,6 +331,40 @@ val generateAndroidSbom = tasks.register("generateAndroidSbom") {
             }
             return digest.digest().joinToString("") { "%02x".format(it) }
         }
+        fun nativeObjects(file: File): List<Map<String, Any>> {
+            if (file.extension != "aar") return emptyList()
+            return ZipFile(file).use { archive ->
+                val rows = mutableListOf<Map<String, Any>>()
+                val names = mutableSetOf<String>()
+                val entries = archive.entries()
+                while (entries.hasMoreElements()) {
+                    val entry = entries.nextElement()
+                    if (entry.isDirectory || !entry.name.matches(Regex("jni/[^/]+/[^/]+\\.so"))) continue
+                    check(names.add(entry.name) && entry.size in 1..64L * 1024L * 1024L) {
+                        "Runtime dependency has malformed native entries: ${file.name}"
+                    }
+                    val digest = MessageDigest.getInstance("SHA-256")
+                    var bytes = 0L
+                    archive.getInputStream(entry).buffered().use { input ->
+                        val buffer = ByteArray(64 * 1024)
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            bytes += count
+                            check(bytes <= entry.size)
+                            digest.update(buffer, 0, count)
+                        }
+                    }
+                    check(bytes == entry.size)
+                    rows += linkedMapOf(
+                        "path" to entry.name,
+                        "bytes" to bytes,
+                        "sha256" to digest.digest().joinToString("") { "%02x".format(it) },
+                    )
+                }
+                rows.sortedBy { it.getValue("path") as String }
+            }
+        }
         val components = artifacts.map { artifact ->
             val group = artifact.moduleVersion.id.group
             val name = artifact.name
@@ -337,6 +372,7 @@ val generateAndroidSbom = tasks.register("generateAndroidSbom") {
             val license = reviewedDependencyLicense(group, name, version)
             val artifactHash = sha256(artifact.file)
             val artifactType = artifact.file.extension.ifBlank { "jar" }
+            val nativeObjects = nativeObjects(artifact.file)
             linkedMapOf<String, Any>(
                 "type" to "library",
                 "group" to group,
@@ -358,7 +394,12 @@ val generateAndroidSbom = tasks.register("generateAndroidSbom") {
                 "properties" to listOf(
                     mapOf("name" to "covalent:artifact-file", "value" to artifact.file.name),
                     mapOf("name" to "covalent:license-review", "value" to "explicit-fail-closed"),
-                ),
+                ) + nativeObjects.map { native ->
+                    mapOf(
+                        "name" to "covalent:native-object:${native.getValue("path")}",
+                        "value" to "${native.getValue("bytes")} ${native.getValue("sha256")}",
+                    )
+                },
             )
         }
         val document = linkedMapOf<String, Any>(
@@ -400,6 +441,7 @@ val generateAndroidSbom = tasks.register("generateAndroidSbom") {
                     "licenseName" to license.name,
                     "licenseText" to license.textUrl,
                     "reviewEvidence" to license.evidenceUrl,
+                    "nativeObjects" to nativeObjects(artifact.file),
                 )
             },
         )

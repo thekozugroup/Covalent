@@ -69,6 +69,9 @@ fi
 android_build_inputs="apps/android crates packaging/sync-engine Cargo.toml Cargo.lock rust-toolchain.toml LICENSE docs/licenses/sync-engine/OFL-1.1.txt scripts/build-android-jni.sh scripts/build-android-sync-engine.sh scripts/android-go-link-wrapper.sh scripts/collect-go-target-license-inventory.py scripts/collect-sync-engine-notices.py scripts/collect-android-native-link-provenance.py scripts/collect-android-native-distribution-summary.py scripts/test-collect-android-native-distribution-summary.py scripts/android-native-budgets.sh scripts/check-android-native-package.sh scripts/test-android-native-package.sh"
 android_prebuild_stamp="$repo_root/apps/android/app/build/covalent-prebuild-stamp"
 native_distribution_summary="$repo_root/apps/android/app/build/generated/syncEngine/reports/android-native-distribution-summary.json"
+android_sbom="$repo_root/apps/android/app/build/reports/covalent/android-sbom.cdx.json"
+android_license_inventory="$repo_root/apps/android/app/build/reports/covalent/android-license-inventory.json"
+dependency_verification="$repo_root/apps/android/gradle/verification-metadata.xml"
 
 # Fingerprint every tracked and untracked nonignored build input by content,
 # path and mode, alongside HEAD and the exact NUL-delimited status stream. HEAD
@@ -176,6 +179,8 @@ if [ "$mode" = verify-prebuilt ]; then
     "$repo_root/apps/android/app/build/test-results/testDebugUnitTest"
   require_prebuilt_artifact "debug lint report" \
     "$repo_root/apps/android/app/build/reports/lint-results-debug.xml"
+  require_prebuilt_artifact "Android runtime SBOM" "$android_sbom"
+  require_prebuilt_artifact "Android runtime license inventory" "$android_license_inventory"
 
   # Presence is not the same as a pass. Read the reports the
   # skipped `test` and `lint` tasks wrote and re-assert their verdicts here, so
@@ -200,15 +205,14 @@ if [ "$mode" = verify-prebuilt ]; then
   fi
   echo "  verified: debug lint report records no error-severity issues"
 elif [ -n "$android_java" ]; then
-  env JAVA_HOME="$android_java" ANDROID_HOME="$android_sdk" ANDROID_SDK_ROOT="$android_sdk" COVALENT_ANDROID_NDK_HOME="$android_ndk" "$repo_root/apps/android/gradlew" -p "$repo_root/apps/android" --no-daemon test lint assembleDebug assembleRelease assembleDebugAndroidTest
+  env JAVA_HOME="$android_java" ANDROID_HOME="$android_sdk" ANDROID_SDK_ROOT="$android_sdk" COVALENT_ANDROID_NDK_HOME="$android_ndk" "$repo_root/apps/android/gradlew" -p "$repo_root/apps/android" --no-daemon test lint assembleDebug assembleRelease assembleDebugAndroidTest generateAndroidSbom
 else
-  env ANDROID_HOME="$android_sdk" ANDROID_SDK_ROOT="$android_sdk" COVALENT_ANDROID_NDK_HOME="$android_ndk" "$repo_root/apps/android/gradlew" -p "$repo_root/apps/android" --no-daemon test lint assembleDebug assembleRelease assembleDebugAndroidTest
+  env ANDROID_HOME="$android_sdk" ANDROID_SDK_ROOT="$android_sdk" COVALENT_ANDROID_NDK_HOME="$android_ndk" "$repo_root/apps/android/gradlew" -p "$repo_root/apps/android" --no-daemon test lint assembleDebug assembleRelease assembleDebugAndroidTest generateAndroidSbom
 fi
 
-# Bind both APK variants' six packaged native objects to the final-link records
-# and to the exact NDK notice bytes shipped to recipients. The report remains a
-# review-required evidence summary: requested inputs, final-map contributors,
-# and DT_NEEDED entries are deliberately kept as separate categories.
+# Account for every native object in both APK variants. Covalent-built objects
+# bind to final-link records; prebuilt AndroidX objects bind to the runtime
+# dependency graph, Gradle verification hashes, and recipient notice terms.
 native_summary_tool="$repo_root/scripts/collect-android-native-distribution-summary.py"
 jni_reports="$repo_root/apps/android/app/build/generated/jniLibs/provenance"
 engine_reports="$repo_root/apps/android/app/build/generated/syncEngine/reports"
@@ -220,7 +224,10 @@ set -- \
   --record "$engine_reports/syncthing-link-provenance-arm64-v8a.json" \
   --record "$engine_reports/syncthing-link-provenance-x86_64.json" \
   --debug-package "$repo_root/apps/android/app/build/outputs/apk/debug/app-debug.apk" \
-  --release-package "$repo_root/apps/android/app/build/outputs/apk/release/app-release-unsigned.apk"
+  --release-package "$repo_root/apps/android/app/build/outputs/apk/release/app-release-unsigned.apk" \
+  --android-sbom "$android_sbom" \
+  --android-license-inventory "$android_license_inventory" \
+  --dependency-verification "$dependency_verification"
 if [ "$mode" = full ]; then
   test ! -e "$native_distribution_summary" && test ! -L "$native_distribution_summary" || {
     echo "Android native distribution summary output was not recreated by the build" >&2

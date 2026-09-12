@@ -34,6 +34,9 @@ class Fixture:
             for component in summary.COMPONENTS
             for abi in summary.ABIS
         }
+        self.graphics_payloads = {
+            abi: f"graphics-path:{abi}:native".encode() for abi in summary.ABIS
+        }
         self.ndk_payloads = {
             "source.properties": b"Pkg.Revision = 27.1.12297006\n",
             "NOTICE": b"Android NDK notice\n",
@@ -46,6 +49,10 @@ class Fixture:
         ]
         self.debug = self.root / "debug.apk"
         self.release = self.root / "release.apk"
+        self.sbom = self.root / "android-sbom.json"
+        self.licenses = self.root / "android-licenses.json"
+        self.verification = self.root / "verification-metadata.xml"
+        self.write_runtime_evidence()
         self.write_package(self.debug)
         self.write_package(self.release, marker=b"release")
 
@@ -89,9 +96,20 @@ class Fixture:
         path.write_text(json.dumps(self.record_value(component, abi), sort_keys=True) + "\n")
         return path
 
-    def notice_fixture(self) -> tuple[dict[str, object], dict[str, bytes]]:
+    def notice_fixture(
+        self, *, include_recipient_attribution: bool = True
+    ) -> tuple[dict[str, object], dict[str, bytes]]:
+        attribution = (
+            summary.GRAPHICS_PATH_ATTRIBUTION
+            + b"AAR SHA-256: "
+            + self.graphics_aar_sha.encode("ascii")
+            + b"\n"
+        )
         files = {
-            "THIRD-PARTY-NOTICES.txt": b"Readable third-party notices\n",
+            "THIRD-PARTY-NOTICES.txt": (
+                b"Readable third-party notices\nApache License\nVersion 2.0\n"
+                + (attribution if include_recipient_attribution else b"")
+            ),
             "toolchain/NOTICE": self.ndk_payloads["NOTICE"],
             "toolchain/NOTICE.toolchain": self.ndk_payloads["NOTICE.toolchain"],
             "modules/0000/LICENSE": b"module license\n",
@@ -126,6 +144,15 @@ class Fixture:
                 for name in ("NOTICE", "NOTICE.toolchain")
             ],
         }
+        if include_recipient_attribution:
+            manifest["recipientAttributions"] = [{
+                "artifactSha256": self.graphics_aar_sha,
+                "coordinate": ":".join(summary.GRAPHICS_PATH_COORDINATE),
+                "license": summary.GRAPHICS_PATH_LICENSE,
+                "licenseEvidence": summary.GRAPHICS_PATH_LICENSE_EVIDENCE,
+                "name": "Android Graphics Path",
+                "publisher": "The Android Open Source Project",
+            }]
         return manifest, files
 
     def write_package(
@@ -135,12 +162,17 @@ class Fixture:
         marker: bytes = b"debug",
         omit_notice: str | None = None,
         payloads: dict[tuple[str, str], bytes] | None = None,
+        include_recipient_attribution: bool = True,
     ) -> None:
-        manifest, notice_files = self.notice_fixture()
+        manifest, notice_files = self.notice_fixture(
+            include_recipient_attribution=include_recipient_attribution
+        )
         with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             archive.writestr("assets/build-marker", marker)
             for (component, abi), data in (payloads or self.payloads).items():
                 archive.writestr(f"lib/{abi}/{summary.LIBRARIES[component]}", data)
+            for abi, data in self.graphics_payloads.items():
+                archive.writestr(f"lib/{abi}/{summary.GRAPHICS_PATH_LIBRARY}", data)
             for relative, data in notice_files.items():
                 if relative != omit_notice:
                     archive.writestr("assets/sync-engine-notices/" + relative, data)
@@ -168,6 +200,74 @@ class Fixture:
                     rows.append(f"{abi} {hashlib.sha256(data).hexdigest()} {len(data)}")
                 archive.writestr("assets/" + asset, "\n".join(rows) + "\n")
 
+    def write_runtime_evidence(self) -> None:
+        coordinate = ":".join(summary.GRAPHICS_PATH_COORDINATE)
+        aar = b"fixture graphics-path AAR"
+        aar_digest = hashlib.sha256(aar).hexdigest()
+        self.graphics_aar_sha = aar_digest
+        native = [
+            {
+                "path": f"jni/{abi}/{summary.GRAPHICS_PATH_LIBRARY}",
+                **self.descriptor(self.graphics_payloads[abi]),
+            }
+            for abi in summary.ABIS
+        ]
+        properties = [
+            {"name": "covalent:artifact-file", "value": "graphics-path-1.0.1.aar"},
+            {"name": "covalent:license-review", "value": "explicit-fail-closed"},
+        ] + [
+            {
+                "name": f"covalent:native-object:{row['path']}",
+                "value": f"{row['bytes']} {row['sha256']}",
+            }
+            for row in native
+        ]
+        self.sbom.write_text(json.dumps({
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.5",
+            "components": [{
+                "group": "androidx.graphics",
+                "name": "graphics-path",
+                "version": "1.0.1",
+                "hashes": [{"alg": "SHA-256", "content": aar_digest}],
+                "licenses": [{"license": {"id": "Apache-2.0"}}],
+                "properties": properties,
+            }],
+        }, sort_keys=True) + "\n")
+        self.licenses.write_text(json.dumps({
+            "schemaVersion": 1,
+            "components": [{
+                "coordinate": coordinate,
+                "artifact": "graphics-path-1.0.1.aar",
+                "sha256": aar_digest,
+                "spdxId": "Apache-2.0",
+                "reviewEvidence": summary.GRAPHICS_PATH_LICENSE_EVIDENCE,
+                "nativeObjects": native,
+            }],
+        }, sort_keys=True) + "\n")
+        self.verification.write_text(
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<verification-metadata xmlns="https://schema.gradle.org/dependency-verification">'
+            '<components><component group="androidx.graphics" name="graphics-path" version="1.0.1">'
+            f'<artifact name="graphics-path-1.0.1.aar"><sha256 value="{aar_digest}"/></artifact>'
+            f'<artifact name="graphics-path-1.0.1.module"><sha256 value="{"1" * 64}"/></artifact>'
+            f'<artifact name="graphics-path-1.0.1.pom"><sha256 value="{"2" * 64}"/></artifact>'
+            '</component></components></verification-metadata>\n'
+        )
+
+    def collect(
+        self,
+        packages: list[pathlib.Path] | None = None,
+        records: list[pathlib.Path] | None = None,
+    ) -> dict[str, object]:
+        return summary.collect(
+            records or self.record_paths,
+            packages or [self.debug, self.release],
+            self.sbom,
+            self.licenses,
+            self.verification,
+        )
+
     def close(self) -> None:
         self.temp.cleanup()
 
@@ -180,9 +280,7 @@ class NativeDistributionSummaryTests(unittest.TestCase):
         self.fixture.close()
 
     def test_six_records_bind_both_packages_and_emit_requested_vs_contributing(self) -> None:
-        value = summary.collect(
-            self.fixture.record_paths, [self.fixture.debug, self.fixture.release]
-        )
+        value = self.fixture.collect()
         self.assertEqual(len(value["records"]), 6)
         self.assertEqual(len(value["packages"]), 2)
         self.assertEqual(value["totals"]["requestedCategories"]["android-crt"], 6)
@@ -195,20 +293,56 @@ class NativeDistributionSummaryTests(unittest.TestCase):
         self.assertEqual(
             value["packages"][0]["nativeObjects"], value["packages"][1]["nativeObjects"]
         )
+        self.assertEqual(len(value["packages"][0]["nativeObjects"]), 8)
+        self.assertEqual(
+            value["runtimeDependency"]["coordinate"],
+            "androidx.graphics:graphics-path:1.0.1",
+        )
+        self.assertEqual(
+            value["runtimeDependency"]["license"]["recipientAttribution"]["path"],
+            "assets/sync-engine-notices/THIRD-PARTY-NOTICES.txt",
+        )
+
+    def test_unclassified_or_dependency_mismatched_native_object_fails_closed(self) -> None:
+        with zipfile.ZipFile(self.fixture.release, "a") as archive:
+            archive.writestr("lib/arm64-v8a/libunexpected.so", b"unexpected")
+        with self.assertRaisesRegex(summary.SummaryError, "unclassified native object"):
+            self.fixture.collect()
+
+        self.fixture.write_package(self.fixture.release)
+        changed = json.loads(self.fixture.licenses.read_text())
+        changed["components"][0]["nativeObjects"][0]["sha256"] = "f" * 64
+        self.fixture.licenses.write_text(json.dumps(changed) + "\n")
+        with self.assertRaisesRegex(summary.SummaryError, "SBOM and license native evidence differ"):
+            self.fixture.collect()
+
+    def test_graphics_path_verification_and_attribution_are_required(self) -> None:
+        changed = json.loads(self.fixture.licenses.read_text())
+        changed["components"][0]["spdxId"] = "NOASSERTION"
+        self.fixture.licenses.write_text(json.dumps(changed) + "\n")
+        with self.assertRaisesRegex(summary.SummaryError, "attribution differs"):
+            self.fixture.collect()
+
+        self.fixture.write_runtime_evidence()
+        self.fixture.write_package(
+            self.fixture.release, include_recipient_attribution=False
+        )
+        with self.assertRaisesRegex(summary.SummaryError, "omit the graphics-path attribution"):
+            self.fixture.collect()
 
     def test_missing_and_duplicate_record_sets_are_rejected(self) -> None:
         with self.assertRaisesRegex(summary.SummaryError, "exactly six"):
-            summary.collect(self.fixture.record_paths[:-1], [self.fixture.debug, self.fixture.release])
+            self.fixture.collect(records=self.fixture.record_paths[:-1])
         duplicated = self.fixture.record_paths[:-1] + [self.fixture.record_paths[0]]
         with self.assertRaisesRegex(summary.SummaryError, "duplicated"):
-            summary.collect(duplicated, [self.fixture.debug, self.fixture.release])
+            self.fixture.collect(records=duplicated)
 
     def test_cross_record_ndk_notice_mismatch_is_rejected(self) -> None:
         changed = json.loads(self.fixture.record_paths[0].read_text())
         changed["ndk"]["files"]["NOTICE"]["sha256"] = "0" * 64
         self.fixture.record_paths[0].write_text(json.dumps(changed))
         with self.assertRaisesRegex(summary.SummaryError, "different NDK notice"):
-            summary.collect(self.fixture.record_paths, [self.fixture.debug, self.fixture.release])
+            self.fixture.collect()
 
     def test_package_binary_mismatch_and_cross_package_mismatch_are_rejected(self) -> None:
         changed_payloads = dict(self.fixture.payloads)
@@ -217,7 +351,7 @@ class NativeDistributionSummaryTests(unittest.TestCase):
         expected = self.fixture.payloads[("jni", "x86_64")]
         actual = changed_payloads[("jni", "x86_64")]
         with self.assertRaises(summary.SummaryError) as failure:
-            summary.collect(self.fixture.record_paths, [self.fixture.debug, self.fixture.release])
+            self.fixture.collect()
         self.assertEqual(
             str(failure.exception),
             "packaged native object differs from link evidence: "
@@ -230,14 +364,14 @@ class NativeDistributionSummaryTests(unittest.TestCase):
         changed_record["evidence"]["binary"]["sha256"] = "f" * 64
         self.fixture.record_paths[-1].write_text(json.dumps(changed_record))
         with self.assertRaisesRegex(summary.SummaryError, "differs from link evidence"):
-            summary.collect(self.fixture.record_paths, [self.fixture.debug, self.fixture.debug])
+            self.fixture.collect([self.fixture.debug, self.fixture.debug])
 
     def test_every_declared_notice_must_be_present_and_digest_bound(self) -> None:
         self.fixture.write_package(
             self.fixture.release, omit_notice="modules/0000/LICENSE"
         )
         with self.assertRaises(summary.SummaryError) as failure:
-            summary.collect(self.fixture.record_paths, [self.fixture.debug, self.fixture.release])
+            self.fixture.collect()
         self.assertEqual(
             str(failure.exception),
             "required Android package entry is missing or exceeds its bound: "
@@ -264,14 +398,14 @@ class NativeDistributionSummaryTests(unittest.TestCase):
             with zipfile.ZipFile(self.fixture.release, "a") as archive:
                 archive.writestr("lib/arm64-v8a/libsyncthing.so", b"duplicate")
         with self.assertRaisesRegex(summary.SummaryError, "duplicate entries"):
-            summary.collect(self.fixture.record_paths, [self.fixture.debug, self.fixture.release])
+            self.fixture.collect()
 
         self.fixture.write_package(self.fixture.release)
         self.fixture.record_paths[0].write_text(
             '{"schemaVersion":1,"schemaVersion":1}\n'
         )
         with self.assertRaisesRegex(summary.SummaryError, "duplicate field"):
-            summary.collect(self.fixture.record_paths, [self.fixture.debug, self.fixture.release])
+            self.fixture.collect()
 
     def test_cli_writes_once_and_verifies_exact_canonical_output(self) -> None:
         output = self.fixture.root / "summary.json"
@@ -280,6 +414,9 @@ class NativeDistributionSummaryTests(unittest.TestCase):
             arguments.extend(("--record", str(record)))
         arguments.extend(("--debug-package", str(self.fixture.debug)))
         arguments.extend(("--release-package", str(self.fixture.release)))
+        arguments.extend(("--android-sbom", str(self.fixture.sbom)))
+        arguments.extend(("--android-license-inventory", str(self.fixture.licenses)))
+        arguments.extend(("--dependency-verification", str(self.fixture.verification)))
         first_messages = io.StringIO()
         with redirect_stdout(first_messages), redirect_stderr(first_messages):
             self.assertEqual(summary.main([*arguments, "--output", str(output)]), 0)
@@ -306,7 +443,7 @@ class NativeDistributionSummaryTests(unittest.TestCase):
         with redirect_stdout(messages), redirect_stderr(messages):
             self.assertEqual(summary.main([*arguments, "--verify-output", str(output)]), 0)
             self.assertEqual(summary.main([*arguments, "--output", str(output)]), 1)
-        self.assertEqual(json.loads(output.read_text())["schemaVersion"], 1)
+        self.assertEqual(json.loads(output.read_text())["schemaVersion"], 2)
         output.write_text("{}\n")
         with redirect_stdout(messages), redirect_stderr(messages):
             self.assertEqual(summary.main([*arguments, "--verify-output", str(output)]), 1)
