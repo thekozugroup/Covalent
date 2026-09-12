@@ -114,14 +114,18 @@ internal class RawFolderAccess(private val context: Context) {
             "Android's managed application directory cannot be shared."
         }
         var current = root
-        relative.forEach { component ->
-            val name = component.toString()
-            check(name.isNotEmpty() && name != "." && name != ".." && '/' !in name && '\\' !in name)
-            current += "/$name"
-            val stat = runCatching { Os.lstat(current) }
-                .getOrElse { throw IllegalArgumentException("Android cannot safely open that folder.") }
-            check(OsConstants.S_ISDIR(stat.st_mode) && !OsConstants.S_ISLNK(stat.st_mode)) {
-                "Folder sync does not follow links or non-directory entries."
+        // Relativizing a volume to itself yields one empty Path component.
+        // Browsing that admitted root needs only the descriptor check below.
+        if (selected != root) {
+            relative.forEach { component ->
+                val name = component.toString()
+                check(name.isNotEmpty() && name != "." && name != ".." && '/' !in name && '\\' !in name)
+                current += "/$name"
+                val stat = runCatching { Os.lstat(current) }
+                    .getOrElse { throw IllegalArgumentException("Android cannot safely open that folder.") }
+                check(OsConstants.S_ISDIR(stat.st_mode) && !OsConstants.S_ISLNK(stat.st_mode)) {
+                    "Folder sync does not follow links or non-directory entries."
+                }
             }
         }
         val descriptor = runCatching {

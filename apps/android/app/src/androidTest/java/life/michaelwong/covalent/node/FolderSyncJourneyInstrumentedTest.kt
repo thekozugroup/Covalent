@@ -134,6 +134,15 @@ class FolderSyncJourneyInstrumentedTest {
             val packageValue = FolderSyncInstrumentationBridge.isolatedPackage(context)
             installedEngine = packageValue.engine
             val roots = createExternalFixture(runId)
+            val browser = RawFolderAccess(context)
+            val volumePath = browser.roots().first().absolutePath
+            assertTrue(
+                "Opening shared storage must list the isolated folder",
+                browser.children(volumePath).any { it.name == checkNotNull(fixtureRoot).name },
+            )
+            assertTrue("The whole storage volume cannot be shared", runCatching { browser.select(volumePath) }.isFailure)
+            assertTrue("Android app storage cannot be shared", runCatching { browser.select("$volumePath/Android") }.isFailure)
+            assertTrue("Private app storage cannot be shared", runCatching { browser.select(context.filesDir.path) }.isFailure)
             val rootA = RawFolderAccess(context).select(roots.first.path)
             val rootB = RawFolderAccess(context).select(roots.second.path)
             assertTrue(manager.enableFolderSyncHost())
