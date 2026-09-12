@@ -127,6 +127,7 @@ FROM caddy AS caddy-evidence
 ARG TARGETARCH
 COPY --chmod=0555 scripts/collect-caddy-distribution-evidence.py /usr/local/bin/collect-caddy-distribution-evidence
 COPY --chmod=0444 LICENSE /build/LICENSE
+# Root owns the evidence directories; owner write permits unprivileged docker cp extraction.
 RUN set -eu; \
     case "$TARGETARCH" in amd64|arm64) ;; *) echo 'unsupported Caddy target architecture' >&2; exit 64 ;; esac; \
     apk add --no-cache python3=3.12.14-r0; \
@@ -144,7 +145,7 @@ RUN set -eu; \
       --ca-bundle /etc/ssl/certs/ca-certificates.crt \
       --target "linux-${TARGETARCH}" linux "$TARGETARCH" "/tmp/caddy-go-target-deps-linux-${TARGETARCH}.ndjson" \
       --output /caddy-evidence; \
-    find /caddy-evidence -type d -exec chmod 0555 {} +; \
+    find /caddy-evidence -type d -exec chmod 0755 {} +; \
     find /caddy-evidence -type f -exec chmod 0444 {} +
 
 # Build the reviewed local BusyBox revision from frozen corresponding source.
