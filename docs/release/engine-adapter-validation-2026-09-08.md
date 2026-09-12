@@ -1902,3 +1902,51 @@ package verification; amd64 uses an explicitly marked candidate until native
 execution. The Docker build now requires the 13 request-target checks and
 tested payload equality before constructing its patched runtime. Final images,
 their vulnerability classification and the unchanged size cap remain open.
+
+### Checkpoint 43 terminal result and Docker extraction correction
+
+CI run `34699401208`, PR merge `bba2da44b705dfe825118b6e06fdbfca5d893259`,
+passes Mac integration/UI, the Mac bundle, shared Rust, iOS and dependency
+review. CodeQL run `34699401184` also passes. Android foundation job
+`103568373590` reports the exact absent entry
+`assets/sync-engine-notices/sources/0000-source.tar.gz`; no complete Android
+device journey pass is established.
+
+Both native patched Docker builds succeed. Jobs `103568373490` (arm64) and
+`103568373603` (amd64) then fail at `docker cp` with permission denied on
+`caddy-evidence/sources/0045-source.tar.gz`. Copying preserves directory modes;
+mode 0555 prevents the unprivileged destination owner from populating nested
+files. Root-owned mode 0755 directories fix this while the image's user 65532
+still cannot write them. Evidence files remain mode 0444.
+
+An isolated Atmos regression used two synthetic scratch images and two
+containers that were never started. Mode 0555 reproduced the exact error;
+mode 0755 copied the exact payload. All four owned resources and the temporary
+folder were removed. Before/after sets match all 20 existing containers and
+37 image IDs. The nine local container-contract tests also pass. Retained
+result SHA-256:
+`1e3c19c5d9a5267d9aebbde8722615ac3f6fd1c10b3818808d921d46eae6f79b`.
+This narrow reproduction does not replace complete corrected-image execution,
+image-size checks or vulnerability classification. Acceptance remains 70%.
+
+### Checkpoint 44 Android source-archive preservation
+
+The checksum-bound AGP sdk-common 32.2.1 class `AssetItem` tests the filename
+extension against `gz`, ignoring case. Its merged asset writer uses
+`GZIPInputStream` and removes that extension. Android now requests `.tgz` from
+the notice collector, retaining gzip compression and exact manifest paths,
+byte counts and SHA-256 verification. Other platforms retain `.tar.gz`.
+The suffix parameter permits only those two values.
+
+The focused regression verifies the `.tgz` path, gzip header, digest, size and
+readable tar contents. Fourteen collector tests, eight Android distribution
+summary tests, native-package fixtures and the Android JNI contract pass.
+The combined Docker/Android correction passes `validate-foundation.sh`.
+Hosted APK and complete device verification remain required.
+
+Root additionally decoded `AssetItem.shouldBeUnGzipped(String)` from the
+locally cached, dependency-verification-bound JAR. Its bytecode calls
+`Files.getFileExtension`, converts case and compares with `gz`; the retained
+review is `android-source-archive-assets-fix/root-bytecode-review.json`.
+No Actions artifact bytes were used. The worker's owned temporary checkout
+and scratch evidence were removed after retaining its commit and receipts.

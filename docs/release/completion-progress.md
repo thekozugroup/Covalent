@@ -1,16 +1,20 @@
 # Completion progress
 
-Updated: 2026-09-12. Checkpoint 42, commit
-`8c380bf3ef4ecdd2eadf5b16680f0cbdbbb3d4c4`, has terminal hosted results.
-Android compilation succeeds, but package verification reports a required entry
-that is missing or outside its byte bounds. Zero instrumentation tests run and
-the aggregate release gate fails; all other main CI jobs pass. Checkpoint 43
-adds the exact entry name and declared size to that diagnostic. It preserves
-all package requirements and limits; the exact packaging correction still
-requires evidence from its hosted run.
-Checkpoint 43 also integrates the reviewed Caddy/Alpine source evidence and
-BusyBox security backport. Local foundation and native arm64 intermediate
-runtime checks pass; both complete patched Docker images still need validation.
+Updated: 2026-09-12. Checkpoint 43, commit
+`afb5fa4a3139a1af689dbb83957e9511894a3883`, has terminal hosted results.
+Mac integration/UI, the Mac bundle, shared Rust, iOS, dependency review and
+CodeQL pass. Android package verification identifies the missing required
+`assets/sync-engine-notices/sources/0000-source.tar.gz`; the full device journey
+remains unverified. Both patched Docker images build, then fail while copying
+Caddy source evidence from root-owned directories with mode 0555. Their runtime,
+image-size and vulnerability gates do not run. An isolated Atmos reproduction
+confirms that root-owned directories with mode 0755 permit extraction while
+remaining unwritable to the non-root runtime user. The fix retains mode 0444
+for files. The complete corrected images still need hosted validation.
+Checkpoint 44 also uses `.tgz` for Android corresponding-source archives,
+so AGP preserves the compressed bytes instead of expanding `.gz` assets.
+All local foundation checks pass on the combined correction. Fresh hosted
+package, device and final Docker gates remain required.
 
 **70% of acceptance milestones are verified: 14 of 20.** This is a milestone
 count, not an estimate of elapsed time or remaining effort. Each milestone has
