@@ -184,7 +184,20 @@ class FolderSyncJourneyInstrumentedTest {
                 }
             }
             client.acceptFolder(connectionB.baseUrl, connectionB.token, checkNotNull(offerId), rootB)
-            awaitFile("forward transfer", File(rootB, "forward.txt"), forward)
+            try {
+                awaitFile("forward transfer", File(rootB, "forward.txt"), forward)
+            } catch (failure: AssertionError) {
+                val states = listOf(connectionA, connectionB).mapIndexed { index, connection ->
+                    runCatching {
+                        val snapshot = client.folderSyncStatus(connection.baseUrl, connection.token)
+                        "node$index=${snapshot.availability}/${snapshot.lifecycle}/${snapshot.issue} " +
+                            "sharePhases=${snapshot.shares.take(MAX_DIAGNOSTIC_NODES).map { it.phase }}"
+                    }.getOrElse { "node$index=diagnosticError:${it.javaClass.name}" }
+                }
+                val helpers = runCatching { exactHelperCounts().toString() }
+                    .getOrElse { "diagnosticError:${it.javaClass.name}" }
+                throw AssertionError("Forward transfer failed: $states helpers=$helpers", failure)
+            }
             awaitExactHelperCounts(workers = 2, guardians = 2)
 
             val reverse = "api37-reverse-before-restart\n".toByteArray(StandardCharsets.UTF_8)
