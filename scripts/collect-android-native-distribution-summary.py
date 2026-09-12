@@ -209,8 +209,16 @@ def _read_zip_entry(
     maximum: int,
 ) -> bytes:
     info = index.get(name)
-    if info is None or info.is_dir() or not 0 < info.file_size <= maximum:
-        raise SummaryError("required Android package entry is missing or exceeds its bound")
+    if info is None:
+        raise SummaryError(
+            "required Android package entry is missing or exceeds its bound: "
+            f"entry={name!r} maximum_bytes={maximum} actual_bytes=missing"
+        )
+    if info.is_dir() or not 0 < info.file_size <= maximum:
+        raise SummaryError(
+            "required Android package entry is missing or exceeds its bound: "
+            f"entry={name!r} maximum_bytes={maximum} actual_bytes={info.file_size}"
+        )
     retained = bytearray()
     try:
         with archive.open(info) as source:

@@ -236,8 +236,27 @@ class NativeDistributionSummaryTests(unittest.TestCase):
         self.fixture.write_package(
             self.fixture.release, omit_notice="modules/0000/LICENSE"
         )
-        with self.assertRaisesRegex(summary.SummaryError, "entry is missing"):
+        with self.assertRaises(summary.SummaryError) as failure:
             summary.collect(self.fixture.record_paths, [self.fixture.debug, self.fixture.release])
+        self.assertEqual(
+            str(failure.exception),
+            "required Android package entry is missing or exceeds its bound: "
+            "entry='assets/sync-engine-notices/modules/0000/LICENSE' "
+            f"maximum_bytes={summary.MAX_NOTICE_FILE_BYTES} actual_bytes=missing",
+        )
+
+    def test_zip_entry_bound_diagnostic_names_entry_limit_and_size(self) -> None:
+        with zipfile.ZipFile(self.fixture.release) as archive:
+            index = summary._zip_index(archive)
+            entry = "assets/sync-engine-notices/THIRD-PARTY-NOTICES.txt"
+            actual = index[entry].file_size
+            with self.assertRaises(summary.SummaryError) as failure:
+                summary._read_zip_entry(archive, index, entry, actual - 1)
+        self.assertEqual(
+            str(failure.exception),
+            "required Android package entry is missing or exceeds its bound: "
+            f"entry={entry!r} maximum_bytes={actual - 1} actual_bytes={actual}",
+        )
 
     def test_duplicate_package_entry_and_duplicate_json_field_fail_closed(self) -> None:
         with warnings.catch_warnings():
