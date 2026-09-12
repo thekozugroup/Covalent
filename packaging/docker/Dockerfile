@@ -57,9 +57,9 @@ RUN build-linux-sync-engine package \
 # fixes it: 2.11.4 is the newest x.y.z-alpine upstream publishes, so the only
 # lever left is to control the toolchain ourselves.
 #
-# This is not a fork. packaging/docker/caddy is the same three-line consumer
-# module `xcaddy` generates and the official image builds - it imports
-# caddy/v2/modules/standard and nothing else. The selected upstream snapshot is
+# This is not a fork. packaging/docker/caddy imports the upstream modules used
+# by the shipped Caddyfile and runtime checks, without unrelated standard
+# distribution modules. The selected upstream snapshot is
 # the canonical compatibility commit b2693fb63a30e6d7be0972c3645e9a2c0a500e93,
 # 33 commits after v2.11.4, adapting Caddy's CEL matcher to the post-v0.28 API.
 # The consumer module then selects cel-go v0.30.0, which fixes GO-2026-6094.
@@ -90,7 +90,7 @@ COPY packaging/docker/caddy/main.go ./
 RUN go build -buildvcs=false -trimpath -ldflags "-s -w" -o /caddy.unprivileged . \
     && chmod 0555 /caddy.unprivileged
 # Assert the three properties this stage exists to guarantee. A toolchain
-# regression, a Caddy version drift, or either advisory bump being lost to a
+# regression, a Caddy version drift, or a compiled advisory bump being lost to a
 # careless `go mod tidy` fails the build here rather than reaching a scanner.
 RUN set -eu; \
     go version -m /caddy.unprivileged > /tmp/buildinfo; \
@@ -106,8 +106,6 @@ RUN set -eu; \
       || { echo 'OpenTelemetry regressed below v1.44.0 (GO-2026-5158)' >&2; exit 1; }; \
     grep -q 'github.com/google/cel-go[[:space:]]\+v0\.30\.0' /tmp/buildinfo \
       || { echo 'cel-go drifted from reviewed v0.30.0 (GO-2026-6094)' >&2; exit 1; }; \
-    grep -q 'github.com/go-chi/chi/v5[[:space:]]\+v5\.3\.0' /tmp/buildinfo \
-      || { echo 'go-chi drifted from reviewed v5.3.0 (GO-2026-5774/5775/5777)' >&2; exit 1; }; \
     grep -q 'github.com/klauspost/compress[[:space:]]\+v1\.18\.7' /tmp/buildinfo \
       || { echo 'klauspost/compress drifted from reviewed v1.18.7 (GO-2026-5841)' >&2; exit 1; }; \
     /caddy.unprivileged version

@@ -6,10 +6,13 @@ graphs and identifies separately retained source material.
 
 ## Exact build binding
 
-The shipped Caddy binary is built from the three-line consumer in
-`packaging/docker/caddy`. It imports `github.com/caddyserver/caddy/v2/modules/standard`
-at upstream snapshot `v2.11.5-0.20260711231708-b2693fb63a30`, uses Go 1.26.7,
-sets `CGO_ENABLED=0`, has no build tags, and builds with
+The shipped Caddy binary is built from the consumer in
+`packaging/docker/caddy`. It imports the upstream modules required by the
+shipped Caddyfile and runtime checks: the Caddyfile adapter, events, HTTP,
+gzip, zstd, headers, reverse proxy, internal PKI, TLS, standard session-ticket
+keys, file storage and logging. It uses upstream snapshot
+`v2.11.5-0.20260711231708-b2693fb63a30` and Go 1.26.7, sets `CGO_ENABLED=0`,
+has no build tags, and builds with
 `-buildvcs=false -trimpath -ldflags "-s -w"`. Disabling VCS stamping is
 required because the Docker build context has no `.git` directory. The
 reviewed binaries therefore contain no checkout-specific revision or time.
@@ -29,8 +32,8 @@ Local exact Go 1.26.7 collection produced:
 
 | Target | Packages | Modules | Candidate files | Unclassified |
 |---|---:|---:|---:|---:|
-| `linux/amd64` | 991 | 161 | 218 | 0 |
-| `linux/arm64` | 989 | 161 | 218 | 0 |
+| `linux/amd64` | 921 | 142 | 193 | 0 |
+| `linux/arm64` | 919 | 142 | 193 | 0 |
 
 The module sets and candidate bytes are identical. The amd64 graph alone adds
 `github.com/klauspost/compress/internal/cpuinfo` and the Go standard-library
@@ -43,11 +46,11 @@ The exact observed module-family counts are:
 
 | Text family | Modules |
 |---|---:|
-| Apache-2.0 | 70 |
+| Apache-2.0 | 61 |
 | BSD-2-Clause | 4 |
-| BSD-3-Clause | 61 |
+| BSD-3-Clause | 56 |
 | CC0-1.0 | 1 |
-| MIT | 60 |
+| MIT | 50 |
 | MPL-2.0 | 1 |
 
 Counts can overlap when a module tree contains more than one license family.
@@ -81,15 +84,17 @@ Each architecture image receives only the target-specific result under
 - `target-license-inventory.json`, binding the target graph and every candidate;
 - `THIRD-PARTY-NOTICES.txt`, a deduplicated readable copy of every observed
   license/notice text plus the Go toolchain texts;
-- `sources/0045-source.tar.gz`, the normalized MySQL source archive;
+- `sources/0040-source.tar.gz`, the normalized MySQL source archive;
 - `manifest.json`, binding those files and the exact Caddy binary digest.
 
-The local output is about 700 KiB before container-layer compression: 139 KiB
-inventory, 383 KiB readable notices, 74 KiB manifest and 109 KiB source
-archive. This addition is larger than checkpoint 39's 72,192-byte amd64 image
-headroom, so the existing image budget will fail unless measured packaging
-work or an explicitly reviewed new limit resolves it. This document does not
-raise that limit.
+The local output is about 600 KiB before container-layer compression: its exact
+inventory and manifest sizes vary by architecture, while the readable notice is
+365,690 bytes and the source archive is 109,494 bytes. The configured amd64
+executable is 7,315,456 bytes smaller than the prior standard-module build.
+The last tested amd64 image was still 518,144 bytes above its 128 MiB limit
+after executable-only savings; only a complete final-image build can establish
+whether the smaller evidence and dependency layers recover the remainder. This
+document does not raise that limit.
 
 The final image copies `/etc/ssl/certs/ca-certificates.crt` from the Go/Caddy
 builder. The evidence therefore also verifies its actual owning package in the

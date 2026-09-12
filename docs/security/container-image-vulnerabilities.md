@@ -127,9 +127,9 @@ against `golang:1.26.7-alpine3.23` pinned by digest. That stage replaced the
 `caddy:2.11.4-alpine` stage entirely; nothing from the published Caddy image
 enters the runtime image any more.
 
-`packaging/docker/caddy` is the three-line consumer module `xcaddy` generates and
-the official Caddy image builds: it imports `caddy/v2/cmd` and
-`caddy/v2/modules/standard`, and nothing else. No official Caddy patch release
+`packaging/docker/caddy` imports `caddy/v2/cmd` and the upstream modules required
+by the shipped Caddyfile and runtime checks. It omits unrelated modules in the
+standard distribution. No official Caddy patch release
 newer than v2.11.4 is published yet. To compile against patched cel-go, the
 module pins upstream snapshot `v2.11.5-0.20260711231708-b2693fb63a30`, commit
 `b2693fb63a30e6d7be0972c3645e9a2c0a500e93`, whose direct purpose is the cel-go
@@ -191,27 +191,29 @@ snapshot after repeating the same gates and delta review.
 ### Post-snapshot dependency refresh
 
 A refreshed Go vulnerability database on 2026-08-28 added five fixable
-dependency findings after the initial CEL compatibility work. The consumer
-module now raises them through ordinary minimal version selection, without a
-`replace`, fork, or source patch:
+dependency findings after the initial CEL compatibility work. The configured
+distribution no longer compiles `github.com/go-chi/chi/v5`, removing its three
+findings with the unused standard modules that selected it. The consumer raises
+the two remaining compiled dependencies through ordinary minimal version
+selection, without a `replace`, fork, or source patch:
 
 | module | prior | selected | finding |
 | --- | --- | --- | --- |
 | `github.com/google/cel-go` | `v0.29.2` | `v0.30.0` | GO-2026-6094 |
-| `github.com/go-chi/chi/v5` | `v5.2.5` | `v5.3.0` | GO-2026-5774, GO-2026-5775, GO-2026-5777 |
 | `github.com/klauspost/compress` | `v1.18.6` | `v1.18.7` | GO-2026-5841 |
 
 Pinned Go 1.26.7 `go mod verify`, `go test ./...`, `go vet ./...`, the custom
 build, and `caddy validate` all pass with that graph. Official
-`govulncheck v1.7.0` source analysis reports zero called vulnerable symbols.
-It reports GO-2026-5932 only at module level because `golang.org/x/crypto` is in
-the graph: the affected `openpgp` packages are not imported or called, and the
-Go report has no module version that can fix an unused package. A stripped
-binary scan cannot recover call information and may conservatively report
-unreachable code; the Go tool's documented limitation says binary mode can
-produce that false positive. The release decision therefore uses the exact
-source call graph plus an unstripped verification build, not a suppression or
-an ignored advisory.
+`govulncheck v1.7.0` source analysis on 2026-09-12 reports zero called
+vulnerable symbols. It also reports GO-2026-6354 and GO-2026-6355 in the
+imported `golang.org/x/crypto/ssh` package and GO-2026-5932 at module level for
+`golang.org/x/crypto/openpgp`; none is called by this consumer graph. The first
+two have a later module fix while the unmaintained OpenPGP advisory has none.
+This result is recorded rather than suppressed. A stripped binary scan cannot
+recover call information and may conservatively report unreachable code; the
+Go tool's documented limitation says binary mode can produce that false
+positive. Release review therefore retains the exact source call graph plus an
+unstripped verification build.
 
 The full upstream integration package was compared under the same local
 environment. `TestH2ToH1ChunkedResponse` fails against both the exact v2.11.4
@@ -226,7 +228,7 @@ snapshot delta called out explicitly:
 | check | result |
 | --- | --- |
 | `caddy version` | `v2.11.5-0.20260711231708-b2693fb63a30 h1:GLKxfFw6+vJgw57aRSkZwXiogAFn4JMb6wqIop4KJtY=` — exact pinned upstream snapshot |
-| `caddy list-modules` | **133 standard modules**; the snapshot adds the upstream `http.matchers.url_pattern` module compared with the 132-module v2.11.4 image |
+| `caddy list-modules` | **112 modules** in the configured distribution |
 | `caddy adapt` on this repo's unchanged `Caddyfile` | **valid configuration**, checked against the pinned snapshot |
 | `caddy validate` | `Valid configuration` |
 

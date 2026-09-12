@@ -14,6 +14,7 @@ claim_script="$repo_root/scripts/check-container-claim.sh"
 apple_tls_script="$repo_root/scripts/apple-package-tls-e2e.sh"
 caddy_gomod="$repo_root/packaging/docker/caddy/go.mod"
 caddy_gosum="$repo_root/packaging/docker/caddy/go.sum"
+caddy_main="$repo_root/packaging/docker/caddy/main.go"
 caddy_collector="$repo_root/scripts/collect-caddy-distribution-evidence.py"
 caddy_verifier="$repo_root/scripts/verify-caddy-distribution-evidence.py"
 caddy_evidence_documentation="$repo_root/docs/security/caddy-target-license-inventory.md"
@@ -51,6 +52,25 @@ require_text "FROM golang:1.26.7-alpine3.23@sha256:" "$dockerfile"
 require_text "GOTOOLCHAIN=local" "$dockerfile"
 require_text "GOFLAGS=-mod=readonly" "$dockerfile"
 require_text "github.com/caddyserver/caddy/v2 v2.11.5-0.20260711231708-b2693fb63a30" "$caddy_gomod"
+for caddy_module in \
+  caddyconfig/caddyfile \
+  modules/caddyevents \
+  modules/caddyhttp \
+  modules/caddyhttp/encode/gzip \
+  modules/caddyhttp/encode/zstd \
+  modules/caddyhttp/headers \
+  modules/caddyhttp/reverseproxy \
+  modules/caddypki \
+  modules/caddytls \
+  modules/caddytls/standardstek \
+  modules/filestorage \
+  modules/logging; do
+  require_text "github.com/caddyserver/caddy/v2/$caddy_module" "$caddy_main"
+done
+if grep -Fq 'github.com/caddyserver/caddy/v2/modules/standard' "$caddy_main"; then
+  echo "configured Caddy build unexpectedly imports the full standard module set" >&2
+  exit 1
+fi
 # Eight stdlib advisories are fixed in go1.26.6; GOTOOLCHAIN=local makes this
 # directive the floor the compiler itself enforces. Lowering it re-opens them.
 require_text "go 1.26.7" "$caddy_gomod"
@@ -60,10 +80,8 @@ require_text "grpc drifted from reviewed v1.83.2" "$dockerfile"
 require_text "golang.org/x/text v0.41.0" "$caddy_gomod"
 require_text "go.opentelemetry.io/otel v1.44.0" "$caddy_gomod"
 require_text "github.com/google/cel-go v0.30.0" "$caddy_gomod"
-require_text "github.com/go-chi/chi/v5 v5.3.0" "$caddy_gomod"
 require_text "github.com/klauspost/compress v1.18.7" "$caddy_gomod"
 require_text "cel-go drifted from reviewed v0.30.0" "$dockerfile"
-require_text "go-chi drifted from reviewed v5.3.0" "$dockerfile"
 require_text "klauspost/compress drifted from reviewed v1.18.7" "$dockerfile"
 require_text 'go build -buildvcs=false -trimpath -ldflags "-s -w"' "$dockerfile"
 require_text "FROM caddy AS caddy-evidence" "$dockerfile"
