@@ -27,6 +27,16 @@ revision. Arm64 source applicability is reviewed; final image-bound review and
 independent clean-builder payload comparison remain required. Findings are
 retained without suppression.
 
+The Docker candidate selects only Caddy modules used by the shipped TLS proxy,
+headers, compression and runtime configuration, saving 7,315,456 executable
+bytes on AMD64. It also removes superseded Alpine package layers while copying
+the complete patched runtime filesystem and preserving runtime metadata.
+Caddy's SSH dependency is pinned to its fixed version. Both Linux target
+source/notice verifiers and eight native TLS/proxy/compression checks pass;
+source analysis reports zero called or imported-package vulnerabilities and
+retains one unused OpenPGP module finding. Both complete final images still
+require all acceptance gates, including the unchanged size limit.
+
 **75% of acceptance milestones are verified: 15 of 20.** This is a milestone
 count, not an estimate of elapsed time or remaining effort. Independent review verifies Android folder recovery and the complete peer-connectivity journey from combined live evidence. Docker image acceptance remains open until both final images pass. Each milestone has
 equal weight. An implemented feature does not pass until its stated execution
