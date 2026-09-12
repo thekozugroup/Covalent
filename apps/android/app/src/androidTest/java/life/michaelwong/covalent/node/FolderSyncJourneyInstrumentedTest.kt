@@ -30,6 +30,13 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
 import java.io.InputStream
+import java.net.DatagramSocket
+import java.net.Inet4Address
+import java.net.InetAddress
+import java.net.Inet6Address
+import java.net.InetSocketAddress
+import java.net.NetworkInterface
+import java.net.ServerSocket
 import java.nio.charset.StandardCharsets
 import java.nio.file.DirectoryStream
 import java.nio.file.Files
@@ -79,6 +86,9 @@ class FolderSyncJourneyInstrumentedTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()
     private val client = CovalentNodeClient()
     private var secondHandle = 0L
+    private var secondApiToken: String? = null
+    private var secondKeyEncryptionKey: ByteArray? = null
+    private var secondFolderSyncListenerPort: Int? = null
     private var offerId: String? = null
     private var installedEngine: VerifiedPackagedSyncEngine? = null
     private var fixtureRoot: File? = null
@@ -126,7 +136,7 @@ class FolderSyncJourneyInstrumentedTest {
             assertTrue(manager.enableFolderSyncHost())
             val connectionA = awaitValue("service node API") { manager.liveConnection() }
             val identityA = client.transportIdentity(connectionA.baseUrl, connectionA.token)
-            val connectionB = startSecondNode(packageValue)
+            var connectionB = startSecondNode(packageValue)
             val identityB = client.transportIdentity(connectionB.baseUrl, connectionB.token)
             assertTrue(identityA.deviceId != identityB.deviceId)
 
@@ -135,7 +145,11 @@ class FolderSyncJourneyInstrumentedTest {
             compose.setContent {
                 CovalentTheme { if (showScreen.value) FolderSyncScreen(manager) }
             }
-            pairUsingPhoneUi(connectionA, connectionB, identityB.peerPort)
+            pairUsingPhoneUi(
+                connectionA,
+                connectionB,
+                advertisedGuestPeerAddress(identityB.peerPort),
+            )
             clickScreenText(context.getString(R.string.folder_sync_storage_roots))
             val volume = RawFolderAccess(context).roots().first()
             clickScreenText(volume.name.ifBlank { volume.absolutePath })
@@ -176,6 +190,53 @@ class FolderSyncJourneyInstrumentedTest {
             awaitFile("resumed transfer", File(rootB, "forward.txt"), PAUSED_CONTENT)
             awaitExactHelperCounts(workers = 2, guardians = 2)
 
+            val oldWorkerPort = checkNotNull(secondFolderSyncListenerPort)
+            val movedPeerPort = reserveEphemeralPeerPort(identityB.peerPort)
+            val movedWorkerPort = reserveEphemeralWorkerPort(oldWorkerPort)
+            assertTrue(CovalentNative.stop(secondHandle).ok)
+            secondHandle = 0
+            awaitExactHelperCounts(workers = 1, guardians = 1)
+            await("old second-node listeners released") {
+                canBindPeerPort(identityB.peerPort) && canBindWorkerPort(oldWorkerPort)
+            }
+            connectionB = startSecondNode(packageValue, movedPeerPort, movedWorkerPort)
+            val movedIdentity = client.transportIdentity(connectionB.baseUrl, connectionB.token)
+            assertEquals(identityB.deviceId, movedIdentity.deviceId)
+            assertEquals(identityB.certificateFingerprint, movedIdentity.certificateFingerprint)
+            assertEquals(identityB.certificateDer, movedIdentity.certificateDer)
+            assertEquals(movedPeerPort, movedIdentity.peerPort)
+            assertTrue(identityB.peerPort != movedIdentity.peerPort)
+            assertEquals(movedWorkerPort, secondFolderSyncListenerPort)
+            assertTrue(oldWorkerPort != movedWorkerPort)
+            awaitExactHelperCounts(workers = 2, guardians = 2)
+
+            val movedPeerAddress = advertisedGuestPeerAddress(movedPeerPort)
+            val addressButtonTag = "folder-peer-address-${identityB.deviceId}"
+            compose.onNodeWithTag("folder-sync-list")
+                .performScrollToNode(hasTestTag(addressButtonTag))
+            clickScreenTag(addressButtonTag)
+            compose.onNodeWithTag("folder-peer-address-input")
+                .performTextInput(movedPeerAddress)
+            clickScreenTag("folder-peer-address-confirm")
+            await("native address refresh becomes authoritative") {
+                client.folderSyncStatus(connectionA.baseUrl, connectionA.token).peers
+                    .singleOrNull { it.peerId == identityB.deviceId }
+                    ?.address == movedPeerAddress
+            }
+
+            writeNew(File(rootA, "after-address-forward.txt"), AFTER_ADDRESS_FORWARD_CONTENT)
+            awaitFile(
+                "forward transfer after native address refresh",
+                File(rootB, "after-address-forward.txt"),
+                AFTER_ADDRESS_FORWARD_CONTENT,
+            )
+            writeNew(File(rootB, "after-address-reverse.txt"), AFTER_ADDRESS_REVERSE_CONTENT)
+            awaitFile(
+                "reverse transfer after native address refresh",
+                File(rootA, "after-address-reverse.txt"),
+                AFTER_ADDRESS_REVERSE_CONTENT,
+            )
+
             stopServiceAndAwaitWorkers(checkNotNull(manager.localConnectionForFolderSync()), remainingWorkers = 1)
             manager.reconnectIfEnabled()
             val restartedA = awaitValue("cold restarted service node API") { manager.liveConnection() }
@@ -185,6 +246,12 @@ class FolderSyncJourneyInstrumentedTest {
             assertEquals(identityA.certificateFingerprint, restartedIdentity.certificateFingerprint)
             assertEquals(identityA.certificateDer, restartedIdentity.certificateDer)
             awaitExactHelperCounts(workers = 2, guardians = 2)
+            writeNew(File(rootA, "after-address-cold-forward.txt"), AFTER_ADDRESS_COLD_FORWARD_CONTENT)
+            awaitFile(
+                "persisted refreshed route after cold service restart",
+                File(rootB, "after-address-cold-forward.txt"),
+                AFTER_ADDRESS_COLD_FORWARD_CONTENT,
+            )
             writeNew(File(rootB, "after-restart.txt"), AFTER_RESTART_CONTENT)
             awaitFile("transfer after cold service restart", File(rootA, "after-restart.txt"), AFTER_RESTART_CONTENT)
 
@@ -194,6 +261,7 @@ class FolderSyncJourneyInstrumentedTest {
             // process. Android intentionally kills this process for that change.
             assertTrue(CovalentNative.stop(secondHandle).ok)
             secondHandle = 0
+            forgetSecondNodeSecrets()
             awaitExactHelperCounts(workers = 1, guardians = 1)
             persistReceipt(
                 JourneyReceipt(
@@ -297,6 +365,30 @@ class FolderSyncJourneyInstrumentedTest {
             val rootB = File(checkNotNull(fixtureRoot), "second")
             assertArrayEquals(PAUSED_CONTENT, readBounded(File(rootA, "forward.txt")))
             assertArrayEquals(PAUSED_CONTENT, readBounded(File(rootB, "forward.txt")))
+            assertArrayEquals(
+                AFTER_ADDRESS_FORWARD_CONTENT,
+                readBounded(File(rootA, "after-address-forward.txt")),
+            )
+            assertArrayEquals(
+                AFTER_ADDRESS_FORWARD_CONTENT,
+                readBounded(File(rootB, "after-address-forward.txt")),
+            )
+            assertArrayEquals(
+                AFTER_ADDRESS_REVERSE_CONTENT,
+                readBounded(File(rootA, "after-address-reverse.txt")),
+            )
+            assertArrayEquals(
+                AFTER_ADDRESS_REVERSE_CONTENT,
+                readBounded(File(rootB, "after-address-reverse.txt")),
+            )
+            assertArrayEquals(
+                AFTER_ADDRESS_COLD_FORWARD_CONTENT,
+                readBounded(File(rootA, "after-address-cold-forward.txt")),
+            )
+            assertArrayEquals(
+                AFTER_ADDRESS_COLD_FORWARD_CONTENT,
+                readBounded(File(rootB, "after-address-cold-forward.txt")),
+            )
             assertArrayEquals(AFTER_RESTART_CONTENT, readBounded(File(rootA, "after-restart.txt")))
             assertArrayEquals(AFTER_RESTART_CONTENT, readBounded(File(rootB, "after-restart.txt")))
             manager.reconnectIfEnabled()
@@ -333,44 +425,106 @@ class FolderSyncJourneyInstrumentedTest {
         target.performClick()
     }
 
-    private fun startSecondNode(packageValue: PackagedSyncEnginePackage.Verified): NodeConnection {
+    private fun clickScreenTag(value: String) {
+        val target = compose.onNodeWithTag(value)
+        compose.waitUntil(timeoutMillis = DEFAULT_TIMEOUT_MILLIS) {
+            runCatching { target.assertIsDisplayed().assertIsEnabled(); true }.getOrDefault(false)
+        }
+        target.performClick()
+    }
+
+    private fun startSecondNode(
+        packageValue: PackagedSyncEnginePackage.Verified,
+        peerListenerPort: Int = 0,
+        folderSyncListenerPort: Int? = null,
+    ): NodeConnection {
         val runId = requireRunId(InstrumentationRegistry.getArguments().getString(JOURNEY_RUN_ID_ARGUMENT))
         val data = secondDataDirectory(runId)
         check(data.parentFile == context.noBackupFilesDir.canonicalFile)
-        check(data.mkdir())
+        if (secondKeyEncryptionKey == null) {
+            check(data.mkdir())
+        } else {
+            check(data.isDirectory)
+        }
         secondData = data
         val random = SecureRandom()
-        val tokenRandom = ByteArray(32).also(random::nextBytes)
-        val token = Base64.getUrlEncoder().withoutPadding().encodeToString(tokenRandom)
-        tokenRandom.fill(0)
+        val token = secondApiToken ?: ByteArray(32).also(random::nextBytes).let { tokenRandom ->
+            Base64.getUrlEncoder().withoutPadding().encodeToString(tokenRandom)
+                .also { tokenRandom.fill(0) }
+        }.also { secondApiToken = it }
+        val key = secondKeyEncryptionKey ?: ByteArray(32).also(random::nextBytes)
+            .also { secondKeyEncryptionKey = it }
+        val syncListenerPort = folderSyncListenerPort
+            ?: secondFolderSyncListenerPort
+            ?: FolderSyncInstrumentationBridge.reserveEphemeralListenerPort()
+        secondFolderSyncListenerPort = syncListenerPort
         val response = CovalentNative.start(
             dataDirectory = data.path,
             deviceName = "API 37 isolated peer",
             lanDiscoveryEnabled = false,
             apiToken = token.toByteArray(StandardCharsets.US_ASCII),
-            keyEncryptionKey = ByteArray(32).also(random::nextBytes),
+            keyEncryptionKey = key.copyOf(),
             keyVersion = 1,
             maximumTotalBytes = 512L * 1024L * 1024L,
             freeSpaceReserveBytes = 0,
             keyProtectionLevel = KeyProtectionLevel.SOFTWARE,
             syncEngine = packageValue,
             backupProviderEnabled = false,
-            folderSyncListenerPort = FolderSyncInstrumentationBridge.reserveEphemeralListenerPort(),
-            peerListenerPort = 0,
+            folderSyncListenerPort = syncListenerPort,
+            peerListenerPort = peerListenerPort,
         )
         assertTrue("The isolated JNI node must start", response.ok)
         secondHandle = checkNotNull(response.handle)
         return NodeConnection(checkNotNull(response.apiBaseUrl), token)
     }
 
+    private fun reserveEphemeralPeerPort(excludedPort: Int): Int {
+        repeat(16) {
+            val candidate = DatagramSocket(0).use { it.localPort }
+            if (candidate != excludedPort) return candidate
+        }
+        error("A distinct test-owned peer port could not be reserved.")
+    }
+
+    private fun reserveEphemeralWorkerPort(excludedPort: Int): Int {
+        repeat(16) {
+            val candidate = FolderSyncInstrumentationBridge.reserveEphemeralListenerPort()
+            if (candidate != excludedPort) return candidate
+        }
+        error("A distinct test-owned worker port could not be reserved.")
+    }
+
+    private fun canBindPeerPort(port: Int): Boolean = runCatching {
+        DatagramSocket(null).use { socket ->
+            socket.reuseAddress = false
+            socket.bind(InetSocketAddress(InetAddress.getByAddress(byteArrayOf(0, 0, 0, 0)), port))
+        }
+        true
+    }.getOrDefault(false)
+
+    private fun canBindWorkerPort(port: Int): Boolean = runCatching {
+        ServerSocket().use { socket ->
+            socket.reuseAddress = true
+            socket.bind(InetSocketAddress(InetAddress.getByAddress(byteArrayOf(0, 0, 0, 0)), port))
+        }
+        true
+    }.getOrDefault(false)
+
+    private fun forgetSecondNodeSecrets() {
+        secondKeyEncryptionKey?.fill(0)
+        secondKeyEncryptionKey = null
+        secondApiToken = null
+        secondFolderSyncListenerPort = null
+    }
+
     private fun pairUsingPhoneUi(
         connectionA: NodeConnection,
         connectionB: NodeConnection,
-        peerPortB: Int,
+        peerAddressB: String,
     ) {
         compose.onNodeWithTag("folder-sync-list")
             .performScrollToNode(hasTestTag("folder-pair.address"))
-        compose.onNodeWithTag("folder-pair.address").performTextInput("127.0.0.1:$peerPortB")
+        compose.onNodeWithTag("folder-pair.address").performTextInput(peerAddressB)
         val start = compose.onNodeWithTag("folder-pair.start")
         compose.waitUntil(timeoutMillis = DEFAULT_TIMEOUT_MILLIS) {
             runCatching { start.assertIsEnabled(); true }.getOrDefault(false)
@@ -408,17 +562,95 @@ class FolderSyncJourneyInstrumentedTest {
             incoming.authenticationString,
         )
         assertEquals(NetworkPairingState.COMPLETE, second.state)
-        await("initiator observes completed pairing") {
+        val completed = awaitValue("initiator observes completed pairing") {
             client.pendingNetworkPairings(connectionA.baseUrl, connectionA.token)
                 .singleOrNull { it.pairingId == incoming.pairingId }
-                ?.state == NetworkPairingState.COMPLETE
+                ?.takeIf { it.state == NetworkPairingState.COMPLETE }
         }
+        assertEquals(peerAddressB, checkNotNull(completed.peerTransport).address)
         visibleScreenText(context.getString(R.string.folder_sync_pair_complete)).assertIsDisplayed()
         clickScreenText(context.getString(R.string.action_done))
         await("completed phone pairing request dismissed") {
             client.pendingNetworkPairings(connectionA.baseUrl, connectionA.token)
                 .none { it.pairingId == incoming.pairingId }
         }
+    }
+
+    private fun advertisedGuestPeerAddress(peerPort: Int): String {
+        val inContainer = File("/.dockerenv").exists() ||
+            File("/run/.containerenv").exists() ||
+            runCatching { File("/proc/1/cgroup").readText() }.getOrNull()?.let { cgroup ->
+                cgroup.contains("/docker/") ||
+                    cgroup.contains("/containerd/") ||
+                    cgroup.contains("/kubepods")
+            } == true
+        val candidates = mutableListOf<Pair<Int, InetAddress>>()
+        val interfaces = NetworkInterface.getNetworkInterfaces()
+            ?: error("The hosted emulator exposes no network interfaces.")
+        while (interfaces.hasMoreElements()) {
+            val networkInterface = interfaces.nextElement()
+            if (networkInterface.isLoopback) continue
+            val addresses = networkInterface.inetAddresses
+            while (addresses.hasMoreElements()) {
+                val address = addresses.nextElement()
+                advertisedAddressClass(address)?.let { addressClass ->
+                    if (addressClass != ADDRESS_CLASS_CONTAINER_BRIDGE || !inContainer) {
+                        candidates += addressClass to address
+                    }
+                }
+            }
+        }
+        val address = candidates.minWithOrNull { left, right ->
+            compareValues(left.first, right.first)
+                .takeIf { it != 0 }
+                ?: compareValues(left.second is Inet6Address, right.second is Inet6Address)
+                    .takeIf { it != 0 }
+                ?: compareUnsignedAddressBytes(left.second.address, right.second.address)
+        }?.second ?: error("The hosted emulator exposes no advertisable guest address.")
+        val host = address.hostAddress.substringBefore('%')
+        return if (address is Inet6Address) "[$host]:$peerPort" else "$host:$peerPort"
+    }
+
+    private fun advertisedAddressClass(address: InetAddress): Int? = when (address) {
+        is Inet4Address -> {
+            val bytes = address.address.map(Byte::toUByte)
+            val first = bytes[0].toInt()
+            val second = bytes[1].toInt()
+            when {
+                address.isLoopbackAddress || address.isLinkLocalAddress ||
+                    address.isAnyLocalAddress || address.isMulticastAddress ||
+                    bytes.all { it == UByte.MAX_VALUE } -> null
+                first == 192 && second == 0 && bytes[2].toInt() == 2 -> null
+                first == 198 && second == 51 && bytes[2].toInt() == 100 -> null
+                first == 203 && second == 0 && bytes[2].toInt() == 113 -> null
+                first == 100 && second in 64..127 -> ADDRESS_CLASS_TAILNET
+                first == 172 && second in 16..31 -> ADDRESS_CLASS_CONTAINER_BRIDGE
+                address.isSiteLocalAddress -> ADDRESS_CLASS_PRIVATE_LAN
+                else -> null
+            }
+        }
+        is Inet6Address -> {
+            val bytes = address.address.map(Byte::toUByte)
+            when {
+                address.isLoopbackAddress || address.isAnyLocalAddress ||
+                    address.isMulticastAddress || address.isLinkLocalAddress -> null
+                bytes[0].toInt() == 0xfd && bytes[1].toInt() == 0x7a &&
+                    bytes[2].toInt() == 0x11 && bytes[3].toInt() == 0x5c &&
+                    bytes[4].toInt() == 0xa1 && bytes[5].toInt() == 0xe0 -> ADDRESS_CLASS_TAILNET
+                bytes[0].toInt() and 0xfe == 0xfc -> ADDRESS_CLASS_PRIVATE_LAN
+                else -> null
+            }
+        }
+        else -> null
+    }
+
+    private fun compareUnsignedAddressBytes(left: ByteArray, right: ByteArray): Int {
+        left.indices.forEach { index ->
+            compareValues(left[index].toUByte(), right[index].toUByte())
+                .takeIf { it != 0 }
+                ?.let { return it }
+        }
+        return 0
     }
 
     private fun EmbeddedNodeManager.liveConnection(): NodeConnection? {
@@ -670,6 +902,7 @@ class FolderSyncJourneyInstrumentedTest {
                 secondHandle = 0
             }
         }
+        forgetSecondNodeSecrets()
         var helpersReaped = installedEngine == null
         attempt {
             if (installedEngine != null) {
@@ -818,8 +1051,17 @@ class FolderSyncJourneyInstrumentedTest {
         const val FIXTURE_PREFIX = "CovalentApi37-"
         const val SECOND_DATA_PREFIX = "journey-"
         const val MAX_RECEIPT_VALUE_CHARS = 512
+        const val ADDRESS_CLASS_PRIVATE_LAN = 0
+        const val ADDRESS_CLASS_TAILNET = 1
+        const val ADDRESS_CLASS_CONTAINER_BRIDGE = 2
         val RUN_ID = Regex("[0-9a-f]{32}")
         val PAUSED_CONTENT = "api37-edit-held-while-paused\n".toByteArray(StandardCharsets.UTF_8)
+        val AFTER_ADDRESS_FORWARD_CONTENT =
+            "api37-forward-after-address-refresh\n".toByteArray(StandardCharsets.UTF_8)
+        val AFTER_ADDRESS_REVERSE_CONTENT =
+            "api37-reverse-after-address-refresh\n".toByteArray(StandardCharsets.UTF_8)
+        val AFTER_ADDRESS_COLD_FORWARD_CONTENT =
+            "api37-forward-after-address-cold-restart\n".toByteArray(StandardCharsets.UTF_8)
         val AFTER_RESTART_CONTENT = "api37-reverse-after-service-restart\n".toByteArray(StandardCharsets.UTF_8)
         val RECEIPT_KEYS = setOf(
             RECEIPT_RUN_ID,

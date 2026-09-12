@@ -161,6 +161,7 @@ node ./scripts/test-setup-guidance.mjs
 ./scripts/test-android-native-package.sh
 python3 -B ./scripts/test-collect-sync-engine-notices.py
 python3 -B ./scripts/test-collect-android-native-link-provenance.py
+python3 -B ./scripts/test-collect-android-native-distribution-summary.py
 python3 -B ./scripts/test-android-native-library-directory.py
 python3 -B ./scripts/test-collect-go-target-license-inventory.py
 ./scripts/test-linux-sync-engine-notice-packaging.sh

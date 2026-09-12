@@ -1768,3 +1768,48 @@ linux/amd64 Caddy binary is 55,165,090 bytes, SHA-256
 gRPC 1.83.2. The image budget remains 128 MiB. New container distribution
 collectors and the pending BusyBox backport are separate work, not part of this
 narrow rerun or a claim that security acceptance has passed.
+
+
+## Checkpoint 41: Android pairing endpoint and native distribution evidence
+
+Checkpoint 40 (`53ad71a64fca55b27703faf8bc20816d1f6808a1`) completes its
+hosted checks in run `34306597129`. Rust/contracts, Mac bundle/integration/UI,
+Android foundation, iOS, both Docker architectures and dependency review pass.
+CodeQL run `34306597117` passes Java/Kotlin, Swift and the zero-open-alert policy.
+Both exact Docker image scans report zero High findings and three Medium
+BusyBox CVE-2025-60876 findings. The amd64 image is 134,153,728 bytes and arm64
+is 125,030,400 bytes; the 134,217,728-byte cap is unchanged.
+
+Android device job `102324478641` passes all 75 baseline instrumentation tests,
+then fails the one native folder setup test with
+`incoming network pairing did not complete before its deadline.` Permission
+loss and restored-access phases do not execute. The parent-directory correction
+passes the earlier runtime-directory failure, but this does not establish a
+complete Android folder journey.
+
+The setup test entered a loopback peer endpoint while the native runtime signed
+its detected emulator guest address. Production requires the candidate to match
+the signed endpoint and verifies the request source address. Checkpoint 41
+corrects the test's UI input to the live emulator address using the native
+selection order. Production pairing validation, permissions and timeouts remain
+unchanged. The test also moves the second node's UDP peer and TCP worker ports,
+verifies its retained identity, edits the address through Compose controls,
+checks transfer in both directions, cold routing and file preservation through
+the existing permission-loss/restoration phases. These changes require a fresh
+hosted device run; static source inspection cannot pass the journey milestone.
+
+The Android distribution collector requires six distinct native objects: JNI,
+worker and guardian for arm64-v8a and x86_64. It matches their final-link records
+to bytes in both debug and release APKs and verifies the exact NDK source
+properties, notices and packaged notice manifest. Full-build mode requires a
+fresh generated summary; prebuilt mode recomputes and compares it. Bounded CI
+JSON records make the complete six-object identity evidence available in logs.
+Seven adversarial collector tests pass; actual hosted NDK/APK aggregation is
+pending. No local Android compilation or device execution is claimed.
+
+Acceptance remains 14 of 20 milestones (70%). The independently reviewed Caddy,
+Alpine and BusyBox work remains outside checkpoint 41. The isolated BusyBox
+arm64 build now passes exact package version/ownership and all 13 network tests;
+its final amd64/arm64 image integration, vulnerability classification and size
+acceptance remain open. Mac spoken accessibility and personal-build upgrade,
+final installation regression and performance acceptance also remain open.
