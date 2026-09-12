@@ -256,8 +256,10 @@ impl OwnedEngineWorker {
 
         // The pinned upstream locations module resolves the real OS home at
         // process initialization, even with explicit config/data flags. Keep
-        // this one non-secret OS value; never substitute a task directory or
-        // inherit arbitrary engine settings from the parent environment.
+        // this one non-secret OS value on desktop/server hosts. Android app
+        // processes omit HOME; Go uses its Android default there. Explicit
+        // config/data paths below still keep all worker state app-private.
+        #[cfg(not(target_os = "android"))]
         let os_home = std::env::var_os("HOME")
             .filter(|home| !home.is_empty())
             .map(PathBuf::from)
@@ -279,7 +281,6 @@ impl OwnedEngineWorker {
             .arg("--no-upgrade")
             .arg("--no-port-probing")
             .env_clear()
-            .env("HOME", os_home)
             .env("STMONITORED", "1")
             .env("STNOUPGRADE", "1")
             .env("TMPDIR", &config_dir)
@@ -288,6 +289,8 @@ impl OwnedEngineWorker {
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        #[cfg(not(target_os = "android"))]
+        command.env("HOME", os_home);
 
         let mut child = command
             .spawn()
