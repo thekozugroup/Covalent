@@ -216,6 +216,34 @@ class Fixture:
         actual = docker("exec", self.nodes[key]["name"], "sha256sum", "/sync/" + filename)
         return actual.decode("ascii").split()[0] == hashlib.sha256(payload).hexdigest()
 
+    def missing(self, key: str, filename: str) -> bool:
+        result = docker("exec", self.nodes[key]["name"], "sh", "-c",
+                        'if [ -e "$1" ] || [ -L "$1" ]; then printf present; else printf missing; fi',
+                        "sh", "/sync/" + filename)
+        return result == b"missing"
+
+    def delete(self, key: str, filename: str):
+        docker("exec", self.nodes[key]["name"], "rm", "--", "/sync/" + filename)
+
+    def change_policy(self, key: str, folder_id: str, *, propagate: bool, restore: bool):
+        row = next(row for row in self.status(key)["shares"] if row["folderId"] == folder_id)
+        current = row["linkSettings"]
+        if not current["confirmed"] or current["pendingChange"] is not None:
+            raise GateError("link settings are not ready for an edit")
+        settings = {"deletionPolicy": {"propagateSourceDeletions": propagate,
+                                        "restoreLocalDeletions": restore}, "paused": False}
+        body = {"folderId": folder_id, "changeId": str(uuid.uuid4()),
+                "expectedRevision": current["revision"], "settings": settings}
+        self.wait(lambda: self.request(key, "/api/v1/sync/settings", body)["schemaVersion"] == 1,
+                  "durable settings submission")
+        for device in ("a", "b"):
+            def committed(device=device):
+                state = next(row for row in self.status(device)["shares"]
+                             if row["folderId"] == folder_id)["linkSettings"]
+                return (state["revision"] == current["revision"] + 1 and state["settings"] == settings
+                        and state["pendingChange"] is None and state["confirmed"])
+            self.wait(committed, "shared settings convergence on " + device)
+
     def status(self, key: str):
         return self.request(key, "/api/v1/sync/status")
 
@@ -276,7 +304,8 @@ class Fixture:
         self.phase = "durable signed folder offer"
         payload = b"packaged-container-folder-gate\n"
         self.write("a", "forward.txt", payload)
-        body = {"peerId": peer, "folderId": str(uuid.uuid4()), "label": "Container folder gate", "selectedRoot": "/sync"}
+        body = {"peerId": peer, "folderId": str(uuid.uuid4()), "label": "Container folder gate", "selectedRoot": "/sync",
+                "linkPolicy": {"propagateSourceDeletions": False, "restoreLocalDeletions": False}}
         offered = self.request("a", "/api/v1/sync/folders", body)
         offer_id = offered["offerId"]
         if self.request("a", "/api/v1/sync/folders", body)["offerId"] != offer_id:
@@ -299,7 +328,7 @@ class Fixture:
         self.request("a", "/api/v1/sync/pause", {"offerId": offer_id, "paused": False})
         self.wait(lambda: self.matches("b", "forward.txt", paused_payload), "resumed transfer")
         self.checks.append("pause-withholds-edit-and-resume-converges")
-        self.phase = "cold restart and reverse transfer"
+        self.phase = "cold restart and one-way direction"
         before = self.request("b", "/api/v1/transport/identity")
         docker("stop", "--time=20", self.nodes["b"]["name"])
         docker("start", self.nodes["b"]["name"])
@@ -310,19 +339,57 @@ class Fixture:
         self.wait(lambda: self.request("b", "/api/v1/status").get("state") == "ready", "cold restart")
         if self.request("b", "/api/v1/transport/identity") != before:
             raise GateError("cold restart replaced identity")
-        reverse = b"reverse edit after packaged node restart\n"
+        reverse = b"destination-only edit after packaged node restart\n"
         self.write("b", "reverse.txt", reverse)
-        self.wait(lambda: self.matches("a", "reverse.txt", reverse), "reverse transfer after restart")
-        self.checks.append("durable-identity-restart-and-reverse-transfer")
+        self.write("a", "barrier.txt", b"one-way barrier\n")
+        self.wait(lambda: self.matches("b", "barrier.txt", b"one-way barrier\n"), "forward transfer after restart")
+        if not self.missing("a", "reverse.txt"):
+            raise GateError("destination content flowed back to the source")
+        self.checks.append("durable-identity-restart-and-one-way-direction")
+
+        self.phase = "keep source-deleted copies"
+        self.write("a", "preserved.txt", payload)
+        self.wait(lambda: self.matches("b", "preserved.txt", payload), "preserved copy setup")
+        self.delete("a", "preserved.txt")
+        self.write("a", "barrier.txt", b"source-deletion barrier\n")
+        self.wait(lambda: self.matches("b", "barrier.txt", b"source-deletion barrier\n"), "source deletion scan")
+        if not self.matches("b", "preserved.txt", payload):
+            raise GateError("default source deletion removed the destination copy")
+        self.checks.append("default-source-deletion-keeps-destination-copy")
+
+        self.phase = "keep destination deletion across source edit"
+        self.delete("b", "forward.txt")
+        paused_payload = b"later source edit must not recreate a destination deletion\n"
+        self.write("a", "forward.txt", paused_payload)
+        self.write("a", "barrier.txt", b"destination-deletion barrier\n")
+        self.wait(lambda: self.matches("b", "barrier.txt", b"destination-deletion barrier\n"), "source edit scan")
+        if not self.missing("b", "forward.txt"):
+            raise GateError("source edit recreated a deliberately deleted destination file")
+        self.checks.append("destination-deletion-stays-deleted-after-source-edit")
+
+        self.phase = "destination settings change and explicit restoration"
+        self.change_policy("b", body["folderId"], propagate=False, restore=True)
+        self.wait(lambda: self.matches("b", "forward.txt", paused_payload), "explicit deletion restoration")
+        if not self.matches("b", "reverse.txt", reverse) or not self.missing("a", "reverse.txt"):
+            raise GateError("explicit restoration changed an unrelated destination-only file")
+        self.checks.append("destination-settings-converge-and-restore-only-deleted-files")
+
+        self.phase = "optional source deletion propagation"
+        self.write("a", "mirrored.txt", payload)
+        self.wait(lambda: self.matches("b", "mirrored.txt", payload), "mirror copy setup")
+        self.change_policy("a", body["folderId"], propagate=True, restore=True)
+        self.delete("a", "mirrored.txt")
+        self.wait(lambda: self.missing("b", "mirrored.txt"), "source deletion propagation")
+        self.checks.append("optional-source-deletion-propagates")
         self.phase = "offline peer removal and file preservation"
         # Pause only this fixture's recipient. Its network identity and mounted
         # files remain allocated while it cannot acknowledge a control request.
         docker("pause", self.nodes["b"]["name"])
         self.request("a", "/api/v1/sync/remove", {"offerId": offer_id})
-        if not self.matches("a", "forward.txt", paused_payload) or not self.matches("a", "reverse.txt", reverse):
+        if not self.matches("a", "forward.txt", paused_payload) or not self.missing("a", "reverse.txt"):
             raise GateError("local removal changed selected files")
         self.wait(lambda: self.status("a")["lifecycle"] == "stopped", "removed worker stop")
-        if not self.matches("a", "forward.txt", paused_payload) or not self.matches("a", "reverse.txt", reverse):
+        if not self.matches("a", "forward.txt", paused_payload) or not self.missing("a", "reverse.txt"):
             raise GateError("completed local removal changed selected files")
         self.checks.append("local-removal-preserves-files-and-stops-worker")
 
@@ -357,8 +424,10 @@ class Fixture:
             raise GateError("removed recipient cold restart replaced identity")
         self.wait(lambda: removed("b", False), "cold recipient removal")
         for key in ("a", "b"):
-            if not self.matches(key, "forward.txt", paused_payload) or not self.matches(key, "reverse.txt", reverse):
+            if not self.matches(key, "forward.txt", paused_payload):
                 raise GateError("remote removal changed an existing file")
+        if not self.matches("b", "reverse.txt", reverse) or not self.missing("a", "reverse.txt"):
+            raise GateError("remote removal changed the one-way destination-only file")
         self.checks.append("signed-remote-removal-acknowledgement-and-recipient-cold-restart-keep-both-copies")
 
     @staticmethod

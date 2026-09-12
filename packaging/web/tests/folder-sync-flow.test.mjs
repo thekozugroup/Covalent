@@ -11,6 +11,21 @@ const otherDeviceId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const peerId = "22222222-2222-4222-8222-222222222222";
 const offerId = "33333333-3333-4333-8333-333333333333";
 const folderId = "44444444-4444-4444-8444-444444444444";
+const linkPolicy = { propagateSourceDeletions: false, restoreLocalDeletions: false };
+const changeId = "55555555-5555-4555-8555-555555555555";
+
+function linkState(overrides = {}) {
+  return {
+    revision: 0,
+    settings: { deletionPolicy: linkPolicy, paused: false },
+    changeId: "00000000-0000-0000-0000-000000000000",
+    changedBy: peerId,
+    confirmed: false,
+    pendingChange: null,
+    conflictedChange: null,
+    ...overrides,
+  };
+}
 
 class MemoryStorage {
   constructor() { this.values = new Map(); }
@@ -45,6 +60,8 @@ function share(overrides = {}) {
     expiresAtUnixMs: 10,
     expired: false,
     peerConnection: "unknown",
+    linkPolicy: null,
+    linkSettings: null,
     ...overrides,
   };
 }
@@ -74,7 +91,7 @@ test("server-declared expiry blocks acceptance before a mutation", async () => {
 
 test("a lost offer response reloads and retries the exact retained body", async () => {
   const storage = new MemoryStorage();
-  const body = { peerId, folderId, label: "Plans", selectedRoot: "/sync" };
+  const body = { peerId, folderId, label: "Plans", selectedRoot: "/sync", linkPolicy };
   const firstCalls = [];
   const first = folders.coordinator({
     storage,
@@ -157,7 +174,7 @@ test("removal remains visible until the peer acknowledges and keeps old invitati
 
 test("lost renewal response retries the expired ID and preserves an unrelated draft", async () => {
   const storage = new MemoryStorage();
-  const draft = { peerId, folderId, label: "Other plans", selectedRoot: "/other" };
+  const draft = { peerId, folderId, label: "Other plans", selectedRoot: "/other", linkPolicy };
   folders.pending.save(storage, deviceId, draft);
   const replacementId = "55555555-5555-4555-8555-555555555555";
   const calls = [];
@@ -232,7 +249,7 @@ test("storage failure prevents an offer mutation", async () => {
   });
   enable(controller);
   await assert.rejects(
-    controller.sendOffer({ peerId, folderId, label: "Plans", selectedRoot: "/sync" }),
+    controller.sendOffer({ peerId, folderId, label: "Plans", selectedRoot: "/sync", linkPolicy }),
     (error) => /no request was sent/i.test(error.covalentGuidance),
   );
   assert.equal(calls, 0);
@@ -260,7 +277,7 @@ test("a throwing sessionStorage getter does not prevent independent initializati
   enable(controller);
   assert.equal((await controller.refresh()).applied, true);
   await assert.rejects(
-    controller.sendOffer({ peerId, folderId, label: "Plans", selectedRoot: "/sync" }),
+    controller.sendOffer({ peerId, folderId, label: "Plans", selectedRoot: "/sync", linkPolicy }),
     (error) => /could not read its pending folder offer/i.test(error.covalentGuidance),
   );
   assert.equal(statusCalls, 1);
@@ -306,7 +323,7 @@ test("a delayed status response cannot cross an authoritative device-context cha
 
 test("a delayed offer response retains the old server receipt after context changes", async () => {
   const storage = new MemoryStorage();
-  const body = { peerId, folderId, label: "Plans", selectedRoot: "/sync" };
+  const body = { peerId, folderId, label: "Plans", selectedRoot: "/sync", linkPolicy };
   let resolveMutation;
   const controller = folders.coordinator({
     storage,
@@ -698,14 +715,16 @@ test("initial scanning reports local checking before offered or ready phases", (
   assert.equal(folders.shareView(decoded, decoded.shares[0]).text, "Checking folder");
 });
 
-test("the primary Folders tab uses server paths, confirmed names, and visible unlocked polling", async () => {
+test("the primary Links tab uses server paths, confirmed names, and visible unlocked polling", async () => {
   const root = new URL("../", import.meta.url);
   const [html, app] = await Promise.all([
     readFile(new URL("index.html", root), "utf8"),
     readFile(new URL("app.js", root), "utf8"),
   ]);
-  assert.match(html, /data-tab="folders">Folders<\/button>/);
-  assert.ok(html.indexOf('data-tab="folders"') < html.indexOf('data-tab="pair"'));
+  assert.match(html, /data-tab="folders">Links<\/button>/);
+  assert.ok(html.indexOf('data-tab="pair"') < html.indexOf('data-tab="folders"'));
+  assert.ok(html.indexOf('data-tab="folders"') < html.indexOf('data-tab="settings"'));
+  assert.match(html, /<summary>Older backup and restore tools<\/summary>[\s\S]*data-tool-panel="backup"[\s\S]*data-tool-panel="restore"/);
   assert.match(html, /Advanced server folder path/);
   assert.match(html, /name="selectedRoot" value="\/sync"/);
   assert.match(html, /data-paired-devices/);
@@ -727,4 +746,175 @@ test("the primary Folders tab uses server paths, confirmed names, and visible un
   assert.match(app, /folderSync\.lazySessionStorage\(globalThis\)/);
   assert.doesNotMatch(app, /storage: globalThis\.sessionStorage/);
   assert.doesNotMatch(app, /innerHTML\s*=/);
+});
+
+
+test("one-way offers require explicit complete deletion options and preserve them on retry", () => {
+  const body = { peerId, folderId, label: "Photos", selectedRoot: "/sync" };
+  for (const policy of [undefined, null, {}, { propagateSourceDeletions: false },
+    { ...linkPolicy, restoreLocalDeletions: "false" }, { ...linkPolicy, unknown: true }]) {
+    assert.throws(() => folders.offerBody({ ...body, linkPolicy: policy }), /folder sync guidance/);
+  }
+  assert.deepEqual(folders.offerBody({ ...body, linkPolicy }).linkPolicy, linkPolicy);
+});
+
+test("idle one-way deleted-file counts do not pretend to be active transfers", () => {
+  const health = { folderId, state: "idle", remainingFiles: 1, remainingBytes: 32,
+    scanPullErrorCount: 0, reportedErrorRows: 0, statusError: false, watchError: false };
+  const candidate = share({
+    phase: "ready", linkPolicy, linkSettings: linkState({ confirmed: true }), peerConnection: "connected",
+  });
+  const current = folders.requireStatus(status({ shares: [candidate], folders: [health] }));
+  assert.equal(folders.shareView(current, current.shares[0]).kind, "ready");
+  const legacy = folders.requireStatus(status({ shares: [share({ phase: "ready" })], folders: [health] }));
+  assert.equal(legacy.shares[0].linkPolicy, null);
+  assert.equal(folders.shareView(legacy, legacy.shares[0]).kind, "syncing");
+  assert.match(folders.policyExplanation(null), /both directions/);
+  assert.match(folders.policyExplanation(linkPolicy), /stay deleted/);
+});
+
+test("link settings require complete consistent bounded server state", () => {
+  const valid = share({
+    incoming: false,
+    phase: "ready",
+    linkPolicy,
+    linkSettings: linkState({ confirmed: true, changedBy: deviceId }),
+  });
+  assert.equal(folders.requireStatus(status({ shares: [valid] })).shares[0].linkSettings.confirmed, true);
+
+  for (const invalid of [
+    { ...valid, linkSettings: null },
+    { ...valid, linkPolicy: null },
+    { ...valid, linkSettings: { ...valid.linkSettings, confirmed: "true" } },
+    { ...valid, linkSettings: { ...valid.linkSettings, revision: 1 } },
+    { ...valid, linkSettings: { ...valid.linkSettings,
+      settings: { deletionPolicy: { ...linkPolicy, restoreLocalDeletions: true }, paused: false } } },
+    { ...valid, linkSettings: { ...valid.linkSettings, extra: true } },
+  ]) {
+    assert.throws(() => folders.requireStatus(status({ shares: [invalid] })), /folder sync guidance/);
+  }
+});
+
+test("a lost link-settings reply retries the exact retained revision and change ID", async () => {
+  const storage = new MemoryStorage();
+  const desired = { deletionPolicy: { ...linkPolicy, restoreLocalDeletions: true }, paused: false };
+  const current = share({ incoming: false, phase: "ready", linkPolicy,
+    linkSettings: linkState({ confirmed: true, changedBy: deviceId }) });
+  const posts = [];
+  let loseReply = true;
+  const controller = folders.coordinator({
+    storage,
+    randomUuid: () => changeId,
+    api: async (path, options) => {
+      if (path === "/api/v1/sync/status") return status({ shares: [current] });
+      posts.push(JSON.parse(options.body));
+      if (loseReply) {
+        loseReply = false;
+        throw new TypeError("connection closed after request");
+      }
+      return { schemaVersion: 1, offerId: null, lifecycle: "running", issue: null };
+    },
+  });
+  enable(controller);
+  await controller.refresh();
+  await assert.rejects(controller.updateDeletionPolicy(folderId, desired.deletionPolicy),
+    (error) => /uncertain/.test(error.covalentGuidance));
+  const retained = { folderId, changeId, expectedRevision: 0, settings: desired };
+  assert.deepEqual(controller.pendingLinkSettings(), retained);
+  await controller.retryPendingLinkSettings();
+  assert.deepEqual(posts, [retained, retained]);
+  assert.equal(controller.pendingLinkSettings(), null);
+});
+
+test("unconfirmed or removed links cannot create a settings retry", async () => {
+  for (const candidate of [
+    share({ phase: "awaitingCommit", linkPolicy, linkSettings: linkState() }),
+    share({ phase: "removed", linkPolicy, linkSettings: linkState({ confirmed: true }) }),
+  ]) {
+    let posts = 0;
+    const controller = folders.coordinator({ storage: new MemoryStorage(), api: async (path) => {
+      if (path === "/api/v1/sync/status") return status({ shares: [candidate] });
+      posts += 1;
+    } });
+    enable(controller);
+    await controller.refresh();
+    assert.throws(() => controller.pause(offerId, true), /folder sync guidance/);
+    assert.equal(posts, 0);
+    assert.equal(controller.pendingLinkSettings(), null);
+  }
+});
+
+test("current server state resolves a lost settings reply without another mutation", async () => {
+  const storage = new MemoryStorage();
+  const desired = { deletionPolicy: { ...linkPolicy, propagateSourceDeletions: true }, paused: false };
+  const retained = { folderId, changeId, expectedRevision: 0, settings: desired };
+  folders.pendingSettings.save(storage, deviceId, retained);
+  const applied = share({ incoming: false, phase: "ready", linkPolicy: desired.deletionPolicy,
+    linkSettings: linkState({ revision: 1, settings: desired, changeId, changedBy: deviceId, confirmed: true }) });
+  let posts = 0;
+  const controller = folders.coordinator({ storage, api: async (path) => {
+    if (path === "/api/v1/sync/status") return status({ shares: [applied] });
+    posts += 1;
+  } });
+  enable(controller);
+  await controller.refresh();
+  assert.equal((await controller.retryPendingLinkSettings()).outcome, "applied");
+  assert.equal(posts, 0);
+  assert.equal(controller.pendingLinkSettings(), null);
+});
+
+test("a stale saved settings request never overwrites a newer revision", async () => {
+  const storage = new MemoryStorage();
+  const desired = { deletionPolicy: { ...linkPolicy, restoreLocalDeletions: true }, paused: false };
+  const retained = { folderId, changeId, expectedRevision: 0, settings: desired };
+  folders.pendingSettings.save(storage, deviceId, retained);
+  const current = share({ incoming: false, phase: "ready", linkPolicy,
+    linkSettings: linkState({ revision: 1, changeId: otherDeviceId, changedBy: peerId, confirmed: true }) });
+  let posts = 0;
+  const controller = folders.coordinator({ storage, api: async (path) => {
+    if (path === "/api/v1/sync/status") return status({ shares: [current] });
+    posts += 1;
+  } });
+  enable(controller);
+  await controller.refresh();
+  await assert.rejects(controller.retryPendingLinkSettings(),
+    (error) => /old revision/.test(error.covalentGuidance));
+  assert.equal(posts, 0);
+  assert.deepEqual(controller.pendingLinkSettings(), retained);
+});
+
+test("destination pending and conflicted requests remain distinct from current settings", async () => {
+  const storage = new MemoryStorage();
+  const desired = { deletionPolicy: { ...linkPolicy, restoreLocalDeletions: true }, paused: true };
+  const request = {
+    folderId, sourceId: peerId, requesterId: deviceId, changeId, expectedRevision: 0, settings: desired,
+  };
+  const pendingShare = share({ phase: "ready", linkPolicy,
+    linkSettings: linkState({ pendingChange: request }) });
+  const decoded = folders.requireStatus(status({ shares: [pendingShare] })).shares[0];
+  assert.equal(decoded.linkSettings.settings.deletionPolicy.restoreLocalDeletions, false);
+  assert.equal(decoded.linkSettings.pendingChange.settings.deletionPolicy.restoreLocalDeletions, true);
+
+  const retained = { folderId, changeId, expectedRevision: 0, settings: desired };
+  folders.pendingSettings.save(storage, deviceId, retained);
+  const conflicted = share({ phase: "ready", linkPolicy,
+    linkSettings: linkState({
+      revision: 1,
+      changeId: otherDeviceId,
+      changedBy: peerId,
+      confirmed: true,
+      conflictedChange: request,
+    }) });
+  let posts = 0;
+  const controller = folders.coordinator({ storage, api: async (path) => {
+    if (path === "/api/v1/sync/status") return status({ shares: [conflicted] });
+    posts += 1;
+  } });
+  enable(controller);
+  await controller.refresh();
+  await assert.rejects(controller.retryPendingLinkSettings(),
+    (error) => /old revision/.test(error.covalentGuidance));
+  assert.equal(posts, 0);
+  assert.equal(controller.pendingLinkSettings(), null);
+  assert.deepEqual(controller.current().shares[0].linkSettings.conflictedChange.settings, desired);
 });

@@ -36,9 +36,9 @@ pub use engine::{
 };
 pub use folder_sharing::{
     FolderSharingError, MAX_FOLDER_SHARE_LIFETIME_MS, accept_folder_share_offer,
-    commit_folder_share, create_folder_share_offer, folder_share_acceptance_digest,
-    folder_share_offer_digest, verify_folder_share_acceptance, verify_folder_share_commit,
-    verify_folder_share_offer, verify_fresh_folder_share_acceptance,
+    commit_folder_share, create_folder_share_offer, create_folder_share_offer_with_policy,
+    folder_share_acceptance_digest, folder_share_offer_digest, verify_folder_share_acceptance,
+    verify_folder_share_commit, verify_folder_share_offer, verify_fresh_folder_share_acceptance,
     verify_fresh_folder_share_offer,
 };
 pub use identity::{DeviceIdentity, PublicIdentity};

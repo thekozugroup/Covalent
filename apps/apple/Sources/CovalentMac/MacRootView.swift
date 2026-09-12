@@ -3,24 +3,25 @@ import SwiftUI
 struct MacRootView: View {
     @ObservedObject var model: CovalentAppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var selectedSection: AppSection = .overview
+    @State private var selectedSection: AppSection = .folders
+    @State private var adoptedInitialSection = false
     @State private var detailedAlert: AppAlert?
     @State private var pendingRecovery: (@MainActor () async -> Void)?
 
     var body: some View {
         NavigationSplitView {
             VStack(spacing: 0) {
-                List(AppSection.allCases, selection: $selectedSection) { section in
-                    Label(section.label, systemImage: section.systemImage)
-                        .tag(section)
-                        // Sidebar rows are rendered through AppKit vibrancy.
-                        // Use opaque appearance-aware ink for unselected rows;
-                        // the selected row keeps the required white-on-blue
-                        // treatment explicitly instead of relying on semantic
-                        // `.primary` blending.
-                        .font(.body.weight(.medium))
-                        .foregroundStyle(section == selectedSection ? Color.white : MacLabelColor.sidebarUnselected)
-                        .accessibilityIdentifier("sidebar.\(section.rawValue)")
+                List(selection: $selectedSection) {
+                    Section {
+                        ForEach([AppSection.devices, .folders, .settings]) { section in
+                            sidebarLabel(for: section)
+                        }
+                    }
+                    Section("Tools") {
+                        ForEach([AppSection.overview, .backups]) { section in
+                            sidebarLabel(for: section)
+                        }
+                    }
                 }
                 .listStyle(.sidebar)
                 // The list vends its own accessibility element (an outline), so
@@ -56,7 +57,7 @@ struct MacRootView: View {
             // own, so a container that SwiftUI has already collapsed may take
             // one too, and this reads better than nesting another group inside
             // one that is already a single-child wrapper.
-            .accessibilityLabel(model.selectedSection.label)
+            .accessibilityLabel(macLabel(for: model.selectedSection))
         }
         .toolbar {
             ToolbarItemGroup {
@@ -67,18 +68,25 @@ struct MacRootView: View {
                 }
                 .help("Refresh local service status")
 
-                Button {
-                    model.requestNewBackup()
+                Menu {
+                    Button("New Backup…") { model.requestNewBackup() }
+                        .disabled(!model.isAuthorized || model.activeTask != nil)
+                        .accessibilityIdentifier("toolbar.newBackup")
+                    Button("Restore Latest Backup…") { model.requestRestoreLatest() }
+                        .disabled(!model.isAuthorized || model.snapshots.isEmpty || model.activeTask != nil)
                 } label: {
-                    Label("New Backup", systemImage: "plus")
+                    Label("Backup Tools", systemImage: "externaldrive")
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(!model.isAuthorized || model.activeTask != nil)
-                .help(model.isAuthorized ? "Create a backup" : "Connect to the local service first")
-                .accessibilityIdentifier("toolbar.newBackup")
+                .help("Backup and restore tools")
             }
         }
-        .onAppear { selectedSection = model.selectedSection }
+        .onAppear {
+            if !adoptedInitialSection, model.selectedSection == .overview {
+                model.selectedSection = .folders
+            }
+            adoptedInitialSection = true
+            selectedSection = model.selectedSection
+        }
         .onChange(of: selectedSection) { _, section in
             if model.selectedSection != section {
                 model.selectedSection = section
@@ -188,6 +196,24 @@ struct MacRootView: View {
                 .keyboardShortcut(.cancelAction)
         } message: { alert in
             Text(alert.detail ?? "")
+        }
+    }
+
+    private func sidebarLabel(for section: AppSection) -> some View {
+        Label(macLabel(for: section), systemImage: section.systemImage)
+            .tag(section)
+            .font(.body.weight(.medium))
+            .foregroundStyle(
+                section == selectedSection ? Color.white : MacLabelColor.sidebarUnselected
+            )
+            .accessibilityIdentifier("sidebar.\(section.rawValue)")
+    }
+
+    private func macLabel(for section: AppSection) -> String {
+        switch section {
+        case .devices: "Pair"
+        case .folders: "Links"
+        default: section.label
         }
     }
 

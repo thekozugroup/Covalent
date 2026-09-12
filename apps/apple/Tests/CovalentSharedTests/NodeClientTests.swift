@@ -1864,6 +1864,32 @@ func realDaemonBackupVerifyAndRestore() async throws {
     #expect(status.displayState(for: status.shares[0]) == .invitationExpired)
 }
 
+@Test func folderStatusDecodesSharedSettingsWithoutShowingPendingPolicyAsApplied() async throws {
+    let source = UUID()
+    let requester = UUID()
+    let offer = UUID()
+    let folder = UUID()
+    let committed = UUID()
+    let pending = UUID()
+    let recorder = RequestRecorder { request in
+        TestResponse.response(
+            request,
+            status: 200,
+            json: """
+            {"availability":"available","lifecycle":"running","issue":null,"healthFreshness":"fresh","connectionFreshness":"fresh","peers":[{"peerId":"\(source.uuidString)","displayName":"Source Mac"}],"shares":[{"offerId":"\(offer.uuidString)","folderId":"\(folder.uuidString)","label":"Photos","peerId":"\(source.uuidString)","incoming":true,"phase":"ready","expiresAtUnixMs":null,"expired":false,"peerConnection":"connected","linkPolicy":{"propagateSourceDeletions":false,"restoreLocalDeletions":false},"linkSettings":{"revision":2,"settings":{"deletionPolicy":{"propagateSourceDeletions":false,"restoreLocalDeletions":false},"paused":false},"changeId":"\(committed.uuidString)","changedBy":"\(source.uuidString)","confirmed":true,"pendingChange":{"folderId":"\(folder.uuidString)","sourceId":"\(source.uuidString)","requesterId":"\(requester.uuidString)","changeId":"\(pending.uuidString)","expectedRevision":2,"settings":{"deletionPolicy":{"propagateSourceDeletions":true,"restoreLocalDeletions":false},"paused":false}},"conflictedChange":null}}],"folders":[]}
+            """
+        )
+    }
+    let status = try await makeClient(
+        recorder: recorder, token: String(repeating: "l", count: 32)
+    ).folderSyncStatus()
+    let share = try #require(status.shares.first)
+    #expect(share.linkPolicy == FolderLinkPolicy())
+    #expect(share.linkSettings?.settings.deletionPolicy == FolderLinkPolicy())
+    #expect(share.linkSettings?.pendingChange?.changeId == pending)
+    #expect(share.linkSettings?.pendingChange?.settings.deletionPolicy.propagateSourceDeletions == true)
+}
+
 @Test func peerAddressRefreshUsesExactAuthenticatedContract() async throws {
     let peer = UUID()
     let expected = "192.0.2.10:8787"
@@ -2013,6 +2039,13 @@ func realDaemonBackupVerifyAndRestore() async throws {
             let object = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
             #expect(Set(object.keys) == ["offerId"])
             #expect(UUID(uuidString: try #require(object["offerId"] as? String)) == offer)
+        case 7:
+            #expect(request.url?.path == "/api/v1/sync/settings")
+            let payload = try #require(requestBody(request))
+            let object = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+            #expect(Set(object.keys) == ["folderId", "changeId", "expectedRevision", "settings"])
+            #expect(UUID(uuidString: try #require(object["folderId"] as? String)) == folder)
+            #expect((object["expectedRevision"] as? NSNumber)?.uint64Value == 4)
         default:
             Issue.record("Unexpected folder mutation request")
         }
@@ -2030,6 +2063,10 @@ func realDaemonBackupVerifyAndRestore() async throws {
     _ = try await client.removeFolder(FolderReferenceRequest(offerId: offer))
     _ = try await client.retryFolderSync()
     _ = try await client.renewFolder(FolderReferenceRequest(offerId: offer))
+    _ = try await client.updateFolderLinkSettings(FolderLinkSettingsRequest(
+        folderId: folder, changeId: UUID(), expectedRevision: 4,
+        settings: FolderLinkSettings(deletionPolicy: FolderLinkPolicy(), paused: true)
+    ))
 }
 
 @Test func folderStateDoesNotClaimRemoteConvergenceFromIdleHealth() {
@@ -2057,6 +2094,35 @@ func realDaemonBackupVerifyAndRestore() async throws {
     #expect(status.displayState(for: ready) == .folderReady)
     #expect(status.displayLabel(for: ready) == "Connected to Kitchen Mac")
     #expect(status.displayState(for: ready).label != "Up to date")
+
+    let oneWay = FolderShare(
+        offerId: UUID(), folderId: ready.folderId, label: ready.label, peerId: peer,
+        incoming: false, phase: .ready, expiresAtUnixMs: nil, expired: false,
+        peerConnection: .connected, linkPolicy: FolderLinkPolicy()
+    )
+    let suppressedDeletionCounts = FolderHealth(
+        folderId: ready.folderId, state: "idle", remainingFiles: 3, remainingBytes: 40,
+        scanPullErrorCount: 0, reportedErrorRows: 0, statusError: false, watchError: false
+    )
+    let oneWayIdle = FolderSyncStatus(
+        availability: "available", lifecycle: "running", issue: nil, healthFreshness: "fresh",
+        connectionFreshness: "fresh", peers: [], shares: [oneWay], folders: [suppressedDeletionCounts]
+    )
+    let legacyIdle = FolderSyncStatus(
+        availability: "available", lifecycle: "running", issue: nil, healthFreshness: "fresh",
+        connectionFreshness: "fresh", peers: [], shares: [ready], folders: [suppressedDeletionCounts]
+    )
+    #expect(oneWayIdle.displayState(for: oneWay) == .folderReady)
+    #expect(legacyIdle.displayState(for: ready) == .syncing)
+
+    let activelySyncing = FolderSyncStatus(
+        availability: "available", lifecycle: "running", issue: nil, healthFreshness: "fresh",
+        peers: [], shares: [oneWay], folders: [FolderHealth(
+            folderId: ready.folderId, state: "syncing", remainingFiles: 0, remainingBytes: 0,
+            scanPullErrorCount: 0, reportedErrorRows: 0, statusError: false, watchError: false
+        )]
+    )
+    #expect(activelySyncing.displayState(for: oneWay) == .syncing)
 
     let scanning = FolderSyncStatus(
         availability: "available", lifecycle: "running", issue: nil, healthFreshness: "fresh",

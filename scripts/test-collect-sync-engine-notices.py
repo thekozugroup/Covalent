@@ -123,7 +123,11 @@ class Fixture:
             encoding="utf-8",
         )
 
-    def build(self, source_archive_suffix: str = ".tar.gz") -> dict[str, object]:
+    def build(
+        self,
+        source_archive_suffix: str = ".tar.gz",
+        source_patch_inputs: list[tuple[str, str, pathlib.Path, str]] | None = None,
+    ) -> dict[str, object]:
         return notices.build_bundle(
             self.inventory,
             self.source,
@@ -133,6 +137,7 @@ class Fixture:
             REPOSITORY / "LICENSE",
             REPOSITORY / "docs/licenses/sync-engine/OFL-1.1.txt",
             self.output,
+            source_patch_inputs=source_patch_inputs,
             source_archive_suffix=source_archive_suffix,
         )
 
@@ -205,6 +210,39 @@ class NoticeBundleTests(unittest.TestCase):
         self.assertEqual(archive_record["sha256"], hashlib.sha256(data).hexdigest())
         with tarfile.open(archive, "r:gz") as source_tar:
             self.assertIn("source/LICENSE", source_tar.getnames())
+
+    def test_source_patch_is_bound_to_modified_source_and_recipient_notices(self) -> None:
+        patch = self.fixture.root / "keep-local-deletions.patch"
+        patch.write_bytes(b"diff --git a/old b/new\n")
+        digest = hashlib.sha256(patch.read_bytes()).hexdigest()
+        source_patch = self.fixture.source / "covalent-patches" / patch.name
+        source_patch.parent.mkdir()
+        source_patch.write_bytes(patch.read_bytes())
+
+        manifest = self.fixture.build(
+            source_patch_inputs=[
+                ("Covalent keep-local-deletions patch", patch.name, patch, digest)
+            ]
+        )
+
+        self.assertEqual(manifest["sourceModifications"][0]["sha256"], digest)
+        self.assertEqual(
+            (self.fixture.output / "patches" / patch.name).read_bytes(),
+            patch.read_bytes(),
+        )
+        main_source = manifest["correspondingSources"][0]
+        self.assertEqual(main_source["sourceState"], "modified")
+        self.assertEqual(main_source["modifications"][0]["sha256"], digest)
+        archive_path = self.fixture.output / main_source["archive"]["bundlePath"]
+        with tarfile.open(archive_path, "r:gz") as archive:
+            member = archive.extractfile(
+                "source/covalent-patches/keep-local-deletions.patch"
+            )
+            self.assertIsNotNone(member)
+            self.assertEqual(member.read(), patch.read_bytes())
+        combined = (self.fixture.output / "THIRD-PARTY-NOTICES.txt").read_bytes()
+        self.assertIn(digest.encode(), combined)
+        self.assertIn(main_source["archive"]["sha256"].encode(), combined)
 
     def test_exact_toolchain_notices_are_bundled_without_changing_other_callers(self) -> None:
         ndk_notice = self.fixture.root / "NOTICE"

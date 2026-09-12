@@ -13,7 +13,10 @@ Each architecture is built in its own pinned
 Syncthing v2.1.3 from commit
 `946e2b83a1f6c6ae119427c09e0a5802940b82ff` with `GOOS=linux`, the image's
 exact `GOARCH`, `CGO_ENABLED=0`, `GOFLAGS=-mod=readonly`, and the upstream
-`noupgrade` build tag. It then runs this exact target query:
+`noupgrade` build tag. The builder verifies and applies Covalent's
+`keep-local-deletions.patch`, SHA-256
+`e58e7d133a388576a54cacc6a5a5094e6607c483c0daabac552de1a1854d92ac`,
+only to the private source export. It then runs this exact target query:
 
 ```text
 go list -tags noupgrade -deps -json ./cmd/syncthing
@@ -63,8 +66,10 @@ notice counts and bytes, evidence hashes, final image sizes, and whether the
 two target graphs differ. A reviewer must classify the exact collected texts,
 confirm required attribution presentation, and confirm the MPL-2.0
 corresponding-source offer for the shipped Syncthing source and changes. The
-source reference remains
+upstream source reference remains
 <https://github.com/syncthing/syncthing/tree/946e2b83a1f6c6ae119427c09e0a5802940b82ff>.
+The target notice manifest and combined recipient notice bind the patch digest
+to the bundled modified-source archive.
 
 Android already has an exact target inventory and generated proof bundle, but
 the production APK has not yet proved installation or in-app notice access.

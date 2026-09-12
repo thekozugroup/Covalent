@@ -24,8 +24,13 @@ use covalent_protocol::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::config::{EngineDeviceId, EngineFolderConfig, EnginePeerConfig};
+use super::config::{EngineDeviceId, EngineFolderConfig, EngineFolderRole, EnginePeerConfig};
 use super::{EngineInstallation, EngineSessionSettings, EngineStateStore};
+
+mod link_settings;
+pub use link_settings::{
+    FolderLinkSettings, LinkSettingsCommit, LinkSettingsRequest, LinkSettingsState,
+};
 
 const MAX_SHARES: usize = 512;
 const MAX_RETAINED_OFFERS: usize = 4096;
@@ -47,6 +52,8 @@ pub enum SharingError {
     FolderUnavailable,
     LimitExceeded,
     PersistenceUncertain,
+    SettingsConflict,
+    SettingsPending,
 }
 
 impl fmt::Display for SharingError {
@@ -60,6 +67,10 @@ impl fmt::Display for SharingError {
             Self::FolderUnavailable => "the selected folder needs access again",
             Self::LimitExceeded => "folder sharing reached its local limit",
             Self::PersistenceUncertain => "folder sharing needs state recovery",
+            Self::SettingsConflict => {
+                "link settings changed on another device; review them and try again"
+            }
+            Self::SettingsPending => "a link settings change is waiting for the source",
         })
     }
 }
@@ -90,6 +101,8 @@ pub struct ShareSummary {
     pub label: String,
     pub peer_id: DeviceId,
     pub incoming: bool,
+    pub link_policy: Option<covalent_protocol::FolderLinkPolicy>,
+    pub link_settings: Option<LinkSettingsState>,
     pub phase: SharingPhase,
     /// Only unaccepted invitations expire. A durable acceptance remains valid
     /// for replay after its original delivery window has elapsed.
@@ -128,6 +141,8 @@ pub enum FolderShareRecord {
         commit: FolderShareCommit,
     },
     Removal(FolderRemovalNotice),
+    SettingsRequest(LinkSettingsRequest),
+    SettingsCommit(LinkSettingsCommit),
 }
 
 #[derive(Clone)]
@@ -193,6 +208,8 @@ struct Snapshot {
     pending_peer_address_refresh: Option<PendingPeerAddressRefresh>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     completed_peer_address_refreshes: BTreeMap<DeviceId, CompletedPeerAddressRefresh>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    link_settings: BTreeMap<Uuid, LinkSettingsState>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -345,6 +362,7 @@ impl FolderSharingJournal {
             current_peer_routes: BTreeMap::new(),
             pending_peer_address_refresh: None,
             completed_peer_address_refreshes: BTreeMap::new(),
+            link_settings: BTreeMap::new(),
         };
         validate_snapshot(&snapshot, &engine, &installation)?;
         let payload = serde_json::to_vec(&snapshot).map_err(|_| SharingError::InvalidState)?;
@@ -790,6 +808,7 @@ impl FolderSharingJournal {
                 record,
             });
         }
+        self.append_link_deliveries(&mut result);
         Ok(result)
     }
 
@@ -813,12 +832,31 @@ impl FolderSharingJournal {
                 label: share.offer.label.clone(),
                 peer_id: share.peer_identity.device_id,
                 incoming: share.offer.target_device_id == self.engine.device_id(),
+                link_policy: self
+                    .snapshot
+                    .link_settings
+                    .get(&share.offer.folder_id)
+                    .map(|state| state.settings.deletion_policy)
+                    .or(share.offer.link_policy),
+                link_settings: self
+                    .snapshot
+                    .link_settings
+                    .get(&share.offer.folder_id)
+                    .cloned(),
                 expires_at_unix_ms: (!share.removed && share.acceptance.is_none())
                     .then_some(share.offer.expires_at_unix_ms),
                 phase: if share.removed {
                     SharingPhase::Removed
-                } else if share.paused {
+                } else if share.paused
+                    || self
+                        .snapshot
+                        .link_settings
+                        .get(&share.offer.folder_id)
+                        .is_some_and(|state| state.settings.paused)
+                {
                     SharingPhase::Paused
+                } else if share.commit.is_some() && !self.link_allows_transfer(share) {
+                    SharingPhase::AwaitingCommit
                 } else if share.commit.is_some() {
                     SharingPhase::Ready
                 } else if share.acceptance.is_some() {
@@ -847,6 +885,8 @@ impl FolderSharingJournal {
                     label: removed.label.clone(),
                     peer_id: removed.peer_id,
                     incoming: removed.incoming,
+                    link_policy: None,
+                    link_settings: None,
                     phase: SharingPhase::Removed,
                     expires_at_unix_ms: None,
                     remote_removal_pending: self.snapshot.pending_remote_removals.iter().any(
@@ -879,12 +919,12 @@ impl FolderSharingJournal {
             .payload()
             .map_err(|_| SharingError::PersistenceUncertain)?;
         let mut result = BTreeMap::new();
-        for share in self
-            .snapshot
-            .shares
-            .iter()
-            .filter(|share| !share.removed && !share.paused && share.commit.is_some())
-        {
+        for share in self.snapshot.shares.iter().filter(|share| {
+            !share.removed
+                && !share.paused
+                && share.commit.is_some()
+                && self.link_allows_transfer(share)
+        }) {
             let binding = if share.offer.source_device_id == self.engine.device_id() {
                 &share
                     .acceptance
@@ -914,8 +954,25 @@ impl FolderSharingJournal {
         selected_root: &Path,
         now: u64,
     ) -> Result<FolderShareOffer, SharingError> {
+        self.offer_with_policy(peer_id, folder_id, label, selected_root, now, None)
+    }
+
+    pub fn offer_with_policy(
+        &mut self,
+        peer_id: DeviceId,
+        folder_id: Uuid,
+        label: &str,
+        selected_root: &Path,
+        now: u64,
+        link_policy: Option<covalent_protocol::FolderLinkPolicy>,
+    ) -> Result<FolderShareOffer, SharingError> {
         self.reconcile_trust()?;
         let peer = self.trusted_peer(peer_id)?;
+        if let Some(current) = self.snapshot.link_settings.get(&folder_id)
+            && Some(current.settings.deletion_policy) != link_policy
+        {
+            return Err(SharingError::SettingsConflict);
+        }
         let root = capture_root(selected_root, &self.installation)?;
         if let Some(existing) = self.snapshot.shares.iter().find(|share| {
             !share.removed
@@ -924,6 +981,8 @@ impl FolderSharingJournal {
         }) {
             if existing.offer.source_device_id == self.engine.device_id()
                 && existing.offer.label == label
+                && (existing.offer.link_policy == link_policy
+                    || self.snapshot.link_settings.contains_key(&folder_id))
                 && existing
                     .root
                     .as_ref()
@@ -942,7 +1001,7 @@ impl FolderSharingJournal {
         self.check_not_shared(folder_id, peer_id)?;
         let offer = self
             .engine
-            .issue_folder_share_offer(
+            .issue_folder_share_offer_with_policy(
                 peer_id,
                 folder_id,
                 label,
@@ -950,6 +1009,7 @@ impl FolderSharingJournal {
                 None,
                 now,
                 INVITATION_LIFETIME_MS,
+                link_policy,
             )
             .map_err(|_| SharingError::InvalidRecord)?;
         let mut next = self.snapshot.clone();
@@ -1053,6 +1113,7 @@ impl FolderSharingJournal {
                 || offer.issued_at_unix_ms <= previous.offer.issued_at_unix_ms
                 || offer.expires_at_unix_ms <= previous.offer.expires_at_unix_ms
                 || offer.label != previous.offer.label
+                || offer.link_policy != previous.offer.link_policy
                 || !same_engine_identity(&offer.source_engine, &previous.offer.source_engine)
                 || offer.pairing_id != previous.offer.pairing_id
                 || !peer.matches(previous)
@@ -1170,7 +1231,7 @@ impl FolderSharingJournal {
         }
         let replacement = self
             .engine
-            .issue_folder_share_offer(
+            .issue_folder_share_offer_with_policy(
                 share.peer_identity.device_id,
                 share.offer.folder_id,
                 &share.offer.label,
@@ -1178,6 +1239,7 @@ impl FolderSharingJournal {
                 share.offer.pairing_id.as_deref(),
                 now,
                 INVITATION_LIFETIME_MS,
+                share.offer.link_policy,
             )
             .map_err(|_| SharingError::InvalidRecord)?;
         if replacement.issued_at_unix_ms <= share.offer.issued_at_unix_ms
@@ -1313,6 +1375,22 @@ impl FolderSharingJournal {
     pub fn set_paused(&mut self, offer_id: Uuid, paused: bool) -> Result<(), SharingError> {
         self.reconcile_trust()?;
         let index = self.index(offer_id)?;
+        let folder_id = self.snapshot.shares[index].offer.folder_id;
+        if let Some(state) = self.snapshot.link_settings.get(&folder_id) {
+            if let Some(pending) = &state.pending_change {
+                return if pending.settings.paused == paused {
+                    Ok(())
+                } else {
+                    Err(SharingError::SettingsPending)
+                };
+            }
+            if state.settings.paused == paused && state.pending_change.is_none() {
+                return Ok(());
+            }
+            let mut settings = state.settings;
+            settings.paused = paused;
+            return self.request_link_settings(folder_id, Uuid::new_v4(), state.revision, settings);
+        }
         if self.snapshot.shares[index].paused == paused {
             return Ok(());
         }
@@ -1744,18 +1822,16 @@ impl FolderSharingJournal {
             .payload()
             .map_err(|_| SharingError::PersistenceUncertain)?;
         let mut peers = BTreeMap::<DeviceId, EnginePeerConfig>::new();
-        let mut folders = BTreeMap::<Uuid, (String, PathBuf, BTreeSet<EngineDeviceId>)>::new();
+        let mut folders =
+            BTreeMap::<Uuid, (String, PathBuf, BTreeSet<EngineDeviceId>, EngineFolderRole)>::new();
         let own_id = self.installation.device_id().clone();
         let configuration = self
             .engine
             .config()
             .map_err(|_| SharingError::InvalidState)?;
-        for share in self
-            .snapshot
-            .shares
-            .iter()
-            .filter(|s| !s.removed && !s.paused && s.commit.is_some())
-        {
+        for share in self.snapshot.shares.iter().filter(|s| {
+            !s.removed && !s.paused && s.commit.is_some() && self.link_allows_transfer(s)
+        }) {
             let current_trust = observe_trust(&configuration, share.peer_identity.device_id)?
                 .ok_or(SharingError::UntrustedPeer)?;
             if !current_trust.matches(share) {
@@ -1794,22 +1870,40 @@ impl FolderSharingJournal {
             {
                 return Err(SharingError::InvalidRecord);
             }
+            let role = match self
+                .snapshot
+                .link_settings
+                .get(&share.offer.folder_id)
+                .map(|state| state.settings.deletion_policy)
+                .or(share.offer.link_policy)
+            {
+                None => EngineFolderRole::LegacyTwoWay,
+                Some(_) if share.offer.source_device_id == self.engine.device_id() => {
+                    EngineFolderRole::Source
+                }
+                Some(policy) => EngineFolderRole::Destination {
+                    propagate_source_deletions: policy.propagate_source_deletions,
+                    restore_local_deletions: policy.restore_local_deletions,
+                },
+            };
             let folder = folders.entry(share.offer.folder_id).or_insert_with(|| {
                 (
                     share.offer.label.clone(),
                     root.path.clone(),
                     BTreeSet::from([own_id.clone()]),
+                    role,
                 )
             });
-            if folder.0 != share.offer.label || folder.1 != root.path {
+            if folder.0 != share.offer.label || folder.1 != root.path || folder.3 != role {
                 return Err(SharingError::InvalidState);
             }
             folder.2.insert(id);
         }
         let folders = folders
             .into_iter()
-            .map(|(id, (label, root, members))| {
+            .map(|(id, (label, root, members, role))| {
                 EngineFolderConfig::new(id, &label, root, members.into_iter().collect())
+                    .map(|folder| folder.with_role(role))
                     .map_err(|_| SharingError::FolderUnavailable)
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -1969,6 +2063,7 @@ impl FolderSharingJournal {
             candidate.pending_root_reset = None;
         }
         compact_removed(&mut candidate);
+        link_settings::reconcile_link_states(&mut candidate);
         validate_snapshot(&candidate, &self.engine, &self.installation)?;
         let payload = serde_json::to_vec(&candidate).map_err(|_| SharingError::InvalidState)?;
         self.store
@@ -1996,6 +2091,7 @@ fn validate_snapshot(
     engine: &Engine,
     installation: &EngineInstallation,
 ) -> Result<(), SharingError> {
+    link_settings::validate_link_states(snapshot)?;
     let advertised = snapshot
         .binding
         .validate()
@@ -2019,6 +2115,7 @@ fn validate_snapshot(
     let mut memberships = BTreeSet::new();
     let mut roots = BTreeMap::<Uuid, &LocalRoot>::new();
     let mut labels = BTreeMap::<Uuid, &str>::new();
+    let mut link_policies = BTreeMap::new();
     let mut peer_engines = BTreeMap::new();
     let mut engine_owners = BTreeMap::new();
     let mut removed_chain_total = 0_usize;
@@ -2115,6 +2212,14 @@ fn validate_snapshot(
             return Err(SharingError::InvalidState);
         }
         if !share.removed {
+            if let Some((policy, source)) = link_policies.insert(
+                share.offer.folder_id,
+                (share.offer.link_policy, share.offer.source_device_id),
+            ) && (policy.is_some() != share.offer.link_policy.is_some()
+                || (policy.is_some() && source != share.offer.source_device_id))
+            {
+                return Err(SharingError::InvalidRecord);
+            }
             if let Some(acceptance) = &share.acceptance {
                 let binding = if source_is_owner {
                     &acceptance.target_engine

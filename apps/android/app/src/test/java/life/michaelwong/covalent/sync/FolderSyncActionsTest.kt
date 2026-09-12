@@ -3,6 +3,8 @@ package life.michaelwong.covalent.sync
 import java.util.UUID
 import life.michaelwong.covalent.model.FolderHealthFreshness
 import life.michaelwong.covalent.model.FolderShare
+import life.michaelwong.covalent.model.FolderLinkPolicy
+import life.michaelwong.covalent.model.FolderLinkSettings
 import life.michaelwong.covalent.model.FolderSharePhase
 import life.michaelwong.covalent.model.FolderSyncAvailability
 import life.michaelwong.covalent.model.FolderSyncLifecycle
@@ -22,11 +24,57 @@ class FolderSyncActionsTest {
         val api = RecordingApi(events)
         val actions = actions(events, journal, api) { "/validated$it" }
 
-        actions.offer("22222222-2222-4222-8222-222222222222", folder, "Photos", "/storage/emulated/0/Photos")
+        val policy = FolderLinkPolicy(propagateSourceDeletions = true, restoreLocalDeletions = false)
+        actions.offer(
+            "22222222-2222-4222-8222-222222222222",
+            folder,
+            "Photos",
+            "/storage/emulated/0/Photos",
+            policy,
+        )
 
         assertEquals(listOf("validate-root", "prepare-offer", "node", "api-offer", "finish-offer"), events)
         assertEquals("/validated/storage/emulated/0/Photos", journal.offeredRoot)
         assertEquals("/validated/storage/emulated/0/Photos", api.offeredRoot)
+        assertEquals(policy, api.offeredPolicy)
+    }
+
+    @Test
+    fun addDestinationReusesTheSavedSourceIdentityAndPolicy() {
+        val events = mutableListOf<String>()
+        val policy = FolderLinkPolicy(propagateSourceDeletions = false, restoreLocalDeletions = true)
+        val source = FolderShare(
+            OFFER,
+            SOURCE_FOLDER,
+            "Photos",
+            SOURCE_PEER,
+            false,
+            FolderSharePhase.READY,
+            null,
+            false,
+            linkPolicy = policy,
+        )
+        val journal = RecordingJournal(events).apply {
+            saved = listOf(FolderSyncGrant(
+                "offer:$OFFER",
+                FolderSyncGrantKind.OFFER,
+                OFFER,
+                SOURCE_FOLDER,
+                SOURCE_PEER,
+                "/storage/emulated/0/Photos",
+                "Photos",
+            ))
+        }
+        val api = RecordingApi(events)
+
+        actions(events, journal, api).addDestination(source, OTHER_OFFER)
+
+        assertEquals(listOf("validate-root", "prepare-offer", "node", "api-offer", "finish-offer"), events)
+        assertEquals(UUID.fromString(SOURCE_FOLDER), api.offeredFolderId)
+        assertEquals(OTHER_OFFER, api.offeredPeerId)
+        assertEquals("Photos", api.offeredLabel)
+        assertEquals("/storage/emulated/0/Photos", api.offeredRoot)
+        assertEquals(policy, api.offeredPolicy)
     }
 
     @Test
@@ -228,12 +276,31 @@ class FolderSyncActionsTest {
     ) : FolderSyncApi {
         var offeredRoot: String? = null
             private set
+        var offeredPolicy: FolderLinkPolicy? = null
+            private set
+        var offeredFolderId: UUID? = null
+            private set
+        var offeredPeerId: String? = null
+            private set
+        var offeredLabel: String? = null
+            private set
         var addressRequest: PeerAddressRefreshRequest? = null
             private set
         override fun status(connection: NodeConnection) = responseStatus
-        override fun offer(connection: NodeConnection, peerId: String, folderId: UUID, label: String, selectedRoot: String): FolderSyncMutation {
+        override fun offer(
+            connection: NodeConnection,
+            peerId: String,
+            folderId: UUID,
+            label: String,
+            selectedRoot: String,
+            linkPolicy: FolderLinkPolicy,
+        ): FolderSyncMutation {
             events += "api-offer"
+            offeredFolderId = folderId
+            offeredPeerId = peerId
+            offeredLabel = label
             offeredRoot = selectedRoot
+            offeredPolicy = linkPolicy
             return MUTATION
         }
         override fun accept(connection: NodeConnection, offerId: String, selectedRoot: String): FolderSyncMutation {
@@ -241,6 +308,13 @@ class FolderSyncActionsTest {
             if (failAccept) error("network failure")
             return MUTATION
         }
+        override fun settings(
+            connection: NodeConnection,
+            folderId: String,
+            changeId: String,
+            expectedRevision: Long,
+            settings: FolderLinkSettings,
+        ) = MUTATION
         override fun pause(connection: NodeConnection, offerId: String, paused: Boolean) = MUTATION
         override fun renew(connection: NodeConnection, offerId: String): FolderSyncMutation {
             events += "api-renew"
@@ -270,6 +344,8 @@ class FolderSyncActionsTest {
         val CONNECTION = NodeConnection("http://127.0.0.1:8787", "token")
         const val OFFER = "33333333-3333-4333-8333-333333333333"
         const val OTHER_OFFER = "44444444-4444-4444-8444-444444444444"
+        const val SOURCE_FOLDER = "11111111-1111-4111-8111-111111111111"
+        const val SOURCE_PEER = "22222222-2222-4222-8222-222222222222"
         fun mutation(offerId: String?) = FolderSyncMutation(
             offerId,
             FolderSyncLifecycle.STOPPED,

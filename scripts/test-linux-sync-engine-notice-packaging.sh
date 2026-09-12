@@ -2,6 +2,12 @@
 set -euo pipefail
 
 repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+build_script="$repo_root/scripts/build-linux-sync-engine.sh"
+grep -Fq 'SOURCE_PATCH_SHA256=e58e7d133a388576a54cacc6a5a5094e6607c483c0daabac552de1a1854d92ac' "$build_script"
+grep -Fq 'git -C "$source_dir" apply --check "$source_patch"' "$build_script"
+grep -Fq 'covalent-patches/keep-local-deletions.patch' "$build_script"
+grep -Fq 'test ! -e "$source_dir/.git" && test ! -L "$source_dir/.git"' "$build_script"
+grep -Fq 'expendable extracted archive without .git' "$build_script"
 tmp_root=${TMPDIR:-/tmp}
 case "$tmp_root" in /*) ;; *) tmp_root=/tmp ;; esac
 fixture=$(mktemp -d "$tmp_root/covalent-linux-notice-package.XXXXXX")
@@ -42,6 +48,23 @@ esac
 EOF
 chmod 0555 "$fixture/bin/uname" "$fixture/bin/cc" "$fixture/bin/readelf"
 
+mkdir -p "$fixture/source-with-git-dir/.git" \
+  "$fixture/source-with-git-file" "$fixture/source-with-git-symlink"
+printf 'gitdir: elsewhere\n' > "$fixture/source-with-git-file/.git"
+ln -s missing-gitdir "$fixture/source-with-git-symlink/.git"
+printf 'patch\n' > "$fixture/source.patch"
+for kind in dir file symlink; do
+  if "$build_script" worker "$fixture/source-with-git-$kind" \
+      "$fixture/rejected-worker-$kind" amd64 "$fixture/source.patch" \
+      >"$fixture/git-rejection-$kind.log" 2>&1; then
+    echo "Linux worker builder accepted source .git kind $kind" >&2
+    exit 1
+  fi
+  grep -Fq 'expendable extracted archive without .git' \
+    "$fixture/git-rejection-$kind.log"
+  test ! -e "$fixture/rejected-worker-$kind"
+done
+
 dd if=/dev/zero of="$fixture/worker/covalent-syncthing" \
   bs=1048576 count=16 status=none
 chmod 0555 "$fixture/worker/covalent-syncthing"
@@ -69,7 +92,7 @@ printf '{"inventorySha256": "%s"}\n' "$inventory_sha" \
 printf 'combined notice\n' > "$fixture/notices/THIRD-PARTY-NOTICES.txt"
 printf 'module notice\n' > "$fixture/notices/modules/0000/LICENSE"
 
-PATH="$fixture/bin:$PATH" "$repo_root/scripts/build-linux-sync-engine.sh" package \
+PATH="$fixture/bin:$PATH" "$build_script" package \
   "$fixture/worker" \
   "$repo_root/packaging/sync-engine/engine-guardian.c" \
   "$fixture/notices" \
@@ -98,7 +121,7 @@ printf '{"inventorySha256": "%s"}\n' "$inventory_sha" \
   > "$fixture/notices-unsafe/manifest.json"
 printf 'combined\n' > "$fixture/notices-unsafe/THIRD-PARTY-NOTICES.txt"
 mkfifo "$fixture/notices-unsafe/unexpected"
-if PATH="$fixture/bin:$PATH" "$repo_root/scripts/build-linux-sync-engine.sh" package \
+if PATH="$fixture/bin:$PATH" "$build_script" package \
     "$fixture/worker" \
     "$repo_root/packaging/sync-engine/engine-guardian.c" \
     "$fixture/notices-unsafe" \

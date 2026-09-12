@@ -952,12 +952,99 @@ public enum PeerConnectionState: String, Codable, Sendable {
     case paused
 }
 
+public struct FolderLinkPolicy: Codable, Hashable, Sendable {
+    public var propagateSourceDeletions: Bool
+    public var restoreLocalDeletions: Bool
+
+    public init(propagateSourceDeletions: Bool = false, restoreLocalDeletions: Bool = false) {
+        self.propagateSourceDeletions = propagateSourceDeletions
+        self.restoreLocalDeletions = restoreLocalDeletions
+    }
+
+    public var sourceDeletionExplanation: String {
+        propagateSourceDeletions
+            ? "Deleting a source file also deletes this link’s destination copies. Other links’ files stay untouched."
+            : "Deleting a source file leaves destination copies untouched."
+    }
+
+    public var destinationDeletionExplanation: String {
+        restoreLocalDeletions
+            ? "Files deleted at a destination download again on the next transfer if they still exist at the source."
+            : "Files deleted at a destination stay deleted there, even if the source changes. The source and other destinations stay untouched."
+    }
+}
+
+public struct FolderLinkSettings: Codable, Hashable, Sendable {
+    public var deletionPolicy: FolderLinkPolicy
+    public var paused: Bool
+
+    public init(deletionPolicy: FolderLinkPolicy, paused: Bool) {
+        self.deletionPolicy = deletionPolicy
+        self.paused = paused
+    }
+}
+
+public struct FolderLinkSettingsChange: Codable, Hashable, Sendable {
+    public let folderId: UUID
+    public let sourceId: UUID
+    public let requesterId: UUID
+    public let changeId: UUID
+    public let expectedRevision: UInt64
+    public let settings: FolderLinkSettings
+}
+
+public struct FolderLinkSettingsState: Codable, Hashable, Sendable {
+    public let revision: UInt64
+    public let settings: FolderLinkSettings
+    public let changeId: UUID
+    public let changedBy: UUID
+    public let confirmed: Bool
+    public let pendingChange: FolderLinkSettingsChange?
+    public let conflictedChange: FolderLinkSettingsChange?
+}
+
+/// One exact optimistic-concurrency request retained until authenticated
+/// status proves whether the source applied, queued, or rejected it.
+public struct PendingFolderLinkSettingsChange: Codable, Equatable, Sendable {
+    public let folderId: UUID
+    public let changeId: UUID
+    public let expectedRevision: UInt64
+    public let settings: FolderLinkSettings
+    public let requiresReview: Bool
+
+    public init(
+      folderId: UUID,
+      changeId: UUID = UUID(),
+      expectedRevision: UInt64,
+      settings: FolderLinkSettings,
+      requiresReview: Bool = false
+    ) {
+      self.folderId = folderId
+      self.changeId = changeId
+      self.expectedRevision = expectedRevision
+      self.settings = settings
+      self.requiresReview = requiresReview
+    }
+
+    public func markedForReview() -> Self {
+      Self(
+        folderId: folderId,
+        changeId: changeId,
+        expectedRevision: expectedRevision,
+        settings: settings,
+        requiresReview: true
+      )
+    }
+}
+
 public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
     public let offerId: UUID
     public let folderId: UUID
     public let label: String
     public let peerId: UUID
     public let incoming: Bool
+    public let linkPolicy: FolderLinkPolicy?
+    public let linkSettings: FolderLinkSettingsState?
     public let phase: FolderSharePhase
     /// Present only for an unaccepted invitation. The node supplies this from
     /// its own clock; the client never tries to decide expiry locally.
@@ -982,13 +1069,17 @@ public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
       expired: Bool,
       peerConnection: PeerConnectionState = .unknown,
       supersededOfferIds: [UUID] = [],
-      remoteRemovalPending: Bool = false
+      remoteRemovalPending: Bool = false,
+      linkPolicy: FolderLinkPolicy? = nil,
+      linkSettings: FolderLinkSettingsState? = nil
     ) {
       self.offerId = offerId
       self.folderId = folderId
       self.label = label
       self.peerId = peerId
       self.incoming = incoming
+      self.linkPolicy = linkPolicy
+      self.linkSettings = linkSettings
       self.phase = phase
       self.expiresAtUnixMs = expiresAtUnixMs
       self.expired = expired
@@ -999,7 +1090,7 @@ public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
       case offerId, folderId, label, peerId, incoming, phase, expiresAtUnixMs, expired
-      case peerConnection, supersededOfferIds, remoteRemovalPending
+      case peerConnection, supersededOfferIds, remoteRemovalPending, linkPolicy, linkSettings
     }
 
     public init(from decoder: Decoder) throws {
@@ -1009,6 +1100,8 @@ public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
       label = try values.decode(String.self, forKey: .label)
       peerId = try values.decode(UUID.self, forKey: .peerId)
       incoming = try values.decode(Bool.self, forKey: .incoming)
+      linkPolicy = try values.decodeIfPresent(FolderLinkPolicy.self, forKey: .linkPolicy)
+      linkSettings = try values.decodeIfPresent(FolderLinkSettingsState.self, forKey: .linkSettings)
       phase = try values.decode(FolderSharePhase.self, forKey: .phase)
       expiresAtUnixMs = try values.decodeIfPresent(UInt64.self, forKey: .expiresAtUnixMs)
       expired = try values.decode(Bool.self, forKey: .expired)
@@ -1239,13 +1332,17 @@ extension FolderSyncStatus {
         return .needsAttention
       }
       if let health {
-        if health.remainingFiles > 0 || health.remainingBytes > 0 { return .syncing }
-        switch health.state.lowercased() {
+        let state = health.state.lowercased()
+        switch state {
         case "error": return .needsAttention
         case "starting", "scanning", "scan-waiting", "cleaning", "clean-waiting":
           return .checkingFolder
         case "syncing", "sync-waiting", "sync-preparing": return .syncing
         default: break
+        }
+        if (health.remainingFiles > 0 || health.remainingBytes > 0)
+          && (share.linkPolicy == nil || state != "idle") {
+          return .syncing
         }
       }
       guard connectionFreshness == "fresh" else { return .waitingForConnection }
@@ -1339,12 +1436,14 @@ public struct FolderOfferRequest: Codable, Equatable, Sendable {
     /// A local, user-selected directory only. It is sent to the local node and
     /// is never rendered by the client outside the user's own picker context.
     public let selectedRoot: String
+    public let linkPolicy: FolderLinkPolicy
 
-    public init(peerId: UUID, folderId: UUID, label: String, selectedRoot: String) {
+    public init(peerId: UUID, folderId: UUID, label: String, selectedRoot: String, linkPolicy: FolderLinkPolicy = FolderLinkPolicy()) {
       self.peerId = peerId
       self.folderId = folderId
       self.label = label
       self.selectedRoot = selectedRoot
+      self.linkPolicy = linkPolicy
     }
 }
 
@@ -1375,6 +1474,25 @@ public struct FolderPauseRequest: Codable, Equatable, Sendable {
     public init(offerId: UUID, paused: Bool) {
       self.offerId = offerId
       self.paused = paused
+    }
+}
+
+public struct FolderLinkSettingsRequest: Codable, Equatable, Sendable {
+    public let folderId: UUID
+    public let changeId: UUID
+    public let expectedRevision: UInt64
+    public let settings: FolderLinkSettings
+
+    public init(
+      folderId: UUID,
+      changeId: UUID,
+      expectedRevision: UInt64,
+      settings: FolderLinkSettings
+    ) {
+      self.folderId = folderId
+      self.changeId = changeId
+      self.expectedRevision = expectedRevision
+      self.settings = settings
     }
 }
 

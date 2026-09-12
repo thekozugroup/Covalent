@@ -1420,9 +1420,34 @@ impl Engine {
         now_unix_ms: u64,
         lifetime_ms: u64,
     ) -> Result<covalent_protocol::FolderShareOffer, crate::FolderSharingError> {
+        self.issue_folder_share_offer_with_policy(
+            target,
+            folder_id,
+            label,
+            binding,
+            pairing_id,
+            now_unix_ms,
+            lifetime_ms,
+            None,
+        )
+    }
+
+    /// Sign the exact one-way link policy for a currently trusted peer.
+    #[allow(clippy::too_many_arguments)]
+    pub fn issue_folder_share_offer_with_policy(
+        &self,
+        target: DeviceId,
+        folder_id: uuid::Uuid,
+        label: &str,
+        binding: covalent_protocol::SyncEngineBinding,
+        pairing_id: Option<&str>,
+        now_unix_ms: u64,
+        lifetime_ms: u64,
+        link_policy: Option<covalent_protocol::FolderLinkPolicy>,
+    ) -> Result<covalent_protocol::FolderShareOffer, crate::FolderSharingError> {
         self.trusted_peer_identity(target)
             .map_err(|_| crate::FolderSharingError::WrongPeer)?;
-        crate::create_folder_share_offer(
+        crate::create_folder_share_offer_with_policy(
             &self.identity,
             target,
             folder_id,
@@ -1431,6 +1456,7 @@ impl Engine {
             pairing_id,
             now_unix_ms,
             lifetime_ms,
+            link_policy,
         )
     }
 

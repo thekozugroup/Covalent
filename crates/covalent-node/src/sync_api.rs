@@ -13,6 +13,7 @@ pub(crate) struct OfferRequest {
     folder_id: uuid::Uuid,
     label: String,
     selected_root: std::path::PathBuf,
+    link_policy: covalent_protocol::FolderLinkPolicy,
 }
 
 #[derive(Deserialize)]
@@ -40,6 +41,44 @@ pub(crate) struct ShareRequest {
 pub(crate) struct PauseRequest {
     offer_id: uuid::Uuid,
     paused: bool,
+}
+
+#[cfg(unix)]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SettingsRequest {
+    folder_id: uuid::Uuid,
+    change_id: uuid::Uuid,
+    expected_revision: u64,
+    settings: crate::sync_engine::FolderLinkSettings,
+}
+
+#[cfg(unix)]
+pub(crate) async fn settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ContractJson(request): ContractJson<SettingsRequest>,
+) -> Result<axum::Json<MutationResponse>, ApiError> {
+    authorize(&state, &headers)?;
+    let committed = ready_service(&state)?
+        .request_link_settings(
+            request.folder_id,
+            request.change_id,
+            request.expected_revision,
+            request.settings,
+        )
+        .await
+        .map_err(service_error)?;
+    Ok(mutation_response(None, committed.lifecycle()))
+}
+
+#[cfg(not(unix))]
+pub(crate) async fn settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<axum::Json<MutationResponse>, ApiError> {
+    authorize(&state, &headers)?;
+    Err(unavailable_error())
 }
 
 #[derive(Deserialize)]
@@ -103,12 +142,13 @@ pub(crate) async fn offer(
     #[cfg(unix)]
     {
         let committed = ready_service(&state)?
-            .offer(
+            .offer_with_policy(
                 request.peer_id,
                 request.folder_id,
                 &request.label,
                 &request.selected_root,
                 crate::now_unix_ms(),
+                Some(request.link_policy),
             )
             .await
             .map_err(service_error)?;
@@ -500,6 +540,25 @@ fn peer_connection_field(
 
 #[cfg(all(test, unix))]
 mod lifecycle_tests {
+    #[test]
+    fn new_folder_requests_reject_omitted_null_or_incomplete_one_way_policy() {
+        let mut value = serde_json::json!({
+            "peerId": uuid::Uuid::new_v4(), "folderId": uuid::Uuid::new_v4(),
+            "label": "Photos", "selectedRoot": "/selected"
+        });
+        assert!(serde_json::from_value::<super::OfferRequest>(value.clone()).is_err());
+        for invalid in [
+            serde_json::Value::Null,
+            serde_json::json!({"propagateSourceDeletions": false}),
+        ] {
+            value["linkPolicy"] = invalid;
+            assert!(serde_json::from_value::<super::OfferRequest>(value.clone()).is_err());
+        }
+        value["linkPolicy"] =
+            serde_json::json!({"propagateSourceDeletions": false, "restoreLocalDeletions": false});
+        assert!(serde_json::from_value::<super::OfferRequest>(value).is_ok());
+    }
+
     use std::collections::BTreeSet;
 
     use covalent_core::{DeviceIdentity, NodeConfig};
@@ -643,6 +702,9 @@ struct ShareResponse {
     label: String,
     peer_id: covalent_protocol::DeviceId,
     incoming: bool,
+    link_policy: Option<covalent_protocol::FolderLinkPolicy>,
+    #[cfg(unix)]
+    link_settings: Option<crate::sync_engine::LinkSettingsState>,
     phase: &'static str,
     expires_at_unix_ms: Option<u64>,
     expired: bool,
@@ -796,6 +858,27 @@ pub(crate) async fn status(
 #[cfg(unix)]
 pub(crate) fn service_error(error: crate::sync_engine::FolderSyncServiceError) -> ApiError {
     use crate::sync_engine::FolderSyncServiceError;
+    if matches!(
+        error,
+        FolderSyncServiceError::SettingsConflict | FolderSyncServiceError::SettingsPending
+    ) {
+        let pending = error == FolderSyncServiceError::SettingsPending;
+        return ApiError {
+            status: StatusCode::CONFLICT,
+            code: if pending {
+                "link_settings_pending"
+            } else {
+                "link_settings_conflict"
+            },
+            message: if pending {
+                "A settings change is waiting for the source. Check link status before changing it again."
+            } else {
+                "Link settings changed on another device. Review the current settings and try again."
+            },
+            retryable: false,
+            upload_offset: None,
+        };
+    }
     let retryable = matches!(
         error,
         FolderSyncServiceError::Busy | FolderSyncServiceError::WorkerStillStopping
@@ -862,6 +945,8 @@ fn share_responses(
             label: share.label.clone(),
             peer_id: share.peer_id,
             incoming: share.incoming,
+            link_policy: share.link_policy,
+            link_settings: share.link_settings.clone(),
             expires_at_unix_ms: share.expires_at_unix_ms,
             expired: share
                 .expires_at_unix_ms

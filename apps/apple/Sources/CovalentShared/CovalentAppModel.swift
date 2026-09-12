@@ -224,6 +224,7 @@ public final class CovalentAppModel: ObservableObject {
     @Published public private(set) var startingPairingAddress: String?
     @Published public private(set) var directoryGrants: [SelectedDirectoryGrant] = []
     @Published public private(set) var pendingFolderRepairs: [PendingFolderAccessRepair] = []
+    @Published public private(set) var pendingFolderLinkSettingsChanges: [PendingFolderLinkSettingsChange] = []
     @Published public private(set) var snapshots: [SnapshotRecord] = []
     @Published public private(set) var activeTask: ActiveTask?
     @Published public var restoreSetupRequest: RestoreSetupRequest?
@@ -460,9 +461,11 @@ public final class CovalentAppModel: ObservableObject {
         do {
             async let grants = persistence.loadDirectoryGrants()
             async let pendingRepairs = persistence.loadPendingFolderRepairs()
+            async let pendingLinkSettings = persistence.loadPendingFolderLinkSettingsChanges()
             async let history = persistence.loadSnapshots()
             directoryGrants = try await grants
             pendingFolderRepairs = try await pendingRepairs
+            pendingFolderLinkSettingsChanges = try await pendingLinkSettings
             snapshots = try await history.sorted { $0.createdAt > $1.createdAt }
         } catch {
             report(error, title: "Saved access could not be loaded")
@@ -639,6 +642,7 @@ public final class CovalentAppModel: ObservableObject {
         if folderSyncScopeRefreshRequired {
           continue
         }
+        try await reconcilePendingFolderLinkSettingsChanges(with: snapshot)
         return snapshot
       }
       throw NodeClientError.invalidResponse
@@ -649,31 +653,23 @@ public final class CovalentAppModel: ObservableObject {
       peerId: UUID,
       folderId: UUID,
       label: String,
-      grant: SelectedDirectoryGrant
+      grant: SelectedDirectoryGrant,
+      linkPolicy: FolderLinkPolicy = FolderLinkPolicy()
     ) async -> Bool {
       guard beginFolderMutation() else { return false }
       defer { folderSyncMutationInFlight = false }
 
       do {
-        let savedGrant = try await persistFolderSyncGrant(grant)
-        try await restartForFolderSyncDirectoryGrants()
-        let root = try savedGrant.resolve()
-        let client = self.client
-        let request = FolderOfferRequest(
-          peerId: peerId,
-          folderId: folderId,
-          label: label,
-          selectedRoot: try await root.withCoordinatedRead { $0.path }
+        try await submitFolderOffer(
+          FolderOfferDraft(
+            peerId: peerId,
+            folderId: folderId,
+            label: label,
+            grant: grant,
+            linkPolicy: linkPolicy,
+            permitsSharedRoot: false
+          )
         )
-        let mutation = try await root.withCoordinatedRead { url in
-          guard url.path == request.selectedRoot else { throw NodeClientError.invalidResponse }
-          return try await Self.retryFolderSyncBusy {
-            try await client.offerFolder(request)
-          }
-        }
-        guard let offerId = mutation.offerId else { throw NodeClientError.invalidResponse }
-        try await bindFolderSyncGrant(savedGrant, to: offerId)
-        await refreshFoldersDuringMutation()
         return true
       } catch {
         invalidateFolderSyncLaunchState(unlessInitialScanBusy: error)
@@ -682,11 +678,129 @@ public final class CovalentAppModel: ObservableObject {
             peerId: peerId,
             folderId: folderId,
             label: label,
-            grant: grant
+            grant: grant,
+            linkPolicy: linkPolicy
           )
         }
         return false
       }
+    }
+
+    /// Add one paired destination to an existing one-way source link. The new
+    /// offer reuses the source link's identity, settings, and saved folder scope.
+    @discardableResult
+    public func addFolderDestination(from offerId: UUID, to peerId: UUID) async -> Bool {
+      guard beginFolderMutation() else { return false }
+      defer { folderSyncMutationInFlight = false }
+
+      do {
+        let draft = try folderDestinationOffer(from: offerId, to: peerId)
+        do {
+          try await submitFolderOffer(draft)
+          return true
+        } catch {
+          invalidateFolderSyncLaunchState(unlessInitialScanBusy: error)
+          report(error, title: "Destination couldn't be added") { [weak self] in
+            await self?.retryFolderDestination(draft)
+          }
+          return false
+        }
+      } catch {
+        report(error, title: "Destination couldn't be added")
+        return false
+      }
+    }
+
+    private func retryFolderDestination(_ draft: FolderOfferDraft) async {
+      guard beginFolderMutation() else { return }
+      defer { folderSyncMutationInFlight = false }
+      do {
+        try await submitFolderOffer(draft)
+      } catch {
+        invalidateFolderSyncLaunchState(unlessInitialScanBusy: error)
+        report(error, title: "Destination couldn't be added")
+      }
+    }
+
+    private struct FolderOfferDraft: Sendable {
+      let peerId: UUID
+      let folderId: UUID
+      let label: String
+      let grant: SelectedDirectoryGrant
+      let linkPolicy: FolderLinkPolicy
+      let permitsSharedRoot: Bool
+    }
+
+    private func folderDestinationOffer(from offerId: UUID, to peerId: UUID) throws -> FolderOfferDraft {
+      guard let status = folderSyncStatus,
+            status.peers.contains(where: { $0.peerId == peerId }),
+            let source = status.shares.first(where: {
+              $0.offerId == offerId && !$0.incoming && $0.phase != .removed
+            }),
+            let linkPolicy = source.linkPolicy
+      else { throw NodeClientError.invalidResponse }
+
+      let shares = status.shares.filter { $0.folderId == source.folderId && $0.phase != .removed }
+      guard !shares.isEmpty,
+            shares.allSatisfy({
+              !$0.incoming && $0.label == source.label && $0.linkPolicy == linkPolicy
+            }),
+            !shares.contains(where: { $0.peerId == peerId })
+      else { throw NodeClientError.invalidResponse }
+      let settingsStates = Set(shares.compactMap(\.linkSettings))
+      guard settingsStates.count == 1,
+            let settingsState = settingsStates.first,
+            shares.allSatisfy({ $0.linkSettings == settingsState }),
+            settingsState.confirmed,
+            settingsState.pendingChange == nil,
+            settingsState.conflictedChange == nil
+      else { throw NodeClientError.invalidResponse }
+
+      let offerIds = Set(shares.map(\.offerId))
+      guard let saved = directoryGrants.first(where: {
+        $0.purpose == .folderSync && $0.folderOfferId.map(offerIds.contains) == true
+      }) else { throw FolderAccessRepairError.savedGrantMissing }
+
+      let reused = SelectedDirectoryGrant(
+        displayName: saved.displayName,
+        purpose: .folderSync,
+        bookmarkData: saved.bookmarkData,
+        capturedAt: saved.capturedAt
+      )
+      return FolderOfferDraft(
+        peerId: peerId,
+        folderId: source.folderId,
+        label: source.label,
+        grant: reused,
+        linkPolicy: linkPolicy,
+        permitsSharedRoot: true
+      )
+    }
+
+    private func submitFolderOffer(_ draft: FolderOfferDraft) async throws {
+      let savedGrant = try await persistFolderSyncGrant(
+        draft.grant,
+        permitsSharedRoot: draft.permitsSharedRoot
+      )
+      try await restartForFolderSyncDirectoryGrants()
+      let root = try savedGrant.resolve()
+      let client = self.client
+      let request = FolderOfferRequest(
+        peerId: draft.peerId,
+        folderId: draft.folderId,
+        label: draft.label,
+        selectedRoot: try await root.withCoordinatedRead { $0.path },
+        linkPolicy: draft.linkPolicy
+      )
+      let mutation = try await root.withCoordinatedRead { url in
+        guard url.path == request.selectedRoot else { throw NodeClientError.invalidResponse }
+        return try await Self.retryFolderSyncBusy {
+          try await client.offerFolder(request)
+        }
+      }
+      guard let offerId = mutation.offerId else { throw NodeClientError.invalidResponse }
+      try await bindFolderSyncGrant(savedGrant, to: offerId)
+      await refreshFoldersDuringMutation()
     }
 
     @discardableResult
@@ -737,7 +851,7 @@ public final class CovalentAppModel: ObservableObject {
         }
         // The old binding is already durable. A lost response or failed save is
         // repaired by the next authenticated status relationship after restart.
-        try await bindFolderSyncGrant(grant, to: replacementID)
+        try await bindFolderSyncGrant(grant, to: replacementID, replacing: offerId)
         await refreshFoldersDuringMutation()
         return true
       } catch {
@@ -829,14 +943,194 @@ public final class CovalentAppModel: ObservableObject {
     }
 
     public func setFolderPaused(_ offerId: UUID, paused: Bool) async {
-      guard beginFolderMutation() else { return }
+      guard let share = folderSyncStatus?.shares.first(where: { $0.offerId == offerId }) else {
+        report(NodeClientError.invalidResponse, title: "Folder couldn't be updated")
+        return
+      }
+      if let state = share.linkSettings {
+        _ = await updateFolderLinkSettings(
+          folderId: share.folderId,
+          expectedRevision: state.revision,
+          settings: FolderLinkSettings(
+            deletionPolicy: state.settings.deletionPolicy,
+            paused: paused
+          )
+        )
+        return
+      }
+      guard share.linkPolicy == nil, beginFolderMutation() else {
+        report(NodeClientError.invalidResponse, title: "Folder couldn't be updated")
+        return
+      }
       defer { folderSyncMutationInFlight = false }
-
       do {
         _ = try await client.pauseFolder(FolderPauseRequest(offerId: offerId, paused: paused))
         await refreshFoldersDuringMutation()
       } catch {
         report(error, title: "Folder couldn't be updated")
+      }
+    }
+
+    @discardableResult
+    public func updateFolderLinkSettings(
+      folderId: UUID,
+      expectedRevision: UInt64,
+      settings: FolderLinkSettings
+    ) async -> Bool {
+      guard beginFolderMutation() else { return false }
+      defer { folderSyncMutationInFlight = false }
+      do {
+        let change = try await prepareFolderLinkSettingsChange(
+          folderId: folderId,
+          expectedRevision: expectedRevision,
+          settings: settings
+        )
+        return await submitFolderLinkSettingsChange(change)
+      } catch {
+        report(error, title: "Link settings couldn't be saved")
+        return false
+      }
+    }
+
+    @discardableResult
+    public func retryFolderLinkSettingsChange(folderId: UUID) async -> Bool {
+      guard beginFolderMutation() else { return false }
+      defer { folderSyncMutationInFlight = false }
+      guard let change = pendingFolderLinkSettingsChanges.first(where: {
+        $0.folderId == folderId && !$0.requiresReview
+      }) else {
+        report(NodeClientError.invalidResponse, title: "Review the link settings")
+        return false
+      }
+      return await submitFolderLinkSettingsChange(change)
+    }
+
+    public func reviewPendingFolderLinkSettingsChange(folderId: UUID) async {
+      let retained = pendingFolderLinkSettingsChanges.filter { $0.folderId != folderId }
+      guard retained != pendingFolderLinkSettingsChanges else { return }
+      do {
+        try await persistence.savePendingFolderLinkSettingsChanges(retained)
+        pendingFolderLinkSettingsChanges = retained
+      } catch {
+        report(error, title: "Link settings couldn't be reviewed")
+      }
+    }
+
+    private func prepareFolderLinkSettingsChange(
+      folderId: UUID,
+      expectedRevision: UInt64,
+      settings: FolderLinkSettings
+    ) async throws -> PendingFolderLinkSettingsChange {
+      if let existing = pendingFolderLinkSettingsChanges.first(where: { $0.folderId == folderId }) {
+        guard !existing.requiresReview,
+              existing.expectedRevision == expectedRevision,
+              existing.settings == settings
+        else { throw NodeClientError.invalidResponse }
+        return existing
+      }
+      let shares = folderSyncStatus?.shares.filter {
+        $0.folderId == folderId && $0.phase != .removed && $0.linkPolicy != nil
+      } ?? []
+      let states = Set(shares.compactMap(\.linkSettings))
+      guard !shares.isEmpty,
+            states.count == 1,
+            let state = states.first,
+            state.revision == expectedRevision,
+            state.pendingChange == nil
+      else { throw NodeClientError.invalidResponse }
+      let change = PendingFolderLinkSettingsChange(
+        folderId: folderId,
+        expectedRevision: expectedRevision,
+        settings: settings
+      )
+      guard pendingFolderLinkSettingsChanges.count < 128 else {
+        throw SelectedDirectoryError.tooManyFolderSyncGrants
+      }
+      let updated = pendingFolderLinkSettingsChanges + [change]
+      try await persistence.savePendingFolderLinkSettingsChanges(updated)
+      pendingFolderLinkSettingsChanges = updated
+      return change
+    }
+
+    private func submitFolderLinkSettingsChange(
+      _ change: PendingFolderLinkSettingsChange
+    ) async -> Bool {
+      do {
+        _ = try await client.updateFolderLinkSettings(
+          FolderLinkSettingsRequest(
+            folderId: change.folderId,
+            changeId: change.changeId,
+            expectedRevision: change.expectedRevision,
+            settings: change.settings
+          )
+        )
+        await refreshFoldersDuringMutation()
+        return true
+      } catch let error as NodeClientError {
+        if case let .api(_, code, _, _) = error,
+           code == "link_settings_pending" || code == "link_settings_conflict" {
+          await markFolderLinkSettingsChangeForReview(change)
+          await refreshFoldersDuringMutation()
+          report(error, title: "Review the link settings")
+          return false
+        }
+        report(error, title: "Link settings couldn't be saved") { [weak self] in
+          _ = await self?.retryFolderLinkSettingsChange(folderId: change.folderId)
+        }
+        return false
+      } catch {
+        report(error, title: "Link settings couldn't be saved") { [weak self] in
+          _ = await self?.retryFolderLinkSettingsChange(folderId: change.folderId)
+        }
+        return false
+      }
+    }
+
+    private func markFolderLinkSettingsChangeForReview(
+      _ change: PendingFolderLinkSettingsChange
+    ) async {
+      guard let index = pendingFolderLinkSettingsChanges.firstIndex(where: {
+        $0.folderId == change.folderId && $0.changeId == change.changeId
+      }) else { return }
+      var updated = pendingFolderLinkSettingsChanges
+      updated[index] = updated[index].markedForReview()
+      do {
+        try await persistence.savePendingFolderLinkSettingsChanges(updated)
+        pendingFolderLinkSettingsChanges = updated
+      } catch {
+        report(error, title: "Link settings couldn't be saved")
+      }
+    }
+
+    private func reconcilePendingFolderLinkSettingsChanges(
+      with status: FolderSyncStatus
+    ) async throws {
+      let activeFolders = Set(status.shares.filter {
+        $0.phase != .removed && $0.linkPolicy != nil
+      }.map(\.folderId))
+      var updated: [PendingFolderLinkSettingsChange] = []
+      for saved in pendingFolderLinkSettingsChanges where activeFolders.contains(saved.folderId) {
+        let states = Set(status.shares.filter { $0.folderId == saved.folderId }
+          .compactMap(\.linkSettings))
+        guard states.count <= 1 else { throw NodeClientError.invalidResponse }
+        guard let state = states.first else {
+          updated.append(saved)
+          continue
+        }
+        let observed = state.changeId == saved.changeId
+          || state.pendingChange?.changeId == saved.changeId
+          || state.conflictedChange?.changeId == saved.changeId
+        if observed { continue }
+        if saved.requiresReview || state.revision != saved.expectedRevision
+          || state.pendingChange != nil || state.conflictedChange != nil {
+          updated.append(saved.markedForReview())
+        } else {
+          updated.append(saved)
+        }
+      }
+      if updated != pendingFolderLinkSettingsChanges {
+        try await persistence.savePendingFolderLinkSettingsChanges(updated)
+        pendingFolderLinkSettingsChanges = updated
       }
     }
 
@@ -1243,10 +1537,14 @@ public final class CovalentAppModel: ObservableObject {
     /// worker. If the request outcome is uncertain, retaining the grant lets a
     /// subsequent helper restart regain the same user-authorized folder.
     private func persistFolderSyncGrant(
-      _ grant: SelectedDirectoryGrant
+      _ grant: SelectedDirectoryGrant,
+      permitsSharedRoot: Bool = false
     ) async throws -> SelectedDirectoryGrant {
       guard grant.purpose == .folderSync else {
         throw SelectedDirectoryError.notAFileURL
+      }
+      if let existing = directoryGrants.first(where: { $0.id == grant.id }) {
+        return existing
       }
       let selectedRoot = try await grant.resolve().withCoordinatedRead { url in
         url.standardizedFileURL.resolvingSymlinksInPath()
@@ -1258,6 +1556,9 @@ public final class CovalentAppModel: ObservableObject {
           url.standardizedFileURL.resolvingSymlinksInPath()
         }) else { continue }
         if existingRoot == selectedRoot {
+          if permitsSharedRoot {
+            continue
+          }
           guard let offerId = grant.folderOfferId else { return existing }
           guard existing.folderOfferId == nil || existing.folderOfferId == offerId else {
             throw FolderAccessRepairError.folderAlreadyUsed
@@ -1388,10 +1689,14 @@ public final class CovalentAppModel: ObservableObject {
 
     private func bindFolderSyncGrant(
       _ grant: SelectedDirectoryGrant,
-      to offerId: UUID
+      to offerId: UUID,
+      replacing expectedOfferId: UUID? = nil
     ) async throws {
       guard let index = directoryGrants.firstIndex(where: { $0.id == grant.id }) else {
         throw FolderAccessRepairError.savedGrantMissing
+      }
+      guard directoryGrants[index].folderOfferId == expectedOfferId else {
+        throw NodeClientError.invalidResponse
       }
       var updated = directoryGrants
       updated[index] = updated[index].bound(toFolderOfferId: offerId)
@@ -1436,6 +1741,38 @@ public final class CovalentAppModel: ObservableObject {
       guard bound.count <= 1 else { throw FolderAccessRepairError.ambiguousSavedAccess }
 
       var replacedIDs = Set(bound.map(\.id))
+      var refreshedSiblings: [SelectedDirectoryGrant] = []
+      if !bound.isEmpty {
+        let liveShares = folderSyncStatus?.shares.filter { $0.phase != .removed } ?? []
+        guard let repairedShare = liveShares.first(where: { $0.offerId == offerId }) else {
+          throw FolderAccessRepairError.shareMissing
+        }
+        if !repairedShare.incoming, let policy = repairedShare.linkPolicy {
+          let siblings = liveShares.filter { $0.folderId == repairedShare.folderId }
+          guard siblings.allSatisfy({
+            !$0.incoming && $0.label == repairedShare.label && $0.linkPolicy == policy
+          }) else { throw FolderAccessRepairError.ambiguousSavedAccess }
+          let siblingOfferIDs = Set(siblings.map(\.offerId))
+          let siblingGrants = folderGrants.filter {
+            $0.folderOfferId.map(siblingOfferIDs.contains) == true
+          }
+          guard siblingGrants.count == siblingOfferIDs.count,
+                Set(siblingGrants.compactMap(\.folderOfferId)) == siblingOfferIDs
+          else { throw FolderAccessRepairError.ambiguousSavedAccess }
+          replacedIDs.formUnion(siblingGrants.map(\.id))
+          refreshedSiblings = siblingGrants.compactMap { existing in
+            guard existing.folderOfferId != offerId else { return nil }
+            return SelectedDirectoryGrant(
+              id: existing.id,
+              displayName: replacement.displayName,
+              purpose: .folderSync,
+              bookmarkData: replacement.bookmarkData,
+              capturedAt: replacement.capturedAt,
+              folderOfferId: existing.folderOfferId
+            )
+          }
+        }
+      }
       if bound.isEmpty {
         let liveShares = folderSyncStatus?.shares.filter { $0.phase != .removed } ?? []
         let legacy = folderGrants.filter { $0.folderOfferId == nil }
@@ -1453,6 +1790,7 @@ public final class CovalentAppModel: ObservableObject {
         }
       }
       return directoryGrants.filter { !replacedIDs.contains($0.id) }
+        + refreshedSiblings
         + [replacement.bound(toFolderOfferId: offerId)]
     }
 

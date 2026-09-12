@@ -1,96 +1,57 @@
-# Folder synchronization
+# One-way folder links
 
-Status: planned — not available in released Covalent builds.
+Covalent sends files from one source to one or more destinations. Pairing alone
+never shares files: select a source folder, invite a paired device, then choose
+and accept its destination folder on that device. A destination does not send
+its contents back to the source or to another destination.
 
-Folder synchronization will be a separate feature from Backup and Restore. A
-backup remains an immutable recovery point. A sync folder keeps selected local
-folders converged between devices that members explicitly authorize.
+This is the current development contract. The complete product is not yet
+released; see the [acceptance ledger](../release/completion-progress.md) for
+verified behavior and remaining failures. The original two-way design remains
+in Git history at checkpoint 46. Existing two-way records keep their original
+behavior and are explicitly labeled as legacy; they are not silently converted.
 
-The first implementation connects authorized folder devices directly. Each
-participating device has access to the chosen folder's contents. Existing
-encrypted backup devices remain a separate choice; storing backup copies does
-not automatically give a device access to sync folders. An untrusted sync relay
-is outside this first milestone.
+## Deletion choices
 
-## The intended flow
+| Choice | Off by default | When enabled |
+| --- | --- | --- |
+| Delete destination copies when source files are deleted | Destination copies remain. | The source deletion also removes its destination copies. |
+| Restore files deleted at a destination | Those files remain deleted there, including after source edits. | Covalent copies those files there again from the source. |
 
-1. Choose a folder.
-2. Choose the devices allowed to join it and their roles.
-3. Sync.
+The apps explain and confirm the consequences of enabling either option.
+Stopping a link preserves files already on each device. This is plain file
+synchronization; a mirrored deletion is not a recoverable backup by itself.
 
-The app validates that the chosen folder is writable and safe to manage before
-it calls the folder active. Each device has its own identity. Pairing a device
-does not share folders automatically: the owner must explicitly approve the
-folder, device, and role.
+## One setting for the whole link
 
-Users will see a folder name, local path, members, role, last complete scan,
-last mutually acknowledged sync, pending changes, conflicts, and a specific
-paused/error action. “Waiting for a device,” “permission needed,” and “up to
-date” are different states.
+Deletion choices and pause belong to the entire link. An authorized member can
+request a change. The source commits its revision and sends it to every linked
+destination. An offline source leaves the request visibly pending. Competing
+edits require review; a stale request never silently overwrites a newer choice.
+New destinations wait for the source's current settings before transferring.
 
-## Expected behavior
+Manual, scheduled and continuous operation with Android Wi-Fi/charging
+conditions are required but remain under development. Do not infer those
+features from a pause button. Batch workers must stop between runs, and status
+must distinguish waiting, active transfer, paused, and errors.
 
-- Edits made while a device is offline are synchronized after it reconnects.
-- Edits to different files merge.
-- Concurrent edits to the same file keep every version. One stays at the
-  original path and the others receive stable, readable conflict names.
-- A delete racing an edit retains the edited bytes as a conflict; it is never
-  silently treated as a deletion.
-- Renaming is initially represented as delete plus create with retained
-  history. It is not presented as lossless rename tracking.
-- Unsharing a folder stops future synchronization and does not delete local
-  files.
-- Removing a device ends its future folder access. Removing write permission
-  first requires the remaining devices to agree on the history they have
-  already accepted. If one cannot be reached, the app waits or asks the owner
-  to explicitly remove that device too. Previously received files stay intact;
-  later edits from a removed device remain local for review.
+## Collections and access
 
-Synchronization will not report success merely because a transfer was sent.
-It reports up to date only after the local folder has applied the shared
-state, connected participants acknowledge it, and no unresolved conflicts or
-errors remain. Offline participants remain visibly waiting.
+Independent links can contribute to one collection using a distinct child
+folder for each source. Two sources must not manage the same files: separate
+folders prevent collisions and keep one contributor's deletion policy from
+removing another contributor's files. The source never receives the collection's
+other contents. Automatic collection setup remains an open acceptance item.
 
-## Safety rules
+Folder access is checked before transfer and after worker restarts. Lost
+permissions and incomplete scans must not be treated as source deletions.
+Covalent retains authenticated device consent, private engine control, verified
+worker executables and restricted filesystem access. Idle engine status and raw
+need counts do not establish that two folders contain identical files; files
+intentionally left deleted can remain in those counts.
 
-Only a complete successful scan may infer a deletion. If access is revoked, a
-folder changes while being scanned, a provider cursor fails, a scan is
-cancelled, or a watcher overflows, Covalent pauses or rescans and publishes no
-deletions.
-
-Downloaded changes are verified, staged, and journaled before user files are
-changed. Restarting after interruption resumes or safely reconciles that
-journal. Sync folders use path confinement and no-follow handling on Unix.
-On document providers that cannot safely rename or replace files, Covalent
-uses a visible pending/conflict path instead of assuming destructive operations
-are atomic.
-
-An encrypted backup provider remains outside the sync folder. It stores backup
-objects through the existing backup protocol and does not receive sync
-operations, grant folder access, or resolve sync conflicts. Direct sync
-participants are explicitly authorized to read the chosen folder.
-
-## macOS and Android
-
-On macOS, a revoked folder permission pauses the folder until the user grants
-access again. File-system events are hints; Covalent verifies them with a scan.
-
-On Android, SAF rescans are authoritative. `ContentObserver` helps while the
-app is active but is not a recursive change log. [Periodic WorkManager work](https://developer.android.com/reference/androidx/work/PeriodicWorkRequest) is
-inexact, and Android force-stop prevents background work until the app is
-opened again. The app will show that limitation rather than promise continuous
-background sync.
-
-## Release criteria
-
-This feature will remain planned until Covalent proves deterministic
-multi-device convergence, conflict-byte preservation, safe deletion handling,
-member-removal admission barriers, crash recovery, bounded hostile-input handling, and
-platform-specific filesystem behavior. Backup and Restore remain available
-independently throughout that work.
-
-For reference, the product behavior takes inspiration from Syncthing's
-[Understanding Synchronization](https://docs.syncthing.net/users/syncing.html)
-and its [Block Exchange Protocol](https://docs.syncthing.net/specs/bep-v1.html).
-They describe an external reference implementation; this planned protocol is
-not Syncthing/BEP compatible.
+macOS uses native folder access grants and a menu bar view. Android uses its
+available folder access and background execution facilities; force-stop and
+platform scheduling restrictions must remain visible. Docker is the accepted
+Unraid delivery path while Atlas is offline. Testing uses isolated temporary
+folders on the laptop and Atmos.

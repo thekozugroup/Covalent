@@ -216,7 +216,7 @@ enum class TransferKind { BACKUP, VERIFICATION, RESTORE }
 
 enum class TransferState { QUEUED, RUNNING, PAUSED, COMPLETED, FAILED, CANCELLED }
 
-enum class PrimaryAction { PAIR, BACKUP, RESTORE }
+enum class PrimaryAction { PAIR, LINKS }
 
 enum class RecoveryPhase(val wireValue: String) {
     NOT_CONFIGURED("not_configured"),

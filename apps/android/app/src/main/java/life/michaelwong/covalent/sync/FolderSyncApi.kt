@@ -3,6 +3,8 @@ package life.michaelwong.covalent.sync
 import java.util.UUID
 import life.michaelwong.covalent.data.CovalentNodeClient
 import life.michaelwong.covalent.model.FolderSyncMutation
+import life.michaelwong.covalent.model.FolderLinkPolicy
+import life.michaelwong.covalent.model.FolderLinkSettings
 import life.michaelwong.covalent.model.FolderSyncStatus
 import life.michaelwong.covalent.model.NodeConnection
 
@@ -14,8 +16,16 @@ internal interface FolderSyncApi {
         folderId: UUID,
         label: String,
         selectedRoot: String,
+        linkPolicy: FolderLinkPolicy,
     ): FolderSyncMutation
     fun accept(connection: NodeConnection, offerId: String, selectedRoot: String): FolderSyncMutation
+    fun settings(
+        connection: NodeConnection,
+        folderId: String,
+        changeId: String,
+        expectedRevision: Long,
+        settings: FolderLinkSettings,
+    ): FolderSyncMutation
     fun pause(connection: NodeConnection, offerId: String, paused: Boolean): FolderSyncMutation
     fun remove(connection: NodeConnection, offerId: String): FolderSyncMutation
     fun renew(connection: NodeConnection, offerId: String): FolderSyncMutation
@@ -34,10 +44,26 @@ internal class NodeFolderSyncApi(private val client: CovalentNodeClient) : Folde
         folderId: UUID,
         label: String,
         selectedRoot: String,
-    ) = client.offerFolder(connection.baseUrl, connection.token, peerId, folderId, label, selectedRoot)
+        linkPolicy: FolderLinkPolicy,
+    ) = client.offerFolder(connection.baseUrl, connection.token, peerId, folderId, label, selectedRoot, linkPolicy)
 
     override fun accept(connection: NodeConnection, offerId: String, selectedRoot: String) =
         client.acceptFolder(connection.baseUrl, connection.token, offerId, selectedRoot)
+
+    override fun settings(
+        connection: NodeConnection,
+        folderId: String,
+        changeId: String,
+        expectedRevision: Long,
+        settings: FolderLinkSettings,
+    ) = client.updateFolderLinkSettings(
+        connection.baseUrl,
+        connection.token,
+        folderId,
+        changeId,
+        expectedRevision,
+        settings,
+    )
 
     override fun pause(connection: NodeConnection, offerId: String, paused: Boolean) =
         client.pauseFolder(connection.baseUrl, connection.token, offerId, paused)

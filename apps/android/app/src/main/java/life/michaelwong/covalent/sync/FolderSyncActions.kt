@@ -2,6 +2,8 @@ package life.michaelwong.covalent.sync
 
 import java.util.UUID
 import life.michaelwong.covalent.model.FolderSyncMutation
+import life.michaelwong.covalent.model.FolderLinkPolicy
+import life.michaelwong.covalent.model.FolderShare
 import life.michaelwong.covalent.model.NodeConnection
 
 /** Orders private capability persistence before any authenticated sharing mutation. */
@@ -12,13 +14,38 @@ internal class FolderSyncActions(
     private val validateRoot: (String) -> String,
     private val onRepairAcknowledged: () -> Unit,
 ) {
-    fun offer(peerId: String, folderId: UUID, label: String, root: String): FolderSyncMutation {
+    fun offer(
+        peerId: String,
+        folderId: UUID,
+        label: String,
+        root: String,
+        linkPolicy: FolderLinkPolicy,
+    ): FolderSyncMutation {
         val selectedRoot = validateRoot(root)
         val durableFolderId = grants.prepareOffer(peerId, folderId, selectedRoot, label)
         val connection = ensureNodeReady()
-        return api.offer(connection, peerId, durableFolderId, label, selectedRoot).also { mutation ->
+        return api.offer(connection, peerId, durableFolderId, label, selectedRoot, linkPolicy).also { mutation ->
             grants.finishOffer(durableFolderId, checkNotNull(mutation.offerId) { "The node omitted the folder offer ID." })
         }
+    }
+
+    fun addDestination(source: FolderShare, peerId: String): FolderSyncMutation {
+        check(!source.incoming) { "Only this phone's source folders can add a destination." }
+        check(peerId != source.peerId) { "Choose another paired device." }
+        val policy = checkNotNull(source.linkPolicy) { "Legacy two-way folders cannot add one-way destinations." }
+        val savedSource = grants.records().singleOrNull {
+            it.kind == FolderSyncGrantKind.OFFER && it.offerId == source.offerId && it.folderId == source.folderId
+        } ?: throw IllegalStateException("The saved source folder is unavailable.")
+        check(savedSource.pendingRoot == null && !savedSource.pendingRemoval) {
+            "Finish the saved folder change before adding a destination."
+        }
+        return offer(
+            peerId = peerId,
+            folderId = UUID.fromString(source.folderId),
+            label = source.label,
+            root = savedSource.root,
+            linkPolicy = policy,
+        )
     }
 
     fun accept(offerId: String, root: String): FolderSyncMutation {

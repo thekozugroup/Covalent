@@ -2,6 +2,7 @@ package life.michaelwong.covalent.sync
 
 import life.michaelwong.covalent.model.FolderHealth
 import life.michaelwong.covalent.model.FolderHealthFreshness
+import life.michaelwong.covalent.model.FolderLinkPolicy
 import life.michaelwong.covalent.model.FolderShare
 import life.michaelwong.covalent.model.FolderSharePhase
 import life.michaelwong.covalent.model.FolderShareSummary
@@ -42,6 +43,22 @@ class FolderSyncContractsTest {
         val oldHealth = status(removed, lifecycle = FolderSyncLifecycle.INITIAL_SCANNING)
         assertEquals(FolderShareSummary.REMOVED, oldHealth.summaryFor(removed))
         assertEquals(FolderShareSummary.REMOVAL_PENDING, oldHealth.summaryFor(removed.copy(remoteRemovalPending = true)))
+    }
+
+    @Test
+    fun oneWayIdleNeedCountsDoNotOverrideActiveStateOrErrors() {
+        val share = share(PeerConnectionState.CONNECTED).copy(linkPolicy = FolderLinkPolicy())
+        val idleNeed = status(share).copy(folders = listOf(health.copy(remainingFiles = 2, remainingBytes = 40)))
+        assertEquals(FolderShareSummary.CONNECTED, idleNeed.summaryFor(share))
+
+        val syncing = idleNeed.copy(folders = listOf(health.copy(state = "syncing", remainingFiles = 2)))
+        assertEquals(FolderShareSummary.SYNCING, syncing.summaryFor(share))
+
+        val errored = idleNeed.copy(folders = listOf(health.copy(statusError = true, remainingFiles = 2)))
+        assertEquals(FolderShareSummary.NEEDS_ATTENTION, errored.summaryFor(share))
+
+        val legacy = share.copy(linkPolicy = null)
+        assertEquals(FolderShareSummary.SYNCING, idleNeed.copy(shares = listOf(legacy)).summaryFor(legacy))
     }
 
     private fun share(connection: PeerConnectionState) = FolderShare(

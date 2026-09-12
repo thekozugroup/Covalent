@@ -298,6 +298,59 @@ impl EnginePeerConfig {
     }
 }
 
+/// File direction and deletion choices for an authorized folder.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum EngineFolderRole {
+    /// Existing shares keep their original behavior until explicitly changed.
+    #[default]
+    LegacyTwoWay,
+    Source,
+    Destination {
+        propagate_source_deletions: bool,
+        restore_local_deletions: bool,
+    },
+}
+
+impl EngineFolderRole {
+    const fn engine_type(self) -> &'static str {
+        match self {
+            Self::LegacyTwoWay => "sendreceive",
+            Self::Source => "sendonly",
+            Self::Destination { .. } => "receiveonly",
+        }
+    }
+
+    const fn ignore_source_deletions(self) -> bool {
+        matches!(
+            self,
+            Self::Destination {
+                propagate_source_deletions: false,
+                ..
+            }
+        )
+    }
+
+    const fn keep_local_deletions(self) -> bool {
+        matches!(
+            self,
+            Self::Destination {
+                restore_local_deletions: false,
+                ..
+            }
+        )
+    }
+
+    const fn restore_local_deletions(self) -> bool {
+        matches!(
+            self,
+            Self::Destination {
+                restore_local_deletions: true,
+                ..
+            }
+        )
+    }
+}
+
 /// One exact local root and the explicit engine identities authorized to share
 /// it. Root admission here is provisional; the controller must retain and
 /// revalidate its no-follow descriptor capability before starting the engine.
@@ -308,6 +361,7 @@ pub struct EngineFolderConfig {
     root: PathBuf,
     members: Vec<EngineDeviceId>,
     paused: bool,
+    role: EngineFolderRole,
 }
 
 impl fmt::Debug for EngineFolderConfig {
@@ -319,6 +373,7 @@ impl fmt::Debug for EngineFolderConfig {
             .field("root", &"[PRIVATE]")
             .field("members", &self.members)
             .field("paused", &self.paused)
+            .field("role", &self.role)
             .finish()
     }
 }
@@ -349,7 +404,15 @@ impl EngineFolderConfig {
             root,
             members,
             paused: false,
+            role: EngineFolderRole::default(),
         })
+    }
+
+    /// Apply the role established by the authenticated link configuration.
+    #[must_use]
+    pub const fn with_role(mut self, role: EngineFolderRole) -> Self {
+        self.role = role;
+        self
     }
 
     /// Select whether this folder is present but administratively paused.
@@ -357,6 +420,11 @@ impl EngineFolderConfig {
     pub const fn with_paused(mut self, paused: bool) -> Self {
         self.paused = paused;
         self
+    }
+
+    /// Return the authenticated source or destination role.
+    pub const fn role(&self) -> EngineFolderRole {
+        self.role
     }
 
     /// Return the folder UUID used as the engine folder ID.
@@ -1109,7 +1177,7 @@ fn verify_folder(
             .to_str()
             .ok_or(EngineConfigError::EffectiveConfigMismatch)?,
     )?;
-    require_string(value, "type", "sendreceive")?;
+    require_string(value, "type", expected.role.engine_type())?;
     require_string(value, "filesystemType", "basic")?;
     require_i64(value, "rescanIntervalS", 3600)?;
     require_bool(value, "fsWatcherEnabled", true)?;
@@ -1117,7 +1185,27 @@ fn verify_folder(
     require_i64(value, "fsWatcherTimeoutS", 0)?;
     require_bool(value, "ignorePerms", true)?;
     require_bool(value, "autoNormalize", true)?;
-    require_bool(value, "ignoreDelete", false)?;
+    require_bool(
+        value,
+        "ignoreDelete",
+        expected.role.ignore_source_deletions(),
+    )?;
+    // A stock worker may omit this extension only when it is not needed.
+    // Never start a keep-deleted link after silently losing its protection.
+    if value.get("keepLocalDeletions").is_some() || expected.role.keep_local_deletions() {
+        require_bool(
+            value,
+            "keepLocalDeletions",
+            expected.role.keep_local_deletions(),
+        )?;
+    }
+    if value.get("restoreLocalDeletions").is_some() || expected.role.restore_local_deletions() {
+        require_bool(
+            value,
+            "restoreLocalDeletions",
+            expected.role.restore_local_deletions(),
+        )?;
+    }
     require_i64(value, "maxConflicts", -1)?;
     require_bool(value, "paused", paused)?;
     require_string(value, "markerName", ".stfolder")?;
@@ -1270,7 +1358,9 @@ fn write_folder(
             .to_str()
             .ok_or(EngineConfigError::UnsafeFolderRoot)?,
     )?;
-    xml.push("\" type=\"sendreceive\" rescanIntervalS=\"3600\" fsWatcherEnabled=\"true\" fsWatcherDelayS=\"10\" fsWatcherTimeoutS=\"0\" ignorePerms=\"true\" autoNormalize=\"true\">\n")?;
+    xml.push("\" type=\"")?;
+    xml.push(folder.role.engine_type())?;
+    xml.push("\" rescanIntervalS=\"3600\" fsWatcherEnabled=\"true\" fsWatcherDelayS=\"10\" fsWatcherTimeoutS=\"0\" ignorePerms=\"true\" autoNormalize=\"true\">\n")?;
     xml.push("    <filesystemType>basic</filesystemType>\n")?;
     for member in &folder.members {
         xml.push("    <device id=\"")?;
@@ -1285,7 +1375,18 @@ fn write_folder(
     xml.push("      <fsPath></fsPath>\n")?;
     xml.push("      <fsType>basic</fsType>\n")?;
     xml.push("    </versioning>\n")?;
-    xml.push("    <ignoreDelete>false</ignoreDelete>\n")?;
+    writeln!(
+        xml,
+        "    <ignoreDelete>{}</ignoreDelete>",
+        folder.role.ignore_source_deletions()
+    )
+    .map_err(|_| EngineConfigError::RenderFailed)?;
+    if folder.role.keep_local_deletions() {
+        xml.push("    <keepLocalDeletions>true</keepLocalDeletions>\n")?;
+    }
+    if folder.role.restore_local_deletions() {
+        xml.push("    <restoreLocalDeletions>true</restoreLocalDeletions>\n")?;
+    }
     xml.push("    <maxConflicts>-1</maxConflicts>\n")?;
     writeln!(xml, "    <paused>{paused}</paused>").map_err(|_| EngineConfigError::RenderFailed)?;
     xml.push("    <markerName>.stfolder</markerName>\n")?;

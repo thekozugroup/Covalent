@@ -53,9 +53,9 @@ done
 
 mkdir -p "$output_dir"
 umask 077
-build_dir=$(mktemp -d "$output_dir/.personal-macos-build.XXXXXX")
+build_dir=$(mktemp -d "${TMPDIR:-/tmp}/covalent-personal-macos-build.XXXXXX")
 case "$build_dir" in
-  "$output_dir"/.personal-macos-build.*) ;;
+  */covalent-personal-macos-build.*) ;;
   *) fail "Could not create a private build directory." ;;
 esac
 

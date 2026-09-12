@@ -15,12 +15,14 @@ link_provenance_tool="$repo_root/scripts/collect-android-native-link-provenance.
 go_link_wrapper_source="$repo_root/scripts/android-go-link-wrapper.sh"
 project_license="$repo_root/LICENSE"
 ofl_license="$repo_root/docs/licenses/sync-engine/OFL-1.1.txt"
+source_patch="$repo_root/packaging/sync-engine/keep-local-deletions.patch"
 . "$repo_root/scripts/android-native-budgets.sh"
 
 expected_commit=946e2b83a1f6c6ae119427c09e0a5802940b82ff
 expected_go='go version go1.26.7 '
 expected_ndk=27.1.12297006
 guardian_source_sha=c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579
+source_patch_sha=e58e7d133a388576a54cacc6a5a5094e6607c483c0daabac552de1a1854d92ac
 expected_gomod_sha=a129d6ae9cf20593fab4b1fb04ac09b176c4942d3a4bec9394f9c888fe2d1bd1
 expected_gosum_sha=7e9606117eca33e9263181a3d0141e403c940c55022a061d8ed9e22d4bda2acd
 source_date_epoch=1785792965
@@ -29,6 +31,11 @@ maximum_notice_manifest_bytes=$((4 * 1024 * 1024))
 
 test "$(shasum -a 256 "$guardian_source" | awk '{print $1}')" = "$guardian_source_sha" || {
   echo "Reviewed engine guardian source hash does not match" >&2
+  exit 1
+}
+test -f "$source_patch" && test ! -L "$source_patch" &&
+  test "$(shasum -a 256 "$source_patch" | awk '{print $1}')" = "$source_patch_sha" || {
+  echo "Reviewed Syncthing source patch hash does not match" >&2
   exit 1
 }
 
@@ -100,6 +107,12 @@ test "$(shasum -a 256 "$build_source/go.mod" | awk '{print $1}')" = "$expected_g
   echo "Exported Syncthing module files do not match" >&2
   exit 1
 }
+GIT_CEILING_DIRECTORIES="$private_work" git -C "$build_source" apply --check "$source_patch"
+GIT_CEILING_DIRECTORIES="$private_work" git -C "$build_source" apply "$source_patch"
+GIT_CEILING_DIRECTORIES="$private_work" git -C "$build_source" apply --check --reverse "$source_patch"
+mkdir "$build_source/covalent-patches"
+install -m 0444 "$source_patch" \
+  "$build_source/covalent-patches/keep-local-deletions.patch"
 
 go_version=$(go version)
 case "$go_version" in
@@ -558,6 +571,8 @@ python3 "$notice_tool" \
   --ofl-license "$ofl_license" \
   --toolchain-notice "Android NDK $expected_ndk / NOTICE" NOTICE "$ndk_dir/NOTICE" "$ndk_notice_sha" \
   --toolchain-notice "Android NDK $expected_ndk / NOTICE.toolchain" NOTICE.toolchain "$ndk_dir/NOTICE.toolchain" "$ndk_toolchain_notice_sha" \
+  --source-patch "Covalent keep-local-deletions patch" \
+    keep-local-deletions.patch "$source_patch" "$source_patch_sha" \
   --source-archive-suffix .tgz \
   --output "$notices"
 

@@ -2,6 +2,25 @@ import Foundation
 import Testing
 @testable import CovalentShared
 
+@Test func newFolderRequestsAlwaysUseAnExplicitOneWayDeletionPolicy() throws {
+    let peer = UUID()
+    let folder = UUID()
+    let defaultRequest = FolderOfferRequest(peerId: peer, folderId: folder, label: "Photos", selectedRoot: "/selected")
+    #expect(defaultRequest.linkPolicy == FolderLinkPolicy())
+    for propagate in [false, true] {
+        for restore in [false, true] {
+            let policy = FolderLinkPolicy(propagateSourceDeletions: propagate, restoreLocalDeletions: restore)
+            let request = FolderOfferRequest(peerId: peer, folderId: folder, label: "Photos", selectedRoot: "/selected", linkPolicy: policy)
+            let payload = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
+            let selectedPolicy = try #require(payload["linkPolicy"] as? [String: Bool])
+            #expect(selectedPolicy == ["propagateSourceDeletions": propagate, "restoreLocalDeletions": restore])
+        }
+    }
+    #expect(throws: (any Error).self) {
+        try JSONDecoder().decode(FolderLinkPolicy.self, from: Data("{\"propagateSourceDeletions\":false}".utf8))
+    }
+}
+
 @MainActor
 private final class FolderGrantBootstrapper: LocalNodeBootstrapping {
     let configuration: NodeConnectionConfiguration
@@ -947,6 +966,233 @@ private final class FolderRepairResultBox<Value: Sendable>: @unchecked Sendable 
 }
 
 private enum FolderGrantTestError: Error { case restartFailed }
+
+@Test @MainActor func addingDestinationReusesLinkAndKeepsBothGrantBindingsUntilRemoval() async throws {
+    let fixture = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let source = fixture.appending(path: "source")
+    try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+    let grant = try SelectedDirectoryGrant.capture(url: source, purpose: .folderSync)
+    let folder = UUID()
+    let firstPeer = UUID()
+    let secondPeer = UUID()
+    let firstOffer = UUID()
+    let secondOffer = UUID()
+    let policy = FolderLinkPolicy(propagateSourceDeletions: true, restoreLocalDeletions: false)
+    let settingsState = FolderLinkSettingsState(
+        revision: 1,
+        settings: FolderLinkSettings(deletionPolicy: policy, paused: false),
+        changeId: UUID(), changedBy: firstPeer, confirmed: true,
+        pendingChange: nil, conflictedChange: nil
+    )
+    let peers = [
+        FolderSyncPeer(peerId: firstPeer, displayName: "First Mac"),
+        FolderSyncPeer(peerId: secondPeer, displayName: "Second Mac"),
+    ]
+    let firstShare = FolderShare(
+        offerId: firstOffer, folderId: folder, label: "Photos", peerId: firstPeer,
+        incoming: false, phase: .ready, expiresAtUnixMs: nil, expired: false,
+        peerConnection: .connected, linkPolicy: policy, linkSettings: settingsState
+    )
+    let secondShare = FolderShare(
+        offerId: secondOffer, folderId: folder, label: "Photos", peerId: secondPeer,
+        incoming: false, phase: .offered, expiresAtUnixMs: 10, expired: false,
+        peerConnection: .connected, linkPolicy: policy, linkSettings: settingsState
+    )
+    let firstStatus = try encodedFolderStatus(peers: peers, shares: [firstShare])
+    let fanoutStatus = try encodedFolderStatus(peers: peers, shares: [firstShare, secondShare])
+    let repairStatus = try encodedFolderStatus(
+        peers: peers, shares: [firstShare, secondShare], issue: "folderAccess"
+    )
+    let retainedStatus = try encodedFolderStatus(peers: peers, shares: [secondShare])
+    let sequence = RequestSequence()
+    let offerBodies = FolderRepairRequestRoots()
+    let recorder = RequestRecorder(removeAfterRequest: false) { request in
+        switch sequence.next() {
+        case 0:
+            #expect(request.url?.path == "/api/v1/sync/folders")
+            return TestResponse.response(request, status: 200, json: mutationJSON(offer: firstOffer))
+        case 1:
+            return TestResponse.response(request, status: 200, json: firstStatus)
+        case 2:
+            #expect(request.url?.path == "/api/v1/sync/folders")
+            offerBodies.append(String(decoding: try #require(folderRepairRequestBody(request)), as: UTF8.self))
+            return TestResponse.response(request, status: 200, json: mutationJSON(offer: secondOffer))
+        case 3:
+            return TestResponse.response(request, status: 200, json: fanoutStatus)
+        case 4:
+            return TestResponse.response(request, status: 200, json: repairStatus)
+        case 5:
+            #expect(request.url?.path == "/api/v1/sync/repair")
+            return TestResponse.response(request, status: 200, json: mutationJSON(offer: firstOffer))
+        case 6:
+            return TestResponse.response(request, status: 200, json: fanoutStatus)
+        case 7:
+            #expect(request.url?.path == "/api/v1/sync/remove")
+            return TestResponse.response(request, status: 200, json: mutationJSON(offer: firstOffer))
+        case 8:
+            return TestResponse.response(request, status: 200, json: retainedStatus)
+        default:
+            Issue.record("Unexpected fan-out request")
+            return TestResponse.response(request, status: 500, json: "{}")
+        }
+    }
+    let persistence = AppleAppPersistence(directoryURL: fixture.appending(path: "state"))
+    let (model, bootstrapper) = try folderMutationModel(recorder: recorder, persistence: persistence)
+
+    #expect(await model.offerFolder(
+        peerId: firstPeer, folderId: folder, label: "Photos", grant: grant, linkPolicy: policy
+    ))
+    #expect(await model.addFolderDestination(from: firstOffer, to: secondPeer))
+
+    let body = try #require(offerBodies.values.first)
+    let payload = try #require(JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any])
+    #expect(UUID(uuidString: try #require(payload["peerId"] as? String)) == secondPeer)
+    #expect(UUID(uuidString: try #require(payload["folderId"] as? String)) == folder)
+    #expect(payload["label"] as? String == "Photos")
+    let selectedRoot = try #require(payload["selectedRoot"] as? String)
+    #expect(selectedRoot == source.path || selectedRoot == "/private\(source.path)")
+    #expect(payload["linkPolicy"] as? [String: Bool] == [
+        "propagateSourceDeletions": true,
+        "restoreLocalDeletions": false,
+    ])
+    #expect(model.directoryGrants.count == 2)
+    #expect(Set(model.directoryGrants.compactMap(\.folderOfferId)) == [firstOffer, secondOffer])
+    #expect(Set(model.directoryGrants.map(\.bookmarkData)) == [grant.bookmarkData])
+    #expect(Set(model.directoryGrants.map(\.id)).count == 2)
+    #expect(bootstrapper.restartCalls == 2)
+
+    await model.refreshFolders()
+    let replacement = try SelectedDirectoryGrant.capture(url: source, purpose: .folderSync)
+    #expect(await model.repairFolderAccess(offerId: firstOffer, grant: replacement))
+    #expect(model.directoryGrants.count == 2)
+    #expect(Set(model.directoryGrants.compactMap(\.folderOfferId)) == [firstOffer, secondOffer])
+    #expect(Set(model.directoryGrants.map(\.bookmarkData)) == [replacement.bookmarkData])
+    #expect(bootstrapper.pendingRepairRestartCalls == 1)
+    #expect(bootstrapper.lastPendingRepairGrants.count == 2)
+    #expect(Set(bootstrapper.lastPendingRepairGrants.map(\.bookmarkData)) == [replacement.bookmarkData])
+
+    await model.removeFolder(firstOffer)
+    #expect(model.directoryGrants.count == 1)
+    #expect(model.directoryGrants.first?.folderOfferId == secondOffer)
+    #expect(model.directoryGrants.first?.bookmarkData == replacement.bookmarkData)
+    let persisted = try await persistence.loadDirectoryGrants()
+    #expect(persisted.map(\.id) == model.directoryGrants.map(\.id))
+    #expect(persisted.map(\.folderOfferId) == model.directoryGrants.map(\.folderOfferId))
+    #expect(persisted.map(\.bookmarkData) == model.directoryGrants.map(\.bookmarkData))
+    #expect(bootstrapper.restartCalls == 4)
+    #expect(sequence.count == 9)
+}
+
+private func encodedFolderStatus(
+    peers: [FolderSyncPeer],
+    shares: [FolderShare],
+    issue: String? = nil
+) throws -> String {
+    let status = FolderSyncStatus(
+        availability: "available", lifecycle: "running", issue: issue,
+        healthFreshness: "fresh", connectionFreshness: "fresh",
+        peers: peers, shares: shares, folders: []
+    )
+    return String(decoding: try JSONEncoder().encode(status), as: UTF8.self)
+}
+
+@Test @MainActor func uncertainLinkSettingsRetryUsesExactDurableRequestUntilStatusConfirmsIt() async throws {
+    let fixture = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let folder = UUID()
+    let peer = UUID()
+    let offer = UUID()
+    let policy = FolderLinkPolicy()
+    let initialState = FolderLinkSettingsState(
+        revision: 3,
+        settings: FolderLinkSettings(deletionPolicy: policy, paused: false),
+        changeId: UUID(), changedBy: peer, confirmed: true,
+        pendingChange: nil, conflictedChange: nil
+    )
+    let initialShare = FolderShare(
+        offerId: offer, folderId: folder, label: "Photos", peerId: peer,
+        incoming: false, phase: .ready, expiresAtUnixMs: nil, expired: false,
+        peerConnection: .connected, linkPolicy: policy, linkSettings: initialState
+    )
+    let initialStatus = try encodedFolderStatus(
+        peers: [FolderSyncPeer(peerId: peer, displayName: "Mac")], shares: [initialShare]
+    )
+    let sequence = RequestSequence()
+    let bodies = FolderRepairRequestRoots()
+    let recorder = RequestRecorder(removeAfterRequest: false) { request in
+        switch sequence.next() {
+        case 0:
+            return TestResponse.response(request, status: 200, json: initialStatus)
+        case 1:
+            #expect(request.url?.path == "/api/v1/sync/settings")
+            bodies.append(String(decoding: try #require(folderRepairRequestBody(request)), as: UTF8.self))
+            throw URLError(.networkConnectionLost)
+        case 2:
+            #expect(request.url?.path == "/api/v1/sync/settings")
+            bodies.append(String(decoding: try #require(folderRepairRequestBody(request)), as: UTF8.self))
+            return TestResponse.response(
+                request, status: 200,
+                json: #"{"offerId":null,"lifecycle":"running","issue":null}"#
+            )
+        case 3:
+            let firstBody = try #require(bodies.values.first)
+            let object = try #require(JSONSerialization.jsonObject(
+                with: Data(firstBody.utf8)
+            ) as? [String: Any])
+            let changeIdText = try #require(object["changeId"] as? String)
+            let changeId = try #require(UUID(uuidString: changeIdText))
+            let updatedPolicy = FolderLinkPolicy(
+                propagateSourceDeletions: true, restoreLocalDeletions: false
+            )
+            let appliedState = FolderLinkSettingsState(
+                revision: 4,
+                settings: FolderLinkSettings(deletionPolicy: updatedPolicy, paused: false),
+                changeId: changeId, changedBy: peer, confirmed: true,
+                pendingChange: nil, conflictedChange: nil
+            )
+            let appliedShare = FolderShare(
+                offerId: offer, folderId: folder, label: "Photos", peerId: peer,
+                incoming: false, phase: .ready, expiresAtUnixMs: nil, expired: false,
+                peerConnection: .connected, linkPolicy: updatedPolicy, linkSettings: appliedState
+            )
+            return TestResponse.response(
+                request, status: 200,
+                json: try encodedFolderStatus(
+                    peers: [FolderSyncPeer(peerId: peer, displayName: "Mac")],
+                    shares: [appliedShare]
+                )
+            )
+        default:
+            Issue.record("Unexpected link settings request")
+            return TestResponse.response(request, status: 500, json: "{}")
+        }
+    }
+    let persistence = AppleAppPersistence(directoryURL: fixture.appending(path: "state"))
+    let (model, _) = try folderMutationModel(recorder: recorder, persistence: persistence)
+    await model.refreshFolders()
+
+    let requested = FolderLinkSettings(
+        deletionPolicy: FolderLinkPolicy(
+            propagateSourceDeletions: true, restoreLocalDeletions: false
+        ),
+        paused: false
+    )
+    #expect(!(await model.updateFolderLinkSettings(
+        folderId: folder, expectedRevision: 3, settings: requested
+    )))
+    #expect(model.pendingFolderLinkSettingsChanges.count == 1)
+    #expect(try await persistence.loadPendingFolderLinkSettingsChanges()
+        == model.pendingFolderLinkSettingsChanges)
+
+    let retry = try #require(model.takeAlertRecovery())
+    await retry()
+    #expect(bodies.values.count == 2)
+    #expect(bodies.values[0] == bodies.values[1])
+    #expect(model.pendingFolderLinkSettingsChanges.isEmpty)
+    #expect(try await persistence.loadPendingFolderLinkSettingsChanges().isEmpty)
+    #expect(sequence.count == 4)
+}
 
 @Test @MainActor func folderOfferRetriesTypedBusyInPlaceWithoutRestartingAgain() async throws {
     let fixture = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)

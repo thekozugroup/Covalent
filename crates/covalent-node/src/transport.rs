@@ -431,7 +431,12 @@ impl TlsIdentity {
 
     fn server_config(&self) -> Result<ServerConfig, CoreError> {
         #[cfg(unix)]
-        let alpns: &[&[u8]] = &[ALPN, PAIRING_ALPN, crate::sync_control::FOLDER_CONTROL_ALPN];
+        let alpns: &[&[u8]] = &[
+            ALPN,
+            PAIRING_ALPN,
+            crate::sync_control::FOLDER_CONTROL_ALPN,
+            crate::sync_control::LINK_CONTROL_ALPN,
+        ];
         #[cfg(not(unix))]
         let alpns: &[&[u8]] = &[ALPN, PAIRING_ALPN];
         self.server_config_with_alpns(alpns)
@@ -725,12 +730,14 @@ impl QuicNode {
                     return;
                 }
                 #[cfg(unix)]
-                if negotiated_alpn(&connection).as_deref()
-                    == Some(crate::sync_control::FOLDER_CONTROL_ALPN)
+                if let Some(alpn) = negotiated_alpn(&connection)
+                    && (alpn == crate::sync_control::FOLDER_CONTROL_ALPN
+                        || alpn == crate::sync_control::LINK_CONTROL_ALPN)
                 {
                     if let Some(service) = folder_service {
                         let _ = crate::sync_control::serve_folder_control_connection(
                             connection,
+                            alpn,
                             engine,
                             service,
                             fingerprint,

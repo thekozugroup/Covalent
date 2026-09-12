@@ -30,6 +30,10 @@ import org.json.JSONArray
 import org.json.JSONObject
 import life.michaelwong.covalent.model.DiscoveryCandidate
 import life.michaelwong.covalent.model.FolderHealth
+import life.michaelwong.covalent.model.FolderLinkPolicy
+import life.michaelwong.covalent.model.FolderLinkSettings
+import life.michaelwong.covalent.model.FolderLinkSettingsChange
+import life.michaelwong.covalent.model.FolderLinkSettingsState
 import life.michaelwong.covalent.model.FolderHealthFreshness
 import life.michaelwong.covalent.model.PeerConnectionFreshness
 import life.michaelwong.covalent.model.PeerConnectionState
@@ -160,6 +164,7 @@ class CovalentNodeClient(
         folderId: UUID,
         label: String,
         selectedRoot: String,
+        linkPolicy: FolderLinkPolicy,
     ): FolderSyncMutation {
         requireUuid(peerId, "peer")
         require(label.isNotBlank() && label.length <= MAX_FOLDER_LABEL_CHARS && label.none(Char::isISOControl)) {
@@ -174,7 +179,37 @@ class CovalentNodeClient(
                 .put("peerId", peerId)
                 .put("folderId", folderId.toString())
                 .put("label", label)
-                .put("selectedRoot", selectedRoot),
+                .put("selectedRoot", selectedRoot)
+                .put(
+                    "linkPolicy",
+                    JSONObject()
+                        .put("propagateSourceDeletions", linkPolicy.propagateSourceDeletions)
+                        .put("restoreLocalDeletions", linkPolicy.restoreLocalDeletions),
+                ),
+        ).toFolderSyncMutation()
+    }
+
+    fun updateFolderLinkSettings(
+        baseUrl: String,
+        token: String,
+        folderId: String,
+        changeId: String,
+        expectedRevision: Long,
+        settings: FolderLinkSettings,
+    ): FolderSyncMutation {
+        requireUuid(folderId, "folder")
+        requireUuid(changeId, "settings change")
+        require(changeId != "00000000-0000-0000-0000-000000000000")
+        require(expectedRevision >= 0) { "The expected settings revision is invalid." }
+        return post(
+            baseUrl,
+            token,
+            "/api/v1/sync/settings",
+            JSONObject()
+                .put("folderId", folderId)
+                .put("changeId", changeId)
+                .put("expectedRevision", expectedRevision)
+                .put("settings", settings.toJson()),
         ).toFolderSyncMutation()
     }
 
@@ -969,7 +1004,7 @@ private fun JSONObject.toFolderSyncStatus(): FolderSyncStatus {
             requireJsonKeys(
                 share,
                 setOf("offerId", "folderId", "label", "peerId", "incoming", "phase", "expiresAtUnixMs", "expired"),
-                setOf("peerConnection", "supersededOfferIds", "remoteRemovalPending"),
+                setOf("peerConnection", "supersededOfferIds", "remoteRemovalPending", "linkPolicy", "linkSettings"),
             )
             FolderShare(
                 offerId = requireUuid(share.getString("offerId"), "folder offer ID"),
@@ -1009,7 +1044,38 @@ private fun JSONObject.toFolderSyncStatus(): FolderSyncStatus {
                     (share.get("remoteRemovalPending") as? Boolean)
                         ?: error("The node returned an invalid removal status.")
                 } else false,
-            )
+                linkPolicy = if (share.has("linkPolicy") && !share.isNull("linkPolicy")) {
+                    share.getJSONObject("linkPolicy").let { policy ->
+                        requireJsonKeys(
+                            policy,
+                            setOf("propagateSourceDeletions", "restoreLocalDeletions"),
+                        )
+                        FolderLinkPolicy(
+                            propagateSourceDeletions = (policy.get("propagateSourceDeletions") as? Boolean)
+                                ?: error("The node returned an invalid source deletion policy."),
+                            restoreLocalDeletions = (policy.get("restoreLocalDeletions") as? Boolean)
+                                ?: error("The node returned an invalid destination deletion policy."),
+                        )
+                    }
+                } else null,
+                linkSettings = if (share.has("linkSettings") && !share.isNull("linkSettings")) {
+                    share.getJSONObject("linkSettings").toFolderLinkSettingsState()
+                } else null,
+            ).also { parsed ->
+                parsed.linkSettings?.let { state ->
+                    check(parsed.linkPolicy == state.settings.deletionPolicy) {
+                        "The node returned inconsistent current link settings."
+                    }
+                    listOfNotNull(state.pendingChange, state.conflictedChange).forEach { change ->
+                        check(change.folderId == parsed.folderId) {
+                            "The node returned settings for another folder."
+                        }
+                        if (parsed.incoming) check(change.sourceId == parsed.peerId) {
+                            "The node returned settings from another source."
+                        }
+                    }
+                }
+            }
         }
     }
     check(shares.map(FolderShare::offerId).toSet().size == shares.size)
@@ -1071,6 +1137,70 @@ private fun JSONObject.toFolderSyncStatus(): FolderSyncStatus {
         shares = shares,
         folders = folders,
     )
+}
+
+private fun FolderLinkSettings.toJson() = JSONObject()
+    .put(
+        "deletionPolicy",
+        JSONObject()
+            .put("propagateSourceDeletions", deletionPolicy.propagateSourceDeletions)
+            .put("restoreLocalDeletions", deletionPolicy.restoreLocalDeletions),
+    )
+    .put("paused", paused)
+
+private fun JSONObject.toFolderLinkSettings(): FolderLinkSettings {
+    requireJsonKeys(this, setOf("deletionPolicy", "paused"))
+    val policy = getJSONObject("deletionPolicy")
+    requireJsonKeys(policy, setOf("propagateSourceDeletions", "restoreLocalDeletions"))
+    return FolderLinkSettings(
+        deletionPolicy = FolderLinkPolicy(
+            propagateSourceDeletions = (policy.get("propagateSourceDeletions") as? Boolean)
+                ?: error("The node returned an invalid source deletion policy."),
+            restoreLocalDeletions = (policy.get("restoreLocalDeletions") as? Boolean)
+                ?: error("The node returned an invalid destination deletion policy."),
+        ),
+        paused = (get("paused") as? Boolean) ?: error("The node returned an invalid link pause setting."),
+    )
+}
+
+private fun JSONObject.toFolderLinkSettingsChange(): FolderLinkSettingsChange {
+    requireJsonKeys(
+        this,
+        setOf("folderId", "sourceId", "requesterId", "changeId", "expectedRevision", "settings"),
+    )
+    return FolderLinkSettingsChange(
+        folderId = requireUuid(getString("folderId"), "settings folder ID"),
+        sourceId = requireUuid(getString("sourceId"), "settings source ID"),
+        requesterId = requireUuid(getString("requesterId"), "settings requester ID"),
+        changeId = requireUuid(getString("changeId"), "settings change ID").also {
+            check(it != "00000000-0000-0000-0000-000000000000")
+        },
+        expectedRevision = getLong("expectedRevision").also { check(it >= 0) },
+        settings = getJSONObject("settings").toFolderLinkSettings(),
+    )
+}
+
+private fun JSONObject.toFolderLinkSettingsState(): FolderLinkSettingsState {
+    requireJsonKeys(
+        this,
+        setOf("revision", "settings", "changeId", "changedBy", "confirmed", "pendingChange", "conflictedChange"),
+    )
+    return FolderLinkSettingsState(
+        revision = getLong("revision").also { check(it >= 0) },
+        settings = getJSONObject("settings").toFolderLinkSettings(),
+        changeId = requireUuid(getString("changeId"), "committed settings change ID"),
+        changedBy = requireUuid(getString("changedBy"), "settings author ID"),
+        confirmed = (get("confirmed") as? Boolean)
+            ?: error("The node returned an invalid settings confirmation state."),
+        pendingChange = if (isNull("pendingChange")) null
+        else getJSONObject("pendingChange").toFolderLinkSettingsChange(),
+        conflictedChange = if (isNull("conflictedChange")) null
+        else getJSONObject("conflictedChange").toFolderLinkSettingsChange(),
+    ).also { state ->
+        check((state.revision == 0L) == (state.changeId == "00000000-0000-0000-0000-000000000000")) {
+            "The node returned an invalid settings revision."
+        }
+    }
 }
 
 private fun folderSyncLifecycle(value: String): FolderSyncLifecycle = when (value) {

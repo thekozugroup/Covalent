@@ -487,6 +487,113 @@ fn verifies_retained_v2_1_3_effective_initial_and_desired_shapes() {
 }
 
 #[test]
+fn one_way_roles_verify_direction_and_both_deletion_choices() {
+    let fixture = TempDir::new().expect("temporary directory");
+    let root = fixture.path().join("shared");
+    std::fs::create_dir(&root).expect("root");
+    let roles = [
+        (EngineFolderRole::Source, "sendonly", false, false),
+        (
+            EngineFolderRole::Destination {
+                propagate_source_deletions: false,
+                restore_local_deletions: false,
+            },
+            "receiveonly",
+            true,
+            true,
+        ),
+        (
+            EngineFolderRole::Destination {
+                propagate_source_deletions: true,
+                restore_local_deletions: false,
+            },
+            "receiveonly",
+            false,
+            true,
+        ),
+        (
+            EngineFolderRole::Destination {
+                propagate_source_deletions: false,
+                restore_local_deletions: true,
+            },
+            "receiveonly",
+            true,
+            false,
+        ),
+        (
+            EngineFolderRole::Destination {
+                propagate_source_deletions: true,
+                restore_local_deletions: true,
+            },
+            "receiveonly",
+            false,
+            false,
+        ),
+    ];
+    for (role, engine_type, ignore_delete, keep_local) in roles {
+        let restore_local = role.restore_local_deletions();
+        let config = desired(
+            &fixture,
+            vec![peer()],
+            vec![folder(root.clone(), vec![id(OWN_ID), id(PEER_ID)]).with_role(role)],
+            Some(address(22000)),
+        )
+        .expect("config");
+        let xml = config.render_desired_xml().expect("XML");
+        assert!(xml.contains(&format!("type=\"{engine_type}\"")));
+        assert!(xml.contains(&format!("<ignoreDelete>{ignore_delete}</ignoreDelete>")));
+        assert_eq!(
+            xml.contains("<keepLocalDeletions>true</keepLocalDeletions>"),
+            keep_local
+        );
+        let mut effective = effective_fixture(&config, true);
+        effective["folders"][0]["type"] = json!(engine_type);
+        effective["folders"][0]["ignoreDelete"] = json!(ignore_delete);
+        effective["folders"][0]["keepLocalDeletions"] = json!(keep_local);
+        effective["folders"][0]["restoreLocalDeletions"] = json!(restore_local);
+        assert_eq!(
+            xml.contains("<restoreLocalDeletions>true</restoreLocalDeletions>"),
+            restore_local
+        );
+        config
+            .verify_effective(&effective)
+            .expect("exact selected policy");
+        for (field, changed) in [
+            ("type", json!("sendreceive")),
+            ("ignoreDelete", json!(!ignore_delete)),
+            ("keepLocalDeletions", json!(!keep_local)),
+            ("restoreLocalDeletions", json!(!restore_local)),
+        ] {
+            let mut drifted = effective.clone();
+            drifted["folders"][0][field] = changed;
+            assert_eq!(
+                config.verify_effective(&drifted),
+                Err(EngineConfigError::EffectiveConfigMismatch)
+            );
+        }
+        effective["folders"][0]
+            .as_object_mut()
+            .expect("folder")
+            .remove("keepLocalDeletions");
+        assert_eq!(
+            config.verify_effective(&effective).is_err(),
+            keep_local,
+            "stock worker cannot silently ignore keep-deleted protection"
+        );
+        effective["folders"][0]["keepLocalDeletions"] = json!(keep_local);
+        effective["folders"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("restoreLocalDeletions");
+        assert_eq!(
+            config.verify_effective(&effective).is_err(),
+            restore_local,
+            "stock worker cannot silently ignore explicit restore behavior"
+        );
+    }
+}
+
+#[test]
 fn effective_verification_rejects_security_membership_and_retention_drift() {
     let fixture = TempDir::new().expect("temporary directory");
     let root = fixture.path().join("shared");

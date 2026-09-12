@@ -23,6 +23,8 @@ pub const MAX_CHUNK_PLAINTEXT_BYTES: u32 = 8 * 1_024 * 1_024;
 pub const MAX_REMEMBERED_BACKUPS: usize = 100_000;
 /// Current public folder-sharing record schema.
 pub const FOLDER_SHARE_SCHEMA_VERSION: u16 = 1;
+/// One-way links require a peer that understands link-wide deletion settings.
+pub const FOLDER_LINK_SCHEMA_VERSION: u16 = 2;
 /// Largest user-visible folder label admitted to a signed share record.
 pub const MAX_FOLDER_SHARE_LABEL_BYTES: usize = 256;
 /// Largest retained pairing identifier admitted to a signed share record.
@@ -651,6 +653,15 @@ const fn is_ipv6_unicast_link_local(value: Ipv6Addr) -> bool {
     value.segments()[0] & 0xffc0 == 0xfe80
 }
 
+/// Deletion choices shared by all destinations of a one-way link.
+/// Absence on a historical offer preserves its original two-way behavior.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FolderLinkPolicy {
+    pub propagate_source_deletions: bool,
+    pub restore_local_deletions: bool,
+}
+
 /// Source-signed invitation to share one folder with one exact Covalent peer.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -662,6 +673,8 @@ pub struct FolderShareOffer {
     pub source_device_id: DeviceId,
     pub target_device_id: DeviceId,
     pub source_engine: SyncEngineBinding,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_policy: Option<FolderLinkPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pairing_id: Option<String>,
     pub issued_at_unix_ms: u64,

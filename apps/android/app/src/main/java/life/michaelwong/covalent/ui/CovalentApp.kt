@@ -1021,8 +1021,7 @@ internal fun CovalentApp(
                 ) { action ->
                     state.screen = when (action) {
                         PrimaryAction.PAIR -> Screen.PAIR
-                        PrimaryAction.BACKUP -> Screen.BACKUP
-                        PrimaryAction.RESTORE -> Screen.RESTORE
+                        PrimaryAction.LINKS -> Screen.FOLDERS
                     }
                 }
             }
@@ -1172,11 +1171,6 @@ private fun Home(
         item {
             ConnectionCard(state) {
                 connection?.let { reconnectNode(context, state, node, store, it, scope) }
-            }
-        }
-        item {
-            Button(onClick = { state.screen = Screen.FOLDERS }, modifier = Modifier.fillMaxWidth()) {
-                Text(stringResource(R.string.folder_sync_open))
             }
         }
         if (state.transfers.isNotEmpty()) {
@@ -3792,8 +3786,7 @@ fun PrimaryActionToolbar(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 ToolbarButton(PrimaryAction.PAIR, enabled, iconOnly, onAction, Icons.Rounded.AddLink)
-                ToolbarButton(PrimaryAction.BACKUP, enabled, iconOnly, onAction, Icons.Rounded.Backup)
-                ToolbarButton(PrimaryAction.RESTORE, enabled, iconOnly, onAction, Icons.Rounded.FolderOpen)
+                ToolbarButton(PrimaryAction.LINKS, enabled, iconOnly, onAction, Icons.Rounded.FolderOpen)
             }
         }
     }
@@ -3809,8 +3802,7 @@ private fun ToolbarButton(
 ) {
     val label = when (action) {
         PrimaryAction.PAIR -> stringResource(R.string.action_pair)
-        PrimaryAction.BACKUP -> stringResource(R.string.action_backup)
-        PrimaryAction.RESTORE -> stringResource(R.string.action_restore)
+        PrimaryAction.LINKS -> stringResource(R.string.action_links)
     }
     if (iconOnly) {
         IconButton(onClick = { onAction(action) }, enabled = enabled) {

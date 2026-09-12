@@ -131,6 +131,7 @@ require_text 'io.covalent.source.fingerprint="$COVALENT_SOURCE_FINGERPRINT"' "$d
 require_text 'io.covalent.runtime.openssl.version="3.5.8-r0"' "$dockerfile"
 require_text 'FROM runtime-base AS busybox-package-test' "$dockerfile"
 require_text 'FROM runtime-base AS runtime-patched' "$dockerfile"
+require_text 'HOME=/home/covalent' "$dockerfile"
 require_text '--mount=type=bind,from=busybox-package-test,source=/packages,target=/tmp/busybox-backport,readonly' "$dockerfile"
 require_text 'sha256sum -c /tmp/busybox-backport/runtime-payload.sha256' "$dockerfile"
 require_text '/test_wget_request_target.py --busybox /bin/busybox' "$dockerfile"

@@ -194,11 +194,10 @@ class CovalentAppTest {
     }
 
     @Test
-    fun floatingToolbarKeepsTheThreeTierOneActionsAccessible() {
+    fun floatingToolbarKeepsPairingAndLinksAccessible() {
         compose.setContent { CovalentTheme { PrimaryActionToolbar(enabled = true, onAction = {}) } }
         compose.onNodeWithText("Pair").assertIsDisplayed()
-        compose.onNodeWithText("Backup").assertIsDisplayed()
-        compose.onNodeWithText("Restore").assertIsDisplayed()
+        compose.onNodeWithText("Links").assertIsDisplayed()
     }
 
     @Test
@@ -212,8 +211,7 @@ class CovalentAppTest {
             }
         }
         compose.onNodeWithContentDescription("Pair").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Backup").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Restore").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Links").assertIsDisplayed()
     }
 
     @Test
@@ -226,8 +224,7 @@ class CovalentAppTest {
             }
         }
         compose.onNodeWithContentDescription("Pair").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Backup").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Restore").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Links").assertIsDisplayed()
     }
 
     @Test

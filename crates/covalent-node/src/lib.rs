@@ -1381,6 +1381,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/sync/accept", post(sync_api::accept))
         .route("/api/v1/sync/renew", post(sync_api::renew))
         .route("/api/v1/sync/pause", post(sync_api::pause))
+        .route("/api/v1/sync/settings", post(sync_api::settings))
         .route("/api/v1/sync/remove", post(sync_api::remove))
         .route("/api/v1/sync/repair", post(sync_api::repair))
         .route(

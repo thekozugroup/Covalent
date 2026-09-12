@@ -10,9 +10,9 @@ use std::fmt;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use covalent_protocol::{
-    DeviceId, FOLDER_SHARE_SCHEMA_VERSION, FolderShareAcceptance, FolderShareCommit,
-    FolderShareOffer, MAX_FOLDER_SHARE_LABEL_BYTES, MAX_FOLDER_SHARE_PAIRING_ID_BYTES,
-    SyncEngineBinding,
+    DeviceId, FOLDER_LINK_SCHEMA_VERSION, FOLDER_SHARE_SCHEMA_VERSION, FolderShareAcceptance,
+    FolderShareCommit, FolderShareOffer, MAX_FOLDER_SHARE_LABEL_BYTES,
+    MAX_FOLDER_SHARE_PAIRING_ID_BYTES, SyncEngineBinding,
 };
 use rand_core::{OsRng, RngCore as _};
 use serde::Serialize;
@@ -79,6 +79,32 @@ pub fn create_folder_share_offer(
     now_unix_ms: u64,
     lifetime_ms: u64,
 ) -> Result<FolderShareOffer, FolderSharingError> {
+    create_folder_share_offer_with_policy(
+        source,
+        target_device_id,
+        folder_id,
+        label,
+        source_engine,
+        pairing_id,
+        now_unix_ms,
+        lifetime_ms,
+        None,
+    )
+}
+
+/// Create an offer whose signed policy fixes one-way direction and deletion choices.
+#[allow(clippy::too_many_arguments)]
+pub fn create_folder_share_offer_with_policy(
+    source: &DeviceIdentity,
+    target_device_id: DeviceId,
+    folder_id: Uuid,
+    label: &str,
+    source_engine: SyncEngineBinding,
+    pairing_id: Option<&str>,
+    now_unix_ms: u64,
+    lifetime_ms: u64,
+    link_policy: Option<covalent_protocol::FolderLinkPolicy>,
+) -> Result<FolderShareOffer, FolderSharingError> {
     validate_label(label)?;
     validate_pairing_id(pairing_id)?;
     validate_binding(&source_engine, source.device_id())?;
@@ -107,13 +133,18 @@ pub fn create_folder_share_offer(
     offer_id_bytes[6] = (offer_id_bytes[6] & 0x0f) | 0x40;
     offer_id_bytes[8] = (offer_id_bytes[8] & 0x3f) | 0x80;
     let mut offer = FolderShareOffer {
-        schema_version: FOLDER_SHARE_SCHEMA_VERSION,
+        schema_version: if link_policy.is_some() {
+            FOLDER_LINK_SCHEMA_VERSION
+        } else {
+            FOLDER_SHARE_SCHEMA_VERSION
+        },
         offer_id: Uuid::from_bytes(offer_id_bytes),
         folder_id,
         label: label.to_owned(),
         source_device_id: source.device_id(),
         target_device_id,
         source_engine,
+        link_policy,
         pairing_id: pairing_id.map(str::to_owned),
         issued_at_unix_ms: now_unix_ms,
         expires_at_unix_ms,
@@ -179,7 +210,7 @@ pub fn accept_folder_share_offer(
     verify_fresh_folder_share_offer(offer, trusted_source, target.device_id(), now_unix_ms)?;
     validate_binding(&target_engine, target.device_id())?;
     let mut acceptance = FolderShareAcceptance {
-        schema_version: FOLDER_SHARE_SCHEMA_VERSION,
+        schema_version: offer.schema_version,
         offer_digest: folder_share_offer_digest(offer)?,
         target_device_id: target.device_id(),
         target_engine,
@@ -262,7 +293,7 @@ pub fn commit_folder_share(
         now_unix_ms,
     )?;
     let mut commit = FolderShareCommit {
-        schema_version: FOLDER_SHARE_SCHEMA_VERSION,
+        schema_version: offer.schema_version,
         source_device_id: source.device_id(),
         offer_digest: folder_share_offer_digest(offer)?,
         acceptance_digest: folder_share_acceptance_digest(offer, acceptance)?,
@@ -306,6 +337,8 @@ struct OfferSigningFields<'a> {
     source_device_id: DeviceId,
     target_device_id: DeviceId,
     source_engine: &'a SyncEngineBinding,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    link_policy: Option<covalent_protocol::FolderLinkPolicy>,
     pairing_id: Option<&'a str>,
     issued_at_unix_ms: u64,
     expires_at_unix_ms: u64,
@@ -340,6 +373,7 @@ fn offer_signing_bytes(offer: &FolderShareOffer) -> Result<Vec<u8>, FolderSharin
         source_device_id: offer.source_device_id,
         target_device_id: offer.target_device_id,
         source_engine: &offer.source_engine,
+        link_policy: offer.link_policy,
         pairing_id: offer.pairing_id.as_deref(),
         issued_at_unix_ms: offer.issued_at_unix_ms,
         expires_at_unix_ms: offer.expires_at_unix_ms,
@@ -387,7 +421,12 @@ fn validate_offer_shape(
     validate_label(&offer.label)?;
     validate_pairing_id(offer.pairing_id.as_deref())?;
     validate_binding(&offer.source_engine, offer.source_device_id)?;
-    if offer.schema_version != FOLDER_SHARE_SCHEMA_VERSION
+    let expected_version = if offer.link_policy.is_some() {
+        FOLDER_LINK_SCHEMA_VERSION
+    } else {
+        FOLDER_SHARE_SCHEMA_VERSION
+    };
+    if offer.schema_version != expected_version
         || offer.offer_id.is_nil()
         || offer.folder_id.is_nil()
         || is_nil_device_id(offer.source_device_id)
@@ -412,7 +451,7 @@ fn validate_acceptance_shape(
     require_signature: bool,
 ) -> Result<(), FolderSharingError> {
     validate_binding(&acceptance.target_engine, acceptance.target_device_id)?;
-    if acceptance.schema_version != FOLDER_SHARE_SCHEMA_VERSION
+    if acceptance.schema_version != offer.schema_version
         || acceptance.accepted_at_unix_ms == 0
         || acceptance.accepted_at_unix_ms >= offer.expires_at_unix_ms
         || acceptance
@@ -436,7 +475,7 @@ fn validate_commit_shape(
     commit: &FolderShareCommit,
     require_signature: bool,
 ) -> Result<(), FolderSharingError> {
-    if commit.schema_version != FOLDER_SHARE_SCHEMA_VERSION
+    if commit.schema_version != offer.schema_version
         || !is_lower_hex_digest(&commit.offer_digest)
         || !is_lower_hex_digest(&commit.acceptance_digest)
         || commit.offer_digest != folder_share_offer_digest(offer)?

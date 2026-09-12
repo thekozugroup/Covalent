@@ -49,15 +49,21 @@
       </section>
 
       <nav class="tabs" aria-label="Covalent actions" role="tablist">
-        <button id="folders-tab" role="tab" aria-selected="true" aria-controls="folders-panel" tabindex="0" data-tab="folders">Folders</button>
         <button id="pair-tab" role="tab" aria-selected="false" aria-controls="pair-panel" tabindex="-1" data-tab="pair">Pair</button>
-        <button id="backup-tab" role="tab" aria-selected="false" aria-controls="backup-panel" tabindex="-1" data-tab="backup">Backup</button>
-        <button id="restore-tab" role="tab" aria-selected="false" aria-controls="restore-panel" tabindex="-1" data-tab="restore">Restore</button>
+        <button id="folders-tab" role="tab" aria-selected="true" aria-controls="folders-panel" tabindex="0" data-tab="folders">Links</button>
         <button id="settings-tab" role="tab" aria-selected="false" aria-controls="settings-panel" tabindex="-1" data-tab="settings">Settings</button>
       </nav>
 
+      <details class="advanced">
+        <summary>Older backup and restore tools</summary>
+        <nav class="tabs" aria-label="Older tools">
+          <button id="backup-tool" type="button" aria-controls="backup-panel" data-tool-panel="backup">Backup</button>
+          <button id="restore-tool" type="button" aria-controls="restore-panel" data-tool-panel="restore">Restore</button>
+        </nav>
+      </details>
+
       <section id="folders-panel" role="tabpanel" aria-labelledby="folders-tab" tabindex="0" data-panel="folders">
-        <div class="panel-heading"><div><h2>Keep folders in sync</h2><p class="muted">Share a folder with a confirmed paired device. Covalent reports local folder health; it does not call an idle folder “up to date.”</p></div></div>
+        <div class="panel-heading"><div><h2>Your links</h2><p class="muted">Send files from one source to one or more destinations. Destination files stay on their own device.</p></div></div>
 
         <section class="card" aria-live="polite">
           <div class="button-row"><h3>Shared folders</h3><button type="button" class="secondary" data-folders-refresh>Refresh folders</button></div>
@@ -77,9 +83,19 @@
           </div>
         </section>
 
+        <section class="card" data-link-settings-pending hidden>
+          <h3>Saved link-settings request</h3>
+          <p>The result of a previous request is uncertain. Refresh first, then retry these exact settings. Do not submit different settings until this request is resolved.</p>
+          <p class="muted" data-link-settings-pending-summary></p>
+          <div class="button-row">
+            <button type="button" data-link-settings-retry data-folder-mutation>Retry exact settings</button>
+            <button type="button" class="quiet" data-link-settings-discard data-folder-mutation>Discard after review</button>
+          </div>
+        </section>
+
         <form class="card" data-folder-offer-form>
-          <h3>Share another folder</h3>
-          <label>Paired device <select name="peerId" data-folder-peer required disabled><option value="">Unlock the console to load confirmed devices</option></select></label>
+          <h3>Create a one-way link</h3>
+          <label>Destination device <select name="peerId" data-folder-peer required disabled><option value="">Unlock the console to load confirmed devices</option></select></label>
           <label>Folder name <input name="label" maxlength="120" placeholder="Shared documents" required /></label>
           <details class="advanced">
             <summary>Advanced server folder path</summary>
@@ -87,7 +103,14 @@
             <label>Folder path on this server <input name="selectedRoot" value="/sync" maxlength="1024" required /></label>
           </details>
           <p class="notice">The default <code>/sync</code> path must be a writable folder mounted into the Covalent server.</p>
-          <button data-folder-offer-submit data-folder-mutation disabled>Share folder</button>
+          <fieldset>
+            <legend>Deletion options</legend>
+            <label><input type="checkbox" name="propagateSourceDeletions" /> Delete destination copies when source files are deleted</label>
+            <p class="muted">Off by default: deleting a source file leaves its destination copies untouched. Turning this on also removes those copies.</p>
+            <label><input type="checkbox" name="restoreLocalDeletions" /> Restore files deleted at a destination</label>
+            <p class="muted">Off by default: destination deletions stay local, even after source edits. Turning this on copies those files there again from the source.</p>
+          </fieldset>
+          <button data-folder-offer-submit data-folder-mutation disabled>Create link</button>
         </form>
       </section>
 
@@ -170,7 +193,7 @@
         </details>
       </section>
 
-      <section id="backup-panel" role="tabpanel" aria-labelledby="backup-tab" tabindex="0" data-panel="backup" hidden>
+      <section id="backup-panel" role="region" aria-labelledby="backup-tool" tabindex="0" data-panel="backup" hidden>
         <div class="panel-heading"><div><h2>Back up selected files</h2><p class="muted">Only read-only source mounts such as <code>/source</code> or <code>/boot-source</code> should be selected. Extra copies are made only on the currently verified backup devices you choose.</p></div></div>
         <section class="card" aria-live="polite">
           <div class="button-row"><h3>Your backups</h3><button type="button" class="secondary" data-backups-refresh>Refresh list</button></div>
@@ -201,7 +224,7 @@
         </form>
       </section>
 
-      <section id="restore-panel" role="tabpanel" aria-labelledby="restore-tab" tabindex="0" data-panel="restore" hidden>
+      <section id="restore-panel" role="region" aria-labelledby="restore-tool" tabindex="0" data-panel="restore" hidden>
         <div class="panel-heading"><div><h2>Preview before restore</h2><p class="muted">Choose an existing folder on your backup server. Review where each file will go and how conflicts will be handled before anything is written.</p></div></div>
         <form class="card" data-restore-preview>
           <label>Completed backup <select name="rememberedRestore" data-restore-choice aria-describedby="restore-choice-help"><option value="">Unlock the console to load completed backups</option></select></label>

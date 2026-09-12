@@ -151,6 +151,319 @@ fn share(
 }
 
 #[test]
+fn one_way_policy_drives_fanout_roles_and_survives_reopen() {
+    let a = Device::new("Source", 43211);
+    let b = Device::new("Destination", 43212);
+    let c = Device::new("Second destination", 43213);
+    pair(&a, &b);
+    pair(&a, &c);
+    pair(&b, &c);
+    let mut first = a.journal();
+    let mut second = b.journal();
+    let mut third = c.journal();
+    let folder_id = Uuid::new_v4();
+    let policy = covalent_protocol::FolderLinkPolicy::default();
+    for (index, (device, journal)) in [(&b, &mut second), (&c, &mut third)]
+        .into_iter()
+        .enumerate()
+    {
+        let now = 2000 + index as u64 * 10;
+        let offer = first
+            .offer_with_policy(
+                device.engine.device_id(),
+                folder_id,
+                "Photos",
+                &a.files(),
+                now,
+                Some(policy),
+            )
+            .unwrap();
+        journal.receive_offer(offer.clone(), now + 1).unwrap();
+        let acceptance = journal
+            .accept(offer.offer_id, &device.files(), now + 2)
+            .unwrap();
+        let commit = first
+            .receive_acceptance(offer.offer_id, acceptance, now + 3)
+            .unwrap();
+        journal.receive_commit(offer.offer_id, commit).unwrap();
+        assert!(journal.desired_settings().unwrap().folders.is_empty());
+        deliver_link_settings(&mut first, journal);
+    }
+    let source = first.desired_settings().unwrap();
+    assert_eq!(source.folders.len(), 1);
+    assert_eq!(source.folders[0].members().len(), 3);
+    assert_eq!(source.folders[0].role(), EngineFolderRole::Source);
+    assert!(
+        first
+            .offer_with_policy(
+                b.engine.device_id(),
+                folder_id,
+                "Photos",
+                &a.files(),
+                2024,
+                Some(covalent_protocol::FolderLinkPolicy {
+                    propagate_source_deletions: true,
+                    ..policy
+                })
+            )
+            .is_err()
+    );
+    assert!(
+        second
+            .offer_with_policy(
+                c.engine.device_id(),
+                folder_id,
+                "Photos",
+                &b.files(),
+                2024,
+                Some(policy)
+            )
+            .is_err()
+    );
+    drop(second);
+    let mut reopened = b.reopen();
+    assert_eq!(reopened.summaries().unwrap()[0].link_policy, Some(policy));
+    let target = reopened.desired_settings().unwrap();
+    assert_eq!(target.folders[0].members().len(), 2);
+    assert_eq!(
+        target.folders[0].role(),
+        EngineFolderRole::Destination {
+            propagate_source_deletions: false,
+            restore_local_deletions: false,
+        }
+    );
+}
+
+fn deliver_link_settings(source: &mut FolderSharingJournal, target: &mut FolderSharingJournal) {
+    for delivery in source.outbound_records().unwrap() {
+        if delivery.peer_transport.peer_id == target.engine.device_id()
+            && let FolderShareRecord::SettingsCommit(commit) = delivery.record
+        {
+            target.receive_link_settings_commit(&commit).unwrap();
+        }
+    }
+}
+
+#[test]
+fn link_settings_commit_once_fan_out_survive_offline_conflicts_and_require_membership() {
+    let a = Device::new("Source", 43211);
+    let b = Device::new("Phone", 43212);
+    let c = Device::new("Tablet", 43213);
+    let outsider = Device::new("Another paired device", 43214);
+    pair(&a, &b);
+    pair(&a, &c);
+    pair(&a, &outsider);
+    let mut source = a.journal();
+    let mut phone = b.journal();
+    let mut tablet = c.journal();
+    let folder = Uuid::new_v4();
+    let policy = covalent_protocol::FolderLinkPolicy::default();
+    for (device, journal) in [(&b, &mut phone), (&c, &mut tablet)] {
+        let offer = source
+            .offer_with_policy(
+                device.engine.device_id(),
+                folder,
+                "Photos",
+                &a.files(),
+                2000,
+                Some(policy),
+            )
+            .unwrap();
+        journal.receive_offer(offer.clone(), 2001).unwrap();
+        let acceptance = journal
+            .accept(offer.offer_id, &device.files(), 2002)
+            .unwrap();
+        let commit = source
+            .receive_acceptance(offer.offer_id, acceptance, 2003)
+            .unwrap();
+        journal.receive_commit(offer.offer_id, commit).unwrap();
+        assert!(journal.desired_settings().unwrap().folders.is_empty());
+        deliver_link_settings(&mut source, journal);
+        assert_eq!(journal.desired_settings().unwrap().folders.len(), 1);
+    }
+    let settings = FolderLinkSettings {
+        deletion_policy: covalent_protocol::FolderLinkPolicy {
+            propagate_source_deletions: true,
+            restore_local_deletions: true,
+        },
+        paused: true,
+    };
+    let change = Uuid::new_v4();
+    phone
+        .request_link_settings(folder, change, 0, settings)
+        .unwrap();
+    let phone_offer = phone.summaries().unwrap()[0].offer_id;
+    phone.set_paused(phone_offer, true).unwrap();
+    assert_eq!(
+        phone.set_paused(phone_offer, false),
+        Err(SharingError::SettingsPending)
+    );
+    phone
+        .request_link_settings(folder, change, 0, settings)
+        .unwrap();
+    assert_eq!(
+        phone.summaries().unwrap()[0]
+            .link_settings
+            .as_ref()
+            .unwrap()
+            .revision,
+        0
+    );
+    assert!(
+        !phone.summaries().unwrap()[0]
+            .link_settings
+            .as_ref()
+            .unwrap()
+            .settings
+            .paused
+    );
+    assert_eq!(
+        phone.request_link_settings(folder, Uuid::new_v4(), 0, settings),
+        Err(SharingError::SettingsPending)
+    );
+    drop(phone);
+    let mut phone = b.reopen();
+    let pending = phone.summaries().unwrap()[0]
+        .link_settings
+        .as_ref()
+        .unwrap()
+        .pending_change
+        .clone()
+        .unwrap();
+    let mut unauthorized = pending.clone();
+    unauthorized.requester_id = outsider.engine.device_id();
+    assert_eq!(
+        source.receive_link_settings_request(&unauthorized),
+        Err(SharingError::UntrustedPeer)
+    );
+    assert_eq!(
+        source.summaries().unwrap()[0]
+            .link_settings
+            .as_ref()
+            .unwrap()
+            .revision,
+        0
+    );
+    let committed = source.receive_link_settings_request(&pending).unwrap();
+    assert_eq!(committed.revision, 1);
+    assert_eq!(
+        source.receive_link_settings_request(&pending).unwrap(),
+        committed
+    );
+    assert!(source.desired_settings().unwrap().folders.is_empty());
+    phone.receive_link_settings_commit(&committed).unwrap();
+    assert!(
+        phone.summaries().unwrap()[0]
+            .link_settings
+            .as_ref()
+            .unwrap()
+            .pending_change
+            .is_none()
+    );
+    deliver_link_settings(&mut source, &mut tablet);
+    for journal in [&mut phone, &mut tablet] {
+        assert!(journal.desired_settings().unwrap().folders.is_empty());
+        let state = journal.summaries().unwrap()[0]
+            .link_settings
+            .clone()
+            .unwrap();
+        assert_eq!(state.revision, 1);
+        assert_eq!(state.settings, settings);
+    }
+    // Two offline changes start at the same revision. The first commits, the
+    // second never overwrites it and remains visible for user review.
+    let resumed = FolderLinkSettings {
+        paused: false,
+        ..settings
+    };
+    phone
+        .request_link_settings(folder, Uuid::new_v4(), 1, resumed)
+        .unwrap();
+    tablet
+        .request_link_settings(
+            folder,
+            Uuid::new_v4(),
+            1,
+            FolderLinkSettings {
+                deletion_policy: policy,
+                ..resumed
+            },
+        )
+        .unwrap();
+    let phone_pending = phone.summaries().unwrap()[0]
+        .link_settings
+        .as_ref()
+        .unwrap()
+        .pending_change
+        .clone()
+        .unwrap();
+    let tablet_pending = tablet.summaries().unwrap()[0]
+        .link_settings
+        .as_ref()
+        .unwrap()
+        .pending_change
+        .clone()
+        .unwrap();
+    let phone_reply = source
+        .receive_link_settings_request(&phone_pending)
+        .unwrap();
+    let stale_reply = source
+        .receive_link_settings_request(&tablet_pending)
+        .unwrap();
+    assert_eq!(phone_reply.revision, 2);
+    assert_eq!(stale_reply.revision, 2);
+    assert_eq!(stale_reply.settings, resumed);
+    phone.receive_link_settings_commit(&phone_reply).unwrap();
+    tablet.receive_link_settings_commit(&stale_reply).unwrap();
+    let tablet_state = tablet.summaries().unwrap()[0]
+        .link_settings
+        .clone()
+        .unwrap();
+    assert!(tablet_state.pending_change.is_none());
+    assert_eq!(tablet_state.conflicted_change, Some(tablet_pending));
+    let mut rollback = committed.clone();
+    rollback.target_id = c.engine.device_id();
+    tablet.receive_link_settings_commit(&rollback).unwrap();
+    assert_eq!(
+        tablet.summaries().unwrap()[0]
+            .link_settings
+            .as_ref()
+            .unwrap()
+            .revision,
+        2
+    );
+    let source_settings = source.desired_settings().unwrap();
+    assert_eq!(source_settings.folders[0].members().len(), 3);
+    assert_eq!(
+        phone.desired_settings().unwrap().folders[0].role(),
+        EngineFolderRole::Destination {
+            propagate_source_deletions: true,
+            restore_local_deletions: true,
+        }
+    );
+    drop(source);
+    drop(tablet);
+    let source = a.reopen();
+    let tablet = c.reopen();
+    assert_eq!(
+        source.summaries().unwrap()[0]
+            .link_settings
+            .as_ref()
+            .unwrap()
+            .revision,
+        2
+    );
+    assert!(
+        tablet.summaries().unwrap()[0]
+            .link_settings
+            .as_ref()
+            .unwrap()
+            .conflicted_change
+            .is_some()
+    );
+}
+
+#[test]
 fn one_destination_confirmation_and_both_signatures_precede_any_membership() {
     let a = Device::new("Mac", 43211);
     let b = Device::new("Docker", 43212);

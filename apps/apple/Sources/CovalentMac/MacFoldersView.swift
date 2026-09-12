@@ -6,11 +6,16 @@ struct MacFoldersView: View {
 
     @State private var chosenPeer: UUID?
     @State private var label = ""
+    @State private var linkPolicy = FolderLinkPolicy()
     /// Kept until a successful offer so a network retry reuses the same folder
     /// identity and cannot create a second offer for the same selection.
     @State private var draftFolderId = UUID()
     @State private var pendingOffer: PendingOffer?
     @State private var folderBeingRemoved: FolderShare?
+    @State private var destinationSourceOfferId: UUID?
+    @State private var destinationPeer: UUID?
+    @State private var settingsEditor: FolderLinkSettingsEditorContext?
+    @State private var confirmsNewLinkConsequences = false
     @FocusState private var focusedField: ComposerField?
 
     var body: some View {
@@ -40,12 +45,40 @@ struct MacFoldersView: View {
            status.availability == "available",
            status.issue == nil,
            !status.isInitialScanning {
-          shareComposer(status: status)
+          if let source = status.shares.first(where: {
+            $0.offerId == destinationSourceOfferId && !$0.incoming && $0.phase != .removed
+          }) {
+            destinationComposer(source: source, status: status)
+          } else {
+            shareComposer(status: status)
+          }
         }
       }
       .formStyle(.grouped)
-      .navigationTitle("Folders")
+      .navigationTitle("Links")
       .task { await refreshWhileVisible() }
+      .sheet(item: $settingsEditor) { editor in
+        MacFolderLinkSettingsEditor(editor: editor) { settings in
+          Task {
+            _ = await model.updateFolderLinkSettings(
+              folderId: editor.folderId,
+              expectedRevision: editor.expectedRevision,
+              settings: settings
+            )
+          }
+        }
+      }
+      .confirmationDialog(
+        "Create Link With File Consequences?",
+        isPresented: $confirmsNewLinkConsequences
+      ) {
+        Button("Continue to Choose Folder", role: .destructive) {
+          chooseSourceFolderForOffer()
+        }
+        Button("Cancel", role: .cancel) {}
+      } message: {
+        Text(newLinkConsequenceConfirmation)
+      }
       .confirmationDialog(
         "Remove Shared Folder?",
         isPresented: Binding(
@@ -149,7 +182,7 @@ struct MacFoldersView: View {
     }
 
     private func shareSection(_ shares: [FolderShare], status: FolderSyncStatus) -> some View {
-      Section("Shared Folders") {
+      Section("Links") {
         ForEach(shares) { share in
           shareRow(share, status: status)
         }
@@ -172,6 +205,24 @@ struct MacFoldersView: View {
         }
         LabeledContent("Paired Device", value: peerName(for: share, status: status))
           .font(.subheadline)
+        if let policy = share.linkPolicy {
+          Label(share.incoming ? "Receives files from the source" : "Sends files to the destination",
+                systemImage: share.incoming ? "arrow.down.circle" : "arrow.up.circle")
+            .font(.subheadline)
+          Text(policy.sourceDeletionExplanation)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+          Text(policy.destinationDeletionExplanation)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+          if isSettingsRow(share, status: status), let settings = share.linkSettings {
+            linkSettingsStatus(settings, share: share)
+          }
+        } else {
+          Text("Existing two-way folder")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
         if share.expired {
           Text(share.incoming
             ? "Ask the other device to send a new invitation, then choose your folder again."
@@ -231,6 +282,23 @@ struct MacFoldersView: View {
           "\(state == .invitationExpired ? "Remove" : "Decline") \(share.label) invitation"
         )
       } else {
+        if !share.incoming, share.linkPolicy != nil, isSettingsRow(share, status: status) {
+          if hasConfirmedSettings(for: share, status: status) {
+            Button("Add Destination…") {
+              destinationSourceOfferId = share.offerId
+              destinationPeer = nil
+            }
+            .accessibilityLabel("Add a destination for \(share.label)")
+          } else {
+            Label("Add a destination after source settings are confirmed", systemImage: "clock")
+              .foregroundStyle(.secondary)
+          }
+        }
+
+        if isSettingsRow(share, status: status), let settings = share.linkSettings {
+          linkSettingsActions(settings, share: share)
+        }
+
         if state == .needsAttention {
           Button("Try Again") {
             Task { await model.retryFolderSync() }
@@ -263,8 +331,171 @@ struct MacFoldersView: View {
       }
     }
 
+    @ViewBuilder
+    private func linkSettingsStatus(
+      _ state: FolderLinkSettingsState,
+      share: FolderShare
+    ) -> some View {
+      if let pending = state.pendingChange {
+        Label("Waiting for the source to apply this settings change", systemImage: "clock")
+          .foregroundStyle(.secondary)
+        Text(settingsSummary(pending.settings))
+          .font(.callout)
+          .foregroundStyle(.secondary)
+      } else if let conflict = state.conflictedChange {
+        Label("Settings change needs review", systemImage: "exclamationmark.triangle")
+          .foregroundStyle(.orange)
+        Text("Attempted: \(settingsSummary(conflict.settings))")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+      } else if let saved = model.pendingFolderLinkSettingsChanges.first(where: {
+        $0.folderId == share.folderId
+      }) {
+        Label(
+          saved.requiresReview ? "Saved settings change needs review" : "Settings change is not confirmed",
+          systemImage: saved.requiresReview ? "exclamationmark.triangle" : "wifi.exclamationmark"
+        )
+        .foregroundStyle(saved.requiresReview ? .orange : .secondary)
+        Text(settingsSummary(saved.settings))
+          .font(.callout)
+          .foregroundStyle(.secondary)
+      } else if !state.confirmed {
+        Label("Waiting for confirmed source settings", systemImage: "clock")
+          .foregroundStyle(.secondary)
+      }
+    }
+
+    @ViewBuilder
+    private func linkSettingsActions(
+      _ state: FolderLinkSettingsState,
+      share: FolderShare
+    ) -> some View {
+      if let conflict = state.conflictedChange {
+        Button("Review Settings…") {
+          settingsEditor = FolderLinkSettingsEditorContext(
+            folderId: share.folderId,
+            label: share.label,
+            expectedRevision: state.revision,
+            current: state.settings,
+            proposed: conflict.settings
+          )
+        }
+      } else if let saved = model.pendingFolderLinkSettingsChanges.first(where: {
+        $0.folderId == share.folderId
+      }) {
+        if saved.requiresReview {
+          Button("Review Settings…") {
+            Task {
+              await model.reviewPendingFolderLinkSettingsChange(folderId: share.folderId)
+              settingsEditor = FolderLinkSettingsEditorContext(
+                folderId: share.folderId,
+                label: share.label,
+                expectedRevision: state.revision,
+                current: state.settings,
+                proposed: saved.settings
+              )
+            }
+          }
+        } else {
+          Button("Try Sending Settings Again") {
+            Task { _ = await model.retryFolderLinkSettingsChange(folderId: share.folderId) }
+          }
+        }
+      } else if state.pendingChange == nil && state.confirmed {
+        Button("Edit Link Settings…") {
+          settingsEditor = FolderLinkSettingsEditorContext(
+            folderId: share.folderId,
+            label: share.label,
+            expectedRevision: state.revision,
+            current: state.settings,
+            proposed: state.settings
+          )
+        }
+      }
+    }
+
+    private func isSettingsRow(_ share: FolderShare, status: FolderSyncStatus) -> Bool {
+      status.shares.first(where: {
+        $0.folderId == share.folderId && $0.phase != .removed
+      })?.offerId == share.offerId
+    }
+
+    private func hasConfirmedSettings(
+      for share: FolderShare,
+      status: FolderSyncStatus
+    ) -> Bool {
+      let linkShares = status.shares.filter {
+        $0.folderId == share.folderId && $0.phase != .removed
+      }
+      guard let state = share.linkSettings,
+            state.confirmed,
+            state.pendingChange == nil,
+            state.conflictedChange == nil
+      else { return false }
+      return linkShares.allSatisfy { $0.linkSettings == state }
+    }
+
+    private func settingsSummary(_ settings: FolderLinkSettings) -> String {
+      let pause = settings.paused ? "Paused" : "Running"
+      return "\(pause). \(settings.deletionPolicy.sourceDeletionExplanation) \(settings.deletionPolicy.destinationDeletionExplanation)"
+    }
+
+    private func destinationComposer(source: FolderShare, status: FolderSyncStatus) -> some View {
+      let existingPeers = Set(status.shares.filter {
+        $0.folderId == source.folderId && $0.phase != .removed
+      }.map(\.peerId))
+      let availablePeers = status.peers.filter { !existingPeers.contains($0.peerId) }
+      return Section("Add Destination") {
+        LabeledContent("Source Link", value: source.label)
+        Text("Covalent will reuse this link’s source folder and deletion settings.")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+
+        if availablePeers.isEmpty {
+          Label("Every paired device is already a destination for this link.", systemImage: "checkmark.circle")
+            .foregroundStyle(.secondary)
+          Button("Done", role: .cancel) {
+            destinationSourceOfferId = nil
+            destinationPeer = nil
+          }
+        } else {
+          Picker("Paired Device", selection: $destinationPeer) {
+            Text("Choose a Device").tag(UUID?.none)
+            ForEach(availablePeers) { peer in
+              Text(peer.displayName).tag(Optional(peer.peerId))
+            }
+          }
+          .accessibilityHint("Selects one additional destination for \(source.label).")
+
+          HStack {
+            Button("Cancel", role: .cancel) {
+              destinationSourceOfferId = nil
+              destinationPeer = nil
+            }
+            Spacer()
+            Button("Add Destination") {
+              guard let peerId = destinationPeer else { return }
+              Task {
+                if await model.addFolderDestination(from: source.offerId, to: peerId) {
+                  destinationSourceOfferId = nil
+                  destinationPeer = nil
+                }
+              }
+            }
+            .keyboardShortcut(.defaultAction)
+            .disabled(
+              destinationPeer == nil
+                || !hasConfirmedSettings(for: source, status: status)
+                || !model.isAuthorized
+                || model.folderSyncMutationInFlight
+            )
+          }
+        }
+      }
+    }
+
     private func shareComposer(status: FolderSyncStatus) -> some View {
-      Section("Share a Folder") {
+      Section("New One-Way Link") {
         if status.peers.isEmpty {
           Label("Pair a device before sharing a folder.", systemImage: "laptopcomputer.and.iphone")
             .foregroundStyle(.secondary)
@@ -276,10 +507,32 @@ struct MacFoldersView: View {
             }
           }
           .accessibilityHint("Selects the paired device that will receive this folder offer.")
+          .disabled(pendingOffer != nil)
 
           TextField("Folder Name", text: $label, prompt: Text("Shared Documents"))
             .focused($focusedField, equals: .label)
             .accessibilityHint("Names the folder for the paired device.")
+            .disabled(pendingOffer != nil)
+
+          Text("This Mac is the source. Changes on the destination never change files on this Mac.")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+          Picker("When Source Files Are Deleted", selection: $linkPolicy.propagateSourceDeletions) {
+            Text("Keep Destination Copies").tag(false)
+            Text("Delete Destination Copies Too").tag(true)
+          }
+          .disabled(pendingOffer != nil)
+          Text(linkPolicy.sourceDeletionExplanation)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+          Picker("When Destination Files Are Deleted", selection: $linkPolicy.restoreLocalDeletions) {
+            Text("Keep Them Deleted").tag(false)
+            Text("Restore from Source").tag(true)
+          }
+          .disabled(pendingOffer != nil)
+          Text(linkPolicy.destinationDeletionExplanation)
+            .font(.callout)
+            .foregroundStyle(.secondary)
 
           if let pendingOffer {
             Label("The previous result was uncertain. Retry the same folder offer.", systemImage: "arrow.clockwise")
@@ -291,18 +544,11 @@ struct MacFoldersView: View {
             .keyboardShortcut(.defaultAction)
             .disabled(!model.isAuthorized || model.folderSyncMutationInFlight)
           } else {
-            Button("Choose Folder and Share…") {
-              guard let peerId = chosenPeer else { return }
-              let safeLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
-              chooseFolder(purpose: .folderSync) { grant in
-                let offer = PendingOffer(
-                  peerId: peerId,
-                  folderId: draftFolderId,
-                  label: safeLabel.isEmpty ? grant.displayName : safeLabel,
-                  grant: grant
-                )
-                pendingOffer = offer
-                submit(offer)
+            Button("Choose Source Folder…") {
+              if linkPolicy.propagateSourceDeletions || linkPolicy.restoreLocalDeletions {
+                confirmsNewLinkConsequences = true
+              } else {
+                chooseSourceFolderForOffer()
               }
             }
             .keyboardShortcut(.defaultAction)
@@ -319,7 +565,8 @@ struct MacFoldersView: View {
           peerId: offer.peerId,
           folderId: offer.folderId,
           label: offer.label,
-          grant: offer.grant
+          grant: offer.grant,
+          linkPolicy: offer.linkPolicy
         )
         if succeeded {
           pendingOffer = nil
@@ -328,6 +575,34 @@ struct MacFoldersView: View {
           focusedField = nil
         }
       }
+    }
+
+    private func chooseSourceFolderForOffer() {
+      guard let peerId = chosenPeer else { return }
+      let safeLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+      let selectedPolicy = linkPolicy
+      chooseFolder(purpose: .folderSync) { grant in
+        let offer = PendingOffer(
+          peerId: peerId,
+          folderId: draftFolderId,
+          label: safeLabel.isEmpty ? grant.displayName : safeLabel,
+          grant: grant,
+          linkPolicy: selectedPolicy
+        )
+        pendingOffer = offer
+        submit(offer)
+      }
+    }
+
+    private var newLinkConsequenceConfirmation: String {
+      var consequences: [String] = []
+      if linkPolicy.propagateSourceDeletions {
+        consequences.append("Deleting a source file will also delete this link’s destination copies.")
+      }
+      if linkPolicy.restoreLocalDeletions {
+        consequences.append("A file deleted at a destination will download again if it still exists at the source.")
+      }
+      return consequences.joined(separator: " ")
     }
 
     private func refreshWhileVisible() async {
@@ -368,6 +643,7 @@ struct MacFoldersView: View {
       let folderId: UUID
       let label: String
       let grant: SelectedDirectoryGrant
+      let linkPolicy: FolderLinkPolicy
     }
 
     private func chooseFolder(
@@ -388,4 +664,102 @@ struct MacFoldersView: View {
       }
       completion(grant)
     }
+}
+
+private struct FolderLinkSettingsEditorContext: Identifiable {
+  let folderId: UUID
+  let label: String
+  let expectedRevision: UInt64
+  let current: FolderLinkSettings
+  let proposed: FolderLinkSettings
+
+  var id: UUID { folderId }
+}
+
+private struct MacFolderLinkSettingsEditor: View {
+  @Environment(\.dismiss) private var dismiss
+  let editor: FolderLinkSettingsEditorContext
+  let save: (FolderLinkSettings) -> Void
+  @State private var proposed: FolderLinkSettings
+  @State private var confirmsConsequences = false
+
+  init(
+    editor: FolderLinkSettingsEditorContext,
+    save: @escaping (FolderLinkSettings) -> Void
+  ) {
+    self.editor = editor
+    self.save = save
+    _proposed = State(initialValue: editor.proposed)
+  }
+
+  var body: some View {
+    Form {
+      Section("\(editor.label) Settings") {
+        Toggle("Pause this link", isOn: $proposed.paused)
+        Toggle(
+          "Delete destination copies when source files are deleted",
+          isOn: $proposed.deletionPolicy.propagateSourceDeletions
+        )
+        Text(proposed.deletionPolicy.sourceDeletionExplanation)
+          .font(.callout)
+          .foregroundStyle(.secondary)
+        Toggle(
+          "Restore files deleted at a destination",
+          isOn: $proposed.deletionPolicy.restoreLocalDeletions
+        )
+        Text(proposed.deletionPolicy.destinationDeletionExplanation)
+          .font(.callout)
+          .foregroundStyle(.secondary)
+      }
+      HStack {
+        Button("Cancel", role: .cancel) { dismiss() }
+        Spacer()
+        Button("Save") {
+          if enablesConsequences {
+            confirmsConsequences = true
+          } else {
+            commit()
+          }
+        }
+        .keyboardShortcut(.defaultAction)
+        .disabled(proposed == editor.current)
+      }
+    }
+    .formStyle(.grouped)
+    .frame(width: 520, height: 390)
+    .confirmationDialog(
+      "Apply Settings With File Consequences?",
+      isPresented: $confirmsConsequences
+    ) {
+      Button("Apply Settings", role: .destructive) { commit() }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text(consequenceConfirmation)
+    }
+  }
+
+  private var enablesConsequences: Bool {
+    (!editor.current.deletionPolicy.propagateSourceDeletions
+      && proposed.deletionPolicy.propagateSourceDeletions)
+      || (!editor.current.deletionPolicy.restoreLocalDeletions
+        && proposed.deletionPolicy.restoreLocalDeletions)
+  }
+
+  private var consequenceConfirmation: String {
+    var consequences: [String] = []
+    if !editor.current.deletionPolicy.propagateSourceDeletions
+      && proposed.deletionPolicy.propagateSourceDeletions {
+      consequences.append("Deleting a source file will also delete every destination copy for this link.")
+    }
+    if !editor.current.deletionPolicy.restoreLocalDeletions
+      && proposed.deletionPolicy.restoreLocalDeletions {
+      consequences.append("A file deleted at a destination will download again if it still exists at the source.")
+    }
+    return consequences.joined(separator: " ")
+  }
+
+  private func commit() {
+    save(proposed)
+    dismiss()
+  }
 }

@@ -8,6 +8,9 @@ distribution decisions.
 
 - Syncthing `v2.1.3`, commit
   [`946e2b83a1f6c6ae119427c09e0a5802940b82ff`](https://github.com/syncthing/syncthing/tree/946e2b83a1f6c6ae119427c09e0a5802940b82ff).
+- Covalent `keep-local-deletions.patch`, SHA-256
+  `e58e7d133a388576a54cacc6a5a5094e6607c483c0daabac552de1a1854d92ac`,
+  applied only to private build exports.
 - Successful proof run `34241597202`, commit `5c157f37`, supply-chain artifact
   `10062298950`, artifact SHA-256
   `89f6a221e736215b30314653d99b8359ab92af6e2367a969da02622ee8a57a2f`.
@@ -124,6 +127,11 @@ every such compiled module it creates a deterministic `tar.gz` source archive,
 records its SHA-256 and size, and prints both the bundled relative path and an
 external exact-version source URL in `THIRD-PARTY-NOTICES.txt`. This is a narrow
 MPL source-access safeguard, not a general SPDX classifier.
+
+When a builder supplies a source patch, the collector verifies the external
+patch and its copy inside the modified source tree, bundles the patch as a
+recipient-visible notice item, marks the main-module source state as modified,
+and binds the patch digest to the complete modified-source archive.
 
 Source archives contain only regular files and directories under `source/`.
 Symlinks and special files are rejected, every file is hashed before and after

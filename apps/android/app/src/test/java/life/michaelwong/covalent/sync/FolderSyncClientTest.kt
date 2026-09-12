@@ -3,6 +3,8 @@ package life.michaelwong.covalent.sync
 import java.util.UUID
 import life.michaelwong.covalent.data.CovalentNodeClient
 import life.michaelwong.covalent.model.FolderSharePhase
+import life.michaelwong.covalent.model.FolderLinkPolicy
+import life.michaelwong.covalent.model.FolderLinkSettings
 import life.michaelwong.covalent.model.FolderSyncIssue
 import life.michaelwong.covalent.model.FolderSyncLifecycle
 import life.michaelwong.covalent.model.PeerConnectionFreshness
@@ -21,7 +23,7 @@ class FolderSyncClientTest {
     fun authenticatedFolderRoutesUseTheBoundedV1Contract() {
         val server = MockWebServer()
         server.enqueue(MockResponse().setBody(STATUS))
-        repeat(7) { server.enqueue(MockResponse().setBody(MUTATION)) }
+        repeat(8) { server.enqueue(MockResponse().setBody(MUTATION)) }
         server.enqueue(MockResponse().setBody(ADDRESS_MUTATION))
         server.start()
         try {
@@ -34,8 +36,30 @@ class FolderSyncClientTest {
             assertFalse(status.shares.single().expired)
             assertEquals(PeerConnectionFreshness.FRESH, status.connectionFreshness)
             assertEquals(PeerConnectionState.DISCONNECTED, status.shares.single().peerConnection)
+            assertEquals(FolderLinkPolicy(false, true), status.shares.single().linkPolicy)
+            val sharedSettings = checkNotNull(status.shares.single().linkSettings)
+            assertEquals(2L, sharedSettings.revision)
+            assertTrue(sharedSettings.confirmed)
+            assertEquals(SETTINGS_REQUEST, sharedSettings.pendingChange?.changeId)
+            assertEquals(FolderLinkPolicy(true, false), sharedSettings.pendingChange?.settings?.deletionPolicy)
 
-            client.offerFolder(base, "token", PEER, UUID.fromString(FOLDER), "Photos", "/storage/emulated/0/Photos")
+            client.offerFolder(
+                base,
+                "token",
+                PEER,
+                UUID.fromString(FOLDER),
+                "Photos",
+                "/storage/emulated/0/Photos",
+                FolderLinkPolicy(propagateSourceDeletions = true, restoreLocalDeletions = false),
+            )
+            client.updateFolderLinkSettings(
+                base,
+                "token",
+                FOLDER,
+                SETTINGS_REQUEST,
+                2,
+                FolderLinkSettings(FolderLinkPolicy(true, false), paused = true),
+            )
             client.acceptFolder(base, "token", OFFER, "/storage/emulated/0/Shared")
             client.pauseFolder(base, "token", OFFER, true)
             client.repairFolder(base, "token", OFFER, "/storage/emulated/0/Repaired")
@@ -49,7 +73,37 @@ class FolderSyncClientTest {
             )
 
             assertEquals("/api/v1/sync/status", server.takeRequest().path)
-            assertEquals("/api/v1/sync/folders", server.takeRequest().path)
+            val offer = server.takeRequest()
+            assertEquals("/api/v1/sync/folders", offer.path)
+            val offerBody = JSONObject(offer.body.readUtf8())
+            assertEquals(
+                setOf("peerId", "folderId", "label", "selectedRoot", "linkPolicy"),
+                offerBody.keys().asSequence().toSet(),
+            )
+            val linkPolicy = offerBody.getJSONObject("linkPolicy")
+            assertEquals(
+                setOf("propagateSourceDeletions", "restoreLocalDeletions"),
+                linkPolicy.keys().asSequence().toSet(),
+            )
+            assertTrue(linkPolicy.getBoolean("propagateSourceDeletions"))
+            assertFalse(linkPolicy.getBoolean("restoreLocalDeletions"))
+            val settings = server.takeRequest()
+            assertEquals("/api/v1/sync/settings", settings.path)
+            val settingsBody = JSONObject(settings.body.readUtf8())
+            assertEquals(
+                setOf("folderId", "changeId", "expectedRevision", "settings"),
+                settingsBody.keys().asSequence().toSet(),
+            )
+            assertEquals(FOLDER, settingsBody.getString("folderId"))
+            assertEquals(SETTINGS_REQUEST, settingsBody.getString("changeId"))
+            assertEquals(2L, settingsBody.getLong("expectedRevision"))
+            val submitted = settingsBody.getJSONObject("settings")
+            assertEquals(setOf("deletionPolicy", "paused"), submitted.keys().asSequence().toSet())
+            assertTrue(submitted.getBoolean("paused"))
+            assertEquals(
+                setOf("propagateSourceDeletions", "restoreLocalDeletions"),
+                submitted.getJSONObject("deletionPolicy").keys().asSequence().toSet(),
+            )
             assertEquals("/api/v1/sync/accept", server.takeRequest().path)
             assertEquals("/api/v1/sync/pause", server.takeRequest().path)
             val repair = server.takeRequest()
@@ -81,6 +135,28 @@ class FolderSyncClientTest {
             assertEquals(PEER, addressBody.getString("peerId"))
             assertEquals("192.0.2.10:8787", addressBody.getString("expectedAddress"))
             assertEquals("[2001:db8::20]:8787", addressBody.getString("candidateAddress"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun nullLinkPolicyRemainsLegacyTwoWay() {
+        val server = MockWebServer().apply {
+            enqueue(MockResponse().setBody(
+                STATUS.replace(
+                    "\"linkPolicy\":$LINK_POLICY,\"linkSettings\":$LINK_SETTINGS",
+                    "\"linkPolicy\":null,\"linkSettings\":null",
+                ),
+            ))
+            start()
+        }
+        try {
+            val status = CovalentNodeClient().folderSyncStatus(
+                server.url("/").toString().removeSuffix("/"),
+                "token",
+            )
+            assertEquals(null, status.shares.single().linkPolicy)
         } finally {
             server.shutdown()
         }
@@ -285,11 +361,15 @@ class FolderSyncClientTest {
         const val PEER = "22222222-2222-4222-8222-222222222222"
         const val FOLDER = "11111111-1111-4111-8111-111111111111"
         const val OFFER = "33333333-3333-4333-8333-333333333333"
+        const val SETTINGS_COMMIT = "66666666-6666-4666-8666-666666666666"
+        const val SETTINGS_REQUEST = "77777777-7777-4777-8777-777777777777"
+        const val LINK_POLICY = """{"propagateSourceDeletions":false,"restoreLocalDeletions":true}"""
+        const val LINK_SETTINGS = """{"revision":2,"settings":{"deletionPolicy":$LINK_POLICY,"paused":false},"changeId":"$SETTINGS_COMMIT","changedBy":"$PEER","confirmed":true,"pendingChange":{"folderId":"$FOLDER","sourceId":"$PEER","requesterId":"$OFFER","changeId":"$SETTINGS_REQUEST","expectedRevision":2,"settings":{"deletionPolicy":{"propagateSourceDeletions":true,"restoreLocalDeletions":false},"paused":false}},"conflictedChange":null}"""
         const val STATUS = """{
           "schemaVersion":1,"availability":"available","lifecycle":"stopped","issue":null,
           "healthFreshness":"neverObserved","connectionFreshness":"fresh",
           "peers":[{"peerId":"$PEER","displayName":"Phone","address":"192.0.2.10:8787"}],
-          "shares":[{"offerId":"$OFFER","folderId":"$FOLDER","label":"Photos","peerId":"$PEER","incoming":true,"phase":"offered","expiresAtUnixMs":4102444800000,"expired":false,"peerConnection":"disconnected"}],
+          "shares":[{"offerId":"$OFFER","folderId":"$FOLDER","label":"Photos","peerId":"$PEER","incoming":true,"phase":"offered","expiresAtUnixMs":4102444800000,"expired":false,"peerConnection":"disconnected","linkPolicy":$LINK_POLICY,"linkSettings":$LINK_SETTINGS}],
           "folders":[]
         }"""
         const val MUTATION = """{"schemaVersion":1,"offerId":"$OFFER","lifecycle":"stopped","issue":null}"""

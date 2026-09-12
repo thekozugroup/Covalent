@@ -18,6 +18,8 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 
 pub const FOLDER_CONTROL_ALPN: &[u8] = b"covalent-quic/4";
+/// Never negotiate one-way records with a legacy two-way-only peer.
+pub const LINK_CONTROL_ALPN: &[u8] = b"covalent-quic/5";
 const SCHEMA_VERSION: u16 = 1;
 const REQUEST_DOMAIN: &[u8] = b"covalent/folder-control/request/v1";
 const RESPONSE_DOMAIN: &[u8] = b"covalent/folder-control/response/v1";
@@ -71,6 +73,8 @@ pub enum FolderControlOperation {
         commit: FolderShareCommit,
     },
     SendRemoval(crate::sync_engine::FolderRemovalNotice),
+    RequestLinkSettings(crate::sync_engine::LinkSettingsRequest),
+    CommitLinkSettings(crate::sync_engine::LinkSettingsCommit),
     ProbeAddress {
         requester_id: DeviceId,
         target_id: DeviceId,
@@ -78,12 +82,33 @@ pub enum FolderControlOperation {
     },
 }
 impl FolderControlOperation {
+    fn alpn(&self) -> &'static [u8] {
+        let one_way = match self {
+            Self::SendOffer(offer) => offer.link_policy.is_some(),
+            Self::SendAcceptance { acceptance, .. } => {
+                acceptance.schema_version >= covalent_protocol::FOLDER_LINK_SCHEMA_VERSION
+            }
+            Self::SendCommit { commit, .. } => {
+                commit.schema_version >= covalent_protocol::FOLDER_LINK_SCHEMA_VERSION
+            }
+            Self::RequestLinkSettings(_) | Self::CommitLinkSettings(_) => true,
+            Self::SendRemoval(_) | Self::ProbeAddress { .. } => false,
+        };
+        if one_way {
+            LINK_CONTROL_ALPN
+        } else {
+            FOLDER_CONTROL_ALPN
+        }
+    }
+
     fn requester(&self) -> DeviceId {
         match self {
             Self::SendOffer(offer) => offer.source_device_id,
             Self::SendAcceptance { acceptance, .. } => acceptance.target_device_id,
             Self::SendCommit { commit, .. } => commit.source_device_id,
             Self::SendRemoval(notice) => notice.requester_id,
+            Self::RequestLinkSettings(request) => request.requester_id,
+            Self::CommitLinkSettings(commit) => commit.source_id,
             Self::ProbeAddress { requester_id, .. } => *requester_id,
         }
     }
@@ -95,6 +120,8 @@ impl FolderControlOperation {
             Self::SendOffer(offer) => Some(offer.target_device_id),
             Self::SendAcceptance { .. } | Self::SendCommit { .. } => None,
             Self::SendRemoval(notice) => Some(notice.target_id),
+            Self::RequestLinkSettings(request) => Some(request.source_id),
+            Self::CommitLinkSettings(commit) => Some(commit.target_id),
             Self::ProbeAddress { target_id, .. } => Some(*target_id),
         }
     }
@@ -124,6 +151,7 @@ pub enum FolderControlPayload {
     Rejected,
     NeedsAttention,
     AddressProof(SyncEngineBinding),
+    LinkSettings(crate::sync_engine::LinkSettingsCommit),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -262,6 +290,7 @@ pub fn sign_request(
 /// the journal preflight because their records reference a retained offer.
 pub fn verify_request(
     request: &FolderControlRequest,
+    negotiated_alpn: &[u8],
     server: DeviceId,
     fingerprint: &str,
     requester: &PublicIdentity,
@@ -269,7 +298,8 @@ pub fn verify_request(
     now: u64,
 ) -> Result<(), FolderControlError> {
     enforce_frame(request)?;
-    if request.schema_version != SCHEMA_VERSION
+    if request.operation.alpn() != negotiated_alpn
+        || request.schema_version != SCHEMA_VERSION
         || request.requester_id == nil_device_id()
         || request.target_id == nil_device_id()
         || request.requester_id == request.target_id
@@ -529,7 +559,7 @@ async fn send_folder_control_to(
         let mut crypto = rustls::ClientConfig::builder()
             .with_root_certificates(roots)
             .with_no_client_auth();
-        crypto.alpn_protocols = vec![FOLDER_CONTROL_ALPN.to_vec()];
+        crypto.alpn_protocols = vec![request.operation.alpn().to_vec()];
         let quic = quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
             .map_err(|_| FolderControlError::Unavailable)?;
         let mut config = ClientConfig::new(std::sync::Arc::new(quic));
@@ -593,9 +623,10 @@ async fn send_folder_control_to(
 }
 
 /// Serve exactly one bidirectional stream after the QUIC endpoint has selected
-/// `covalent-quic/4`. Root dispatch must reject every other ALPN before calling.
+/// a folder-control ALPN. The decoded operation must match that exact protocol.
 pub async fn serve_folder_control_connection(
     connection: quinn::Connection,
+    negotiated_alpn: Vec<u8>,
     engine: std::sync::Arc<Engine>,
     service: std::sync::Arc<crate::sync_engine::FolderSyncService>,
     server_fingerprint: String,
@@ -624,6 +655,7 @@ pub async fn serve_folder_control_connection(
                 .map_err(|_| FolderControlError::Busy)?;
             verify_request(
                 &request,
+                &negotiated_alpn,
                 engine.device_id(),
                 &server_fingerprint,
                 &requester,
@@ -695,6 +727,20 @@ async fn apply_remote(
         }
         FolderControlOperation::SendRemoval(notice) => {
             match service.receive_removal(&notice).await {
+                Ok(_) => FolderControlPayload::Ack,
+                Err(crate::sync_engine::FolderSyncServiceError::Busy) => FolderControlPayload::Busy,
+                Err(_) => FolderControlPayload::NeedsAttention,
+            }
+        }
+        FolderControlOperation::RequestLinkSettings(request) => {
+            match service.receive_link_settings_request(&request).await {
+                Ok(value) => FolderControlPayload::LinkSettings(value.into_value()),
+                Err(crate::sync_engine::FolderSyncServiceError::Busy) => FolderControlPayload::Busy,
+                Err(_) => FolderControlPayload::NeedsAttention,
+            }
+        }
+        FolderControlOperation::CommitLinkSettings(commit) => {
+            match service.receive_link_settings_commit(&commit).await {
                 Ok(_) => FolderControlPayload::Ack,
                 Err(crate::sync_engine::FolderSyncServiceError::Busy) => FolderControlPayload::Busy,
                 Err(_) => FolderControlPayload::NeedsAttention,

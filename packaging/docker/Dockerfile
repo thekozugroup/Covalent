@@ -12,11 +12,16 @@ COPY --chmod=0555 scripts/build-linux-sync-engine.sh /usr/local/bin/build-linux-
 COPY --chmod=0555 scripts/collect-go-target-license-inventory.py /usr/local/bin/collect-go-target-license-inventory
 COPY --chmod=0555 scripts/collect-sync-engine-notices.py /usr/local/bin/collect-sync-engine-notices
 COPY --chmod=0444 packaging/sync-engine/engine-guardian.c /tmp/engine-guardian.c
+COPY --chmod=0444 packaging/sync-engine/keep-local-deletions.patch /tmp/keep-local-deletions.patch
 COPY --chmod=0444 LICENSE /tmp/Covalent-LICENSE.txt
 COPY --chmod=0444 docs/licenses/sync-engine/OFL-1.1.txt /tmp/OFL-1.1.txt
-RUN apk add --no-cache python3=3.12.14-r0 \
+RUN apk add --no-cache \
+      git=2.52.0-r0 \
+      python3=3.12.14-r0 \
+    && test "$(git --version)" = "git version 2.52.0" \
     && test "$(python3 --version)" = "Python 3.12.14" \
     && build-linux-sync-engine worker /tmp/syncthing-source /engine-worker "$TARGETARCH" \
+      /tmp/keep-local-deletions.patch \
     && mkdir -m 0700 /engine-evidence \
     && collect-go-target-license-inventory \
       --source-root /tmp/syncthing-source \
@@ -32,6 +37,9 @@ RUN apk add --no-cache python3=3.12.14-r0 \
       --guardian-source /tmp/engine-guardian.c \
       --project-license /tmp/Covalent-LICENSE.txt \
       --ofl-license /tmp/OFL-1.1.txt \
+      --source-patch "Covalent keep-local-deletions patch" \
+        keep-local-deletions.patch /tmp/keep-local-deletions.patch \
+        e58e7d133a388576a54cacc6a5a5094e6607c483c0daabac552de1a1854d92ac \
       --output /engine-notices \
     && install -m 0444 /engine-evidence/target-license-inventory.json \
       /engine-worker/target-license-inventory.json
@@ -301,6 +309,7 @@ LABEL org.opencontainers.image.title="Covalent" \
       io.covalent.sync-engine.version="v2.1.3" \
       io.covalent.sync-engine.commit="946e2b83a1f6c6ae119427c09e0a5802940b82ff" \
       io.covalent.sync-engine.source-sha256="dbcc9498602286a843f29a7104833bd1422082999aa51ff92eef493172d47959" \
+      io.covalent.sync-engine.patch-sha256="e58e7d133a388576a54cacc6a5a5094e6607c483c0daabac552de1a1854d92ac" \
       io.covalent.runtime.openssl.version="3.5.8-r0"
 
 LABEL io.covalent.runtime.busybox.version="1.37.0-r1000" \
@@ -308,7 +317,8 @@ LABEL io.covalent.runtime.busybox.version="1.37.0-r1000" \
       io.covalent.runtime.busybox.patch-sha256="bdd8391fa2e4020079df71557d880e475f5f517fa949b5e80ef633cdafc71a2a" \
       io.covalent.runtime.busybox.alpine-aports-commit="1e823a60eb85606954b3a5af5f8e5bbd1ea680cf" \
       io.covalent.runtime.busybox.original-apkbuild-sha256="fb2323ac3121c6cd1122c42cabbd19ec28a29a1cf434a4c0759792c63a1c63a8"
-ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    HOME=/home/covalent
 
 FROM runtime
 COPY --from=builder /source/target/release/covalent-node /usr/local/bin/covalent-node

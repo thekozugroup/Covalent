@@ -1,8 +1,10 @@
 # Docker
 
-For the shortest end-to-end route, start with
-[Back up your first folder](../../docs/getting-started.md). This page contains
-the Docker-specific detail and recovery contract.
+The current product is [one-way links](../../docs/product/synchronization.md).
+The complete simplified release remains under development; check the
+[acceptance ledger](../../docs/release/completion-progress.md) before relying on
+it. This page retains source-checkout provisioning and older backup/recovery
+operations; those operations do not define the new link workflow.
 
 ## Personal use from this checkout
 
@@ -93,7 +95,9 @@ Compose deliberately fixes the runtime UID/GID at `65532:65532`: Docker Compose 
 Add one existing folder using the optional sync overlay. Covalent needs read,
 write and directory-traverse access as UID/GID `65532:65532`. Choose only the
 folder you intend to share, outside Covalent's private state and key folders.
-Changes and deletions from explicitly paired devices can reach this folder.
+When this server is a destination, source changes can reach this folder.
+Source deletions propagate only when that link option is enabled. When this
+server is the source, destination changes do not flow back.
 
 ```sh
 export COVALENT_SYNC_FOLDER=/absolute/path/to/your/folder
@@ -102,10 +106,11 @@ docker compose -f packaging/docker/compose.yaml \
 ```
 
 The overlay refuses a missing host folder instead of silently creating one.
-It exposes the selected folder as `/sync` inside the container. Open **Folders**
-in the console, keep `/sync` as the server folder, choose a paired device and
-send an invitation. Accept that invitation on the other device and choose its
-local folder. The browser's own file picker cannot grant the server access to
+It exposes the selected folder as `/sync` inside the container. Open **Links**
+in the console, keep `/sync` as the source folder, choose a destination device
+and review the deletion options. Accept that invitation on the other device
+and choose its destination folder. To receive files on this server instead,
+create the link on the source device and accept it here. The browser's own file picker cannot grant the server access to
 a folder on your computer.
 
 For an empty test folder, create a new directory owned by the container user;
@@ -115,7 +120,7 @@ the Docker template and grant the configured container user access. Leave the
 optional mapping empty to use backup/recovery without folder sync. Never map
 all of `/mnt/user`, `appdata`, `system`, `/boot`, or a directory containing keys.
 
-After stopping all shares using this mount in **Folders**, remove the overlay
+After stopping all links using this mount in **Links**, remove the overlay
 from the Compose command to withdraw container access. Stopping sharing keeps
 local files; it does not serve as a backup of changes made before stopping.
 
@@ -124,7 +129,7 @@ local files; it does not serve as a backup of changes made before stopping.
 A same-container Caddy proxy serves `https://localhost:8443` and can reach the
 daemon only over its loopback socket. Claim and enroll the CA before opening
 that address; never click through the browser's certificate warning. The
-responsive no-framework console implements Folders, Pair, Backup, Restore, and Settings
+responsive no-framework console implements Links, Pair, Backup, Restore, and Settings
 against the daemon's real `/api/v1/*` routes. Status is public; changes require
 a token.
 

@@ -221,6 +221,21 @@ class FolderSyncGrantStoreTest {
         assertEquals(setOf("offer:$OFFER", "folder:$FOLDER"), store.records().map { it.key }.toSet())
     }
 
+    @Test
+    fun oneSourceFolderRetainsASeparateGrantForEachDestination() {
+        val store = FolderSyncGrantStore(MemoryPersistence())
+        store.prepareOffer(PEER, UUID.fromString(FOLDER), OLD_ROOT, "Photos")
+        store.finishOffer(UUID.fromString(FOLDER), OFFER)
+        store.prepareOffer(OTHER_PEER, UUID.fromString(FOLDER), OLD_ROOT, "Photos")
+        store.finishOffer(UUID.fromString(FOLDER), REPLACEMENT)
+
+        val grants = store.records().sortedBy { it.offerId }
+        assertEquals(listOf(OFFER, REPLACEMENT), grants.map { it.offerId })
+        assertEquals(setOf(PEER, OTHER_PEER), grants.map { it.peerId }.toSet())
+        assertEquals(setOf(FOLDER), grants.map { it.folderId }.toSet())
+        assertEquals(setOf(OLD_ROOT), grants.map { it.root }.toSet())
+    }
+
     private fun renewalShare(incoming: Boolean) = FolderShare(
         REPLACEMENT, FOLDER, "Photos", PEER, incoming, FolderSharePhase.OFFERED,
         100, false, supersededOfferIds = listOf(OFFER),
@@ -249,6 +264,7 @@ class FolderSyncGrantStoreTest {
         const val REPLACEMENT = "44444444-4444-4444-8444-444444444444"
         const val FOLDER = "11111111-1111-4111-8111-111111111111"
         const val PEER = "22222222-2222-4222-8222-222222222222"
+        const val OTHER_PEER = "55555555-5555-4555-8555-555555555555"
         const val OLD_ROOT = "/storage/emulated/0/Photos"
         const val NEW_ROOT = "/storage/emulated/0/Repaired"
         const val OTHER_ROOT = "/storage/emulated/0/Other"

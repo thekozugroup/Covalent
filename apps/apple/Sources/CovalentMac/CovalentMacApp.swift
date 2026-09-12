@@ -53,14 +53,15 @@ struct CovalentMacApp: App {
             }
             CommandGroup(after: .sidebar) {
                 Divider()
-                Button("Overview") { model.selectedSection = .overview }
+                Button("Pair") { model.selectedSection = .devices }
                     .keyboardShortcut("1")
-                Button("Backups") { model.selectedSection = .backups }
+                Button("Links") { model.selectedSection = .folders }
                     .keyboardShortcut("2")
-                Button("Devices") { model.selectedSection = .devices }
+                Button("Settings") { model.selectedSection = .settings }
                     .keyboardShortcut("3")
-                Button("Folders") { model.selectedSection = .folders }
-                    .keyboardShortcut("4")
+                Divider()
+                Button("Overview") { model.selectedSection = .overview }
+                Button("Backups") { model.selectedSection = .backups }
             }
             CommandMenu("Service") {
                 Button("Refresh") {
@@ -140,6 +141,7 @@ private struct MacMenuBarMenu: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+      Group {
         Button("Open Covalent") {
             showMainWindow()
         }
@@ -147,6 +149,7 @@ private struct MacMenuBarMenu: View {
         Divider()
 
         Text(statusSummary)
+        folderMenus
         if let task = model.activeTask {
             Text("\(task.kind.label): \(task.title)")
             if task.jobId != nil {
@@ -187,6 +190,10 @@ private struct MacMenuBarMenu: View {
             NSApplication.shared.terminate(nil)
         }
         .keyboardShortcut("q")
+      }
+      .onAppear {
+        Task { await model.refreshFolders() }
+      }
     }
 
     private var statusSummary: String {
@@ -194,6 +201,75 @@ private struct MacMenuBarMenu: View {
             return "\(model.serviceStatusLabel) · \(status.deviceName)"
         }
         return model.serviceStatusLabel
+    }
+
+    @ViewBuilder
+    private var folderMenus: some View {
+        if let error = model.folderSyncError {
+            Label(error, systemImage: "exclamationmark.triangle")
+        } else if let status = model.folderSyncStatus {
+            let shares = status.shares.filter { $0.phase != .removed }
+            ForEach(shares) { share in
+                Menu {
+                    let peer = status.peers.first { $0.peerId == share.peerId }
+                    Text(peer?.displayName ?? "Paired Device")
+                    Text(status.displayLabel(for: share))
+                    Button("Show in Covalent") {
+                        model.selectedSection = .folders
+                        showMainWindow()
+                    }
+                    Divider()
+                    let state = status.displayState(for: share)
+                    if state == .needsAttention {
+                        Button("Try Again") {
+                            Task { await model.retryFolderSync() }
+                        }
+                        .disabled(!model.isAuthorized || model.folderSyncMutationInFlight)
+                    }
+                    if share.expired && !share.incoming
+                        && (share.phase == .offered || share.phase == .paused) {
+                        Button("Send New Invitation") {
+                            Task { _ = await model.renewFolderInvitation(share.offerId) }
+                        }
+                        .disabled(!model.isAuthorized || model.folderSyncMutationInFlight)
+                    } else if !(share.incoming && share.phase == .offered) {
+                        Button(share.phase == .paused ? "Resume" : "Pause") {
+                            Task {
+                                await model.setFolderPaused(
+                                    share.offerId,
+                                    paused: share.phase != .paused
+                                )
+                            }
+                        }
+                        .disabled(
+                            state == .invitationExpired
+                                || !model.isAuthorized
+                                || model.folderSyncMutationInFlight
+                        )
+                    }
+                    Button("Remove…", role: .destructive) {
+                        confirmRemoval(of: share)
+                    }
+                    .disabled(!model.isAuthorized || model.folderSyncMutationInFlight)
+                } label: {
+                    Label(
+                        "\(share.label) — \(status.displayLabel(for: share))",
+                        systemImage: share.phase == .paused ? "pause.circle" : "folder"
+                    )
+                }
+            }
+        }
+    }
+
+    private func confirmRemoval(of share: FolderShare) {
+        let alert = NSAlert()
+        alert.messageText = "Remove \(share.label)?"
+        alert.informativeText = "Transfers stop on this Mac now and on the other device when it reconnects. Files stay on both devices."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Remove and Keep Files").hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        Task { await model.removeFolder(share.offerId) }
     }
 
     private func showMainWindow() {

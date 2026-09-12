@@ -478,6 +478,7 @@ def _combined_notice(
     module_rows: list[dict[str, Any]],
     source_archives: list[dict[str, Any]],
     toolchain_notices: list[dict[str, Any]],
+    source_patches: list[dict[str, Any]],
 ) -> bytes:
     sections: list[tuple[str, str]] = []
     for item in go_files:
@@ -505,6 +506,8 @@ def _combined_notice(
     )
     for item in toolchain_notices:
         sections.append((item["label"], item["bundlePath"]))
+    for item in source_patches:
+        sections.append((item["label"], item["bundlePath"]))
     combined = bytearray(
         b"Covalent synchronized-folder engine notices\n"
         b"Exact copied texts for the compiled target graph; release review remains required.\n"
@@ -529,6 +532,22 @@ def _combined_notice(
                 combined.extend(
                     f"  Go module content sum: {item['moduleSum']}\n".encode("utf-8")
                 )
+    if source_patches:
+        combined.extend(
+            b"\n===== Covalent source modifications =====\n"
+            b"The bundled main-module source archive contains these applied patches.\n"
+        )
+        for item in source_patches:
+            combined.extend(
+                (
+                    f"{item['label']}\n"
+                    f"  bundled patch: {item['bundlePath']}\n"
+                    f"  patch SHA-256: {item['sha256']}\n"
+                    f"  patch bytes: {item['bytes']}\n"
+                    f"  modified source archive: {item['modifiedSourceArchive']['bundlePath']}\n"
+                    f"  modified source SHA-256: {item['modifiedSourceArchive']['sha256']}\n"
+                ).encode("utf-8")
+            )
     for label, relative in sections:
         data = _read_regular(_safe_child(output, relative), MAX_CANDIDATE_BYTES)
         combined.extend(f"\n===== {label} =====\n".encode("utf-8"))
@@ -643,6 +662,7 @@ def build_bundle(
     ofl_license: pathlib.Path,
     output: pathlib.Path,
     toolchain_notice_inputs: list[tuple[str, str, pathlib.Path, str]] | None = None,
+    source_patch_inputs: list[tuple[str, str, pathlib.Path, str]] | None = None,
     source_archive_suffix: str = ".tar.gz",
 ) -> dict[str, Any]:
     if source_archive_suffix not in {".tar.gz", ".tgz"}:
@@ -659,6 +679,7 @@ def build_bundle(
     budget = Budget()
     source_budget = SourceBudget()
     toolchain_notice_inputs = toolchain_notice_inputs or []
+    source_patch_inputs = source_patch_inputs or []
     toolchain_notices: list[dict[str, Any]] = []
     seen_toolchain_names: set[str] = set()
     for label, name, path, expected_digest in toolchain_notice_inputs:
@@ -683,6 +704,43 @@ def build_bundle(
             {
                 "label": label,
                 "sourceName": name,
+                "bundlePath": destination,
+                "bytes": len(data),
+                "sha256": expected_digest,
+            }
+        )
+
+    source_patches: list[dict[str, Any]] = []
+    seen_patch_names: set[str] = set()
+    for label, name, path, expected_digest in source_patch_inputs:
+        if (
+            not label
+            or len(label.encode("utf-8")) > 256
+            or any(ord(character) < 0x20 for character in label)
+            or SAFE_TOOLCHAIN_NAME.fullmatch(name) is None
+            or name in seen_patch_names
+            or HEX_SHA256.fullmatch(expected_digest) is None
+        ):
+            raise NoticeError("source patch descriptor is malformed")
+        seen_patch_names.add(name)
+        data = _exact_file(path, expected_digest, MAX_CANDIDATE_BYTES)
+        source_copy = _exact_file(
+            _safe_child(source_root, f"covalent-patches/{name}"),
+            expected_digest,
+            MAX_CANDIDATE_BYTES,
+        )
+        if source_copy != data:
+            raise NoticeError("modified source patch copy differs")
+        destination = f"patches/{name}"
+        _write_new(output / destination, data)
+        budget.files += 1
+        budget.bytes += len(data)
+        if budget.files > MAX_CANDIDATES or budget.bytes > MAX_TOTAL_BYTES:
+            raise NoticeError("notice bundle aggregate bound exceeded")
+        source_patches.append(
+            {
+                "label": label,
+                "sourcePath": f"covalent-patches/{name}",
                 "bundlePath": destination,
                 "bytes": len(data),
                 "sha256": expected_digest,
@@ -897,6 +955,25 @@ def build_bundle(
             module_row
         )
 
+    if source_patches:
+        main_source = next(
+            (item for item in source_archives if item["path"] == MAIN_MODULE),
+            None,
+        )
+        if main_source is None:
+            raise NoticeError("modified main-module source archive is unavailable")
+        main_source["sourceState"] = "modified"
+        main_source["modifications"] = [
+            {
+                "bundlePath": item["bundlePath"],
+                "bytes": item["bytes"],
+                "sha256": item["sha256"],
+            }
+            for item in source_patches
+        ]
+        for item in source_patches:
+            item["modifiedSourceArchive"] = dict(main_source["archive"])
+
     source_license = next(
         (
             file
@@ -937,7 +1014,8 @@ def build_bundle(
         raise NoticeError("notice bundle aggregate bound exceeded")
 
     combined = _combined_notice(
-        output, go_files, module_rows, source_archives, toolchain_notices
+        output, go_files, module_rows, source_archives, toolchain_notices,
+        source_patches
     )
     combined_digest = _sha256(combined)
     budget.files += 1
@@ -1005,6 +1083,8 @@ def build_bundle(
             "Never substitute an inventory from another GOOS, GOARCH, CGO, or build-tag combination.",
             "Confirm the recipient-facing source locations remain available for the externally distributed executable.",
         ]
+    if source_patches:
+        manifest["sourceModifications"] = source_patches
     encoded = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
     if len(encoded) > MAX_INVENTORY_BYTES:
         raise NoticeError("notice manifest bound exceeded")
@@ -1034,6 +1114,13 @@ def main(argv: Iterable[str] | None = None) -> int:
         default=".tar.gz",
         help="suffix for gzip-compressed corresponding-source archives",
     )
+    parser.add_argument(
+        "--source-patch",
+        action="append",
+        nargs=4,
+        metavar=("LABEL", "NAME", "PATH", "SHA256"),
+        default=[],
+    )
     parser.add_argument("--output", required=True, type=pathlib.Path)
     arguments = parser.parse_args(argv)
     try:
@@ -1049,6 +1136,10 @@ def main(argv: Iterable[str] | None = None) -> int:
             toolchain_notice_inputs=[
                 (label, name, pathlib.Path(path), digest)
                 for label, name, path, digest in arguments.toolchain_notice
+            ],
+            source_patch_inputs=[
+                (label, name, pathlib.Path(path), digest)
+                for label, name, path, digest in arguments.source_patch
             ],
             source_archive_suffix=arguments.source_archive_suffix,
         )

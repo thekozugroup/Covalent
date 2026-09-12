@@ -95,6 +95,7 @@ fn signed_request_and_response_bind_identity_nonce_digest_and_certificate() {
     let mut replay = FolderControlReplay::default();
     verify_request(
         &request,
+        request.operation.alpn(),
         target.engine.device_id(),
         &fingerprint,
         &source.engine.public_identity(),
@@ -140,6 +141,87 @@ fn signed_request_and_response_bind_identity_nonce_digest_and_certificate() {
 }
 
 #[test]
+fn link_settings_are_bound_to_the_source_member_revision_and_explicit_protocol() {
+    let source = test_engine();
+    let target = test_engine();
+    let outsider = test_engine();
+    let fingerprint = "c".repeat(64);
+    let settings = crate::sync_engine::FolderLinkSettings {
+        deletion_policy: covalent_protocol::FolderLinkPolicy::default(),
+        paused: false,
+    };
+    let operations = [
+        FolderControlOperation::RequestLinkSettings(crate::sync_engine::LinkSettingsRequest {
+            folder_id: uuid::Uuid::new_v4(),
+            source_id: target.engine.device_id(),
+            requester_id: source.engine.device_id(),
+            change_id: uuid::Uuid::new_v4(),
+            expected_revision: 7,
+            settings,
+        }),
+        FolderControlOperation::CommitLinkSettings(crate::sync_engine::LinkSettingsCommit {
+            folder_id: uuid::Uuid::new_v4(),
+            source_id: source.engine.device_id(),
+            target_id: target.engine.device_id(),
+            revision: 8,
+            settings,
+            change_id: uuid::Uuid::new_v4(),
+            changed_by: target.engine.device_id(),
+        }),
+    ];
+    assert_eq!(
+        operation(source.engine.device_id()).alpn(),
+        FOLDER_CONTROL_ALPN
+    );
+    for operation in operations {
+        assert_eq!(operation.alpn(), LINK_CONTROL_ALPN);
+        let request = sign_request(
+            &source.engine,
+            target.engine.device_id(),
+            &fingerprint,
+            operation,
+        )
+        .unwrap();
+        let verify = |request: &FolderControlRequest| {
+            verify_request(
+                request,
+                request.operation.alpn(),
+                target.engine.device_id(),
+                &fingerprint,
+                &source.engine.public_identity(),
+                &mut FolderControlReplay::default(),
+                request.issued_at_unix_ms,
+            )
+        };
+        verify(&request).unwrap();
+        let mut altered = request.clone();
+        match &mut altered.operation {
+            FolderControlOperation::RequestLinkSettings(settings) => {
+                settings.expected_revision += 1
+            }
+            FolderControlOperation::CommitLinkSettings(settings) => settings.revision += 1,
+            _ => unreachable!(),
+        }
+        assert_eq!(verify(&altered), Err(FolderControlError::Rejected));
+        // Even a valid outer signature cannot impersonate another requester
+        // or commit source. Identity is checked independently of the digest.
+        let mut impersonated = request.clone();
+        match &mut impersonated.operation {
+            FolderControlOperation::RequestLinkSettings(settings) => {
+                settings.requester_id = outsider.engine.device_id()
+            }
+            FolderControlOperation::CommitLinkSettings(settings) => {
+                settings.source_id = outsider.engine.device_id()
+            }
+            _ => unreachable!(),
+        }
+        impersonated.operation_digest = digest(&impersonated.operation).unwrap();
+        resign(&source.engine, &mut impersonated);
+        assert_eq!(verify(&impersonated), Err(FolderControlError::Rejected));
+    }
+}
+
+#[test]
 fn request_rejects_forwarding_version_time_and_signature_tampering() {
     let source = test_engine();
     let target = test_engine();
@@ -155,6 +237,7 @@ fn request_rejects_forwarding_version_time_and_signature_tampering() {
     let verify = |request: &FolderControlRequest| {
         verify_request(
             request,
+            request.operation.alpn(),
             target.engine.device_id(),
             &fingerprint,
             &source.engine.public_identity(),
@@ -180,6 +263,7 @@ fn request_rejects_forwarding_version_time_and_signature_tampering() {
     assert_eq!(
         verify_request(
             &stale,
+            stale.operation.alpn(),
             target.engine.device_id(),
             &fingerprint,
             &source.engine.public_identity(),
@@ -218,6 +302,7 @@ fn removal_request_binds_both_peers_folder_and_complete_offer_chain() {
     .expect("signed removal request");
     verify_request(
         &request,
+        request.operation.alpn(),
         target.engine.device_id(),
         &fingerprint,
         &source.engine.public_identity(),
@@ -234,6 +319,7 @@ fn removal_request_binds_both_peers_folder_and_complete_offer_chain() {
     assert_eq!(
         verify_request(
             &altered_folder,
+            altered_folder.operation.alpn(),
             target.engine.device_id(),
             &fingerprint,
             &source.engine.public_identity(),
@@ -251,6 +337,7 @@ fn removal_request_binds_both_peers_folder_and_complete_offer_chain() {
     assert_eq!(
         verify_request(
             &altered_chain,
+            altered_chain.operation.alpn(),
             target.engine.device_id(),
             &fingerprint,
             &source.engine.public_identity(),
@@ -320,6 +407,7 @@ fn replay_covers_the_entire_future_skew_freshness_window() {
     let mut replay = FolderControlReplay::default();
     verify_request(
         &request,
+        request.operation.alpn(),
         target.engine.device_id(),
         &fingerprint,
         &source.engine.public_identity(),
@@ -332,6 +420,7 @@ fn replay_covers_the_entire_future_skew_freshness_window() {
     assert_eq!(
         verify_request(
             &request,
+            request.operation.alpn(),
             target.engine.device_id(),
             &fingerprint,
             &source.engine.public_identity(),
@@ -357,6 +446,7 @@ async fn authenticated_request_observes_busy_when_all_mutation_slots_are_held() 
     let admission = FolderControlAdmission::default();
     verify_request(
         &request,
+        request.operation.alpn(),
         target.engine.device_id(),
         &fingerprint,
         &source.engine.public_identity(),
@@ -387,99 +477,118 @@ fn frame_limit_rejects_oversized_serialized_data() {
 }
 
 #[tokio::test]
-async fn pinned_v4_client_uses_one_real_loopback_quic_stream() {
-    let source = test_engine();
-    let target = test_engine();
-    let source_tls = source.tls();
-    let target_tls = target.tls();
-    let endpoint = quinn::Endpoint::server(
-        target_tls
-            .server_config_with_alpns(&[FOLDER_CONTROL_ALPN])
-            .expect("v4 server configuration"),
-        ([127, 0, 0, 1], 0).into(),
-    )
-    .expect("loopback endpoint");
-    let address = endpoint.local_addr().expect("loopback address");
-    let target_binding = target.transport(&target_tls, address);
-    let source_binding = source.transport(&source_tls, ([127, 0, 0, 1], 43123).into());
+async fn pinned_legacy_and_link_clients_use_their_exact_loopback_protocol() {
+    for alpn in [FOLDER_CONTROL_ALPN, LINK_CONTROL_ALPN] {
+        let source = test_engine();
+        let target = test_engine();
+        let source_tls = source.tls();
+        let target_tls = target.tls();
+        let endpoint = quinn::Endpoint::server(
+            target_tls
+                .server_config_with_alpns(&[alpn])
+                .expect("v4 server configuration"),
+            ([127, 0, 0, 1], 0).into(),
+        )
+        .expect("loopback endpoint");
+        let address = endpoint.local_addr().expect("loopback address");
+        let target_binding = target.transport(&target_tls, address);
+        let source_binding = source.transport(&source_tls, ([127, 0, 0, 1], 43123).into());
 
-    let invitation = source
-        .engine
-        .pairing_manager()
-        .create_invitation_with_transport(
-            1_000,
-            60_000,
-            vec![source_binding.address.clone()],
-            source_binding,
-        )
-        .expect("invitation");
-    let roles = BTreeSet::from([PeerRole::BackupReader]);
-    let mut session = target
-        .engine
-        .accept_pairing_with_transport(
-            invitation,
-            target_binding.clone(),
-            roles.clone(),
-            roles,
-            1_001,
-        )
-        .expect("accept pairing");
-    let code = session.authentication_string().as_str().to_owned();
-    target
-        .engine
-        .confirm_pairing_as_responder(&mut session, &code, 1_002)
-        .expect("responder confirmation");
-    source
-        .engine
-        .confirm_pairing_as_inviter(&mut session, &code, 1_003)
-        .expect("inviter confirmation");
-    source
-        .engine
-        .finalize_pairing_as_inviter(&session, 1_004)
-        .expect("retained target pin");
+        let invitation = source
+            .engine
+            .pairing_manager()
+            .create_invitation_with_transport(
+                1_000,
+                60_000,
+                vec![source_binding.address.clone()],
+                source_binding,
+            )
+            .expect("invitation");
+        let roles = BTreeSet::from([PeerRole::BackupReader]);
+        let mut session = target
+            .engine
+            .accept_pairing_with_transport(
+                invitation,
+                target_binding.clone(),
+                roles.clone(),
+                roles,
+                1_001,
+            )
+            .expect("accept pairing");
+        let code = session.authentication_string().as_str().to_owned();
+        target
+            .engine
+            .confirm_pairing_as_responder(&mut session, &code, 1_002)
+            .expect("responder confirmation");
+        source
+            .engine
+            .confirm_pairing_as_inviter(&mut session, &code, 1_003)
+            .expect("inviter confirmation");
+        source
+            .engine
+            .finalize_pairing_as_inviter(&session, 1_004)
+            .expect("retained target pin");
 
-    let server_engine = Arc::clone(&target.engine);
-    let server_fingerprint = target_binding.certificate_fingerprint.clone();
-    let server = tokio::spawn(async move {
-        let connecting = endpoint.accept().await.expect("incoming v4 connection");
-        let connection = connecting.await.expect("v4 handshake");
-        let (mut send, mut receive) = connection.accept_bi().await.expect("one stream");
-        let request: FolderControlRequest = serde_json::from_slice(
-            &crate::transport::read_frame(&mut receive, MAX_FRAME_BYTES)
-                .await
-                .expect("request frame"),
-        )
-        .expect("request schema");
-        let response = sign_response(
-            &server_engine,
-            &request,
-            &server_fingerprint,
-            FolderControlPayload::Ack,
-        )
-        .expect("response");
-        crate::transport::write_frame(
-            &mut send,
-            &serde_json::to_vec(&response).expect("response JSON"),
-        )
-        .await
-        .expect("response frame");
-        send.finish().expect("finish response");
-        let _ = tokio::time::timeout(Duration::from_secs(2), send.stopped()).await;
-        connection.close(0_u32.into(), b"test complete");
-        endpoint.close(0_u32.into(), b"test complete");
-        endpoint.wait_idle().await;
-    });
+        let server_engine = Arc::clone(&target.engine);
+        let server_fingerprint = target_binding.certificate_fingerprint.clone();
+        let server = tokio::spawn(async move {
+            let connecting = endpoint.accept().await.expect("incoming v4 connection");
+            let connection = connecting.await.expect("v4 handshake");
+            let (mut send, mut receive) = connection.accept_bi().await.expect("one stream");
+            let request: FolderControlRequest = serde_json::from_slice(
+                &crate::transport::read_frame(&mut receive, MAX_FRAME_BYTES)
+                    .await
+                    .expect("request frame"),
+            )
+            .expect("request schema");
+            let response = sign_response(
+                &server_engine,
+                &request,
+                &server_fingerprint,
+                FolderControlPayload::Ack,
+            )
+            .expect("response");
+            crate::transport::write_frame(
+                &mut send,
+                &serde_json::to_vec(&response).expect("response JSON"),
+            )
+            .await
+            .expect("response frame");
+            send.finish().expect("finish response");
+            let _ = tokio::time::timeout(Duration::from_secs(2), send.stopped()).await;
+            connection.close(0_u32.into(), b"test complete");
+            endpoint.close(0_u32.into(), b"test complete");
+            endpoint.wait_idle().await;
+        });
 
-    assert_eq!(
-        send_folder_control(
-            Arc::clone(&source.engine),
-            target_binding,
-            operation(source.engine.device_id()),
-        )
-        .await,
-        Ok(FolderControlPayload::Ack)
-    );
-    server.await.expect("server task");
+        assert_eq!(
+            send_folder_control(
+                Arc::clone(&source.engine),
+                target_binding,
+                if alpn == FOLDER_CONTROL_ALPN {
+                    operation(source.engine.device_id())
+                } else {
+                    FolderControlOperation::CommitLinkSettings(
+                        crate::sync_engine::LinkSettingsCommit {
+                            folder_id: uuid::Uuid::new_v4(),
+                            source_id: source.engine.device_id(),
+                            target_id: target.engine.device_id(),
+                            revision: 0,
+                            settings: crate::sync_engine::FolderLinkSettings {
+                                deletion_policy: covalent_protocol::FolderLinkPolicy::default(),
+                                paused: false,
+                            },
+                            change_id: uuid::Uuid::nil(),
+                            changed_by: source.engine.device_id(),
+                        },
+                    )
+                },
+            )
+            .await,
+            Ok(FolderControlPayload::Ack)
+        );
+        server.await.expect("server task");
+    }
 }
 
 #[test]
@@ -501,6 +610,7 @@ fn address_probe_request_binds_candidate_and_rejects_ambiguous_routes() {
     .unwrap();
     verify_request(
         &request,
+        request.operation.alpn(),
         target.engine.device_id(),
         &fingerprint,
         &source.engine.public_identity(),
@@ -523,6 +633,7 @@ fn address_probe_request_binds_candidate_and_rejects_ambiguous_routes() {
         assert_eq!(
             verify_request(
                 &altered,
+                altered.operation.alpn(),
                 target.engine.device_id(),
                 &fingerprint,
                 &source.engine.public_identity(),
@@ -634,4 +745,59 @@ async fn candidate_probe_authenticates_old_pin_at_new_route_and_returns_signed_e
         Ok(expected_proof)
     );
     server.await.unwrap();
+}
+
+#[test]
+fn signed_operations_cannot_cross_legacy_and_link_protocols() {
+    let source = test_engine();
+    let target = test_engine();
+    let fingerprint = "c".repeat(64);
+    let link = FolderControlOperation::CommitLinkSettings(crate::sync_engine::LinkSettingsCommit {
+        folder_id: uuid::Uuid::new_v4(),
+        source_id: source.engine.device_id(),
+        target_id: target.engine.device_id(),
+        revision: 0,
+        settings: crate::sync_engine::FolderLinkSettings {
+            deletion_policy: covalent_protocol::FolderLinkPolicy::default(),
+            paused: false,
+        },
+        change_id: uuid::Uuid::nil(),
+        changed_by: source.engine.device_id(),
+    });
+    for (operation, wrong_alpn) in [
+        (operation(source.engine.device_id()), LINK_CONTROL_ALPN),
+        (link, FOLDER_CONTROL_ALPN),
+    ] {
+        let request = sign_request(
+            &source.engine,
+            target.engine.device_id(),
+            &fingerprint,
+            operation,
+        )
+        .unwrap();
+        let mut replay = FolderControlReplay::default();
+        assert_eq!(
+            verify_request(
+                &request,
+                wrong_alpn,
+                target.engine.device_id(),
+                &fingerprint,
+                &source.engine.public_identity(),
+                &mut replay,
+                request.issued_at_unix_ms
+            ),
+            Err(FolderControlError::Rejected)
+        );
+        // Protocol rejection happens before recording replay state or mutation.
+        verify_request(
+            &request,
+            request.operation.alpn(),
+            target.engine.device_id(),
+            &fingerprint,
+            &source.engine.public_identity(),
+            &mut replay,
+            request.issued_at_unix_ms,
+        )
+        .unwrap();
+    }
 }

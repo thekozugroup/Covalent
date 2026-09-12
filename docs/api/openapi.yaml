@@ -78,7 +78,13 @@ paths:
           $ref: "#/components/responses/Conflict"
   /api/v1/sync/folders:
     post:
-      summary: Choose a local folder and offer it to a paired device
+      summary: Offer a one-way source folder to a paired destination
+      description: >-
+        New links require an explicit deletion policy. Both false keeps destination
+        copies after a source deletion and leaves destination deletions in place.
+        Reuse the same folderId, source root, label and current policy to add another
+        destination. Legacy signed two-way invitations remain readable but cannot
+        be created by omitting linkPolicy.
       operationId: offerFolder
       requestBody:
         required: true
@@ -144,7 +150,12 @@ paths:
           $ref: "#/components/responses/Conflict"
   /api/v1/sync/pause:
     post:
-      summary: Pause or resume this device's participation in a shared folder
+      summary: Pause or resume a link
+      description: >-
+        One-way links change the shared setting for every member through the source.
+        An offline source leaves a pending request. Legacy two-way folders retain
+        their per-device pause behavior. New clients should use the revisioned
+        settings endpoint to expose conflicts and retain exact retries.
       operationId: pauseFolder
       requestBody:
         required: true
@@ -159,6 +170,41 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/sync/settings:
+    post:
+      summary: Change settings for the entire one-way link
+      operationId: changeFolderLinkSettings
+      description: >-
+        Any currently authorized member can submit a change against the displayed
+        revision. The source commits one revision and distributes it to every
+        destination. A destination durably queues the request while the source is
+        offline; a 200 response confirms local persistence, not remote convergence.
+        Retain the exact changeId, expectedRevision and settings for uncertain retries.
+        A conflicting edit must be reviewed against the current status before a new
+        request is created. This endpoint does not modify legacy two-way folders.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FolderLinkSettingsRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/FolderSyncMutation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: >-
+            link_settings_pending means an earlier destination request awaits the
+            source. link_settings_conflict means the displayed revision is stale.
+            Read status and show the pending or conflicting values; do not silently
+            overwrite them. Other folder errors use the ordinary mutation contract.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
         "503":
           $ref: "#/components/responses/Conflict"
   /api/v1/sync/remove:
@@ -1620,7 +1666,7 @@ components:
     FolderOfferRequest:
       type: object
       additionalProperties: false
-      required: [peerId, folderId, label, selectedRoot]
+      required: [peerId, folderId, label, selectedRoot, linkPolicy]
       properties:
         peerId:
           $ref: "#/components/schemas/DeviceId"
@@ -1636,6 +1682,93 @@ components:
           minLength: 1
           maxLength: 4096
           description: Absolute folder selected by the local user; native hosts retain its OS access grant.
+        linkPolicy:
+          $ref: "#/components/schemas/FolderLinkPolicy"
+    FolderLinkPolicy:
+      type: object
+      additionalProperties: false
+      required: [propagateSourceDeletions, restoreLocalDeletions]
+      properties:
+        propagateSourceDeletions:
+          type: boolean
+          description: If true, source deletions also remove destination copies. If false, destination copies remain.
+        restoreLocalDeletions:
+          type: boolean
+          description: If true, files deleted at a destination are copied there again from the source. If false, those files stay deleted there, including after later source edits.
+    FolderLinkSettings:
+      type: object
+      additionalProperties: false
+      required: [deletionPolicy, paused]
+      properties:
+        deletionPolicy:
+          $ref: "#/components/schemas/FolderLinkPolicy"
+        paused:
+          type: boolean
+          description: Shared pause for the entire link, including all destinations.
+    FolderLinkSettingsRequest:
+      type: object
+      additionalProperties: false
+      required: [folderId, changeId, expectedRevision, settings]
+      properties:
+        folderId:
+          type: string
+          format: uuid
+        changeId:
+          type: string
+          format: uuid
+          description: Nonzero UUID retained unchanged when retrying this exact edit.
+        expectedRevision:
+          type: integer
+          minimum: 0
+        settings:
+          $ref: "#/components/schemas/FolderLinkSettings"
+    FolderLinkPendingChange:
+      type: object
+      additionalProperties: false
+      required: [folderId, sourceId, requesterId, changeId, expectedRevision, settings]
+      properties:
+        folderId:
+          type: string
+          format: uuid
+        sourceId:
+          $ref: "#/components/schemas/DeviceId"
+        requesterId:
+          $ref: "#/components/schemas/DeviceId"
+        changeId:
+          type: string
+          format: uuid
+        expectedRevision:
+          type: integer
+          minimum: 0
+        settings:
+          $ref: "#/components/schemas/FolderLinkSettings"
+    FolderLinkSettingsState:
+      type: object
+      additionalProperties: false
+      required: [revision, settings, changeId, changedBy, confirmed, pendingChange, conflictedChange]
+      properties:
+        revision:
+          type: integer
+          minimum: 0
+        settings:
+          $ref: "#/components/schemas/FolderLinkSettings"
+        changeId:
+          type: string
+          format: uuid
+          description: The zero UUID names initial revision zero; subsequent revisions have a nonzero change ID.
+        changedBy:
+          $ref: "#/components/schemas/DeviceId"
+        confirmed:
+          type: boolean
+          description: A new destination waits for current source-confirmed settings before transferring, even after accepting an invitation.
+        pendingChange:
+          oneOf:
+            - $ref: "#/components/schemas/FolderLinkPendingChange"
+            - type: "null"
+        conflictedChange:
+          oneOf:
+            - $ref: "#/components/schemas/FolderLinkPendingChange"
+            - type: "null"
     FolderAcceptRequest:
       type: object
       additionalProperties: false
@@ -1773,6 +1906,15 @@ components:
           format: uuid
         incoming:
           type: boolean
+        linkPolicy:
+          description: Current effective policy for a one-way link. Null or absent identifies a legacy two-way folder; never present it as one-way.
+          oneOf:
+            - $ref: "#/components/schemas/FolderLinkPolicy"
+            - type: "null"
+        linkSettings:
+          oneOf:
+            - $ref: "#/components/schemas/FolderLinkSettingsState"
+            - type: "null"
         phase:
           type: string
           enum: [offered, awaitingCommit, ready, paused, removed]
@@ -1805,6 +1947,7 @@ components:
           type: string
           format: date-time
         remainingFiles:
+          description: Raw engine need count. Deliberately retained destination deletions can remain in this count; it does not by itself mean an idle one-way link is transferring.
           type: integer
           minimum: 0
         remainingBytes:

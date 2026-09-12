@@ -87,6 +87,8 @@ pub enum FolderSyncServiceError {
     WorkerLaunch,
     WorkerStop,
     WorkerStillStopping,
+    SettingsConflict,
+    SettingsPending,
 }
 
 impl fmt::Display for FolderSyncServiceError {
@@ -98,6 +100,8 @@ impl fmt::Display for FolderSyncServiceError {
             Self::WorkerLaunch => "folder sync worker could not start",
             Self::WorkerStop => "folder sync worker could not be reaped",
             Self::WorkerStillStopping => "folder sync worker is still stopping",
+            Self::SettingsConflict => "link settings changed on another device",
+            Self::SettingsPending => "a link settings change is waiting for the source",
         })
     }
 }
@@ -497,6 +501,21 @@ impl FolderSyncService {
             .await
     }
 
+    pub async fn offer_with_policy(
+        &self,
+        peer_id: DeviceId,
+        folder_id: Uuid,
+        label: &str,
+        selected_root: &Path,
+        now: u64,
+        policy: Option<covalent_protocol::FolderLinkPolicy>,
+    ) -> Result<CommittedMutation<FolderShareOffer>, FolderSyncServiceError> {
+        self.mutate(|journal| {
+            journal.offer_with_policy(peer_id, folder_id, label, selected_root, now, policy)
+        })
+        .await
+    }
+
     /// Read durable retransmission records while reconciling any intervening
     /// revocation with the owned worker before returning them to the dialer.
     pub async fn outbound_records(
@@ -586,6 +605,35 @@ impl FolderSyncService {
         notice: &super::FolderRemovalNotice,
     ) -> Result<CommittedMutation<()>, FolderSyncServiceError> {
         self.mutate(|journal| journal.receive_removal(notice)).await
+    }
+
+    pub async fn request_link_settings(
+        &self,
+        folder_id: Uuid,
+        change_id: Uuid,
+        expected_revision: u64,
+        settings: super::FolderLinkSettings,
+    ) -> Result<CommittedMutation<()>, FolderSyncServiceError> {
+        self.mutate(|journal| {
+            journal.request_link_settings(folder_id, change_id, expected_revision, settings)
+        })
+        .await
+    }
+
+    pub async fn receive_link_settings_request(
+        &self,
+        request: &super::LinkSettingsRequest,
+    ) -> Result<CommittedMutation<super::LinkSettingsCommit>, FolderSyncServiceError> {
+        self.mutate(|journal| journal.receive_link_settings_request(request))
+            .await
+    }
+
+    pub async fn receive_link_settings_commit(
+        &self,
+        commit: &super::LinkSettingsCommit,
+    ) -> Result<CommittedMutation<()>, FolderSyncServiceError> {
+        self.mutate(|journal| journal.receive_link_settings_commit(commit))
+            .await
     }
 
     /// Durably retire a removal outbox entry after an authenticated peer ACK.
@@ -1293,8 +1341,12 @@ async fn health_loop(
     }
 }
 
-fn map_journal_error(_: SharingError) -> FolderSyncServiceError {
-    FolderSyncServiceError::Journal
+fn map_journal_error(error: SharingError) -> FolderSyncServiceError {
+    match error {
+        SharingError::SettingsConflict => FolderSyncServiceError::SettingsConflict,
+        SharingError::SettingsPending => FolderSyncServiceError::SettingsPending,
+        _ => FolderSyncServiceError::Journal,
+    }
 }
 
 fn map_start_issue(issue: FolderSyncIssue) -> FolderSyncServiceError {

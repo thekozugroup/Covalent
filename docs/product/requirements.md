@@ -1,89 +1,65 @@
 # Product requirements
 
-Status: foundation contract, 2026-08-15.
+Updated 2026-09-12 from the owner's explicit scope reduction and subsequent clarifications.
 
 ## Product promise
 
-Covalent makes private distributed backup understandable: pair devices, choose sources, choose exactly which devices hold extra copies, verify continuously, and restore safely to a directory the user selects.
+Covalent makes one-way file transfers easy to pair, configure, and monitor. A link has one source folder and one or more destinations. Destination files remain ordinary files. No hosted account or subscription is required.
 
-Core workflows work without a hosted account, cloud coordinator, or subscription.
+Supported products: native macOS, native Android, and Docker for Unraid and other Docker hosts. Atlas is offline; Docker and isolated Atmos tests are the accepted server targets.
 
-## Priority policy
+This contract supersedes the distributed encrypted-backup and bidirectional-sync release scope. Preserve existing user files and identities; never silently migrate their behavior. The previous source and evidence remain in Git history at checkpoint 46, commit c47003113e28b6e934a8ab4823040614fb07fb30.
 
-Supported platforms are Unraid, macOS, and Android. iOS and Windows are not supported.
+## Links
 
-| Priority | Platforms | Definition of ready |
+- Choose a source, pair destinations, authorize their folders, then start.
+- File content travels only from source to destinations. Destination changes never alter the source or another destination.
+- Each link has one set of settings. Any authorized member can submit a change; the source commits and distributes a revision to all members. Offline edits stay visibly pending. Stale conflicting changes are not silently applied.
+- Separate links have independent settings. Multiple family members can contribute to one collection without downloading its other contents.
+- Each link owns a distinct subfolder of a shared collection. Identical camera filenames from different devices cannot overwrite each other. A link can remove only its own files.
+- Removing a link stops transfers and preserves files.
+
+## Deletion choices
+
+The two choices are independent. Explain them before starting a link and in its settings.
+
+| Setting | Default | User explanation |
 | --- | --- | --- |
-| Supported | macOS, Android, Docker/Unraid | All required functional, safety, accessibility, packaging, and disaster-restore checks pass. |
-| Not supported | iOS, Windows | No definition of ready. Neither is published or installable, and neither gates a release. Windows has no code at all; the iOS target exists and still builds in an informational CI lane, which is deliberately not a required check and carries no support promise. |
+| Source file deleted | Keep destination copies | Deleting a source file leaves destination copies untouched. |
+| Alternative | Delete destination copies too | Deleting a source file also deletes copies this link created at its destinations. Other links' files stay untouched. |
+| Destination file deleted | Keep it deleted | Source and other destinations stay untouched. This destination does not download the file again until restoration is enabled. |
+| Alternative | Restore from source | If the source file still exists, this destination downloads it again on the next transfer. |
 
-## Required journeys
+A later source edit must not silently bypass keep-deleted behavior. Destructive setting changes require a review of their effects. Missing mounts, failed scans, lost permissions, and offline sources must never be treated as empty folders.
 
-### PR-01 Name and pair a device
+## Timing and status
 
-The user names a device, discovers a candidate on a permitted LAN or Tailnet, compares a human-readable authentication string on both devices, and explicitly accepts. LAN discovery has a persistent off switch. Manual address or remembered-peer connection remains available.
+Provide Run Now, Scheduled, and Continuous. Settings apply across the whole link. Android provides Wi-Fi and charging conditions and respects operating-system background limits; show waiting conditions without promising exact timing or unrestricted background work.
 
-### PR-02 Create a backup
+Scheduled/manual links stop their transfer worker when idle. Continuous links use file events and coalesce changes. Do not promise zero application or operating-system overhead.
 
-The user selects one or more authorized source directories, reviews exclusions and access limits, chooses zero or more specific authorized provider devices for extra copies, and starts a resumable backup. Covalent never chooses replica devices automatically.
+Show per-destination status, meaningful progress, last success, pending settings, and actionable errors. Support pause, resume, retry, and file-preserving removal. An offline destination must not stop other destinations.
 
-### PR-03 Store and verify
+## Native interfaces
 
-The engine streams, chunks, authenticates, encrypts, signs, and durably records content. Every connected authorized provider that holds a requested chunk may serve or verify it. Corruption is rejected and reported; repair requires an intact authorized source.
+macOS follows Apple HIG: system typography, standard windows/settings, keyboard navigation, VoiceOver, and a menu bar item with a small status symbol and per-link status/actions. Use the supported menu bar API, not an invented third-party Control Center extension.
 
-### PR-04 Restore
+Android uses native Compose/Material controls. The reference is [Tomato](https://github.com/nsh07/Tomato); the owner prefers its floating action bar, typography, data visuals, and top bar. Adapt those ideas to transfers and accessibility. Inspect licensing before reusing code, fonts, or assets.
 
-The user selects a backup, an authorized target root, relative paths, and a conflict policy. Covalent previews the result, then restores only normalized relative paths beneath that root with symlink and traversal defenses. Writes are staged, synchronized, and atomically committed where supported.
+## Server and file safety
 
-### PR-05 Manage replicas
+Docker is the default Unraid distribution. Use explicit mounts and a non-root service where supported. Live appdata requires an application-consistent source, such as a stopped application or snapshot. Ordinary file copying is not a guaranteed live-database backup. Copy readable boot files only through an explicit mount; do not claim full boot recovery without testing it. Add an Unraid plugin only for a demonstrated Docker limitation.
 
-Availability is visible per backup and provider. Adding or removing a replica is always an explicit user action with impact shown before deletion. Offline devices are degraded, not silently replaced.
+Retain authenticated pairing, encrypted transport, restricted folder access, path/symlink defenses, interruption recovery, bounded resources, and accessible errors. Reuse a maintained transfer engine. Do not build a distributed filesystem or multiple interchangeable engines.
 
-### PR-06 Import and export settings
+## Completion
 
-The user exports a versioned file containing the device name, LAN discovery preference, and remembered backup descriptors. Private identity keys and backup content keys are excluded by default and imports reject key-like unknown fields.
+The [completion ledger](../release/completion-progress.md) defines ten complete acceptance checks. Existing foundation evidence is reusable but does not prove new link behavior.
 
-### PR-07 Platform-native access
+Establish stability, then measure idle resources and representative transfer performance. Optimize measured problems. Put builds and test data in dedicated temporary directories. Retain compact evidence and release outputs; remove owned processes, fixtures, obsolete builds, and caches when finished. Never disturb unrelated Atmos services or user files.
 
-- macOS Tier 1 uses open panels, security-scoped bookmarks in sandboxed builds, and coordinated file access.
-- Android Tier 1 targets the current stable Android API, uses the Storage Access Framework and persisted URI grants, and requests local-network permission only when the user enables LAN discovery.
-- Docker and Unraid Tier 1 use explicit mounts. Backup sources are read-only by default; restore targets require explicit writable mounts and confirmation.
-- iOS is not a supported platform. The iOS target does use document pickers, security-scoped URLs/bookmarks, and coordinated access, but that behaviour is unreleased, is not held to these requirements, and process-termination request rehydration was never completed.
+The owner authorizes final GitHub releases after acceptance. Previously accepted personal-use signing scope remains. Do not label incomplete builds as complete releases. Report completion with one line each for Situation, Task, Action, and Result.
 
-## Quality attributes
+## Excluded from this release
 
-- Bounded memory while scanning and transferring large files.
-- Deterministic content verification and versioned contracts.
-- No plaintext content or path disclosure to an untrusted storage provider beyond unavoidable traffic metadata.
-- Crash-safe metadata and recoverable interrupted transfers.
-- Native accessibility: VoiceOver, TalkBack, keyboard support where applicable, scalable text, contrast, and reduced-motion behavior.
-- No required secrets for build, tests, or local multi-node development.
-
-## Locked non-goals
-
-- Windows clients or packaging. Explicitly out of scope for now.
-- Hosted user accounts or required cloud coordination.
-- Automatic replica placement, background selection, or opaque availability promises.
-- Arbitrary filesystem restore or restore outside an explicitly authorized root.
-- A supported iOS client. Explicitly out of scope for now, along with full-device iOS backup, unsupported background execution, and access to other apps' private data.
-- Photo management, media streaming, password management, or generic object storage.
-
-## Planned two-way folder synchronization
-
-Status: planned for future work; not implemented, released, or a current support promise. The scope is defined by [ADR 0006](../adr/0006-two-way-folder-sync.md) and [Folder synchronization](synchronization.md).
-
-### Planned journey
-
-The user chooses a folder, chooses member devices and their roles, then starts synchronization. Members explicitly receive the folder epoch key; storage providers hold opaque encrypted data and do not decide membership or placement. A revoked member stops receiving new epoch keys at the explicit revocation cutoff.
-
-### Planned release prerequisites
-
-- Each writer has a distinct device identity. Folder roles, membership changes, independent epoch keys, recipient wraps, and revocation cutoffs are durably authenticated before operations are accepted.
-- Causal version vectors preserve concurrent file, directory, and deletion values. Delete tombstones remain until every active member acknowledges collection or the member is explicitly removed. Scan failures produce zero deletes.
-- Every member can recover the same state through signed operation history and encrypted provider data. The protocol rejects malformed, unauthenticated, missing-dependency, and equivocal history without silently choosing a version.
-- macOS applies changes beneath an authorized root using a crash-safe journal. Android uses the Storage Access Framework and its real background-execution limits; it never promises background synchronization the platform cannot run.
-- Tests cover source loss, offline members, revocation, concurrent edits and deletes, interrupted apply and restart, provider opacity, and platform-native access before any support or release claim.
-
-## Acceptance boundary
-
-The foundation is accepted when its contracts, repository layout, baseline executable safety tests, deterministic commands, CI, and public repository exist. Production acceptance additionally requires later end-to-end pairing, encrypted backup, explicit replication, source-loss restore, corruption repair, platform builds, packaging, and independent zero-finding audits.
+Bidirectional editing, distributed conflict resolution, encrypted backup-provider pools, source-loss disaster recovery, historical version browsing, photo management, cloud services, alternative transfer backends, iOS, and Windows do not gate this product. Preserve existing data while removing these flows from the primary interface.

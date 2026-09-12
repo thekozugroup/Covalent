@@ -96,6 +96,8 @@
       RECOVERY.retry,
     ],
     folder_sync_busy: ["Another folder change is still in progress. Try again shortly.", RECOVERY.retry],
+    link_settings_conflict: ["Link settings changed on another device. Refresh and review the current settings before submitting again.", RECOVERY.none],
+    link_settings_pending: ["A link-settings change is waiting for the source. Review that request before making another change.", RECOVERY.none],
     folder_sync_needs_attention: [
       "Folder sync needs attention before it can continue. Check the folder status, then try again.",
       RECOVERY.retry,
@@ -653,12 +655,152 @@ async function runFolderMutation(action, success) {
   try {
     await action();
     renderPendingFolderOffer();
+    renderPendingLinkSettings();
     await loadFolders(false);
     say(success);
   } catch (error) {
     renderPendingFolderOffer();
+    renderPendingLinkSettings();
     fail(error);
   }
+}
+
+function firstLinkMember(status, share) {
+  return status.shares.find((item) => item.folderId === share.folderId
+    && item.linkSettings !== null && item.phase !== "removed")?.offerId === share.offerId;
+}
+
+function renderLinkSettings(container, status, share) {
+  const state = share.linkSettings;
+  const details = document.createElement("details");
+  details.className = "advanced";
+  const summary = document.createElement("summary");
+  summary.textContent = "Link settings";
+  const current = document.createElement("p");
+  current.className = "muted";
+  current.textContent = state.confirmed
+    ? "These settings apply to every destination in this link."
+    : "Waiting for the source to confirm current settings. File transfer has not started.";
+  details.append(summary, current);
+
+  if (state.pendingChange !== null) {
+    const pending = document.createElement("p");
+    pending.setAttribute("role", "status");
+    pending.textContent = `Waiting for the source to confirm this request: ${folderSync.settingsExplanation(state.pendingChange.settings)}`;
+    details.append(pending);
+  }
+  if (state.conflictedChange !== null) {
+    const conflict = document.createElement("p");
+    conflict.setAttribute("role", "alert");
+    conflict.textContent = `A request used an old revision and was not applied: ${folderSync.settingsExplanation(state.conflictedChange.settings)} Review the current choices below before submitting again.`;
+    details.append(conflict);
+  }
+
+  const form = document.createElement("form");
+  form.className = "inline-form";
+  const sourceDeletes = document.createElement("label");
+  const sourceDeletesInput = document.createElement("input");
+  sourceDeletesInput.type = "checkbox";
+  sourceDeletesInput.name = "propagateSourceDeletions";
+  sourceDeletesInput.checked = state.settings.deletionPolicy.propagateSourceDeletions;
+  sourceDeletes.append(sourceDeletesInput, " Delete destination copies when source files are deleted");
+  const localDeletes = document.createElement("label");
+  const localDeletesInput = document.createElement("input");
+  localDeletesInput.type = "checkbox";
+  localDeletesInput.name = "restoreLocalDeletions";
+  localDeletesInput.checked = state.settings.deletionPolicy.restoreLocalDeletions;
+  localDeletes.append(localDeletesInput, " Restore files deleted at a destination");
+  const submit = document.createElement("button");
+  submit.dataset.folderMutation = "";
+  submit.disabled = folderController.isMutationLocked() || !state.confirmed || state.pendingChange !== null;
+  submit.textContent = state.conflictedChange === null ? "Save link settings" : "Submit reviewed settings";
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const policy = {
+      propagateSourceDeletions: sourceDeletesInput.checked,
+      restoreLocalDeletions: localDeletesInput.checked,
+    };
+    const currentPolicy = state.settings.deletionPolicy;
+    const enablesDeletion = policy.propagateSourceDeletions && !currentPolicy.propagateSourceDeletions
+      || policy.restoreLocalDeletions && !currentPolicy.restoreLocalDeletions;
+    if (enablesDeletion && !globalThis.confirm(`${folderSync.policyExplanation(policy)} Apply these choices to every destination in this link?`)) return;
+    void runFolderMutation(
+      () => folderController.updateDeletionPolicy(share.folderId, policy),
+      "Link settings request saved. Current link status shows whether the source confirmed it.",
+    );
+  });
+  form.append(sourceDeletes, localDeletes, submit);
+  details.append(form);
+  container.append(details);
+}
+
+function renderAddDestination(container, status, share) {
+  const memberIds = new Set(status.shares
+    .filter((item) => item.folderId === share.folderId && item.phase !== "removed")
+    .map((item) => item.peerId));
+  const peers = status.peers.filter((peer) => !memberIds.has(peer.peerId));
+  const details = document.createElement("details");
+  details.className = "advanced";
+  const summary = document.createElement("summary");
+  summary.textContent = "Add destination";
+  const explanation = document.createElement("p");
+  explanation.className = "muted";
+  explanation.textContent = "Enter the same source path used by this link. The server verifies the existing folder identity before adding a destination.";
+  details.append(summary, explanation);
+  if (peers.length === 0) {
+    const empty = document.createElement("p");
+    empty.textContent = "Every paired device is already a destination for this link.";
+    details.append(empty);
+    container.append(details);
+    return;
+  }
+  const form = document.createElement("form");
+  form.className = "inline-form";
+  const peerLabel = document.createElement("label");
+  peerLabel.textContent = "Destination device ";
+  const select = document.createElement("select");
+  select.name = "peerId";
+  select.required = true;
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "Choose a confirmed paired device";
+  select.append(placeholder);
+  for (const peer of peers) {
+    const option = document.createElement("option");
+    option.value = peer.peerId;
+    option.textContent = peer.displayName;
+    select.append(option);
+  }
+  peerLabel.append(select);
+  const pathLabel = document.createElement("label");
+  pathLabel.textContent = "Existing source path on this server ";
+  const path = document.createElement("input");
+  path.name = "selectedRoot";
+  path.maxLength = 1024;
+  path.required = true;
+  path.placeholder = "/sync";
+  pathLabel.append(path);
+  const submit = document.createElement("button");
+  submit.dataset.folderMutation = "";
+  submit.textContent = "Send destination invitation";
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const body = {
+      peerId: select.value,
+      folderId: share.folderId,
+      label: share.label,
+      selectedRoot: path.value,
+      linkPolicy: share.linkPolicy,
+    };
+    if (!globalThis.confirm(`Confirm that ${path.value} is the same source folder already used by ${share.label}. Add this destination?`)) return;
+    void runFolderMutation(
+      () => folderController.sendOffer(body),
+      "Destination invitation sent with this link's existing identity and settings.",
+    );
+  });
+  form.append(peerLabel, pathLabel, submit);
+  details.append(form);
+  container.append(details);
 }
 
 function renderFolderActions(container, status, share, view) {
@@ -680,15 +822,25 @@ function renderFolderActions(container, status, share, view) {
     container.append(pathLabel, accept);
   }
 
-  if (!share.expired && !(share.incoming && share.phase === "offered")) {
+  const firstMember = share.linkSettings === null || firstLinkMember(status, share);
+  if (firstMember && !share.expired && !(share.incoming && share.phase === "offered")) {
     const paused = share.phase === "paused";
-    const pause = folderActionButton(paused ? "Resume" : "Pause", () => {
+    const pause = folderActionButton(share.linkPolicy === null
+      ? (paused ? "Resume" : "Pause") : (paused ? "Resume link" : "Pause link"), () => {
       void runFolderMutation(
         () => folderController.pause(share.offerId, !paused),
-        paused ? "Folder sync resumed." : "Folder sync paused.",
+        share.linkPolicy === null ? (paused ? "Folder sync resumed." : "Folder sync paused.")
+          : "Link pause change saved. It applies to all devices when the source confirms it.",
       );
     });
     container.append(pause);
+  }
+
+  if (share.linkSettings !== null && firstMember) {
+    renderLinkSettings(container, status, share);
+    if (!share.incoming && share.linkSettings.confirmed && ["ready", "paused"].includes(share.phase)) {
+      renderAddDestination(container, status, share);
+    }
   }
 
   if (share.expired && !share.incoming && ["offered", "paused"].includes(share.phase)) {
@@ -910,6 +1062,9 @@ function renderFolderStatus(status) {
   retry.hidden = !(status.lifecycle === "needsAttention" || status.issue !== null);
   const list = $("[data-folders-list]");
   const visibleShares = status.shares.filter((share) => share.phase !== "removed" || share.remoteRemovalPending);
+  let savedSettings = null;
+  try { savedSettings = folderController.pendingLinkSettings(); }
+  catch (error) { renderFolderError(error); }
   const retained = new Map(Array.from(list.children).map((item) => [item.dataset.folderOfferId, item]));
   const visibleIds = new Set(visibleShares.map((share) => share.offerId));
   for (const [id, item] of retained) {
@@ -926,20 +1081,39 @@ function renderFolderStatus(status) {
       const peer = document.createElement("span");
       const state = document.createElement("span");
       state.className = "folder-state";
-      details.append(name, peer, state);
+      const policy = document.createElement("span");
+      policy.className = "muted";
+      const linkState = document.createElement("span");
+      linkState.className = "muted";
+      details.append(name, peer, state, policy, linkState);
       const actions = document.createElement("div");
       actions.className = "folder-actions";
       item.append(details, actions);
     }
     const [details, actions] = item.children;
-    const [name, peer, state] = details.children;
+    const [name, peer, state, policy, linkState] = details.children;
     name.textContent = share.label;
-    peer.textContent = folderPeerName(status, share.peerId);
+    const peerName = folderPeerName(status, share.peerId);
+    peer.textContent = share.linkPolicy === null ? `${peerName} · Legacy two-way`
+      : share.incoming ? `${peerName} → This server` : `This server → ${peerName}`;
+    policy.textContent = folderSync.policyExplanation(share.linkPolicy);
+    linkState.textContent = share.linkSettings === null ? ""
+      : !share.linkSettings.confirmed ? "Waiting for source-confirmed link settings before transfer starts."
+        : share.linkSettings.pendingChange !== null ? "A change is waiting for the source; current settings remain active."
+          : share.linkSettings.conflictedChange !== null ? "A stale settings request needs review; current settings remain active."
+            : share.linkSettings.settings.paused ? "Whole link paused."
+              : "Link settings confirmed by the source.";
     state.dataset.kind = view.kind;
     state.textContent = view.text;
     // Routine health polling must preserve typed paths, keyboard focus, and
     // explicit confirmation. Rebuild controls only when their meaning changes.
-    const actionState = JSON.stringify([folderDeviceId, share.incoming, share.phase, share.expired]);
+    const linkMembers = status.shares.filter((item) => item.folderId === share.folderId && item.phase !== "removed")
+      .map((item) => item.peerId);
+    const actionState = JSON.stringify([
+      folderDeviceId, share.incoming, share.phase, share.expired, share.linkSettings,
+      linkMembers, status.peers.map((item) => [item.peerId, item.displayName]),
+      savedSettings?.folderId === share.folderId ? savedSettings : null,
+    ]);
     if (actions.dataset.state !== actionState) {
       actions.replaceChildren();
       renderFolderActions(actions, status, share, view);
@@ -974,10 +1148,26 @@ function renderPendingFolderOffer() {
   $("[data-folder-pending-summary]").textContent = `${pending.label} for ${peerName}, using ${pending.selectedRoot}.`;
 }
 
+function renderPendingLinkSettings() {
+  const card = $("[data-link-settings-pending]");
+  let pending = null;
+  try { pending = folderController.pendingLinkSettings(); }
+  catch (error) { renderFolderError(error); }
+  card.hidden = pending === null;
+  if (pending === null) return;
+  const share = folderController.current()?.shares.find((item) => item.folderId === pending.folderId);
+  const label = share?.label ?? "this link";
+  const currentRevision = share?.linkSettings?.revision;
+  $("[data-link-settings-pending-summary]").textContent = `${label}: saved revision ${pending.expectedRevision}; ${folderSync.settingsExplanation(pending.settings)}${currentRevision === undefined ? "" : ` Current revision: ${currentRevision}.`}`;
+}
+
 async function loadFolders(reportError = false) {
   try {
     const result = await folderController.refresh();
-    if (result.applied) renderPendingFolderOffer();
+    if (result.applied) {
+      renderPendingFolderOffer();
+      renderPendingLinkSettings();
+    }
   } catch (error) {
     renderFolderError(error);
     if (reportError) fail(error);
@@ -989,6 +1179,7 @@ async function initializeFolderSync() {
   folderDeviceId = identity?.deviceId ?? null;
   folderController.setAccess({ deviceId: folderDeviceId, unlocked: true });
   renderPendingFolderOffer();
+  renderPendingLinkSettings();
   syncFolderPolling(false);
   if (folderPollingEligible()) await loadFolders(false);
 }
@@ -997,6 +1188,7 @@ function clearFolderSyncAccess() {
   folderDeviceId = null;
   folderController.setAccess({ deviceId: null, unlocked: false });
   folderController.setPollingEnabled(false);
+  $("[data-link-settings-pending]").hidden = true;
   $("[data-paired-devices]").replaceChildren();
   const empty = $("[data-paired-devices-empty]");
   empty.hidden = false;
@@ -1427,7 +1619,13 @@ $("[data-folder-offer-form]").addEventListener("submit", (event) => {
     folderId: crypto.randomUUID(),
     label: data.get("label"),
     selectedRoot: data.get("selectedRoot"),
+    linkPolicy: {
+      propagateSourceDeletions: data.get("propagateSourceDeletions") === "on",
+      restoreLocalDeletions: data.get("restoreLocalDeletions") === "on",
+    },
   };
+  if ((body.linkPolicy.propagateSourceDeletions || body.linkPolicy.restoreLocalDeletions)
+    && !globalThis.confirm(`${folderSync.policyExplanation(body.linkPolicy)} Create this link?`)) return;
   void runFolderMutation(async () => {
     await folderController.sendOffer(body);
     form.reset();
@@ -1445,6 +1643,20 @@ $("[data-folder-offer-discard]").addEventListener("click", () => {
     say("Saved folder-offer retry discarded.");
   } catch (error) { fail(error); }
 });
+$('[data-link-settings-retry]').addEventListener("click", () => {
+  void runFolderMutation(
+    () => folderController.retryPendingLinkSettings(),
+    "Saved link-settings request reconciled with the server.",
+  );
+});
+$('[data-link-settings-discard]').addEventListener("click", () => {
+  if (!globalThis.confirm("Discard this exact retry only after reviewing current link settings. The request may already have reached the server. Continue?")) return;
+  try {
+    folderController.discardPendingLinkSettings();
+    renderPendingLinkSettings();
+    say("Saved link-settings retry discarded. Current server settings were not changed.");
+  } catch (error) { fail(error); }
+});
 $("[data-backups-refresh]").addEventListener("click", async () => {
   try { await loadBackups(); say("Backup list refreshed from the node."); }
   catch (error) { fail(error); }
@@ -1455,7 +1667,7 @@ $("[data-providers-refresh]").addEventListener("click", async () => {
   catch (error) { fail(error); }
 });
 tabFlow.install(document);
-document.querySelectorAll("[data-tab]").forEach((tab) => {
+document.querySelectorAll("[data-tab], [data-tool-panel]").forEach((tab) => {
   tab.addEventListener("click", () => queueMicrotask(() => syncFolderPolling(true)));
   tab.addEventListener("keydown", () => queueMicrotask(() => syncFolderPolling(true)));
 });

@@ -29,6 +29,7 @@ for contract in \
   946e2b83a1f6c6ae119427c09e0a5802940b82ff \
   dbcc9498602286a843f29a7104833bd1422082999aa51ff92eef493172d47959 \
   eb60efd57d1662af75ffb2f7b89abab7200362c654838486138a34bee00fed29 \
+  e58e7d133a388576a54cacc6a5a5094e6607c483c0daabac552de1a1854d92ac \
   4df1dea892fac3c9d1c0e822827c9a4c57711dcddaaf56a61edaab41d5337bbb \
   c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579 \
   Syncthing-LICENSE.txt \
@@ -36,6 +37,9 @@ for contract in \
   THIRD-PARTY-NOTICES.txt \
   source-build.json \
   correspondingSources \
+  keep-local-deletions.patch \
+  --source-patch \
+  'apply --check' \
   'mod verify' \
   'xcrun clang' \
   '-arch arm64' \

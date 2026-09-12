@@ -2,14 +2,17 @@ Covalent maintained folder engine
 
 Engine: Syncthing v2.1.3
 Source commit: 946e2b83a1f6c6ae119427c09e0a5802940b82ff
+Source patch SHA-256: e58e7d133a388576a54cacc6a5a5094e6607c483c0daabac552de1a1854d92ac
 Build toolchain: Go 1.26.7, darwin/arm64, CGO enabled
 Minimum macOS deployment target: 15.0
 Build tags: noupgrade
 License: Mozilla Public License 2.0
 Corresponding source: https://github.com/syncthing/syncthing/tree/946e2b83a1f6c6ae119427c09e0a5802940b82ff
+Modified corresponding source: bundled Open Source Notices source archive and patch
 
-The executable is built from an archive of that exact commit with a private
-module cache. The bundled target manifest and Open Source Notices contain
+The executable is built from an archive of that exact commit, modified only by
+the hash-bound bundled patch, with a private module cache. The bundled target
+manifest and Open Source Notices contain
 byte-exact license and notice evidence for the compiled macOS arm64 package
 graph. That inventory records evidence for review; it is not legal approval.
 

@@ -5,6 +5,7 @@ set -eu
 ENGINE_VERSION=v2.1.3
 ENGINE_COMMIT=946e2b83a1f6c6ae119427c09e0a5802940b82ff
 SOURCE_ARCHIVE_SHA256=dbcc9498602286a843f29a7104833bd1422082999aa51ff92eef493172d47959
+SOURCE_PATCH_SHA256=e58e7d133a388576a54cacc6a5a5094e6607c483c0daabac552de1a1854d92ac
 GUARDIAN_SOURCE_SHA256=c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579
 LICENSE_SHA256=3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04
 AUTHORS_SHA256=5a0044d13ddf6f013bdd5c2bc419bf45d6123c356567510237e82f304d113d48
@@ -44,14 +45,19 @@ architecture() {
 }
 
 build_worker() {
-  test "$#" -eq 3 || { echo "usage: $0 worker SOURCE OUTPUT TARGETARCH" >&2; exit 64; }
+  test "$#" -eq 4 || { echo "usage: $0 worker EXTRACTED-SOURCE OUTPUT TARGETARCH SOURCE-PATCH" >&2; exit 64; }
   source_dir=$1
   output_root=$2
   target_arch=$3
+  source_patch=$4
   case "$source_dir:$output_root" in
     /*:/*) ;;
     *) echo "Worker source and output paths must be absolute" >&2; exit 64 ;;
   esac
+  test ! -e "$source_dir/.git" && test ! -L "$source_dir/.git" || {
+    echo "Worker source must be an expendable extracted archive without .git; the patch is applied in place" >&2
+    exit 64
+  }
   runtime_arch=$(architecture "$target_arch")
   test "$(uname -s)" = Linux && test "$(uname -m)" = "$runtime_arch" || {
     echo "Worker must be built in its exact target-platform container" >&2
@@ -69,8 +75,22 @@ build_worker() {
   require_hash "$source_dir/AUTHORS" "$AUTHORS_SHA256"
   require_hash "$source_dir/go.mod" "$GO_MOD_SHA256"
   require_hash "$source_dir/go.sum" "$GO_SUM_SHA256"
+  test -f "$source_patch" && test ! -L "$source_patch" || {
+    echo "Maintained engine source patch is unavailable" >&2
+    exit 1
+  }
+  require_hash "$source_patch" "$SOURCE_PATCH_SHA256"
   go_mod_before=$(sha256 "$source_dir/go.mod")
   go_sum_before=$(sha256 "$source_dir/go.sum")
+  GIT_CEILING_DIRECTORIES="$(dirname -- "$source_dir")" \
+    git -C "$source_dir" apply --check "$source_patch"
+  GIT_CEILING_DIRECTORIES="$(dirname -- "$source_dir")" \
+    git -C "$source_dir" apply "$source_patch"
+  GIT_CEILING_DIRECTORIES="$(dirname -- "$source_dir")" \
+    git -C "$source_dir" apply --check --reverse "$source_patch"
+  mkdir "$source_dir/covalent-patches"
+  install -m 0444 "$source_patch" \
+    "$source_dir/covalent-patches/keep-local-deletions.patch"
   mkdir -p "$output_root"
   output="$output_root/covalent-syncthing"
   (
@@ -289,6 +309,8 @@ Covalent maintained Linux folder engine
 Syncthing version: $ENGINE_VERSION
 Upstream commit: $ENGINE_COMMIT
 Pinned source archive SHA-256: $SOURCE_ARCHIVE_SHA256
+Covalent source patch SHA-256: $SOURCE_PATCH_SHA256
+Modified corresponding source: target notice manifest sourceModifications and correspondingSources records
 Build toolchain: Go 1.26.7, CGO_ENABLED=0
 Guardian source SHA-256: $GUARDIAN_SOURCE_SHA256
 Target architecture: $runtime_arch
@@ -303,7 +325,7 @@ Notice classification and release approval: still required
 EOF
   chmod 0444 "$output_root/share/PROVENANCE.txt"
   cat > "$output_root/share/manifest.json" <<EOF
-{"schema":1,"engine":{"name":"Syncthing","version":"$ENGINE_VERSION","commit":"$ENGINE_COMMIT","sourceArchiveSha256":"$SOURCE_ARCHIVE_SHA256","goVersion":"go1.26.7"},"guardian":{"sourceSha256":"$GUARDIAN_SOURCE_SHA256"},"notices":{"licenseSha256":"$LICENSE_SHA256","authorsSha256":"$AUTHORS_SHA256","targetManifestSha256":"$notice_manifest_sha","combinedSha256":"$combined_notice_sha","combinedBytes":$combined_notice_size,"thirdPartyStatus":"target-texts-collected-review-required"},"targetEvidence":{"goListSha256":"$graph_sha","goListBytes":$graph_size,"goVersionSha256":"$go_version_sha","goVersionBytes":$go_version_size,"licenseInventorySha256":"$inventory_sha","licenseInventoryBytes":$inventory_size},"architecture":"$runtime_arch","executables":{"guardian":{"sha256":"$guardian_sha","bytes":$guardian_size},"worker":{"sha256":"$worker_sha","bytes":$worker_size}}}
+{"schema":1,"engine":{"name":"Syncthing","version":"$ENGINE_VERSION","commit":"$ENGINE_COMMIT","sourceArchiveSha256":"$SOURCE_ARCHIVE_SHA256","sourcePatchSha256":"$SOURCE_PATCH_SHA256","sourceState":"modified","goVersion":"go1.26.7"},"guardian":{"sourceSha256":"$GUARDIAN_SOURCE_SHA256"},"notices":{"licenseSha256":"$LICENSE_SHA256","authorsSha256":"$AUTHORS_SHA256","targetManifestSha256":"$notice_manifest_sha","combinedSha256":"$combined_notice_sha","combinedBytes":$combined_notice_size,"thirdPartyStatus":"target-texts-collected-review-required"},"targetEvidence":{"goListSha256":"$graph_sha","goListBytes":$graph_size,"goVersionSha256":"$go_version_sha","goVersionBytes":$go_version_size,"licenseInventorySha256":"$inventory_sha","licenseInventoryBytes":$inventory_size},"architecture":"$runtime_arch","executables":{"guardian":{"sha256":"$guardian_sha","bytes":$guardian_size},"worker":{"sha256":"$worker_sha","bytes":$worker_size}}}
 EOF
   chmod 0444 "$output_root/share/manifest.json"
   test "$(size_of "$output_root/share/manifest.json")" -le 8192

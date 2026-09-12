@@ -6,6 +6,8 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -24,6 +26,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -33,6 +36,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -51,6 +55,9 @@ import life.michaelwong.covalent.R
 import life.michaelwong.covalent.data.CovalentNodeClient
 import life.michaelwong.covalent.data.NodeApiException
 import life.michaelwong.covalent.model.FolderShare
+import life.michaelwong.covalent.model.FolderLinkPolicy
+import life.michaelwong.covalent.model.FolderLinkSettings
+import life.michaelwong.covalent.model.FolderLinkSettingsState
 import life.michaelwong.covalent.model.FolderSharePhase
 import life.michaelwong.covalent.model.FolderSyncStatus
 import life.michaelwong.covalent.model.FolderSyncAvailability
@@ -62,6 +69,8 @@ import life.michaelwong.covalent.model.NodeConnection
 import life.michaelwong.covalent.node.EmbeddedNodeManager
 import life.michaelwong.covalent.sync.FolderSyncActions
 import life.michaelwong.covalent.sync.FolderSyncGrantStore
+import life.michaelwong.covalent.sync.FolderLinkSettingsChangeStore
+import life.michaelwong.covalent.sync.SavedFolderLinkSettingsChange
 import life.michaelwong.covalent.sync.FolderSyncSpecialAccess
 import life.michaelwong.covalent.sync.NodeFolderSyncApi
 import life.michaelwong.covalent.sync.PeerAddressUpdateDraft
@@ -74,6 +83,15 @@ private data class LoadedFolderSyncStatus(
     val status: FolderSyncStatus,
     val pendingRepairOffers: Set<String>,
     val retiredFolderChoice: Boolean,
+    val savedSettingsChanges: List<SavedFolderLinkSettingsChange>,
+)
+
+private data class LinkSettingsEditor(
+    val folderId: String,
+    val label: String,
+    val current: FolderLinkSettingsState,
+    val propagateSourceDeletions: Boolean,
+    val restoreLocalDeletions: Boolean,
 )
 
 @Composable
@@ -91,8 +109,12 @@ internal fun FolderSyncScreen(
     val peerAddressChangedMessage = stringResource(R.string.node_error_peer_address_changed)
     val addressUpdatedMessage = stringResource(R.string.folder_sync_address_updated_checking)
     val addressSavedRefreshNeededMessage = stringResource(R.string.folder_sync_address_saved_refresh_needed)
+    val settingsPendingMessage = stringResource(R.string.folder_link_settings_pending_error)
+    val settingsConflictMessage = stringResource(R.string.folder_link_settings_conflict_error)
+    val settingsUnknownMessage = stringResource(R.string.folder_link_settings_status_unknown)
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val grants = remember(context) { FolderSyncGrantStore(context.applicationContext) }
+    val settingsChanges = remember(context) { FolderLinkSettingsChangeStore(context.applicationContext) }
     val api = remember { NodeFolderSyncApi(CovalentNodeClient()) }
     val browser = remember(context) { RawFolderAccess(context.applicationContext) }
     var accessGranted by remember { mutableStateOf(FolderSyncSpecialAccess.granted()) }
@@ -104,8 +126,14 @@ internal fun FolderSyncScreen(
     var entries by remember { mutableStateOf<List<RawFolderEntry>>(emptyList()) }
     var label by remember { mutableStateOf("") }
     var selectedPeer by remember { mutableStateOf<String?>(null) }
+    var propagateSourceDeletions by remember { mutableStateOf(false) }
+    var restoreLocalDeletions by remember { mutableStateOf(false) }
+    var destinationSource by remember { mutableStateOf<FolderShare?>(null) }
     var busy by remember { mutableStateOf(false) }
     var pendingRepairOffers by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var savedSettingsChanges by remember { mutableStateOf<List<SavedFolderLinkSettingsChange>>(emptyList()) }
+    var settingsEditor by remember { mutableStateOf<LinkSettingsEditor?>(null) }
+    var settingsConfirmation by remember { mutableStateOf<LinkSettingsEditor?>(null) }
     var addressEditor by remember { mutableStateOf<PeerAddressUpdateDraft?>(null) }
     var addressEditorError by remember { mutableStateOf<String?>(null) }
     var addressUpdateNotice by remember { mutableStateOf<String?>(null) }
@@ -123,7 +151,10 @@ internal fun FolderSyncScreen(
         }
         return withContext(Dispatchers.IO) {
             val previousChoices = grants.records().mapNotNull { it.offerId }.toSet()
-            val snapshot = api.status(ready).also(grants::reconcile)
+            val snapshot = api.status(ready).also {
+                grants.reconcile(it)
+                settingsChanges.reconcile(it)
+            }
             val retiredChoice = snapshot.shares.any { share ->
                 if (share.phase == FolderSharePhase.REMOVED) {
                     share.offerId in previousChoices || share.supersededOfferIds.any { it in previousChoices }
@@ -136,6 +167,7 @@ internal fun FolderSyncScreen(
                     .mapNotNull { it.offerId }
                     .toSet(),
                 retiredChoice,
+                settingsChanges.records(),
             )
         }
     }
@@ -143,6 +175,7 @@ internal fun FolderSyncScreen(
     fun applyStatus(loaded: LoadedFolderSyncStatus) {
         status = loaded.status
         pendingRepairOffers = loaded.pendingRepairOffers
+        savedSettingsChanges = loaded.savedSettingsChanges
         if (loaded.retiredFolderChoice) selectedFolder = null
         if (
             addressUpdateNotice == addressSavedRefreshNeededMessage ||
@@ -185,6 +218,73 @@ internal fun FolderSyncScreen(
         browser::select,
         manager::refreshFolderSyncAccess,
     )
+
+    fun submitSettings(
+        folderId: String,
+        expectedRevision: Long,
+        settings: FolderLinkSettings,
+        retry: SavedFolderLinkSettingsChange? = null,
+    ) {
+        if (busy) return
+        busy = true
+        error = null
+        settingsEditor = null
+        settingsConfirmation = null
+        scope.launch {
+            val prepared = runCatching {
+                withContext(Dispatchers.IO) {
+                    retry ?: settingsChanges.prepare(folderId, expectedRevision, settings)
+                }
+            }
+            if (prepared.isFailure) {
+                error = folderSyncErrorText(checkNotNull(prepared.exceptionOrNull()))
+                busy = false
+                return@launch
+            }
+            val change = checkNotNull(prepared.getOrNull())
+            val persisted = runCatching { withContext(Dispatchers.IO) { settingsChanges.records() } }
+            if (persisted.isFailure) {
+                error = folderSyncErrorText(checkNotNull(persisted.exceptionOrNull()))
+                busy = false
+                return@launch
+            }
+            savedSettingsChanges = checkNotNull(persisted.getOrNull())
+            val submission = runCatching {
+                withContext(Dispatchers.IO) {
+                    api.settings(
+                        connection(),
+                        change.folderId,
+                        change.changeId,
+                        change.expectedRevision,
+                        change.settings,
+                    )
+                }
+            }
+            val submissionError = submission.exceptionOrNull()
+            val code = (submissionError as? NodeApiException)?.code
+            val storageFailure = if (code == "link_settings_pending" || code == "link_settings_conflict") {
+                runCatching {
+                    withContext(Dispatchers.IO) {
+                        settingsChanges.markForReview(change.folderId, change.changeId)
+                    }
+                }
+                    .exceptionOrNull()
+            } else null
+            val loaded = runCatching { loadStatus() }
+            loaded.onSuccess(::applyStatus)
+            val saved = runCatching { withContext(Dispatchers.IO) { settingsChanges.records() } }
+            saved.onSuccess { savedSettingsChanges = it }
+            error = when {
+                storageFailure != null -> folderSyncErrorText(storageFailure)
+                code == "link_settings_pending" -> settingsPendingMessage
+                code == "link_settings_conflict" -> settingsConflictMessage
+                submissionError != null -> settingsUnknownMessage
+                loaded.isFailure || saved.isFailure -> settingsUnknownMessage
+                else -> null
+            }
+            busy = false
+        }
+    }
 
     fun submitAddressUpdate() {
         if (busy) return
@@ -362,6 +462,50 @@ internal fun FolderSyncScreen(
                     },
                     enabled = !busy,
                 ) { Text(stringResource(R.string.action_cancel)) }
+            },
+        )
+    }
+
+    settingsEditor?.let { editor ->
+        LinkSettingsEditorDialog(
+            editor = editor,
+            busy = busy,
+            onChange = { settingsEditor = it },
+            onSave = {
+                val enablesSourceDeletion =
+                    !editor.current.settings.deletionPolicy.propagateSourceDeletions &&
+                        editor.propagateSourceDeletions
+                val enablesRestore =
+                    !editor.current.settings.deletionPolicy.restoreLocalDeletions &&
+                        editor.restoreLocalDeletions
+                if (enablesSourceDeletion || enablesRestore) {
+                    settingsEditor = null
+                    settingsConfirmation = editor
+                } else {
+                    submitSettings(
+                        editor.folderId,
+                        editor.current.revision,
+                        editor.proposedSettings(),
+                    )
+                }
+            },
+            onDismiss = { settingsEditor = null },
+        )
+    }
+    settingsConfirmation?.let { editor ->
+        LinkSettingsConfirmationDialog(
+            editor = editor,
+            busy = busy,
+            onConfirm = {
+                submitSettings(
+                    editor.folderId,
+                    editor.current.revision,
+                    editor.proposedSettings(),
+                )
+            },
+            onDismiss = {
+                settingsConfirmation = null
+                settingsEditor = editor
             },
         )
     }
@@ -574,6 +718,42 @@ internal fun FolderSyncScreen(
                         }
                     }
                     item {
+                        val peerName = snapshot.peers.firstOrNull { it.peerId == selectedPeer }?.displayName
+                        if (selectedFolder != null && peerName != null) {
+                            Card(Modifier.fillMaxWidth()) {
+                                Column(
+                                    Modifier.padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                                ) {
+                                    Text(
+                                        stringResource(R.string.folder_link_direction),
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                    Text(stringResource(R.string.folder_link_source_folder, checkNotNull(selectedFolder)))
+                                    Text(stringResource(R.string.folder_link_destination_peer, peerName))
+                                }
+                            }
+                        }
+                    }
+                    item {
+                        LinkPolicyControl(
+                            checked = propagateSourceDeletions,
+                            onCheckedChange = { propagateSourceDeletions = it },
+                            title = stringResource(R.string.folder_link_source_deletions),
+                            detail = stringResource(R.string.folder_link_source_deletions_detail),
+                            tag = "folder-link-source-deletions",
+                        )
+                    }
+                    item {
+                        LinkPolicyControl(
+                            checked = restoreLocalDeletions,
+                            onCheckedChange = { restoreLocalDeletions = it },
+                            title = stringResource(R.string.folder_link_destination_deletions),
+                            detail = stringResource(R.string.folder_link_destination_deletions_detail),
+                            tag = "folder-link-destination-deletions",
+                        )
+                    }
+                    item {
                         Button(
                             enabled = !busy && selectedFolder != null && selectedPeer != null && label.isNotBlank(),
                             onClick = {
@@ -586,6 +766,10 @@ internal fun FolderSyncScreen(
                                                 UUID.randomUUID(),
                                                 label.trim(),
                                                 checkNotNull(selectedFolder),
+                                                FolderLinkPolicy(
+                                                    propagateSourceDeletions = propagateSourceDeletions,
+                                                    restoreLocalDeletions = restoreLocalDeletions,
+                                                ),
                                             )
                                         }
                                     }.onFailure { error = folderSyncErrorText(it) }
@@ -598,6 +782,10 @@ internal fun FolderSyncScreen(
                 }
             }
             items(snapshot.shares.filter { it.phase != FolderSharePhase.REMOVED || it.remoteRemovalPending }, key = FolderShare::offerId) { share ->
+                val settingsCardOfferId = snapshot.shares.firstOrNull {
+                    it.folderId == share.folderId && it.linkPolicy != null &&
+                        (it.phase != FolderSharePhase.REMOVED || it.remoteRemovalPending)
+                }?.offerId
                 FolderShareCard(
                     status = snapshot,
                     share = share,
@@ -607,6 +795,43 @@ internal fun FolderSyncScreen(
                     accessGranted = accessGranted,
                     hasPendingRepair = share.offerId in pendingRepairOffers,
                     busy = busy,
+                    addDestination = { destinationSource = share },
+                    showLinkSettings = share.offerId == settingsCardOfferId,
+                    savedSettingsChange = savedSettingsChanges.singleOrNull { it.folderId == share.folderId },
+                    editSettings = { state, policy ->
+                        settingsEditor = LinkSettingsEditor(
+                            share.folderId,
+                            share.label,
+                            state,
+                            policy.propagateSourceDeletions,
+                            policy.restoreLocalDeletions,
+                        )
+                    },
+                    retrySettings = { change ->
+                        submitSettings(
+                            change.folderId,
+                            change.expectedRevision,
+                            change.settings,
+                            change,
+                        )
+                    },
+                    reviewSettings = { state, policy ->
+                        scope.launch {
+                            runCatching {
+                                withContext(Dispatchers.IO) { settingsChanges.takeForReview(share.folderId) }
+                                withContext(Dispatchers.IO) { settingsChanges.records() }
+                            }.onSuccess {
+                                savedSettingsChanges = it
+                                settingsEditor = LinkSettingsEditor(
+                                    share.folderId,
+                                    share.label,
+                                    state,
+                                    policy.propagateSourceDeletions,
+                                    policy.restoreLocalDeletions,
+                                )
+                            }.onFailure { error = folderSyncErrorText(it) }
+                        }
+                    },
                     mutate = { action ->
                         busy = true
                         scope.launch {
@@ -631,6 +856,62 @@ internal fun FolderSyncScreen(
                     },
                 )
             }
+        }
+    }
+    destinationSource?.let { source ->
+        val snapshot = status
+        if (snapshot != null) {
+            val existingDestinations = snapshot.shares
+                .filter {
+                    !it.incoming && it.folderId == source.folderId &&
+                        (it.phase != FolderSharePhase.REMOVED || it.remoteRemovalPending)
+                }
+                .mapTo(mutableSetOf(), FolderShare::peerId)
+            val availablePeers = snapshot.peers.filter { it.peerId !in existingDestinations }
+            AlertDialog(
+                onDismissRequest = { if (!busy) destinationSource = null },
+                title = { Text(stringResource(R.string.folder_link_add_destination)) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(source.label, fontWeight = FontWeight.SemiBold)
+                        Text(stringResource(R.string.folder_link_source_this_phone))
+                        Text(stringResource(R.string.folder_link_source_locked))
+                        if (availablePeers.isEmpty()) {
+                            Text(stringResource(R.string.folder_link_no_destinations))
+                        } else {
+                            availablePeers.forEach { peer ->
+                                OutlinedButton(
+                                    onClick = {
+                                        busy = true
+                                        scope.launch {
+                                            runCatching {
+                                                withContext(Dispatchers.IO) {
+                                                    actions().addDestination(source, peer.peerId)
+                                                }
+                                            }.onSuccess {
+                                                destinationSource = null
+                                            }.onFailure { error = folderSyncErrorText(it) }
+                                            busy = false
+                                            refresh()
+                                        }
+                                    },
+                                    enabled = !busy,
+                                    modifier = Modifier.fillMaxWidth()
+                                        .testTag("folder-link-add-${peer.peerId}"),
+                                ) {
+                                    Text(stringResource(R.string.folder_link_add_peer, peer.displayName))
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = { destinationSource = null }, enabled = !busy) {
+                        Text(stringResource(R.string.action_cancel))
+                    }
+                },
+            )
         }
     }
 }
@@ -681,6 +962,12 @@ private fun FolderShareCard(
     accessGranted: Boolean,
     hasPendingRepair: Boolean,
     busy: Boolean,
+    addDestination: () -> Unit,
+    showLinkSettings: Boolean,
+    savedSettingsChange: SavedFolderLinkSettingsChange?,
+    editSettings: (FolderLinkSettingsState, FolderLinkPolicy) -> Unit,
+    retrySettings: (SavedFolderLinkSettingsChange) -> Unit,
+    reviewSettings: (FolderLinkSettingsState, FolderLinkPolicy) -> Unit,
     mutate: (String) -> Unit,
 ) {
     var showingRemovalConfirmation by remember(share.offerId) { mutableStateOf(false) }
@@ -708,6 +995,39 @@ private fun FolderShareCard(
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(share.label, fontWeight = FontWeight.SemiBold)
+            Text(
+                if (share.incoming) stringResource(R.string.folder_link_source_peer, peerName)
+                else stringResource(R.string.folder_link_source_this_phone),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                if (share.incoming) stringResource(R.string.folder_link_destination_this_phone)
+                else stringResource(R.string.folder_link_destination_peer, peerName),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            share.linkPolicy?.let { policy ->
+                Text(stringResource(R.string.folder_link_one_way), fontWeight = FontWeight.SemiBold)
+                LinkPolicySummary(policy)
+            } ?: Text(stringResource(R.string.folder_link_legacy_two_way), fontWeight = FontWeight.SemiBold)
+            if (!share.incoming && share.linkPolicy != null && share.phase != FolderSharePhase.REMOVED) {
+                OutlinedButton(
+                    onClick = addDestination,
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth().testTag("folder-link-add-destination-${share.offerId}"),
+                ) {
+                    Text(stringResource(R.string.folder_link_add_destination))
+                }
+            }
+            if (showLinkSettings && share.linkPolicy != null) {
+                FolderLinkSettingsSummary(
+                    state = share.linkSettings,
+                    savedChange = savedSettingsChange,
+                    busy = busy,
+                    edit = editSettings,
+                    retry = retrySettings,
+                    review = reviewSettings,
+                )
+            }
             val summary = when (status.summaryFor(share)) {
                 FolderShareSummary.REMOVAL_PENDING -> stringResource(R.string.folder_sync_removal_pending, peerName)
                 FolderShareSummary.REMOVED -> stringResource(R.string.folder_sync_removed)
@@ -765,10 +1085,14 @@ private fun FolderShareCard(
                     }
                 }
                 if (status.issue != FolderSyncIssue.FOLDER_ACCESS && share.phase == FolderSharePhase.READY) {
-                    OutlinedButton(onClick = { mutate("pause") }, enabled = !busy) { Text(stringResource(R.string.action_pause)) }
+                    OutlinedButton(onClick = { mutate("pause") }, enabled = !busy) {
+                        Text(stringResource(if (share.linkPolicy == null) R.string.action_pause else R.string.folder_link_pause))
+                    }
                 }
                 if (status.issue != FolderSyncIssue.FOLDER_ACCESS && share.phase == FolderSharePhase.PAUSED && !share.expired) {
-                    OutlinedButton(onClick = { mutate("resume") }, enabled = !busy) { Text(stringResource(R.string.action_resume)) }
+                    OutlinedButton(onClick = { mutate("resume") }, enabled = !busy) {
+                        Text(stringResource(if (share.linkPolicy == null) R.string.action_resume else R.string.folder_link_resume))
+                    }
                 }
                 if (share.phase != FolderSharePhase.REMOVED) {
                     OutlinedButton(onClick = { showingRemovalConfirmation = true }, enabled = !busy) {
@@ -779,6 +1103,196 @@ private fun FolderShareCard(
         }
     }
 }
+
+@Composable
+private fun FolderLinkSettingsSummary(
+    state: FolderLinkSettingsState?,
+    savedChange: SavedFolderLinkSettingsChange?,
+    busy: Boolean,
+    edit: (FolderLinkSettingsState, FolderLinkPolicy) -> Unit,
+    retry: (SavedFolderLinkSettingsChange) -> Unit,
+    review: (FolderLinkSettingsState, FolderLinkPolicy) -> Unit,
+) {
+    if (state == null) {
+        Text(stringResource(R.string.folder_link_settings_unavailable), color = MaterialTheme.colorScheme.error)
+        return
+    }
+    Text(
+        stringResource(R.string.folder_link_settings_revision, state.revision),
+        fontWeight = FontWeight.SemiBold,
+    )
+    Text(
+        stringResource(R.string.folder_link_settings_every_destination),
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    if (!state.confirmed) {
+        Text(stringResource(R.string.folder_link_settings_unconfirmed))
+        return
+    }
+    state.conflictedChange?.let { conflict ->
+        Text(stringResource(R.string.folder_link_settings_conflicted), color = MaterialTheme.colorScheme.error)
+        LinkPolicySummary(conflict.settings.deletionPolicy)
+        OutlinedButton(
+            onClick = { review(state, conflict.settings.deletionPolicy) },
+            enabled = !busy,
+        ) { Text(stringResource(R.string.folder_link_settings_review)) }
+        return
+    }
+    state.pendingChange?.let { pending ->
+        Text(stringResource(R.string.folder_link_settings_waiting_for_source))
+        LinkPolicySummary(pending.settings.deletionPolicy)
+        return
+    }
+    savedChange?.let { saved ->
+        Text(
+            stringResource(
+                if (saved.requiresReview) R.string.folder_link_settings_saved_review
+                else R.string.folder_link_settings_status_unknown,
+            ),
+        )
+        LinkPolicySummary(saved.settings.deletionPolicy)
+        OutlinedButton(
+            onClick = {
+                if (saved.requiresReview) review(state, saved.settings.deletionPolicy)
+                else retry(saved)
+            },
+            enabled = !busy,
+        ) {
+            Text(stringResource(
+                if (saved.requiresReview) R.string.folder_link_settings_review
+                else R.string.folder_link_settings_retry_exact,
+            ))
+        }
+        return
+    }
+    if (state.settings.paused) Text(stringResource(R.string.folder_link_settings_paused))
+    OutlinedButton(
+        onClick = { edit(state, state.settings.deletionPolicy) },
+        enabled = !busy,
+        modifier = Modifier.fillMaxWidth(),
+    ) { Text(stringResource(R.string.folder_link_settings_edit)) }
+}
+
+@Composable
+private fun LinkPolicySummary(policy: FolderLinkPolicy) {
+    Text(stringResource(
+        if (policy.propagateSourceDeletions) R.string.folder_link_source_deletions_propagate
+        else R.string.folder_link_source_deletions_keep,
+    ))
+    Text(stringResource(
+        if (policy.restoreLocalDeletions) R.string.folder_link_destination_deletions_restore
+        else R.string.folder_link_destination_deletions_keep,
+    ))
+}
+
+@Composable
+private fun LinkPolicyControl(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    title: String,
+    detail: String,
+    tag: String,
+) {
+    Card(Modifier.fillMaxWidth().testTag(tag)) {
+        Row(
+            Modifier.padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(title, fontWeight = FontWeight.SemiBold)
+                Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Switch(checked = checked, onCheckedChange = onCheckedChange)
+        }
+    }
+}
+
+@Composable
+private fun LinkSettingsEditorDialog(
+    editor: LinkSettingsEditor,
+    busy: Boolean,
+    onChange: (LinkSettingsEditor) -> Unit,
+    onSave: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text(stringResource(R.string.folder_link_settings_edit_title, editor.label)) },
+        text = {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(stringResource(R.string.folder_link_settings_every_destination))
+                LinkPolicyControl(
+                    editor.propagateSourceDeletions,
+                    { onChange(editor.copy(propagateSourceDeletions = it)) },
+                    stringResource(R.string.folder_link_source_deletions),
+                    stringResource(R.string.folder_link_source_deletions_detail),
+                    "folder-link-settings-source-deletions",
+                )
+                LinkPolicyControl(
+                    editor.restoreLocalDeletions,
+                    { onChange(editor.copy(restoreLocalDeletions = it)) },
+                    stringResource(R.string.folder_link_destination_deletions),
+                    stringResource(R.string.folder_link_destination_deletions_detail),
+                    "folder-link-settings-destination-deletions",
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = onSave, enabled = !busy) {
+                Text(stringResource(R.string.folder_link_settings_save))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !busy) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        },
+    )
+}
+
+@Composable
+private fun LinkSettingsConfirmationDialog(
+    editor: LinkSettingsEditor,
+    busy: Boolean,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val current = editor.current.settings.deletionPolicy
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text(stringResource(R.string.folder_link_settings_confirm_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (!current.propagateSourceDeletions && editor.propagateSourceDeletions) {
+                    Text(stringResource(R.string.folder_link_settings_confirm_source_deletions))
+                }
+                if (!current.restoreLocalDeletions && editor.restoreLocalDeletions) {
+                    Text(stringResource(R.string.folder_link_settings_confirm_restore_deletions))
+                }
+                Text(stringResource(R.string.folder_link_settings_confirm_current_until_applied))
+            }
+        },
+        confirmButton = {
+            Button(onClick = onConfirm, enabled = !busy) {
+                Text(stringResource(R.string.folder_link_settings_confirm))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !busy) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        },
+    )
+}
+
+private fun LinkSettingsEditor.proposedSettings() = FolderLinkSettings(
+    FolderLinkPolicy(propagateSourceDeletions, restoreLocalDeletions),
+    paused = current.settings.paused,
+)
 
 private fun folderSyncErrorText(error: Throwable): String = when (error) {
     is SecurityException -> "Android denied access to that folder."

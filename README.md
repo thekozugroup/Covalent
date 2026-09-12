@@ -1,6 +1,8 @@
 # Covalent
 
-Covalent is a lightweight, self-hosted backup and restore system for devices you control. It pairs directly over a LAN or Tailnet, stores encrypted verified chunks on devices you explicitly choose, and restores relative paths only beneath a destination you authorize.
+Covalent is being simplified into a native, self-hosted wrapper for one-way file links: choose a source, pair destinations, configure the link once, and monitor transfers. macOS, Android, and Docker/Unraid are the supported targets.
+
+**Development scope changed on 2026-09-12.** The current checkout contains a working pairing and transfer foundation plus earlier backup features. The new one-way workflows are not yet complete. Follow the [current product requirements](docs/product/requirements.md) and [verified progress](docs/release/completion-progress.md); the older backup instructions below describe the existing foundation.
 
 ## Start here
 
@@ -87,7 +89,7 @@ Prerequisites by area: Rust 1.97.1 for the shared engine; an Apple Silicon Mac w
 cargo run -p covalent-cli -- doctor
 ```
 
-Use `apple`, `android`, `container`, or `all` with both scripts for broader work. Android headed validation additionally requires the exact `Covalent_API_37` AVD and an explicit `ANDROID_SERIAL`; Apple UI gates use the bounded scripts under `apps/apple/Scripts`. Container validation includes TLS-only management, the three-node disaster drill, and artifact budgets. Public package promotion and a physical Unraid drill remain release gates. Apple Developer ID/notarization is excluded, and Android production signing is deferred.
+Use `apple`, `android`, `container`, or `all` with both scripts for broader work. Android headed validation additionally requires the exact `Covalent_API_37` AVD and an explicit `ANDROID_SERIAL`; Apple UI gates use the bounded scripts under `apps/apple/Scripts`. Container validation includes TLS-only management, the three-node disaster drill, and artifact budgets. Public package promotion remains required. Docker is the accepted Unraid validation target while Atlas is offline; a physical Atlas drill does not gate the current scope. Apple Developer ID/notarization is excluded, and Android production signing is deferred.
 
 Bootstrap checks tools; it does not start a node. A headless node requires an
 explicitly provisioned KEK, and network access requires the TLS container path.

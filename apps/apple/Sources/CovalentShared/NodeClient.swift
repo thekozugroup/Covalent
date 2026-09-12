@@ -160,6 +160,26 @@ public actor NodeClient {
                 && !address.contains(where: \Character.isWhitespace)
             })
       else { throw NodeClientError.invalidResponse }
+      let zero = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+      for share in status.shares {
+        guard let state = share.linkSettings else { continue }
+        guard share.linkPolicy == state.settings.deletionPolicy,
+              state.changeId != zero,
+              state.changedBy != zero
+        else { throw NodeClientError.invalidResponse }
+        for change in [state.pendingChange, state.conflictedChange].compactMap({ $0 }) {
+          guard change.folderId == share.folderId,
+                change.sourceId != zero,
+                change.requesterId != zero,
+                change.changeId != zero,
+                !share.incoming || change.sourceId == share.peerId
+          else { throw NodeClientError.invalidResponse }
+        }
+      }
+      for folderId in Set(status.shares.map(\.folderId)) {
+        let states = Set(status.shares.filter { $0.folderId == folderId }.compactMap(\.linkSettings))
+        guard states.count <= 1 else { throw NodeClientError.invalidResponse }
+      }
       _ = try status.invitationReplacements()
       return status
     }
@@ -182,6 +202,12 @@ public actor NodeClient {
 
     public func pauseFolder(_ request: FolderPauseRequest) async throws -> FolderSyncMutation {
       try await send(path: "api/v1/sync/pause", method: "POST", body: request)
+    }
+
+    public func updateFolderLinkSettings(
+      _ request: FolderLinkSettingsRequest
+    ) async throws -> FolderSyncMutation {
+      try await send(path: "api/v1/sync/settings", method: "POST", body: request)
     }
 
     public func removeFolder(_ request: FolderReferenceRequest) async throws -> FolderSyncMutation {

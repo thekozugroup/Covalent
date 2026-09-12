@@ -35,6 +35,37 @@ data class FolderShare(
     val peerConnection: PeerConnectionState = PeerConnectionState.UNKNOWN,
     val supersededOfferIds: List<String> = emptyList(),
     val remoteRemovalPending: Boolean = false,
+    val linkPolicy: FolderLinkPolicy? = null,
+    val linkSettings: FolderLinkSettingsState? = null,
+)
+
+data class FolderLinkPolicy(
+    val propagateSourceDeletions: Boolean = false,
+    val restoreLocalDeletions: Boolean = false,
+)
+
+data class FolderLinkSettings(
+    val deletionPolicy: FolderLinkPolicy,
+    val paused: Boolean,
+)
+
+data class FolderLinkSettingsChange(
+    val folderId: String,
+    val sourceId: String,
+    val requesterId: String,
+    val changeId: String,
+    val expectedRevision: Long,
+    val settings: FolderLinkSettings,
+)
+
+data class FolderLinkSettingsState(
+    val revision: Long,
+    val settings: FolderLinkSettings,
+    val changeId: String,
+    val changedBy: String,
+    val confirmed: Boolean,
+    val pendingChange: FolderLinkSettingsChange?,
+    val conflictedChange: FolderLinkSettingsChange?,
 )
 
 enum class FolderSharePhase { OFFERED, AWAITING_COMMIT, READY, PAUSED, REMOVED }
@@ -68,7 +99,7 @@ fun FolderSyncStatus.summaryFor(share: FolderShare): FolderShareSummary {
             return FolderShareSummary.CHECKING
         }
         if (health.state in setOf("syncing", "sync-waiting", "sync-preparing") ||
-            health.remainingFiles > 0 || health.remainingBytes > 0
+            share.linkPolicy == null && (health.remainingFiles > 0 || health.remainingBytes > 0)
         ) return FolderShareSummary.SYNCING
     }
     return if (connectionFreshness != PeerConnectionFreshness.FRESH) {

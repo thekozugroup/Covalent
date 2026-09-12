@@ -15,6 +15,7 @@ inventory_tool="$repo_root/scripts/collect-go-target-license-inventory.py"
 notice_tool="$repo_root/scripts/collect-sync-engine-notices.py"
 project_license="$repo_root/LICENSE"
 ofl_license="$repo_root/docs/licenses/sync-engine/OFL-1.1.txt"
+source_patch="$repo_root/packaging/sync-engine/keep-local-deletions.patch"
 
 engine_version=v2.1.3
 engine_commit=946e2b83a1f6c6ae119427c09e0a5802940b82ff
@@ -23,6 +24,7 @@ source_export_sha=eb60efd57d1662af75ffb2f7b89abab7200362c654838486138a34bee00fed
 go_mod_sha=a129d6ae9cf20593fab4b1fb04ac09b176c4942d3a4bec9394f9c888fe2d1bd1
 go_sum_sha=7e9606117eca33e9263181a3d0141e403c940c55022a061d8ed9e22d4bda2acd
 guardian_sha=c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579
+source_patch_sha=e58e7d133a388576a54cacc6a5a5094e6607c483c0daabac552de1a1854d92ac
 source_date_epoch=1785792965
 maximum_graph_bytes=$((16 * 1024 * 1024))
 maximum_inventory_bytes=$((16 * 1024 * 1024))
@@ -38,6 +40,9 @@ test "$(uname -s)" = Darwin && test "$(uname -m)" = arm64 ||
 case "$source_dir:$output_root" in /*:/*) ;; *) fail "source and output paths must be absolute" ;; esac
 test -x "$inventory_tool" && test -x "$notice_tool" || fail "notice collectors are unavailable"
 test "$(sha256 "$guardian_source")" = "$guardian_sha" || fail "guardian source digest differs"
+test -f "$source_patch" && test ! -L "$source_patch" &&
+  test "$(sha256 "$source_patch")" = "$source_patch_sha" ||
+  fail "Syncthing source patch digest differs"
 git -C "$source_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 ||
   fail "Syncthing source must be a git checkout"
 test "$(git -C "$source_dir" rev-parse HEAD)" = "$engine_commit" ||
@@ -102,6 +107,12 @@ tar -xf "$source_export" -C "$build_source"
 test "$(sha256 "$build_source/go.mod")" = "$go_mod_sha" &&
   test "$(sha256 "$build_source/go.sum")" = "$go_sum_sha" ||
   fail "exported Syncthing module graph differs"
+GIT_CEILING_DIRECTORIES="$private" git -C "$build_source" apply --check "$source_patch"
+GIT_CEILING_DIRECTORIES="$private" git -C "$build_source" apply "$source_patch"
+GIT_CEILING_DIRECTORIES="$private" git -C "$build_source" apply --check --reverse "$source_patch"
+mkdir "$build_source/covalent-patches"
+install -m 0444 "$source_patch" \
+  "$build_source/covalent-patches/keep-local-deletions.patch"
 
 worker="$output_root/covalent-syncthing"
 graph="$output_root/go-target-deps.ndjson"
@@ -155,7 +166,10 @@ python3 "$notice_tool" \
   --inventory "$inventory" --source-root "$build_source" \
   --module-cache "$GOMODCACHE" --go-root "$go_root" \
   --guardian-source "$guardian_source" --project-license "$project_license" \
-  --ofl-license "$ofl_license" --output "$notices"
+  --ofl-license "$ofl_license" \
+  --source-patch "Covalent keep-local-deletions patch" \
+    keep-local-deletions.patch "$source_patch" "$source_patch_sha" \
+  --output "$notices"
 cp "$build_source/LICENSE" "$output_root/Syncthing-LICENSE.txt"
 cp "$build_source/AUTHORS" "$output_root/Syncthing-AUTHORS.txt"
 
@@ -173,7 +187,7 @@ inventory_sha=$(sha256 "$inventory")
 notice_sha=$(sha256 "$combined")
 notice_manifest_sha=$(sha256 "$notice_manifest")
 cat > "$output_root/source-build.json" <<EOF
-{"schema":1,"engine":{"version":"$engine_version","commit":"$engine_commit","upstreamArchiveSha256":"$upstream_archive_sha","sourceExportSha256":"$source_export_sha"},"target":{"goos":"darwin","goarch":"arm64","cgoEnabled":true,"minimumMacOS":"15.0","buildTags":["noupgrade"]},"toolchain":{"goVersion":"go1.26.7"},"evidence":{"licenseInventorySha256":"$inventory_sha","licenseInventoryBytes":$inventory_bytes,"noticeManifestSha256":"$notice_manifest_sha","combinedNoticeSha256":"$notice_sha","combinedNoticeBytes":$combined_bytes},"unsignedExecutable":{"sha256":"$worker_sha","bytes":$(size_of "$worker")}}
+{"schema":1,"engine":{"version":"$engine_version","commit":"$engine_commit","upstreamArchiveSha256":"$upstream_archive_sha","sourceExportSha256":"$source_export_sha","sourcePatchSha256":"$source_patch_sha","sourceState":"modified"},"target":{"goos":"darwin","goarch":"arm64","cgoEnabled":true,"minimumMacOS":"15.0","buildTags":["noupgrade"]},"toolchain":{"goVersion":"go1.26.7"},"evidence":{"licenseInventorySha256":"$inventory_sha","licenseInventoryBytes":$inventory_bytes,"noticeManifestSha256":"$notice_manifest_sha","combinedNoticeSha256":"$notice_sha","combinedNoticeBytes":$combined_bytes},"unsignedExecutable":{"sha256":"$worker_sha","bytes":$(size_of "$worker")}}
 EOF
 chmod 0555 "$worker"
 find "$notices" -type d -exec chmod 0555 {} +
