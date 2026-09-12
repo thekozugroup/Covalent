@@ -64,7 +64,11 @@ render_log() {
   done < "$suite_file"
   printf 'INSTRUMENTATION_RESULT: stream=\n'
   printf '\nTime: 12.345\n\n'
-  printf 'OK (%s tests)\n\n' "$summary_total"
+  summary_word=tests
+  if [ "$summary_total" -eq 1 ]; then
+    summary_word=test
+  fi
+  printf 'OK (%s %s)\n\n' "$summary_total" "$summary_word"
   printf 'INSTRUMENTATION_CODE: -1\n'
 }
 
