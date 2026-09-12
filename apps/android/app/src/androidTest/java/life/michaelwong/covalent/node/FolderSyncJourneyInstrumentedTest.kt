@@ -10,6 +10,7 @@ import android.system.ErrnoException
 import android.system.Os
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.SemanticsNodeInteraction
+import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
@@ -426,7 +427,7 @@ class FolderSyncJourneyInstrumentedTest {
                     true
                 }.onFailure { lastFailure = it }.getOrDefault(false)
             }
-        } catch (timeout: Exception) {
+        } catch (timeout: ComposeTimeoutException) {
             val nodes = runCatching {
                 compose.onAllNodesWithText(value).fetchSemanticsNodes()
             }.getOrDefault(emptyList())
@@ -603,10 +604,13 @@ class FolderSyncJourneyInstrumentedTest {
         val expectedPeerId = checkNotNull(completed.peerTransport).peerId
         visibleScreenText(context.getString(R.string.folder_sync_pair_complete)) {
             val requests = client.pendingNetworkPairings(connectionA.baseUrl, connectionA.token)
-            val peers = client.folderSyncStatus(connectionA.baseUrl, connectionA.token).peers
+            val syncStatus = client.folderSyncStatus(connectionA.baseUrl, connectionA.token)
+            val peers = syncStatus.peers
             "apiPairingCount=${requests.size} " +
                 "apiCompletedPairingCount=${requests.count { it.state == NetworkPairingState.COMPLETE }} " +
-                "apiPeerCount=${peers.size} expectedPeerPresent=${peers.any { it.peerId == expectedPeerId }}"
+                "apiPeerCount=${peers.size} expectedPeerPresent=${peers.any { it.peerId == expectedPeerId }} " +
+                "apiAvailability=${syncStatus.availability} apiLifecycle=${syncStatus.lifecycle} " +
+                "apiIssue=${syncStatus.issue}"
         }.assertIsDisplayed()
         clickScreenText(context.getString(R.string.action_done))
         await("completed phone pairing request dismissed") {
