@@ -39,6 +39,20 @@ fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
 }
 
 #[test]
+fn executable_owner_policy_rejects_foreign_apps_and_scopes_android_system_uid() {
+    let app_uid = 10_233;
+    assert!(is_trusted_executable_owner(0, app_uid));
+    assert!(is_trusted_executable_owner(app_uid, app_uid));
+    for foreign in [1, 999, 1001, 10_234, 65_534] {
+        assert!(!is_trusted_executable_owner(foreign, app_uid));
+    }
+    #[cfg(target_os = "android")]
+    assert!(is_trusted_executable_owner(1000, app_uid));
+    #[cfg(not(target_os = "android"))]
+    assert!(!is_trusted_executable_owner(1000, app_uid));
+}
+
+#[test]
 fn executable_checks_pin_digest_and_rejects_symlink_or_broad_mode() {
     let (root, guardian, _engine, _config) = fixture();
     let expected = digest(&guardian);

@@ -521,7 +521,7 @@ fn validate_executable_metadata(metadata: &fs::Metadata) -> Result<(), EngineSup
     let uid = rustix::process::geteuid().as_raw();
     let mode = metadata.mode();
     if !metadata.is_file()
-        || !is_current_or_root(metadata.uid(), uid)
+        || !is_trusted_executable_owner(metadata.uid(), uid)
         || mode & 0o022 != 0
         || mode & 0o6000 != 0
         || mode & 0o111 == 0
@@ -532,8 +532,11 @@ fn validate_executable_metadata(metadata: &fs::Metadata) -> Result<(), EngineSup
     Ok(())
 }
 
-fn is_current_or_root(owner: u32, current: u32) -> bool {
-    owner == 0 || owner == current
+fn is_trusted_executable_owner(owner: u32, current: u32) -> bool {
+    // Android's package installer owns extracted native libraries as AID_SYSTEM.
+    // This allowance applies only to executable ownership; private state still
+    // requires the app UID, and every executable keeps the hash and mode checks.
+    owner == 0 || owner == current || (cfg!(target_os = "android") && owner == 1000)
 }
 
 fn open_nofollow(path: &Path) -> std::io::Result<File> {
