@@ -254,6 +254,7 @@ class FolderSyncJourneyInstrumentedTest {
                 "forward transfer after native address refresh",
                 File(rootB, "after-address-forward.txt"),
                 AFTER_ADDRESS_FORWARD_CONTENT,
+                connections = listOf(connectionA, connectionB),
             )
             writeNew(File(rootB, "after-address-reverse.txt"), AFTER_ADDRESS_REVERSE_CONTENT)
             awaitFile(
@@ -772,9 +773,29 @@ class FolderSyncJourneyInstrumentedTest {
         return output.toByteArray()
     }
 
-    private fun awaitFile(label: String, file: File, expected: ByteArray) {
-        await(label, TRANSFER_TIMEOUT_MILLIS) {
-            runCatching { readBounded(file).contentEquals(expected) }.getOrDefault(false)
+    private fun awaitFile(
+        label: String,
+        file: File,
+        expected: ByteArray,
+        connections: List<NodeConnection> = emptyList(),
+    ) {
+        try {
+            await(label, TRANSFER_TIMEOUT_MILLIS) {
+                runCatching { readBounded(file).contentEquals(expected) }.getOrDefault(false)
+            }
+        } catch (failure: AssertionError) {
+            if (connections.isEmpty()) throw failure
+            val states = connections.take(MAX_DIAGNOSTIC_NODES).mapIndexed { index, connection ->
+                runCatching {
+                    val snapshot = client.folderSyncStatus(connection.baseUrl, connection.token)
+                    "node$index=${snapshot.availability}/${snapshot.lifecycle}/${snapshot.issue} " +
+                        "freshness=${snapshot.healthFreshness}/${snapshot.connectionFreshness} " +
+                        "shares=${snapshot.shares.take(MAX_DIAGNOSTIC_NODES).map { "${it.phase}/${it.peerConnection}" }}"
+                }.getOrElse { "node$index=diagnosticError:${it.javaClass.name}" }
+            }
+            val helpers = runCatching { exactHelperCounts().toString() }
+                .getOrElse { "diagnosticError:${it.javaClass.name}" }
+            throw AssertionError("$label failed: $states helpers=$helpers", failure)
         }
     }
 
