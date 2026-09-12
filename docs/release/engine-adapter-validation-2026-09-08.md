@@ -1950,3 +1950,61 @@ locally cached, dependency-verification-bound JAR. Its bytecode calls
 review is `android-source-archive-assets-fix/root-bytecode-review.json`.
 No Actions artifact bytes were used. The worker's owned temporary checkout
 and scratch evidence were removed after retaining its commit and receipts.
+
+### Checkpoint 44 verified packaging and remaining failures
+
+PR merge `aaab6bd3f62fabbea0ca41acf6d1c23f24babd72`, main CI `34702083616`,
+uses Docker source fingerprint
+`da656bff020b261af50586bc5b07727ffaffa7cf4820e85ae4c52e2b56bc8519`.
+Android foundation `103575517239` passes all package checks. The debug APK
+is 65,987,834 bytes and release APK 45,016,910 bytes. Both verify all six native
+records and all 117 notice/source files, totaling 11,700,885 uncompressed bytes.
+This confirms the `.tgz` correction. Full device execution remains separate.
+
+Arm64 Docker job `103575517205` passes strict packaged Caddy/Alpine evidence,
+all nine folder-sync checks and its image budget. Image
+`sha256:1167d99930768d026f3db208cfa449b71852b34a99aa5063fb4f3c48d10ee67f`
+measures 133,095,936 bytes. Grype 0.117.0 with database schema v6.1.9, built
+2026-09-12T06:27:25Z, reports zero High and three Medium CVE-2025-60876 findings
+for BusyBox, busybox-binsh and ssl_client 1.37.0-r1000. The reviewed backport is
+present; final applicability classification is still required and no finding
+is waived.
+
+AMD64 job `103575517309` passes both strict source verifiers and basic runtime
+checks, then fails its image budget: 142,051,328 > 134,217,728 bytes. Later
+folder-sync, Compose and scanning steps are skipped. The CI correction moves
+both image-size commands after functional/security checks, preserving the
+unchanged cap and failing behavior. It does not claim the size issue is fixed.
+
+Mac job `103575517221` exposes a fixture scheduling flaw in
+`independentFileLocksPreventAStaleRotationReadBeforeKeyGeneration`. Its shared
+GCD block did not reach readiness within five seconds; nonthrowing assertions
+continued and produced out-of-order version results. The correction uses a
+dedicated thread, throwing readiness/completion requirements and deferred
+release/drain. Production locking is unchanged. The focused test and three
+consecutive full 171-test runs pass; foundation checks pass. The owned checkout
+and build cache were removed after retaining compact proof.
+
+Independent review of all 20 milestones reopens current Docker acceptance:
+13 of 20 (65%) remain verified until the changed image completes its required
+validation. Verified milestones are 1–12 and 16. Open milestones are 13–15 and
+17–20, together with the applicable full product validation matrix. Original
+scope, signing exceptions, access boundaries and stability-before-performance
+ordering remain unchanged.
+
+### Checkpoint 45 Android pairing visibility correction
+
+Checkpoint 44 API 37 job `103575517234` passes 75 baseline instrumentation
+tests. Its complete folder journey then fails in `visibleScreenText` after the
+90-second timeout. The signed pairing API already reports `COMPLETE` and the
+expected peer address before that assertion. The completion card is nested in
+one lazy-list item taller than the viewport. The previous helper positioned the
+item without explicitly exposing the exact text descendant.
+
+The correction calls `performScrollTo` on that descendant after composing its
+lazy item. It preserves the timeout and visible-state assertions. On failure,
+it reports bounded node counts/bounds, the last exception class and sanitized
+pairing/peer counts, with no IDs, tokens or verification codes. The instrumentation
+result parser passes all 76 source-derived tests and harness cases. This is a
+reviewed test diagnosis pending compilation and fresh API 37 execution; it does
+not establish completion of the Android journey.

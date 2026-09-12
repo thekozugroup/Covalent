@@ -3,9 +3,8 @@
 Standing analysis of what the Grype gate (`severity-cutoff: high`, `fail-build: true`)
 sees in `packaging/docker/Dockerfile`, and what is left to decide.
 
-Measured locally with Grype against `linux/arm64` builds of this Dockerfile.
-CI scans the merged multi-arch manifest, so its totals run higher than these;
-the *set* of distinct findings is the same.
+Current CI scans the immutable local image ID separately on native amd64 and
+arm64 runners. Historical measurements below retain their original scope.
 
 ## Where it stands
 
@@ -15,7 +14,7 @@ the *set* of distinct findings is the same.
 | Caddy 2.11.4-alpine | **12** — 10 in the vendored Caddy binary, 2 in the Alpine base |
 | Caddy upstream snapshot `v2.11.5-0.20260711231708-b2693fb63a30` built from source, with exact Alpine security revisions (checkpoint 38) | **1** — `GHSA-vp52-pcj8-j9qc` in gRPC v1.82.1 |
 | Same source and toolchain with gRPC v1.83.1 (checkpoint 39) | **0** in the image scan; dependency review separately found `GHSA-2v4p-qf9q-27wj` |
-| Same source and toolchain with gRPC v1.83.2 (candidate) | **pending exact-image rescan** |
+| Same source and toolchain with gRPC v1.83.2 and the local BusyBox backport (checkpoint 44) | **0** on arm64; current amd64 scan skipped after the image-size failure |
 
 The checkpoint 38 row is from Grype 0.117.0 database v6.1.9, built
 2026-09-08T06:30:10Z, against the exact CI images for both architectures. The
@@ -36,7 +35,30 @@ GO-2026-5158 in OpenTelemetry v1.43.0 and GO-2026-6094 in cel-go v0.29.2;
 the consumer module pins patched v1.44.0 and v0.30.0 respectively, and the
 Dockerfile verifies both selections from the built Caddy binary.
 
-## gRPC advisories — v1.83.2 upgrade awaiting exact-image rescan
+## Current BusyBox backport and remaining review
+
+Checkpoint 44 arm64 image
+`sha256:1167d99930768d026f3db208cfa449b71852b34a99aa5063fb4f3c48d10ee67f`
+passes its source/notice verifiers and all nine packaged folder-sync checks.
+Grype 0.117.0 database v6.1.9, built 2026-09-12T06:27:25Z, reports zero High
+and three Medium CVE-2025-60876 findings for `busybox`, `busybox-binsh` and
+`ssl_client`, each at the local version `1.37.0-r1000`.
+
+The final build includes the reviewed request-target patch, verifies all
+45 recipe patches, passes all 13 wire checks and binds installed payloads to
+the tested binaries. Its complete original/modified recipe and corresponding
+source pass the packaged verifier; see [Alpine source evidence](alpine-runtime-source.md).
+The scanner report lists no fixed Alpine version for this advisory. These
+observations require a final applicability review of both exact images; the
+findings remain visible and no ignore rule or VEX filter is introduced.
+
+The current amd64 image passes its source and basic runtime checks but exceeds
+the unchanged 128 MiB size cap, so its later scan does not run. The next CI
+checkpoint places the size gate after functional and security checks. All
+size failures still fail the job; the reorder permits separate evidence for
+functionality, security and image size.
+
+## gRPC advisories — v1.83.2 exact-image coverage
 
 The checkpoint 38 scans found
 [`GHSA-vp52-pcj8-j9qc`](https://github.com/advisories/GHSA-vp52-pcj8-j9qc) /
