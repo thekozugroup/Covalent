@@ -1813,3 +1813,65 @@ arm64 build now passes exact package version/ownership and all 13 network tests;
 its final amd64/arm64 image integration, vulnerability classification and size
 acceptance remain open. Mac spoken accessibility and personal-build upgrade,
 final installation regression and performance acceptance also remain open.
+
+### Checkpoint 41 terminal hosted results and isolated patched-runtime proof
+
+Published commit `14850c7a74e6cf9e49b82cbff5a25186e11fb0a1` was tested as PR
+merge `63ad397b66295b25a048176c7381082b7abc2915` in run `34693770786`.
+Rust/contracts, both Mac jobs, iOS, dependency review and both Docker jobs pass.
+CodeQL run `34693770832` passes both languages and its alert policy; release
+version run `34693770796` passes. Android foundation job `103553591406` and
+device job `103553591417` fail; aggregate job `103555640186` fails.
+
+Both Android variants compile and assemble, then the distribution collector
+reports `packaged native object differs from link evidence`. The build writes
+no prebuilt stamp. The device job subsequently reports
+`--verify-prebuilt requires a prior full ./scripts/check-android.sh`.
+Zero instrumentation tests run on this checkpoint. The 75 passing baseline
+tests from checkpoint 40 do not establish a passing checkpoint 41 device run.
+
+Docker jobs `103553591461` (amd64) and `103553591466` (arm64) pass all nine
+hardened runtime checks. The amd64 Compose journey also passes backup,
+source-loss/corruption repair and restore. Their common source fingerprint is
+`d235dce10288de1075e9541f5a54aa6dd362b2a29f2372dc9d5f7b27ff6dccd9`.
+The images measure 134,153,728 and 125,030,400 bytes, respectively. Both Grype
+scans report zero High and three Medium CVE-2025-60876 findings. These are
+the published, unpatched BusyBox images; the separate backport does not change
+their classification.
+
+The unpublished main Dockerfile's `runtime-patched` target was built natively
+on Atmos from local integration commit
+`8055cdd55079d7c76e381283d7e6e7b07ec8af18` plus the frozen BusyBox wiring
+(Dockerfile SHA-256
+`a770f54b6a4d01fa967e49e5db87eb61799361d6b07237385020265416bc4be4`).
+All 45 patches verify, all 11 APKs build, all 13 wget request-target checks pass,
+and the three installed runtime payloads match their tested bytes. The raw
+installed-package database confirms that all three local packages omit the
+package commit field and `busybox-binsh` uses architecture `noarch`. This is
+an intermediate arm64 runtime proof; final image checks, amd64 execution,
+vulnerability classification and final image size remain open.
+
+The retained result SHA-256 is
+`21b59256a00a9c754105702f5062dfd8fcee2d58cee1bdbea7e70a55f27490a3`.
+Exact owned test resources were removed. Atmos's before/after ID sets match:
+20 running containers, 20 total containers and 25 images. Separately, 15
+obsolete owned temporary entries totaling 245,253,648 logical bytes were
+removed after retaining useful evidence. Physical disk space reclaimed was
+not measured. Acceptance remains 14 of 20 milestones (70%).
+
+### Checkpoint 42 Android final-link package preservation
+
+`build-android-jni.sh` links `libcovalent_android_jni.so` with `--strip-all` and
+records its final linked bytes before Gradle packaging. Checkpoint 41 preserves
+the worker and guardian through AGP's strip step but omits JNI. Checkpoint 42
+adds JNI to the same `keepDebugSymbols` configuration so AGP packages the
+already stripped output. Package-to-link equality checks remain strict.
+Mismatch errors now identify the variant, component and ABI and include bounded
+expected/actual byte counts and SHA-256 digests.
+
+Root source review and `./scripts/validate-foundation.sh` pass on the integrated
+change, including seven distribution-summary tests, eleven link-evidence tests,
+native-package regression fixtures and the JNI contract. The diagnosis comes
+from the checked-in build sequence and the permitted checkpoint 41 job log;
+fresh hosted APK verification must confirm it. No local Android compilation,
+new instrumentation pass or milestone increase is claimed.

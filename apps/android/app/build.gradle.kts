@@ -130,6 +130,9 @@ android {
             // The maintained engine and its guardian execute directly from the
             // installer-owned nativeLibraryDir. They are never copied to writable storage.
             useLegacyPackaging = true
+            // The JNI linker already uses --strip-all. Keep AGP from changing the
+            // final-link bytes recorded by the native provenance collector.
+            keepDebugSymbols += "**/libcovalent_android_jni.so"
             keepDebugSymbols += "**/libsyncthing.so"
             keepDebugSymbols += "**/libengineguardian.so"
         }

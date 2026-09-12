@@ -319,6 +319,7 @@ def _declared_notice_files(manifest: dict[str, Any]) -> dict[str, tuple[int | No
 def _package_summary(
     path: pathlib.Path,
     records: dict[tuple[str, str], dict[str, Any]],
+    variant: str,
 ) -> tuple[dict[str, Any], bytes, dict[str, tuple[int, str]]]:
     flags = (
         os.O_RDONLY
@@ -364,7 +365,12 @@ def _package_summary(
                     observed = (len(data), _digest(data))
                     expected = records[(component, abi)]["binary"]
                     if observed != (expected["bytes"], expected["sha256"]):
-                        raise SummaryError("packaged native object differs from link evidence")
+                        raise SummaryError(
+                            "packaged native object differs from link evidence: "
+                            f"variant={variant} component={component} abi={abi} "
+                            f"expected_bytes={expected['bytes']} expected_sha256={expected['sha256']} "
+                            f"actual_bytes={observed[0]} actual_sha256={observed[1]}"
+                        )
                     if component in binary_manifests and observed != binary_manifests[component][abi]:
                         raise SummaryError("packaged native object differs from its manifest")
                     native.append({
@@ -497,7 +503,7 @@ def collect(record_paths: list[pathlib.Path], package_paths: list[pathlib.Path])
     packages: list[dict[str, Any]] = []
     notice_manifest: bytes | None = None
     for variant, path in zip(("debug", "release"), package_paths, strict=True):
-        package, observed_manifest, observed_notices = _package_summary(path, records)
+        package, observed_manifest, observed_notices = _package_summary(path, records, variant)
         package["variant"] = variant
         if notice_manifest is not None and observed_manifest != notice_manifest:
             raise SummaryError("Android packages contain different notice manifests")

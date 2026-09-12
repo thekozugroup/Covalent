@@ -214,8 +214,17 @@ class NativeDistributionSummaryTests(unittest.TestCase):
         changed_payloads = dict(self.fixture.payloads)
         changed_payloads[("jni", "x86_64")] = b"different jni"
         self.fixture.write_package(self.fixture.release, payloads=changed_payloads)
-        with self.assertRaisesRegex(summary.SummaryError, "differs from link evidence"):
+        expected = self.fixture.payloads[("jni", "x86_64")]
+        actual = changed_payloads[("jni", "x86_64")]
+        with self.assertRaises(summary.SummaryError) as failure:
             summary.collect(self.fixture.record_paths, [self.fixture.debug, self.fixture.release])
+        self.assertEqual(
+            str(failure.exception),
+            "packaged native object differs from link evidence: "
+            "variant=release component=jni abi=x86_64 "
+            f"expected_bytes={len(expected)} expected_sha256={hashlib.sha256(expected).hexdigest()} "
+            f"actual_bytes={len(actual)} actual_sha256={hashlib.sha256(actual).hexdigest()}",
+        )
 
         changed_record = json.loads(self.fixture.record_paths[-1].read_text())
         changed_record["evidence"]["binary"]["sha256"] = "f" * 64
