@@ -106,6 +106,8 @@ RUN set -eu; \
       || { echo 'OpenTelemetry regressed below v1.44.0 (GO-2026-5158)' >&2; exit 1; }; \
     grep -q 'github.com/google/cel-go[[:space:]]\+v0\.30\.0' /tmp/buildinfo \
       || { echo 'cel-go drifted from reviewed v0.30.0 (GO-2026-6094)' >&2; exit 1; }; \
+    grep -q 'golang.org/x/crypto[[:space:]]\+v0\.56\.0' /tmp/buildinfo \
+      || { echo 'x/crypto drifted from reviewed v0.56.0 (GO-2026-6354/6355)' >&2; exit 1; }; \
     grep -q 'github.com/klauspost/compress[[:space:]]\+v1\.18\.7' /tmp/buildinfo \
       || { echo 'klauspost/compress drifted from reviewed v1.18.7 (GO-2026-5841)' >&2; exit 1; }; \
     /caddy.unprivileged version

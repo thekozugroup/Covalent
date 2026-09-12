@@ -204,12 +204,13 @@ selection, without a `replace`, fork, or source patch:
 
 Pinned Go 1.26.7 `go mod verify`, `go test ./...`, `go vet ./...`, the custom
 build, and `caddy validate` all pass with that graph. Official
-`govulncheck v1.7.0` source analysis on 2026-09-12 reports zero called
-vulnerable symbols. It also reports GO-2026-6354 and GO-2026-6355 in the
-imported `golang.org/x/crypto/ssh` package and GO-2026-5932 at module level for
-`golang.org/x/crypto/openpgp`; none is called by this consumer graph. The first
-two have a later module fix while the unmaintained OpenPGP advisory has none.
-This result is recorded rather than suppressed. A stripped binary scan cannot
+`golang.org/x/crypto` is pinned to `v0.56.0`, fixing
+[GO-2026-6354](https://pkg.go.dev/vuln/GO-2026-6354) and
+[GO-2026-6355](https://pkg.go.dev/vuln/GO-2026-6355) in the imported SSH package.
+`govulncheck v1.7.0` source analysis on 2026-09-12 reports zero called or
+imported-package vulnerabilities. It retains GO-2026-5932 at module level for
+`golang.org/x/crypto/openpgp`: that unmaintained package is neither imported nor
+called, and the report supplies no fixed version. No finding is suppressed. A stripped binary scan cannot
 recover call information and may conservatively report unreachable code; the
 Go tool's documented limitation says binary mode can produce that false
 positive. Release review therefore retains the exact source call graph plus an
