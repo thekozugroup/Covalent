@@ -806,7 +806,6 @@ jobs:
           if-no-files-found: error
       - run: docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp --entrypoint covalent covalent:ci doctor
       - run: ./scripts/check-container-runtime.sh covalent:ci
-      - run: ./scripts/check-artifact-budgets.sh --image-only covalent:ci --platform linux/amd64
       - run: ./scripts/validate-unraid-template.sh
       - name: Validate packaged folder sync with isolated writable volumes
         run: python3 -B scripts/container-folder-sync-e2e.py covalent:ci
@@ -817,6 +816,8 @@ jobs:
           ./scripts/run-pinned-grype-scan.sh
           '${{ steps.container-evidence.outputs.image_id }}'
           '${{ runner.temp }}/covalent-container-vulnerabilities-amd64.json'
+      # A size failure must preserve the functional and security results above.
+      - run: ./scripts/check-artifact-budgets.sh --image-only covalent:ci --platform linux/amd64
       - name: Retain the amd64 vulnerability report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -873,7 +874,6 @@ jobs:
           name: linux-sync-engine-evidence-arm64-${{ github.sha }}
           path: ${{ runner.temp }}/covalent-linux-engine-evidence-arm64
           if-no-files-found: error
-      - run: ./scripts/check-artifact-budgets.sh --image-only covalent:ci-arm64 --platform linux/arm64
       - name: Validate packaged arm64 folder sync with isolated writable volumes
         run: python3 -B scripts/container-folder-sync-e2e.py covalent:ci-arm64
       - name: Scan the exact arm64 runtime image
@@ -882,6 +882,7 @@ jobs:
           ./scripts/run-pinned-grype-scan.sh
           '${{ steps.container-evidence.outputs.image_id }}'
           '${{ runner.temp }}/covalent-container-vulnerabilities-arm64.json'
+      - run: ./scripts/check-artifact-budgets.sh --image-only covalent:ci-arm64 --platform linux/arm64
       - name: Retain the arm64 vulnerability report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
