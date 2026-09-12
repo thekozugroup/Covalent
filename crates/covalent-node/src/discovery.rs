@@ -23,6 +23,14 @@ const MAX_TAILSCALE_STATUS_BYTES: usize = 4 * 1_024 * 1_024;
 const MAX_TAILSCALE_HTTP_BYTES: usize = MAX_TAILSCALE_STATUS_BYTES + 64 * 1_024;
 const DEFAULT_TAILSCALE_SOCKET: &str = "/var/run/tailscale/tailscaled.sock";
 
+const fn advertised_capabilities(local_provider_enabled: bool) -> &'static str {
+    if local_provider_enabled {
+        "chunks"
+    } else {
+        "pairing"
+    }
+}
+
 /// Untrusted connection hint. Pairing identity validation remains mandatory.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -58,6 +66,14 @@ pub struct LanDiscovery {
 impl LanDiscovery {
     /// Starts a minimal ephemeral advertisement, or performs no network action when disabled.
     pub fn start(enabled: bool, peer_port: u16) -> Result<Self, CoreError> {
+        Self::start_with_provider(enabled, peer_port, true)
+    }
+
+    fn start_with_provider(
+        enabled: bool,
+        peer_port: u16,
+        local_provider_enabled: bool,
+    ) -> Result<Self, CoreError> {
         if !enabled {
             return Ok(Self {
                 daemon: None,
@@ -73,7 +89,7 @@ impl LanDiscovery {
         let properties = [
             ("min", protocol.as_str()),
             ("max", protocol.as_str()),
-            ("caps", "chunks"),
+            ("caps", advertised_capabilities(local_provider_enabled)),
         ];
         let info = ServiceInfo::new(
             SERVICE_TYPE,
@@ -173,15 +189,30 @@ impl Drop for LanDiscovery {
 /// Reconfigures the live mDNS advertiser when the persisted privacy setting changes.
 pub struct DiscoveryController {
     peer_port: u16,
+    local_provider_enabled: bool,
     current: Mutex<LanDiscovery>,
 }
 
 impl DiscoveryController {
     /// Starts the controller in the persisted state.
     pub fn new(enabled: bool, peer_port: u16) -> Result<Self, CoreError> {
+        Self::new_with_provider(enabled, peer_port, true)
+    }
+
+    /// Retains the host's provider admission policy across discovery toggles.
+    pub(crate) fn new_with_provider(
+        enabled: bool,
+        peer_port: u16,
+        local_provider_enabled: bool,
+    ) -> Result<Self, CoreError> {
         Ok(Self {
             peer_port,
-            current: Mutex::new(LanDiscovery::start(enabled, peer_port)?),
+            local_provider_enabled,
+            current: Mutex::new(LanDiscovery::start_with_provider(
+                enabled,
+                peer_port,
+                local_provider_enabled,
+            )?),
         })
     }
 
@@ -194,7 +225,11 @@ impl DiscoveryController {
         if current.is_active() == enabled {
             return Ok(());
         }
-        let replacement = LanDiscovery::start(enabled, self.peer_port)?;
+        let replacement = LanDiscovery::start_with_provider(
+            enabled,
+            self.peer_port,
+            self.local_provider_enabled,
+        )?;
         let previous = std::mem::replace(&mut *current, replacement);
         drop(current);
         previous.stop();
@@ -454,6 +489,16 @@ fn property_u16(info: &mdns_sd::ResolvedService, key: &str) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disabled_provider_never_advertises_chunk_storage() {
+        assert_eq!(advertised_capabilities(false), "pairing");
+        assert_eq!(advertised_capabilities(true), "chunks");
+        let controller = DiscoveryController::new_with_provider(false, 4433, false).unwrap();
+        controller.set_enabled(false).unwrap();
+        assert!(!controller.local_provider_enabled);
+        assert!(!controller.is_active().unwrap());
+    }
 
     #[test]
     fn disabled_lan_discovery_has_no_daemon_or_results() {

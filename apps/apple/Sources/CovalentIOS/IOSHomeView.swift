@@ -28,6 +28,7 @@ struct IOSHomeView: View {
                 } label: {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
+                .tint(Color(uiColor: .label))
             }
         }
     }

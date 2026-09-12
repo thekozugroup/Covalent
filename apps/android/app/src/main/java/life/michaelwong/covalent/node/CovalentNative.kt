@@ -1,5 +1,6 @@
 package life.michaelwong.covalent.node
 
+import life.michaelwong.covalent.BuildConfig
 import org.json.JSONObject
 
 /** Fixed direct JNI ABI. Native methods are registered by JNI_OnLoad, never name-mangled. */
@@ -21,6 +22,40 @@ internal object CovalentNative {
         maximumTotalBytes: Long,
         freeSpaceReserveBytes: Long,
         keyProtectionLevel: Int,
+        backupProviderEnabled: Boolean,
+        syncPackageInvalid: Boolean,
+        folderSyncAccessUnavailable: Boolean,
+        syncGuardianPath: String,
+        syncGuardianSha256: String,
+        syncWorkerPath: String,
+        syncWorkerSha256: String,
+        syncRuntimeDirectory: String,
+        syncListenerPort: Int,
+        peerListenerPort: Int,
+    ): String
+
+    @JvmStatic
+    private external fun nativeRecoverStart(
+        dataDirectory: String,
+        deviceName: String,
+        lanDiscoveryEnabled: Boolean,
+        apiToken: ByteArray,
+        keyEncryptionKey: ByteArray,
+        keyVersion: Int,
+        maximumTotalBytes: Long,
+        freeSpaceReserveBytes: Long,
+        keyProtectionLevel: Int,
+        recoveryKit: ByteArray,
+        recoveryKey: ByteArray,
+        backupProviderEnabled: Boolean,
+        syncPackageInvalid: Boolean,
+        folderSyncAccessUnavailable: Boolean,
+        syncGuardianPath: String,
+        syncGuardianSha256: String,
+        syncWorkerPath: String,
+        syncWorkerSha256: String,
+        syncRuntimeDirectory: String,
+        peerListenerPort: Int,
     ): String
 
     @JvmStatic
@@ -49,9 +84,21 @@ internal object CovalentNative {
         maximumTotalBytes: Long,
         freeSpaceReserveBytes: Long,
         keyProtectionLevel: KeyProtectionLevel,
+        syncEngine: PackagedSyncEnginePackage,
+        backupProviderEnabled: Boolean = true,
+        folderSyncAccessUnavailable: Boolean = false,
+        folderSyncListenerPort: Int = FOLDER_SYNC_LISTENER_PORT,
+        peerListenerPort: Int = PEER_LISTENER_PORT,
     ): NativeNodeResponse {
         if (!libraryLoaded) return NativeNodeResponse.unavailable()
+        require(BuildConfig.DEBUG || folderSyncListenerPort == FOLDER_SYNC_LISTENER_PORT) {
+            "Release builds use Covalent's fixed folder-sync listener port."
+        }
+        require(peerListenerPort in 0..0xffff && (BuildConfig.DEBUG || peerListenerPort == PEER_LISTENER_PORT)) {
+            "Release builds use Covalent's fixed peer listener port."
+        }
         return parse(runCatching {
+            val packaged = syncEngine.verifiedOrNull()
             nativeStart(
                 dataDirectory,
                 deviceName,
@@ -62,6 +109,69 @@ internal object CovalentNative {
                 maximumTotalBytes,
                 freeSpaceReserveBytes,
                 keyProtectionLevel.wireValue,
+                backupProviderEnabled,
+                syncEngine is PackagedSyncEnginePackage.Invalid,
+                folderSyncAccessUnavailable,
+                packaged?.guardianPath.orEmpty(),
+                packaged?.guardianSha256.orEmpty(),
+                packaged?.workerPath.orEmpty(),
+                packaged?.workerSha256.orEmpty(),
+                packaged?.runtimeDirectory.orEmpty(),
+                folderSyncListenerPort,
+                peerListenerPort,
+            )
+        }.getOrElse { NativeNodeResponse.unavailable().toJson() })
+    }
+
+    /**
+     * Recovers a node identity into its ordinary private data root before normal opening.
+     * Native code clears all four JVM byte arrays immediately. The caller also clears its
+     * arrays in `finally`, so validation and linkage failures cannot leave an owned copy here.
+     */
+    fun recoverStart(
+        dataDirectory: String,
+        deviceName: String,
+        lanDiscoveryEnabled: Boolean,
+        apiToken: ByteArray,
+        keyEncryptionKey: ByteArray,
+        keyVersion: Int,
+        maximumTotalBytes: Long,
+        freeSpaceReserveBytes: Long,
+        keyProtectionLevel: KeyProtectionLevel,
+        recoveryKit: ByteArray,
+        recoveryKey: ByteArray,
+        syncEngine: PackagedSyncEnginePackage,
+        backupProviderEnabled: Boolean = true,
+        folderSyncAccessUnavailable: Boolean = false,
+        peerListenerPort: Int = PEER_LISTENER_PORT,
+    ): NativeNodeResponse {
+        if (!libraryLoaded) return NativeNodeResponse.unavailable()
+        require(peerListenerPort in 0..0xffff && (BuildConfig.DEBUG || peerListenerPort == PEER_LISTENER_PORT)) {
+            "Release builds use Covalent's fixed peer listener port."
+        }
+        return parse(runCatching {
+            val packaged = syncEngine.verifiedOrNull()
+            nativeRecoverStart(
+                dataDirectory,
+                deviceName,
+                lanDiscoveryEnabled,
+                apiToken,
+                keyEncryptionKey,
+                keyVersion,
+                maximumTotalBytes,
+                freeSpaceReserveBytes,
+                keyProtectionLevel.wireValue,
+                recoveryKit,
+                recoveryKey,
+                backupProviderEnabled,
+                syncEngine is PackagedSyncEnginePackage.Invalid,
+                folderSyncAccessUnavailable,
+                packaged?.guardianPath.orEmpty(),
+                packaged?.guardianSha256.orEmpty(),
+                packaged?.workerPath.orEmpty(),
+                packaged?.workerSha256.orEmpty(),
+                packaged?.runtimeDirectory.orEmpty(),
+                peerListenerPort,
             )
         }.getOrElse { NativeNodeResponse.unavailable().toJson() })
     }
@@ -87,7 +197,13 @@ internal object CovalentNative {
             )
         }
     }.getOrElse { NativeNodeResponse.unavailable() }
+
+    private const val FOLDER_SYNC_LISTENER_PORT = 8_789
+    private const val PEER_LISTENER_PORT = 8_787
 }
+
+private fun PackagedSyncEnginePackage.verifiedOrNull(): VerifiedPackagedSyncEngine? =
+    (this as? PackagedSyncEnginePackage.Verified)?.engine
 
 internal data class NativeNodeResponse(
     val ok: Boolean,

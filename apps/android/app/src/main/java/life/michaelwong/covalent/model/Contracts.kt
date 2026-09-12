@@ -216,4 +216,44 @@ enum class TransferKind { BACKUP, VERIFICATION, RESTORE }
 
 enum class TransferState { QUEUED, RUNNING, PAUSED, COMPLETED, FAILED, CANCELLED }
 
-enum class PrimaryAction { PAIR, BACKUP, RESTORE }
+enum class PrimaryAction { PAIR, LINKS }
+
+enum class RecoveryPhase(val wireValue: String) {
+    NOT_CONFIGURED("not_configured"),
+    PENDING("pending"),
+    IMPORTED("imported"),
+    PARTIAL("partial"),
+    BLOCKED("blocked"),
+    NO_CATALOGS("no_catalogs");
+
+    val canRetry: Boolean
+        get() = this in setOf(PENDING, PARTIAL, BLOCKED, NO_CATALOGS)
+
+    companion object {
+        fun fromWire(value: String): RecoveryPhase = entries.firstOrNull { it.wireValue == value }
+            ?: error("The node returned an unknown recovery phase.")
+    }
+}
+
+data class RecoveredBackup(
+    val backupId: String,
+    val snapshotId: String,
+    val sourceProviderIds: Set<String>,
+)
+
+data class RecoveryFailure(
+    val providerId: String,
+    val snapshotId: String?,
+    val reason: String,
+)
+
+/** Secret-free durable progress returned after an owner-loss recovery attempt. */
+data class RecoveryStatus(
+    val protocolVersion: UShort,
+    val phase: RecoveryPhase,
+    val recoveredBackups: List<RecoveredBackup>,
+    val queriedProviderIds: Set<String>,
+    val configuredProviderIds: Set<String>,
+    val failures: List<RecoveryFailure>,
+    val newerSnapshotMayExist: Boolean,
+)

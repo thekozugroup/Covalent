@@ -9,6 +9,12 @@ service="$repo_root/apps/android/app/src/main/java/life/michaelwong/covalent/nod
 manifest="$repo_root/apps/android/app/src/main/AndroidManifest.xml"
 package_gate="$repo_root/scripts/check-android-native-package.sh"
 verification_metadata="$repo_root/apps/android/gradle/verification-metadata.xml"
+sync_builder="$repo_root/scripts/build-android-sync-engine.sh"
+link_provenance="$repo_root/scripts/collect-android-native-link-provenance.py"
+go_link_wrapper="$repo_root/scripts/android-go-link-wrapper.sh"
+sync_guardian="$repo_root/packaging/sync-engine/engine-guardian.c"
+gradle_build="$repo_root/apps/android/app/build.gradle.kts"
+packaged_sync="$repo_root/apps/android/app/src/main/java/life/michaelwong/covalent/node/PackagedSyncEngine.kt"
 
 test -f "$crate/Cargo.toml"
 test -f "$crate/src/lib.rs"
@@ -16,6 +22,11 @@ test -f "$native"
 test -f "$manager"
 test -f "$service"
 test -f "$verification_metadata"
+test -x "$sync_builder"
+test -x "$link_provenance"
+test -x "$go_link_wrapper"
+test -f "$sync_guardian"
+test -f "$packaged_sync"
 
 # AAPT2 resolves a host-specific executable JAR lazily during resource
 # processing. Dependency verification generated on macOS therefore sees only
@@ -79,6 +90,19 @@ grep -Fq 'local:' "$crate/exports.map"
 grep -Fq -e '--version-script' "$repo_root/scripts/build-android-jni.sh"
 grep -Fq -- '--pack-dyn-relocs=android' "$repo_root/scripts/build-android-jni.sh"
 grep -Fq 'SHT_ANDROID_RELA' "$repo_root/scripts/build-android-jni.sh"
+# Android release builds may optimise the node orchestration and JNI adapter
+# for size, but a global release override would also slow crypto and streaming
+# dependencies. Pin the exact package-scoped Cargo overrides and their position
+# after cargo-ndk's `--`, where they are forwarded to `cargo build`.
+build_jni="$repo_root/scripts/build-android-jni.sh"
+grep -Fq 'node_release_override='\''profile.release.package.covalent-node.opt-level="s"'\''' "$build_jni"
+grep -Fq 'jni_release_override='\''profile.release.package.covalent-android-jni.opt-level="s"'\''' "$build_jni"
+grep -Fq -- '--config "$node_release_override"' "$build_jni"
+grep -Fq -- '--config "$jni_release_override"' "$build_jni"
+if grep -Eq 'profile\.release\.opt-level|profile\.release\.package\."\*"\.opt-level' "$build_jni"; then
+  echo "Android JNI size optimisation must remain scoped to the node and JNI packages" >&2
+  exit 1
+fi
 grep -Fq 'JNI_OnLoad' "$crate/src/lib.rs"
 grep -Fq 'register_native_methods' "$crate/src/lib.rs"
 grep -Fq 'MAX_LIVE_NODES' "$crate/src/lib.rs"
@@ -89,6 +113,58 @@ grep -Fq 'FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE' "$service"
 grep -Fq 'FOREGROUND_SERVICE_CONNECTED_DEVICE' "$manifest"
 grep -Fq 'foregroundServiceType="connectedDevice"' "$manifest"
 grep -Fq 'nativeStart' "$native"
+
+# The maintained folder engine is built from a git archive of one exact
+# official source commit. Its executable guardian is the byte-identical source
+# reviewed for the macOS package, and no prebuilt ELF is tracked here.
+test "$(shasum -a 256 "$sync_guardian" | awk '{print $1}')" = \
+  c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579
+grep -Fq 'expected_commit=946e2b83a1f6c6ae119427c09e0a5802940b82ff' "$sync_builder"
+grep -Fq "expected_go='go version go1.26.7 '" "$sync_builder"
+grep -Fq 'expected_ndk=27.1.12297006' "$sync_builder"
+grep -Fq 'source_patch_sha=e58e7d133a388576a54cacc6a5a5094e6607c483c0daabac552de1a1854d92ac' "$sync_builder"
+grep -Fq 'git -C "$source_dir" archive --format=tar "$expected_commit"' "$sync_builder"
+grep -Fq 'git -C "$build_source" apply --check "$source_patch"' "$sync_builder"
+grep -Fq -- '--source-patch "Covalent keep-local-deletions patch"' "$sync_builder"
+grep -Fq 'GOFLAGS=-mod=readonly' "$sync_builder"
+grep -Fq 'GOTMPDIR=' "$sync_builder"
+grep -Fq 'TMPDIR=' "$sync_builder"
+grep -Fq -- '-goos android' "$sync_builder"
+grep -Fq -- '-no-upgrade' "$sync_builder"
+grep -Fq -- '-version v2.1.3' "$sync_builder"
+grep -Fq 'max-page-size=16384' "$sync_builder"
+grep -Fq 'syncthing-link-provenance-$abi.json' "$sync_builder"
+grep -Fq 'guardian-link-provenance-$abi.json' "$sync_builder"
+grep -Fq 'android-go-link-wrapper.sh' "$sync_builder"
+grep -Fq 'COVALENT_LINK_PRIVATE_ROOT=' "$sync_builder"
+grep -Fq 'jni-link-provenance-$abi.json' "$repo_root/scripts/build-android-jni.sh"
+grep -Fq 'NOTICE.toolchain' "$sync_builder"
+grep -Fq -- '--source-archive-suffix .tgz' "$sync_builder"
+grep -Fq -- '-Wl,-Map,' "$go_link_wrapper"
+grep -Fq -- '-Wl,-Map,' "$repo_root/scripts/build-android-jni.sh"
+grep -Fq -- '-###' "$go_link_wrapper"
+grep -Fq -- '-###' "$repo_root/scripts/build-android-jni.sh"
+grep -Fq 'useLegacyPackaging = true' "$gradle_build"
+grep -Fq 'keepDebugSymbols += "**/libcovalent_android_jni.so"' "$gradle_build"
+grep -Fq 'keepDebugSymbols += "**/libsyncthing.so"' "$gradle_build"
+grep -Fq 'keepDebugSymbols += "**/libengineguardian.so"' "$gradle_build"
+grep -Fq 'it.name.startsWith("merge") && it.name.endsWith("Assets")' "$gradle_build"
+grep -Fq 'mustRunAfter(buildAndroidSyncEngine)' "$gradle_build"
+grep -Fq 'COVALENT_SYNC_ENGINE_PACKAGED' "$gradle_build"
+grep -Fq 'PackagedSyncEnginePackage.Invalid' "$packaged_sync"
+grep -Fq 'folder_sync_package_invalid' "$crate/src/lib.rs"
+grep -Fq 'folder_sync_access_unavailable' "$crate/src/lib.rs"
+grep -Fq 'backup_provider_enabled' "$crate/src/lib.rs"
+grep -Fq 'configuration.local_provider_enabled = backup_provider_enabled' "$crate/src/lib.rs"
+grep -Fq 'folderSyncAccessUnavailable' "$native"
+grep -Fq 'backupProviderEnabled' "$native"
+grep -Fq 'folderSyncAccessUnavailable()' "$manager"
+if git -C "$repo_root" ls-files '*.so' | \
+  grep -E '(^|/)(libsyncthing|libengineguardian)\.so$' >/dev/null; then
+  echo "Prebuilt folder-engine executables must not be committed to the product source" >&2
+  exit 1
+fi
+"$repo_root/scripts/test-android-native-package.sh"
 
 # The embedded on-device provider is an explicit opt-in that must never disturb
 # a separately configured external node. That contract used to be asserted by

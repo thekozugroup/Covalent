@@ -69,6 +69,18 @@ function recorder(responder) {
   return { api, calls };
 }
 
+test("a fresh unpaired node can load its empty provider list for local-only backup", async () => {
+  const { api } = recorder((path) => path === "/api/v1/providers" ? [] : null);
+  assert.deepEqual(await providers.listNamed(api), []);
+});
+
+test("a missing roster still rejects connected providers and malformed rosters never pass", async () => {
+  const missing = recorder((path) => path === "/api/v1/providers" ? [provider()] : null);
+  await assert.rejects(providers.listNamed(missing.api), /no signed provider roster/);
+  const malformed = recorder((path) => path === "/api/v1/providers" ? [] : {});
+  await assert.rejects(providers.listNamed(malformed.api), /cannot verify/);
+});
+
 test("manual finalization activates only its exact signed transport, then verifies the persisted provider", async () => {
   const signedTransport = transport();
   const { api, calls } = recorder((path) => {

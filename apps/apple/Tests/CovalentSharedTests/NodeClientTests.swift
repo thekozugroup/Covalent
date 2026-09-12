@@ -35,6 +35,179 @@ import Testing
     #expect(settings.deviceName == "Home Mac")
 }
 
+@Test func recoveryKitExportUsesExplicitConfirmationAndDecodesRawKit() async throws {
+    let token = String(repeating: "r", count: 32)
+    let rawKit = Data("encrypted-kit-bytes".utf8)
+    let recoveryKey = Data(repeating: 0x42, count: 32)
+        .base64EncodedString()
+        .replacingOccurrences(of: "+", with: "-")
+        .replacingOccurrences(of: "/", with: "_")
+        .replacingOccurrences(of: "=", with: "")
+    let recorder = RequestRecorder { request in
+        #expect(request.url?.path == "/api/v1/recovery/kit")
+        #expect(request.httpMethod == "POST")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(token)")
+        let body = try #require(requestBody(request))
+        let payload = try #require(JSONSerialization.jsonObject(with: body) as? [String: Bool])
+        #expect(payload == ["confirmed": true])
+        return TestResponse.response(
+            request,
+            status: 200,
+            json: #"{"protocolVersion":1,"recoveryKit":"\#(rawKit.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: ""))","recoveryKey":"\#(recoveryKey)"}"#
+        )
+    }
+    let exported = try await makeClient(recorder: recorder, token: token).exportRecoveryKit(confirmed: true)
+    #expect(exported.kit == rawKit)
+    #expect(exported.recoveryKey == Data(recoveryKey.utf8))
+}
+
+@Test func recoveryStatusAndRetryUseStableSecretFreeContract() async throws {
+    let token = String(repeating: "s", count: 32)
+    let provider = UUID()
+    let backup = UUID()
+    let sequence = RequestSequence()
+    let status = #"{"protocolVersion":1,"phase":"partial","recoveredBackups":[{"backupId":"\#(backup.uuidString.lowercased())","snapshotId":"s-1","sourceProviderIds":["\#(provider.uuidString.lowercased())"]}],"queriedProviderIds":["\#(provider.uuidString.lowercased())"],"configuredProviderIds":["\#(provider.uuidString.lowercased())"],"failures":[],"newerSnapshotMayExist":true}"#
+    let recorder = RequestRecorder(removeAfterRequest: false) { request in
+        switch sequence.next() {
+        case 0:
+            #expect(request.url?.path == "/api/v1/recovery/status")
+            #expect(request.httpMethod == "GET")
+            return TestResponse.response(request, status: 200, json: status)
+        case 1:
+            #expect(request.url?.path == "/api/v1/recovery/retry")
+            #expect(request.httpMethod == "POST")
+            let body = try #require(requestBody(request))
+            let payload = try #require(JSONSerialization.jsonObject(with: body) as? [String: Bool])
+            #expect(payload == ["confirmed": true])
+            return TestResponse.response(request, status: 200, json: status)
+        default:
+            Issue.record("Unexpected recovery request")
+            return TestResponse.response(request, status: 500, json: "{}")
+        }
+    }
+    let client = try makeClient(recorder: recorder, token: token)
+    #expect(try await client.recoveryStatus().phase == .partial)
+    #expect(try await client.retryRecovery(confirmed: true).recoveredBackups.count == 1)
+}
+
+@Test func recoveryStatusRejectsContradictoryOrDuplicateProviderEvidence() async throws {
+    let token = String(repeating: "q", count: 32)
+    let provider = UUID().uuidString.lowercased()
+    let response = "{\"protocolVersion\":1,\"phase\":\"imported\",\"recoveredBackups\":[],\"queriedProviderIds\":[\"\(provider)\",\"\(provider)\"],\"configuredProviderIds\":[\"\(provider)\"],\"failures\":[],\"newerSnapshotMayExist\":true}"
+    let recorder = RequestRecorder { request in
+        TestResponse.response(
+            request,
+            status: 200,
+            json: response
+        )
+    }
+    await #expect(throws: NodeClientError.invalidResponse) {
+        _ = try await makeClient(recorder: recorder, token: token).recoveryStatus()
+    }
+}
+
+@Test func recoveryStatusRejectsForeignAndDuplicateBackupSources() async throws {
+    let token = String(repeating: "f", count: 32)
+    let configured = UUID().uuidString.lowercased()
+    let foreign = UUID().uuidString.lowercased()
+    let backup = UUID().uuidString.lowercased()
+    let responses = [
+        "{\"protocolVersion\":1,\"phase\":\"partial\",\"recoveredBackups\":[{\"backupId\":\"\(backup)\",\"snapshotId\":\"snapshot-1\",\"sourceProviderIds\":[\"\(foreign)\"]}],\"queriedProviderIds\":[\"\(configured)\"],\"configuredProviderIds\":[\"\(configured)\"],\"failures\":[],\"newerSnapshotMayExist\":true}",
+        "{\"protocolVersion\":1,\"phase\":\"partial\",\"recoveredBackups\":[{\"backupId\":\"\(backup)\",\"snapshotId\":\"snapshot-1\",\"sourceProviderIds\":[\"\(configured)\",\"\(configured)\"]}],\"queriedProviderIds\":[\"\(configured)\"],\"configuredProviderIds\":[\"\(configured)\"],\"failures\":[],\"newerSnapshotMayExist\":true}"
+    ]
+    for response in responses {
+        let recorder = RequestRecorder { request in
+            TestResponse.response(request, status: 200, json: response)
+        }
+        await #expect(throws: NodeClientError.invalidResponse) {
+            _ = try await makeClient(recorder: recorder, token: token).recoveryStatus()
+        }
+    }
+}
+
+@Test func recoveryStatusRejectsContradictoryPhaseShapesAndInvalidFailureReasons() async throws {
+    let token = String(repeating: "c", count: 32)
+    let provider = UUID().uuidString.lowercased()
+    let backup = UUID().uuidString.lowercased()
+    let recovered = "{\"backupId\":\"\(backup)\",\"snapshotId\":\"snapshot-1\",\"sourceProviderIds\":[\"\(provider)\"]}"
+    let responses = [
+        "{\"protocolVersion\":1,\"phase\":\"imported\",\"recoveredBackups\":[],\"queriedProviderIds\":[\"\(provider)\"],\"configuredProviderIds\":[\"\(provider)\"],\"failures\":[],\"newerSnapshotMayExist\":false}",
+        "{\"protocolVersion\":1,\"phase\":\"no_catalogs\",\"recoveredBackups\":[\(recovered)],\"queriedProviderIds\":[\"\(provider)\"],\"configuredProviderIds\":[\"\(provider)\"],\"failures\":[],\"newerSnapshotMayExist\":false}",
+        "{\"protocolVersion\":1,\"phase\":\"partial\",\"recoveredBackups\":[],\"queriedProviderIds\":[],\"configuredProviderIds\":[\"\(provider)\"],\"failures\":[],\"newerSnapshotMayExist\":true}",
+        "{\"protocolVersion\":1,\"phase\":\"blocked\",\"recoveredBackups\":[\(recovered)],\"queriedProviderIds\":[],\"configuredProviderIds\":[\"\(provider)\"],\"failures\":[],\"newerSnapshotMayExist\":true}",
+        "{\"protocolVersion\":1,\"phase\":\"pending\",\"recoveredBackups\":[],\"queriedProviderIds\":[],\"configuredProviderIds\":[\"\(provider)\"],\"failures\":[],\"newerSnapshotMayExist\":false}",
+        "{\"protocolVersion\":1,\"phase\":\"not_configured\",\"recoveredBackups\":[],\"queriedProviderIds\":[],\"configuredProviderIds\":[\"\(provider)\"],\"failures\":[],\"newerSnapshotMayExist\":false}",
+        "{\"protocolVersion\":1,\"phase\":\"blocked\",\"recoveredBackups\":[],\"queriedProviderIds\":[],\"configuredProviderIds\":[\"\(provider)\"],\"failures\":[{\"providerId\":\"\(provider)\",\"snapshotId\":null,\"reason\":\"Uppercase_Reason\"}],\"newerSnapshotMayExist\":true}"
+    ]
+    for response in responses {
+        let recorder = RequestRecorder { request in
+            TestResponse.response(request, status: 200, json: response)
+        }
+        await #expect(throws: NodeClientError.invalidResponse) {
+            _ = try await makeClient(recorder: recorder, token: token).recoveryStatus()
+        }
+    }
+}
+
+@Test func recoveryStatusAllowsPartialSourceThatFailedAfterDeliveringCapsules() async throws {
+    let token = String(repeating: "v", count: 32)
+    let source = UUID()
+    let queried = UUID()
+    let backup = UUID()
+    let response = #"{"protocolVersion":1,"phase":"partial","recoveredBackups":[{"backupId":"\#(backup.uuidString.lowercased())","snapshotId":"snapshot-1","sourceProviderIds":["\#(source.uuidString.lowercased())"]}],"queriedProviderIds":["\#(queried.uuidString.lowercased())"],"configuredProviderIds":["\#(source.uuidString.lowercased())","\#(queried.uuidString.lowercased())"],"failures":[{"providerId":"\#(source.uuidString.lowercased())","snapshotId":null,"reason":"recovery_catalog_transport"}],"newerSnapshotMayExist":true}"#
+    let recorder = RequestRecorder { request in
+        TestResponse.response(request, status: 200, json: response)
+    }
+    let status = try await makeClient(recorder: recorder, token: token).recoveryStatus()
+    #expect(status.phase == .partial)
+    #expect(status.recoveredBackups.first?.sourceProviderIds == Set([source]))
+    #expect(status.queriedProviderIds == Set([queried]))
+    #expect(status.failures.first?.providerId == source)
+}
+
+@Test func recoveryStatusRejectsOversizedDeclaredResponseBeforeDecoding() async throws {
+    let token = String(repeating: "o", count: 32)
+    let stopped = RequestSequence()
+    let recorder = RequestRecorder(
+        removeAfterRequest: false,
+        streamChunkBytes: 64 * 1_024,
+        onStop: { _ = stopped.next() }
+    ) { request in
+        TestResponse.data(
+            request,
+            status: 200,
+            body: Data(repeating: 0x20, count: 1_024 * 1_024),
+            headers: ["Content-Length": "25165825"]
+        )
+    }
+    await #expect(throws: NodeClientError.invalidResponse) {
+        _ = try await makeClient(recorder: recorder, token: token).recoveryStatus()
+    }
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(stopped.count > 0)
+}
+
+@Test func recoveryStatusCancelsChunkedResponseAtReceiveLimit() async throws {
+    let token = String(repeating: "x", count: 32)
+    let stopped = RequestSequence()
+    let recorder = RequestRecorder(
+        removeAfterRequest: false,
+        streamChunkBytes: 64 * 1_024,
+        onStop: { _ = stopped.next() }
+    ) { request in
+        TestResponse.data(
+            request,
+            status: 200,
+            body: Data(repeating: 0x20, count: 24 * 1_024 * 1_024 + 1)
+        )
+    }
+    await #expect(throws: NodeClientError.invalidResponse) {
+        _ = try await makeClient(recorder: recorder, token: token).recoveryStatus()
+    }
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(stopped.count > 0)
+}
+
 @Test func networkPairingUsesOneStepSASContract() async throws {
     let token = String(repeating: "9", count: 32)
     let peerId = UUID()
@@ -166,6 +339,49 @@ import Testing
         validUntilUnixMs: now + 5_000,
         capacity: ProviderCapacity(usableBytes: 1, allocatedBytes: 1, quotaBytes: 2)
     ).isEligibleForBackup)
+}
+
+@Test func providerDisplayRequiresCurrentPositiveEvidenceButPreservesLastFailedProbe() throws {
+    let now: UInt64 = 100_000
+    func provider(_ reachability: ProviderReachability?, _ observed: UInt64?, _ expires: UInt64?) -> ProviderConnection {
+        ProviderConnection(
+            peerId: UUID(), address: "100.100.100.12:8788",
+            certificateFingerprint: String(repeating: "c", count: 64),
+            reachability: reachability, observedAtUnixMs: observed, validUntilUnixMs: expires
+        )
+    }
+    #expect(provider(.reachable, now, now + 1).displayedReachability(atUnixMs: now) == .reachable)
+    #expect(provider(.unknown, now - 1, now + 1).displayedReachability(atUnixMs: now) == .unknown)
+    #expect(provider(.reachable, now - 1, now).displayedReachability(atUnixMs: now) == .reachable)
+    #expect(provider(.reachable, now - 2, now - 1).displayedReachability(atUnixMs: now) == .unknown)
+    #expect(provider(.reachable, now + 1, now + 2).displayedReachability(atUnixMs: now) == .unknown)
+    #expect(provider(.reachable, now + 1, now - 1).displayedReachability(atUnixMs: now) == .unknown)
+    #expect(provider(.reachable, nil, now + 1).displayedReachability(atUnixMs: now) == .unknown)
+    #expect(provider(.reachable, now - 1, nil).displayedReachability(atUnixMs: now) == .unknown)
+    #expect(provider(nil, now - 1, now + 1).displayedReachability(atUnixMs: now) == .unknown)
+
+    let unreachableJSON = #"{"peerId":"00000000-0000-0000-0000-000000000001","address":"100.100.100.12:8788","certificateFingerprint":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","reachability":"unreachable","observedAtUnixMs":null,"validUntilUnixMs":null,"usableBytes":null,"allocatedBytes":null,"quotaBytes":null}"#
+    let unreachable = try JSONDecoder().decode(
+        ProviderConnection.self,
+        from: Data(unreachableJSON.utf8)
+    )
+    #expect(unreachable.displayedReachability(atUnixMs: now) == .unreachable)
+    #expect(unreachable.selectionStatus(atUnixMs: now) == "Did not respond on last check — cannot select")
+    #expect(!unreachable.isEligibleForBackup(atUnixMs: now))
+}
+
+@Test func futureAndExpiredProviderObservationsCannotAdvertiseBackupSpace() {
+    let now = UInt64(Date().timeIntervalSince1970 * 1_000)
+    for (observed, expires) in [(now + 60_000, now + 120_000), (now - 120_000, now - 60_000)] {
+        let provider = ProviderConnection(
+            peerId: UUID(), address: "100.100.100.12:8788",
+            certificateFingerprint: String(repeating: "c", count: 64), reachability: .reachable,
+            observedAtUnixMs: observed, validUntilUnixMs: expires,
+            capacity: ProviderCapacity(usableBytes: 1, allocatedBytes: 1, quotaBytes: 2)
+        )
+        #expect(!provider.isEligibleForBackup)
+        #expect(provider.selectionStatus == "Device availability is unknown — cannot select")
+    }
 }
 
 @Test func apiErrorsPreserveServerRecoveryMessage() async throws {
@@ -1386,6 +1602,11 @@ func realDaemonBackupVerifyAndRestore() async throws {
                 status: 200,
                 json: #"{"deviceName":"Apple test","protocolVersion":1,"lanDiscovery":false,"platformTier":"tier1","state":"ready"}"#
             )
+        case "/api/v1/sync/status":
+            return TestResponse.response(
+                request, status: 200,
+                json: #"{"schemaVersion":1,"availability":"notPackaged","lifecycle":"stopped","issue":null,"healthFreshness":"neverObserved","peers":[],"shares":[],"folders":[]}"#
+            )
         case "/api/v1/config/export":
             return TestResponse.response(
                 request,
@@ -1619,6 +1840,349 @@ func realDaemonBackupVerifyAndRestore() async throws {
     #expect(!FileManager.default.fileExists(atPath: target.appending(path: "z-after.txt").path))
 }
 
+@Test func folderStatusUsesCanonicalEndpointAndDecodesInvitationExpiry() async throws {
+    let peer = UUID()
+    let offer = UUID()
+    let folder = UUID()
+    let recorder = RequestRecorder { request in
+        #expect(request.url?.path == "/api/v1/sync/status")
+        #expect(request.httpMethod == "GET")
+        return TestResponse.response(
+            request,
+            status: 200,
+            json: """
+            {"schemaVersion":1,"availability":"available","lifecycle":"running","issue":null,"healthFreshness":"fresh","connectionFreshness":"fresh","peers":[{"peerId":"\(peer.uuidString.lowercased())","displayName":"Kitchen Mac"}],"shares":[{"offerId":"\(offer.uuidString.lowercased())","folderId":"\(folder.uuidString.lowercased())","label":"Plans","peerId":"\(peer.uuidString.lowercased())","incoming":true,"phase":"offered","expiresAtUnixMs":1234,"expired":true,"peerConnection":"disconnected"}],"folders":[]}
+            """
+        )
+    }
+
+    let status = try await makeClient(recorder: recorder, token: String(repeating: "s", count: 32)).folderSyncStatus()
+    #expect(status.peers == [FolderSyncPeer(peerId: peer, displayName: "Kitchen Mac")])
+    #expect(status.peers.first?.address == nil)
+    #expect(status.shares[0].expired)
+    #expect(status.shares[0].expiresAtUnixMs == 1234)
+    #expect(status.displayState(for: status.shares[0]) == .invitationExpired)
+}
+
+@Test func folderStatusDecodesSharedSettingsWithoutShowingPendingPolicyAsApplied() async throws {
+    let source = UUID()
+    let requester = UUID()
+    let offer = UUID()
+    let folder = UUID()
+    let committed = UUID()
+    let pending = UUID()
+    let recorder = RequestRecorder { request in
+        TestResponse.response(
+            request,
+            status: 200,
+            json: """
+            {"availability":"available","lifecycle":"running","issue":null,"healthFreshness":"fresh","connectionFreshness":"fresh","peers":[{"peerId":"\(source.uuidString)","displayName":"Source Mac"}],"shares":[{"offerId":"\(offer.uuidString)","folderId":"\(folder.uuidString)","label":"Photos","peerId":"\(source.uuidString)","incoming":true,"phase":"ready","expiresAtUnixMs":null,"expired":false,"peerConnection":"connected","linkPolicy":{"propagateSourceDeletions":false,"restoreLocalDeletions":false},"linkSettings":{"revision":2,"settings":{"deletionPolicy":{"propagateSourceDeletions":false,"restoreLocalDeletions":false},"paused":false},"changeId":"\(committed.uuidString)","changedBy":"\(source.uuidString)","confirmed":true,"pendingChange":{"folderId":"\(folder.uuidString)","sourceId":"\(source.uuidString)","requesterId":"\(requester.uuidString)","changeId":"\(pending.uuidString)","expectedRevision":2,"settings":{"deletionPolicy":{"propagateSourceDeletions":true,"restoreLocalDeletions":false},"paused":false}},"conflictedChange":null}}],"folders":[]}
+            """
+        )
+    }
+    let status = try await makeClient(
+        recorder: recorder, token: String(repeating: "l", count: 32)
+    ).folderSyncStatus()
+    let share = try #require(status.shares.first)
+    #expect(share.linkPolicy == FolderLinkPolicy())
+    #expect(share.linkSettings?.settings.deletionPolicy == FolderLinkPolicy())
+    #expect(share.linkSettings?.pendingChange?.changeId == pending)
+    #expect(share.linkSettings?.pendingChange?.settings.deletionPolicy.propagateSourceDeletions == true)
+}
+
+@Test func peerAddressRefreshUsesExactAuthenticatedContract() async throws {
+    let peer = UUID()
+    let expected = "192.0.2.10:8787"
+    let candidate = "[2001:db8::20]:8787"
+    let recorder = RequestRecorder { request in
+        #expect(request.url?.path == "/api/v1/sync/peers/refresh-address")
+        #expect(request.httpMethod == "POST")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(String(repeating: "p", count: 32))")
+        let body = try #require(requestBody(request))
+        let payload = try #require(JSONSerialization.jsonObject(with: body) as? [String: String])
+        #expect(Set(payload.keys) == Set(["peerId", "expectedAddress", "candidateAddress"]))
+        #expect(UUID(uuidString: try #require(payload["peerId"])) == peer)
+        #expect(payload["expectedAddress"] == expected)
+        #expect(payload["candidateAddress"] == candidate)
+        return TestResponse.response(
+            request,
+            status: 200,
+            json: #"{"offerId":null,"lifecycle":"running","issue":null}"#
+        )
+    }
+    let request = PeerAddressRefreshRequest(
+        peerId: peer,
+        expectedAddress: expected,
+        candidateAddress: candidate
+    )
+    let result = try await makeClient(
+        recorder: recorder,
+        token: String(repeating: "p", count: 32)
+    ).refreshPeerAddress(request)
+    #expect(result == FolderSyncMutation(offerId: nil, lifecycle: "running", issue: nil))
+}
+
+@Test func folderStatusValidatesAdditivePeerAddresses() async throws {
+    let peer = UUID()
+    let valid = "192.0.2.10:8787"
+    let validRecorder = RequestRecorder { request in
+        TestResponse.response(
+            request,
+            status: 200,
+            json: "{\"schemaVersion\":1,\"availability\":\"available\",\"lifecycle\":\"running\",\"issue\":null,\"healthFreshness\":\"fresh\",\"connectionFreshness\":\"fresh\",\"peers\":[{\"peerId\":\"\(peer.uuidString)\",\"displayName\":\"Kitchen Mac\",\"address\":\"\(valid)\"}],\"shares\":[],\"folders\":[]}"
+        )
+    }
+    let status = try await makeClient(
+        recorder: validRecorder,
+        token: String(repeating: "v", count: 32)
+    ).folderSyncStatus()
+    #expect(status.peers.first?.address == valid)
+
+    for invalid in ["", "192.0.2.10: 8787", String(repeating: "1", count: 129)] {
+        let invalidRecorder = RequestRecorder { request in
+            let encoded = try JSONSerialization.data(withJSONObject: [
+                "schemaVersion": 1,
+                "availability": "available",
+                "lifecycle": "running",
+                "issue": NSNull(),
+                "healthFreshness": "fresh",
+                "connectionFreshness": "fresh",
+                "peers": [["peerId": peer.uuidString, "displayName": "Kitchen Mac", "address": invalid]],
+                "shares": [],
+                "folders": [],
+            ])
+            return TestResponse.data(request, status: 200, body: encoded)
+        }
+        await #expect(throws: NodeClientError.invalidResponse) {
+            _ = try await makeClient(
+                recorder: invalidRecorder,
+                token: String(repeating: "i", count: 32)
+            ).folderSyncStatus()
+        }
+    }
+}
+
+@Test func signedPairingInvitationPreservesTransportBindingAcrossNativeRoundTrip() throws {
+    let owner = UUID()
+    let object: [String: Any] = [
+        "protocolVersion": 2,
+        "minimumProtocolVersion": 1,
+        "inviterDeviceId": owner.uuidString.lowercased(),
+        "inviterPublicKey": "public-key",
+        "inviterDeviceName": "Kitchen Mac",
+        "invitationId": "invitation-id",
+        "invitationSecret": "invitation-secret",
+        "invitationSecretCommitment": "commitment",
+        "expiresAtUnixMs": 4_102_444_800_000 as UInt64,
+        "endpoints": ["127.0.0.1:8787"],
+        "transportBinding": [
+            "peerId": owner.uuidString.lowercased(),
+            "displayName": "Kitchen Mac",
+            "address": "127.0.0.1:8789",
+            "certificateDer": "Y2VydGlmaWNhdGU",
+            "certificateFingerprint": String(repeating: "a", count: 64),
+        ],
+        "signature": "signed-record",
+    ]
+    let source = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    let invitation = try JSONDecoder().decode(PairingInvitation.self, from: source)
+    let rebound = try #require(invitation.transportBinding)
+    #expect(rebound.peerId == owner)
+    #expect(rebound.displayName == "Kitchen Mac")
+    #expect(rebound.address == "127.0.0.1:8789")
+    #expect(rebound.certificateDer == "Y2VydGlmaWNhdGU")
+    #expect(rebound.certificateFingerprint == String(repeating: "a", count: 64))
+    let encoded = try JSONEncoder().encode(invitation)
+    let roundTrip = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+    let encodedBinding = try #require(roundTrip["transportBinding"] as? [String: Any])
+    var sourceBinding = try #require(object["transportBinding"] as? [String: Any])
+    // Foundation encodes UUIDs in uppercase. The signed protocol decodes them
+    // as UUID values before canonical serialization, so letter case is not a
+    // different identity. Every other transport field must remain byte-exact.
+    sourceBinding["peerId"] = owner.uuidString
+    #expect(NSDictionary(dictionary: encodedBinding).isEqual(to: sourceBinding))
+}
+
+@Test func folderMutationsUseBoundedCanonicalRoutesAndPayloads() async throws {
+    let peer = UUID()
+    let offer = UUID()
+    let folder = UUID()
+    let sequence = RequestSequence()
+    let recorder = RequestRecorder(removeAfterRequest: false) { request in
+        switch sequence.next() {
+        case 0:
+            #expect(request.url?.path == "/api/v1/sync/folders")
+            #expect(request.httpMethod == "POST")
+            let payload = try #require(requestBody(request))
+            let object = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+            #expect(UUID(uuidString: try #require(object["peerId"] as? String)) == peer)
+            #expect(UUID(uuidString: try #require(object["folderId"] as? String)) == folder)
+            #expect(object["label"] as? String == "Plans")
+            #expect(object["selectedRoot"] as? String == "/chosen/by/user")
+        case 1:
+            #expect(request.url?.path == "/api/v1/sync/accept")
+        case 2:
+            #expect(request.url?.path == "/api/v1/sync/repair")
+            let payload = try #require(requestBody(request))
+            let object = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+            #expect(UUID(uuidString: try #require(object["offerId"] as? String)) == offer)
+            #expect(object["selectedRoot"] as? String == "/chosen/by/user")
+        case 3:
+            #expect(request.url?.path == "/api/v1/sync/pause")
+        case 4:
+            #expect(request.url?.path == "/api/v1/sync/remove")
+        case 5:
+            #expect(request.url?.path == "/api/v1/sync/retry")
+        case 6:
+            #expect(request.url?.path == "/api/v1/sync/renew")
+            let payload = try #require(requestBody(request))
+            let object = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+            #expect(Set(object.keys) == ["offerId"])
+            #expect(UUID(uuidString: try #require(object["offerId"] as? String)) == offer)
+        case 7:
+            #expect(request.url?.path == "/api/v1/sync/settings")
+            let payload = try #require(requestBody(request))
+            let object = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+            #expect(Set(object.keys) == ["folderId", "changeId", "expectedRevision", "settings"])
+            #expect(UUID(uuidString: try #require(object["folderId"] as? String)) == folder)
+            #expect((object["expectedRevision"] as? NSNumber)?.uint64Value == 4)
+        default:
+            Issue.record("Unexpected folder mutation request")
+        }
+        return TestResponse.response(
+            request,
+            status: 200,
+            json: "{\"offerId\":\"\(offer.uuidString.lowercased())\",\"lifecycle\":\"running\",\"issue\":null}"
+        )
+    }
+    let client = try makeClient(recorder: recorder, token: String(repeating: "m", count: 32))
+    _ = try await client.offerFolder(FolderOfferRequest(peerId: peer, folderId: folder, label: "Plans", selectedRoot: "/chosen/by/user"))
+    _ = try await client.acceptFolder(FolderAcceptRequest(offerId: offer, selectedRoot: "/chosen/by/user"))
+    _ = try await client.repairFolder(FolderRepairRequest(offerId: offer, selectedRoot: "/chosen/by/user"))
+    _ = try await client.pauseFolder(FolderPauseRequest(offerId: offer, paused: true))
+    _ = try await client.removeFolder(FolderReferenceRequest(offerId: offer))
+    _ = try await client.retryFolderSync()
+    _ = try await client.renewFolder(FolderReferenceRequest(offerId: offer))
+    _ = try await client.updateFolderLinkSettings(FolderLinkSettingsRequest(
+        folderId: folder, changeId: UUID(), expectedRevision: 4,
+        settings: FolderLinkSettings(deletionPolicy: FolderLinkPolicy(), paused: true)
+    ))
+}
+
+@Test func folderStateDoesNotClaimRemoteConvergenceFromIdleHealth() {
+    let peer = UUID()
+    let offered = FolderShare(
+        offerId: UUID(), folderId: UUID(), label: "Plans", peerId: peer,
+        incoming: false, phase: .offered, expiresAtUnixMs: 10, expired: false
+    )
+    let ready = FolderShare(
+        offerId: UUID(), folderId: UUID(), label: "Plans", peerId: peer,
+        incoming: false, phase: .ready, expiresAtUnixMs: nil, expired: false,
+        peerConnection: .connected
+    )
+    let healthy = FolderHealth(
+        folderId: ready.folderId, state: "idle", remainingFiles: 0, remainingBytes: 0,
+        scanPullErrorCount: 0, reportedErrorRows: 0, statusError: false, watchError: false
+    )
+    let status = FolderSyncStatus(
+        availability: "available", lifecycle: "running", issue: nil, healthFreshness: "fresh",
+        connectionFreshness: "fresh",
+        peers: [FolderSyncPeer(peerId: peer, displayName: "Kitchen Mac")],
+        shares: [offered, ready], folders: [healthy]
+    )
+    #expect(status.displayState(for: offered) == .waitingForOtherDevice)
+    #expect(status.displayState(for: ready) == .folderReady)
+    #expect(status.displayLabel(for: ready) == "Connected to Kitchen Mac")
+    #expect(status.displayState(for: ready).label != "Up to date")
+
+    let oneWay = FolderShare(
+        offerId: UUID(), folderId: ready.folderId, label: ready.label, peerId: peer,
+        incoming: false, phase: .ready, expiresAtUnixMs: nil, expired: false,
+        peerConnection: .connected, linkPolicy: FolderLinkPolicy()
+    )
+    let suppressedDeletionCounts = FolderHealth(
+        folderId: ready.folderId, state: "idle", remainingFiles: 3, remainingBytes: 40,
+        scanPullErrorCount: 0, reportedErrorRows: 0, statusError: false, watchError: false
+    )
+    let oneWayIdle = FolderSyncStatus(
+        availability: "available", lifecycle: "running", issue: nil, healthFreshness: "fresh",
+        connectionFreshness: "fresh", peers: [], shares: [oneWay], folders: [suppressedDeletionCounts]
+    )
+    let legacyIdle = FolderSyncStatus(
+        availability: "available", lifecycle: "running", issue: nil, healthFreshness: "fresh",
+        connectionFreshness: "fresh", peers: [], shares: [ready], folders: [suppressedDeletionCounts]
+    )
+    #expect(oneWayIdle.displayState(for: oneWay) == .folderReady)
+    #expect(legacyIdle.displayState(for: ready) == .syncing)
+
+    let activelySyncing = FolderSyncStatus(
+        availability: "available", lifecycle: "running", issue: nil, healthFreshness: "fresh",
+        peers: [], shares: [oneWay], folders: [FolderHealth(
+            folderId: ready.folderId, state: "syncing", remainingFiles: 0, remainingBytes: 0,
+            scanPullErrorCount: 0, reportedErrorRows: 0, statusError: false, watchError: false
+        )]
+    )
+    #expect(activelySyncing.displayState(for: oneWay) == .syncing)
+
+    let scanning = FolderSyncStatus(
+        availability: "available", lifecycle: "running", issue: nil, healthFreshness: "fresh",
+        peers: [], shares: [ready], folders: [FolderHealth(
+            folderId: ready.folderId, state: "scanning", remainingFiles: 0, remainingBytes: 0,
+            scanPullErrorCount: 0, reportedErrorRows: 0, statusError: false, watchError: false
+        )]
+    )
+    let failed = FolderSyncStatus(
+        availability: "available", lifecycle: "running", issue: nil, healthFreshness: "fresh",
+        peers: [], shares: [ready], folders: [FolderHealth(
+            folderId: ready.folderId, state: "error", remainingFiles: 0, remainingBytes: 0,
+            scanPullErrorCount: 0, reportedErrorRows: 0, statusError: false, watchError: false
+        )]
+    )
+    #expect(scanning.displayState(for: ready) == .checkingFolder)
+    #expect(failed.displayState(for: ready) == .needsAttention)
+
+    let disconnected = FolderShare(
+        offerId: ready.offerId, folderId: ready.folderId, label: ready.label, peerId: peer,
+        incoming: false, phase: .ready, expiresAtUnixMs: nil, expired: false,
+        peerConnection: .disconnected
+    )
+    let waiting = FolderSyncStatus(
+        availability: "available", lifecycle: "running", issue: nil, healthFreshness: "fresh",
+        connectionFreshness: "fresh",
+        peers: [FolderSyncPeer(peerId: peer, displayName: "Kitchen Mac")],
+        shares: [disconnected], folders: [healthy]
+    )
+    #expect(waiting.displayState(for: disconnected) == .waitingForConnection)
+    #expect(waiting.displayLabel(for: disconnected) == "Waiting for Kitchen Mac")
+}
+
+@Test func folderInitialScanUsesCheckingStateUntilSafetyGateCompletes() {
+    let peer = UUID()
+    let offered = FolderShare(
+        offerId: UUID(), folderId: UUID(), label: "Plans", peerId: peer,
+        incoming: false, phase: .offered, expiresAtUnixMs: 10, expired: false
+    )
+    let scanning = FolderSyncStatus(
+        availability: "available", lifecycle: "initialScanning", issue: nil,
+        healthFreshness: "unknown", peers: [], shares: [offered], folders: []
+    )
+    #expect(scanning.isInitialScanning)
+    #expect(scanning.displayState(for: offered) == .checkingFolder)
+
+    let failed = FolderSyncStatus(
+        availability: "available", lifecycle: "needsAttention", issue: "initialScan",
+        healthFreshness: "unknown", peers: [], shares: [offered], folders: []
+    )
+    #expect(!failed.isInitialScanning)
+    #expect(failed.displayState(for: offered) == .needsAttention)
+
+    let unavailable = FolderSyncStatus(
+        availability: "unavailable", lifecycle: "initialScanning", issue: nil,
+        healthFreshness: "unknown", peers: [], shares: [offered], folders: []
+    )
+    #expect(!unavailable.isInitialScanning)
+}
+
 private func policyRestorePlan(
     inventory: AppleArchiveTransfer.TargetInventoryDraft,
     policy: ConflictPolicy,
@@ -1813,6 +2377,11 @@ private func durableRestoreRecorder(
                 status: 200,
                 json: #"{"deviceName":"Apple test","protocolVersion":1,"lanDiscovery":false,"platformTier":"tier1","state":"ready"}"#
             )
+        case "/api/v1/sync/status":
+            return TestResponse.response(
+                request, status: 200,
+                json: #"{"schemaVersion":1,"availability":"notPackaged","lifecycle":"stopped","issue":null,"healthFreshness":"neverObserved","peers":[],"shares":[],"folders":[]}"#
+            )
         case "/api/v1/config/export":
             return TestResponse.response(
                 request,
@@ -1986,20 +2555,26 @@ private func requestBody(_ request: URLRequest) -> Data? {
     return data
 }
 
-private struct RequestRecorder: @unchecked Sendable {
+struct RequestRecorder: @unchecked Sendable {
     let removeAfterRequest: Bool
+    let streamChunkBytes: Int?
+    let onStop: (@Sendable () -> Void)?
     let handler: (URLRequest) throws -> (HTTPURLResponse, Data)
 
     init(
         removeAfterRequest: Bool = true,
+        streamChunkBytes: Int? = nil,
+        onStop: (@Sendable () -> Void)? = nil,
         handler: @escaping (URLRequest) throws -> (HTTPURLResponse, Data)
     ) {
         self.removeAfterRequest = removeAfterRequest
+        self.streamChunkBytes = streamChunkBytes
+        self.onStop = onStop
         self.handler = handler
     }
 }
 
-private final class RequestSequence: @unchecked Sendable {
+final class RequestSequence: @unchecked Sendable {
     private let lock = NSLock()
     private var value = 0
 
@@ -2015,7 +2590,7 @@ private final class RequestSequence: @unchecked Sendable {
     }
 }
 
-private final class RecorderBox: @unchecked Sendable {
+final class RecorderBox: @unchecked Sendable {
     private let lock = NSLock()
     private var values: [Int: RequestRecorder] = [:]
     private var nextPort = 20_000
@@ -2044,8 +2619,11 @@ private final class RecorderBox: @unchecked Sendable {
     }
 }
 
-private final class RecordingURLProtocol: URLProtocol, @unchecked Sendable {
+final class RecordingURLProtocol: URLProtocol, @unchecked Sendable {
     static let recorder = RecorderBox()
+    private let stateLock = NSLock()
+    private var stopped = false
+    private var activeRecorder: RequestRecorder?
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -2055,22 +2633,47 @@ private final class RecordingURLProtocol: URLProtocol, @unchecked Sendable {
             client?.urlProtocol(self, didFailWithError: NodeClientError.invalidResponse)
             return
         }
+        stateLock.withLock { activeRecorder = recorder }
         do {
             let (response, data) = try recorder.handler(request)
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: data)
-            client?.urlProtocolDidFinishLoading(self)
-            if recorder.removeAfterRequest { Self.recorder.remove(for: request) }
+            if let chunkBytes = recorder.streamChunkBytes {
+                precondition(chunkBytes > 0)
+                DispatchQueue.global().async { [weak self] in
+                    guard let self else { return }
+                    var offset = 0
+                    while offset < data.count {
+                        if self.stateLock.withLock({ self.stopped }) { return }
+                        let end = min(offset + chunkBytes, data.count)
+                        self.client?.urlProtocol(self, didLoad: data.subdata(in: offset..<end))
+                        offset = end
+                        Thread.sleep(forTimeInterval: 0.001)
+                    }
+                    if self.stateLock.withLock({ self.stopped }) { return }
+                    self.client?.urlProtocolDidFinishLoading(self)
+                    if recorder.removeAfterRequest { Self.recorder.remove(for: self.request) }
+                }
+            } else {
+                client?.urlProtocol(self, didLoad: data)
+                client?.urlProtocolDidFinishLoading(self)
+                if recorder.removeAfterRequest { Self.recorder.remove(for: request) }
+            }
         } catch {
             client?.urlProtocol(self, didFailWithError: error)
             if recorder.removeAfterRequest { Self.recorder.remove(for: request) }
         }
     }
 
-    override func stopLoading() {}
+    override func stopLoading() {
+        let recorder = stateLock.withLock { () -> RequestRecorder? in
+            stopped = true
+            return activeRecorder
+        }
+        recorder?.onStop?()
+    }
 }
 
-private enum TestResponse {
+enum TestResponse {
     static func response(
         _ request: URLRequest,
         status: Int,

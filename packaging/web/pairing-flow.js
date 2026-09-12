@@ -263,6 +263,10 @@
       listProviders(api),
       api("/api/v1/rosters/current"),
     ]);
+    // A brand-new node has neither peers nor a signed roster yet. That is a
+    // valid local-only setup, not an authentication failure. A nonempty list
+    // still requires its signed grants before any provider can be selected.
+    if (listed.length === 0 && roster === null) return [];
     const names = providerNamesFromRoster(roster);
     return listed.map((provider) => {
       const displayName = names.get(provider.peerId);

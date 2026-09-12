@@ -55,6 +55,252 @@ paths:
                 $ref: "#/components/schemas/TransportIdentity"
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /api/v1/sync/status:
+    get:
+      summary: Read authenticated folder consent and observed worker health
+      operationId: folderSyncStatus
+      description: >-
+        Consent phases do not assert transfer completion. Folder errors are a bounded
+        first-page observation; idle does not prove a complete initial scan or peer convergence.
+        Local paths, engine IDs, credentials and raw engine errors are excluded.
+      responses:
+        "200":
+          description: Folder engine availability, consent and redacted observed health.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FolderSyncStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/sync/folders:
+    post:
+      summary: Offer a one-way source folder to a paired destination
+      description: >-
+        New links require an explicit deletion policy. Both false keeps destination
+        copies after a source deletion and leaves destination deletions in place.
+        Reuse the same folderId, source root, label and current policy to add another
+        destination. Legacy signed two-way invitations remain readable but cannot
+        be created by omitting linkPolicy.
+      operationId: offerFolder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FolderOfferRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/FolderSyncMutation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/sync/accept:
+    post:
+      summary: Choose a local destination and accept a folder invitation
+      operationId: acceptFolder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FolderAcceptRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/FolderSyncMutation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/sync/renew:
+    post:
+      summary: Renew an expired outgoing folder invitation
+      operationId: renewFolderInvitation
+      description: >-
+        Explicitly replaces one expired, unaccepted outgoing invitation with a
+        newly signed invitation. The response offerId is the new invitation ID;
+        clients must durably replace the expired pending reference. Accepted or
+        removed invitations cannot be renewed, and the recipient must explicitly
+        accept the new invitation. If the recipient's prior acceptance expired
+        before the source committed it, intake retires that acceptance and its
+        local grant without deleting files, and exposes the replacement as a new
+        offered invitation requiring folder selection and consent again.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FolderReference"
+      responses:
+        "200":
+          $ref: "#/components/responses/FolderSyncMutation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/sync/pause:
+    post:
+      summary: Pause or resume a link
+      description: >-
+        One-way links change the shared setting for every member through the source.
+        An offline source leaves a pending request. Legacy two-way folders retain
+        their per-device pause behavior. New clients should use the revisioned
+        settings endpoint to expose conflicts and retain exact retries.
+      operationId: pauseFolder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FolderPauseRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/FolderSyncMutation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/sync/settings:
+    post:
+      summary: Change settings for the entire one-way link
+      operationId: changeFolderLinkSettings
+      description: >-
+        Any currently authorized member can submit a change against the displayed
+        revision. The source commits one revision and distributes it to every
+        destination. A destination durably queues the request while the source is
+        offline; a 200 response confirms local persistence, not remote convergence.
+        Retain the exact changeId, expectedRevision and settings for uncertain retries.
+        A conflicting edit must be reviewed against the current status before a new
+        request is created. This endpoint does not modify legacy two-way folders.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FolderLinkSettingsRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/FolderSyncMutation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: >-
+            link_settings_pending means an earlier destination request awaits the
+            source. link_settings_conflict means the displayed revision is stale.
+            Read status and show the pending or conflicting values; do not silently
+            overwrite them. Other folder errors use the ordinary mutation contract.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "503":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/sync/remove:
+    post:
+      summary: Stop sharing this folder while preserving local files
+      operationId: removeFolder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FolderReference"
+      responses:
+        "200":
+          $ref: "#/components/responses/FolderSyncMutation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/sync/retry:
+    post:
+      summary: Retry folder sync after resolving its reported problem
+      operationId: retryFolderSync
+      responses:
+        "200":
+          $ref: "#/components/responses/FolderSyncMutation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/sync/repair:
+    post:
+      summary: Restore local access for an existing folder share
+      operationId: repairFolderAccess
+      description: >-
+        Rebinds one existing live share to a newly selected local directory.
+        This does not change the signed invitation, peer, folder identifier,
+        pause state, or user files. A worker is reaped before an active repair.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FolderRepairRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/FolderSyncMutation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/sync/peers/refresh-address:
+    post:
+      summary: Authenticate and adopt a paired device's new address
+      operationId: refreshFolderSyncPeerAddress
+      description: >-
+        Proves the retained peer signing identity and TLS certificate at one
+        canonical numeric candidate address before replacing mutable routing
+        state. Signed pairing and folder-consent records remain unchanged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PeerAddressRefreshRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/FolderSyncMutation"
+        "400":
+          description: The candidate is not a canonical numeric device address.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "502":
+          description: The retained device could not be authenticated at the candidate address.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "503":
+          description: Folder sync is busy or unavailable; the error says whether retry is possible.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /api/v1/discovery:
     get:
       summary: List untrusted discovery candidates
@@ -104,6 +350,73 @@ paths:
       responses:
         "204":
           description: Safe settings replaced after explicit confirmation.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/recovery/kit:
+    post:
+      summary: Create a one-time owner-loss recovery kit and random recovery key
+      description: >-
+        Returns the encrypted signed kit and its independently generated 256-bit key only in
+        this authenticated, explicitly confirmed response. Neither value is persisted in node
+        settings or recovery status. The response must not be cached.
+        For the standalone CLI, decode `recoveryKit` into raw bytes and save the two values in
+        separate files. On Unix set both files to mode 0600; ordinary browser downloads may be
+        created as 0644 and are deliberately refused until their permissions are tightened.
+      operationId: exportRecoveryKit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmedRecoveryRequest"
+      responses:
+        "200":
+          description: Newly generated recovery material. Save both values separately.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: "no-store, max-age=0"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecoveryKitExport"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/recovery/status:
+    get:
+      summary: Read durable owner-loss recovery progress and partial-provider warnings
+      operationId: recoveryStatus
+      responses:
+        "200":
+          description: Secret-free recovery state with exact provider evidence.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecoveryStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/v1/recovery/retry:
+    post:
+      summary: Retry bounded authenticated catalog import from active providers
+      operationId: retryRecovery
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmedRecoveryRequest"
+      responses:
+        "200":
+          description: Durable recovery status after the attempt.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecoveryStatus"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "409":
@@ -1239,6 +1552,14 @@ components:
               jobId:
                 $ref: "#/components/schemas/JobId"
   responses:
+    FolderSyncMutation:
+      description: >-
+        The local decision is durable. A needsAttention or stillStopping worker
+        lifecycle does not undo that decision; status reports further progress.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/FolderSyncMutationResult"
     ClientError:
       description: The route or HTTP method is not available.
       content:
@@ -1318,6 +1639,332 @@ components:
           schema:
             $ref: "#/components/schemas/PairingConfirmation"
   schemas:
+    FolderSyncMutationResult:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, offerId, lifecycle, issue]
+      properties:
+        schemaVersion:
+          const: 1
+        offerId:
+          type: [string, "null"]
+          format: uuid
+        lifecycle:
+          type: string
+          enum: [stopped, initialScanning, running, stillStopping, needsAttention]
+        issue:
+          type: [string, "null"]
+          enum: [null, journal, workerLaunch, initialScan, workerHealth, workerStop, peerRevocation, folderAccess]
+    FolderReference:
+      type: object
+      additionalProperties: false
+      required: [offerId]
+      properties:
+        offerId:
+          type: string
+          format: uuid
+    FolderOfferRequest:
+      type: object
+      additionalProperties: false
+      required: [peerId, folderId, label, selectedRoot, linkPolicy]
+      properties:
+        peerId:
+          $ref: "#/components/schemas/DeviceId"
+        folderId:
+          type: string
+          format: uuid
+        label:
+          type: string
+          minLength: 1
+          maxLength: 256
+        selectedRoot:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          description: Absolute folder selected by the local user; native hosts retain its OS access grant.
+        linkPolicy:
+          $ref: "#/components/schemas/FolderLinkPolicy"
+    FolderLinkPolicy:
+      type: object
+      additionalProperties: false
+      required: [propagateSourceDeletions, restoreLocalDeletions]
+      properties:
+        propagateSourceDeletions:
+          type: boolean
+          description: If true, source deletions also remove destination copies. If false, destination copies remain.
+        restoreLocalDeletions:
+          type: boolean
+          description: If true, files deleted at a destination are copied there again from the source. If false, those files stay deleted there, including after later source edits.
+    FolderLinkSettings:
+      type: object
+      additionalProperties: false
+      required: [deletionPolicy, paused]
+      properties:
+        deletionPolicy:
+          $ref: "#/components/schemas/FolderLinkPolicy"
+        paused:
+          type: boolean
+          description: Shared pause for the entire link, including all destinations.
+    FolderLinkSettingsRequest:
+      type: object
+      additionalProperties: false
+      required: [folderId, changeId, expectedRevision, settings]
+      properties:
+        folderId:
+          type: string
+          format: uuid
+        changeId:
+          type: string
+          format: uuid
+          description: Nonzero UUID retained unchanged when retrying this exact edit.
+        expectedRevision:
+          type: integer
+          minimum: 0
+        settings:
+          $ref: "#/components/schemas/FolderLinkSettings"
+    FolderLinkPendingChange:
+      type: object
+      additionalProperties: false
+      required: [folderId, sourceId, requesterId, changeId, expectedRevision, settings]
+      properties:
+        folderId:
+          type: string
+          format: uuid
+        sourceId:
+          $ref: "#/components/schemas/DeviceId"
+        requesterId:
+          $ref: "#/components/schemas/DeviceId"
+        changeId:
+          type: string
+          format: uuid
+        expectedRevision:
+          type: integer
+          minimum: 0
+        settings:
+          $ref: "#/components/schemas/FolderLinkSettings"
+    FolderLinkSettingsState:
+      type: object
+      additionalProperties: false
+      required: [revision, settings, changeId, changedBy, confirmed, pendingChange, conflictedChange]
+      properties:
+        revision:
+          type: integer
+          minimum: 0
+        settings:
+          $ref: "#/components/schemas/FolderLinkSettings"
+        changeId:
+          type: string
+          format: uuid
+          description: The zero UUID names initial revision zero; subsequent revisions have a nonzero change ID.
+        changedBy:
+          $ref: "#/components/schemas/DeviceId"
+        confirmed:
+          type: boolean
+          description: A new destination waits for current source-confirmed settings before transferring, even after accepting an invitation.
+        pendingChange:
+          oneOf:
+            - $ref: "#/components/schemas/FolderLinkPendingChange"
+            - type: "null"
+        conflictedChange:
+          oneOf:
+            - $ref: "#/components/schemas/FolderLinkPendingChange"
+            - type: "null"
+    FolderAcceptRequest:
+      type: object
+      additionalProperties: false
+      required: [offerId, selectedRoot]
+      properties:
+        offerId:
+          type: string
+          format: uuid
+        selectedRoot:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          description: Absolute destination selected by the recipient; never sent to another peer.
+    FolderRepairRequest:
+      type: object
+      additionalProperties: false
+      required: [offerId, selectedRoot]
+      properties:
+        offerId:
+          type: string
+          format: uuid
+        selectedRoot:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          description: Newly authorized absolute local root; never sent to another peer.
+    PeerAddressRefreshRequest:
+      type: object
+      additionalProperties: false
+      required: [peerId, expectedAddress, candidateAddress]
+      properties:
+        peerId:
+          $ref: "#/components/schemas/DeviceId"
+        expectedAddress:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Exact currently displayed numeric peer-control endpoint.
+        candidateAddress:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Canonical unicast numeric endpoint to authenticate before use.
+    FolderPauseRequest:
+      type: object
+      additionalProperties: false
+      required: [offerId, paused]
+      properties:
+        offerId:
+          type: string
+          format: uuid
+        paused:
+          type: boolean
+    FolderSyncStatus:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, availability, lifecycle, issue, healthFreshness, connectionFreshness, peers, shares, folders]
+      properties:
+        schemaVersion:
+          const: 1
+        availability:
+          type: string
+          enum: [notPackaged, needsAttention, available]
+        lifecycle:
+          type: string
+          enum: [stopped, initialScanning, running, stillStopping, needsAttention]
+        issue:
+          type: [string, "null"]
+          enum: [null, installation, folderAccess, journal, workerLaunch, initialScan, workerHealth, workerStop, peerRevocation]
+        healthFreshness:
+          type: string
+          enum: [neverObserved, fresh, stale]
+        connectionFreshness:
+          type: string
+          enum: [neverObserved, fresh, stale]
+          description: Freshness of the current worker's paired-device connection observation; connection state does not establish file convergence.
+        peers:
+          type: array
+          description: Paired devices with a current confirmed grant and retained transport pin, including devices without a backup storage role.
+          items:
+            $ref: "#/components/schemas/FolderSharingPeer"
+        shares:
+          type: array
+          maxItems: 4096
+          items:
+            $ref: "#/components/schemas/FolderShareSummary"
+        folders:
+          type: array
+          maxItems: 128
+          items:
+            $ref: "#/components/schemas/FolderHealthObservation"
+    FolderSharingPeer:
+      type: object
+      additionalProperties: false
+      required: [peerId, displayName, address]
+      properties:
+        peerId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+        address:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >-
+            Exact current authenticated numeric peer-control endpoint retained
+            with this confirmed peer's transport pin. It is not inferred from
+            discovery and does not describe folder convergence.
+    FolderShareSummary:
+      type: object
+      additionalProperties: false
+      required: [offerId, supersededOfferIds, folderId, label, peerId, incoming, phase, expiresAtUnixMs, expired, peerConnection, remoteRemovalPending]
+      properties:
+        offerId:
+          type: string
+          format: uuid
+        supersededOfferIds:
+          type: array
+          maxItems: 128
+          uniqueItems: true
+          description: Older invitation IDs replaced by this exact authenticated journal row. Clients retire matching local grant bindings and require fresh consent for the current offer ID.
+          items:
+            type: string
+            format: uuid
+        folderId:
+          type: string
+          format: uuid
+        label:
+          type: string
+          minLength: 1
+          maxLength: 256
+        peerId:
+          type: string
+          format: uuid
+        incoming:
+          type: boolean
+        linkPolicy:
+          description: Current effective policy for a one-way link. Null or absent identifies a legacy two-way folder; never present it as one-way.
+          oneOf:
+            - $ref: "#/components/schemas/FolderLinkPolicy"
+            - type: "null"
+        linkSettings:
+          oneOf:
+            - $ref: "#/components/schemas/FolderLinkSettingsState"
+            - type: "null"
+        phase:
+          type: string
+          enum: [offered, awaitingCommit, ready, paused, removed]
+        expiresAtUnixMs:
+          type: [integer, "null"]
+          minimum: 1
+          description: Deadline for an unaccepted invitation; null after a durable acceptance or removal.
+        expired:
+          type: boolean
+          description: The node's clock has reached the unaccepted invitation deadline.
+        peerConnection:
+          type: string
+          enum: [unknown, connected, disconnected, paused]
+          description: Connection to this share's paired device from a fresh current-worker observation, or unknown when no such observation is available. A durably paused share reports paused.
+        remoteRemovalPending:
+          type: boolean
+          description: This node has stopped sharing locally and retained an authenticated removal notice that the peer has not yet acknowledged. It never claims remote files were deleted.
+    FolderHealthObservation:
+      type: object
+      additionalProperties: false
+      required: [folderId, state, stateChanged, remainingFiles, remainingBytes, scanPullErrorCount, reportedErrorRows, statusError, watchError]
+      properties:
+        folderId:
+          type: string
+          format: uuid
+        state:
+          type: string
+          enum: [starting, idle, scanning, scan-waiting, sync-waiting, sync-preparing, syncing, cleaning, clean-waiting, error]
+        stateChanged:
+          type: string
+          format: date-time
+        remainingFiles:
+          description: Raw engine need count. Deliberately retained destination deletions can remain in this count; it does not by itself mean an idle one-way link is transferring.
+          type: integer
+          minimum: 0
+        remainingBytes:
+          type: integer
+          minimum: 0
+        scanPullErrorCount:
+          type: integer
+          minimum: 0
+        reportedErrorRows:
+          description: Rows in the first 128-row error page, not a total error count.
+          type: integer
+          minimum: 0
+          maximum: 128
+        statusError:
+          type: boolean
+        watchError:
+          type: boolean
     DeviceId:
       type: string
       format: uuid
@@ -1329,6 +1976,105 @@ components:
       minLength: 1
       maxLength: 128
       pattern: "^[A-Za-z0-9_-]+$"
+    ConfirmedRecoveryRequest:
+      type: object
+      additionalProperties: false
+      required: [confirmed]
+      properties:
+        confirmed:
+          type: boolean
+          description: Must be true after a local user confirms the recovery action.
+    RecoveryKitExport:
+      type: object
+      additionalProperties: false
+      required: [protocolVersion, recoveryKit, recoveryKey]
+      properties:
+        protocolVersion:
+          type: integer
+          const: 1
+        recoveryKit:
+          type: string
+          minLength: 1
+          maxLength: 22369624
+          pattern: "^[A-Za-z0-9_-]+$"
+          description: >-
+            Base64url unpadded encrypted signed recovery-kit bytes. Decode this field and save
+            the raw bytes in an owner-only `.covalent-recovery` file for `covalent-node recover`.
+        recoveryKey:
+          type: string
+          minLength: 43
+          maxLength: 43
+          pattern: "^[A-Za-z0-9_-]{43}$"
+          description: >-
+            Base64url unpadded random 256-bit key; shown only in this response. Save the exact
+            43 characters in a separate owner-only `.covalent-recovery-key` file.
+    RecoveryStatus:
+      type: object
+      additionalProperties: false
+      required:
+        - protocolVersion
+        - phase
+        - recoveredBackups
+        - queriedProviderIds
+        - configuredProviderIds
+        - failures
+        - newerSnapshotMayExist
+      properties:
+        protocolVersion:
+          type: integer
+          const: 1
+        phase:
+          enum: [not_configured, pending, imported, partial, blocked, no_catalogs]
+        recoveredBackups:
+          type: array
+          maxItems: 100000
+          items:
+            type: object
+            additionalProperties: false
+            required: [backupId, snapshotId, sourceProviderIds]
+            properties:
+              backupId:
+                $ref: "#/components/schemas/BackupId"
+              snapshotId:
+                $ref: "#/components/schemas/SnapshotId"
+              sourceProviderIds:
+                type: array
+                maxItems: 128
+                uniqueItems: true
+                items:
+                  $ref: "#/components/schemas/DeviceId"
+        queriedProviderIds:
+          type: array
+          maxItems: 128
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/DeviceId"
+        configuredProviderIds:
+          type: array
+          maxItems: 128
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/DeviceId"
+        failures:
+          type: array
+          maxItems: 256
+          items:
+            type: object
+            additionalProperties: false
+            required: [providerId, snapshotId, reason]
+            properties:
+              providerId:
+                $ref: "#/components/schemas/DeviceId"
+              snapshotId:
+                oneOf:
+                  - $ref: "#/components/schemas/SnapshotId"
+                  - type: "null"
+              reason:
+                type: string
+                minLength: 1
+                maxLength: 128
+        newerSnapshotMayExist:
+          type: boolean
     JobId:
       type: string
       minLength: 1

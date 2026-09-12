@@ -36,6 +36,7 @@ const specMethods = new Set(["get", "post", "put", "patch", "delete"]);
 const appleClientFile = "apps/apple/Sources/CovalentShared/NodeClient.swift";
 const androidClientFile = "apps/android/app/src/main/java/life/michaelwong/covalent/data/CovalentNodeClient.kt";
 const webConsoleFile = "packaging/web/app.js";
+const webFolderFile = "packaging/web/folder-sync-flow.js";
 
 // Client trees are declared, but the declaration is not trusted to be complete:
 // `classifyRepository` below proves that every tracked file mentioning the API
@@ -51,6 +52,7 @@ const clientTrees = [
     // A call site is only understood if its callee appears here. Anything else
     // fails, which is what makes the table safe to keep short.
     calls: {
+      sendRecovery: { path: { label: "path" }, method: { kind: "argument", label: "method", default: "recoveryDefault" } },
       send: { path: { label: "path" }, method: { kind: "argument", label: "method", default: "sendDefault" } },
       sendNoContent: { path: { label: "path" }, method: { kind: "derived", derivation: "sendNoContent" } },
       execute: { path: { label: "path" }, method: { kind: "argument", label: "method" } },
@@ -58,11 +60,17 @@ const clientTrees = [
       previewRestoreReference: { path: { label: "path" }, method: { kind: "derived", derivation: "previewRestoreReference" } },
     },
     derivations: {
+      recoveryDefault: { file: appleClientFile, pattern: /func sendRecovery\b[\s\S]{0,220}?method: String = "([A-Za-z]+)"/g },
       sendDefault: { file: appleClientFile, pattern: /func send\b[^)]*?method: String = "([A-Za-z]+)"/g },
       sendNoContent: { file: appleClientFile, pattern: /func sendNoContent\b[\s\S]{0,400}?method: "([A-Za-z]+)"/g },
       previewRestoreReference: { file: appleClientFile, pattern: /func previewRestoreReference\b[\s\S]{0,400}?method: "([A-Za-z]+)"/g },
     },
     wiring: [
+      {
+        description: "bounded Apple recovery requests preserve authenticated path and method forwarding",
+        file: appleClientFile,
+        pattern: /func sendRecovery\b[\s\S]{0,400}?authenticatedRequest\( path: path, method: method, accept: "application\/json"/g,
+      },
       {
         description: "URLRequest.httpMethod is taken from the caller's method argument",
         file: appleClientFile,
@@ -77,6 +85,7 @@ const clientTrees = [
     extension: ".kt",
     interpolation: /\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*/g,
     calls: {
+      requestBoundedObject: { path: { index: 2, label: "path" }, method: { kind: "argument", index: 1, label: "method" } },
       request: { path: { index: 2, label: "path" }, method: { kind: "argument", index: 1, label: "method" } },
       post: { path: { index: 2, label: "path" }, method: { kind: "derived", derivation: "post" } },
       postNoContent: { path: { index: 2, label: "path" }, method: { kind: "derived", derivation: "postNoContent" } },
@@ -98,6 +107,11 @@ const clientTrees = [
     },
     wiring: [
       {
+        description: "bounded Android recovery requests forward the exact path and method",
+        file: androidClientFile,
+        pattern: /fun requestBoundedObject\b[\s\S]{0,400}?openConnection\(baseUrl, path, method, token, "application\/json"\)/g,
+      },
+      {
         description: "HttpURLConnection.requestMethod is taken from the caller's method argument",
         file: androidClientFile,
         pattern: /requestMethod = method/g,
@@ -112,6 +126,9 @@ const clientTrees = [
     exclude: ["packaging/web/tests"],
     interpolation: /\$\{[^}]*\}/g,
     calls: {
+      folderApi: { path: { index: 0 }, method: { kind: "options", index: 1, default: "webDefault" } },
+      mutate: { path: { index: 0 }, method: { kind: "derived", derivation: "folderMutation" } },
+      recoveryApi: { path: { index: 0 }, method: { kind: "options", index: 1, default: "webDefault" } },
       api: { path: { index: 0 }, method: { kind: "options", index: 1, default: "webDefault" } },
       apiResponse: { path: { index: 0 }, method: { kind: "options", index: 1, default: "webDefault" } },
     },
@@ -120,10 +137,13 @@ const clientTrees = [
       // method of its own, so an omitted method is a GET. Pinning the exact
       // forwarding line makes that inference break loudly if it stops holding.
       webDefault: { file: webConsoleFile, pattern: /await fetch\(path, \{ \.\.\.options, headers, cache: "no-store" \}\)/g, constant: "GET" },
+      folderMutation: { file: webFolderFile, pattern: /async function mutate\b[\s\S]{0,1600}?options\.api\(path, \{ method: "([A-Za-z]+)", body: JSON\.stringify\(body\) \}\)/g },
     },
     wiring: [
-      { description: "the console apiResponse() helper takes its method from the caller's options", file: webConsoleFile, pattern: /async function apiResponse\(path, options = \{\}\)/g },
-      { description: "the console api() helper forwards its path and options to apiResponse()", file: webConsoleFile, pattern: /return \(await apiResponse\(path, options\)\)\.body;/g },
+      { description: "bounded folder parsing preserves console path and method forwarding", file: webConsoleFile, pattern: /function folderApi\(path, options\) \{ return api\(path, options, folderSync\.readJson\); \}/g },
+      { description: "bounded recovery parsing preserves console path and method forwarding", file: webConsoleFile, pattern: /function recoveryApi\(path, options\) \{ return api\(path, options, recovery\.readJson\); \}/g },
+      { description: "the console apiResponse() helper takes its method from the caller's options", file: webConsoleFile, pattern: /async function apiResponse\(path, options = \{\}(?:, readJson = \(response\) => response\.json\(\))?\)/g },
+      { description: "the console api() helper forwards its path and options to apiResponse()", file: webConsoleFile, pattern: /return \(await apiResponse\(path, options(?:, readJson)?\)\)\.body;/g },
     ],
   },
   // Mock-server assertions are not requests, so they carry no verb; their path

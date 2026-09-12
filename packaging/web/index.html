@@ -6,9 +6,14 @@
     <meta name="color-scheme" content="light dark" />
     <title>Covalent node</title>
     <link rel="stylesheet" href="/assets/app.css" />
+    <script src="/assets/folder-sync-flow.js" defer></script>
     <script src="/assets/pairing-flow.js" defer></script>
     <script src="/assets/restore-plan-flow.js" defer></script>
+    <script src="/assets/restore-preview-flow.js" defer></script>
     <script src="/assets/backup-terminal-flow.js" defer></script>
+    <script src="/assets/backup-verification-flow.js" defer></script>
+    <script src="/assets/backup-selection-flow.js" defer></script>
+    <script src="/assets/recovery-flow.js" defer></script>
     <script src="/assets/tab-flow.js" defer></script>
     <script src="/assets/app.js" defer></script>
   </head>
@@ -44,13 +49,72 @@
       </section>
 
       <nav class="tabs" aria-label="Covalent actions" role="tablist">
-        <button id="pair-tab" role="tab" aria-selected="true" aria-controls="pair-panel" tabindex="0" data-tab="pair">Pair</button>
-        <button id="backup-tab" role="tab" aria-selected="false" aria-controls="backup-panel" tabindex="-1" data-tab="backup">Backup</button>
-        <button id="restore-tab" role="tab" aria-selected="false" aria-controls="restore-panel" tabindex="-1" data-tab="restore">Restore</button>
+        <button id="pair-tab" role="tab" aria-selected="false" aria-controls="pair-panel" tabindex="-1" data-tab="pair">Pair</button>
+        <button id="folders-tab" role="tab" aria-selected="true" aria-controls="folders-panel" tabindex="0" data-tab="folders">Links</button>
         <button id="settings-tab" role="tab" aria-selected="false" aria-controls="settings-panel" tabindex="-1" data-tab="settings">Settings</button>
       </nav>
 
-      <section id="pair-panel" role="tabpanel" aria-labelledby="pair-tab" tabindex="0" data-panel="pair">
+      <details class="advanced">
+        <summary>Older backup and restore tools</summary>
+        <nav class="tabs" aria-label="Older tools">
+          <button id="backup-tool" type="button" aria-controls="backup-panel" data-tool-panel="backup">Backup</button>
+          <button id="restore-tool" type="button" aria-controls="restore-panel" data-tool-panel="restore">Restore</button>
+        </nav>
+      </details>
+
+      <section id="folders-panel" role="tabpanel" aria-labelledby="folders-tab" tabindex="0" data-panel="folders">
+        <div class="panel-heading"><div><h2>Your links</h2><p class="muted">Send files from one source to one or more destinations. Destination files stay on their own device.</p></div></div>
+
+        <section class="card" aria-live="polite">
+          <div class="button-row"><h3>Shared folders</h3><button type="button" class="secondary" data-folders-refresh>Refresh folders</button></div>
+          <p data-folders-status>Unlock the console to load folder sync status.</p>
+          <p class="muted" data-folders-empty>No shared folders are available yet.</p>
+          <ul class="device-list folder-list" data-folders-list></ul>
+          <button type="button" class="secondary" data-folders-retry-service data-folder-mutation hidden>Try folder sync again</button>
+        </section>
+
+        <section class="card" data-folder-pending hidden>
+          <h3>Saved folder offer</h3>
+          <p>A previous request may have reached this server. Retry its exact saved folder identity and path to avoid creating a duplicate.</p>
+          <p class="muted" data-folder-pending-summary></p>
+          <div class="button-row">
+            <button type="button" data-folder-offer-retry data-folder-mutation>Retry saved offer</button>
+            <button type="button" class="quiet" data-folder-offer-discard data-folder-mutation>Discard saved retry</button>
+          </div>
+        </section>
+
+        <section class="card" data-link-settings-pending hidden>
+          <h3>Saved link-settings request</h3>
+          <p>The result of a previous request is uncertain. Refresh first, then retry these exact settings. Do not submit different settings until this request is resolved.</p>
+          <p class="muted" data-link-settings-pending-summary></p>
+          <div class="button-row">
+            <button type="button" data-link-settings-retry data-folder-mutation>Retry exact settings</button>
+            <button type="button" class="quiet" data-link-settings-discard data-folder-mutation>Discard after review</button>
+          </div>
+        </section>
+
+        <form class="card" data-folder-offer-form>
+          <h3>Create a one-way link</h3>
+          <label>Destination device <select name="peerId" data-folder-peer required disabled><option value="">Unlock the console to load confirmed devices</option></select></label>
+          <label>Folder name <input name="label" maxlength="120" placeholder="Shared documents" required /></label>
+          <details class="advanced">
+            <summary>Advanced server folder path</summary>
+            <p class="muted">Choose a path already mounted into this server. A browser folder picker would select files on the computer running the browser and cannot grant this server access.</p>
+            <label>Folder path on this server <input name="selectedRoot" value="/sync" maxlength="1024" required /></label>
+          </details>
+          <p class="notice">The default <code>/sync</code> path must be a writable folder mounted into the Covalent server.</p>
+          <fieldset>
+            <legend>Deletion options</legend>
+            <label><input type="checkbox" name="propagateSourceDeletions" /> Delete destination copies when source files are deleted</label>
+            <p class="muted">Off by default: deleting a source file leaves its destination copies untouched. Turning this on also removes those copies.</p>
+            <label><input type="checkbox" name="restoreLocalDeletions" /> Restore files deleted at a destination</label>
+            <p class="muted">Off by default: destination deletions stay local, even after source edits. Turning this on copies those files there again from the source.</p>
+          </fieldset>
+          <button data-folder-offer-submit data-folder-mutation disabled>Create link</button>
+        </form>
+      </section>
+
+      <section id="pair-panel" role="tabpanel" aria-labelledby="pair-tab" tabindex="0" data-panel="pair" hidden>
         <div class="panel-heading"><div><h2>Pair a device</h2><p class="muted">Pairing requires both people to compare the same short code before a device receives any role.</p></div></div>
 
         <section class="card">
@@ -67,6 +131,13 @@
             <input id="network-pair-address" name="candidateAddress" maxlength="512" placeholder="node-a.tailnet.ts.net:8787" autocomplete="off" spellcheck="false" required />
             <button class="secondary">Pair with this address</button>
           </form>
+        </section>
+
+        <section class="card" aria-labelledby="paired-devices-heading">
+          <h3 id="paired-devices-heading">Paired devices</h3>
+          <p class="muted">These are saved, confirmed devices. If one moves to a new network address, verify its new numeric IP address and port here.</p>
+          <ul class="device-list" data-paired-devices></ul>
+          <p class="muted" data-paired-devices-empty>Unlock the console to load paired devices.</p>
         </section>
 
         <section class="card pairing-consent" data-network-card hidden aria-live="polite">
@@ -122,17 +193,22 @@
         </details>
       </section>
 
-      <section id="backup-panel" role="tabpanel" aria-labelledby="backup-tab" tabindex="0" data-panel="backup" hidden>
+      <section id="backup-panel" role="region" aria-labelledby="backup-tool" tabindex="0" data-panel="backup" hidden>
         <div class="panel-heading"><div><h2>Back up selected files</h2><p class="muted">Only read-only source mounts such as <code>/source</code> or <code>/boot-source</code> should be selected. Extra copies are made only on the currently verified backup devices you choose.</p></div></div>
         <section class="card" aria-live="polite">
-          <div class="button-row"><h3>Remembered backups</h3><button type="button" class="secondary" data-backups-refresh>Refresh list</button></div>
+          <div class="button-row"><h3>Your backups</h3><button type="button" class="secondary" data-backups-refresh>Refresh list</button></div>
+          <p class="muted">Verify checks the latest backup and the extra copies on your selected backup devices. It does not change your files.</p>
           <p class="muted" data-backups-empty>Unlock the console to load authoritative node backups.</p>
           <ul data-backups-list></ul>
         </section>
         <form class="card" data-backup-form>
           <label>Source directory <input name="sourceRoot" value="/source" required /></label>
-          <label>Backup name <input name="displayName" maxlength="120" required /></label>
-          <label>Snapshot ID <input name="snapshotId" pattern="[A-Za-z0-9_-]+" value="snapshot-1" required /></label>
+          <label>Backup name <input name="displayName" data-backup-name maxlength="120" required /></label>
+          <details class="advanced">
+            <summary>Advanced backup identifiers</summary>
+            <p class="muted">Covalent creates a safe snapshot ID when you start. Enter one only when continuing a manual recovery procedure.</p>
+            <label>Snapshot ID <input name="snapshotId" pattern="[A-Za-z0-9_-]+" autocomplete="off" /></label>
+          </details>
           <fieldset data-provider-selection>
             <legend>Backup devices</legend>
             <p class="muted" data-providers-empty>Unlock the console to inspect connected backup devices.</p>
@@ -148,29 +224,61 @@
         </form>
       </section>
 
-      <section id="restore-panel" role="tabpanel" aria-labelledby="restore-tab" tabindex="0" data-panel="restore" hidden>
-        <div class="panel-heading"><div><h2>Preview before restore</h2><p class="muted">Choose a distinct writable target. Relative restore paths stay under that target; preview is required before any write.</p></div></div>
+      <section id="restore-panel" role="region" aria-labelledby="restore-tool" tabindex="0" data-panel="restore" hidden>
+        <div class="panel-heading"><div><h2>Preview before restore</h2><p class="muted">Choose an existing folder on your backup server. Review where each file will go and how conflicts will be handled before anything is written.</p></div></div>
         <form class="card" data-restore-preview>
-          <label>Backup ID <input name="backupId" required /></label>
-          <label>Snapshot ID <input name="snapshotId" required /></label>
-          <label>Writable target directory <input name="targetRoot" value="/restore" required /></label>
+          <label>Completed backup <select name="rememberedRestore" data-restore-choice aria-describedby="restore-choice-help"><option value="">Unlock the console to load completed backups</option></select></label>
+          <p id="restore-choice-help" class="muted" data-restore-choice-help>Choose a remembered backup to use its latest completed snapshot.</p>
+          <details class="advanced">
+            <summary>Manual recovery identifiers</summary>
+            <p class="muted">Use this only when a support or recovery procedure gave you exact identifiers.</p>
+            <label>Backup ID <input name="backupId" autocomplete="off" /></label>
+            <label>Snapshot ID <input name="snapshotId" pattern="[A-Za-z0-9_-]+" autocomplete="off" /></label>
+          </details>
+          <label>Restore folder on the backup server <input name="targetRoot" value="/restore" required /></label>
           <label>Conflict policy <select name="conflictPolicy"><option value="fail">Stop on conflicts (safest)</option><option value="skip">Skip existing files</option><option value="rename">Create renamed copies</option><option value="replace">Replace regular files</option></select></label>
           <button>Preview restore</button>
         </form>
         <section class="card" aria-live="polite" data-restore-result hidden>
-          <h3>Restore preview</h3><p data-restore-summary></p><pre data-restore-plan></pre>
+          <h3>Restore preview</h3><p data-restore-summary></p><ol class="restore-preview-list" data-restore-plan></ol>
           <div class="button-row" aria-label="Restore preview pages">
             <button type="button" class="secondary" data-restore-previous disabled>Previous page</button>
             <button type="button" class="secondary" data-restore-next disabled>Next page</button>
             <button type="button" class="secondary" data-restore-discard>Discard preview</button>
           </div>
-          <label class="confirmation"><input type="checkbox" data-restore-confirm /> I reviewed this signed preview and authorize this restore to its displayed target.</label>
+          <label class="confirmation"><input type="checkbox" data-restore-confirm /> I reviewed the file actions and want to restore to the folder shown above.</label>
           <button type="button" data-restore-execute disabled>Restore this preview</button>
         </section>
       </section>
 
       <section id="settings-panel" role="tabpanel" aria-labelledby="settings-tab" tabindex="0" data-panel="settings" hidden>
         <div class="panel-heading"><div><h2>Settings and reachability</h2><p class="muted">LAN discovery is <strong data-discovery>Unknown</strong>. It can remain off when you use explicit LAN addresses or Tailscale; neither method bypasses pairing.</p></div></div>
+        <section class="card" aria-labelledby="recovery-heading">
+          <h3 id="recovery-heading">Recover after losing this device</h3>
+          <p>Save a recovery file and its separate recovery code somewhere safe, away from this backup server. You need both to recover its identity and find backups on your other devices. Anyone with both can access those backups.</p>
+          <p class="muted">Create a fresh pair after adding backups or changing trusted devices. Safe settings alone cannot recover your files.</p>
+          <form data-recovery-export>
+            <label class="confirmation"><input type="checkbox" name="confirmed" required /> I want to create recovery files and will keep both safe.</label>
+            <button data-recovery-create>Create recovery files</button>
+          </form>
+          <div data-recovery-downloads hidden>
+            <p data-recovery-save-status aria-live="polite">Preparing recovery files…</p>
+            <div class="button-row">
+              <button type="button" data-recovery-kit disabled>Save recovery file</button>
+              <button type="button" data-recovery-code disabled>Save recovery code</button>
+              <button type="button" data-recovery-close>Close and discard this copy</button>
+            </div>
+            <p class="muted">Check that both downloads finished before closing. Keep the code separately from the recovery file. This tab does not remember them after you close it.</p>
+          </div>
+          <h4>Last recovery attempt</h4>
+          <p data-recovery-status>Unlock the console, then check recovery progress.</p>
+          <p data-recovery-warning role="status" hidden></p>
+          <button type="button" data-recovery-refresh>Check recovery progress</button>
+          <form data-recovery-retry hidden>
+            <label class="confirmation"><input type="checkbox" name="confirmed" required /> Check my backup devices again for recoverable backups.</label>
+            <button>Retry recovery</button>
+          </form>
+        </section>
         <div class="two-column">
           <section class="card"><h3>Export safe settings</h3><p class="muted">Exports name, discovery preference, and remembered backups. It excludes identity keys, backup keys, grants, and provider credentials.</p><button type="button" data-settings-export>Download settings</button></section>
           <form class="card" data-settings-import><h3>Import safe settings</h3><label>Settings JSON <textarea name="settings" rows="5" required></textarea></label><label class="confirmation"><input type="checkbox" name="confirmed" required /> I understand this replaces safe settings, not identity keys.</label><button>Import settings</button></form>

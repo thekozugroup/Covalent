@@ -32,19 +32,35 @@
   function install(documentRoot) {
     const tabs = [...documentRoot.querySelectorAll("[data-tab]")];
     const panels = [...documentRoot.querySelectorAll("[data-panel]")];
-    if (tabs.length === 0) return Object.freeze({ tabs, panels });
+    const tools = [...documentRoot.querySelectorAll("[data-tool-panel]")];
+    if (tabs.length === 0) return Object.freeze({ tabs, panels, tools });
     const initial = tabs.find((tab) => tab.getAttribute("aria-selected") === "true") ?? tabs[0];
     activate(tabs, panels, initial);
     for (const tab of tabs) {
-      tab.addEventListener("click", () => activate(tabs, panels, tab));
+      tab.addEventListener("click", () => {
+        for (const tool of tools) tool.removeAttribute("aria-current");
+        activate(tabs, panels, tab);
+      });
       tab.addEventListener("keydown", (event) => {
         const next = targetIndex(tabs.indexOf(tab), tabs.length, event.key);
         if (next === null) return;
         event.preventDefault();
+        for (const tool of tools) tool.removeAttribute("aria-current");
         activate(tabs, panels, tabs[next], true);
       });
     }
-    return Object.freeze({ tabs, panels });
+    for (const tool of tools) {
+      tool.addEventListener("click", () => {
+        for (const tab of tabs) {
+          tab.setAttribute("aria-selected", "false");
+          tab.setAttribute("tabindex", "-1");
+        }
+        for (const other of tools) other.removeAttribute("aria-current");
+        tool.setAttribute("aria-current", "page");
+        for (const panel of panels) panel.hidden = panel.dataset.panel !== tool.dataset.toolPanel;
+      });
+    }
+    return Object.freeze({ tabs, panels, tools });
   }
 
   return Object.freeze({ activate, install, targetIndex });

@@ -3,9 +3,8 @@
 Standing analysis of what the Grype gate (`severity-cutoff: high`, `fail-build: true`)
 sees in `packaging/docker/Dockerfile`, and what is left to decide.
 
-Measured locally with Grype against `linux/arm64` builds of this Dockerfile.
-CI scans the merged multi-arch manifest, so its totals run higher than these;
-the *set* of distinct findings is the same.
+Current CI scans the immutable local image ID separately on native amd64 and
+arm64 runners. Historical measurements below retain their original scope.
 
 ## Where it stands
 
@@ -13,11 +12,15 @@ the *set* of distinct findings is the same.
 | --- | --- |
 | Caddy 2.10.2-alpine | **49** — 47 in the vendored Caddy binary, 2 in the Alpine base |
 | Caddy 2.11.4-alpine | **12** — 10 in the vendored Caddy binary, 2 in the Alpine base |
-| Caddy upstream snapshot `v2.11.5-0.20260711231708-b2693fb63a30` built from source, with exact Alpine security revisions (current) | **0** |
+| Caddy upstream snapshot `v2.11.5-0.20260711231708-b2693fb63a30` built from source, with exact Alpine security revisions (checkpoint 38) | **1** — `GHSA-vp52-pcj8-j9qc` in gRPC v1.82.1 |
+| Same source and toolchain with gRPC v1.83.1 (checkpoint 39) | **0** in the image scan; dependency review separately found `GHSA-2v4p-qf9q-27wj` |
+| Same source and toolchain with gRPC v1.83.2 and the local BusyBox backport (checkpoint 44) | **0** on arm64; current amd64 scan skipped after the image-size failure |
 
-Measured with Grype 0.117.0 against locally built images. The final current-row
-measurement is the local `linux/arm64` candidate; the release workflow repeats
-the same strict scan independently on both architectures before promotion.
+The checkpoint 38 row is from Grype 0.117.0 database v6.1.9, built
+2026-09-08T06:30:10Z, against the exact CI images for both architectures. The
+candidate has passed source, module, binary-build-info, and Caddy configuration
+validation. It is not recorded as clear until the release workflow repeats the
+strict scan against both rebuilt exact images.
 
 The bump cleared 39 findings and introduced 2 (both Go stdlib, superseded by the
 same toolchain gap described below). Notably cleared: both step-ca criticals,
@@ -27,10 +30,83 @@ because the docs instruct operators to enrol the local CA from Caddy's PKI.
 Also cleared: all 9 Caddy auth/path-bypass CVEs, all 6 `x/crypto`, both `grpc`
 criticals, `quic-go`, both `go-jose`, `otel`, `nebula`, `x/net`, and 16 stdlib.
 
-Both blockers below are now **cleared**. Later database refreshes also exposed
+The two original blockers below remain **cleared**. Later database refreshes also exposed
 GO-2026-5158 in OpenTelemetry v1.43.0 and GO-2026-6094 in cel-go v0.29.2;
 the consumer module pins patched v1.44.0 and v0.30.0 respectively, and the
 Dockerfile verifies both selections from the built Caddy binary.
+
+## Current BusyBox backport and remaining review
+
+Checkpoint 44 arm64 image
+`sha256:1167d99930768d026f3db208cfa449b71852b34a99aa5063fb4f3c48d10ee67f`
+passes its source/notice verifiers and all nine packaged folder-sync checks.
+Grype 0.117.0 database v6.1.9, built 2026-09-12T06:27:25Z, reports zero High
+and three Medium CVE-2025-60876 findings for `busybox`, `busybox-binsh` and
+`ssl_client`, each at the local version `1.37.0-r1000`.
+
+The final build includes the reviewed request-target patch, verifies all
+45 recipe patches, passes all 13 wire checks and binds installed payloads to
+the tested binaries. Its complete original/modified recipe and corresponding
+source pass the packaged verifier; see [Alpine source evidence](alpine-runtime-source.md).
+The scanner report lists no fixed Alpine version for this advisory. Independent
+review of this immutable arm64 image concludes that the applicable request-target
+behavior is remediated by the local backport. `busybox-binsh` is a symlink package
+depending on the same patched executable. `ssl_client` forwards TLS bytes and
+does not construct HTTP request targets; its finding comes from the shared
+BusyBox package origin. This is an image-specific technical assessment, not a
+claim of an Alpine or upstream fixed release. All three scanner rows remain
+visible and no ignore rule or VEX filter is introduced.
+
+The review binds the frozen upstream source and original/modified Alpine recipe
+to all 45 applied patches, the 13 direct/proxy wire checks, and the final runtime's
+successful comparison with the tested payload digests. The final image inherits
+that runtime without replacing its BusyBox files. Ordinary job console evidence
+is retained at `artifacts/validation-2026-09-12/checkpoint44-hosted/103575517205.log`;
+the independent review is `checkpoint44-busybox-applicability-review/result.json`.
+Its SHA-256 is `2f60d884cfb1fcf4eaca0237fa6aff1025844d59a2dcf4f0f752828e315969f1`.
+
+The earlier console reports successful digest comparisons without printing their
+values. The build now prints the verified digest list, allowing a subsequent
+clean builder's unsigned payloads to be compared numerically. That reproducibility
+comparison and the amd64 applicability review remain open. No new runtime files,
+package versions, image-size limits or scanner policy are introduced by logging
+the existing checked digest list.
+
+The current amd64 image passes its source and basic runtime checks but exceeds
+the unchanged 128 MiB size cap, so its later scan does not run. The next CI
+checkpoint places the size gate after functional and security checks. All
+size failures still fail the job; the reorder permits separate evidence for
+functionality, security and image size.
+
+## gRPC advisories — v1.83.2 exact-image coverage
+
+The checkpoint 38 scans found
+[`GHSA-vp52-pcj8-j9qc`](https://github.com/advisories/GHSA-vp52-pcj8-j9qc) /
+CVE-2026-84304 in `google.golang.org/grpc` v1.82.1. The advisory affects
+versions through v1.83.0 and identifies
+[v1.83.1](https://github.com/grpc/grpc-go/releases/tag/v1.83.1) as the patched
+release. Checkpoint 39 selected it and both exact-image Grype scans reported no
+High finding. The dependency-review database then identified
+[`GHSA-2v4p-qf9q-27wj`](https://github.com/advisories/GHSA-2v4p-qf9q-27wj), a
+separate xDS server panic affecting v1.83.1. The exact compiled Caddy graph does
+not include `grpc/xds` or `internal/xds/server`, but no reachability waiver is
+used: the consumer selects the signed patched
+[v1.83.2](https://github.com/grpc/grpc-go/releases/tag/v1.83.2), and the Docker
+build rejects every other gRPC version in the built binary metadata. This is a
+dependency update, not a scanner suppression or severity-policy change.
+
+Ordinary Go minimal-version selection also advances the exact transitive graph
+required through v1.83.2. Relative to v1.83.1, it advances `x/crypto` to v0.55,
+`x/mod` to v0.38, `x/net` to v0.58, `x/sync` to v0.22, `x/sys` to v0.47,
+`x/term` to v0.45, `x/text` to v0.41 and `x/tools` to v0.48. The checked-in
+`go.sum` authenticates the complete selected graph. The exact module diff and
+local binary measurements are retained in the checkpoint validation artifacts.
+With identical Go 1.26.7 Linux build flags, v1.83.2 adds 8,192 bytes to the
+v1.83.1 stripped amd64 binary and no bytes to arm64. Checkpoint 39 had only
+72,192 bytes of amd64 image headroom. The measured binary-only increase leaves
+an estimated 64,000 bytes before image-layer accounting; the actual rebuilt
+image remains authoritative. The 128 MiB budget is unchanged. Both release architectures still need an exact
+rebuilt-image Grype result before this finding can be marked cleared.
 
 ## Blocker 1 — Caddy's Go toolchain (10 findings) — CLEARED
 
@@ -51,9 +127,9 @@ against `golang:1.26.7-alpine3.23` pinned by digest. That stage replaced the
 `caddy:2.11.4-alpine` stage entirely; nothing from the published Caddy image
 enters the runtime image any more.
 
-`packaging/docker/caddy` is the three-line consumer module `xcaddy` generates and
-the official Caddy image builds: it imports `caddy/v2/cmd` and
-`caddy/v2/modules/standard`, and nothing else. No official Caddy patch release
+`packaging/docker/caddy` imports `caddy/v2/cmd` and the upstream modules required
+by the shipped Caddyfile and runtime checks. It omits unrelated modules in the
+standard distribution. No official Caddy patch release
 newer than v2.11.4 is published yet. To compile against patched cel-go, the
 module pins upstream snapshot `v2.11.5-0.20260711231708-b2693fb63a30`, commit
 `b2693fb63a30e6d7be0972c3645e9a2c0a500e93`, whose direct purpose is the cel-go
@@ -115,27 +191,30 @@ snapshot after repeating the same gates and delta review.
 ### Post-snapshot dependency refresh
 
 A refreshed Go vulnerability database on 2026-08-28 added five fixable
-dependency findings after the initial CEL compatibility work. The consumer
-module now raises them through ordinary minimal version selection, without a
-`replace`, fork, or source patch:
+dependency findings after the initial CEL compatibility work. The configured
+distribution no longer compiles `github.com/go-chi/chi/v5`, removing its three
+findings with the unused standard modules that selected it. The consumer raises
+the two remaining compiled dependencies through ordinary minimal version
+selection, without a `replace`, fork, or source patch:
 
 | module | prior | selected | finding |
 | --- | --- | --- | --- |
 | `github.com/google/cel-go` | `v0.29.2` | `v0.30.0` | GO-2026-6094 |
-| `github.com/go-chi/chi/v5` | `v5.2.5` | `v5.3.0` | GO-2026-5774, GO-2026-5775, GO-2026-5777 |
 | `github.com/klauspost/compress` | `v1.18.6` | `v1.18.7` | GO-2026-5841 |
 
 Pinned Go 1.26.7 `go mod verify`, `go test ./...`, `go vet ./...`, the custom
 build, and `caddy validate` all pass with that graph. Official
-`govulncheck v1.7.0` source analysis reports zero called vulnerable symbols.
-It reports GO-2026-5932 only at module level because `golang.org/x/crypto` is in
-the graph: the affected `openpgp` packages are not imported or called, and the
-Go report has no module version that can fix an unused package. A stripped
-binary scan cannot recover call information and may conservatively report
-unreachable code; the Go tool's documented limitation says binary mode can
-produce that false positive. The release decision therefore uses the exact
-source call graph plus an unstripped verification build, not a suppression or
-an ignored advisory.
+`golang.org/x/crypto` is pinned to `v0.56.0`, fixing
+[GO-2026-6354](https://pkg.go.dev/vuln/GO-2026-6354) and
+[GO-2026-6355](https://pkg.go.dev/vuln/GO-2026-6355) in the imported SSH package.
+`govulncheck v1.7.0` source analysis on 2026-09-12 reports zero called or
+imported-package vulnerabilities. It retains GO-2026-5932 at module level for
+`golang.org/x/crypto/openpgp`: that unmaintained package is neither imported nor
+called, and the report supplies no fixed version. No finding is suppressed. A stripped binary scan cannot
+recover call information and may conservatively report unreachable code; the
+Go tool's documented limitation says binary mode can produce that false
+positive. Release review therefore retains the exact source call graph plus an
+unstripped verification build.
 
 The full upstream integration package was compared under the same local
 environment. `TestH2ToH1ChunkedResponse` fails against both the exact v2.11.4
@@ -150,7 +229,7 @@ snapshot delta called out explicitly:
 | check | result |
 | --- | --- |
 | `caddy version` | `v2.11.5-0.20260711231708-b2693fb63a30 h1:GLKxfFw6+vJgw57aRSkZwXiogAFn4JMb6wqIop4KJtY=` — exact pinned upstream snapshot |
-| `caddy list-modules` | **133 standard modules**; the snapshot adds the upstream `http.matchers.url_pattern` module compared with the 132-module v2.11.4 image |
+| `caddy list-modules` | **112 modules** in the configured distribution |
 | `caddy adapt` on this repo's unchanged `Caddyfile` | **valid configuration**, checked against the pinned snapshot |
 | `caddy validate` | `Valid configuration` |
 
@@ -294,21 +373,33 @@ package contract prevents the remediation from silently regressing.
 
 ## Process gaps
 
-**Grype ran only in the release lane.** `ci.yml`'s `container-foundation` did not
-scan, which let dependency findings wait until tag time. With both image
-blockers resolved, the same pinned high-severity scan belongs in ordinary CI
-after `docker-compose-e2e.sh`:
+**Container scans now run before release.** Both ordinary CI architecture
+jobs scan their exact locally built image ID after runtime acceptance, retaining
+JSON evidence even when the scan fails. High and critical findings fail the job;
+findings without an available fix remain included. A missing report also fails.
+No image is published by these jobs. The evidence-copy step streams Docker's
+archive through GNU tar so read-only image directories regain their final modes
+only after their files are extracted. Distribution files have their own `engine/`
+subdirectory, leaving the outer evidence directory writable for image metadata.
+An ordinary-user isolated Atmos fixture
+verifies exact bytes and restored 0555/0444 modes; its temporary root was removed.
+This fixes checkpoint 35's copy failure without changing image permissions.
 
-```yaml
-      - uses: anchore/scan-action@1638637db639e0ade3258b51db49a9a137574c3e # v6
-        with:
-          image: covalent:ci
-          fail-build: true
-          severity-cutoff: high
-```
-
-Same action, pin, cutoff and failure mode as the release lane, so CI and the
-release gate cannot disagree about what is acceptable.
+CI and release scans use `scripts/run-pinned-grype-scan.sh`, which downloads the
+official Grype v0.117.0 release archive for the runner architecture and checks an
+exact hard-coded SHA-256 before extracting only its bounded regular-file contents.
+The pinned hashes are `38525dab...9c26` for Linux amd64 and
+`935f628b...91b` for Linux arm64, matching the release's
+[official checksum asset](https://github.com/anchore/grype/releases/download/v0.117.0/grype_0.117.0_checksums.txt).
+The workflow does not execute an installer or a GitHub action's mutable bundled
+download code. The scanner verifies the database hash and age, requires a live
+update check, includes findings without fixes, and uses no ignore rules or VEX.
+Grype's documented `docker:` source selects the local Docker daemon, and a
+bounded validator rejects a JSON report unless both its requested input and
+resolved image ID equal the immutable ID recorded before the scan. The release
+lane attempts both architectures and uploads each JSON report before a combined
+gate can permit SBOM generation or publishing. These changes require a fresh
+hosted run before claiming the current complete images pass.
 
 **The SBOM outran its own gate.** `anchore/sbom-action` defaults
 `upload-release-assets` to `true`, and it ran *before* `anchore/scan-action`.

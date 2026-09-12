@@ -51,6 +51,7 @@ import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -75,6 +76,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -129,7 +131,11 @@ import life.michaelwong.covalent.R
 import life.michaelwong.covalent.data.CovalentNodeClient
 import life.michaelwong.covalent.data.EnrolledTrust
 import life.michaelwong.covalent.data.NodeApiException
+import life.michaelwong.covalent.data.RecoveryExportMaterial
+import life.michaelwong.covalent.data.RecoverySafFiles
 import life.michaelwong.covalent.data.SafTransferBridge
+import life.michaelwong.covalent.data.SafSourceAccessException
+import life.michaelwong.covalent.data.SafTargetAccessException
 import life.michaelwong.covalent.data.SecureNodeStore
 import life.michaelwong.covalent.data.encodeEnrolledCertificate
 import life.michaelwong.covalent.data.newId
@@ -147,6 +153,8 @@ import life.michaelwong.covalent.model.PeerTransport
 import life.michaelwong.covalent.model.Provider
 import life.michaelwong.covalent.model.ProviderReachability
 import life.michaelwong.covalent.model.RememberedBackup
+import life.michaelwong.covalent.model.RecoveryPhase
+import life.michaelwong.covalent.model.RecoveryStatus
 import life.michaelwong.covalent.model.RestorePlanPage
 import life.michaelwong.covalent.model.RestoreConflictPolicy
 import life.michaelwong.covalent.model.TransferKind
@@ -166,9 +174,10 @@ import org.json.JSONObject
 
 private const val UI_LOG_TAG = "CovalentUi"
 
-internal enum class Screen { HOME, SETUP, PAIR, BACKUP, RESTORE, SETTINGS }
+internal enum class Screen { HOME, SETUP, PAIR, FOLDERS, BACKUP, RESTORE, SETTINGS }
 
-internal fun Screen.systemBackTarget(): Screen? = when (this) {
+internal fun Screen.systemBackTarget(hasBackupConnection: Boolean = true): Screen? = when (this) {
+    Screen.FOLDERS -> if (hasBackupConnection) Screen.HOME else Screen.SETUP
     Screen.PAIR, Screen.BACKUP, Screen.RESTORE, Screen.SETTINGS -> Screen.HOME
     Screen.HOME, Screen.SETUP -> null
 }
@@ -184,6 +193,24 @@ internal data class ValidatedSetup(
     val status: NodeStatus,
     val backups: List<RememberedBackup>,
 )
+
+internal data class FolderSelectionAttempt<T>(
+    val selected: T?,
+    val replacementAttempted: Boolean,
+    val failure: Throwable? = null,
+)
+
+internal inline fun <T : Any> retainFolderSelection(
+    current: T?,
+    candidate: T?,
+    retainPermission: (T) -> Unit,
+): FolderSelectionAttempt<T> {
+    if (candidate == null) return FolderSelectionAttempt(current, replacementAttempted = false)
+    return runCatching { retainPermission(candidate) }.fold(
+        onSuccess = { FolderSelectionAttempt(candidate, replacementAttempted = true) },
+        onFailure = { FolderSelectionAttempt(null, replacementAttempted = true, failure = it) },
+    )
+}
 
 private const val CLAIM_TOKEN_FILE_MAX_BYTES = 1_024
 
@@ -375,6 +402,22 @@ internal fun CovalentApp(
     val node = remember(store, state) { CovalentNodeClient(state::pendingEnrolledTrust) }
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
+    var recoveryKitDestination by remember { mutableStateOf<Uri?>(null) }
+    var recoveryCodeDestination by remember { mutableStateOf<Uri?>(null) }
+    var recoveryExportSession by remember { mutableStateOf<RecoveryExportMaterial?>(null) }
+    var confirmRecoveryExport by remember { mutableStateOf(false) }
+    var recoveryKitSource by remember { mutableStateOf<Uri?>(null) }
+    var recoveryCodeSource by remember { mutableStateOf<Uri?>(null) }
+    var confirmRecoveryBootstrap by remember { mutableStateOf(false) }
+    var pendingRecoveryPermission by remember { mutableStateOf(false) }
+
+    DisposableEffect(recoveryExportSession) {
+        val ownedSession = recoveryExportSession
+        onDispose { ownedSession?.close() }
+    }
+    DisposableEffect(embeddedManager) {
+        onDispose { embeddedManager.cancelPendingRecovery() }
+    }
 
     LaunchedEffect(embeddedProvider.maxBytes, embeddedProvider.keepFreeBytes, embeddedProvider.lanDiscoveryRequested) {
         state.loadProviderDraft(
@@ -428,6 +471,64 @@ internal fun CovalentApp(
             state.discovered = node.discovery(connection.baseUrl, connection.token)
             state.discoveryRunning = false
             state.discoveryCompleted = true
+        }
+    }
+
+    fun beginSelectedRecovery() {
+        val kitUri = recoveryKitSource ?: return
+        val codeUri = recoveryCodeSource ?: return
+        val capacity = providerCapacityBytes(state.providerMaximumGiB, state.providerKeepFreeGiB)
+        if (capacity == null) {
+            state.notice = resources.getString(R.string.phone_provider_invalid_capacity)
+            return
+        }
+        api(context, state, scope, onError = {
+            state.notice = resources.getString(R.string.recovery_bootstrap_failed)
+        }) {
+            val material = RecoverySafFiles.readBootstrap(context, kitUri, codeUri)
+            if (embeddedManager.recover(material, capacity.first, capacity.second, state.providerLanDiscovery)) {
+                recoveryKitSource = null
+                recoveryCodeSource = null
+                state.notice = resources.getString(R.string.recovery_bootstrap_started)
+            }
+        }
+    }
+
+    fun missingProviderPermissions(): Array<String> = buildList {
+        if (
+            Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.POST_NOTIFICATIONS,
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            add(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+        if (
+            Build.VERSION.SDK_INT >= 37 &&
+            ContextCompat.checkSelfPermission(context, LOCAL_NETWORK_PERMISSION) != PackageManager.PERMISSION_GRANTED
+        ) {
+            add(LOCAL_NETWORK_PERMISSION)
+        }
+    }.toTypedArray()
+
+    val recoveryProviderPermissions = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { grants ->
+        if (!pendingRecoveryPermission) return@rememberLauncherForActivityResult
+        pendingRecoveryPermission = false
+        if (grants.values.all { it }) beginSelectedRecovery()
+        else state.notice = resources.getString(R.string.phone_provider_permission_denied)
+    }
+
+    fun requestSelectedRecovery() {
+        if (!embeddedProvider.supported || !embeddedProvider.keyProtectionAvailable) {
+            state.notice = resources.getString(R.string.phone_provider_locked)
+            return
+        }
+        val missing = missingProviderPermissions()
+        if (missing.isEmpty()) beginSelectedRecovery() else {
+            pendingRecoveryPermission = true
+            recoveryProviderPermissions.launch(missing)
         }
     }
 
@@ -550,10 +651,17 @@ internal fun CovalentApp(
     }
 
     val sourcePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        uri?.let {
+        val selection = retainFolderSelection(state.selectedSource, uri) {
             context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            state.selectedSource = it
-            state.notice = resources.getString(R.string.source_access_saved)
+        }
+        if (selection.replacementAttempted) {
+            state.selectedSource = selection.selected
+            if (selection.failure == null) {
+                state.notice = resources.getString(R.string.source_access_saved)
+            } else {
+                Log.w(UI_LOG_TAG, "Source folder access could not be retained", selection.failure)
+                state.notice = resources.getString(R.string.error_source_access_revoked)
+            }
         }
     }
     val caCertificatePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -587,13 +695,19 @@ internal fun CovalentApp(
         }
     }
     val targetPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        uri?.let {
+        val selection = retainFolderSelection(state.selectedTarget, uri) {
             context.contentResolver.takePersistableUriPermission(
                 it,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
             )
-            state.selectedTarget = it
+        }
+        if (selection.replacementAttempted) {
+            state.selectedTarget = selection.selected
             state.persistRestorePlan(null)
+            selection.failure?.let { error ->
+                Log.w(UI_LOG_TAG, "Restore folder access could not be retained", error)
+                state.notice = resources.getString(R.string.error_target_access_revoked)
+            }
         }
     }
     val createSettings = rememberLauncherForActivityResult(
@@ -624,8 +738,136 @@ internal fun CovalentApp(
         }
     }
 
+    fun saveRecoveryExport() {
+        val connection = activeConnection ?: return
+        val kitUri = recoveryKitDestination ?: return
+        val codeUri = recoveryCodeDestination ?: return
+        api(context, state, scope, onError = {
+            state.notice = resources.getString(R.string.recovery_export_failed)
+        }) {
+            val session = recoveryExportSession ?: node.exportRecoveryKit(
+                connection.baseUrl,
+                connection.token,
+            ).also { recoveryExportSession = it }
+            session.save(context, kitUri, codeUri)
+            if (session.complete) {
+                session.close()
+                recoveryExportSession = null
+                recoveryKitDestination = null
+                recoveryCodeDestination = null
+                state.notice = resources.getString(R.string.recovery_export_saved)
+            }
+        }
+    }
+
+    val recoveryCodeDestinationPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain"),
+    ) { uri ->
+        recoveryCodeDestination = uri
+        confirmRecoveryExport = uri != null && recoveryKitDestination != null
+        if (uri == null) recoveryKitDestination = null
+    }
+    val recoveryKitDestinationPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream"),
+    ) { uri ->
+        recoveryKitDestination = uri
+        if (uri == null) {
+            recoveryCodeDestination = null
+        } else {
+            recoveryCodeDestinationPicker.launch("covalent-recovery-code.txt")
+        }
+    }
+    val recoveryCodeSourcePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        recoveryCodeSource = uri
+        confirmRecoveryBootstrap = uri != null && recoveryKitSource != null
+        if (uri == null) recoveryKitSource = null
+    }
+    val recoveryKitSourcePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        recoveryKitSource = uri
+        if (uri == null) {
+            recoveryCodeSource = null
+        } else {
+            recoveryCodeSourcePicker.launch(arrayOf("text/plain", "application/octet-stream"))
+        }
+    }
+
+    if (confirmRecoveryExport) {
+        AlertDialog(
+            onDismissRequest = {
+                confirmRecoveryExport = false
+                recoveryKitDestination = null
+                recoveryCodeDestination = null
+            },
+            title = { Text(stringResource(R.string.recovery_export_confirm_title)) },
+            text = { Text(stringResource(R.string.recovery_export_confirm_detail)) },
+            confirmButton = {
+                FilledTonalButton(onClick = {
+                    confirmRecoveryExport = false
+                    saveRecoveryExport()
+                }) { Text(stringResource(R.string.action_create_recovery_kit)) }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    confirmRecoveryExport = false
+                    recoveryKitDestination = null
+                    recoveryCodeDestination = null
+                }) { Text(stringResource(R.string.action_cancel)) }
+            },
+        )
+    }
+    if (confirmRecoveryBootstrap) {
+        AlertDialog(
+            onDismissRequest = {
+                confirmRecoveryBootstrap = false
+                recoveryKitSource = null
+                recoveryCodeSource = null
+            },
+            title = { Text(stringResource(R.string.recovery_bootstrap_confirm_title)) },
+            text = { Text(stringResource(R.string.recovery_bootstrap_confirm_detail)) },
+            confirmButton = {
+                FilledTonalButton(onClick = {
+                    confirmRecoveryBootstrap = false
+                    requestSelectedRecovery()
+                }) { Text(stringResource(R.string.action_recover_phone)) }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    confirmRecoveryBootstrap = false
+                    recoveryKitSource = null
+                    recoveryCodeSource = null
+                }) { Text(stringResource(R.string.action_cancel)) }
+            },
+        )
+    }
+
     LaunchedEffect(store, state) {
         state.initialize(store)
+        if (state.screen == Screen.SETUP && embeddedManager.folderSyncRequested()) {
+            state.screen = Screen.FOLDERS
+        }
+    }
+    LaunchedEffect(state.screen) {
+        if (state.screen != Screen.SETTINGS && recoveryExportSession != null) {
+            recoveryExportSession?.close()
+            recoveryExportSession = null
+            recoveryKitDestination = null
+            recoveryCodeDestination = null
+        }
+    }
+    LaunchedEffect(state.screen, activeConnection?.baseUrl, activeConnection?.token) {
+        val connection = activeConnection
+        state.recoveryStatus = null
+        if (state.screen == Screen.SETTINGS && connection != null) {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    node.recoveryStatus(connection.baseUrl, connection.token)
+                }
+            }.onSuccess { state.recoveryStatus = it }
+        }
     }
     LaunchedEffect(state.pendingSetupLink) {
         val link = state.pendingSetupLink
@@ -666,7 +908,9 @@ internal fun CovalentApp(
             }.onFailure { error ->
                 state.connectionHealth = ConnectionHealth.STALE
                 state.connectionError = nodeFailureMessage(context, error, R.string.error_connection_failed)
-                if (shouldReturnToSetupAfterRefreshFailure(error)) state.screen = Screen.SETUP
+                if (state.screen != Screen.FOLDERS && shouldReturnToSetupAfterRefreshFailure(error)) {
+                    state.screen = Screen.SETUP
+                }
             }
             delay(STATUS_POLL_MILLIS)
         }
@@ -712,7 +956,7 @@ internal fun CovalentApp(
                                 it.state != NetworkPairingState.FAILED
                         }
                     }
-                    if (state.activeNetworkPairing != null && state.screen != Screen.SETUP) {
+                    if (state.activeNetworkPairing != null && state.screen != Screen.SETUP && state.screen != Screen.FOLDERS) {
                         state.screen = Screen.PAIR
                     }
                 }
@@ -737,8 +981,8 @@ internal fun CovalentApp(
         snackbar.showSnackbar(notice)
         state.notice = null
     }
-    BackHandler(enabled = state.screen.systemBackTarget() != null) {
-        state.screen.systemBackTarget()?.let { state.screen = it }
+    BackHandler(enabled = state.screen.systemBackTarget(activeConnection != null) != null) {
+        state.screen.systemBackTarget(activeConnection != null)?.let { state.screen = it }
     }
 
     val compactActions = LocalDensity.current.fontScale >= 1.3f
@@ -749,7 +993,9 @@ internal fun CovalentApp(
                 title = { Text(stringResource(R.string.app_name)) },
                 navigationIcon = if (state.screen != Screen.HOME && state.screen != Screen.SETUP) {
                     {
-                        IconButton(onClick = { state.screen = Screen.HOME }) {
+                        IconButton(onClick = {
+                            state.screen = state.screen.systemBackTarget(activeConnection != null) ?: Screen.HOME
+                        }) {
                             Icon(
                                 Icons.AutoMirrored.Rounded.ArrowBack,
                                 stringResource(R.string.action_back),
@@ -775,8 +1021,7 @@ internal fun CovalentApp(
                 ) { action ->
                     state.screen = when (action) {
                         PrimaryAction.PAIR -> Screen.PAIR
-                        PrimaryAction.BACKUP -> Screen.BACKUP
-                        PrimaryAction.RESTORE -> Screen.RESTORE
+                        PrimaryAction.LINKS -> Screen.FOLDERS
                     }
                 }
             }
@@ -791,8 +1036,21 @@ internal fun CovalentApp(
                     state,
                     page,
                     ::requestSetup,
+                    openFolders = { state.screen = Screen.FOLDERS },
                     pickTokenFile = { tokenPicker.launch(arrayOf("text/plain", "application/octet-stream")) },
                     pickCaCertificate = { caCertificatePicker.launch(arrayOf("application/x-x509-ca-cert", "application/pkix-cert", "text/plain")) },
+                    recoverPhone = {
+                        recoveryKitSourcePicker.launch(
+                            arrayOf("application/octet-stream", "application/vnd.covalent.recovery"),
+                        )
+                    },
+                    recoveredPhoneReady = embeddedProvider.enabled && embeddedProvider.running,
+                    useRecoveredPhone = {
+                        if (embeddedManager.selectLocalMode()) {
+                            state.connectionHealth = ConnectionHealth.CONNECTING
+                            state.screen = Screen.HOME
+                        }
+                    },
                 )
                 Screen.PAIR -> Pair(state, node, activeConnection, scope, page) {
                     if (
@@ -805,6 +1063,20 @@ internal fun CovalentApp(
                         discover()
                     }
                 }
+                Screen.FOLDERS -> FolderSyncScreen(
+                    embeddedManager,
+                    page,
+                    onProviderConnectionsChanged = {
+                        val connection = activeConnection
+                        val local = embeddedManager.localConnectionForFolderSync()
+                        if (connection != null && local == connection) {
+                            val providers = withContext(Dispatchers.IO) {
+                                node.providers(connection.baseUrl, connection.token)
+                            }
+                            state.providers = providers
+                        }
+                    },
+                )
                 Screen.BACKUP -> Backup(state, node, store, activeConnection, scope, page) { sourcePicker.launch(null) }
                 Screen.RESTORE -> Restore(state, node, store, activeConnection, scope, page) { targetPicker.launch(null) }
                 Screen.SETTINGS -> Settings(
@@ -818,6 +1090,22 @@ internal fun CovalentApp(
                     page,
                     createSettings::launch,
                     importSettings::launch,
+                    exportRecovery = { recoveryKitDestinationPicker.launch("covalent-recovery.covalent-recovery") },
+                    retryRecoveryExport = if (recoveryExportSession != null) ::saveRecoveryExport else null,
+                    discardRecoveryExport = if (recoveryExportSession != null) ({
+                        recoveryExportSession?.close()
+                        recoveryExportSession = null
+                        recoveryKitDestination = null
+                        recoveryCodeDestination = null
+                    }) else null,
+                    retryRecovery = {
+                        activeConnection?.let { connection ->
+                            api(context, state, scope) {
+                                state.recoveryStatus = node.retryRecovery(connection.baseUrl, connection.token)
+                                state.notice = resources.getString(R.string.recovery_retry_finished)
+                            }
+                        }
+                    },
                     onLanChange = { enabled ->
                         if (
                             enabled && Build.VERSION.SDK_INT >= 37 &&
@@ -1262,8 +1550,12 @@ private fun Setup(
     state: CovalentViewModel,
     modifier: Modifier,
     connect: () -> Unit,
+    openFolders: () -> Unit,
     pickTokenFile: () -> Unit,
     pickCaCertificate: () -> Unit,
+    recoverPhone: () -> Unit,
+    recoveredPhoneReady: Boolean,
+    useRecoveredPhone: () -> Unit,
 ) {
     val nameFocus = remember { FocusRequester() }
     val addressFocus = remember { FocusRequester() }
@@ -1274,6 +1566,11 @@ private fun Setup(
         stringResource(R.string.setup_title),
         stringResource(R.string.setup_subtitle),
     ) {
+        Button(onClick = openFolders, modifier = Modifier.fillMaxWidth().testTag("setup.folderSync")) {
+            Text(stringResource(R.string.folder_sync_setup_action))
+        }
+        Text(stringResource(R.string.folder_sync_setup_detail))
+        SectionTitle(stringResource(R.string.setup_backup_section))
         OnboardingChoice(
             icon = Icons.Rounded.Search,
             title = stringResource(R.string.setup_nearby_title),
@@ -1431,6 +1728,30 @@ private fun Setup(
         }) {
             if (state.busy) CircularProgressIndicator(Modifier.padding(end = 8.dp))
             Text(stringResource(if (state.busy) R.string.action_checking else R.string.action_connect))
+        }
+        HorizontalDivider()
+        SectionTitle(stringResource(R.string.recovery_bootstrap_title))
+        Text(
+            stringResource(R.string.recovery_bootstrap_detail),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedButton(
+            enabled = canSubmit,
+            onClick = recoverPhone,
+            modifier = Modifier.testTag("setup.recovery.start"),
+        ) {
+            Icon(Icons.Rounded.Security, contentDescription = null)
+            Text(stringResource(R.string.action_choose_recovery_files), Modifier.padding(start = 8.dp))
+        }
+        if (recoveredPhoneReady) {
+            FilledTonalButton(
+                enabled = canSubmit,
+                onClick = useRecoveredPhone,
+                modifier = Modifier.testTag("setup.recovery.use_phone"),
+            ) {
+                Text(stringResource(R.string.action_use_recovered_phone))
+            }
         }
     }
 }
@@ -1674,15 +1995,23 @@ private fun DiscoveryCandidateRow(candidate: DiscoveryCandidate, select: () -> U
 }
 
 @Composable
-private fun NetworkPairingCard(
+internal fun NetworkPairingCard(
     pairing: NetworkPairing,
     providerPersisted: Boolean,
     busy: Boolean,
     confirm: () -> Unit,
     dismiss: () -> Unit,
+    forFolderSync: Boolean = false,
+    completionFailure: String? = null,
 ) {
     val direction = stringResource(
-        if (pairing.direction == NetworkPairingDirection.INCOMING) {
+        if (forFolderSync) {
+            if (pairing.direction == NetworkPairingDirection.INCOMING) {
+                R.string.folder_sync_pair_incoming
+            } else {
+                R.string.folder_sync_pair_outgoing
+            }
+        } else if (pairing.direction == NetworkPairingDirection.INCOMING) {
             R.string.network_pairing_incoming
         } else {
             R.string.network_pairing_outgoing
@@ -1717,7 +2046,10 @@ private fun NetworkPairingCard(
                 }
             }
             Text(
-                stringResource(R.string.network_pairing_compare),
+                stringResource(
+                    if (forFolderSync) R.string.folder_sync_pair_compare
+                    else R.string.network_pairing_compare,
+                ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1748,7 +2080,10 @@ private fun NetworkPairingCard(
                         modifier = Modifier.testTag("pair.confirmNetwork"),
                     ) {
                         Icon(Icons.Rounded.CheckCircle, contentDescription = null)
-                        Text(stringResource(R.string.action_confirm_backup_device), Modifier.padding(start = 8.dp))
+                        Text(
+                            stringResource(if (forFolderSync) R.string.folder_sync_confirm_device else R.string.action_confirm_backup_device),
+                            Modifier.padding(start = 8.dp),
+                        )
                     }
                 }
                 NetworkPairingState.AWAITING_PEER_CONFIRMATION -> {
@@ -1761,12 +2096,17 @@ private fun NetworkPairingCard(
                     if (providerPersisted) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                            Text(stringResource(R.string.network_pairing_complete), fontWeight = FontWeight.SemiBold)
+                            Text(
+                                stringResource(if (forFolderSync) R.string.folder_sync_pair_complete else R.string.network_pairing_complete),
+                                fontWeight = FontWeight.SemiBold,
+                            )
                         }
+                    } else if (completionFailure != null) {
+                        InlineError(completionFailure)
                     } else {
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                             CircularProgressIndicator()
-                            Text(stringResource(R.string.network_pairing_securing_provider))
+                            Text(stringResource(if (forFolderSync) R.string.folder_sync_pair_finishing else R.string.network_pairing_securing_provider))
                         }
                     }
                 }
@@ -2830,6 +3170,10 @@ private fun Settings(
     modifier: Modifier,
     export: (String) -> Unit,
     import: (Array<String>) -> Unit,
+    exportRecovery: () -> Unit,
+    retryRecoveryExport: (() -> Unit)?,
+    discardRecoveryExport: (() -> Unit)?,
+    retryRecovery: () -> Unit,
     onLanChange: (Boolean) -> Unit,
     onSelectExternal: () -> Unit,
     onSelectLocal: () -> Unit,
@@ -2839,6 +3183,11 @@ private fun Settings(
     val resources = LocalResources.current
     val lanEnabled = state.status?.lanDiscovery == true
     var confirmImport by remember { mutableStateOf(false) }
+    var confirmRecoveryRetry by remember { mutableStateOf(false) }
+    var showOpenSourceNotices by remember { mutableStateOf(false) }
+    if (showOpenSourceNotices) {
+        OpenSourceNoticesDialog { showOpenSourceNotices = false }
+    }
     FormPage(
         modifier,
         stringResource(R.string.settings_title),
@@ -2902,6 +3251,52 @@ private fun Settings(
             state.setImportCandidate(null)
             import(arrayOf("application/json", "text/json"))
         }) { Text(stringResource(R.string.action_import_settings)) }
+        HorizontalDivider()
+        SectionTitle(stringResource(R.string.recovery_settings_title))
+        Text(
+            stringResource(R.string.recovery_settings_detail),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedButton(
+            enabled = !state.busy && connection != null && retryRecoveryExport == null,
+            onClick = exportRecovery,
+            modifier = Modifier.testTag("settings.recovery.export"),
+        ) { Text(stringResource(R.string.action_create_recovery_kit)) }
+        if (retryRecoveryExport != null && discardRecoveryExport != null) {
+            InlineError(stringResource(R.string.recovery_export_incomplete))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilledTonalButton(enabled = !state.busy, onClick = retryRecoveryExport) {
+                    Text(stringResource(R.string.action_retry_save))
+                }
+                TextButton(enabled = !state.busy, onClick = discardRecoveryExport) {
+                    Text(stringResource(R.string.action_discard))
+                }
+            }
+        }
+        state.recoveryStatus?.let { status ->
+            RecoveryStatusPanel(status, !state.busy && connection != null) {
+                confirmRecoveryRetry = true
+            }
+        }
+        if (confirmRecoveryRetry) {
+            AlertDialog(
+                onDismissRequest = { confirmRecoveryRetry = false },
+                title = { Text(stringResource(R.string.recovery_retry_confirm_title)) },
+                text = { Text(stringResource(R.string.recovery_retry_confirm_detail)) },
+                confirmButton = {
+                    FilledTonalButton(onClick = {
+                        confirmRecoveryRetry = false
+                        retryRecovery()
+                    }) { Text(stringResource(R.string.action_retry_recovery)) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { confirmRecoveryRetry = false }) {
+                        Text(stringResource(R.string.action_cancel))
+                    }
+                },
+            )
+        }
         state.importCandidate?.let { candidate ->
             val preview = settingsPreview(state.currentExportedSettings, candidate)
             val removedBackups = (preview.oldBackups - preview.newBackups).coerceAtLeast(0)
@@ -2962,6 +3357,97 @@ private fun Settings(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        HorizontalDivider()
+        SectionTitle(stringResource(R.string.open_source_notices_title))
+        Text(
+            stringResource(R.string.open_source_notices_detail),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedButton(
+            modifier = Modifier.testTag("settings.openSourceNotices"),
+            onClick = { showOpenSourceNotices = true },
+        ) {
+            Text(stringResource(R.string.action_view_open_source_notices))
+        }
+    }
+}
+
+@Composable
+private fun RecoveryStatusPanel(
+    status: RecoveryStatus,
+    enabled: Boolean,
+    retry: () -> Unit,
+) {
+    var showDetails by remember(status) { mutableStateOf(false) }
+    val phase = when (status.phase) {
+        RecoveryPhase.NOT_CONFIGURED -> stringResource(R.string.recovery_phase_not_configured)
+        RecoveryPhase.PENDING -> stringResource(R.string.recovery_phase_pending)
+        RecoveryPhase.IMPORTED -> stringResource(R.string.recovery_phase_imported)
+        RecoveryPhase.PARTIAL -> stringResource(R.string.recovery_phase_partial)
+        RecoveryPhase.BLOCKED -> stringResource(R.string.recovery_phase_blocked)
+        RecoveryPhase.NO_CATALOGS -> stringResource(R.string.recovery_phase_no_catalogs)
+    }
+    OutlinedCard(Modifier.fillMaxWidth().testTag("settings.recovery.status")) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(phase, fontWeight = FontWeight.SemiBold)
+            Text(
+                pluralStringResource(
+                    R.plurals.recovery_backup_count,
+                    status.recoveredBackups.size,
+                    status.recoveredBackups.size,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                stringResource(
+                    R.string.recovery_devices_checked,
+                    status.queriedProviderIds.size,
+                    status.configuredProviderIds.size,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (status.newerSnapshotMayExist) {
+                Text(
+                    stringResource(R.string.recovery_newer_snapshot_warning),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            if (status.failures.isNotEmpty()) {
+                TextButton(onClick = { showDetails = !showDetails }) {
+                    Text(stringResource(if (showDetails) R.string.recovery_hide_details else R.string.recovery_show_details))
+                }
+            }
+            if (showDetails) {
+                status.failures.take(3).forEach { failure ->
+                    Text(
+                        stringResource(
+                            R.string.recovery_provider_failure,
+                            failure.providerId.take(8),
+                            failure.reason,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (status.failures.size > 3) {
+                    Text(
+                        pluralStringResource(
+                            R.plurals.recovery_more_failures,
+                            status.failures.size - 3,
+                            status.failures.size - 3,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+            if (status.phase.canRetry) {
+                OutlinedButton(enabled = enabled, onClick = retry) {
+                    Text(stringResource(R.string.action_retry_recovery))
+                }
+            }
+        }
     }
 }
 
@@ -3300,8 +3786,7 @@ fun PrimaryActionToolbar(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 ToolbarButton(PrimaryAction.PAIR, enabled, iconOnly, onAction, Icons.Rounded.AddLink)
-                ToolbarButton(PrimaryAction.BACKUP, enabled, iconOnly, onAction, Icons.Rounded.Backup)
-                ToolbarButton(PrimaryAction.RESTORE, enabled, iconOnly, onAction, Icons.Rounded.FolderOpen)
+                ToolbarButton(PrimaryAction.LINKS, enabled, iconOnly, onAction, Icons.Rounded.FolderOpen)
             }
         }
     }
@@ -3317,8 +3802,7 @@ private fun ToolbarButton(
 ) {
     val label = when (action) {
         PrimaryAction.PAIR -> stringResource(R.string.action_pair)
-        PrimaryAction.BACKUP -> stringResource(R.string.action_backup)
-        PrimaryAction.RESTORE -> stringResource(R.string.action_restore)
+        PrimaryAction.LINKS -> stringResource(R.string.action_links)
     }
     if (iconOnly) {
         IconButton(onClick = { onAction(action) }, enabled = enabled) {
@@ -3422,20 +3906,22 @@ private fun setLanDiscovery(
 }
 
 private fun ensureReadableSource(context: Context, uri: Uri) {
-    check(context.contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission }) {
-        context.getString(R.string.error_source_access_revoked)
+    if (context.contentResolver.persistedUriPermissions.none { it.uri == uri && it.isReadPermission }) {
+        throw SafSourceAccessException()
     }
 }
 
 private fun ensureWritableTarget(context: Context, uri: Uri) {
-    check(
-        context.contentResolver.persistedUriPermissions.any {
+    if (
+        context.contentResolver.persistedUriPermissions.none {
             it.uri == uri && it.isReadPermission && it.isWritePermission
-        },
-    ) { context.getString(R.string.error_target_access_revoked) }
+        }
+    ) {
+        throw SafTargetAccessException()
+    }
     val target = DocumentFile.fromTreeUri(context, uri)
-    check(target != null && target.exists() && target.isDirectory) {
-        context.getString(R.string.error_target_unavailable)
+    if (target == null || !target.exists() || !target.isDirectory) {
+        throw SafTargetAccessException()
     }
 }
 

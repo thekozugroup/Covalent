@@ -39,6 +39,83 @@ public struct NodeStatus: Codable, Equatable, Sendable {
     }
 }
 
+/// Secret-free progress reported while a recovered owner identity reconnects
+/// to its signed storage providers.
+public enum RecoveryPhase: String, Codable, Equatable, Sendable {
+    case notConfigured = "not_configured"
+    case pending
+    case imported
+    case partial
+    case blocked
+    case noCatalogs = "no_catalogs"
+}
+
+public struct RecoveredBackupStatus: Codable, Equatable, Identifiable, Sendable {
+    public let backupId: UUID
+    public let snapshotId: String
+    public let sourceProviderIds: Set<UUID>
+
+    public var id: UUID { backupId }
+}
+
+public struct RecoveryProviderFailure: Codable, Equatable, Identifiable, Sendable {
+    public let providerId: UUID
+    public let snapshotId: String?
+    public let reason: String
+
+    public var id: String { "\(providerId.uuidString.lowercased()):\(snapshotId ?? ""):\(reason)" }
+}
+
+/// The recovery endpoints deliberately return progress only. Neither recovery
+/// kit nor recovery key is ever represented by this type.
+public struct RecoveryStatus: Codable, Equatable, Sendable {
+    public let protocolVersion: UInt16
+    public let phase: RecoveryPhase
+    public let recoveredBackups: [RecoveredBackupStatus]
+    public let queriedProviderIds: Set<UUID>
+    public let configuredProviderIds: Set<UUID>
+    public let failures: [RecoveryProviderFailure]
+    public let newerSnapshotMayExist: Bool
+}
+
+/// A secret-bearing one-time export. It intentionally has no debug or text
+/// representation, and callers must consume it without persisting it.
+public struct RecoveryKitExport: Sendable {
+    public let protocolVersion: UInt16
+    public private(set) var kit: Data
+    public private(set) var recoveryKey: Data
+
+    public init(protocolVersion: UInt16, kit: Data, recoveryKey: Data) {
+        self.protocolVersion = protocolVersion
+        self.kit = kit
+        self.recoveryKey = recoveryKey
+    }
+
+    public mutating func discard() {
+        kit.withUnsafeMutableBytes { if let base = $0.baseAddress { bzero(base, $0.count) } }
+        recoveryKey.withUnsafeMutableBytes { if let base = $0.baseAddress { bzero(base, $0.count) } }
+        kit.removeAll(keepingCapacity: false)
+        recoveryKey.removeAll(keepingCapacity: false)
+    }
+}
+
+/// A read-only result used before the managed local service is allowed to
+/// create identity state.
+public enum LocalNodeStartupDisposition: Equatable, Sendable {
+    case existingIdentity
+    case needsFirstLaunchChoice
+    /// The core recovery journal and identity are present. Only the same
+    /// kit/code pair may resume it; the helper re-authenticates both.
+    case resumableRecovery
+}
+
+/// Recovery input is passed only from the selected owner-only files to the
+/// inherited helper pipe. The URLs, not secret bytes, are the app boundary.
+public enum LocalNodeStartupMode: Sendable {
+    case normal
+    case recover(recoveryKitFile: URL, recoveryKeyFile: URL)
+}
+
 public struct TransportIdentity: Codable, Equatable, Sendable {
     public let deviceId: UUID
     public let peerPort: UInt16
@@ -144,6 +221,9 @@ public struct PairingInvitation: Codable, Equatable, Sendable {
     public let invitationSecretCommitment: String
     public let expiresAtUnixMs: UInt64
     public let endpoints: [String]
+    /// Transport identity covered by the signed invitation. It must survive
+    /// native decode and re-encode unchanged for the peer to verify the record.
+    public let transportBinding: PeerTransport?
     public let signature: String
 
     private enum CodingKeys: String, CodingKey {
@@ -157,6 +237,7 @@ public struct PairingInvitation: Codable, Equatable, Sendable {
         case invitationSecretCommitment
         case expiresAtUnixMs
         case endpoints
+        case transportBinding
         case signature
     }
 
@@ -172,6 +253,7 @@ public struct PairingInvitation: Codable, Equatable, Sendable {
         invitationSecretCommitment = try container.decodeIfPresent(String.self, forKey: .invitationSecretCommitment) ?? ""
         expiresAtUnixMs = try container.decode(UInt64.self, forKey: .expiresAtUnixMs)
         endpoints = try container.decode([String].self, forKey: .endpoints)
+        transportBinding = try container.decodeIfPresent(PeerTransport.self, forKey: .transportBinding)
         signature = try container.decodeIfPresent(String.self, forKey: .signature) ?? ""
     }
 }
@@ -250,6 +332,22 @@ public enum ProviderReachability: String, Codable, Equatable, Sendable {
     case reachable
     case unreachable
     case unknown
+
+    public var connectionStatusLabel: String {
+        switch self {
+        case .reachable: "Responding"
+        case .unreachable: "Did not respond on last check"
+        case .unknown: "Status unknown"
+        }
+    }
+
+    public var connectionStatusSymbol: String {
+        switch self {
+        case .reachable: "checkmark.circle.fill"
+        case .unreachable: "network.slash"
+        case .unknown: "questionmark.circle"
+        }
+    }
 }
 
 public struct ProviderCapacity: Codable, Equatable, Sendable {
@@ -305,19 +403,40 @@ public struct ProviderConnection: Codable, Equatable, Identifiable, Sendable {
 
     public var id: UUID { peerId }
 
-    public var isEligibleForBackup: Bool {
-        guard reachability == .reachable,
-              let capacity,
-              let observedAtUnixMs,
-              let validUntilUnixMs,
-              validUntilUnixMs >= observedAtUnixMs,
-              validUntilUnixMs >= UInt64(Date().timeIntervalSince1970 * 1_000)
-        else { return false }
-        return capacity.canStoreAnotherCopy
+    /// A saved connection is not proof that the device is still responding.
+    /// Expired, future-dated or incomplete observations must not imply availability.
+    public func displayedReachability(atUnixMs now: UInt64) -> ProviderReachability {
+        switch reachability {
+        case .unreachable:
+            // A failed live probe has no signed capability timestamps. Preserve
+            // it as a last-check result without presenting it as a current proof.
+            return .unreachable
+        case .reachable:
+            guard let observedAtUnixMs,
+                  let validUntilUnixMs,
+                  observedAtUnixMs <= now,
+                  now <= validUntilUnixMs
+            else { return .unknown }
+            return .reachable
+        case .unknown, .none:
+            return .unknown
+        }
     }
 
-    public var selectionStatus: String {
-        switch reachability {
+    public var displayedReachability: ProviderReachability {
+        displayedReachability(atUnixMs: UInt64(max(0, Date().timeIntervalSince1970 * 1_000)))
+    }
+
+    public func isEligibleForBackup(atUnixMs now: UInt64) -> Bool {
+        displayedReachability(atUnixMs: now) == .reachable && capacity?.canStoreAnotherCopy == true
+    }
+
+    public var isEligibleForBackup: Bool {
+        isEligibleForBackup(atUnixMs: UInt64(max(0, Date().timeIntervalSince1970 * 1_000)))
+    }
+
+    public func selectionStatus(atUnixMs now: UInt64) -> String {
+        switch displayedReachability(atUnixMs: now) {
         case .reachable:
             guard let capacity else { return "Capacity could not be checked — cannot select" }
             guard capacity.quotaBytes > 0, capacity.usableBytes > 0 else {
@@ -327,10 +446,14 @@ public struct ProviderConnection: Codable, Equatable, Identifiable, Sendable {
                 + "using \(ByteCountFormatter.string(fromByteCount: Int64(clamping: capacity.allocatedBytes), countStyle: .file)) "
                 + "of \(ByteCountFormatter.string(fromByteCount: Int64(clamping: capacity.quotaBytes), countStyle: .file))"
         case .unreachable:
-            return "This device did not answer — cannot select"
-        case .unknown, .none:
-            return "Capacity is unknown — cannot select"
+            return "Did not respond on last check — cannot select"
+        case .unknown:
+            return "Device availability is unknown — cannot select"
         }
+    }
+
+    public var selectionStatus: String {
+        selectionStatus(atUnixMs: UInt64(max(0, Date().timeIntervalSince1970 * 1_000)))
     }
 }
 
@@ -811,5 +934,572 @@ public struct SnapshotRecord: Codable, Equatable, Identifiable, Sendable {
         self.chunksDeduplicated = response.chunksDeduplicated
         self.degradedFailures = response.degradedFailures
         self.integrity = integrity
+    }
+}
+
+public enum FolderSharePhase: String, Codable, Sendable {
+    case offered
+    case awaitingCommit
+    case ready
+    case paused
+    case removed
+}
+
+public enum PeerConnectionState: String, Codable, Sendable {
+    case unknown
+    case connected
+    case disconnected
+    case paused
+}
+
+public struct FolderLinkPolicy: Codable, Hashable, Sendable {
+    public var propagateSourceDeletions: Bool
+    public var restoreLocalDeletions: Bool
+
+    public init(propagateSourceDeletions: Bool = false, restoreLocalDeletions: Bool = false) {
+        self.propagateSourceDeletions = propagateSourceDeletions
+        self.restoreLocalDeletions = restoreLocalDeletions
+    }
+
+    public var sourceDeletionExplanation: String {
+        propagateSourceDeletions
+            ? "Deleting a source file also deletes this link’s destination copies. Other links’ files stay untouched."
+            : "Deleting a source file leaves destination copies untouched."
+    }
+
+    public var destinationDeletionExplanation: String {
+        restoreLocalDeletions
+            ? "Files deleted at a destination download again on the next transfer if they still exist at the source."
+            : "Files deleted at a destination stay deleted there, even if the source changes. The source and other destinations stay untouched."
+    }
+}
+
+public struct FolderLinkSettings: Codable, Hashable, Sendable {
+    public var deletionPolicy: FolderLinkPolicy
+    public var paused: Bool
+
+    public init(deletionPolicy: FolderLinkPolicy, paused: Bool) {
+        self.deletionPolicy = deletionPolicy
+        self.paused = paused
+    }
+}
+
+public struct FolderLinkSettingsChange: Codable, Hashable, Sendable {
+    public let folderId: UUID
+    public let sourceId: UUID
+    public let requesterId: UUID
+    public let changeId: UUID
+    public let expectedRevision: UInt64
+    public let settings: FolderLinkSettings
+}
+
+public struct FolderLinkSettingsState: Codable, Hashable, Sendable {
+    public let revision: UInt64
+    public let settings: FolderLinkSettings
+    public let changeId: UUID
+    public let changedBy: UUID
+    public let confirmed: Bool
+    public let pendingChange: FolderLinkSettingsChange?
+    public let conflictedChange: FolderLinkSettingsChange?
+}
+
+/// One exact optimistic-concurrency request retained until authenticated
+/// status proves whether the source applied, queued, or rejected it.
+public struct PendingFolderLinkSettingsChange: Codable, Equatable, Sendable {
+    public let folderId: UUID
+    public let changeId: UUID
+    public let expectedRevision: UInt64
+    public let settings: FolderLinkSettings
+    public let requiresReview: Bool
+
+    public init(
+      folderId: UUID,
+      changeId: UUID = UUID(),
+      expectedRevision: UInt64,
+      settings: FolderLinkSettings,
+      requiresReview: Bool = false
+    ) {
+      self.folderId = folderId
+      self.changeId = changeId
+      self.expectedRevision = expectedRevision
+      self.settings = settings
+      self.requiresReview = requiresReview
+    }
+
+    public func markedForReview() -> Self {
+      Self(
+        folderId: folderId,
+        changeId: changeId,
+        expectedRevision: expectedRevision,
+        settings: settings,
+        requiresReview: true
+      )
+    }
+}
+
+public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
+    public let offerId: UUID
+    public let folderId: UUID
+    public let label: String
+    public let peerId: UUID
+    public let incoming: Bool
+    public let linkPolicy: FolderLinkPolicy?
+    public let linkSettings: FolderLinkSettingsState?
+    public let phase: FolderSharePhase
+    /// Present only for an unaccepted invitation. The node supplies this from
+    /// its own clock; the client never tries to decide expiry locally.
+    public let expiresAtUnixMs: UInt64?
+    public let expired: Bool
+    public let peerConnection: PeerConnectionState
+    /// Authenticated journal identifiers retired by this replacement invitation.
+    public let supersededOfferIds: [UUID]
+    /// Local removal is durable; the peer has not yet acknowledged withdrawal.
+    public let remoteRemovalPending: Bool
+
+    public var id: UUID { offerId }
+
+    public init(
+      offerId: UUID,
+      folderId: UUID,
+      label: String,
+      peerId: UUID,
+      incoming: Bool,
+      phase: FolderSharePhase,
+      expiresAtUnixMs: UInt64?,
+      expired: Bool,
+      peerConnection: PeerConnectionState = .unknown,
+      supersededOfferIds: [UUID] = [],
+      remoteRemovalPending: Bool = false,
+      linkPolicy: FolderLinkPolicy? = nil,
+      linkSettings: FolderLinkSettingsState? = nil
+    ) {
+      self.offerId = offerId
+      self.folderId = folderId
+      self.label = label
+      self.peerId = peerId
+      self.incoming = incoming
+      self.linkPolicy = linkPolicy
+      self.linkSettings = linkSettings
+      self.phase = phase
+      self.expiresAtUnixMs = expiresAtUnixMs
+      self.expired = expired
+      self.peerConnection = peerConnection
+      self.supersededOfferIds = supersededOfferIds
+      self.remoteRemovalPending = remoteRemovalPending
+    }
+
+    private enum CodingKeys: String, CodingKey {
+      case offerId, folderId, label, peerId, incoming, phase, expiresAtUnixMs, expired
+      case peerConnection, supersededOfferIds, remoteRemovalPending, linkPolicy, linkSettings
+    }
+
+    public init(from decoder: Decoder) throws {
+      let values = try decoder.container(keyedBy: CodingKeys.self)
+      offerId = try values.decode(UUID.self, forKey: .offerId)
+      folderId = try values.decode(UUID.self, forKey: .folderId)
+      label = try values.decode(String.self, forKey: .label)
+      peerId = try values.decode(UUID.self, forKey: .peerId)
+      incoming = try values.decode(Bool.self, forKey: .incoming)
+      linkPolicy = try values.decodeIfPresent(FolderLinkPolicy.self, forKey: .linkPolicy)
+      linkSettings = try values.decodeIfPresent(FolderLinkSettingsState.self, forKey: .linkSettings)
+      phase = try values.decode(FolderSharePhase.self, forKey: .phase)
+      expiresAtUnixMs = try values.decodeIfPresent(UInt64.self, forKey: .expiresAtUnixMs)
+      expired = try values.decode(Bool.self, forKey: .expired)
+      peerConnection = values.contains(.peerConnection)
+        ? try values.decode(PeerConnectionState.self, forKey: .peerConnection) : .unknown
+      supersededOfferIds = values.contains(.supersededOfferIds)
+        ? try values.decode([UUID].self, forKey: .supersededOfferIds) : []
+      remoteRemovalPending = values.contains(.remoteRemovalPending)
+        ? try values.decode(Bool.self, forKey: .remoteRemovalPending) : false
+      guard !remoteRemovalPending || phase == .removed else { throw NodeClientError.invalidResponse }
+    }
+}
+
+public struct FolderHealth: Codable, Equatable, Identifiable, Sendable {
+    public let folderId: UUID
+    public let state: String
+    public let remainingFiles: UInt64
+    public let remainingBytes: UInt64
+    public let scanPullErrorCount: UInt64
+    public let reportedErrorRows: UInt16
+    public let statusError: Bool
+    public let watchError: Bool
+
+    public var id: UUID { folderId }
+
+    public init(
+      folderId: UUID,
+      state: String,
+      remainingFiles: UInt64,
+      remainingBytes: UInt64,
+      scanPullErrorCount: UInt64,
+      reportedErrorRows: UInt16,
+      statusError: Bool,
+      watchError: Bool
+    ) {
+      self.folderId = folderId
+      self.state = state
+      self.remainingFiles = remainingFiles
+      self.remainingBytes = remainingBytes
+      self.scanPullErrorCount = scanPullErrorCount
+      self.reportedErrorRows = reportedErrorRows
+      self.statusError = statusError
+      self.watchError = watchError
+    }
+}
+
+public struct FolderSyncPeer: Codable, Equatable, Identifiable, Sendable {
+    public let peerId: UUID
+    public let displayName: String
+    /// The currently trusted numeric control endpoint. Older protocol-1
+    /// servers omitted this additive field, so clients must tolerate `nil`
+    /// while withholding address-editing controls.
+    public let address: String?
+
+    public var id: UUID { peerId }
+
+    public init(peerId: UUID, displayName: String, address: String? = nil) {
+      self.peerId = peerId
+      self.displayName = displayName
+      self.address = address
+    }
+}
+
+/// One deduplicated row in the native saved-devices list. A peer can exist
+/// without a storage-provider connection and must still remain reachable for
+/// trusted address maintenance.
+public struct SavedPeerDevice: Equatable, Identifiable, Sendable {
+    public let id: UUID
+    public let peer: FolderSyncPeer?
+    public let provider: ProviderConnection?
+
+    public var address: String { peer?.address ?? provider?.address ?? "" }
+    public var displayName: String? { peer?.displayName }
+
+    private init(peer: FolderSyncPeer?, provider: ProviderConnection?) {
+      if let peer {
+        id = peer.peerId
+      } else if let provider {
+        id = provider.peerId
+      } else {
+        preconditionFailure()
+      }
+      self.peer = peer
+      self.provider = provider
+    }
+
+    public static func merge(
+      peers: [FolderSyncPeer],
+      providers: [ProviderConnection]
+    ) -> [SavedPeerDevice] {
+      let peersByID = Dictionary(uniqueKeysWithValues: peers.map { ($0.peerId, $0) })
+      let providerIDs = Set(providers.map(\.peerId))
+      return providers.map { provider in
+        SavedPeerDevice(peer: peersByID[provider.peerId], provider: provider)
+      } + peers.filter { !providerIDs.contains($0.peerId) }.map { peer in
+        SavedPeerDevice(peer: peer, provider: nil)
+      }
+    }
+}
+
+public struct FolderSyncStatus: Codable, Equatable, Sendable {
+    public let availability: String
+    public let lifecycle: String
+    public let issue: String?
+    public let healthFreshness: String
+    public let connectionFreshness: String
+    public let peers: [FolderSyncPeer]
+    public let shares: [FolderShare]
+    public let folders: [FolderHealth]
+
+    public init(
+      availability: String,
+      lifecycle: String,
+      issue: String?,
+      healthFreshness: String,
+      connectionFreshness: String = "neverObserved",
+      peers: [FolderSyncPeer],
+      shares: [FolderShare],
+      folders: [FolderHealth]
+    ) {
+      self.availability = availability
+      self.lifecycle = lifecycle
+      self.issue = issue
+      self.healthFreshness = healthFreshness
+      self.connectionFreshness = connectionFreshness
+      self.peers = peers
+      self.shares = shares
+      self.folders = folders
+    }
+
+    private enum CodingKeys: String, CodingKey {
+      case availability, lifecycle, issue, healthFreshness, connectionFreshness
+      case peers, shares, folders
+    }
+
+    public init(from decoder: Decoder) throws {
+      let values = try decoder.container(keyedBy: CodingKeys.self)
+      availability = try values.decode(String.self, forKey: .availability)
+      lifecycle = try values.decode(String.self, forKey: .lifecycle)
+      issue = try values.decodeIfPresent(String.self, forKey: .issue)
+      healthFreshness = try values.decode(String.self, forKey: .healthFreshness)
+      connectionFreshness = values.contains(.connectionFreshness)
+        ? try values.decode(String.self, forKey: .connectionFreshness) : "neverObserved"
+      peers = try values.decode([FolderSyncPeer].self, forKey: .peers)
+      shares = try values.decode([FolderShare].self, forKey: .shares)
+      folders = try values.decode([FolderHealth].self, forKey: .folders)
+    }
+}
+
+public enum FolderShareDisplayState: Equatable, Sendable {
+    case invitationExpired
+    case waitingForOtherDevice
+    case waitingForConnection
+    case checkingFolder
+    case syncing
+    case folderReady
+    case paused
+    case needsAttention
+
+    public var label: String {
+      switch self {
+      case .invitationExpired: "Invitation expired"
+      case .waitingForOtherDevice: "Waiting for other device"
+      case .waitingForConnection: "Waiting for connection"
+      case .checkingFolder: "Checking folder"
+      case .syncing: "Syncing"
+      case .folderReady: "Folder ready"
+      case .paused: "Paused"
+      case .needsAttention: "Needs attention"
+      }
+    }
+}
+
+extension FolderSyncStatus {
+    /// Validate the complete relationship before using it to change local grants.
+    func invitationReplacements() throws -> [UUID: FolderShare] {
+      guard shares.count <= 4_096 else { throw NodeClientError.invalidResponse }
+      let nilID = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+      var ids = Set<UUID>()
+      for share in shares {
+        guard share.offerId != nilID, ids.insert(share.offerId).inserted else {
+          throw NodeClientError.invalidResponse
+        }
+      }
+      var replacements: [UUID: FolderShare] = [:]
+      for share in shares {
+        guard share.supersededOfferIds.count <= 128,
+              !share.remoteRemovalPending || share.phase == .removed else {
+          throw NodeClientError.invalidResponse
+        }
+        for oldID in share.supersededOfferIds {
+          guard oldID != nilID, ids.insert(oldID).inserted else {
+            throw NodeClientError.invalidResponse
+          }
+          replacements[oldID] = share
+        }
+      }
+      return replacements
+    }
+
+    public var isInitialScanning: Bool {
+      availability == "available" && lifecycle == "initialScanning"
+    }
+
+    /// This combines local engine health with a fresh peer reachability
+    /// observation. It never claims remote convergence.
+    public func displayState(for share: FolderShare) -> FolderShareDisplayState {
+      if share.expired {
+        return .invitationExpired
+      }
+      if share.phase == .paused {
+        return .paused
+      }
+      if isInitialScanning {
+        return .checkingFolder
+      }
+      if lifecycle == "needsAttention" || issue != nil {
+        return .needsAttention
+      }
+      if share.phase == .offered || share.phase == .awaitingCommit {
+        return .waitingForOtherDevice
+      }
+      let health = healthFreshness == "fresh"
+        ? folders.first(where: { $0.folderId == share.folderId }) : nil
+      if let health, health.statusError || health.watchError || health.scanPullErrorCount > 0
+        || health.reportedErrorRows > 0
+      {
+        return .needsAttention
+      }
+      if let health {
+        let state = health.state.lowercased()
+        switch state {
+        case "error": return .needsAttention
+        case "starting", "scanning", "scan-waiting", "cleaning", "clean-waiting":
+          return .checkingFolder
+        case "syncing", "sync-waiting", "sync-preparing": return .syncing
+        default: break
+        }
+        if (health.remainingFiles > 0 || health.remainingBytes > 0)
+          && (share.linkPolicy == nil || state != "idle") {
+          return .syncing
+        }
+      }
+      guard connectionFreshness == "fresh" else { return .waitingForConnection }
+      switch share.peerConnection {
+      case .connected: return .folderReady
+      case .disconnected, .unknown: return .waitingForConnection
+      case .paused: return .paused
+      }
+    }
+
+    public func displayLabel(for share: FolderShare) -> String {
+      let state = displayState(for: share)
+      let peer = peers.first(where: { $0.peerId == share.peerId })?.displayName ?? "other device"
+      switch state {
+      case .waitingForConnection where connectionFreshness == "fresh"
+        && share.peerConnection == .disconnected:
+        return "Waiting for \(peer)"
+      case .folderReady where connectionFreshness == "fresh"
+        && share.peerConnection == .connected:
+        return "Connected to \(peer)"
+      default: return state.label
+      }
+    }
+}
+
+public struct FolderSyncMutation: Codable, Equatable, Sendable {
+    public let offerId: UUID?
+    public let lifecycle: String
+    public let issue: String?
+
+    public init(offerId: UUID?, lifecycle: String, issue: String?) {
+      self.offerId = offerId
+      self.lifecycle = lifecycle
+      self.issue = issue
+    }
+}
+
+/// The exact optimistic-concurrency request accepted by the local node when
+/// moving a paired device to a new control endpoint.
+public struct PeerAddressRefreshRequest: Codable, Equatable, Sendable {
+    public let peerId: UUID
+    public let expectedAddress: String
+    public let candidateAddress: String
+
+    public init(peerId: UUID, expectedAddress: String, candidateAddress: String) {
+      self.peerId = peerId
+      self.expectedAddress = expectedAddress
+      self.candidateAddress = candidateAddress
+    }
+}
+
+/// A fresh address request is safe only while the editor's expected address
+/// still matches the latest authenticated local status. An exact retry is
+/// governed separately because it must survive an unavailable status reload.
+public enum PeerAddressRefreshPolicy {
+    public static func permitsFreshRequest(
+      peer: FolderSyncPeer,
+      status: FolderSyncStatus?,
+      candidateAddress: String
+    ) -> Bool {
+      guard let expectedAddress = peer.address,
+            let currentAddress = status?.peers.first(where: { $0.peerId == peer.peerId })?.address,
+            currentAddress == expectedAddress
+      else { return false }
+      return !candidateAddress.isEmpty
+        && candidateAddress.utf8.count <= 128
+        && candidateAddress != expectedAddress
+    }
+}
+
+/// A native address editor needs more precision than a Boolean result. In
+/// particular, a lost response retains the byte-equivalent request, while an
+/// optimistic-concurrency conflict replaces the expected address and requires
+/// fresh confirmation from the person using the Mac.
+public enum PeerAddressRefreshOutcome: Equatable, Sendable {
+    case saved(FolderSyncPeer)
+    case savedNeedsReload(peerId: UUID, acceptedAddress: String, failure: NodeClientFailure)
+    case retryExact(PeerAddressRefreshRequest, failure: NodeClientFailure)
+    case requiresConfirmation(
+      currentPeer: FolderSyncPeer,
+      candidateAddress: String,
+      failure: NodeClientFailure
+    )
+    case failed(NodeClientFailure)
+}
+
+public struct FolderOfferRequest: Codable, Equatable, Sendable {
+    public let peerId: UUID
+    public let folderId: UUID
+    public let label: String
+    /// A local, user-selected directory only. It is sent to the local node and
+    /// is never rendered by the client outside the user's own picker context.
+    public let selectedRoot: String
+    public let linkPolicy: FolderLinkPolicy
+
+    public init(peerId: UUID, folderId: UUID, label: String, selectedRoot: String, linkPolicy: FolderLinkPolicy = FolderLinkPolicy()) {
+      self.peerId = peerId
+      self.folderId = folderId
+      self.label = label
+      self.selectedRoot = selectedRoot
+      self.linkPolicy = linkPolicy
+    }
+}
+
+public struct FolderAcceptRequest: Codable, Equatable, Sendable {
+    public let offerId: UUID
+    public let selectedRoot: String
+
+    public init(offerId: UUID, selectedRoot: String) {
+      self.offerId = offerId
+      self.selectedRoot = selectedRoot
+    }
+}
+
+public struct FolderRepairRequest: Codable, Equatable, Sendable {
+    public let offerId: UUID
+    public let selectedRoot: String
+
+    public init(offerId: UUID, selectedRoot: String) {
+      self.offerId = offerId
+      self.selectedRoot = selectedRoot
+    }
+}
+
+public struct FolderPauseRequest: Codable, Equatable, Sendable {
+    public let offerId: UUID
+    public let paused: Bool
+
+    public init(offerId: UUID, paused: Bool) {
+      self.offerId = offerId
+      self.paused = paused
+    }
+}
+
+public struct FolderLinkSettingsRequest: Codable, Equatable, Sendable {
+    public let folderId: UUID
+    public let changeId: UUID
+    public let expectedRevision: UInt64
+    public let settings: FolderLinkSettings
+
+    public init(
+      folderId: UUID,
+      changeId: UUID,
+      expectedRevision: UInt64,
+      settings: FolderLinkSettings
+    ) {
+      self.folderId = folderId
+      self.changeId = changeId
+      self.expectedRevision = expectedRevision
+      self.settings = settings
+    }
+}
+
+public struct FolderReferenceRequest: Codable, Equatable, Sendable {
+    public let offerId: UUID
+
+    public init(offerId: UUID) {
+      self.offerId = offerId
     }
 }

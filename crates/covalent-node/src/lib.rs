@@ -5,7 +5,15 @@ pub mod discovery;
 pub mod first_run_claim;
 pub mod network_pairing;
 pub mod pairing_transport;
+mod recovery_state;
 pub mod runtime;
+mod sync_api;
+#[cfg(unix)]
+mod sync_control;
+#[cfg(unix)]
+mod sync_delivery;
+#[cfg(unix)]
+pub mod sync_engine;
 pub mod transport;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -28,15 +36,15 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use covalent_core::{
     BackupOptions, ChunkProvider, CoreError, Engine, JobControl, JobState, KeyProtector,
-    PairingConfirmation, PairingSession, PairingSide, PreviewAction, RestoreOptions, RestorePlan,
-    RestorePreviewEntry, RosterCursor, WrappedSecret, canonical_target_inventory_digest,
-    state_secret_context,
+    PairingConfirmation, PairingSession, PairingSide, PreviewAction, RecoveryUnlockKey,
+    RestoreOptions, RestorePlan, RestorePreviewEntry, RosterCursor, WrappedSecret,
+    canonical_target_inventory_digest, state_secret_context,
 };
 use covalent_protocol::{
     ApiErrorBody, BackupId, BackupSummary, ConflictPolicy, DeviceId, EntryKind, NodeStatus,
-    PROTOCOL_VERSION, PairingInvitation, PeerRole, PlatformTier, RelativePath, ReplicaAvailability,
-    ReplicaIntent, SignedRoster, TargetInventory, TargetInventoryBinding, TargetInventoryEntry,
-    TransportBinding,
+    PROTOCOL_VERSION, PairingInvitation, PeerRole, PlatformTier, RecoveryPhase, RecoveryStatus,
+    RelativePath, ReplicaAvailability, ReplicaIntent, SignedRoster, TargetInventory,
+    TargetInventoryBinding, TargetInventoryEntry, TransportBinding,
 };
 use http_body_util::BodyExt as _;
 use network_pairing::{
@@ -45,6 +53,7 @@ use network_pairing::{
 };
 use pairing_transport::PairingConnection;
 use rand_core::{OsRng, RngCore};
+use recovery_state::RecoveryStateStore;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -59,10 +68,18 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 const INDEX_HTML: &str = include_str!("../../../packaging/web/index.html");
 const APP_CSS: &str = include_str!("../../../packaging/web/app.css");
 const APP_JS: &str = include_str!("../../../packaging/web/app.js");
+const FOLDER_SYNC_FLOW_JS: &str = include_str!("../../../packaging/web/folder-sync-flow.js");
 const PAIRING_FLOW_JS: &str = include_str!("../../../packaging/web/pairing-flow.js");
 const RESTORE_PLAN_FLOW_JS: &str = include_str!("../../../packaging/web/restore-plan-flow.js");
+const RESTORE_PREVIEW_FLOW_JS: &str =
+    include_str!("../../../packaging/web/restore-preview-flow.js");
 const BACKUP_TERMINAL_FLOW_JS: &str =
     include_str!("../../../packaging/web/backup-terminal-flow.js");
+const BACKUP_VERIFICATION_FLOW_JS: &str =
+    include_str!("../../../packaging/web/backup-verification-flow.js");
+const BACKUP_SELECTION_FLOW_JS: &str =
+    include_str!("../../../packaging/web/backup-selection-flow.js");
+const RECOVERY_FLOW_JS: &str = include_str!("../../../packaging/web/recovery-flow.js");
 const TAB_FLOW_JS: &str = include_str!("../../../packaging/web/tab-flow.js");
 const MAX_LOCAL_API_BODY_BYTES: usize = 2 * 1_024 * 1_024;
 const MAX_LOCAL_API_TOKEN_FILE_BYTES: u64 = 16 * 1_024;
@@ -533,6 +550,9 @@ pub struct AppState {
     restore_plan_root: Arc<PathBuf>,
     restore_plan_lock: Arc<Mutex<()>>,
     engine_job_permits: Arc<Semaphore>,
+    recovery_state: Option<Arc<RecoveryStateStore>>,
+    #[cfg(unix)]
+    folder_sync: sync_engine::FolderSyncRuntimeState,
 }
 
 impl AppState {
@@ -587,7 +607,26 @@ impl AppState {
             restore_plan_root: Arc::new(restore_plan_root),
             restore_plan_lock: Arc::new(Mutex::new(())),
             engine_job_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_ENGINE_JOBS)),
+            recovery_state: None,
+            #[cfg(unix)]
+            folder_sync: sync_engine::FolderSyncRuntimeState::default(),
         })
+    }
+
+    /// Connects durable, secret-free owner-loss recovery progress to the API.
+    #[must_use]
+    pub(crate) fn with_recovery_state(mut self, recovery_state: Arc<RecoveryStateStore>) -> Self {
+        self.recovery_state = Some(recovery_state);
+        self
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn with_folder_sync(
+        mut self,
+        folder_sync: sync_engine::FolderSyncRuntimeState,
+    ) -> Self {
+        self.folder_sync = folder_sync;
+        self
     }
 
     /// Sets the exact advertised/discovered QUIC endpoint after the daemon binds it.
@@ -1165,6 +1204,12 @@ impl AppState {
             .peer_transport
             .as_ref()
             .ok_or(CoreError::AuthenticationFailed)?;
+        // Completed pairing receipts are historical evidence. A later
+        // authenticated address refresh advances current mutable trust; an old
+        // receipt must never roll the provider endpoint back.
+        if !self.pairing_transport_is_current(transport)? {
+            return Ok(());
+        }
         let address = transport
             .address
             .parse::<SocketAddr>()
@@ -1199,6 +1244,77 @@ impl AppState {
         }
         self.connect_provider(connection)
     }
+
+    fn pairing_transport_is_current(
+        &self,
+        historical: &TransportBinding,
+    ) -> Result<bool, CoreError> {
+        Ok(self
+            .engine
+            .config()?
+            .trusted_peer_transports
+            .get(&historical.peer_id)
+            .is_some_and(|current| current == historical))
+    }
+
+    #[cfg(unix)]
+    fn refresh_provider_from_current_trust(&self, peer_id: DeviceId) -> Result<(), CoreError> {
+        let retained = self
+            .provider_connections
+            .lock()
+            .map_err(|_| CoreError::Synchronization)?
+            .contains_key(&peer_id);
+        if !retained {
+            return Ok(());
+        }
+        let binding = self
+            .engine
+            .trusted_peer_transport(peer_id, PeerRole::StorageProvider)?;
+        let address = binding
+            .address
+            .parse::<SocketAddr>()
+            .map_err(|_| CoreError::AuthenticationFailed)?;
+        let certificate = URL_SAFE_NO_PAD
+            .decode(&binding.certificate_der)
+            .map_err(|_| CoreError::AuthenticationFailed)?;
+        if certificate.is_empty()
+            || certificate.len() > 64 * 1_024
+            || sha256_hex(&certificate) != binding.certificate_fingerprint
+        {
+            return Err(CoreError::AuthenticationFailed);
+        }
+        self.connect_provider(ProviderConnection {
+            peer_id,
+            address,
+            certificate_der: binding.certificate_der,
+        })
+    }
+
+    /// Finish a crash-recovered route transition only after remembered backup
+    /// provider state has been rebuilt from the already durable core pin.
+    #[cfg(unix)]
+    async fn finish_peer_address_provider_barrier(
+        &self,
+        service: &sync_engine::FolderSyncService,
+    ) -> Result<(), CoreError> {
+        let pending = service
+            .pending_peer_address_refresh()
+            .await
+            .map_err(|_| CoreError::InvalidState("peer address recovery is incomplete".into()))?;
+        let Some((peer_id, core_has_candidate)) = pending else {
+            return Ok(());
+        };
+        if !core_has_candidate {
+            return Err(CoreError::InvalidState(
+                "peer address requires a fresh authenticated proof".into(),
+            ));
+        }
+        self.refresh_provider_from_current_trust(peer_id)?;
+        service
+            .finish_peer_address_refresh(peer_id)
+            .await
+            .map_err(|_| CoreError::InvalidState("peer address recovery is incomplete".into()))
+    }
 }
 
 impl fmt::Debug for AppState {
@@ -1231,22 +1347,55 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(index))
         .route("/assets/app.css", get(css))
         .route("/assets/app.js", get(javascript))
+        .route(
+            "/assets/folder-sync-flow.js",
+            get(folder_sync_flow_javascript),
+        )
         .route("/assets/pairing-flow.js", get(pairing_flow_javascript))
         .route(
             "/assets/restore-plan-flow.js",
             get(restore_plan_flow_javascript),
         )
         .route(
+            "/assets/restore-preview-flow.js",
+            get(restore_preview_flow_javascript),
+        )
+        .route(
             "/assets/backup-terminal-flow.js",
             get(backup_terminal_flow_javascript),
         )
+        .route(
+            "/assets/backup-verification-flow.js",
+            get(backup_verification_flow_javascript),
+        )
+        .route(
+            "/assets/backup-selection-flow.js",
+            get(backup_selection_flow_javascript),
+        )
+        .route("/assets/recovery-flow.js", get(recovery_flow_javascript))
         .route("/assets/tab-flow.js", get(tab_flow_javascript))
         .route("/healthz", get(health))
         .route("/api/v1/status", get(status))
+        .route("/api/v1/sync/status", get(sync_api::status))
+        .route("/api/v1/sync/folders", post(sync_api::offer))
+        .route("/api/v1/sync/accept", post(sync_api::accept))
+        .route("/api/v1/sync/renew", post(sync_api::renew))
+        .route("/api/v1/sync/pause", post(sync_api::pause))
+        .route("/api/v1/sync/settings", post(sync_api::settings))
+        .route("/api/v1/sync/remove", post(sync_api::remove))
+        .route("/api/v1/sync/repair", post(sync_api::repair))
+        .route(
+            "/api/v1/sync/peers/refresh-address",
+            post(sync_api::refresh_peer_address),
+        )
+        .route("/api/v1/sync/retry", post(sync_api::retry))
         .route("/api/v1/transport/identity", get(transport_identity))
         .route("/api/v1/discovery", get(discovery_candidates))
         .route("/api/v1/config/export", post(config_export))
         .route("/api/v1/config/import", post(config_import))
+        .route("/api/v1/recovery/kit", post(export_recovery_kit))
+        .route("/api/v1/recovery/status", get(recovery_status))
+        .route("/api/v1/recovery/retry", post(retry_recovery))
         .route("/api/v1/claim", post(claim_ownership))
         .route("/api/v1/pair/invitations", post(pair_invitation))
         .route("/api/v1/pair/network/start", post(pair_network_start))
@@ -1775,6 +1924,16 @@ async fn javascript() -> impl IntoResponse {
     )
 }
 
+async fn folder_sync_flow_javascript() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        FOLDER_SYNC_FLOW_JS,
+    )
+}
+
 async fn pairing_flow_javascript() -> impl IntoResponse {
     (
         [
@@ -1795,6 +1954,16 @@ async fn restore_plan_flow_javascript() -> impl IntoResponse {
     )
 }
 
+async fn restore_preview_flow_javascript() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        RESTORE_PREVIEW_FLOW_JS,
+    )
+}
+
 async fn backup_terminal_flow_javascript() -> impl IntoResponse {
     (
         [
@@ -1802,6 +1971,36 @@ async fn backup_terminal_flow_javascript() -> impl IntoResponse {
             (header::CACHE_CONTROL, "no-cache"),
         ],
         BACKUP_TERMINAL_FLOW_JS,
+    )
+}
+
+async fn backup_verification_flow_javascript() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        BACKUP_VERIFICATION_FLOW_JS,
+    )
+}
+
+async fn backup_selection_flow_javascript() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        BACKUP_SELECTION_FLOW_JS,
+    )
+}
+
+async fn recovery_flow_javascript() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        RECOVERY_FLOW_JS,
     )
 }
 
@@ -2006,6 +2205,106 @@ async fn config_import(
         }
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ConfirmedRecoveryRequest {
+    confirmed: bool,
+}
+
+/// Deliberately has no `Debug` implementation: both strings are bearer-grade secrets.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecoveryKitExportResponse {
+    protocol_version: u16,
+    recovery_kit: Zeroizing<String>,
+    recovery_key: Zeroizing<String>,
+}
+
+async fn export_recovery_kit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ContractJson(request): ContractJson<ConfirmedRecoveryRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    if !request.confirmed {
+        return Err(ApiError::recovery_confirmation_required());
+    }
+    let admission = state.admit_engine_job()?;
+    let engine = Arc::clone(&state.engine);
+    let response = tokio::task::spawn_blocking(move || {
+        let _admission = admission;
+        let unlock = RecoveryUnlockKey::generate();
+        let kit = engine.export_recovery_kit(&unlock)?;
+        Ok::<_, CoreError>(RecoveryKitExportResponse {
+            protocol_version: PROTOCOL_VERSION,
+            recovery_kit: Zeroizing::new(URL_SAFE_NO_PAD.encode(kit)),
+            recovery_key: unlock.expose_base64(),
+        })
+    })
+    .await
+    .map_err(|_| ApiError::internal("recovery-kit worker failed"))?
+    .map_err(ApiError::from_core)?;
+    let mut response = axum::Json(response).into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, max-age=0"),
+    );
+    Ok(response)
+}
+
+async fn recovery_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<axum::Json<RecoveryStatus>, ApiError> {
+    authorize(&state, &headers)?;
+    let status = match &state.recovery_state {
+        Some(store) => store.status().map_err(ApiError::from_core)?,
+        None => RecoveryStatus {
+            protocol_version: PROTOCOL_VERSION,
+            phase: RecoveryPhase::NotConfigured,
+            recovered_backups: Vec::new(),
+            queried_provider_ids: BTreeSet::new(),
+            configured_provider_ids: BTreeSet::new(),
+            failures: Vec::new(),
+            newer_snapshot_may_exist: false,
+        },
+    };
+    Ok(axum::Json(status))
+}
+
+async fn retry_recovery(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ContractJson(request): ContractJson<ConfirmedRecoveryRequest>,
+) -> Result<axum::Json<RecoveryStatus>, ApiError> {
+    authorize(&state, &headers)?;
+    if !request.confirmed {
+        return Err(ApiError::recovery_confirmation_required());
+    }
+    let store = state.recovery_state.clone().ok_or_else(|| {
+        ApiError::conflict(
+            "recovery_not_configured",
+            "This node was not started from an owner-loss recovery kit.",
+        )
+    })?;
+    if store.status().map_err(ApiError::from_core)?.phase == RecoveryPhase::NotConfigured {
+        return Err(ApiError::conflict(
+            "recovery_not_configured",
+            "This node was not started from an owner-loss recovery kit.",
+        ));
+    }
+    let admission = state.admit_engine_job()?;
+    let engine = Arc::clone(&state.engine);
+    let status = tokio::task::spawn_blocking(move || {
+        let _admission = admission;
+        store.retry(&engine)
+    })
+    .await
+    .map_err(|_| ApiError::internal("recovery worker failed"))?
+    .map_err(ApiError::from_core)?;
+    Ok(axum::Json(status))
 }
 
 #[derive(Deserialize)]
@@ -2654,10 +2953,29 @@ async fn revoke_peer(
     ContractJson(request): ContractJson<RevokePeerRequest>,
 ) -> Result<StatusCode, ApiError> {
     authorize(&state, &headers)?;
-    state
-        .engine
-        .revoke_peer(request.peer_id)
-        .map_err(ApiError::from_core)?;
+    #[cfg(unix)]
+    let managed = if let sync_engine::FolderSyncRuntimeState::Ready(service) = &state.folder_sync {
+        let committed = service
+            .revoke_peer(request.peer_id)
+            .await
+            .map_err(sync_api::service_error)?;
+        if committed.value().is_none() {
+            return Err(sync_api::service_error(
+                sync_engine::FolderSyncServiceError::Journal,
+            ));
+        }
+        true
+    } else {
+        false
+    };
+    #[cfg(not(unix))]
+    let managed = false;
+    if !managed {
+        state
+            .engine
+            .revoke_peer(request.peer_id)
+            .map_err(ApiError::from_core)?;
+    }
     state
         .disconnect_provider(request.peer_id)
         .map_err(ApiError::from_core)?;
@@ -2742,6 +3060,20 @@ async fn connect_provider(
     state
         .connect_provider(connection.clone())
         .map_err(ApiError::from_core)?;
+    if let Some(store) = state.recovery_state.clone()
+        && store.should_retry().map_err(ApiError::from_core)?
+    {
+        let engine = Arc::clone(&state.engine);
+        tokio::spawn(async move {
+            match tokio::task::spawn_blocking(move || store.retry(&engine)).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, "provider catalog recovery remains pending");
+                }
+                Err(error) => tracing::warn!(%error, "provider catalog recovery worker failed"),
+            }
+        });
+    }
     Ok(axum::Json(
         probe_provider_connection(state, connection).await?,
     ))
@@ -6201,6 +6533,16 @@ impl ApiError {
         }
     }
 
+    const fn recovery_confirmation_required() -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            code: "recovery_confirmation_required",
+            message: "Explicit local confirmation is required for this recovery action.",
+            retryable: false,
+            upload_offset: None,
+        }
+    }
+
     const fn bad_request(code: &'static str, message: &'static str) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
@@ -6349,6 +6691,208 @@ mod tests {
         ));
         let engine = Arc::new(Engine::open(options).expect("test engine"));
         AppState::new(engine, PlatformTier::Tier1, TEST_TOKEN.to_owned()).expect("state")
+    }
+
+    #[tokio::test]
+    async fn recovery_kit_export_is_authenticated_confirmed_uncached_and_reopenable() {
+        let directory = TempDir::new().expect("directory");
+        let state = test_state(&directory);
+        let expected_device_id = state.engine.device_id();
+        let app = router(state);
+
+        let unconfirmed = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/recovery/kit")
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"confirmed":false}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(unconfirmed.status(), StatusCode::CONFLICT);
+        let unconfirmed_body = unconfirmed
+            .into_body()
+            .collect()
+            .await
+            .expect("unconfirmed body")
+            .to_bytes();
+        let unconfirmed_error: ApiErrorBody =
+            serde_json::from_slice(&unconfirmed_body).expect("API error");
+        assert_eq!(unconfirmed_error.code, "recovery_confirmation_required");
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/recovery/kit")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"confirmed":true}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/recovery/kit")
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"confirmed":true}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store, max-age=0")
+        );
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let exported: serde_json::Value = serde_json::from_slice(&body).expect("JSON");
+        let kit = URL_SAFE_NO_PAD
+            .decode(exported["recoveryKit"].as_str().expect("kit"))
+            .expect("kit base64url");
+        let material_directory = TempDir::new().expect("material directory");
+        let kit_path = material_directory.path().join("owner.covalent-recovery");
+        let key_path = material_directory
+            .path()
+            .join("owner.covalent-recovery-key");
+        fs::write(&kit_path, &kit).expect("write decoded raw kit");
+        fs::write(
+            &key_path,
+            format!(
+                "{}\n",
+                exported["recoveryKey"].as_str().expect("recovery key")
+            ),
+        )
+        .expect("write recovery key");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&kit_path, fs::Permissions::from_mode(0o600)).expect("protect kit");
+            fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600)).expect("protect key");
+        }
+        let bootstrap = crate::runtime::load_recovery_bootstrap_files(&kit_path, &key_path)
+            .expect("load canonical CLI files");
+        let recovered_parent = TempDir::new().expect("recovered parent");
+        let recovered_path = recovered_parent.path().join("fresh-recovered-node");
+        let mut configuration = crate::runtime::NodeRuntimeConfig::new(
+            &recovered_path,
+            "127.0.0.1:0".parse().expect("API address"),
+            "127.0.0.1:0".parse().expect("peer address"),
+        );
+        configuration.key_protector = Some(Arc::new(
+            StaticKeyProtector::new(1, [0x42; 32]).expect("protector"),
+        ));
+        configuration.recovery = Some(bootstrap);
+        configuration.first_run_claim_enabled = true;
+        let recovered = crate::runtime::NodeRuntime::start(configuration)
+            .await
+            .expect("start recovered serving runtime from API files");
+        recovered.stop().await.expect("stop recovered runtime");
+        let identity: serde_json::Value = serde_json::from_slice(
+            &fs::read(recovered_path.join("identity.json")).expect("recovered identity"),
+        )
+        .expect("identity JSON");
+        assert_eq!(identity["deviceId"], expected_device_id.to_string());
+    }
+
+    #[tokio::test]
+    async fn recovery_status_requires_authentication_and_defaults_to_not_configured() {
+        let directory = TempDir::new().expect("directory");
+        let app = router(test_state(&directory));
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/recovery/status")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/recovery/status")
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let status: RecoveryStatus = serde_json::from_slice(&body).expect("status");
+        assert_eq!(status.phase, RecoveryPhase::NotConfigured);
+    }
+
+    #[tokio::test]
+    async fn recovery_export_respects_bounded_engine_job_admission() {
+        let directory = TempDir::new().expect("directory");
+        let state = test_state(&directory);
+        let _active_job = state.admit_engine_job().expect("hold engine admission");
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/recovery/kit")
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"confirmed":true}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn recovery_retry_respects_bounded_engine_job_admission() {
+        let directory = TempDir::new().expect("directory");
+        let mut state = test_state(&directory);
+        let store = Arc::new(
+            RecoveryStateStore::open(directory.path().join("recovery-state.json"))
+                .expect("recovery state"),
+        );
+        store.begin(&state.engine).expect("pending recovery");
+        state = state.with_recovery_state(store);
+        let _active_job = state.admit_engine_job().expect("hold engine admission");
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/recovery/retry")
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"confirmed":true}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[tokio::test]
@@ -6693,9 +7237,14 @@ mod tests {
         let app = router(test_state(&directory));
         for path in [
             "/assets/app.js",
+            "/assets/folder-sync-flow.js",
             "/assets/pairing-flow.js",
             "/assets/restore-plan-flow.js",
+            "/assets/restore-preview-flow.js",
             "/assets/backup-terminal-flow.js",
+            "/assets/backup-verification-flow.js",
+            "/assets/backup-selection-flow.js",
+            "/assets/recovery-flow.js",
             "/assets/tab-flow.js",
         ] {
             let response = app
@@ -6756,6 +7305,26 @@ mod tests {
             .await
             .expect("response");
         assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        let address_refresh = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/sync/peers/refresh-address")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "peerId": DeviceId::new(),
+                            "expectedAddress": "127.0.0.1:8789",
+                            "candidateAddress": "127.0.0.1:8790"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("address refresh response");
+        assert_eq!(address_refresh.status(), StatusCode::UNAUTHORIZED);
         let authorized = app
             .oneshot(
                 Request::builder()
@@ -6837,6 +7406,92 @@ mod tests {
                 .expect("connections")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn historical_pairing_transport_cannot_revert_a_refreshed_provider_route() {
+        let first_directory = TempDir::new().expect("first directory");
+        let second_directory = TempDir::new().expect("second directory");
+        let first_protector: Arc<dyn KeyProtector> =
+            Arc::new(StaticKeyProtector::new(1, [0x31; 32]).expect("first protector"));
+        let second_protector: Arc<dyn KeyProtector> =
+            Arc::new(StaticKeyProtector::new(1, [0x32; 32]).expect("second protector"));
+        let first = Arc::new(
+            Engine::open(
+                EngineOptions::new(first_directory.path().join("node"))
+                    .with_key_protector(Arc::clone(&first_protector)),
+            )
+            .unwrap(),
+        );
+        let second = Arc::new(
+            Engine::open(
+                EngineOptions::new(second_directory.path().join("node"))
+                    .with_key_protector(Arc::clone(&second_protector)),
+            )
+            .unwrap(),
+        );
+        let first_tls = crate::transport::TlsIdentity::load_or_create(
+            first_directory.path().join("tls"),
+            first_directory.path(),
+            first_protector.as_ref(),
+        )
+        .unwrap();
+        let second_tls = crate::transport::TlsIdentity::load_or_create(
+            second_directory.path().join("tls"),
+            second_directory.path(),
+            second_protector.as_ref(),
+        )
+        .unwrap();
+        let transport = |engine: &Engine, tls: &crate::transport::TlsIdentity, address: &str| {
+            TransportBinding {
+                peer_id: engine.device_id(),
+                display_name: engine.config().unwrap().device_name,
+                address: address.into(),
+                certificate_der: URL_SAFE_NO_PAD.encode(tls.certificate_der()),
+                certificate_fingerprint: tls.certificate_fingerprint(),
+            }
+        };
+        let first_transport = transport(&first, &first_tls, "127.0.0.1:55101");
+        let historical = transport(&second, &second_tls, "127.0.0.1:55102");
+        let invitation = first
+            .pairing_manager()
+            .create_invitation_with_transport(
+                1_000,
+                60_000,
+                vec![first_transport.address.clone()],
+                first_transport,
+            )
+            .unwrap();
+        let roles = BTreeSet::from([PeerRole::BackupReader, PeerRole::StorageProvider]);
+        let mut session = second
+            .accept_pairing_with_transport(
+                invitation,
+                historical.clone(),
+                roles.clone(),
+                roles,
+                1_001,
+            )
+            .unwrap();
+        let code = session.authentication_string().as_str().to_owned();
+        second
+            .confirm_pairing_as_responder(&mut session, &code, 1_002)
+            .unwrap();
+        first
+            .confirm_pairing_as_inviter(&mut session, &code, 1_003)
+            .unwrap();
+        first.finalize_pairing_as_inviter(&session, 1_004).unwrap();
+        let config = first.config().unwrap();
+        let grant = config.trusted_peers.get(&second.device_id()).unwrap();
+        first
+            .refresh_trusted_peer_address(grant, &historical, "127.0.0.1:55112")
+            .unwrap();
+
+        let mut state = test_state(&TempDir::new().unwrap());
+        state.engine = first;
+        assert!(!state.pairing_transport_is_current(&historical).unwrap());
+        let mut current = historical;
+        current.address = "127.0.0.1:55112".into();
+        assert!(state.pairing_transport_is_current(&current).unwrap());
     }
 
     #[test]

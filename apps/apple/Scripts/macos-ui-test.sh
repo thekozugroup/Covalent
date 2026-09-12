@@ -155,6 +155,61 @@ derived_data="$test_root/DerivedData"
 build_log="$artifact_root/build-for-testing.log"
 ui_log="$artifact_root/ui-test.log"
 result_bundle="$artifact_root/MacUITests.xcresult"
+
+# A failed run usually retains its summary and audit attachments. Print the
+# small text attachments so the plain job log identifies each failed element.
+# This helper is diagnostic-only and cannot mask xcodebuild's failure.
+emit_failed_result_details() {
+  if [[ -r "$result_bundle/Info.plist" ]]; then
+    print -u2 -- "--- xcresult test-results summary ---"
+    if ! xcrun xcresulttool get test-results summary --compact --path "$result_bundle" >&2; then
+      print -u2 -- "xcresult test-results summary could not be read."
+    fi
+
+    local attachment_root="$test_root/failed-xcresult-attachments"
+    if ! xcrun xcresulttool export attachments \
+      --path "$result_bundle" \
+      --output-path "$attachment_root" >/dev/null 2>&1; then
+      print -u2 -- "xcresult attachments could not be exported."
+      return 0
+    fi
+    local manifest="$attachment_root/manifest.json"
+    if [[ ! -f "$manifest" || -L "$manifest" ]]; then
+      print -u2 -- "xcresult attachment manifest is unavailable."
+      return 0
+    fi
+
+    local count=0
+    local name file bytes
+    while IFS= read -r name; do
+      [[ -n "$name" && "$name" != */* && "$name" != *..* ]] || continue
+      file="$attachment_root/$name"
+      [[ -f "$file" && ! -L "$file" ]] || continue
+      bytes=$(stat -f '%z' "$file" 2>/dev/null || print 0)
+      (( bytes > 0 && bytes <= 65536 )) || continue
+      LC_ALL=C grep -q '^Accessibility audit:' "$file" || continue
+      if (( count == 0 )); then
+        print -u2 -- "--- accessibility audit elements from xcresult ---"
+      fi
+      sed -n '1,80p' "$file" >&2
+      (( count += 1 ))
+      (( count < 64 )) || break
+    done < <(
+      jq -r '
+        .[]?.attachments[]?
+        | select(
+            .suggestedHumanReadableName == "Accessibility audit element"
+            or .suggestedHumanReadableName == "Accessibility audit element.txt"
+          )
+        | .exportedFileName
+      ' "$manifest" 2>/dev/null
+    )
+    if (( count == 0 )); then
+      print -u2 -- "No text accessibility audit attachments were exported."
+    fi
+  fi
+  return 0
+}
 if ! run_bounded 600 xcodebuild \
   -quiet \
   -project Covalent.xcodeproj \
@@ -189,10 +244,10 @@ codesign \
 codesign --verify --deep --strict --verbose=2 "$runner"
 
 # A hang detector, not a quality gate: it decides when to kill a wedged run,
-# not whether the app is fast enough. CI run 32461742319 executed all three
-# tests in 43s on a real runner, so 480s is roughly ten times the observed
-# cost and still kills a hang inside a job's patience. 900s was set when this
-# lane had never passed and nothing had been measured.
+# not whether the app is fast enough. CI run 32461742319 executed the
+# then-three-test suite in 43s on a real runner; the fourth first-launch test
+# remains within the same deliberately generous 480s hang detector. 900s was
+# set when this lane had never passed and nothing had been measured.
 if ! run_bounded 480 xcodebuild \
   -quiet \
   -project Covalent.xcodeproj \
@@ -216,6 +271,7 @@ if ! run_bounded 480 xcodebuild \
   # of codesign and launch chatter, so the failures themselves — and the audit
   # findings the accessibility test prints — scroll off the end of any tail
   # worth reading. Pull them out by name first.
+  emit_failed_result_details
   print -u2 -- "--- audit findings and test failures ---"
   grep -n -A3 -E 'COVALENT-AUDIT-FINDING|error: -\[|XCTAssert' "$ui_log" | tail -200 >&2 || true
   print -u2 -- "--- last 240 lines ---"
@@ -241,16 +297,17 @@ if ! tests=$(xcrun xcresulttool get test-results tests --compact --path "$result
 fi
 if ! jq -e '
   .result == "Passed" and
-  .totalTestCount == 3 and
-  .passedTests == 3 and
+  .totalTestCount == 4 and
+  .passedTests == 4 and
   .failedTests == 0 and
   .skippedTests == 0
 ' <<<"$summary" >/dev/null; then
-  print -u2 -- "macOS UI test result did not prove exactly three passing, unskipped tests."
+  print -u2 -- "macOS UI test result did not prove exactly four passing, unskipped tests."
   print -u2 -- "$summary"
   exit 1
 fi
 for expected_test in \
+  'testFirstLaunchChoiceCanSetUpAndRecoveryCancelLeavesChoiceVisible()' \
   'testTierOneNavigationAndPrimaryWorkflowsAreReachable()' \
   'testOverviewPassesSystemAccessibilityAudit()' \
   'testNativeMenuBarQuickActionsAreReachable()'

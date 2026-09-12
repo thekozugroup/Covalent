@@ -229,6 +229,15 @@ class AndroidCopyAndConfirmationTest {
     // ---- Error copy ---------------------------------------------------------------------
 
     @Test
+    fun folderSyncPairingDirectionsDoNotCallTheDeviceABackup() {
+        for (name in listOf("folder_sync_pair_incoming", "folder_sync_pair_outgoing")) {
+            val message = requireString(name)
+            assertTrue(message.contains("folder sync"))
+            assertFalse(message.contains("backup", ignoreCase = true))
+        }
+    }
+
+    @Test
     fun transportFailuresBecomePlainLanguageInsteadOfRawExceptions() {
         assertEquals(
             NodeFailure.NEEDS_RECONNECT,

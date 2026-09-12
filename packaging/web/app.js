@@ -78,6 +78,8 @@
       RECOVERY.retry,
     ],
     confirmation_required: ["This has to be confirmed on the other device before it can finish.", RECOVERY.none],
+    recovery_confirmation_required: ["Confirm that you want to create recovery files or retry recovery, then continue.", RECOVERY.none],
+    recovery_not_configured: ["This backup server was set up normally. To replace a lost device, start a new installation with its recovery files.", RECOVERY.none],
 
     // Source folder
     source_changed: ["Files changed while Covalent was copying them. Try again once they stop changing.", RECOVERY.retry],
@@ -88,6 +90,29 @@
     invalid_authorized_root: [
       "The folder you chose is no longer available to Covalent. Choose it again.",
       RECOVERY.chooseFolderAgain,
+    ],
+    folder_sync_unavailable: [
+      "Folder sync is unavailable on this server. Check its folder-sync package and mounted folder, then try again.",
+      RECOVERY.retry,
+    ],
+    folder_sync_busy: ["Another folder change is still in progress. Try again shortly.", RECOVERY.retry],
+    link_settings_conflict: ["Link settings changed on another device. Refresh and review the current settings before submitting again.", RECOVERY.none],
+    link_settings_pending: ["A link-settings change is waiting for the source. Review that request before making another change.", RECOVERY.none],
+    folder_sync_needs_attention: [
+      "Folder sync needs attention before it can continue. Check the folder status, then try again.",
+      RECOVERY.retry,
+    ],
+    invalid_peer_address: [
+      "Enter the device address as a numeric IP address and port, such as 192.168.1.20:8787, then try again.",
+      RECOVERY.none,
+    ],
+    peer_address_changed: [
+      "The saved device address changed before this update finished. Refresh the saved device, then try again.",
+      RECOVERY.retry,
+    ],
+    peer_address_unreachable: [
+      "Covalent could not authenticate the trusted device at the new address. Check the address and network connection, then try again.",
+      RECOVERY.retry,
     ],
 
     // Restore
@@ -457,22 +482,45 @@ let restorePlan = null;
 let restorePage = null;
 let restoreCursor = null;
 let restoreCursorHistory = [];
+let activeRestorePreviewRevision = 0;
 let networkPairing = null;
 let networkPoll = null;
 let providerConnections = [];
 let manualProviderConfirmation = null;
 let backupSubmissionInFlight = false;
 let failedBackupAttempt = null;
+let verificationInFlight = false;
+let rememberedRestoreChoices = [];
+let restoreExecutionInFlight = false;
 const pairing = globalThis.CovalentPairingFlow;
 const restore = globalThis.CovalentRestorePlanFlow;
+const restorePreview = globalThis.CovalentRestorePreviewFlow.coordinator();
 const backupTerminal = globalThis.CovalentBackupTerminalFlow;
+const backupVerification = globalThis.CovalentBackupVerification;
+const backupSelection = globalThis.CovalentBackupSelectionFlow;
+const recovery = globalThis.CovalentRecoveryFlow;
+const recoverySession = recovery.session();
+let recoveryGeneration = 0;
+let recoveryStatusInFlight = false;
 const tabFlow = globalThis.CovalentTabFlow;
 const errorCopy = globalThis.CovalentNodeErrorCopy;
+const folderSync = globalThis.CovalentFolderSyncFlow;
 const pairingStorageKey = "covalent.pairing-session.v1";
 const backupServerContext = backupTerminal.requireContext({
   origin: globalThis.location.origin,
   protocolVersion: PROTOCOL_VERSION,
 });
+let folderDeviceId = null;
+const folderController = folderSync.coordinator({
+  api: folderApi,
+  storage: folderSync.lazySessionStorage(globalThis),
+  onStatus: renderFolderStatus,
+  onLockChange: setFolderMutationLock,
+});
+
+function folderApi(path, options) {
+  return api(path, options, folderSync.readJson);
+}
 
 class NodeApiError extends Error {
   constructor(status, payload) {
@@ -514,14 +562,14 @@ function fail(error) {
   message.dataset.recovery = failure.recovery;
 }
 
-async function apiResponse(path, options = {}) {
+async function apiResponse(path, options = {}, readJson = (response) => response.json()) {
   const headers = new Headers(options.headers || {});
   headers.set("Accept", "application/json");
   if (token) headers.set("Authorization", `Bearer ${token}`);
   if (options.body) headers.set("Content-Type", "application/json");
   const response = await fetch(path, { ...options, headers, cache: "no-store" });
   if (!response.ok) {
-    const decoded = await response.json().catch(() => ({}));
+    const decoded = await readJson(response).catch(() => ({}));
     const body = decoded && typeof decoded === "object" ? decoded : {};
     if (body.protocolVersion !== undefined && body.protocolVersion !== PROTOCOL_VERSION) {
       throw new ProtocolMismatchError(body.protocolVersion);
@@ -530,13 +578,13 @@ async function apiResponse(path, options = {}) {
   }
   return {
     status: response.status,
-    body: response.status === 204 ? null : await response.json(),
+    body: response.status === 204 ? null : await readJson(response),
     headers: response.headers,
   };
 }
 
-async function api(path, options = {}) {
-  return (await apiResponse(path, options)).body;
+async function api(path, options = {}, readJson) {
+  return (await apiResponse(path, options, readJson)).body;
 }
 
 async function loadStatus() {
@@ -555,19 +603,729 @@ async function loadStatus() {
   }
 }
 
+function folderPollingEligible() {
+  const foldersSelected = $("[data-tab=folders]").getAttribute("aria-selected") === "true";
+  const pairSelected = $("[data-tab=pair]").getAttribute("aria-selected") === "true";
+  return Boolean(
+    token
+    && folderDeviceId
+    && document.visibilityState === "visible"
+    && (foldersSelected || pairSelected),
+  );
+}
+
+function syncFolderPolling(refreshNow = false) {
+  const enabled = folderPollingEligible();
+  folderController.setPollingEnabled(enabled);
+  if (enabled && refreshNow) void loadFolders(false);
+}
+
+function renderFolderError(error) {
+  const failure = errorCopy.describe(error);
+  const status = $("[data-folders-status]");
+  status.textContent = failure.summary;
+  status.className = "folder-state";
+  status.dataset.kind = "attention";
+}
+
+function setFolderMutationLock(locked) {
+  document.querySelectorAll("[data-folder-mutation]").forEach((control) => {
+    control.disabled = locked;
+  });
+  $("[data-folder-offer-form]").setAttribute("aria-busy", String(locked));
+}
+
+function folderPeerName(status, peerId) {
+  return status.peers.find((peer) => peer.peerId === peerId)?.displayName
+    ?? "Confirmed paired device unavailable";
+}
+
+function folderActionButton(label, action, className = "secondary") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = className;
+  button.dataset.folderMutation = "";
+  button.textContent = label;
+  button.disabled = folderController.isMutationLocked();
+  button.addEventListener("click", action);
+  return button;
+}
+
+async function runFolderMutation(action, success) {
+  try {
+    await action();
+    renderPendingFolderOffer();
+    renderPendingLinkSettings();
+    await loadFolders(false);
+    say(success);
+  } catch (error) {
+    renderPendingFolderOffer();
+    renderPendingLinkSettings();
+    fail(error);
+  }
+}
+
+function firstLinkMember(status, share) {
+  return status.shares.find((item) => item.folderId === share.folderId
+    && item.linkSettings !== null && item.phase !== "removed")?.offerId === share.offerId;
+}
+
+function renderLinkSettings(container, status, share) {
+  const state = share.linkSettings;
+  const details = document.createElement("details");
+  details.className = "advanced";
+  const summary = document.createElement("summary");
+  summary.textContent = "Link settings";
+  const current = document.createElement("p");
+  current.className = "muted";
+  current.textContent = state.confirmed
+    ? "These settings apply to every destination in this link."
+    : "Waiting for the source to confirm current settings. File transfer has not started.";
+  details.append(summary, current);
+
+  if (state.pendingChange !== null) {
+    const pending = document.createElement("p");
+    pending.setAttribute("role", "status");
+    pending.textContent = `Waiting for the source to confirm this request: ${folderSync.settingsExplanation(state.pendingChange.settings)}`;
+    details.append(pending);
+  }
+  if (state.conflictedChange !== null) {
+    const conflict = document.createElement("p");
+    conflict.setAttribute("role", "alert");
+    conflict.textContent = `A request used an old revision and was not applied: ${folderSync.settingsExplanation(state.conflictedChange.settings)} Review the current choices below before submitting again.`;
+    details.append(conflict);
+  }
+
+  const form = document.createElement("form");
+  form.className = "inline-form";
+  const sourceDeletes = document.createElement("label");
+  const sourceDeletesInput = document.createElement("input");
+  sourceDeletesInput.type = "checkbox";
+  sourceDeletesInput.name = "propagateSourceDeletions";
+  sourceDeletesInput.checked = state.settings.deletionPolicy.propagateSourceDeletions;
+  sourceDeletes.append(sourceDeletesInput, " Delete destination copies when source files are deleted");
+  const localDeletes = document.createElement("label");
+  const localDeletesInput = document.createElement("input");
+  localDeletesInput.type = "checkbox";
+  localDeletesInput.name = "restoreLocalDeletions";
+  localDeletesInput.checked = state.settings.deletionPolicy.restoreLocalDeletions;
+  localDeletes.append(localDeletesInput, " Restore files deleted at a destination");
+  const submit = document.createElement("button");
+  submit.dataset.folderMutation = "";
+  submit.disabled = folderController.isMutationLocked() || !state.confirmed || state.pendingChange !== null;
+  submit.textContent = state.conflictedChange === null ? "Save link settings" : "Submit reviewed settings";
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const policy = {
+      propagateSourceDeletions: sourceDeletesInput.checked,
+      restoreLocalDeletions: localDeletesInput.checked,
+    };
+    const currentPolicy = state.settings.deletionPolicy;
+    const enablesDeletion = policy.propagateSourceDeletions && !currentPolicy.propagateSourceDeletions
+      || policy.restoreLocalDeletions && !currentPolicy.restoreLocalDeletions;
+    if (enablesDeletion && !globalThis.confirm(`${folderSync.policyExplanation(policy)} Apply these choices to every destination in this link?`)) return;
+    void runFolderMutation(
+      () => folderController.updateDeletionPolicy(share.folderId, policy),
+      "Link settings request saved. Current link status shows whether the source confirmed it.",
+    );
+  });
+  form.append(sourceDeletes, localDeletes, submit);
+  details.append(form);
+  container.append(details);
+}
+
+function renderAddDestination(container, status, share) {
+  const memberIds = new Set(status.shares
+    .filter((item) => item.folderId === share.folderId && item.phase !== "removed")
+    .map((item) => item.peerId));
+  const peers = status.peers.filter((peer) => !memberIds.has(peer.peerId));
+  const details = document.createElement("details");
+  details.className = "advanced";
+  const summary = document.createElement("summary");
+  summary.textContent = "Add destination";
+  const explanation = document.createElement("p");
+  explanation.className = "muted";
+  explanation.textContent = "Enter the same source path used by this link. The server verifies the existing folder identity before adding a destination.";
+  details.append(summary, explanation);
+  if (peers.length === 0) {
+    const empty = document.createElement("p");
+    empty.textContent = "Every paired device is already a destination for this link.";
+    details.append(empty);
+    container.append(details);
+    return;
+  }
+  const form = document.createElement("form");
+  form.className = "inline-form";
+  const peerLabel = document.createElement("label");
+  peerLabel.textContent = "Destination device ";
+  const select = document.createElement("select");
+  select.name = "peerId";
+  select.required = true;
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "Choose a confirmed paired device";
+  select.append(placeholder);
+  for (const peer of peers) {
+    const option = document.createElement("option");
+    option.value = peer.peerId;
+    option.textContent = peer.displayName;
+    select.append(option);
+  }
+  peerLabel.append(select);
+  const pathLabel = document.createElement("label");
+  pathLabel.textContent = "Existing source path on this server ";
+  const path = document.createElement("input");
+  path.name = "selectedRoot";
+  path.maxLength = 1024;
+  path.required = true;
+  path.placeholder = "/sync";
+  pathLabel.append(path);
+  const submit = document.createElement("button");
+  submit.dataset.folderMutation = "";
+  submit.textContent = "Send destination invitation";
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const body = {
+      peerId: select.value,
+      folderId: share.folderId,
+      label: share.label,
+      selectedRoot: path.value,
+      linkPolicy: share.linkPolicy,
+    };
+    if (!globalThis.confirm(`Confirm that ${path.value} is the same source folder already used by ${share.label}. Add this destination?`)) return;
+    void runFolderMutation(
+      () => folderController.sendOffer(body),
+      "Destination invitation sent with this link's existing identity and settings.",
+    );
+  });
+  form.append(peerLabel, pathLabel, submit);
+  details.append(form);
+  container.append(details);
+}
+
+function renderFolderActions(container, status, share, view) {
+  if (share.phase === "removed") return;
+  if (share.incoming && share.phase === "offered" && !share.expired) {
+    const pathLabel = document.createElement("label");
+    pathLabel.textContent = "Folder path on this server";
+    const path = document.createElement("input");
+    path.value = "/sync";
+    path.maxLength = 1024;
+    path.required = true;
+    pathLabel.append(path);
+    const accept = folderActionButton("Accept folder", () => {
+      void runFolderMutation(
+        () => folderController.accept(share.offerId, path.value),
+        "Folder accepted. Covalent is checking its local contents.",
+      );
+    }, "");
+    container.append(pathLabel, accept);
+  }
+
+  const firstMember = share.linkSettings === null || firstLinkMember(status, share);
+  if (firstMember && !share.expired && !(share.incoming && share.phase === "offered")) {
+    const paused = share.phase === "paused";
+    const pause = folderActionButton(share.linkPolicy === null
+      ? (paused ? "Resume" : "Pause") : (paused ? "Resume link" : "Pause link"), () => {
+      void runFolderMutation(
+        () => folderController.pause(share.offerId, !paused),
+        share.linkPolicy === null ? (paused ? "Folder sync resumed." : "Folder sync paused.")
+          : "Link pause change saved. It applies to all devices when the source confirms it.",
+      );
+    });
+    container.append(pause);
+  }
+
+  if (share.linkSettings !== null && firstMember) {
+    renderLinkSettings(container, status, share);
+    if (!share.incoming && share.linkSettings.confirmed && ["ready", "paused"].includes(share.phase)) {
+      renderAddDestination(container, status, share);
+    }
+  }
+
+  if (share.expired && !share.incoming && ["offered", "paused"].includes(share.phase)) {
+    container.append(folderActionButton("Send new invitation", () => {
+      void runFolderMutation(
+        () => folderController.renew(share.offerId),
+        "New invitation created. Accept it on the other device to start syncing.",
+      );
+    }));
+  }
+
+  const removeLabel = share.incoming && share.phase === "offered" && !share.expired ? "Decline" : "Remove…";
+  const confirmation = document.createElement("div");
+  confirmation.className = "folder-removal-confirmation";
+  confirmation.hidden = true;
+  confirmation.setAttribute("role", "group");
+  confirmation.setAttribute("aria-label", `Stop sharing ${share.label}`);
+  const explanation = document.createElement("p");
+  explanation.textContent = "Stop syncing this folder? Sync stops here now and on the other device when it reconnects. Files stay on both devices.";
+  const remove = folderActionButton(removeLabel, () => {
+    confirmation.hidden = false;
+    cancel.focus();
+  }, "quiet");
+  const cancel = folderActionButton("Keep sharing", () => {
+    confirmation.hidden = true;
+    remove.focus();
+  }, "quiet");
+  const confirmed = folderActionButton("Stop sharing", () => {
+    void runFolderMutation(
+      () => folderController.remove(share.offerId),
+      "Sync stopped here. The other device will stop when it reconnects. Files stay on both devices.",
+    );
+  }, "quiet");
+  confirmation.append(explanation, cancel, confirmed);
+  container.append(remove, confirmation);
+
+  if (view.kind === "expired") {
+    const guidance = document.createElement("p");
+    guidance.textContent = share.incoming
+      ? `Ask ${folderPeerName(status, share.peerId)} to send a new invitation, then choose your folder again.`
+      : "Send a new invitation so the other device can choose its folder and accept again.";
+    container.append(guidance);
+  }
+}
+
+function renderFolderPeers(status) {
+  const select = $("[data-folder-peer]");
+  const previous = select.value;
+  const labels = status.peers.map((peer) => [peer.peerId, peer.displayName]);
+  const rendered = Array.from(select.options).slice(1).map((option) => [option.value, option.textContent]);
+  const placeholderText = status.peers.length === 0
+    ? "No confirmed paired devices"
+    : "Choose a confirmed paired device";
+  if (select.options[0]?.textContent === placeholderText && JSON.stringify(labels) === JSON.stringify(rendered)) {
+    select.disabled = status.peers.length === 0;
+    return;
+  }
+  select.replaceChildren();
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = placeholderText;
+  select.append(placeholder);
+  for (const peer of status.peers) {
+    const option = document.createElement("option");
+    option.value = peer.peerId;
+    // Peer-controlled labels are always assigned as text, never parsed as markup.
+    option.textContent = peer.displayName;
+    select.append(option);
+  }
+  select.value = status.peers.some((peer) => peer.peerId === previous) ? previous : "";
+  select.disabled = status.peers.length === 0;
+}
+
+function pairedDeviceItem(peer) {
+  const item = document.createElement("li");
+  item.dataset.pairedPeerId = peer.peerId;
+  const details = document.createElement("div");
+  const name = document.createElement("strong");
+  const address = document.createElement("span");
+  details.append(name, address);
+
+  const update = folderActionButton("Update address", () => {
+    const current = folderController.current()?.peers.find((entry) => entry.peerId === peer.peerId);
+    if (!current || current.address === null) return;
+    const pending = folderController.pendingPeerAddressRefresh();
+    if (form.hidden) {
+      input.value = pending?.peerId === peer.peerId ? pending.candidateAddress : current.address;
+    }
+    form.hidden = false;
+    update.setAttribute("aria-expanded", "true");
+    input.focus();
+  });
+  update.setAttribute("aria-expanded", "false");
+
+  const form = document.createElement("form");
+  form.className = "inline-form";
+  form.hidden = true;
+  form.id = `paired-address-form-${peer.peerId}`;
+  update.setAttribute("aria-controls", form.id);
+  const inputId = `paired-address-${peer.peerId}`;
+  const label = document.createElement("label");
+  label.htmlFor = inputId;
+  label.textContent = "New numeric IP address and port";
+  const input = document.createElement("input");
+  input.id = inputId;
+  input.name = "candidateAddress";
+  input.maxLength = 128;
+  input.placeholder = "192.0.2.10:8787 or [2001:db8::10]:8787";
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  input.required = true;
+  label.append(input);
+  const explanation = document.createElement("p");
+  explanation.className = "muted";
+  explanation.textContent = "Covalent will contact this address and require the same paired identity and certificate before saving it.";
+  const state = document.createElement("p");
+  state.className = "muted";
+  state.setAttribute("role", "status");
+  state.setAttribute("aria-live", "polite");
+  const submit = document.createElement("button");
+  submit.dataset.folderMutation = "";
+  submit.disabled = folderController.isMutationLocked();
+  submit.textContent = "Verify and save";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "quiet";
+  cancel.dataset.folderMutation = "";
+  cancel.disabled = folderController.isMutationLocked();
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => {
+    folderController.cancelPeerAddressRefresh(peer.peerId);
+    form.hidden = true;
+    update.setAttribute("aria-expanded", "false");
+    state.textContent = "";
+    update.focus();
+  });
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!requireUnlocked()) return;
+    state.textContent = folderController.pendingPeerAddressRefresh() === null
+      ? "Verifying this address with the paired device…"
+      : "Retrying the exact saved address request…";
+    input.disabled = true;
+    try {
+      const completion = await folderSync.refreshPeerAddressAndProviders(
+        folderController,
+        peer.peerId,
+        input.value,
+        loadProviders,
+      );
+      state.textContent = "Address verified and saved. Checking whether the device is reachable.";
+      submit.textContent = "Verify and save";
+      form.hidden = true;
+      update.setAttribute("aria-expanded", "false");
+      update.focus();
+      say("Address verified and saved. Covalent is checking the device connection.");
+      if (completion.providerError !== null) {
+        const failure = errorCopy.describe(completion.providerError);
+        console.debug("Covalent provider refresh failed after saving an address", completion.providerError);
+        say(`Address verified and saved. ${failure.summary}`, true, failure.detail);
+      }
+    } catch (error) {
+      if (folderController.pendingPeerAddressRefresh()?.peerId === peer.peerId) {
+        submit.textContent = "Retry saved update";
+        state.textContent = "The update is not confirmed. Retry this exact address, or cancel it before entering another one.";
+      } else if (/saved address changed/.test(error?.covalentGuidance ?? "")) {
+        state.textContent = "The saved address changed. Review the current address before submitting again.";
+      } else {
+        state.textContent = "The update is not confirmed. Refresh paired devices before trying again.";
+      }
+      fail(error);
+    } finally {
+      input.disabled = false;
+    }
+  });
+  form.append(label, explanation, state, submit, cancel);
+  item.append(details, update, form);
+  return item;
+}
+
+function renderPairedDevices(status) {
+  const list = $("[data-paired-devices]");
+  const retained = new Map(Array.from(list.children).map((item) => [item.dataset.pairedPeerId, item]));
+  const visible = new Set(status.peers.map((peer) => peer.peerId));
+  for (const [id, item] of retained) {
+    if (!visible.has(id)) item.remove();
+  }
+  for (const [index, peer] of status.peers.entries()) {
+    let item = retained.get(peer.peerId);
+    if (!item) item = pairedDeviceItem(peer);
+    const [details, update, form] = item.children;
+    const [name, address] = details.children;
+    name.textContent = peer.displayName;
+    address.textContent = peer.address === null
+      ? " — Address unavailable from this server version"
+      : ` — ${peer.address}`;
+    update.hidden = peer.address === null;
+    if (peer.address === null) {
+      form.hidden = true;
+      update.setAttribute("aria-expanded", "false");
+    }
+    if (list.children[index] !== item) list.insertBefore(item, list.children[index] ?? null);
+  }
+  const empty = $("[data-paired-devices-empty]");
+  empty.hidden = status.peers.length > 0;
+  if (status.peers.length === 0) empty.textContent = "No confirmed paired devices are available.";
+}
+
+function renderFolderStatus(status) {
+  const summary = folderSync.statusSummary(status);
+  const statusCopy = $("[data-folders-status]");
+  statusCopy.textContent = summary.text;
+  statusCopy.className = "folder-state";
+  statusCopy.dataset.kind = summary.kind;
+  renderFolderPeers(status);
+  renderPairedDevices(status);
+
+  const retry = $("[data-folders-retry-service]");
+  retry.hidden = !(status.lifecycle === "needsAttention" || status.issue !== null);
+  const list = $("[data-folders-list]");
+  const visibleShares = status.shares.filter((share) => share.phase !== "removed" || share.remoteRemovalPending);
+  let savedSettings = null;
+  try { savedSettings = folderController.pendingLinkSettings(); }
+  catch (error) { renderFolderError(error); }
+  const retained = new Map(Array.from(list.children).map((item) => [item.dataset.folderOfferId, item]));
+  const visibleIds = new Set(visibleShares.map((share) => share.offerId));
+  for (const [id, item] of retained) {
+    if (!visibleIds.has(id)) item.remove();
+  }
+  for (const [index, share] of visibleShares.entries()) {
+    const view = folderSync.shareView(status, share);
+    let item = retained.get(share.offerId);
+    if (!item) {
+      item = document.createElement("li");
+      item.dataset.folderOfferId = share.offerId;
+      const details = document.createElement("div");
+      const name = document.createElement("strong");
+      const peer = document.createElement("span");
+      const state = document.createElement("span");
+      state.className = "folder-state";
+      const policy = document.createElement("span");
+      policy.className = "muted";
+      const linkState = document.createElement("span");
+      linkState.className = "muted";
+      details.append(name, peer, state, policy, linkState);
+      const actions = document.createElement("div");
+      actions.className = "folder-actions";
+      item.append(details, actions);
+    }
+    const [details, actions] = item.children;
+    const [name, peer, state, policy, linkState] = details.children;
+    name.textContent = share.label;
+    const peerName = folderPeerName(status, share.peerId);
+    peer.textContent = share.linkPolicy === null ? `${peerName} · Legacy two-way`
+      : share.incoming ? `${peerName} → This server` : `This server → ${peerName}`;
+    policy.textContent = folderSync.policyExplanation(share.linkPolicy);
+    linkState.textContent = share.linkSettings === null ? ""
+      : !share.linkSettings.confirmed ? "Waiting for source-confirmed link settings before transfer starts."
+        : share.linkSettings.pendingChange !== null ? "A change is waiting for the source; current settings remain active."
+          : share.linkSettings.conflictedChange !== null ? "A stale settings request needs review; current settings remain active."
+            : share.linkSettings.settings.paused ? "Whole link paused."
+              : "Link settings confirmed by the source.";
+    state.dataset.kind = view.kind;
+    state.textContent = view.text;
+    // Routine health polling must preserve typed paths, keyboard focus, and
+    // explicit confirmation. Rebuild controls only when their meaning changes.
+    const linkMembers = status.shares.filter((item) => item.folderId === share.folderId && item.phase !== "removed")
+      .map((item) => item.peerId);
+    const actionState = JSON.stringify([
+      folderDeviceId, share.incoming, share.phase, share.expired, share.linkSettings,
+      linkMembers, status.peers.map((item) => [item.peerId, item.displayName]),
+      savedSettings?.folderId === share.folderId ? savedSettings : null,
+    ]);
+    if (actions.dataset.state !== actionState) {
+      actions.replaceChildren();
+      renderFolderActions(actions, status, share, view);
+      actions.dataset.state = actionState;
+    }
+    if (list.children[index] !== item) list.insertBefore(item, list.children[index] ?? null);
+  }
+  const empty = $("[data-folders-empty]");
+  empty.hidden = visibleShares.length > 0;
+  if (visibleShares.length === 0) {
+    empty.textContent = status.availability === "available"
+      ? "No shared folders yet. Choose a confirmed paired device below."
+      : "Shared folders cannot be loaded while folder sync is offline.";
+  }
+}
+
+function renderPendingFolderOffer() {
+  const card = $("[data-folder-pending]");
+  const form = $("[data-folder-offer-form]");
+  let pending = null;
+  try { pending = folderController.loadPending(); }
+  catch (error) { renderFolderError(error); }
+  card.hidden = pending === null;
+  form.querySelector("[data-folder-offer-submit]").disabled = pending !== null
+    || folderController.isMutationLocked()
+    || folderDeviceId === null
+    || (folderController.current()?.peers.length ?? 0) === 0;
+  if (pending === null) return;
+  const peerName = folderController.current()
+    ? folderPeerName(folderController.current(), pending.peerId)
+    : "the saved confirmed device";
+  $("[data-folder-pending-summary]").textContent = `${pending.label} for ${peerName}, using ${pending.selectedRoot}.`;
+}
+
+function renderPendingLinkSettings() {
+  const card = $("[data-link-settings-pending]");
+  let pending = null;
+  try { pending = folderController.pendingLinkSettings(); }
+  catch (error) { renderFolderError(error); }
+  card.hidden = pending === null;
+  if (pending === null) return;
+  const share = folderController.current()?.shares.find((item) => item.folderId === pending.folderId);
+  const label = share?.label ?? "this link";
+  const currentRevision = share?.linkSettings?.revision;
+  $("[data-link-settings-pending-summary]").textContent = `${label}: saved revision ${pending.expectedRevision}; ${folderSync.settingsExplanation(pending.settings)}${currentRevision === undefined ? "" : ` Current revision: ${currentRevision}.`}`;
+}
+
+async function loadFolders(reportError = false) {
+  try {
+    const result = await folderController.refresh();
+    if (result.applied) {
+      renderPendingFolderOffer();
+      renderPendingLinkSettings();
+    }
+  } catch (error) {
+    renderFolderError(error);
+    if (reportError) fail(error);
+  }
+}
+
+async function initializeFolderSync() {
+  const identity = await folderApi("/api/v1/transport/identity");
+  folderDeviceId = identity?.deviceId ?? null;
+  folderController.setAccess({ deviceId: folderDeviceId, unlocked: true });
+  renderPendingFolderOffer();
+  renderPendingLinkSettings();
+  syncFolderPolling(false);
+  if (folderPollingEligible()) await loadFolders(false);
+}
+
+function clearFolderSyncAccess() {
+  folderDeviceId = null;
+  folderController.setAccess({ deviceId: null, unlocked: false });
+  folderController.setPollingEnabled(false);
+  $("[data-link-settings-pending]").hidden = true;
+  $("[data-paired-devices]").replaceChildren();
+  const empty = $("[data-paired-devices-empty]");
+  empty.hidden = false;
+  empty.textContent = "Unlock the console to load paired devices.";
+}
+
+function backupSummaryCopy(backup) {
+  const snapshots = `${backup.snapshotCount} retained snapshot${backup.snapshotCount === 1 ? "" : "s"}`;
+  if (!backup.latestSnapshotId) return `${backup.name} — no completed snapshots yet.`;
+  const selected = backup.selectedProviderIds.length;
+  const protection = selected === 0
+    ? "Local only; it will not protect against losing this device."
+    : `${selected} selected extra backup device${selected === 1 ? "" : "s"}.`;
+  return `${backup.name} — ${snapshots}; ${protection}`;
+}
+
 async function loadBackups() {
   if (!token) return;
-  const backups = await api("/api/v1/backups");
+  const [backups, receipt] = await Promise.all([
+    api("/api/v1/backups"),
+    backupTerminal.load(globalThis.localStorage, backupServerContext).catch(() => null),
+  ]);
+  rememberedRestoreChoices = backupSelection.choices(backups, receipt);
+  renderRestoreChoices(rememberedRestoreChoices);
   const list = $("[data-backups-list]");
   list.replaceChildren();
   backups.forEach((backup) => {
     const item = document.createElement("li");
-    const latest = backup.latestSnapshotId ? `latest ${backup.latestSnapshotId}` : "no local snapshot";
-    item.textContent = `${backup.name} — ${latest}; ${backup.snapshotCount} retained; ${backup.selectedProviderIds.length} explicitly selected providers`;
+    item.textContent = backupSummaryCopy(backup);
+    if (backup.latestSnapshotId) {
+      const actions = document.createElement("div");
+      actions.className = "button-row";
+      const verifyButton = document.createElement("button");
+      verifyButton.type = "button";
+      verifyButton.className = "secondary";
+      verifyButton.dataset.backupVerify = "";
+      verifyButton.textContent = "Verify backup";
+      verifyButton.setAttribute("aria-label", `Verify ${backup.name}`);
+      verifyButton.disabled = verificationInFlight;
+      const verificationStatus = document.createElement("p");
+      verificationStatus.setAttribute("role", "status");
+      verificationStatus.setAttribute("aria-live", "polite");
+      verifyButton.addEventListener("click", () => verifyBackup(backup, verificationStatus, verifyButton));
+      actions.append(verifyButton);
+      item.append(actions, verificationStatus);
+    }
     list.append(item);
   });
   $("[data-backups-empty]").hidden = backups.length > 0;
   if (backups.length === 0) $("[data-backups-empty]").textContent = "No remembered backups on this node.";
+}
+
+function restoreIdentifierInputs() {
+  const form = $("[data-restore-preview]");
+  return {
+    backupId: form.elements.namedItem("backupId"),
+    snapshotId: form.elements.namedItem("snapshotId"),
+  };
+}
+
+function invalidateRestorePreview() {
+  restorePreview.invalidate();
+  activeRestorePreviewRevision = 0;
+  const previous = restorePlan;
+  clearRestorePreview();
+  return previous;
+}
+
+function discardRestorePreviewForChangedInput() {
+  const previous = invalidateRestorePreview();
+  if (previous) {
+    void restore.discard(api, previous).catch((error) => fail(error));
+  }
+}
+
+function restoreChoiceHelp(choice = null) {
+  const help = $("[data-restore-choice-help]");
+  help.textContent = choice === null
+    ? (rememberedRestoreChoices.length === 0
+      ? "No completed remembered backups are available. Open Manual recovery only when you have exact identifiers."
+      : "Choose a completed backup to use its latest snapshot, or open Manual recovery when you have exact identifiers.")
+    : `${choice.label}. ${choice.detail}`;
+}
+
+function renderRestoreChoices(choices) {
+  const select = $("[data-restore-choice]");
+  const selectedKey = select.value;
+  select.replaceChildren();
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = choices.length === 0 ? "No completed backups available" : "Choose a completed backup";
+  select.append(placeholder);
+  for (const choice of choices) {
+    const option = document.createElement("option");
+    option.value = choice.key;
+    option.textContent = choice.label;
+    select.append(option);
+  }
+  select.disabled = choices.length === 0;
+  const preserved = choices.find((choice) => choice.key === selectedKey) ?? null;
+  if (preserved !== null) {
+    select.value = preserved.key;
+    restoreChoiceHelp(preserved);
+    return;
+  }
+  select.value = "";
+  restoreChoiceHelp();
+  if (selectedKey !== "") {
+    const identifiers = restoreIdentifierInputs();
+    identifiers.backupId.value = "";
+    identifiers.snapshotId.value = "";
+    discardRestorePreviewForChangedInput();
+  }
+}
+
+async function verifyBackup(backup, status, trigger) {
+  if (!requireUnlocked() || verificationInFlight) return;
+  verificationInFlight = true;
+  const list = $("[data-backups-list]");
+  list.setAttribute("aria-busy", "true");
+  document.querySelectorAll("[data-backup-verify]").forEach((button) => { button.disabled = true; });
+  status.textContent = "Checking this backup and its selected copies…";
+  try {
+    const result = await backupVerification.verify(api, backup);
+    status.textContent = result.summary;
+    say(result.summary, !result.intact);
+  } catch (error) {
+    status.textContent = errorCopy.describe(error).summary;
+    fail(error);
+  } finally {
+    verificationInFlight = false;
+    list.setAttribute("aria-busy", "false");
+    document.querySelectorAll("[data-backup-verify]").forEach((button) => { button.disabled = false; });
+    // Disabling the active control can move keyboard focus to the page body.
+    // Restore it only if the user has not moved elsewhere while waiting.
+    if (trigger.isConnected && document.activeElement === document.body) trigger.focus();
+  }
 }
 
 function formatBytes(bytes) {
@@ -631,24 +1389,76 @@ function selected(form, name) { return [...form.querySelectorAll(`[name="${name}
 function randomId(prefix) { return `${prefix}-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`; }
 function display(value) { return JSON.stringify(value, null, 2); }
 
-function renderRestorePage(page) {
+function updateAutomaticBackupName() {
+  const form = $("[data-backup-form]");
+  const field = form.elements.namedItem("displayName");
+  if (field.dataset.automaticName !== "true" && field.value.trim() !== "") return;
+  field.value = backupSelection.defaultBackupName(form.elements.namedItem("sourceRoot").value);
+  field.dataset.automaticName = "true";
+}
+
+function clearGeneratedSnapshotId() {
+  const field = $("[data-backup-form]").elements.namedItem("snapshotId");
+  if (field.dataset.generatedSnapshot === "true") {
+    field.value = "";
+    delete field.dataset.generatedSnapshot;
+  }
+}
+
+function renderRestorePage(page, entries) {
   restorePage = page;
   const first = page.entries.length === 0 ? 0 : page.entryOffset + 1;
   const last = page.entryOffset + page.entries.length;
   $("[data-restore-summary]").textContent = restorePlan.totalEntries
-    + " entries are signed for " + restorePlan.authorizedRoot
+    + " items will be handled in " + restorePlan.authorizedRoot
     + ". Showing " + first + "–" + last + ".";
-  $("[data-restore-plan]").textContent = display(page.entries);
+  const list = $("[data-restore-plan]");
+  list.replaceChildren();
+  entries.forEach((entry) => {
+    const item = document.createElement("li");
+    const action = document.createElement("strong");
+    action.textContent = entry.action;
+    const destinationLabel = document.createElement("span");
+    destinationLabel.textContent = " Destination: ";
+    const destination = document.createElement("code");
+    destination.textContent = entry.destination;
+    item.append(action, destinationLabel, destination);
+    if (entry.renamed) {
+      const sourceLabel = document.createElement("span");
+      sourceLabel.textContent = " Original backup path: ";
+      const source = document.createElement("code");
+      source.textContent = entry.source;
+      item.append(sourceLabel, source);
+    }
+    list.append(item);
+  });
   $("[data-restore-previous]").disabled = restoreCursorHistory.length === 0;
   $("[data-restore-next]").disabled = page.nextCursor === null;
 }
 
 async function loadRestorePage(cursor, rememberCurrent = false) {
-  if (!restorePlan) return;
-  const page = await restore.page(api, restorePlan, cursor, 100);
+  const plan = restorePlan;
+  const revision = activeRestorePreviewRevision;
+  if (!plan || revision === 0) return;
+  let page;
+  try {
+    page = await restore.page(api, plan, cursor, 100);
+  } catch (error) {
+    if (restorePreview.isCurrentPlan(revision, plan, restorePlan)) throw error;
+    return;
+  }
+  if (!restorePreview.isCurrentPlan(revision, plan, restorePlan)) return;
+  let entries;
+  try {
+    entries = restore.describePage(page, plan.authorizedRoot);
+  } catch (error) {
+    const previous = invalidateRestorePreview();
+    if (previous) void restore.discard(api, previous).catch((discardError) => fail(discardError));
+    throw error;
+  }
   if (rememberCurrent) restoreCursorHistory.push(restoreCursor);
   restoreCursor = cursor;
-  renderRestorePage(page);
+  renderRestorePage(page, entries);
 }
 
 function clearRestorePreview() {
@@ -767,6 +1577,7 @@ async function startNetworkPairing(candidateAddress) {
 }
 
 $("[data-token-form]").addEventListener("submit", async (event) => {
+  closeRecoveryFiles();
   event.preventDefault();
   token = formData(event.currentTarget).get("token").trim();
   try {
@@ -774,17 +1585,77 @@ $("[data-token-form]").addEventListener("submit", async (event) => {
     await loadBackups();
     await loadProviders();
     await refreshNetworkPairings();
+    try { await initializeFolderSync(); }
+    catch (error) { clearFolderSyncAccess(); renderFolderError(error); }
     const resumedBackup = await resumeBackupTerminalReceipt();
     if (!resumedBackup) say("Console unlocked for this tab only.");
   }
-  catch (error) { token = ""; fail(error); }
+  catch (error) { token = ""; clearFolderSyncAccess(); fail(error); }
 });
 
 $("[data-refresh]").addEventListener("click", async () => {
   await loadStatus();
   if (!token) return;
-  try { await Promise.all([loadBackups(), loadProviders()]); }
+  try { await Promise.all([loadBackups(), loadProviders(), loadFolders(false)]); }
   catch (error) { fail(error); }
+});
+$("[data-folders-refresh]").addEventListener("click", async () => {
+  if (!requireUnlocked()) return;
+  syncFolderPolling(false);
+  await loadFolders(true);
+});
+$("[data-folders-retry-service]").addEventListener("click", () => {
+  void runFolderMutation(() => folderController.retryService(), "Folder sync retry started.");
+});
+$("[data-folder-offer-form]").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (!requireUnlocked()) return;
+  // DOM Event.currentTarget becomes null once dispatch returns. Keep the form
+  // itself across the async offer so a successful response can reset it.
+  const form = event.currentTarget;
+  const data = formData(form);
+  const body = {
+    peerId: data.get("peerId"),
+    folderId: crypto.randomUUID(),
+    label: data.get("label"),
+    selectedRoot: data.get("selectedRoot"),
+    linkPolicy: {
+      propagateSourceDeletions: data.get("propagateSourceDeletions") === "on",
+      restoreLocalDeletions: data.get("restoreLocalDeletions") === "on",
+    },
+  };
+  if ((body.linkPolicy.propagateSourceDeletions || body.linkPolicy.restoreLocalDeletions)
+    && !globalThis.confirm(`${folderSync.policyExplanation(body.linkPolicy)} Create this link?`)) return;
+  void runFolderMutation(async () => {
+    await folderController.sendOffer(body);
+    form.reset();
+    form.elements.selectedRoot.value = "/sync";
+  }, "Folder offer sent to the confirmed paired device.");
+});
+$("[data-folder-offer-retry]").addEventListener("click", () => {
+  void runFolderMutation(() => folderController.retryPendingOffer(), "Saved folder offer sent.");
+});
+$("[data-folder-offer-discard]").addEventListener("click", () => {
+  if (!globalThis.confirm("Discard this saved retry? This does not remove an offer that may already have reached the server.")) return;
+  try {
+    folderController.discardPendingOffer();
+    renderPendingFolderOffer();
+    say("Saved folder-offer retry discarded.");
+  } catch (error) { fail(error); }
+});
+$('[data-link-settings-retry]').addEventListener("click", () => {
+  void runFolderMutation(
+    () => folderController.retryPendingLinkSettings(),
+    "Saved link-settings request reconciled with the server.",
+  );
+});
+$('[data-link-settings-discard]').addEventListener("click", () => {
+  if (!globalThis.confirm("Discard this exact retry only after reviewing current link settings. The request may already have reached the server. Continue?")) return;
+  try {
+    folderController.discardPendingLinkSettings();
+    renderPendingLinkSettings();
+    say("Saved link-settings retry discarded. Current server settings were not changed.");
+  } catch (error) { fail(error); }
 });
 $("[data-backups-refresh]").addEventListener("click", async () => {
   try { await loadBackups(); say("Backup list refreshed from the node."); }
@@ -796,6 +1667,14 @@ $("[data-providers-refresh]").addEventListener("click", async () => {
   catch (error) { fail(error); }
 });
 tabFlow.install(document);
+document.querySelectorAll("[data-tab], [data-tool-panel]").forEach((tab) => {
+  tab.addEventListener("click", () => queueMicrotask(() => syncFolderPolling(true)));
+  tab.addEventListener("keydown", () => queueMicrotask(() => syncFolderPolling(true)));
+});
+document.addEventListener("visibilitychange", () => syncFolderPolling(true));
+setInterval(() => {
+  if (folderPollingEligible()) void loadFolders(false);
+}, 5000);
 
 $("[data-network-discover]").addEventListener("click", async () => {
   if (!requireUnlocked()) return;
@@ -953,18 +1832,30 @@ function withBackupTerminalLock(callback) {
 
 function newBackupAttempt(form) {
   const data = formData(form);
+  const snapshotField = form.elements.namedItem("snapshotId");
+  const suppliedSnapshot = String(data.get("snapshotId") ?? "").trim();
+  const snapshotId = suppliedSnapshot || backupSelection.nextSnapshotId(() => crypto.randomUUID());
+  if (suppliedSnapshot === "") snapshotField.dataset.generatedSnapshot = "true";
+  snapshotField.value = snapshotId;
   return backupTerminal.requireAttempt({
     sourceRoot: data.get("sourceRoot"),
     displayName: data.get("displayName"),
-    snapshotId: data.get("snapshotId"),
+    snapshotId,
     selectedProviderIds: pairing.providers.selectedIds(providerConnections, selected(form, "providers")),
     // Retry reuses this ID if a response was interrupted after acceptance.
     jobId: randomId("backup"),
   });
 }
 
-function backupCompletionCopy(result) {
-  return `Backup complete: ${result.backupId}, ${result.entries} entries, ${result.selectedProviders} explicitly selected providers.`;
+function backupCompletionCopy(result, attempt) {
+  const name = typeof attempt?.displayName === "string" && attempt.displayName.length > 0
+    ? attempt.displayName
+    : "Backup";
+  const items = `${result.entries} item${result.entries === 1 ? "" : "s"}`;
+  const protection = result.selectedProviders === 0
+    ? "This is a local-only backup, so it does not protect against losing this device."
+    : `${result.selectedProviders} selected extra backup device${result.selectedProviders === 1 ? "" : "s"} received a copy.`;
+  return `Backup complete: ${name} — ${items}. ${protection}`;
 }
 
 async function requestBackupTerminalResult(attempt) {
@@ -994,7 +1885,7 @@ async function acknowledgeBackupTerminalReceipt(receipt = null) {
     receipt = await backupTerminal.load(globalThis.localStorage, backupServerContext);
   }
   if (receipt === null || receipt.phase !== "receipt") return false;
-  const complete = backupCompletionCopy(receipt.result);
+  const complete = backupCompletionCopy(receipt.result, receipt.attempt);
   // The decoded result is already rendered below before this function is
   // called. Only now may the terminal server result be acknowledged.
   setBackupSubmissionState("acknowledging", `${complete} Confirming this receipt with the backup server…`);
@@ -1004,6 +1895,7 @@ async function acknowledgeBackupTerminalReceipt(receipt = null) {
       backupServerContext,
       apiResponse,
     );
+    clearGeneratedSnapshotId();
     setBackupSubmissionState("complete", `${complete} Receipt confirmed.`);
     await refreshBackupsAfterTerminalResult(complete);
     return true;
@@ -1032,7 +1924,7 @@ async function resumeBackupTerminalReceipt() {
         return true;
       }
       failedBackupAttempt = null;
-      const complete = backupCompletionCopy(pending.result);
+      const complete = backupCompletionCopy(pending.result, pending.attempt);
       setBackupSubmissionState("complete", `${complete} Resuming receipt confirmation…`);
       say(`${complete} Resuming receipt confirmation.`);
       await acknowledgeBackupTerminalReceipt(pending);
@@ -1059,7 +1951,7 @@ async function submitBackupLocked(attempt) {
     attempt,
     requestBackupTerminalResult,
   );
-  const complete = backupCompletionCopy(receipt.result);
+  const complete = backupCompletionCopy(receipt.result, receipt.attempt);
   setBackupSubmissionState("complete", complete);
   say(complete);
   // The exclusive same-origin lock remains held while the checked result is
@@ -1113,6 +2005,14 @@ $("[data-backup-form]").addEventListener("submit", async (event) => {
   try { await submitBackup(newBackupAttempt(event.currentTarget)); }
   catch (error) { fail(error); }
 });
+$("[data-backup-form]").elements.namedItem("sourceRoot").addEventListener("input", updateAutomaticBackupName);
+$("[data-backup-form]").elements.namedItem("displayName").addEventListener("input", (event) => {
+  event.currentTarget.dataset.automaticName = "false";
+});
+$("[data-backup-form]").elements.namedItem("snapshotId").addEventListener("input", (event) => {
+  delete event.currentTarget.dataset.generatedSnapshot;
+});
+updateAutomaticBackupName();
 $("[data-backup-retry]").addEventListener("click", async () => {
   if (backupSubmissionInFlight) return;
   try {
@@ -1135,19 +2035,41 @@ $("[data-backup-retry]").addEventListener("click", async () => {
 
 $("[data-restore-preview]").addEventListener("submit", async (event) => {
   event.preventDefault(); const data = formData(event.currentTarget);
+  const previewRevision = restorePreview.begin();
   let candidate = null;
   try {
     const previous = restorePlan;
-    candidate = restore.requireReference(await api("/api/v1/restores/preview", { method: "POST", body: JSON.stringify({ backupId: data.get("backupId"), snapshotId: data.get("snapshotId"), targetRoot: data.get("targetRoot"), conflictPolicy: data.get("conflictPolicy"), jobId: randomId("restore") }) }));
+    const selectedBackup = backupSelection.resolve(rememberedRestoreChoices, data.get("rememberedRestore"), {
+      backupId: data.get("backupId"), snapshotId: data.get("snapshotId"),
+    });
+    candidate = restore.requireReference(await api("/api/v1/restores/preview", { method: "POST", body: JSON.stringify({ backupId: selectedBackup.backupId, snapshotId: selectedBackup.snapshotId, targetRoot: data.get("targetRoot"), conflictPolicy: data.get("conflictPolicy"), jobId: randomId("restore") }) }));
+    if (await restorePreview.discardIfStale(previewRevision, candidate, (plan) => restore.discard(api, plan))) return;
     const firstPage = await restore.page(api, candidate, null, 100);
-    restorePlan = candidate;
-    restoreCursor = null; restoreCursorHistory = [];
-    renderRestorePage(firstPage);
+    if (await restorePreview.discardIfStale(previewRevision, candidate, (plan) => restore.discard(api, plan))) return;
+    const firstEntries = restore.describePage(firstPage, candidate.authorizedRoot);
     if (previous) await restore.discard(api, previous).catch(() => {});
+    if (await restorePreview.discardIfStale(previewRevision, candidate, (plan) => restore.discard(api, plan))) return;
+    restorePlan = candidate;
+    activeRestorePreviewRevision = previewRevision;
+    restoreCursor = null; restoreCursorHistory = [];
+    renderRestorePage(firstPage, firstEntries);
     $("[data-restore-result]").hidden = false; $("[data-restore-confirm]").checked = false; $("[data-restore-execute]").disabled = true;
     say("Preview complete. Review the target and conflict actions before authorizing the write.");
   } catch (error) { if (candidate) await restore.discard(api, candidate).catch(() => {}); fail(error); }
 });
+$("[data-restore-choice]").addEventListener("change", (event) => {
+  const selectedChoice = rememberedRestoreChoices.find((choice) => choice.key === event.currentTarget.value) ?? null;
+  const identifiers = restoreIdentifierInputs();
+  identifiers.backupId.value = selectedChoice?.backupId ?? "";
+  identifiers.snapshotId.value = selectedChoice?.snapshotId ?? "";
+  restoreChoiceHelp(selectedChoice);
+  discardRestorePreviewForChangedInput();
+});
+const restoreForm = $("[data-restore-preview]");
+for (const name of ["backupId", "snapshotId", "targetRoot"]) {
+  restoreForm.elements.namedItem(name).addEventListener("input", discardRestorePreviewForChangedInput);
+}
+restoreForm.elements.namedItem("conflictPolicy").addEventListener("change", discardRestorePreviewForChangedInput);
 $("[data-restore-next]").addEventListener("click", async () => {
   if (!restorePage?.nextCursor) return;
   try { await loadRestorePage(restorePage.nextCursor, true); } catch (error) { fail(error); }
@@ -1158,15 +2080,124 @@ $("[data-restore-previous]").addEventListener("click", async () => {
   try { await loadRestorePage(cursor); } catch (error) { fail(error); }
 });
 $("[data-restore-discard]").addEventListener("click", async () => {
-  const plan = restorePlan;
-  clearRestorePreview();
+  const plan = invalidateRestorePreview();
   try { await restore.discard(api, plan); say("Restore preview discarded without writing files."); } catch (error) { fail(error); }
 });
-$("[data-restore-confirm]").addEventListener("change", (event) => { $("[data-restore-execute]").disabled = !event.currentTarget.checked || !restorePlan; });
+$("[data-restore-confirm]").addEventListener("change", (event) => { $("[data-restore-execute]").disabled = !event.currentTarget.checked || !restorePlan || restoreExecutionInFlight; });
 $("[data-restore-execute]").addEventListener("click", async () => {
-  if (!restorePlan) return;
-  try { const plan = restorePlan; const result = await restore.execute(api, plan); await restore.discard(api, plan).catch(() => {}); clearRestorePreview(); say(`Restore complete: ${result.filesRestored} files, ${result.directoriesCreated} directories.`); }
+  if (!restorePlan || restoreExecutionInFlight) return;
+  const button = $("[data-restore-execute]");
+  const plan = restorePlan;
+  restoreExecutionInFlight = true;
+  button.disabled = true;
+  try {
+    restorePreview.invalidate();
+    activeRestorePreviewRevision = 0;
+    const result = await restore.execute(api, plan);
+    await restore.discard(api, plan).catch(() => {});
+    if (restorePlan === plan) clearRestorePreview();
+    say(`Restore complete: ${result.filesRestored} file${result.filesRestored === 1 ? "" : "s"} restored, ${result.directoriesCreated} folder${result.directoriesCreated === 1 ? "" : "s"} created.`);
+  }
   catch (error) { fail(error); }
+  finally {
+    restoreExecutionInFlight = false;
+    if (restorePlan === plan) button.disabled = !$("[data-restore-confirm]").checked;
+  }
+});
+
+function closeRecoveryFiles() {
+  recoveryGeneration += 1;
+  recoverySession.dispose();
+  $("[data-recovery-downloads]").hidden = true;
+  $("[data-recovery-save-status]").textContent = "";
+  $("[data-recovery-export]").reset();
+  $("[data-recovery-create]").disabled = false;
+  $("[data-recovery-kit]").disabled = true;
+  $("[data-recovery-code]").disabled = true;
+}
+
+function recoveryApi(path, options) {
+  return api(path, options, recovery.readJson);
+}
+
+$("[data-recovery-export]").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (formData(event.currentTarget).get("confirmed") !== "on") return;
+  const generation = recoveryGeneration;
+  $("[data-recovery-create]").disabled = true;
+  $("[data-recovery-downloads]").hidden = false;
+  $("[data-recovery-save-status]").textContent = "Preparing recovery files…";
+  try {
+    if (!await recoverySession.generate(recoveryApi) || generation !== recoveryGeneration) return;
+    $("[data-recovery-kit]").disabled = false;
+    $("[data-recovery-code]").disabled = false;
+    $("[data-recovery-save-status]").textContent = "Ready. Save both files before closing this panel.";
+  } catch (error) {
+    if (generation === recoveryGeneration) { closeRecoveryFiles(); fail(error); }
+  }
+});
+
+function saveRecoveryBytes(bytes, filename, mime) {
+  const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
+  try {
+    const link = Object.assign(document.createElement("a"), { href: url, download: filename });
+    document.body.append(link);
+    try { link.click(); } finally { link.remove(); }
+  } finally {
+    // Give the browser time to acquire the download; never keep the URL around
+    // as session state or put secret bytes into document text/attributes.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+}
+
+for (const [kind, filename, mime] of [
+  ["kit", "covalent.covalent-recovery", "application/octet-stream"],
+  ["code", "covalent.covalent-recovery-key", "text/plain"],
+]) {
+  $("[data-recovery-" + kind + "]").addEventListener("click", () => {
+    try {
+      recoverySession.download(kind, (bytes) => saveRecoveryBytes(bytes, filename, mime));
+      $("[data-recovery-save-status]").textContent = "Download requested. Check that both the recovery file and recovery code were saved successfully.";
+    } catch (error) { fail(error); }
+  });
+}
+$("[data-recovery-close]").addEventListener("click", () => {
+  closeRecoveryFiles();
+  $("[data-recovery-create]").focus();
+  say("Recovery files cleared from this tab. Keep any downloaded copies safe.");
+});
+globalThis.addEventListener("pagehide", closeRecoveryFiles);
+
+async function loadRecoveryStatus(retry = false) {
+  if (recoveryStatusInFlight) return;
+  recoveryStatusInFlight = true;
+  const buttons = [$("[data-recovery-refresh]"), $("[data-recovery-retry] button")];
+  buttons.forEach((button) => { button.disabled = true; });
+  try {
+    const status = retry
+      ? await recoveryApi("/api/v1/recovery/retry", { method: "POST", body: JSON.stringify({ confirmed: true }) })
+      : await recoveryApi("/api/v1/recovery/status");
+    const result = recovery.status(status);
+    $("[data-recovery-status]").textContent = result.summary + " " + result.detail;
+    $("[data-recovery-warning]").textContent = result.warning;
+    $("[data-recovery-warning]").hidden = !result.warning;
+    $("[data-recovery-retry]").hidden = !result.canRetry;
+    $("[data-recovery-retry]").reset();
+    if (retry) await loadBackups();
+  } catch (error) {
+    $("[data-recovery-status]").textContent = "Recovery progress could not be checked. Try again when this server is available.";
+    $("[data-recovery-warning]").hidden = true;
+    $("[data-recovery-retry]").hidden = true;
+    fail(error);
+  } finally {
+    recoveryStatusInFlight = false;
+    buttons.forEach((button) => { button.disabled = false; });
+  }
+}
+$("[data-recovery-refresh]").addEventListener("click", () => { void loadRecoveryStatus(); });
+$("[data-recovery-retry]").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (formData(event.currentTarget).get("confirmed") === "on") void loadRecoveryStatus(true);
 });
 
 $("[data-settings-export]").addEventListener("click", async () => {

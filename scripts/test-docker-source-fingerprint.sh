@@ -18,8 +18,13 @@ mkdir -p \
   "$fixture/crates/example/src" \
   "$fixture/packaging/web" \
   "$fixture/packaging/docker/caddy" \
+  "$fixture/packaging/docker/alpine/licenses" \
+  "$fixture/packaging/sync-engine" \
+  "$fixture/docs/licenses/sync-engine" \
+  "$fixture/scripts" \
   "$fixture/target"
 printf 'target\n' > "$fixture/.dockerignore"
+printf 'project license\n' > "$fixture/LICENSE"
 printf '[workspace]\nmembers = []\n' > "$fixture/Cargo.toml"
 printf '# lock\n' > "$fixture/Cargo.lock"
 printf '[toolchain]\nchannel = "1.97.1"\n' > "$fixture/rust-toolchain.toml"
@@ -30,6 +35,16 @@ printf '{}\n' > "$fixture/packaging/docker/Caddyfile"
 printf '#!/bin/sh\n' > "$fixture/packaging/docker/entrypoint.sh"
 printf 'module caddy\n' > "$fixture/packaging/docker/caddy/go.mod"
 printf 'package main\n' > "$fixture/packaging/docker/caddy/main.go"
+printf 'int main(void) { return 0; }\n' > "$fixture/packaging/sync-engine/engine-guardian.c"
+printf '#!/bin/sh\n' > "$fixture/scripts/build-linux-sync-engine.sh"
+printf '#!/usr/bin/env python3\n' > "$fixture/scripts/collect-caddy-distribution-evidence.py"
+printf '#!/usr/bin/env python3\n' > "$fixture/scripts/collect-alpine-runtime-evidence.py"
+printf '{}\n' > "$fixture/packaging/docker/alpine/runtime-source-lock.json"
+printf '{}\n' > "$fixture/packaging/docker/alpine/packaged-evidence-lock.json"
+printf 'license\n' > "$fixture/packaging/docker/alpine/licenses/MIT-terms.txt"
+printf '#!/usr/bin/env python3\n' > "$fixture/scripts/collect-go-target-license-inventory.py"
+printf '#!/usr/bin/env python3\n' > "$fixture/scripts/collect-sync-engine-notices.py"
+printf 'go license\n' > "$fixture/docs/licenses/sync-engine/Go-1.26.7-LICENSE.txt"
 git -C "$fixture" add .
 git -C "$fixture" -c user.name=Covalent -c user.email=release@covalent.invalid \
   commit -qm fixture
@@ -85,6 +100,28 @@ if cmp -s "$fixture/web-before" "$fixture/web-after"; then
   echo "Docker fingerprint missed an untracked nonignored web build input" >&2
   exit 1
 fi
+
+# Every new native producer input must invalidate a cached image.
+for input in \
+  LICENSE \
+  packaging/sync-engine/engine-guardian.c \
+  docs/licenses/sync-engine/Go-1.26.7-LICENSE.txt \
+  scripts/build-linux-sync-engine.sh \
+  scripts/collect-caddy-distribution-evidence.py \
+  scripts/collect-alpine-runtime-evidence.py \
+  packaging/docker/alpine/runtime-source-lock.json \
+  packaging/docker/alpine/packaged-evidence-lock.json \
+  packaging/docker/alpine/licenses/MIT-terms.txt \
+  scripts/collect-go-target-license-inventory.py \
+  scripts/collect-sync-engine-notices.py; do
+  fingerprint > "$fixture/engine-before"
+  printf '# changed\n' >> "$fixture/$input"
+  fingerprint > "$fixture/engine-after"
+  if cmp -s "$fixture/engine-before" "$fixture/engine-after"; then
+    echo "Docker fingerprint missed a maintained engine build input" >&2
+    exit 1
+  fi
+done
 
 # Ignored build/cache output must not make an image stale.
 printf 'one\n' > "$fixture/target/cache"

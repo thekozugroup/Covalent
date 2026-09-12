@@ -1,6 +1,7 @@
 import groovy.json.JsonOutput
 import org.gradle.api.GradleException
 import java.security.MessageDigest
+import java.util.zip.ZipFile
 
 plugins {
     id("com.android.application")
@@ -14,6 +15,10 @@ val releaseKeystorePath = releaseSecret("COVALENT_ANDROID_KEYSTORE_PATH")
 val releaseStorePassword = releaseSecret("COVALENT_ANDROID_STORE_PASSWORD")
 val releaseKeyAlias = releaseSecret("COVALENT_ANDROID_KEY_ALIAS")
 val releaseKeyPassword = releaseSecret("COVALENT_ANDROID_KEY_PASSWORD")
+val syncthingSourcePath = providers.gradleProperty("syncthingSourceDir")
+    .orElse(providers.environmentVariable("SYNCTHING_SOURCE_DIR"))
+val syncthingSourceDir = syncthingSourcePath.orNull?.let(::file)
+val syncEngineGeneratedRoot = layout.buildDirectory.dir("generated/syncEngine")
 val releaseSigningReady = listOf(
     releaseKeystorePath,
     releaseStorePassword,
@@ -69,6 +74,11 @@ android {
         targetSdk = 37
         versionCode = 2000
         versionName = "0.2.0"
+        buildConfigField(
+            "boolean",
+            "COVALENT_SYNC_ENGINE_PACKAGED",
+            (syncthingSourceDir != null).toString(),
+        )
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -117,11 +127,27 @@ android {
     packaging {
         // Preserve dependency license text in distributable artifacts.
         resources.merges += setOf("/META-INF/AL2.0", "/META-INF/LGPL2.1")
+        jniLibs {
+            // The maintained engine and its guardian execute directly from the
+            // installer-owned nativeLibraryDir. They are never copied to writable storage.
+            useLegacyPackaging = true
+            // The JNI linker already uses --strip-all. Keep AGP from changing the
+            // final-link bytes recorded by the native provenance collector.
+            keepDebugSymbols += "**/libcovalent_android_jni.so"
+            keepDebugSymbols += "**/libsyncthing.so"
+            keepDebugSymbols += "**/libengineguardian.so"
+        }
     }
 
     sourceSets {
         getByName("main").jniLibs.directories.add(
             layout.buildDirectory.dir("generated/jniLibs").get().asFile.absolutePath,
+        )
+        getByName("main").jniLibs.directories.add(
+            syncEngineGeneratedRoot.get().dir("jniLibs").asFile.absolutePath,
+        )
+        getByName("main").assets.directories.add(
+            syncEngineGeneratedRoot.get().dir("assets").asFile.absolutePath,
         )
     }
 
@@ -174,6 +200,11 @@ val buildAndroidJni = tasks.register<Exec>("buildAndroidJni") {
     group = "build"
     description = "Builds pinned Android arm64 and x86_64 JNI libraries with 16 KiB ELF alignment."
     workingDir = covalentRepoRoot
+    doFirst {
+        val generatedRoot = layout.buildDirectory.dir("generated/jniLibs").get().asFile
+        project.delete(generatedRoot)
+        check(generatedRoot.parentFile.mkdirs() || generatedRoot.parentFile.isDirectory)
+    }
     commandLine("./scripts/build-android-jni.sh", layout.buildDirectory.dir("generated/jniLibs").get().asFile.absolutePath)
     // The JNI archive links the node, core, and protocol crates too. Tracking
     // only the bridge crate made Gradle eligible to reuse native output after a
@@ -184,12 +215,59 @@ val buildAndroidJni = tasks.register<Exec>("buildAndroidJni") {
         covalentRepoRoot.resolve("Cargo.lock"),
         covalentRepoRoot.resolve("rust-toolchain.toml"),
         covalentRepoRoot.resolve("scripts/build-android-jni.sh"),
+        covalentRepoRoot.resolve("scripts/collect-android-native-link-provenance.py"),
         covalentRepoRoot.resolve("crates/covalent-android-jni"),
         covalentRepoRoot.resolve("crates/covalent-core"),
         covalentRepoRoot.resolve("crates/covalent-node"),
         covalentRepoRoot.resolve("crates/covalent-protocol"),
     )
     outputs.dir(layout.buildDirectory.dir("generated/jniLibs"))
+    // Recheck the external pinned NDK, its exact notices, and final link evidence.
+    outputs.upToDateWhen { false }
+}
+
+val buildAndroidSyncEngine = tasks.register<Exec>("buildAndroidSyncEngine") {
+    group = "build"
+    description = "Builds the exact Syncthing v2.1.3 worker and reviewed guardian for Android."
+    workingDir = covalentRepoRoot
+    doFirst {
+        val generatedRoot = syncEngineGeneratedRoot.get().asFile
+        project.delete(generatedRoot)
+        check(generatedRoot.parentFile.mkdirs() || generatedRoot.parentFile.isDirectory)
+    }
+    val checkedSource = syncthingSourceDir
+    if (checkedSource == null) {
+        commandLine("false")
+        doFirst {
+            throw GradleException(
+                "Set -PsyncthingSourceDir=/absolute/path or SYNCTHING_SOURCE_DIR to the " +
+                    "exact official Syncthing v2.1.3 checkout.",
+            )
+        }
+    } else {
+        commandLine(
+            covalentRepoRoot.resolve("scripts/build-android-sync-engine.sh"),
+            checkedSource.canonicalPath,
+            syncEngineGeneratedRoot.get().asFile.canonicalPath,
+        )
+        inputs.files(
+            fileTree(checkedSource) {
+                exclude(".git/**", "**/gui.files.go")
+            },
+            covalentRepoRoot.resolve("scripts/build-android-sync-engine.sh"),
+            covalentRepoRoot.resolve("scripts/android-native-budgets.sh"),
+            covalentRepoRoot.resolve("scripts/collect-go-target-license-inventory.py"),
+            covalentRepoRoot.resolve("scripts/collect-sync-engine-notices.py"),
+            covalentRepoRoot.resolve("scripts/collect-android-native-link-provenance.py"),
+            covalentRepoRoot.resolve("scripts/android-go-link-wrapper.sh"),
+            covalentRepoRoot.resolve("packaging/sync-engine/engine-guardian.c"),
+            covalentRepoRoot.resolve("docs/licenses/sync-engine/OFL-1.1.txt"),
+            covalentRepoRoot.resolve("LICENSE"),
+        )
+    }
+    outputs.dir(syncEngineGeneratedRoot)
+    // Every requested packaging run must recheck source, toolchain, ELF policy and hashes.
+    outputs.upToDateWhen { false }
 }
 
 // `sourceSets.main.jniLibs.directories` above takes a plain path string, so
@@ -201,12 +279,31 @@ val buildAndroidJni = tasks.register<Exec>("buildAndroidJni") {
 // every debug build, preserving the existing opt-in `covalentBuildNative`
 // behaviour and the unconditional `assembleRelease` dependency below.
 tasks.matching { it.name.endsWith("JniLibFolders") }.configureEach {
-    mustRunAfter(buildAndroidJni)
+    mustRunAfter(buildAndroidJni, buildAndroidSyncEngine)
+}
+// Assets use the same generated-root pattern. Keep every variant's merge after
+// the producer whenever the opt-in preBuild edge or a release task puts both
+// in the graph; this also makes Gradle's generated-directory relationship
+// explicit for AGP's validation.
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
+    mustRunAfter(buildAndroidSyncEngine)
 }
 
-tasks.matching { it.name == "assembleRelease" }.configureEach { dependsOn(buildAndroidJni) }
+// Lint model writers also consume the generated assets/JNI source roots.
+// Ordering is conditional on the producers already being in the graph, so
+// ordinary source-only debug lint does not require native build toolchains.
+tasks.matching { it.name.contains("lint", ignoreCase = true) }.configureEach {
+    mustRunAfter(buildAndroidJni, buildAndroidSyncEngine)
+}
+
+tasks.matching { it.name == "assembleRelease" || it.name == "bundleRelease" }.configureEach {
+    dependsOn(buildAndroidJni, buildAndroidSyncEngine)
+}
 tasks.matching { it.name == "preBuild" }.configureEach {
     if (providers.gradleProperty("covalentBuildNative").orNull == "true") dependsOn(buildAndroidJni)
+    if (providers.gradleProperty("covalentBuildSyncEngine").orNull == "true") {
+        dependsOn(buildAndroidSyncEngine)
+    }
 }
 
 val generateAndroidSbom = tasks.register("generateAndroidSbom") {
@@ -234,6 +331,40 @@ val generateAndroidSbom = tasks.register("generateAndroidSbom") {
             }
             return digest.digest().joinToString("") { "%02x".format(it) }
         }
+        fun nativeObjects(file: File): List<Map<String, Any>> {
+            if (file.extension != "aar") return emptyList()
+            return ZipFile(file).use { archive ->
+                val rows = mutableListOf<Map<String, Any>>()
+                val names = mutableSetOf<String>()
+                val entries = archive.entries()
+                while (entries.hasMoreElements()) {
+                    val entry = entries.nextElement()
+                    if (entry.isDirectory || !entry.name.matches(Regex("jni/[^/]+/[^/]+\\.so"))) continue
+                    check(names.add(entry.name) && entry.size in 1..64L * 1024L * 1024L) {
+                        "Runtime dependency has malformed native entries: ${file.name}"
+                    }
+                    val digest = MessageDigest.getInstance("SHA-256")
+                    var bytes = 0L
+                    archive.getInputStream(entry).buffered().use { input ->
+                        val buffer = ByteArray(64 * 1024)
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            bytes += count
+                            check(bytes <= entry.size)
+                            digest.update(buffer, 0, count)
+                        }
+                    }
+                    check(bytes == entry.size)
+                    rows += linkedMapOf(
+                        "path" to entry.name,
+                        "bytes" to bytes,
+                        "sha256" to digest.digest().joinToString("") { "%02x".format(it) },
+                    )
+                }
+                rows.sortedBy { it.getValue("path") as String }
+            }
+        }
         val components = artifacts.map { artifact ->
             val group = artifact.moduleVersion.id.group
             val name = artifact.name
@@ -241,6 +372,7 @@ val generateAndroidSbom = tasks.register("generateAndroidSbom") {
             val license = reviewedDependencyLicense(group, name, version)
             val artifactHash = sha256(artifact.file)
             val artifactType = artifact.file.extension.ifBlank { "jar" }
+            val nativeObjects = nativeObjects(artifact.file)
             linkedMapOf<String, Any>(
                 "type" to "library",
                 "group" to group,
@@ -262,7 +394,12 @@ val generateAndroidSbom = tasks.register("generateAndroidSbom") {
                 "properties" to listOf(
                     mapOf("name" to "covalent:artifact-file", "value" to artifact.file.name),
                     mapOf("name" to "covalent:license-review", "value" to "explicit-fail-closed"),
-                ),
+                ) + nativeObjects.map { native ->
+                    mapOf(
+                        "name" to "covalent:native-object:${native.getValue("path")}",
+                        "value" to "${native.getValue("bytes")} ${native.getValue("sha256")}",
+                    )
+                },
             )
         }
         val document = linkedMapOf<String, Any>(
@@ -304,6 +441,7 @@ val generateAndroidSbom = tasks.register("generateAndroidSbom") {
                     "licenseName" to license.name,
                     "licenseText" to license.textUrl,
                     "reviewEvidence" to license.evidenceUrl,
+                    "nativeObjects" to nativeObjects(artifact.file),
                 )
             },
         )

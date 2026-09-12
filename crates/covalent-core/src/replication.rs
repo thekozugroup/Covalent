@@ -22,6 +22,15 @@ const MAXIMUM_WRITE_BATCH_BYTES: usize = 16 * 1_024 * 1_024;
 const PIPELINE_LEASE_SEGMENT_BYTES: u64 = 256 * 1_024 * 1_024;
 const PIPELINE_QUEUE_SEGMENTS: usize = 8;
 
+/// Receives recovery catalogs one at a time after reserving their serialized size.
+pub trait RecoveryCatalogSink {
+    /// Reserves memory or another bounded resource before the provider reads a catalog body.
+    fn reserve(&mut self, serialized_bytes: u64) -> Result<(), CoreError>;
+
+    /// Accepts one decoded, provider-validated recovery catalog.
+    fn accept(&mut self, capsule: RecoveryCapsule) -> Result<(), CoreError>;
+}
+
 /// Coarse provider reachability and integrity state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -176,6 +185,19 @@ pub trait ChunkProvider: Send + Sync {
             "provider does not support recovery catalogs".to_owned(),
         ))
     }
+
+    /// Visits bounded opaque catalogs without requiring one aggregate provider allocation.
+    /// Providers supporting recovery must override this and reserve before reading each body.
+    fn visit_recovery_capsules(
+        &self,
+        control: &JobControl,
+        _sink: &mut dyn RecoveryCatalogSink,
+    ) -> Result<(), CoreError> {
+        control.check()?;
+        Err(CoreError::InvalidState(
+            "provider does not support streaming recovery catalogs".to_owned(),
+        ))
+    }
 }
 
 /// Adapter exposing a local `ChunkStore` as one explicitly identified provider.
@@ -220,6 +242,14 @@ impl ChunkProvider for StoreProvider {
 
     fn list_recovery_capsules(&self) -> Result<Vec<RecoveryCapsule>, CoreError> {
         self.store.list_recovery_capsules()
+    }
+
+    fn visit_recovery_capsules(
+        &self,
+        control: &JobControl,
+        sink: &mut dyn RecoveryCatalogSink,
+    ) -> Result<(), CoreError> {
+        self.store.visit_recovery_capsules(control, sink)
     }
 }
 
@@ -289,6 +319,12 @@ impl ReplicationScheduler {
         })
     }
 
+    pub(crate) fn recovery_providers(
+        &self,
+    ) -> impl Iterator<Item = (DeviceId, &Arc<dyn ChunkProvider>)> {
+        self.providers.iter().map(|(id, provider)| (*id, provider))
+    }
+
     pub(crate) fn replicate_recovery_capsule(
         &self,
         intent: &ReplicaIntent,
@@ -332,29 +368,6 @@ impl ReplicationScheduler {
                 &right.reason,
             ))
         });
-    }
-
-    pub(crate) fn recovery_capsules(&self) -> Result<Vec<(DeviceId, RecoveryCapsule)>, CoreError> {
-        let mut capsules = Vec::new();
-        for (provider_id, provider) in self.providers.iter() {
-            if provider.health() != ProviderHealth::Online {
-                continue;
-            }
-            for capsule in provider.list_recovery_capsules()? {
-                capsules.push((*provider_id, capsule));
-                if capsules.len() > 1_000_000 {
-                    return Err(CoreError::ResourceLimit("recovery catalog listing"));
-                }
-            }
-        }
-        capsules.sort_by(|left, right| {
-            (left.1.backup_id, &left.1.snapshot_id, left.0).cmp(&(
-                right.1.backup_id,
-                &right.1.snapshot_id,
-                right.0,
-            ))
-        });
-        Ok(capsules)
     }
 
     /// No-provider scheduler for local-only backups.
@@ -1191,7 +1204,7 @@ pub(crate) struct FetchedChunk {
     pub failures: Vec<ProviderFailure>,
 }
 
-fn error_category(error: &CoreError) -> &'static str {
+pub(crate) fn error_category(error: &CoreError) -> &'static str {
     match error {
         CoreError::MissingChunk(_) => "missing_chunk",
         CoreError::CorruptChunk(_) | CoreError::AuthenticationFailed => "corrupt_chunk",

@@ -64,7 +64,11 @@ render_log() {
   done < "$suite_file"
   printf 'INSTRUMENTATION_RESULT: stream=\n'
   printf '\nTime: 12.345\n\n'
-  printf 'OK (%s tests)\n\n' "$summary_total"
+  summary_word=tests
+  if [ "$summary_total" -eq 1 ]; then
+    summary_word=test
+  fi
+  printf 'OK (%s %s)\n\n' "$summary_total" "$summary_word"
   printf 'INSTRUMENTATION_CODE: -1\n'
 }
 
@@ -278,6 +282,32 @@ fi
 render_log "$real_suite" "$real_count" > "$work_dir/real.log"
 accept "a synthetic clean run of the repository's own $real_count-test suite" \
   "$work_dir/real.log" "$real_suite"
+
+# The folder journey intentionally keeps one source-level test name while its
+# permission transitions run in three separate target processes. Prove that the
+# host partition still covers every derived name exactly once, and that each
+# execution of the one journey name must independently be a real passing run.
+journey_test='life.michaelwong.covalent.node.FolderSyncJourneyInstrumentedTest#nativeFolderScreenSyncsBothWaysAcrossPauseRestartAccessLossAndRemoval'
+if [ "$(grep -Fxc "$journey_test" "$real_suite")" -ne 1 ]; then
+  echo "the repository suite does not contain exactly one host-phased folder journey" >&2
+  failures=$((failures + 1))
+else
+  grep -Fxv "$journey_test" "$real_suite" > "$work_dir/real-base-suite.txt"
+  printf '%s\n' "$journey_test" > "$work_dir/real-journey-suite.txt"
+  if [ "$(grep -c '^' "$work_dir/real-base-suite.txt")" -ne "$((real_count - 1))" ]; then
+    echo "the host-phased partition does not cover the repository suite" >&2
+    failures=$((failures + 1))
+  fi
+  render_log "$work_dir/real-base-suite.txt" "$((real_count - 1))" \
+    > "$work_dir/real-base.log"
+  accept "the exact non-journey suite in its own process" \
+    "$work_dir/real-base.log" "$work_dir/real-base-suite.txt"
+  for phase in setup denied restored; do
+    render_log "$work_dir/real-journey-suite.txt" 1 > "$work_dir/real-$phase.log"
+    accept "the folder journey $phase phase in its own process" \
+      "$work_dir/real-$phase.log" "$work_dir/real-journey-suite.txt"
+  done
+fi
 
 if [ "$failures" -ne 0 ]; then
   echo "Android instrumentation result contract: $failures assertion(s) failed" >&2

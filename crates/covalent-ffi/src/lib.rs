@@ -574,10 +574,12 @@ impl ServiceError {
                 "key_protection_locked",
                 "Unlock this app's protected key storage before opening Covalent data.",
             ),
-            CoreError::Synchronization | CoreError::Io { .. } => Self::retryable(
-                "engine_failed",
-                "The local engine could not complete the request.",
-            ),
+            CoreError::EntropyUnavailable | CoreError::Synchronization | CoreError::Io { .. } => {
+                Self::retryable(
+                    "engine_failed",
+                    "The local engine could not complete the request.",
+                )
+            }
         }
     }
 }
@@ -729,6 +731,18 @@ mod tests {
         ));
         assert_eq!(actual, expected);
         assert!(!actual.message.contains("private-source-name"));
+    }
+
+    #[test]
+    fn entropy_failure_uses_the_existing_retryable_engine_error_contract() {
+        let error = ServiceError::from_engine(&covalent_core::CoreError::EntropyUnavailable);
+        assert_eq!(error.protocol_version, PROTOCOL_VERSION);
+        assert_eq!(error.code, "engine_failed");
+        assert!(error.retryable);
+        assert_eq!(
+            error.message,
+            "The local engine could not complete the request."
+        );
     }
 
     #[test]

@@ -42,6 +42,38 @@ test("backup providers come from verified connected devices, never a raw ID entr
   assert.match(pairing, /async function networkDismiss/);
 });
 
+test("ordinary restore selects a completed remembered backup and keeps manual identifiers as recovery only", async () => {
+  const [html, app, selection] = await Promise.all([
+    source("index.html"), source("app.js"), source("backup-selection-flow.js"),
+  ]);
+  assert.match(html, /data-restore-choice/);
+  assert.match(html, /Manual recovery identifiers/);
+  assert.match(html, /Advanced backup identifiers/);
+  assert.doesNotMatch(html, /value="snapshot-1"/);
+  assert.match(app, /backupSelection\.choices\(backups, receipt\)/);
+  assert.match(app, /const preserved = choices\.find/);
+  assert.match(app, /identifiers\.backupId\.value = ""/);
+  assert.match(app, /discardRestorePreviewForChangedInput\(\)/);
+  assert.match(app, /backupSelection\.resolve\(rememberedRestoreChoices/);
+  assert.match(app, /backupSelection\.nextSnapshotId\(\(\) => crypto\.randomUUID\(\)\)/);
+  assert.match(app, /option\.textContent = choice\.label/);
+  assert.match(selection, /remembered backup is no longer available/);
+});
+
+test("restore preview and backup completion copy avoid raw implementation identifiers", async () => {
+  const [html, app, restore] = await Promise.all([
+    source("index.html"), source("app.js"), source("restore-plan-flow.js"),
+  ]);
+  assert.match(html, /<ol class="restore-preview-list" data-restore-plan><\/ol>/);
+  assert.doesNotMatch(app, /textContent = display\(page\.entries\)/);
+  assert.match(app, /restore\.describePage\(firstPage, candidate\.authorizedRoot\)/);
+  assert.match(app, /textContent = entry\.destination/);
+  assert.match(app, /function backupCompletionCopy\(result, attempt\)/);
+  assert.doesNotMatch(app, /Backup complete: \$\{result\.backupId\}/);
+  assert.match(app, /local-only backup/);
+  assert.match(restore, /cannot safely explain/);
+});
+
 test("normal backup results are decoded before their terminal job receipt is acknowledged", async () => {
   const [html, app, terminal] = await Promise.all([
     source("index.html"), source("app.js"), source("backup-terminal-flow.js"),

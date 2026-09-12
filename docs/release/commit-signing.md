@@ -9,13 +9,15 @@ new releases.
 
 It does **not** check for a specific key, a specific signer, or a local
 `allowed_signers` file. It checks GitHub's own verification records for the
-commit and annotated tag. GitHub sets `verified: true` in exactly two situations:
+commit and annotated tag. The relevant supported signing paths are:
 
 1. The commit carries an SSH or GPG signature made with a key the author has
    registered on their GitHub account as a **signing key**.
-2. The commit was created by GitHub itself on behalf of an authenticated user —
-   the web editor, a merge performed through the UI or API, or any write through
-   the Contents API. GitHub signs those with its own key.
+2. The commit was created through a GitHub workflow that signs on behalf of an
+   authenticated user, such as the GraphQL `createCommitOnBranch` mutation used
+   for this repository's initial release. Confirm the resulting verification
+   record; a server-side write alone does not guarantee a signed commit. The
+   REST Git Data and Contents APIs must not be assumed to sign it.
 
 Case 2 is observable in this repository today. Every Dependabot commit on the
 `dependabot/*` branches reports:
@@ -83,10 +85,10 @@ ssh-keygen -t ed25519 -C "thekozugroup@gmail.com" -f ~/.ssh/covalent_signing
 gh ssh-key add ~/.ssh/covalent_signing.pub --type signing --title "Covalent release signing"
 
 # 4. Tell git to use it for every commit and tag.
-git config --global gpg.format ssh
-git config --global user.signingkey ~/.ssh/covalent_signing.pub
-git config --global commit.gpgsign true
-git config --global tag.gpgsign true
+git config --local gpg.format ssh
+git config --local user.signingkey ~/.ssh/covalent_signing.pub
+git config --local commit.gpgsign true
+git config --local tag.gpgsign true
 ```
 
 Verify before relying on it:

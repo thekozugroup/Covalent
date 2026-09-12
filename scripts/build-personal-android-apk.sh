@@ -190,10 +190,18 @@ export ANDROID_HOME="$android_sdk"
 export ANDROID_SDK_ROOT="$android_sdk"
 export COVALENT_ANDROID_NDK_HOME="$android_sdk/ndk/$ndk_version"
 
+command -v go >/dev/null 2>&1 || fail "install Go 1.26.7 to build the folder sync engine"
+if [ -z "${SYNCTHING_SOURCE_DIR:-}" ]; then
+  SYNCTHING_SOURCE_DIR="$repo_root/artifacts/vendor/syncthing"
+  "$repo_root/scripts/prepare-sync-engine-source.sh" "$SYNCTHING_SOURCE_DIR"
+  export SYNCTHING_SOURCE_DIR
+fi
+
 echo "2/4 Build the debug-signed APK and both native ABIs"
 "$repo_root/apps/android/gradlew" -p "$repo_root/apps/android" --no-daemon \
   --dependency-verification=strict \
   -PcovalentBuildNative=true \
+  -PcovalentBuildSyncEngine=true \
   assembleDebug
 
 apk="$repo_root/apps/android/app/build/outputs/apk/debug/app-debug.apk"
@@ -237,6 +245,7 @@ expected_version_code=$(awk '/^[[:space:]]*versionCode = / { print $3; exit }' "
 }
 
 "$zipalign" -c -P 16 4 "$apk" || fail "APK alignment verification failed"
+COVALENT_ANDROID_ZIPALIGN="$zipalign" "$repo_root/scripts/check-android-native-package.sh" "$apk"
 for abi in arm64-v8a x86_64; do
   entry="lib/$abi/libcovalent_android_jni.so"
   entry_count=$(unzip -Z1 "$apk" | grep -Fxc "$entry" || true)

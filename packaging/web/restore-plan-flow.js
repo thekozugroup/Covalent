@@ -58,6 +58,51 @@
     return page;
   }
 
+  function fullDestination(authorizedRoot, destinationPath) {
+    if (typeof authorizedRoot !== "string" || authorizedRoot.length === 0
+      || typeof destinationPath !== "string" || destinationPath.length === 0) {
+      throw guidance("The signed restore preview has an invalid destination.");
+    }
+    return authorizedRoot.endsWith("/") ? authorizedRoot + destinationPath : authorizedRoot + "/" + destinationPath;
+  }
+
+  function describeEntry(entry, authorizedRoot) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)
+      || typeof entry.sourcePath !== "string" || entry.sourcePath.length === 0
+      || typeof entry.destinationPath !== "string" || entry.destinationPath.length === 0) {
+      throw guidance("The signed restore preview has an invalid entry.");
+    }
+    let action;
+    if (entry.kind === "directory" && entry.action === "create_directory") {
+      action = "Create this folder.";
+    } else if (entry.kind === "directory" && entry.action === "keep_directory") {
+      action = "Use the existing folder.";
+    } else if (entry.kind === "file" && entry.action === "create_file") {
+      action = "Restore this file.";
+    } else if (entry.kind === "file" && entry.action === "skip_file") {
+      action = "Conflict: skip this file and keep the existing file.";
+    } else if (entry.kind === "file" && entry.action === "replace_file") {
+      action = "Conflict: replace the existing file.";
+    } else if (entry.kind === "file" && entry.action === "rename_file") {
+      action = "Conflict: restore a renamed copy.";
+    } else {
+      throw guidance("The signed restore preview contains an action this console cannot safely explain.");
+    }
+    return Object.freeze({
+      action,
+      destination: fullDestination(authorizedRoot, entry.destinationPath),
+      source: entry.sourcePath,
+      renamed: entry.action === "rename_file",
+    });
+  }
+
+  function describePage(page, authorizedRoot) {
+    if (!page || !Array.isArray(page.entries)) {
+      throw guidance("The signed restore preview has no entries to display.");
+    }
+    return Object.freeze(page.entries.map((entry) => describeEntry(entry, authorizedRoot)));
+  }
+
   async function page(api, reference, cursor = null, limit = 100) {
     requireReference(reference);
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
@@ -89,5 +134,5 @@
     });
   }
 
-  return { discard, execute, guidance, page, requirePage, requireReference };
+  return { describeEntry, describePage, discard, execute, guidance, page, requirePage, requireReference };
 });

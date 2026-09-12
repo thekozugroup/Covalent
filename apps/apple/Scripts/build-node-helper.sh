@@ -64,6 +64,10 @@ if [ "$(xcrun lipo -archs "$destination_binary")" != "arm64" ]; then
 fi
 chmod 755 "$destination_binary"
 
+sync_engine_resources="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/CovalentSyncEngine"
+"$apple_dir/Scripts/package-sync-engine.sh" \
+  "$destination_directory" "$sync_engine_resources"
+
 if [ "${CODE_SIGNING_ALLOWED:-YES}" = "YES" ]; then
   identity=${EXPANDED_CODE_SIGN_IDENTITY:--}
   if [ "$configuration" = "Release" ] && [ "$identity" != "-" ]; then

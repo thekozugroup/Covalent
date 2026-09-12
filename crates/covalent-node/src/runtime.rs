@@ -6,21 +6,26 @@
 //! call [`NodeRuntime::stop`] or let the handle drop.
 
 use std::fmt;
+use std::fs::File;
+use std::io::Read as _;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
-use covalent_core::{Engine, EngineOptions, KeyProtector, ProviderQuotaPolicy, RecoveryUnlockKey};
+use covalent_core::{
+    CoreError, Engine, EngineOptions, KeyProtector, ProviderQuotaPolicy, RecoveryUnlockKey,
+};
 use covalent_protocol::PlatformTier;
 use tokio::sync::{Mutex, watch};
-use tracing::info;
+use tracing::{info, warn};
 use zeroize::Zeroizing;
 
 use crate::advertised_address;
 use crate::discovery::DiscoveryController;
 use crate::first_run_claim::{self, ClaimCode, FirstRunClaim};
 use crate::pairing_transport::NetworkPairingService;
+use crate::recovery_state::RecoveryStateStore;
 use crate::transport::{QuicNode, TlsIdentity};
 use crate::{
     AppState, ArchiveLimits, NodeReadyInfo, load_or_create_local_api_token, remove_node_ready_file,
@@ -46,9 +51,93 @@ pub enum LocalApiTokenSource {
 /// Explicit owner-loss input consumed only while creating a fresh state root.
 pub struct RecoveryBootstrap {
     /// Stable signed recovery kit bytes.
-    pub kit: Vec<u8>,
+    pub kit: Zeroizing<Vec<u8>>,
     /// High-entropy secret held outside the lost node state.
     pub unlock: RecoveryUnlockKey,
+}
+
+const MAX_RECOVERY_KIT_FILE_BYTES: u64 = 16 * 1_024 * 1_024;
+
+/// Loads the canonical raw kit and base64url key files without following symlinks.
+///
+/// Both files must be owner-only regular files on Unix. The kit file contains decoded
+/// serialized kit bytes, while the key file contains exactly the printable 256-bit key.
+pub fn load_recovery_bootstrap_files(
+    kit_path: &Path,
+    key_path: &Path,
+) -> std::result::Result<RecoveryBootstrap, CoreError> {
+    let kit = read_private_recovery_file(kit_path, MAX_RECOVERY_KIT_FILE_BYTES, "recovery kit")?;
+    let key = read_private_recovery_file(key_path, 512, "recovery key")?;
+    let key_text = std::str::from_utf8(key.as_ref()).map_err(|_| CoreError::InvalidKeyMaterial)?;
+    let unlock = RecoveryUnlockKey::from_base64(key_text.trim())?;
+    Ok(RecoveryBootstrap { kit, unlock })
+}
+
+fn read_private_recovery_file(
+    path: &Path,
+    maximum: u64,
+    label: &'static str,
+) -> std::result::Result<Zeroizing<Vec<u8>>, CoreError> {
+    #[cfg(unix)]
+    let (file, length) = {
+        use rustix::fs::{FileType, Mode, OFlags, fstat, open};
+        let descriptor = open(
+            path,
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::empty(),
+        )
+        .map_err(|error| CoreError::Io {
+            operation: "open private recovery file without following links",
+            path: path.to_path_buf(),
+            source: std::io::Error::from_raw_os_error(error.raw_os_error()),
+        })?;
+        let stat = fstat(&descriptor).map_err(|error| CoreError::Io {
+            operation: "inspect open private recovery file",
+            path: path.to_path_buf(),
+            source: std::io::Error::from_raw_os_error(error.raw_os_error()),
+        })?;
+        if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
+            || stat.st_mode & 0o077 != 0
+            || stat.st_size < 0
+            || stat.st_size as u64 > maximum
+        {
+            return Err(CoreError::InvalidState(format!(
+                "{label} must be an owner-only regular file no larger than {maximum} bytes"
+            )));
+        }
+        (File::from(descriptor), stat.st_size as u64)
+    };
+    #[cfg(not(unix))]
+    let (file, length) = {
+        let metadata = std::fs::symlink_metadata(path).map_err(|source| CoreError::Io {
+            operation: "inspect private recovery file",
+            path: path.to_path_buf(),
+            source,
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > maximum {
+            return Err(CoreError::InvalidState(format!(
+                "{label} must be a regular file no larger than {maximum} bytes"
+            )));
+        }
+        let file = File::open(path).map_err(|source| CoreError::Io {
+            operation: "open private recovery file",
+            path: path.to_path_buf(),
+            source,
+        })?;
+        (file, metadata.len())
+    };
+    let mut bytes = Zeroizing::new(Vec::with_capacity(length as usize));
+    file.take(maximum.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|source| CoreError::Io {
+            operation: "read private recovery file",
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if bytes.len() as u64 > maximum {
+        return Err(CoreError::ResourceLimit(label));
+    }
+    Ok(bytes)
 }
 
 /// A local API secret that can only be borrowed by the node-owning process.
@@ -96,6 +185,10 @@ pub struct NodeRuntimeConfig {
     pub archive_limits: ArchiveLimits,
     /// Provider-side quota and lease policy.
     pub provider_quota_policy: ProviderQuotaPolicy,
+    /// Admit remote backup storage requests. Native hosts may keep folder sync
+    /// and owner backup/recovery active while their provider switch is off.
+    /// Changing this value requires stopping the old runtime first.
+    pub local_provider_enabled: bool,
     /// Required platform or explicitly provisioned KEK source.
     pub key_protector: Option<Arc<dyn KeyProtector>>,
     /// Optional owner-loss bootstrap for an empty state directory.
@@ -117,6 +210,17 @@ pub struct NodeRuntimeConfig {
     /// is the container deployment. Without it a claim still succeeds and simply
     /// carries no certificate, which is correct for a loopback-only node.
     pub tls_ca_certificate_file: Option<PathBuf>,
+    /// Optional host-verified maintained sync engine package. Backup/recovery
+    /// stays available if its separate installation needs repair.
+    #[cfg(unix)]
+    pub folder_sync: Option<crate::sync_engine::FolderSyncRuntimeConfig>,
+    /// The host found a sync package but could not verify it. Keep the local
+    /// API and backup runtime available with an actionable sync status.
+    #[cfg(unix)]
+    pub folder_sync_package_invalid: bool,
+    /// The native host could not restore all saved folder capabilities.
+    #[cfg(unix)]
+    pub folder_sync_access_unavailable: bool,
 }
 
 impl NodeRuntimeConfig {
@@ -137,12 +241,19 @@ impl NodeRuntimeConfig {
             platform_tier: PlatformTier::Tier1,
             archive_limits: ArchiveLimits::default(),
             provider_quota_policy: ProviderQuotaPolicy::default(),
+            local_provider_enabled: true,
             key_protector: None,
             recovery: None,
             api_token: LocalApiTokenSource::Persisted,
             ready_file: None,
             first_run_claim_enabled: false,
             tls_ca_certificate_file: None,
+            #[cfg(unix)]
+            folder_sync: None,
+            #[cfg(unix)]
+            folder_sync_package_invalid: false,
+            #[cfg(unix)]
+            folder_sync_access_unavailable: false,
         }
     }
 }
@@ -185,6 +296,7 @@ impl NodeRuntimeReadyInfo {
 }
 
 struct RuntimeControl {
+    recovery: Arc<RecoveryStateStore>,
     shutdown: watch::Sender<bool>,
     completion: Mutex<Option<tokio::task::JoinHandle<Result<()>>>>,
 }
@@ -208,12 +320,19 @@ impl NodeRuntime {
             platform_tier,
             archive_limits,
             provider_quota_policy,
+            local_provider_enabled,
             key_protector,
             recovery,
             api_token,
             ready_file,
             first_run_claim_enabled,
             tls_ca_certificate_file,
+            #[cfg(unix)]
+            folder_sync,
+            #[cfg(unix)]
+            folder_sync_package_invalid,
+            #[cfg(unix)]
+            folder_sync_access_unavailable,
         } = configuration;
 
         let key_protector =
@@ -244,17 +363,33 @@ impl NodeRuntime {
         let recovered = recovery.is_some();
         let engine = Arc::new(match recovery {
             Some(recovery) => {
-                Engine::recover_from_kit(engine_options, &recovery.kit, &recovery.unlock)
+                Engine::recover_from_kit(engine_options, recovery.kit.as_ref(), &recovery.unlock)
                     .context("recover Covalent engine")?
             }
             None => Engine::open(engine_options).context("open Covalent engine")?,
         });
-        if recovered {
+        let recovery_state = Arc::new(
+            RecoveryStateStore::open(data_directory.join("recovery-state.json"))
+                .context("open recovery progress")?,
+        );
+        // The marker is published atomically with the recovered identity. A normal
+        // restart repairs this handoff if the process stopped before runtime setup.
+        let bootstrap_pending = engine.config()?.recovery_bootstrap_pending
+            || (recovered
+                && recovery_state.status()?.phase
+                    == covalent_protocol::RecoveryPhase::NotConfigured);
+        if bootstrap_pending {
             persist_recovered_provider_connections(
                 &engine,
                 &data_directory.join("provider-connections.json"),
             )
             .context("restore signed provider transports")?;
+            recovery_state
+                .begin(&engine)
+                .context("record pending catalog recovery")?;
+            engine
+                .acknowledge_recovery_bootstrap()
+                .context("complete runtime recovery handoff")?;
         }
         let token_path = data_directory.join("local-api-token");
         // Commit the explicit unclaimed/claimed lifecycle before token loading
@@ -324,15 +459,20 @@ impl NodeRuntime {
             .context("load persisted discovery preference")?
             .lan_discovery_enabled;
         let quic_node = QuicNode::bind(requested_peer_address, Arc::clone(&engine), &tls_identity)
-            .context("bind QUIC peer endpoint")?;
+            .context("bind QUIC peer endpoint")?
+            .with_local_provider_enabled(local_provider_enabled);
         let peer_address = quic_node
             .local_addr()
             .context("inspect QUIC peer endpoint")?;
         let static_advertised_peer_address =
             resolve_advertised_peer_address(peer_address, advertised_peer_address)?;
         let discovery = Arc::new(
-            DiscoveryController::new(discovery_enabled, peer_address.port())
-                .context("start LAN discovery controller")?,
+            DiscoveryController::new_with_provider(
+                discovery_enabled,
+                peer_address.port(),
+                local_provider_enabled,
+            )
+            .context("start LAN discovery controller")?,
         );
         let mut state = AppState::new(Arc::clone(&engine), platform_tier, api_token.to_string())
             .context("create local API state")?
@@ -342,6 +482,43 @@ impl NodeRuntime {
             .with_discovery_controller(Arc::clone(&discovery))
             .with_provider_state(data_directory.join("provider-connections.json"))
             .context("load remembered provider connections")?;
+        let startup_recovery = recovery_state
+            .should_retry()
+            .context("inspect recovery progress")?
+            .then(|| (Arc::clone(&recovery_state), Arc::clone(&engine)));
+        state = state.with_recovery_state(Arc::clone(&recovery_state));
+        #[cfg(unix)]
+        if folder_sync_access_unavailable {
+            state = state.with_folder_sync(
+                crate::sync_engine::FolderSyncRuntimeConfig::prepare_access_recovery(
+                    &data_directory,
+                    Arc::clone(&engine),
+                    Arc::clone(&key_protector),
+                ),
+            );
+        } else if folder_sync_package_invalid {
+            state =
+                state.with_folder_sync(crate::sync_engine::FolderSyncRuntimeState::NeedsAttention);
+        } else if let Some(folder_sync) = folder_sync {
+            state = state.with_folder_sync(
+                folder_sync
+                    .prepare(
+                        &data_directory,
+                        Arc::clone(&engine),
+                        Arc::clone(&key_protector),
+                        static_advertised_peer_address,
+                    )
+                    .await,
+            );
+        }
+        #[cfg(unix)]
+        if let crate::sync_engine::FolderSyncRuntimeState::Ready(service) = &state.folder_sync {
+            // Provider state was loaded and normalized from current core trust
+            // before the folder journal opened. This is the sole cold-start
+            // hook allowed to clear a core-new address transition barrier.
+            let _ = state.finish_peer_address_provider_barrier(service).await;
+            let _ = service.start().await;
+        }
         if let Some(address) = static_advertised_peer_address {
             state = state.with_peer_address(address);
         }
@@ -358,6 +535,13 @@ impl NodeRuntime {
         )
         .context("open pairing Start admission state")?;
         let quic_node = quic_node.with_pairing_service(Arc::new(pairing_service));
+        #[cfg(unix)]
+        let quic_node = match &state.folder_sync {
+            crate::sync_engine::FolderSyncRuntimeState::Ready(service) => {
+                quic_node.with_folder_service(Arc::clone(service))
+            }
+            _ => quic_node,
+        };
 
         if let Some(path) = ready_file.as_deref()
             && let Err(error) = write_node_ready_file(
@@ -379,6 +563,7 @@ impl NodeRuntime {
         let runtime_token = RuntimeApiToken::new(api_token);
         let task_ready_file = ready_file.clone();
         let supervisor_shutdown = shutdown.clone();
+        let supervisor_recovery = Arc::clone(&recovery_state);
         let completion = tokio::spawn(async move {
             supervise_runtime(
                 listener,
@@ -387,7 +572,11 @@ impl NodeRuntime {
                 discovery,
                 shutdown_receiver,
                 supervisor_shutdown,
-                task_ready_file,
+                SupervisorStartup {
+                    ready_file: task_ready_file,
+                    recovery: startup_recovery,
+                    recovery_control: supervisor_recovery,
+                },
             )
             .await
         });
@@ -401,6 +590,7 @@ impl NodeRuntime {
                 api_token: runtime_token,
             },
             control: Arc::new(RuntimeControl {
+                recovery: recovery_state,
                 shutdown,
                 completion: Mutex::new(Some(completion)),
             }),
@@ -415,22 +605,36 @@ impl NodeRuntime {
 
     /// Requests graceful HTTP shutdown and waits for all owned tasks to exit.
     ///
-    /// Repeated calls are safe.  The first caller owns the completion result;
-    /// later calls observe that shutdown has already been requested.
+    /// Repeated and concurrent calls are safe. The first waiter receives the
+    /// supervisor's completion result; every other waiter returns only after
+    /// that shutdown and its endpoint cleanup have completed.
     pub async fn stop(&self) -> Result<()> {
+        self.control.recovery.cancel();
         let _ = self.control.shutdown.send(true);
-        let completion = self.control.completion.lock().await.take();
-        match completion {
-            Some(completion) => completion.await.context("join node runtime")?,
+        let mut completion = self.control.completion.lock().await;
+        let result = match completion.as_mut() {
+            Some(completion) => completion
+                .await
+                .context("join node runtime")
+                .and_then(|result| result),
             None => Ok(()),
-        }
+        };
+        *completion = None;
+        result
     }
 }
 
 impl Drop for NodeRuntime {
     fn drop(&mut self) {
+        self.control.recovery.cancel();
         let _ = self.control.shutdown.send(true);
     }
+}
+
+struct SupervisorStartup {
+    recovery_control: Arc<RecoveryStateStore>,
+    ready_file: Option<PathBuf>,
+    recovery: Option<(Arc<RecoveryStateStore>, Arc<Engine>)>,
 }
 
 async fn supervise_runtime(
@@ -440,8 +644,21 @@ async fn supervise_runtime(
     discovery: Arc<DiscoveryController>,
     shutdown: watch::Receiver<bool>,
     shutdown_sender: watch::Sender<bool>,
-    ready_file: Option<PathBuf>,
+    startup: SupervisorStartup,
 ) -> Result<()> {
+    #[cfg(unix)]
+    let folder_sync = state.folder_sync.clone();
+    #[cfg(unix)]
+    let delivery_task = match &folder_sync {
+        crate::sync_engine::FolderSyncRuntimeState::Ready(service) => {
+            Some(tokio::spawn(crate::sync_delivery::run(
+                Arc::clone(&state.engine),
+                Arc::clone(service),
+                shutdown.clone(),
+            )))
+        }
+        _ => None,
+    };
     let mut http_task = tokio::spawn(async move {
         axum::serve(listener, router(state))
             .with_graceful_shutdown(wait_for_shutdown(shutdown))
@@ -450,23 +667,55 @@ async fn supervise_runtime(
     });
     let quic_shutdown = quic_node.shutdown_handle();
     let mut quic_task = tokio::spawn(quic_node.run());
+    let recovery_task = startup
+        .recovery
+        .map(|(store, engine)| tokio::task::spawn_blocking(move || store.retry(&engine)));
 
     let result = tokio::select! {
         result = &mut http_task => {
-            let result = result.context("join local API task")?;
+            startup.recovery_control.cancel();
+            let result = result.context("join local API task").and_then(|result| result);
             quic_shutdown.close();
-            quic_task.await.context("join QUIC peer task")?;
-            result
+            let quic_result = quic_task.await.context("join QUIC peer task");
+            result.and(quic_result)
         },
         result = &mut quic_task => {
-            result.context("join QUIC peer task")?;
+            startup.recovery_control.cancel();
+            let quic_result = result.context("join QUIC peer task");
             let _ = shutdown_sender.send(true);
-            http_task.await.context("join local API task")?
+            let http_result = http_task.await.context("join local API task").and_then(|result| result);
+            quic_result.and(http_result)
         }
     };
+    // The serving task can also finish because it was cancelled or panicked.
+    // Close is idempotent and must precede wait_idle in every exit path.
+    quic_shutdown.close();
+    let quic_release_result = quic_shutdown
+        .wait_for_release()
+        .await
+        .context("release QUIC peer endpoint");
 
     let discovery_result = discovery.set_enabled(false).context("stop LAN discovery");
-    let readiness_result = match ready_file {
+    #[cfg(unix)]
+    let delivery_result = match delivery_task {
+        Some(delivery_task) => {
+            let _ = shutdown_sender.send(true);
+            delivery_task
+                .await
+                .context("join folder invitation delivery")
+        }
+        None => Ok(()),
+    };
+    #[cfg(unix)]
+    let folder_sync_result = stop_folder_sync(folder_sync).await;
+    if let Some(task) = recovery_task {
+        match task.await {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => warn!(%error, "provider catalog recovery remains pending"),
+            Err(error) => warn!(%error, "provider catalog recovery worker failed"),
+        }
+    }
+    let readiness_result = match startup.ready_file {
         Some(path) => {
             remove_node_ready_file(&path, std::process::id()).context("remove node readiness")
         }
@@ -474,8 +723,38 @@ async fn supervise_runtime(
     };
 
     result?;
+    quic_release_result?;
     discovery_result?;
+    #[cfg(unix)]
+    delivery_result?;
+    #[cfg(unix)]
+    folder_sync_result?;
     readiness_result
+}
+
+#[cfg(unix)]
+async fn stop_folder_sync(state: crate::sync_engine::FolderSyncRuntimeState) -> Result<()> {
+    use crate::sync_engine::{FolderSyncLifecycle, FolderSyncRuntimeState, FolderSyncServiceError};
+    let FolderSyncRuntimeState::Ready(service) = state else {
+        return Ok(());
+    };
+    let result = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        loop {
+            match service.stop().await {
+                Ok(FolderSyncLifecycle::Stopped) => return Ok(()),
+                Ok(FolderSyncLifecycle::StillStopping) | Err(FolderSyncServiceError::Busy) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+                _ => return Err(anyhow!("folder sync shutdown needs attention")),
+            }
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("folder sync worker is still stopping"))?;
+    // Drop closes the exact lifeline even when shutdown failed. The dedicated
+    // reaper retains installation/root leases until actual child exit.
+    drop(service);
+    result
 }
 
 async fn wait_for_shutdown(mut shutdown: watch::Receiver<bool>) {
@@ -614,6 +893,7 @@ mod tests {
     use sha2::{Digest as _, Sha256};
     use tempfile::TempDir;
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    use zeroize::Zeroizing;
 
     use super::{NodeRuntime, NodeRuntimeConfig, RecoveryBootstrap};
 
@@ -636,6 +916,29 @@ mod tests {
             .expect("start runtime")
     }
 
+    #[tokio::test]
+    async fn disabled_provider_keeps_owner_api_and_folder_status_available() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut configuration = test_configuration(&directory);
+        configuration.local_provider_enabled = false;
+        let runtime = NodeRuntime::start(configuration).await.unwrap();
+        let ready = runtime.ready_info();
+        for path in [
+            "/api/v1/status",
+            "/api/v1/backups",
+            "/api/v1/recovery/status",
+        ] {
+            let response = request(ready.api_address(), &format!(
+                "GET {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {}\r\nConnection: close\r\n\r\n",
+                ready.api_token().expose(),
+            )).await;
+            assert!(response.starts_with("HTTP/1.1 200"), "{path}: {response}");
+        }
+        #[cfg(unix)]
+        assert_eq!(sync_status(&runtime).await["schemaVersion"], 1);
+        runtime.stop().await.unwrap();
+    }
+
     async fn request(address: SocketAddr, request: &str) -> String {
         let mut stream = tokio::net::TcpStream::connect(address)
             .await
@@ -651,6 +954,211 @@ mod tests {
             .await
             .expect("read response");
         response
+    }
+
+    #[cfg(unix)]
+    fn sync_configuration(directory: &TempDir) -> NodeRuntimeConfig {
+        use crate::sync_engine::{FolderSyncRuntimeConfig, VerifiedEngineExecutable};
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut configuration = test_configuration(directory);
+        let executable = directory.path().join("unused-folder-helper");
+        let bytes = b"#!/bin/sh\nexit 99\n";
+        fs::write(&executable, bytes).unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let executable = fs::canonicalize(executable).unwrap();
+        configuration.folder_sync = Some(FolderSyncRuntimeConfig {
+            guardian: VerifiedEngineExecutable::open(&executable, Sha256::digest(bytes).into())
+                .unwrap(),
+            worker: VerifiedEngineExecutable::open(&executable, Sha256::digest(bytes).into())
+                .unwrap(),
+            runtime_parent: fs::canonicalize(directory.path()).unwrap(),
+            listener: "127.0.0.1:43871".parse().unwrap(),
+            advertised_address: Some("127.0.0.1:43871".parse().unwrap()),
+        });
+        configuration
+    }
+
+    #[cfg(unix)]
+    async fn sync_status(runtime: &NodeRuntime) -> serde_json::Value {
+        let ready = runtime.ready_info();
+        let response = request(ready.api_address(), &format!(
+            "GET /api/v1/sync/status HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {}\r\nConnection: close\r\n\r\n",
+            ready.api_token().expose(),
+        )).await;
+        assert!(response.contains(" 200 "), "{response}");
+        serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unavailable_folder_engine_preserves_backup_and_never_creates_sync_state() {
+        for (access_unavailable, expected_issue) in
+            [(false, "installation"), (true, "folderAccess")]
+        {
+            let directory = TempDir::new().unwrap();
+            let mut configuration = sync_configuration(&directory);
+            // Host failures win even with a contradictory verified package.
+            configuration.folder_sync_package_invalid = true;
+            configuration.folder_sync_access_unavailable = access_unavailable;
+            let runtime = NodeRuntime::start(configuration).await.unwrap();
+            let status = sync_status(&runtime).await;
+            assert_eq!(status["availability"], "needsAttention");
+            assert_eq!(status["issue"], expected_issue);
+            assert!(!directory.path().join("folder-sync").exists());
+            let health = request(
+                runtime.ready_info().api_address(),
+                "GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            )
+            .await;
+            assert!(health.contains(" 200 "));
+            runtime.stop().await.unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn access_unavailable_opens_only_existing_authenticated_journal() {
+        let directory = TempDir::new().unwrap();
+        let runtime = NodeRuntime::start(sync_configuration(&directory))
+            .await
+            .unwrap();
+        runtime.stop().await.unwrap();
+        drop(runtime);
+
+        let mut configuration = sync_configuration(&directory);
+        configuration.folder_sync_access_unavailable = true;
+        let runtime = NodeRuntime::start(configuration).await.unwrap();
+        let status = sync_status(&runtime).await;
+        assert_eq!(status["availability"], "needsAttention");
+        assert_eq!(status["issue"], "folderAccess");
+        assert_eq!(status["shares"], serde_json::json!([]));
+        let body = r#"{"offerId":"00000000-0000-0000-0000-000000000001","selectedRoot":"/"}"#;
+        let unauthenticated = request(
+            runtime.ready_info().api_address(),
+            &format!(
+                "POST /api/v1/sync/repair HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len(),
+            ),
+        )
+        .await;
+        assert!(unauthenticated.contains(" 401 "));
+        let renew_body = r#"{"offerId":"00000000-0000-0000-0000-000000000001"}"#;
+        let unauthenticated_renewal = request(
+            runtime.ready_info().api_address(),
+            &format!(
+                "POST /api/v1/sync/renew HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{renew_body}",
+                renew_body.len(),
+            ),
+        )
+        .await;
+        assert!(unauthenticated_renewal.contains(" 401 "));
+        let unavailable_renewal = request(
+            runtime.ready_info().api_address(),
+            &format!(
+                "POST /api/v1/sync/renew HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{renew_body}",
+                runtime.ready_info().api_token().expose(),
+                renew_body.len(),
+            ),
+        )
+        .await;
+        assert!(unavailable_renewal.contains(" 409 "));
+        let denied = request(
+            runtime.ready_info().api_address(),
+            &format!(
+                "POST /api/v1/sync/repair HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                runtime.ready_info().api_token().expose(),
+                body.len(),
+            ),
+        )
+        .await;
+        assert!(denied.contains(" 409 "));
+        runtime.stop().await.unwrap();
+        drop(runtime);
+
+        fs::write(
+            directory.path().join("folder-sync/folder-sharing.v1"),
+            b"damaged",
+        )
+        .unwrap();
+        let mut configuration = sync_configuration(&directory);
+        configuration.folder_sync_access_unavailable = true;
+        let runtime = NodeRuntime::start(configuration).await.unwrap();
+        let status = sync_status(&runtime).await;
+        assert_eq!(status["availability"], "needsAttention");
+        assert_eq!(status["issue"], "installation");
+        runtime.stop().await.unwrap();
+
+        let initialization = TempDir::new().unwrap();
+        let runtime = NodeRuntime::start(sync_configuration(&initialization))
+            .await
+            .unwrap();
+        runtime.stop().await.unwrap();
+        drop(runtime);
+        fs::remove_file(initialization.path().join("folder-sync/folder-sharing.v1")).unwrap();
+        let mut configuration = sync_configuration(&initialization);
+        configuration.folder_sync_access_unavailable = true;
+        let runtime = NodeRuntime::start(configuration).await.unwrap();
+        let status = sync_status(&runtime).await;
+        assert_eq!(status["issue"], "folderAccess");
+        assert_eq!(status["shares"], serde_json::json!([]));
+        assert!(
+            !initialization
+                .path()
+                .join("folder-sync/folder-sharing.v1")
+                .exists()
+        );
+        runtime.stop().await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn packaged_folder_sync_bootstraps_once_and_damage_preserves_backup_runtime() {
+        let directory = TempDir::new().unwrap();
+        let runtime = NodeRuntime::start(sync_configuration(&directory))
+            .await
+            .unwrap();
+        let denied = request(
+            runtime.ready_info().api_address(),
+            "GET /api/v1/sync/status HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert!(denied.contains(" 401 "));
+        let first = sync_status(&runtime).await;
+        assert_eq!(first["availability"], "available");
+        assert_eq!(first["lifecycle"], "stopped");
+        assert_eq!(first["healthFreshness"], "neverObserved");
+        assert_eq!(first["connectionFreshness"], "neverObserved");
+        assert_eq!(first["shares"], serde_json::json!([]));
+        let root = directory.path().join("folder-sync");
+        let identity = fs::read(root.join("engine-identity.v1")).unwrap();
+        runtime.stop().await.unwrap();
+        drop(runtime);
+
+        let runtime = NodeRuntime::start(sync_configuration(&directory))
+            .await
+            .unwrap();
+        assert_eq!(sync_status(&runtime).await, first);
+        runtime.stop().await.unwrap();
+        drop(runtime);
+        assert_eq!(fs::read(root.join("engine-identity.v1")).unwrap(), identity);
+
+        // Missing consent state must not turn into an empty writable default.
+        fs::remove_file(root.join("folder-sharing.v1")).unwrap();
+        let runtime = NodeRuntime::start(sync_configuration(&directory))
+            .await
+            .unwrap();
+        let unavailable = sync_status(&runtime).await;
+        assert_eq!(unavailable["availability"], "needsAttention");
+        assert_eq!(unavailable["issue"], "installation");
+        assert!(!root.join("folder-sharing.v1").exists());
+        assert_eq!(fs::read(root.join("engine-identity.v1")).unwrap(), identity);
+        let health = request(
+            runtime.ready_info().api_address(),
+            "GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert!(health.contains(" 200 "));
+        runtime.stop().await.unwrap();
     }
 
     #[tokio::test]
@@ -748,6 +1256,22 @@ mod tests {
         let reopened = start_runtime(&directory).await;
         assert_eq!(reopened.ready_info().api_token().expose(), initial_token);
         reopened.stop().await.expect("stop reopened runtime");
+    }
+
+    #[tokio::test]
+    async fn stop_releases_quic_port_before_fixed_address_restart() {
+        let directory = TempDir::new().expect("temp directory");
+        let runtime = start_runtime(&directory).await;
+        let peer_address = runtime.ready_info().peer_address();
+        runtime.stop().await.expect("stop first runtime");
+
+        let mut configuration = test_configuration(&directory);
+        configuration.peer_address = peer_address;
+        let restarted = NodeRuntime::start(configuration)
+            .await
+            .expect("restart immediately on released QUIC address");
+        assert_eq!(restarted.ready_info().peer_address(), peer_address);
+        restarted.stop().await.expect("stop restarted runtime");
     }
 
     #[tokio::test]
@@ -898,7 +1422,10 @@ mod tests {
         let mut configuration =
             NodeRuntimeConfig::new(&recovered_path, loopback_zero(), loopback_zero());
         configuration.key_protector = Some(protector());
-        configuration.recovery = Some(RecoveryBootstrap { kit, unlock });
+        configuration.recovery = Some(RecoveryBootstrap {
+            kit: Zeroizing::new(kit),
+            unlock,
+        });
         let runtime = NodeRuntime::start(configuration)
             .await
             .expect("recover node runtime");
@@ -926,6 +1453,43 @@ mod tests {
         assert_eq!(tls["schemaVersion"], 2);
         assert!(tls.get("privateKeyDer").is_none());
         assert!(tls.get("protectedPrivateKey").is_some());
+        let recovery_status = request(
+            runtime.ready_info().api_address(),
+            &format!(
+                "GET /api/v1/recovery/status HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {}\r\nConnection: close\r\n\r\n",
+                runtime.ready_info().api_token().expose()
+            ),
+        )
+        .await;
+        assert!(recovery_status.contains(" 200 "), "{recovery_status}");
+        assert!(recovery_status.contains("\"phase\":"), "{recovery_status}");
         runtime.stop().await.expect("stop recovered runtime");
+        let durable_recovery: serde_json::Value = serde_json::from_slice(
+            &fs::read(recovered_path.join("recovery-state.json")).expect("recovery state"),
+        )
+        .expect("recovery JSON");
+        assert_eq!(durable_recovery["schemaVersion"], 1);
+        // Immediate shutdown can cancel recovery before the unavailable
+        // provider has been contacted. Both states must remain retryable;
+        // neither may be reported as completed or lose the provider roster.
+        assert!(matches!(
+            durable_recovery["status"]["phase"].as_str(),
+            Some("pending" | "blocked")
+        ));
+        assert!(
+            crate::recovery_state::RecoveryStateStore::open(
+                recovered_path.join("recovery-state.json")
+            )
+            .expect("reopen durable recovery progress")
+            .should_retry()
+            .expect("interrupted recovery stays retryable")
+        );
+        assert_eq!(
+            durable_recovery["status"]["configuredProviderIds"],
+            serde_json::json!([provider_id])
+        );
+        let encoded = serde_json::to_string(&durable_recovery).expect("serialize status");
+        assert!(!encoded.contains("recoveryKey"));
+        assert!(!encoded.contains("recoveryKit"));
     }
 }

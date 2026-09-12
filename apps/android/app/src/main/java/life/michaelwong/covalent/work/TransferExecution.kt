@@ -9,7 +9,10 @@ import life.michaelwong.covalent.data.CovalentNodeClient
 import life.michaelwong.covalent.data.ArchiveTransferResult
 import life.michaelwong.covalent.data.DurableTransferPersistenceException
 import life.michaelwong.covalent.data.NodeApiException
+import life.michaelwong.covalent.data.SafResourceLimitException
 import life.michaelwong.covalent.data.SafTransferBridge
+import life.michaelwong.covalent.data.SafSourceAccessException
+import life.michaelwong.covalent.data.SafTargetAccessException
 import life.michaelwong.covalent.data.SecureNodeStore
 import life.michaelwong.covalent.model.TransferState
 import life.michaelwong.covalent.model.NodeConnection
@@ -146,6 +149,15 @@ internal object TransferExecution {
         } catch (error: DurableTransferPersistenceException) {
             Log.w(LOG_TAG, "Transfer $jobId deferred because its terminal state is not durable", error)
             TransferOutcome.RETRY
+        } catch (error: SafSourceAccessException) {
+            failUnlessStopped(store, jobId, context.getString(R.string.error_source_access_revoked), false)
+            TransferOutcome.FAILURE
+        } catch (error: SafTargetAccessException) {
+            failUnlessStopped(store, jobId, context.getString(R.string.error_target_access_revoked), false)
+            TransferOutcome.FAILURE
+        } catch (error: SafResourceLimitException) {
+            failUnlessStopped(store, jobId, context.getString(R.string.node_error_resource_limit), false)
+            TransferOutcome.FAILURE
         } catch (error: NodeApiException) {
             failUnlessStopped(store, jobId, nodeFailureMessage(context, error, GENERIC_FAILURE), error.retryable)
             if (error.retryable) TransferOutcome.RETRY else TransferOutcome.FAILURE
@@ -162,7 +174,12 @@ internal object TransferExecution {
             }
             TransferOutcome.RETRY
         } catch (error: SecurityException) {
-            failUnlessStopped(store, jobId, context.getString(R.string.error_target_access_revoked), false)
+            failUnlessStopped(
+                store,
+                jobId,
+                context.getString(safSecurityFailureMessageRes(pending.optString("mode", "json"))),
+                false,
+            )
             TransferOutcome.FAILURE
         } catch (error: IllegalArgumentException) {
             failUnlessStopped(store, jobId, authoredDetail(context, error), false)
@@ -175,6 +192,32 @@ internal object TransferExecution {
             TransferOutcome.RETRY
         }
     }
+
+    /** Guarantees every scheduler receives an outcome even if setup fails before [run]'s guarded transfer body. */
+    fun runSafely(context: Context, jobId: String): TransferOutcome = guardedTransferExecution(
+        execute = { run(context, jobId) },
+        onUnexpected = { error ->
+            Log.e(LOG_TAG, "Transfer $jobId failed outside its guarded execution body", error)
+            if (DirectBoot.isUserUnlocked(context)) {
+                runCatching {
+                    SecureNodeStore(context).updateTransfer(jobId) { current ->
+                        if (current.state == TransferState.PAUSED || current.state == TransferState.CANCELLED) {
+                            current
+                        } else {
+                            current.copy(
+                                state = TransferState.QUEUED,
+                                detail = context.getString(R.string.error_node_action_failed),
+                                retryable = true,
+                            )
+                        }
+                    }
+                }.onFailure { persistenceError ->
+                    error.addSuppressed(persistenceError)
+                    Log.e(LOG_TAG, "Transfer $jobId recovery state could not be saved", persistenceError)
+                }
+            }
+        },
+    )
 
     /**
      * Opens the encrypted transfer store, or returns null to defer this run.
@@ -328,4 +371,26 @@ internal object TransferExecution {
     }
 
     private const val PROGRESS_PERSIST_INTERVAL_MILLIS = 500L
+}
+
+/** Converts an unexpected scheduler-thread exception into a recoverable, completed scheduler attempt. */
+internal fun guardedTransferExecution(
+    execute: () -> TransferOutcome,
+    onUnexpected: (Exception) -> Unit,
+): TransferOutcome = try {
+    execute()
+} catch (error: Exception) {
+    try {
+        onUnexpected(error)
+    } catch (recordingError: Exception) {
+        if (recordingError !== error) error.addSuppressed(recordingError)
+    }
+    TransferOutcome.RETRY
+}
+
+/** A raw provider SecurityException needs the transfer mode to identify the folder involved. */
+internal fun safSecurityFailureMessageRes(mode: String): Int = when (mode) {
+    TransferWorker.MODE_SAF_BACKUP -> R.string.error_source_access_revoked
+    TransferWorker.MODE_SAF_RESTORE -> R.string.error_target_access_revoked
+    else -> R.string.error_node_action_failed
 }

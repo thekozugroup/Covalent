@@ -6,6 +6,9 @@ mod backup;
 mod chunker;
 mod crypto;
 mod engine;
+mod folder_sharing;
+#[cfg(test)]
+mod folder_sharing_tests;
 mod identity;
 mod key_envelope;
 mod manifest;
@@ -14,6 +17,8 @@ mod recovery;
 mod replication;
 mod restore;
 mod storage;
+/// Folder-sync protocol and private-state foundations; no network sync runtime is shipped.
+pub mod sync;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -26,7 +31,15 @@ pub use chunker::{ChunkingConfig, ContentDefinedChunker, DEFAULT_AVERAGE_CHUNK_S
 pub use crypto::{BackupKey, EncryptedChunk};
 pub use engine::{
     Engine, EngineOptions, JobControl, JobState, MAX_UNACKNOWLEDGED_BACKUP_RESULTS, NodeConfig,
-    RecoveredBackup, RememberedBackupState, RosterCursor, SnapshotAvailabilityReport,
+    RecoveredBackup, RecoveryImportReport, RecoverySnapshotCursor, RememberedBackupState,
+    RosterCursor, SnapshotAvailabilityReport,
+};
+pub use folder_sharing::{
+    FolderSharingError, MAX_FOLDER_SHARE_LIFETIME_MS, accept_folder_share_offer,
+    commit_folder_share, create_folder_share_offer, create_folder_share_offer_with_policy,
+    folder_share_acceptance_digest, folder_share_offer_digest, verify_folder_share_acceptance,
+    verify_folder_share_commit, verify_folder_share_offer, verify_fresh_folder_share_acceptance,
+    verify_fresh_folder_share_offer,
 };
 pub use identity::{DeviceIdentity, PublicIdentity};
 pub use key_envelope::{
@@ -41,8 +54,8 @@ pub use recovery::{
     RecoveryCapsule, RecoveryKit, RecoveryProviderDirectoryEntry, RecoveryUnlockKey,
 };
 pub use replication::{
-    ChunkProvider, ProviderFailure, ProviderHealth, ReplicationReport, ReplicationScheduler,
-    StoreProvider,
+    ChunkProvider, ProviderFailure, ProviderHealth, RecoveryCatalogSink, ReplicationReport,
+    ReplicationScheduler, StoreProvider,
 };
 pub use restore::{
     PreviewAction, RestoreOptions, RestorePlan, RestorePreviewEntry, RestoreReport,
@@ -64,18 +77,13 @@ impl AuthorizedRoot {
     /// Opens an existing, non-symlink directory as a restore boundary.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, CoreError> {
         let path = path.as_ref();
-        let metadata = fs::symlink_metadata(path).map_err(|source| CoreError::Io {
-            operation: "inspect authorized root",
-            path: path.to_path_buf(),
-            source,
-        })?;
+        let metadata = fs::symlink_metadata(path)
+            .map_err(|source| map_authorized_root_io(path, "inspect authorized root", source))?;
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
             return Err(CoreError::InvalidAuthorizedRoot(path.to_path_buf()));
         }
-        let canonical = fs::canonicalize(path).map_err(|source| CoreError::Io {
-            operation: "canonicalize authorized root",
-            path: path.to_path_buf(),
-            source,
+        let canonical = fs::canonicalize(path).map_err(|source| {
+            map_authorized_root_io(path, "canonicalize authorized root", source)
         })?;
         Ok(Self { canonical })
     }
@@ -124,6 +132,27 @@ impl AuthorizedRoot {
             return Err(CoreError::EscapedAuthorizedRoot(destination));
         }
         Ok(destination)
+    }
+}
+
+fn map_authorized_root_io(
+    path: &Path,
+    operation: &'static str,
+    source: std::io::Error,
+) -> CoreError {
+    if matches!(
+        source.kind(),
+        std::io::ErrorKind::NotFound
+            | std::io::ErrorKind::PermissionDenied
+            | std::io::ErrorKind::NotADirectory
+    ) {
+        CoreError::InvalidAuthorizedRoot(path.to_path_buf())
+    } else {
+        CoreError::Io {
+            operation,
+            path: path.to_path_buf(),
+            source,
+        }
     }
 }
 
@@ -193,6 +222,9 @@ pub enum CoreError {
     /// Key material had an invalid encoded length.
     #[error("invalid cryptographic key material")]
     InvalidKeyMaterial,
+    /// The operating system could not provide cryptographic randomness.
+    #[error("secure randomness is unavailable")]
+    EntropyUnavailable,
     /// A record used an unsupported algorithm or version.
     #[error("unsupported cryptographic suite: {0}")]
     UnsupportedCipherSuite(String),
@@ -308,6 +340,29 @@ mod tests {
         let destination = root.resolve(&relative).expect("safe destination");
         assert_eq!(destination, root.canonical_path().join("nested/file.txt"));
         assert!(destination.starts_with(root.canonical_path()));
+    }
+
+    #[test]
+    fn restore_missing_or_non_directory_root_is_actionable_and_never_created() {
+        let directory = tempdir().expect("temporary root");
+        let missing = directory.path().join("missing").join("target");
+        assert!(matches!(
+            AuthorizedRoot::open(&missing),
+            Err(CoreError::InvalidAuthorizedRoot(path)) if path == missing
+        ));
+        assert!(
+            !missing.exists(),
+            "opening a restore root must never create it"
+        );
+
+        let file = directory.path().join("file");
+        fs::write(&file, b"not a directory").expect("file ancestor");
+        let beneath_file = file.join("target");
+        assert!(matches!(
+            AuthorizedRoot::open(&beneath_file),
+            Err(CoreError::InvalidAuthorizedRoot(path)) if path == beneath_file
+        ));
+        assert!(!beneath_file.exists());
     }
 
     #[cfg(unix)]

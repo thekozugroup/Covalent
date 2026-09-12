@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,14 @@ pub const MAX_MANIFEST_ENTRIES: usize = 1_000_000;
 pub const MAX_CHUNK_PLAINTEXT_BYTES: u32 = 8 * 1_024 * 1_024;
 /// Largest remembered-backup collection accepted in a settings import.
 pub const MAX_REMEMBERED_BACKUPS: usize = 100_000;
+/// Current public folder-sharing record schema.
+pub const FOLDER_SHARE_SCHEMA_VERSION: u16 = 1;
+/// One-way links require a peer that understands link-wide deletion settings.
+pub const FOLDER_LINK_SCHEMA_VERSION: u16 = 2;
+/// Largest user-visible folder label admitted to a signed share record.
+pub const MAX_FOLDER_SHARE_LABEL_BYTES: usize = 256;
+/// Largest retained pairing identifier admitted to a signed share record.
+pub const MAX_FOLDER_SHARE_PAIRING_ID_BYTES: usize = 128;
 
 const fn protocol_version_one() -> u16 {
     PROTOCOL_VERSION
@@ -421,6 +430,287 @@ pub struct TransportBinding {
     pub certificate_der: String,
     /// Lowercase SHA-256 digest of the DER certificate.
     pub certificate_fingerprint: String,
+}
+
+const ENGINE_DEVICE_ID_CHUNKS: usize = 8;
+const ENGINE_DEVICE_ID_CHUNK_BYTES: usize = 7;
+const ENGINE_DEVICE_ID_UNCHUNKED_BYTES: usize =
+    ENGINE_DEVICE_ID_CHUNKS * ENGINE_DEVICE_ID_CHUNK_BYTES;
+const ENGINE_LUHN_DATA_BYTES: usize = 13;
+const ENGINE_LUHN_BLOCK_BYTES: usize = 14;
+const ENGINE_LUHN_ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+/// Fixed validation failures for a public folder-sync engine binding.
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+pub enum SyncEngineBindingError {
+    /// The engine identity was not exact canonical Base32 with valid checks.
+    #[error("invalid folder-sync engine identity")]
+    InvalidDeviceId,
+    /// The direct endpoint was not one unambiguous canonical socket address.
+    #[error("invalid folder-sync engine endpoint")]
+    InvalidEndpoint,
+    /// The binding did not name a concrete Covalent owner.
+    #[error("invalid folder-sync engine owner")]
+    InvalidOwner,
+    /// The binding schema is not supported.
+    #[error("unsupported folder-sync engine binding schema")]
+    UnsupportedSchema,
+}
+
+/// Canonical Syncthing device identity, including all four Luhn-32 check digits.
+///
+/// This is a public certificate digest, not a Covalent identity or authorization.
+#[derive(Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SyncEngineDeviceId(Box<str>);
+
+impl SyncEngineDeviceId {
+    /// Validate and retain one exact upstream identity string.
+    pub fn parse(value: &str) -> Result<Self, SyncEngineBindingError> {
+        if value.len() != ENGINE_DEVICE_ID_UNCHUNKED_BYTES + ENGINE_DEVICE_ID_CHUNKS - 1
+            || value
+                .split('-')
+                .any(|chunk| chunk.len() != ENGINE_DEVICE_ID_CHUNK_BYTES)
+        {
+            return Err(SyncEngineBindingError::InvalidDeviceId);
+        }
+        let mut unchunked = [0_u8; ENGINE_DEVICE_ID_UNCHUNKED_BYTES];
+        let mut position = 0;
+        for byte in value.bytes() {
+            if byte == b'-' {
+                continue;
+            }
+            if !ENGINE_LUHN_ALPHABET.contains(&byte) {
+                return Err(SyncEngineBindingError::InvalidDeviceId);
+            }
+            unchunked[position] = byte;
+            position += 1;
+        }
+        if position != unchunked.len()
+            || unchunked
+                .chunks_exact(ENGINE_LUHN_BLOCK_BYTES)
+                .any(|block| {
+                    engine_luhn32(&block[..ENGINE_LUHN_DATA_BYTES])
+                        != Some(block[ENGINE_LUHN_DATA_BYTES])
+                })
+        {
+            return Err(SyncEngineBindingError::InvalidDeviceId);
+        }
+        let mut payload = [0_u8; 52];
+        for (destination, block) in payload
+            .chunks_exact_mut(ENGINE_LUHN_DATA_BYTES)
+            .zip(unchunked.chunks_exact(ENGINE_LUHN_BLOCK_BYTES))
+        {
+            destination.copy_from_slice(&block[..ENGINE_LUHN_DATA_BYTES]);
+        }
+        // SHA-256 Base32 has four padding bits. Requiring their canonical value
+        // prevents multiple checked strings from naming the same certificate.
+        if payload.iter().all(|byte| *byte == b'A')
+            || !matches!(payload.last().copied(), Some(b'A' | b'Q'))
+        {
+            return Err(SyncEngineBindingError::InvalidDeviceId);
+        }
+        Ok(Self(value.into()))
+    }
+
+    /// Return the exact canonical public identity.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for SyncEngineDeviceId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("SyncEngineDeviceId")
+            .field(&self.0)
+            .finish()
+    }
+}
+
+impl fmt::Display for SyncEngineDeviceId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl Serialize for SyncEngineDeviceId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for SyncEngineDeviceId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value).map_err(serde::de::Error::custom)
+    }
+}
+
+fn engine_luhn32(value: &[u8]) -> Option<u8> {
+    let mut factor = 1_usize;
+    let mut sum = 0_usize;
+    for byte in value {
+        let codepoint = ENGINE_LUHN_ALPHABET
+            .iter()
+            .position(|candidate| candidate == byte)?;
+        let addend = factor * codepoint;
+        factor = if factor == 2 { 1 } else { 2 };
+        sum += addend / ENGINE_LUHN_ALPHABET.len() + addend % ENGINE_LUHN_ALPHABET.len();
+    }
+    let check = (ENGINE_LUHN_ALPHABET.len() - sum % ENGINE_LUHN_ALPHABET.len())
+        % ENGINE_LUHN_ALPHABET.len();
+    Some(ENGINE_LUHN_ALPHABET[check])
+}
+
+/// Public engine identity and direct endpoint bound to one Covalent peer.
+///
+/// The engine private key, REST credential, database and local folder paths are
+/// deliberately absent. Pairing code must still bind this record to an expected
+/// trusted Covalent identity before treating it as authority.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SyncEngineBinding {
+    /// Binding schema; currently one.
+    pub schema_version: u16,
+    /// Covalent identity that owns this engine identity and endpoint.
+    pub covalent_device_id: DeviceId,
+    /// Canonical public Syncthing certificate identity.
+    pub engine_device_id: SyncEngineDeviceId,
+    /// Canonical numeric socket address used for direct TCP synchronization.
+    pub direct_address: String,
+}
+
+impl SyncEngineBinding {
+    /// Validate and construct a public binding without granting trust.
+    pub fn new(
+        covalent_device_id: DeviceId,
+        engine_device_id: &str,
+        direct_address: &str,
+    ) -> Result<Self, SyncEngineBindingError> {
+        if covalent_device_id == DeviceId::from_uuid(Uuid::nil()) {
+            return Err(SyncEngineBindingError::InvalidOwner);
+        }
+        let engine_device_id = SyncEngineDeviceId::parse(engine_device_id)?;
+        validate_sync_engine_endpoint(direct_address)?;
+        Ok(Self {
+            schema_version: FOLDER_SHARE_SCHEMA_VERSION,
+            covalent_device_id,
+            engine_device_id,
+            direct_address: direct_address.to_owned(),
+        })
+    }
+
+    /// Revalidate an untrusted decoded binding.
+    pub fn validate(&self) -> Result<SocketAddr, SyncEngineBindingError> {
+        if self.schema_version != FOLDER_SHARE_SCHEMA_VERSION {
+            return Err(SyncEngineBindingError::UnsupportedSchema);
+        }
+        if self.covalent_device_id == DeviceId::from_uuid(Uuid::nil()) {
+            return Err(SyncEngineBindingError::InvalidOwner);
+        }
+        // The strongly typed identity validates during decoding, but repeat the
+        // check so a future internal constructor cannot bypass canonical form.
+        SyncEngineDeviceId::parse(self.engine_device_id.as_str())?;
+        validate_sync_engine_endpoint(&self.direct_address)
+    }
+}
+
+fn validate_sync_engine_endpoint(value: &str) -> Result<SocketAddr, SyncEngineBindingError> {
+    if value.is_empty() || value.len() > 96 || value.chars().any(char::is_control) {
+        return Err(SyncEngineBindingError::InvalidEndpoint);
+    }
+    let address: SocketAddr = value
+        .parse()
+        .map_err(|_| SyncEngineBindingError::InvalidEndpoint)?;
+    if address.to_string() != value || address.port() == 0 {
+        return Err(SyncEngineBindingError::InvalidEndpoint);
+    }
+    let unsafe_ip = match address.ip() {
+        IpAddr::V4(ip) => ip.is_unspecified() || ip.is_multicast() || ip == Ipv4Addr::BROADCAST,
+        IpAddr::V6(ip) => {
+            let ambiguous_link_local = is_ipv6_unicast_link_local(ip);
+            let has_scope = match address {
+                SocketAddr::V6(scoped) => scoped.scope_id() != 0 || scoped.flowinfo() != 0,
+                SocketAddr::V4(_) => false,
+            };
+            ip.is_unspecified() || ip.is_multicast() || ambiguous_link_local || has_scope
+        }
+    };
+    if unsafe_ip {
+        return Err(SyncEngineBindingError::InvalidEndpoint);
+    }
+    Ok(address)
+}
+
+const fn is_ipv6_unicast_link_local(value: Ipv6Addr) -> bool {
+    value.segments()[0] & 0xffc0 == 0xfe80
+}
+
+/// Deletion choices shared by all destinations of a one-way link.
+/// Absence on a historical offer preserves its original two-way behavior.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FolderLinkPolicy {
+    pub propagate_source_deletions: bool,
+    pub restore_local_deletions: bool,
+}
+
+/// Source-signed invitation to share one folder with one exact Covalent peer.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FolderShareOffer {
+    pub schema_version: u16,
+    pub offer_id: Uuid,
+    pub folder_id: Uuid,
+    pub label: String,
+    pub source_device_id: DeviceId,
+    pub target_device_id: DeviceId,
+    pub source_engine: SyncEngineBinding,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_policy: Option<FolderLinkPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pairing_id: Option<String>,
+    pub issued_at_unix_ms: u64,
+    pub expires_at_unix_ms: u64,
+    /// Canonical base64url encoding of 24 random bytes.
+    pub nonce: String,
+    /// Canonical base64url Ed25519 signature.
+    pub signature: String,
+}
+
+/// Target-signed acceptance binding an offer to the target's public engine.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FolderShareAcceptance {
+    pub schema_version: u16,
+    /// Lowercase BLAKE3 digest of the entire signed offer.
+    pub offer_digest: String,
+    pub target_device_id: DeviceId,
+    pub target_engine: SyncEngineBinding,
+    pub accepted_at_unix_ms: u64,
+    /// Canonical base64url Ed25519 signature.
+    pub signature: String,
+}
+
+/// Source-signed commitment to one exact offer and target acceptance.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FolderShareCommit {
+    pub schema_version: u16,
+    pub source_device_id: DeviceId,
+    /// Lowercase BLAKE3 digest of the entire signed offer.
+    pub offer_digest: String,
+    /// Lowercase BLAKE3 digest of the entire signed acceptance.
+    pub acceptance_digest: String,
+    /// Canonical base64url Ed25519 signature.
+    pub signature: String,
 }
 
 /// Provider-issued, backup-scoped reservation required for every remote object write.
@@ -890,6 +1180,68 @@ pub struct NodeStatus {
     pub platform_tier: PlatformTier,
     /// Coarse service lifecycle state.
     pub state: String,
+}
+
+/// Durable progress of an explicitly started owner-loss recovery.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryPhase {
+    /// This state root was opened normally and has no recovery attempt.
+    NotConfigured,
+    /// The signed kit was restored, but provider catalogs have not been queried yet.
+    Pending,
+    /// Catalogs were imported and every configured provider answered cleanly.
+    Imported,
+    /// At least one authenticated catalog was imported with incomplete provider evidence.
+    Partial,
+    /// No catalog was imported because available authenticated evidence was unsafe or unusable.
+    Blocked,
+    /// Every configured provider answered, but none held a catalog for this owner.
+    NoCatalogs,
+}
+
+/// One backup recovered from an authenticated provider catalog.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecoveredBackupStatus {
+    /// Stable logical backup identifier.
+    pub backup_id: BackupId,
+    /// Authenticated snapshot selected by timestamp and stable identifier.
+    pub snapshot_id: String,
+    /// Exact providers that supplied an identical authenticated capsule.
+    pub source_provider_ids: BTreeSet<DeviceId>,
+}
+
+/// One non-secret provider failure retained for a recovery warning.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecoveryProviderFailure {
+    /// Provider that was unavailable or returned rejected evidence.
+    pub provider_id: DeviceId,
+    /// Affected snapshot identifier, when an authenticated request supplied one.
+    pub snapshot_id: Option<String>,
+    /// Stable non-secret failure category.
+    pub reason: String,
+}
+
+/// Secret-free owner-loss recovery status returned by the local management API.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecoveryStatus {
+    /// Active protocol version.
+    pub protocol_version: u16,
+    /// Conservative progress state for this recovery attempt.
+    pub phase: RecoveryPhase,
+    /// Authenticated snapshots committed by the most recent attempt.
+    pub recovered_backups: Vec<RecoveredBackupStatus>,
+    /// Providers from which a complete bounded listing was received.
+    pub queried_provider_ids: BTreeSet<DeviceId>,
+    /// Providers expected from the signed recovery kit.
+    pub configured_provider_ids: BTreeSet<DeviceId>,
+    /// Safe failure evidence from the most recent attempt.
+    pub failures: Vec<RecoveryProviderFailure>,
+    /// True whenever missing or rejected evidence means a newer snapshot may exist.
+    pub newer_snapshot_may_exist: bool,
 }
 
 /// Contract validation error.

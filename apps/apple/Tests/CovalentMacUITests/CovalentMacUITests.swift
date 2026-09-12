@@ -20,9 +20,43 @@ final class CovalentMacUITests: XCTestCase {
     /// is several times the largest transition that has ever been observed.
     private let uiTransitionTimeout: TimeInterval = 10
 
+    func testFirstLaunchChoiceCanSetUpAndRecoveryCancelLeavesChoiceVisible() throws {
+        let app = try launchApp(firstLaunch: true)
+        XCTAssertTrue(app.staticTexts["Set up this Mac"].waitForExistence(timeout: uiTransitionTimeout))
+        XCTAssertTrue(app.buttons["firstLaunch.setup"].isHittable)
+        XCTAssertTrue(app.buttons["firstLaunch.chooseKit"].isHittable)
+        XCTAssertTrue(app.buttons["firstLaunch.chooseCode"].isHittable)
+        XCTAssertFalse(app.buttons["firstLaunch.recover"].isEnabled)
+
+        // Cancelling before selection must not start a service or create an
+        // identity; the choice remains the only visible path.
+        app.buttons["firstLaunch.chooseKit"].click()
+        // AppKit also exposes a Cancel button in the system Touch Bar. Target
+        // the open panel so the test exercises the file chooser's cancellation.
+        let openPanel = app.dialogs["open-panel"]
+        XCTAssertTrue(openPanel.waitForExistence(timeout: uiTransitionTimeout))
+        let cancel = openPanel.buttons["CancelButton"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: uiTransitionTimeout))
+        cancel.click()
+        XCTAssertTrue(waitForDisappearance(of: openPanel, timeout: uiTransitionTimeout))
+        XCTAssertTrue(app.staticTexts["Set up this Mac"].exists)
+
+        app.buttons["firstLaunch.setup"].click()
+        XCTAssertTrue(waitForDisappearance(of: app.staticTexts["Set up this Mac"], timeout: uiTransitionTimeout))
+        showOverview(in: app)
+        XCTAssertTrue(app.staticTexts["Apple UI Test Node is protected here"].waitForExistence(timeout: uiTransitionTimeout))
+    }
+
     func testTierOneNavigationAndPrimaryWorkflowsAreReachable() throws {
         let app = try launchApp()
         continueAfterFailure = false
+        app.typeKey("1", modifierFlags: .command)
+        XCTAssertTrue(app.staticTexts["Your devices"].waitForExistence(timeout: uiTransitionTimeout))
+        app.typeKey("2", modifierFlags: .command)
+        XCTAssertTrue(app.staticTexts["Folder Sync Is Unavailable"].waitForExistence(timeout: uiTransitionTimeout))
+        app.typeKey("3", modifierFlags: .command)
+        XCTAssertTrue(app.staticTexts["Settings transfer"].waitForExistence(timeout: uiTransitionTimeout))
+        showOverview(in: app)
         XCTAssertTrue(app.staticTexts["Apple UI Test Node is protected here"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["overview.newBackup"].isEnabled)
 
@@ -32,8 +66,8 @@ final class CovalentMacUITests: XCTestCase {
         XCTAssertFalse(app.buttons["backup.create"].isEnabled)
         app.buttons["Cancel"].click()
 
-        app.staticTexts["Devices"].click()
-        XCTAssertTrue(app.staticTexts["Your backup network"].waitForExistence(timeout: uiTransitionTimeout))
+        app.descendants(matching: .any).matching(identifier: "sidebar.devices").firstMatch.click()
+        XCTAssertTrue(app.staticTexts["Your devices"].waitForExistence(timeout: uiTransitionTimeout))
         let advanced = app.descendants(matching: .any)["devices.advancedRecovery"]
         XCTAssertTrue(advanced.waitForExistence(timeout: uiTransitionTimeout))
         scrollTo(advanced, in: app)
@@ -63,15 +97,37 @@ final class CovalentMacUITests: XCTestCase {
         app.staticTexts["Settings"].click()
         XCTAssertTrue(app.staticTexts["Settings transfer"].waitForExistence(timeout: uiTransitionTimeout))
         XCTAssertTrue(app.staticTexts["Private identity keys and folder permissions never leave this device."].exists)
+        let notices = app.buttons["settings.openSourceNotices"]
+        scrollTo(notices, in: app)
+        XCTAssertTrue(notices.waitForExistence(timeout: uiTransitionTimeout))
+        notices.click()
+        XCTAssertTrue(app.staticTexts["Open Source Notices"].waitForExistence(timeout: uiTransitionTimeout))
+        let noticeText = app.descendants(matching: .any)["settings.openSourceNotices.text"]
+        XCTAssertTrue(noticeText.waitForExistence(timeout: uiTransitionTimeout))
+        app.buttons["Done"].click()
     }
 
     func testOverviewPassesSystemAccessibilityAudit() throws {
         let app = try launchApp()
+        showOverview(in: app)
+        XCTAssertTrue(app.staticTexts["Apple UI Test Node is protected here"].waitForExistence(timeout: 10))
+        try auditMainWindow(in: app)
+    }
+
+    func testLinksPassesSystemAccessibilityAudit() throws {
+        let app = try launchApp()
+        app.typeKey("2", modifierFlags: .command)
+        // This harness deliberately runs an unpackaged node. Its Links pane
+        // must explain that state and remain accessible.
+        XCTAssertTrue(app.staticTexts["Folder Sync Is Unavailable"].waitForExistence(timeout: uiTransitionTimeout))
+        try auditMainWindow(in: app)
+    }
+
+    private func auditMainWindow(in app: XCUIApplication) throws {
         // Every audit finding still fails this test; stopping at the first one
         // only hid how many there were, which turned a single run into a
         // one-finding-at-a-time search. Report them all.
         continueAfterFailure = true
-        XCTAssertTrue(app.staticTexts["Apple UI Test Node is protected here"].waitForExistence(timeout: 10))
 
         // ---------------------------------------------------------------
         // Why this audit is scoped to the main window.
@@ -253,6 +309,7 @@ final class CovalentMacUITests: XCTestCase {
     func testNativeMenuBarQuickActionsAreReachable() throws {
         let app = try launchApp()
         continueAfterFailure = false
+        showOverview(in: app)
         XCTAssertTrue(app.staticTexts["Apple UI Test Node is protected here"].waitForExistence(timeout: 10))
 
         // macOS maps a menu-bar status item's accessible title into an exact
@@ -296,6 +353,12 @@ final class CovalentMacUITests: XCTestCase {
         XCTAssertTrue(app.menuItems["Refresh Status"].exists)
         XCTAssertTrue(app.menuItems["Settings…"].exists)
         XCTAssertTrue(app.menuItems["Quit Covalent"].exists)
+    }
+
+    private func showOverview(in app: XCUIApplication) {
+        let overview = app.descendants(matching: .any).matching(identifier: "sidebar.overview").firstMatch
+        XCTAssertTrue(overview.waitForExistence(timeout: uiTransitionTimeout))
+        overview.click()
     }
 
     /// Expands a macOS `DisclosureGroup`.
@@ -348,7 +411,7 @@ final class CovalentMacUITests: XCTestCase {
         }
     }
 
-    private func launchApp() throws -> XCUIApplication {
+    private func launchApp(firstLaunch: Bool = false) throws -> XCUIApplication {
         let environment = ProcessInfo.processInfo.environment
         let app = XCUIApplication()
         let testBundle = Bundle(for: CovalentMacUITests.self)
@@ -358,6 +421,7 @@ final class CovalentMacUITests: XCTestCase {
             ?? testBundle.object(forInfoDictionaryKey: "CovalentUITestTokenFile") as? String
         app.launchEnvironment["COVALENT_UI_TEST_BASE_URL"] = "http://127.0.0.1:\(try XCTUnwrap(port))"
         app.launchEnvironment["COVALENT_UI_TEST_TOKEN_FILE"] = try XCTUnwrap(tokenFile)
+        if firstLaunch { app.launchEnvironment["COVALENT_UI_TEST_FIRST_LAUNCH"] = "1" }
         app.launch()
         return app
     }

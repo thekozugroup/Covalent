@@ -140,6 +140,12 @@ Launch Covalent and wait for status **Ready**. First launch automatically:
 - starts the bundled node on a private loopback address; and
 - reconnects the app to that node.
 
+The personal build saves its encryption keys in your login Keychain. If macOS
+asks for access after a verified Covalent update, authorize the Covalent app you
+just opened. Denied or locked access stops startup without replacing your keys.
+Unlock the Mac, retry, and respond to the macOS Keychain prompt. Do not delete
+the saved key to resolve an access error.
+
 Nothing needs to be typed into **Service → Connect**. That form is a recovery
 tool, not the Atlas pairing path, and a managed Mac returns to its bundled node
 on refresh. Keep Covalent open and the Mac awake during the first backup.

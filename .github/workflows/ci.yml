@@ -87,12 +87,27 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Checkout the pinned maintained sync engine
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: syncthing/syncthing
+          ref: 946e2b83a1f6c6ae119427c09e0a5802940b82ff
+          path: artifacts/vendor/syncthing
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6
+        with:
+          go-version: "1.26.7"
+          cache: false
+      - name: Set the verified engine source location
+        run: echo "SYNCTHING_SOURCE_DIR=${GITHUB_WORKSPACE}/artifacts/vendor/syncthing" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
         with:
           targets: aarch64-apple-darwin
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Require an Apple Silicon runner
         run: test "$(uname -m)" = arm64
+      - run: ./scripts/test-macos-open-source-notices.sh
+      - run: ./scripts/test-macos-sync-engine-packaging.sh
       - run: brew install xcodegen
       - run: swift test --package-path apps/apple
       - name: Generate Apple dependency inventories
@@ -131,6 +146,19 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Checkout the pinned maintained sync engine
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: syncthing/syncthing
+          ref: 946e2b83a1f6c6ae119427c09e0a5802940b82ff
+          path: artifacts/vendor/syncthing
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6
+        with:
+          go-version: "1.26.7"
+          cache: false
+      - name: Set the verified engine source location
+        run: echo "SYNCTHING_SOURCE_DIR=${GITHUB_WORKSPACE}/artifacts/vendor/syncthing" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
         with:
           targets: aarch64-apple-darwin
@@ -158,6 +186,19 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Checkout the pinned maintained sync engine
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: syncthing/syncthing
+          ref: 946e2b83a1f6c6ae119427c09e0a5802940b82ff
+          path: artifacts/vendor/syncthing
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6
+        with:
+          go-version: "1.26.7"
+          cache: false
+      - name: Set the verified engine source location
+        run: echo "SYNCTHING_SOURCE_DIR=${GITHUB_WORKSPACE}/artifacts/vendor/syncthing" >> "$GITHUB_ENV"
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
@@ -191,6 +232,29 @@ jobs:
       # existed with no caller anywhere in the repo, so it gated nothing.
       - run: ./scripts/check-android-jni-contract.sh
       - run: ./scripts/check-android.sh
+      - name: Preserve Android foundation failure reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-foundation-reports-${{ github.sha }}
+          path: |
+            apps/android/app/build/reports/lint-results-*
+            apps/android/app/build/test-results
+            apps/android/app/build/generated/syncEngine/reports
+            apps/android/app/build/generated/jniLibs/provenance
+            apps/android/app/build/generated/jniLibs/covalent-android-native-provenance.sha256
+          if-no-files-found: warn
+      - name: Retain the exact Android native distribution evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-native-distribution-evidence-${{ github.sha }}
+          path: |
+            apps/android/app/build/outputs/apk/debug/app-debug.apk
+            apps/android/app/build/generated/syncEngine/reports
+            apps/android/app/build/generated/jniLibs/provenance
+            apps/android/app/build/generated/jniLibs/covalent-android-native-provenance.sha256
+          if-no-files-found: error
+          retention-days: 14
       - run: ./apps/android/gradlew -p apps/android :app:generateAndroidSbom
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -206,6 +270,19 @@ jobs:
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Checkout the pinned maintained sync engine
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: syncthing/syncthing
+          ref: 946e2b83a1f6c6ae119427c09e0a5802940b82ff
+          path: artifacts/vendor/syncthing
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6
+        with:
+          go-version: "1.26.7"
+          cache: false
+      - name: Set the verified engine source location
+        run: echo "SYNCTHING_SOURCE_DIR=${GITHUB_WORKSPACE}/artifacts/vendor/syncthing" >> "$GITHUB_ENV"
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
@@ -674,7 +751,13 @@ jobs:
         if: always()
         with:
           name: android-api37-evidence-${{ github.sha }}
-          path: ${{ runner.temp }}/covalent-android-api37
+          path: |
+            ${{ runner.temp }}/covalent-android-api37
+            apps/android/app/build/reports/lint-results-*
+            apps/android/app/build/test-results
+            apps/android/app/build/generated/syncEngine/reports
+            apps/android/app/build/generated/jniLibs/provenance
+            apps/android/app/build/generated/jniLibs/covalent-android-native-provenance.sha256
           if-no-files-found: warn
 
   container-foundation:
@@ -698,11 +781,51 @@ jobs:
           echo "fingerprint=${fingerprint}" >> "${GITHUB_OUTPUT}"
       - run: docker buildx build --platform linux/amd64 --load --build-arg VCS_REF=${{ github.sha }} --build-arg COVALENT_SOURCE_FINGERPRINT=${{ steps.docker-source.outputs.fingerprint }} -f packaging/docker/Dockerfile -t covalent:ci .
       - run: ./scripts/check-container-contract.sh covalent:ci "${GITHUB_SHA}" development "${{ steps.docker-source.outputs.fingerprint }}"
+      - name: Retain the exact amd64 engine distribution evidence
+        id: container-evidence
+        run: |
+          set -euo pipefail
+          image_id=$(docker image inspect --format '{{.Id}}' covalent:ci)
+          [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          container_id=$(docker create --network none --read-only --entrypoint /bin/true "$image_id")
+          [[ "$container_id" =~ ^[0-9a-f]{64}$ ]]
+          trap 'docker rm -v "$container_id" >/dev/null' EXIT
+          echo "image_id=$image_id" >> "$GITHUB_OUTPUT"
+          output="$RUNNER_TEMP/covalent-linux-engine-evidence-amd64"
+          test ! -e "$output"
+          mkdir "$output" "$output/engine"
+          # Docker's directory copier applies 0555 before writing children.
+          # GNU tar restores directory permissions after extracting their files.
+          docker cp "$container_id:/usr/local/share/covalent/sync-engine/." - \
+            | tar --extract --file - --no-same-owner --delay-directory-restore --directory "$output/engine"
+          docker image inspect "$image_id" > "$output/image-metadata.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-sync-engine-evidence-amd64-${{ github.sha }}
+          path: ${{ runner.temp }}/covalent-linux-engine-evidence-amd64
+          if-no-files-found: error
       - run: docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp --entrypoint covalent covalent:ci doctor
       - run: ./scripts/check-container-runtime.sh covalent:ci
-      - run: ./scripts/check-artifact-budgets.sh --image-only covalent:ci --platform linux/amd64
       - run: ./scripts/validate-unraid-template.sh
+      - name: Validate packaged folder sync with isolated writable volumes
+        run: python3 -B scripts/container-folder-sync-e2e.py covalent:ci
       - run: ./scripts/docker-compose-e2e.sh covalent:ci
+      - name: Scan the exact amd64 runtime image
+        id: container-vulnerabilities
+        run: >-
+          ./scripts/run-pinned-grype-scan.sh
+          '${{ steps.container-evidence.outputs.image_id }}'
+          '${{ runner.temp }}/covalent-container-vulnerabilities-amd64.json'
+      # A size failure must preserve the functional and security results above.
+      - run: ./scripts/check-artifact-budgets.sh --image-only covalent:ci --platform linux/amd64
+      - name: Retain the amd64 vulnerability report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: container-vulnerabilities-amd64-${{ github.sha }}
+          path: ${{ runner.temp }}/covalent-container-vulnerabilities-amd64.json
+          if-no-files-found: error
+          retention-days: 14
 
   container-arm64:
     name: Container arm64 image
@@ -728,7 +851,46 @@ jobs:
           echo "fingerprint=${fingerprint}" >> "${GITHUB_OUTPUT}"
       - run: docker buildx build --platform linux/arm64 --load --build-arg VCS_REF=${{ github.sha }} --build-arg COVALENT_SOURCE_FINGERPRINT=${{ steps.docker-source.outputs.fingerprint }} -f packaging/docker/Dockerfile -t covalent:ci-arm64 .
       - run: ./scripts/check-container-contract.sh covalent:ci-arm64 "${GITHUB_SHA}" development "${{ steps.docker-source.outputs.fingerprint }}"
+      - name: Retain the exact arm64 engine distribution evidence
+        id: container-evidence
+        run: |
+          set -euo pipefail
+          image_id=$(docker image inspect --format '{{.Id}}' covalent:ci-arm64)
+          [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          container_id=$(docker create --network none --read-only --entrypoint /bin/true "$image_id")
+          [[ "$container_id" =~ ^[0-9a-f]{64}$ ]]
+          trap 'docker rm -v "$container_id" >/dev/null' EXIT
+          echo "image_id=$image_id" >> "$GITHUB_OUTPUT"
+          output="$RUNNER_TEMP/covalent-linux-engine-evidence-arm64"
+          test ! -e "$output"
+          mkdir "$output" "$output/engine"
+          # Docker's directory copier applies 0555 before writing children.
+          # GNU tar restores directory permissions after extracting their files.
+          docker cp "$container_id:/usr/local/share/covalent/sync-engine/." - \
+            | tar --extract --file - --no-same-owner --delay-directory-restore --directory "$output/engine"
+          docker image inspect "$image_id" > "$output/image-metadata.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-sync-engine-evidence-arm64-${{ github.sha }}
+          path: ${{ runner.temp }}/covalent-linux-engine-evidence-arm64
+          if-no-files-found: error
+      - name: Validate packaged arm64 folder sync with isolated writable volumes
+        run: python3 -B scripts/container-folder-sync-e2e.py covalent:ci-arm64
+      - name: Scan the exact arm64 runtime image
+        id: container-vulnerabilities
+        run: >-
+          ./scripts/run-pinned-grype-scan.sh
+          '${{ steps.container-evidence.outputs.image_id }}'
+          '${{ runner.temp }}/covalent-container-vulnerabilities-arm64.json'
       - run: ./scripts/check-artifact-budgets.sh --image-only covalent:ci-arm64 --platform linux/arm64
+      - name: Retain the arm64 vulnerability report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: container-vulnerabilities-arm64-${{ github.sha }}
+          path: ${{ runner.temp }}/covalent-container-vulnerabilities-arm64.json
+          if-no-files-found: error
+          retention-days: 14
 
   ios-tier2:
     name: iOS Tier 2

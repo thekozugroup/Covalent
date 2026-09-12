@@ -172,6 +172,8 @@ extension ConnectionStoreError: LocalizedError {
 public actor AppleAppPersistence {
     private let directoryURL: URL
     private let grantsURL: URL
+    private let pendingFolderRepairsURL: URL
+    private let pendingFolderLinkSettingsURL: URL
     private let snapshotsURL: URL
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
@@ -180,6 +182,8 @@ public actor AppleAppPersistence {
         let directory = directoryURL ?? Self.defaultDirectoryURL
         self.directoryURL = directory
         grantsURL = directory.appending(path: "directory-grants.json")
+        pendingFolderRepairsURL = directory.appending(path: "pending-folder-repairs.json")
+        pendingFolderLinkSettingsURL = directory.appending(path: "pending-folder-link-settings.json")
         snapshotsURL = directory.appending(path: "snapshot-history.json")
         decoder.dateDecodingStrategy = .iso8601
         encoder.dateEncodingStrategy = .iso8601
@@ -192,6 +196,52 @@ public actor AppleAppPersistence {
 
     public func saveDirectoryGrants(_ grants: [SelectedDirectoryGrant]) throws {
         try save(grants, to: grantsURL)
+    }
+
+    public func loadPendingFolderRepairs() throws -> [PendingFolderAccessRepair] {
+        let repairs = try load(
+            [PendingFolderAccessRepair].self,
+            from: pendingFolderRepairsURL,
+            fallback: []
+        )
+        guard repairs.count <= 128,
+              Set(repairs.map(\.offerId)).count == repairs.count,
+              repairs.allSatisfy({ repair in
+                  repair.replacementGrant.purpose == .folderSync
+                      && repair.replacementGrant.folderOfferId == repair.offerId
+                      && repair.selectedRoot.hasPrefix("/")
+                      && (1...4_096).contains(repair.selectedRoot.utf8.count)
+                      && !repair.selectedRoot.contains("\0")
+              })
+        else { throw FolderAccessRepairError.invalidSavedRepair }
+        return repairs
+    }
+
+    public func savePendingFolderRepairs(_ repairs: [PendingFolderAccessRepair]) throws {
+        try save(repairs, to: pendingFolderRepairsURL)
+    }
+
+    public func loadPendingFolderLinkSettingsChanges() throws -> [PendingFolderLinkSettingsChange] {
+        let changes = try load(
+            [PendingFolderLinkSettingsChange].self,
+            from: pendingFolderLinkSettingsURL,
+            fallback: []
+        )
+        let zero = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+        guard changes.count <= 128,
+              Set(changes.map(\.folderId)).count == changes.count,
+              changes.allSatisfy({ $0.changeId != zero })
+        else { throw NodeClientError.invalidResponse }
+        return changes
+    }
+
+    public func savePendingFolderLinkSettingsChanges(
+      _ changes: [PendingFolderLinkSettingsChange]
+    ) throws {
+        guard changes.count <= 128,
+              Set(changes.map(\.folderId)).count == changes.count
+        else { throw NodeClientError.invalidResponse }
+        try save(changes, to: pendingFolderLinkSettingsURL)
     }
 
     public func loadSnapshots() throws -> [SnapshotRecord] {

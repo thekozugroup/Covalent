@@ -19,6 +19,7 @@ class FakeElement {
   addEventListener(type, listener) { this.listeners.set(type, listener); }
   getAttribute(name) { return this.attributes.get(name) ?? null; }
   setAttribute(name, value) { this.attributes.set(name, value); }
+  removeAttribute(name) { this.attributes.delete(name); }
   focus() { this.focusCount += 1; }
   fire(type, key = undefined) {
     const event = {
@@ -32,24 +33,27 @@ class FakeElement {
 }
 
 function tabFixture() {
-  const names = ["pair", "backup", "restore", "settings"];
-  const tabElements = names.map((name, index) => new FakeElement(
+  const names = ["pair", "folders", "settings"];
+  const tabElements = names.map((name) => new FakeElement(
     { tab: name },
-    { "aria-selected": index === 0 ? "true" : "false", tabindex: index === 0 ? "0" : "-1" },
+    { "aria-selected": name === "folders" ? "true" : "false", tabindex: name === "folders" ? "0" : "-1" },
   ));
-  const panels = names.map((name, index) => {
+  const panelNames = ["folders", "pair", "backup", "restore", "settings"];
+  const panels = panelNames.map((name) => {
     const panel = new FakeElement({ panel: name });
-    panel.hidden = index !== 0;
+    panel.hidden = name !== "folders";
     return panel;
   });
+  const toolElements = ["backup", "restore"].map((name) => new FakeElement({ toolPanel: name }));
   const documentRoot = {
     querySelectorAll(selector) {
       if (selector === "[data-tab]") return tabElements;
       if (selector === "[data-panel]") return panels;
+      if (selector === "[data-tool-panel]") return toolElements;
       return [];
     },
   };
-  return { documentRoot, panels, tabElements };
+  return { documentRoot, panels, tabElements, toolElements };
 }
 
 function selectedState(tabElements) {
@@ -58,18 +62,21 @@ function selectedState(tabElements) {
 
 test("tab markup starts with one tab stop and one visible labelled panel", async () => {
   const html = await readFile(new URL("index.html", root), "utf8");
-  assert.match(html, /id="pair-tab" role="tab" aria-selected="true" aria-controls="pair-panel" tabindex="0"/);
-  for (const name of ["backup", "restore", "settings"]) {
-    assert.match(
-      html,
-      new RegExp(`id="${name}-tab" role="tab" aria-selected="false" aria-controls="${name}-panel" tabindex="-1"`),
-    );
-    assert.match(
-      html,
-      new RegExp(`id="${name}-panel" role="tabpanel" aria-labelledby="${name}-tab" tabindex="0" data-panel="${name}" hidden`),
-    );
+  assert.match(html, /id="folders-tab" role="tab" aria-selected="true" aria-controls="folders-panel" tabindex="0"/);
+  for (const name of ["pair", "backup", "restore", "settings"]) {
+    if (["pair", "settings"].includes(name)) {
+      assert.match(html,
+        new RegExp(`id="${name}-tab" role="tab" aria-selected="false" aria-controls="${name}-panel" tabindex="-1"`));
+      assert.match(html,
+        new RegExp(`id="${name}-panel" role="tabpanel" aria-labelledby="${name}-tab" tabindex="0" data-panel="${name}" hidden`));
+    } else {
+      assert.match(html, new RegExp(`id="${name}-tool" type="button" aria-controls="${name}-panel" data-tool-panel="${name}"`));
+      assert.match(html,
+        new RegExp(`id="${name}-panel" role="region" aria-labelledby="${name}-tool" tabindex="0" data-panel="${name}" hidden`));
+    }
   }
-  assert.match(html, /id="pair-panel" role="tabpanel" aria-labelledby="pair-tab" tabindex="0" data-panel="pair">/);
+  assert.match(html, /id="folders-panel" role="tabpanel" aria-labelledby="folders-tab" tabindex="0" data-panel="folders">/);
+  assert.match(html, /<script src="\/assets\/folder-sync-flow\.js" defer><\/script>/);
   assert.match(html, /<script src="\/assets\/tab-flow\.js" defer><\/script>/);
 });
 
@@ -77,22 +84,22 @@ test("ArrowLeft and ArrowRight wrap focus, selection, tabindex, and visible pane
   const fixture = tabFixture();
   tabs.install(fixture.documentRoot);
   assert.deepEqual(selectedState(fixture.tabElements), [
-    ["true", "0"], ["false", "-1"], ["false", "-1"], ["false", "-1"],
+    ["false", "-1"], ["true", "0"], ["false", "-1"],
   ]);
-  assert.deepEqual(fixture.panels.map((panel) => panel.hidden), [false, true, true, true]);
+  assert.deepEqual(fixture.panels.map((panel) => panel.hidden), [false, true, true, true, true]);
 
-  const right = fixture.tabElements[0].fire("keydown", "ArrowRight");
+  const right = fixture.tabElements[1].fire("keydown", "ArrowRight");
   assert.equal(right.defaultPrevented, true);
-  assert.equal(fixture.tabElements[1].focusCount, 1);
+  assert.equal(fixture.tabElements[2].focusCount, 1);
   assert.deepEqual(selectedState(fixture.tabElements), [
-    ["false", "-1"], ["true", "0"], ["false", "-1"], ["false", "-1"],
+    ["false", "-1"], ["false", "-1"], ["true", "0"],
   ]);
-  assert.deepEqual(fixture.panels.map((panel) => panel.hidden), [true, false, true, true]);
+  assert.deepEqual(fixture.panels.map((panel) => panel.hidden), [true, true, true, true, false]);
 
   const left = fixture.tabElements[0].fire("keydown", "ArrowLeft");
   assert.equal(left.defaultPrevented, true);
-  assert.equal(fixture.tabElements[3].focusCount, 1);
-  assert.deepEqual(fixture.panels.map((panel) => panel.hidden), [true, true, true, false]);
+  assert.equal(fixture.tabElements[2].focusCount, 2);
+  assert.deepEqual(fixture.panels.map((panel) => panel.hidden), [true, true, true, true, false]);
 });
 
 test("Home and End move to the first and last tabs with automatic activation", () => {
@@ -100,13 +107,28 @@ test("Home and End move to the first and last tabs with automatic activation", (
   tabs.install(fixture.documentRoot);
   const end = fixture.tabElements[1].fire("keydown", "End");
   assert.equal(end.defaultPrevented, true);
-  assert.equal(fixture.tabElements[3].focusCount, 1);
-  assert.deepEqual(fixture.panels.map((panel) => panel.hidden), [true, true, true, false]);
+  assert.equal(fixture.tabElements[2].focusCount, 1);
+  assert.deepEqual(fixture.panels.map((panel) => panel.hidden), [true, true, true, true, false]);
 
-  const home = fixture.tabElements[3].fire("keydown", "Home");
+  const home = fixture.tabElements[2].fire("keydown", "Home");
   assert.equal(home.defaultPrevented, true);
   assert.equal(fixture.tabElements[0].focusCount, 1);
-  assert.deepEqual(fixture.panels.map((panel) => panel.hidden), [false, true, true, true]);
+  assert.deepEqual(fixture.panels.map((panel) => panel.hidden), [true, false, true, true, true]);
+});
+
+test("older tool buttons remain keyboard reachable and select only their labelled region", () => {
+  const fixture = tabFixture();
+  tabs.install(fixture.documentRoot);
+  fixture.toolElements[0].fire("click");
+  assert.deepEqual(selectedState(fixture.tabElements), [
+    ["false", "-1"], ["false", "-1"], ["false", "-1"],
+  ]);
+  assert.equal(fixture.toolElements[0].getAttribute("aria-current"), "page");
+  assert.deepEqual(fixture.panels.map((panel) => panel.hidden), [true, true, false, true, true]);
+
+  fixture.tabElements[1].fire("click");
+  assert.equal(fixture.toolElements[0].getAttribute("aria-current"), null);
+  assert.deepEqual(fixture.panels.map((panel) => panel.hidden), [false, true, true, true, true]);
 });
 
 function token(block, name) {

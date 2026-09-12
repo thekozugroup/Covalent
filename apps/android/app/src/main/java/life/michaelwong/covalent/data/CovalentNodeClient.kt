@@ -29,6 +29,22 @@ import javax.net.ssl.X509TrustManager
 import org.json.JSONArray
 import org.json.JSONObject
 import life.michaelwong.covalent.model.DiscoveryCandidate
+import life.michaelwong.covalent.model.FolderHealth
+import life.michaelwong.covalent.model.FolderLinkPolicy
+import life.michaelwong.covalent.model.FolderLinkSettings
+import life.michaelwong.covalent.model.FolderLinkSettingsChange
+import life.michaelwong.covalent.model.FolderLinkSettingsState
+import life.michaelwong.covalent.model.FolderHealthFreshness
+import life.michaelwong.covalent.model.PeerConnectionFreshness
+import life.michaelwong.covalent.model.PeerConnectionState
+import life.michaelwong.covalent.model.FolderShare
+import life.michaelwong.covalent.model.FolderSharePhase
+import life.michaelwong.covalent.model.FolderSyncAvailability
+import life.michaelwong.covalent.model.FolderSyncIssue
+import life.michaelwong.covalent.model.FolderSyncLifecycle
+import life.michaelwong.covalent.model.FolderSyncMutation
+import life.michaelwong.covalent.model.FolderSyncPeer
+import life.michaelwong.covalent.model.FolderSyncStatus
 import life.michaelwong.covalent.model.NodeStatus
 import life.michaelwong.covalent.model.NetworkPairing
 import life.michaelwong.covalent.model.NetworkPairingDirection
@@ -38,6 +54,10 @@ import life.michaelwong.covalent.model.PeerTransport
 import life.michaelwong.covalent.model.Provider
 import life.michaelwong.covalent.model.ProviderReachability
 import life.michaelwong.covalent.model.RememberedBackup
+import life.michaelwong.covalent.model.RecoveredBackup
+import life.michaelwong.covalent.model.RecoveryFailure
+import life.michaelwong.covalent.model.RecoveryPhase
+import life.michaelwong.covalent.model.RecoveryStatus
 import life.michaelwong.covalent.model.RestorePlanPage
 import life.michaelwong.covalent.model.RestorePlanReference
 import life.michaelwong.covalent.model.RestorePreviewEntry
@@ -49,6 +69,8 @@ import life.michaelwong.covalent.model.TransferKind
 import life.michaelwong.covalent.model.TransferRecord
 import life.michaelwong.covalent.model.TransferState
 import life.michaelwong.covalent.model.TransportIdentity
+import life.michaelwong.covalent.sync.PeerAddressRefreshRequest
+import life.michaelwong.covalent.sync.requireNumericPeerAddress
 
 data class EnrolledTrust(
     val caCertificateDerBase64: String? = null,
@@ -129,6 +151,146 @@ class CovalentNodeClient(
             certificateDer = json.getString("certificateDer"),
             certificateFingerprint = json.getString("certificateFingerprint"),
         )
+    }
+
+    /** Reads only the redacted folder-sync projection from the authenticated node. */
+    fun folderSyncStatus(baseUrl: String, token: String): FolderSyncStatus =
+        request(baseUrl, "GET", "/api/v1/sync/status", token, null).body.toFolderSyncStatus()
+
+    fun offerFolder(
+        baseUrl: String,
+        token: String,
+        peerId: String,
+        folderId: UUID,
+        label: String,
+        selectedRoot: String,
+        linkPolicy: FolderLinkPolicy,
+    ): FolderSyncMutation {
+        requireUuid(peerId, "peer")
+        require(label.isNotBlank() && label.length <= MAX_FOLDER_LABEL_CHARS && label.none(Char::isISOControl)) {
+            "The shared folder name is invalid."
+        }
+        requireSelectedRoot(selectedRoot)
+        return post(
+            baseUrl,
+            token,
+            "/api/v1/sync/folders",
+            JSONObject()
+                .put("peerId", peerId)
+                .put("folderId", folderId.toString())
+                .put("label", label)
+                .put("selectedRoot", selectedRoot)
+                .put(
+                    "linkPolicy",
+                    JSONObject()
+                        .put("propagateSourceDeletions", linkPolicy.propagateSourceDeletions)
+                        .put("restoreLocalDeletions", linkPolicy.restoreLocalDeletions),
+                ),
+        ).toFolderSyncMutation()
+    }
+
+    fun updateFolderLinkSettings(
+        baseUrl: String,
+        token: String,
+        folderId: String,
+        changeId: String,
+        expectedRevision: Long,
+        settings: FolderLinkSettings,
+    ): FolderSyncMutation {
+        requireUuid(folderId, "folder")
+        requireUuid(changeId, "settings change")
+        require(changeId != "00000000-0000-0000-0000-000000000000")
+        require(expectedRevision >= 0) { "The expected settings revision is invalid." }
+        return post(
+            baseUrl,
+            token,
+            "/api/v1/sync/settings",
+            JSONObject()
+                .put("folderId", folderId)
+                .put("changeId", changeId)
+                .put("expectedRevision", expectedRevision)
+                .put("settings", settings.toJson()),
+        ).toFolderSyncMutation()
+    }
+
+    fun acceptFolder(
+        baseUrl: String,
+        token: String,
+        offerId: String,
+        selectedRoot: String,
+    ): FolderSyncMutation {
+        requireUuid(offerId, "offer")
+        requireSelectedRoot(selectedRoot)
+        return post(
+            baseUrl,
+            token,
+            "/api/v1/sync/accept",
+            JSONObject().put("offerId", offerId).put("selectedRoot", selectedRoot),
+        ).toFolderSyncMutation()
+    }
+
+    fun pauseFolder(baseUrl: String, token: String, offerId: String, paused: Boolean): FolderSyncMutation {
+        requireUuid(offerId, "offer")
+        return post(
+            baseUrl,
+            token,
+            "/api/v1/sync/pause",
+            JSONObject().put("offerId", offerId).put("paused", paused),
+        ).toFolderSyncMutation()
+    }
+
+    fun renewFolder(baseUrl: String, token: String, offerId: String): FolderSyncMutation {
+        requireUuid(offerId, "offer")
+        return post(baseUrl, token, "/api/v1/sync/renew", JSONObject().put("offerId", offerId))
+            .toFolderSyncMutation()
+    }
+
+    fun removeFolder(baseUrl: String, token: String, offerId: String): FolderSyncMutation {
+        requireUuid(offerId, "offer")
+        return post(
+            baseUrl,
+            token,
+            "/api/v1/sync/remove",
+            JSONObject().put("offerId", offerId),
+        ).toFolderSyncMutation()
+    }
+
+    fun repairFolder(
+        baseUrl: String,
+        token: String,
+        offerId: String,
+        selectedRoot: String,
+    ): FolderSyncMutation {
+        requireUuid(offerId, "offer")
+        requireSelectedRoot(selectedRoot)
+        return post(
+            baseUrl,
+            token,
+            "/api/v1/sync/repair",
+            JSONObject().put("offerId", offerId).put("selectedRoot", selectedRoot),
+        ).toFolderSyncMutation()
+    }
+
+    fun retryFolderSync(baseUrl: String, token: String): FolderSyncMutation =
+        post(baseUrl, token, "/api/v1/sync/retry", JSONObject()).toFolderSyncMutation()
+
+    internal fun refreshFolderPeerAddress(
+        baseUrl: String,
+        token: String,
+        request: PeerAddressRefreshRequest,
+    ): FolderSyncMutation {
+        requireUuid(request.peerId, "folder-sync peer ID")
+        requireNumericPeerAddress(request.expectedAddress)
+        requireNumericPeerAddress(request.candidateAddress)
+        return post(
+            baseUrl,
+            token,
+            "/api/v1/sync/peers/refresh-address",
+            JSONObject()
+                .put("peerId", request.peerId)
+                .put("expectedAddress", request.expectedAddress)
+                .put("candidateAddress", request.candidateAddress),
+        ).toFolderSyncMutation()
     }
 
     fun peerGrants(baseUrl: String, token: String): List<PeerGrant> {
@@ -402,6 +564,72 @@ class CovalentNodeClient(
         request(baseUrl, "POST", path, token, payload.toString())
     }
 
+    /** Creates one uncached owner-loss recovery pair. The returned object owns mutable copies. */
+    internal fun exportRecoveryKit(baseUrl: String, token: String): RecoveryExportMaterial {
+        val json = requestBoundedObject(
+            baseUrl,
+            "POST",
+            "/api/v1/recovery/kit",
+            token,
+            JSONObject().put("confirmed", true).toString(),
+            MAX_RECOVERY_EXPORT_RESPONSE_BYTES,
+        )
+        requireExactKeys(json, setOf("protocolVersion", "recoveryKit", "recoveryKey"))
+        requireProtocolVersion(json)
+        val kitText = json.getString("recoveryKit")
+        require(kitText.length in 1..MAX_RECOVERY_KIT_ENCODED_LENGTH && kitText.matches(BASE64URL_PATTERN)) {
+            "The node returned an invalid recovery kit."
+        }
+        val codeText = json.getString("recoveryKey")
+        require(codeText.length == RECOVERY_CODE_TEXT_LENGTH && codeText.matches(BASE64URL_PATTERN)) {
+            "The node returned an invalid recovery code."
+        }
+        var ownedKit: ByteArray? = null
+        var ownedCode: ByteArray? = null
+        var decodedCode: ByteArray? = null
+        var transferred = false
+        return try {
+            val kit = JBase64.getUrlDecoder().decode(kitText)
+            ownedKit = kit
+            require(kit.isNotEmpty() && kit.size <= MAX_RECOVERY_KIT_BYTES) {
+                "The node returned an invalid recovery kit."
+            }
+            val code = codeText.encodeToByteArray()
+            ownedCode = code
+            decodedCode = decodeRecoveryCode(code)
+            require(checkNotNull(decodedCode).size == 32)
+            RecoveryExportMaterial(kit, code).also {
+                transferred = true
+            }
+        } finally {
+            if (!transferred) {
+                ownedKit?.fill(0)
+                ownedCode?.fill(0)
+            }
+            decodedCode?.fill(0)
+        }
+    }
+
+    fun recoveryStatus(baseUrl: String, token: String): RecoveryStatus =
+        requestBoundedObject(
+            baseUrl,
+            "GET",
+            "/api/v1/recovery/status",
+            token,
+            null,
+            MAX_RECOVERY_STATUS_RESPONSE_BYTES,
+        ).toRecoveryStatus()
+
+    fun retryRecovery(baseUrl: String, token: String): RecoveryStatus =
+        requestBoundedObject(
+            baseUrl,
+            "POST",
+            "/api/v1/recovery/retry",
+            token,
+            JSONObject().put("confirmed", true).toString(),
+            MAX_RECOVERY_STATUS_RESPONSE_BYTES,
+        ).toRecoveryStatus()
+
     private fun request(
         baseUrl: String,
         method: String,
@@ -419,6 +647,40 @@ class CovalentNodeClient(
             }
         }
         return NodeResponse(readResponse(connection))
+    }
+
+    private fun requestBoundedObject(
+        baseUrl: String,
+        method: String,
+        path: String,
+        token: String,
+        payload: String?,
+        maximumResponseBytes: Int,
+    ): JSONObject {
+        val connection = openConnection(baseUrl, path, method, token, "application/json").apply {
+            useCaches = false
+            setRequestProperty("Cache-Control", "no-store")
+            if (payload != null) {
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json")
+                val bytes = payload.encodeToByteArray()
+                try {
+                    setFixedLengthStreamingMode(bytes.size)
+                    outputStream.use { it.write(bytes) }
+                } finally {
+                    bytes.fill(0)
+                }
+            }
+        }
+        return try {
+            if (connection.responseCode !in 200..299) readResponse(connection)
+            val body = connection.inputStream.use {
+                it.readBoundedText(maximumResponseBytes, "The node response")
+            }
+            JSONObject(body)
+        } finally {
+            connection.disconnect()
+        }
     }
 
     internal fun openConnection(
@@ -485,8 +747,13 @@ class CovalentNodeClient(
         val uploadOffset = connection.getHeaderField("X-Covalent-Upload-Offset")?.toLongOrNull()
         val inventoryOffset = connection.getHeaderField("X-Covalent-Inventory-Offset")?.toLongOrNull()
         val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-        val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
-        connection.disconnect()
+        val text = try {
+            stream?.use {
+                it.readBoundedText(MAX_NODE_JSON_RESPONSE_BYTES, "The node response")
+            }.orEmpty()
+        } finally {
+            connection.disconnect()
+        }
         if (code !in 200..299) {
             val payload = runCatching { JSONObject(text) }.getOrNull()
             val protocolVersion = payload?.optInt("protocolVersion", COVALENT_PROTOCOL_VERSION)
@@ -524,15 +791,457 @@ internal fun peerTransportConnectPayload(peerTransport: PeerTransport): JSONObje
         .put("certificateFingerprint", peerTransport.certificateFingerprint))
 
 private const val COVALENT_PROTOCOL_VERSION = 1
+private const val MAX_RECOVERY_KIT_ENCODED_LENGTH = 22_369_624
+private const val MAX_RECOVERY_EXPORT_RESPONSE_BYTES = MAX_RECOVERY_KIT_ENCODED_LENGTH + 1_024
+private const val MAX_RECOVERY_STATUS_RESPONSE_BYTES = 24 * 1_024 * 1_024
+private const val MAX_NODE_JSON_RESPONSE_BYTES = 64 * 1_024 * 1_024
+private const val RECOVERY_CODE_TEXT_LENGTH = 43
+private const val MAX_RECOVERED_BACKUPS = 100_000
+private const val MAX_RECOVERY_PROVIDER_IDS = 128
+private const val MAX_RECOVERY_FAILURES = 256
 private const val RESTORE_PREVIEW_PAGE_SIZE = 100
 private const val MAX_RESTORE_PREVIEW_PAGE_SIZE = 1_000
 private const val TARGET_INVENTORY_PAGE_SIZE = 5_000
 private const val MAX_TARGET_INVENTORY_PAGE_SIZE = 5_000
 private const val MAX_TARGET_INVENTORY_ENTRIES = 250_000
+private const val MAX_FOLDER_LABEL_CHARS = 256
+private const val MAX_SELECTED_ROOT_CHARS = 4_096
+private const val MAX_FOLDER_SYNC_PEERS = 128
+private const val MAX_FOLDER_SYNC_SHARES = 4_096
+private const val MAX_FOLDER_SYNC_FOLDERS = 128
 private val SAFE_PLAN_ID = Regex("[A-Za-z0-9_-]{16,128}")
 private val SAFE_AUTHENTICATION_STRING = Regex("(?:[0-9]{4}-){3}[0-9]{4}")
 private val SAFE_NETWORK_PAIRING_ID = Regex("[A-Za-z0-9_-]{1,128}")
 private val SAFE_LOWERCASE_DIGEST = Regex("[0-9a-f]{64}")
+private val BASE64URL_PATTERN = Regex("^[A-Za-z0-9_-]+$")
+private val SAFE_RECOVERY_SNAPSHOT_ID = Regex("^[A-Za-z0-9_-]{1,128}$")
+private val SAFE_UUID = Regex(
+    "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+)
+
+private fun requireProtocolVersion(json: JSONObject) {
+    val version = json.getInt("protocolVersion")
+    if (version != COVALENT_PROTOCOL_VERSION) throw NodeProtocolException(version)
+}
+
+private fun requireExactKeys(json: JSONObject, expected: Set<String>) {
+    val actual = buildSet {
+        val iterator = json.keys()
+        while (iterator.hasNext()) add(iterator.next())
+    }
+    require(actual == expected) { "The node returned an unexpected recovery response." }
+}
+
+private fun JSONObject.toRecoveryStatus(): RecoveryStatus {
+    requireExactKeys(
+        this,
+        setOf(
+            "protocolVersion",
+            "phase",
+            "recoveredBackups",
+            "queriedProviderIds",
+            "configuredProviderIds",
+            "failures",
+            "newerSnapshotMayExist",
+        ),
+    )
+    requireProtocolVersion(this)
+    val recoveredValues = getJSONArray("recoveredBackups")
+    require(recoveredValues.length() <= MAX_RECOVERED_BACKUPS) {
+        "The node returned too many recovered backups."
+    }
+    val recovered = List(recoveredValues.length()) { index ->
+        val value = recoveredValues.getJSONObject(index)
+        requireExactKeys(value, setOf("backupId", "snapshotId", "sourceProviderIds"))
+        RecoveredBackup(
+            backupId = requireUuid(value.getString("backupId"), "backup ID"),
+            snapshotId = value.getString("snapshotId").also {
+                require(it.matches(SAFE_RECOVERY_SNAPSHOT_ID)) {
+                    "The node returned an invalid recovery snapshot ID."
+                }
+            },
+            sourceProviderIds = value.getJSONArray("sourceProviderIds").toProviderIdSet(),
+        )
+    }
+    val failureValues = getJSONArray("failures")
+    require(failureValues.length() <= MAX_RECOVERY_FAILURES) {
+        "The node returned too many recovery failures."
+    }
+    val failures = List(failureValues.length()) { index ->
+        val value = failureValues.getJSONObject(index)
+        requireExactKeys(value, setOf("providerId", "snapshotId", "reason"))
+        RecoveryFailure(
+            providerId = requireUuid(value.getString("providerId"), "provider ID"),
+            snapshotId = value.optionalString("snapshotId")?.also {
+                require(it.matches(SAFE_RECOVERY_SNAPSHOT_ID)) {
+                    "The node returned an invalid recovery snapshot ID."
+                }
+            },
+            reason = value.getString("reason").also {
+                require(it.length in 1..128) { "The node returned an invalid recovery failure." }
+            },
+        )
+    }
+    val status = RecoveryStatus(
+        protocolVersion = COVALENT_PROTOCOL_VERSION.toUShort(),
+        phase = RecoveryPhase.fromWire(getString("phase")),
+        recoveredBackups = recovered,
+        queriedProviderIds = getJSONArray("queriedProviderIds").toProviderIdSet(),
+        configuredProviderIds = getJSONArray("configuredProviderIds").toProviderIdSet(),
+        failures = failures,
+        newerSnapshotMayExist = getBoolean("newerSnapshotMayExist"),
+    )
+    require(status.queriedProviderIds.all(status.configuredProviderIds::contains)) {
+        "The node returned recovery results for an unconfigured provider."
+    }
+    require(status.failures.all { it.providerId in status.configuredProviderIds }) {
+        "The node returned a recovery failure for an unconfigured provider."
+    }
+    require(
+        status.recoveredBackups.all { backup ->
+            backup.sourceProviderIds.isNotEmpty() &&
+                backup.sourceProviderIds.all(status.configuredProviderIds::contains)
+        },
+    ) { "The node returned a recovered backup from an unconfigured provider." }
+    require(status.recoveredBackups.map(RecoveredBackup::backupId).toSet().size == status.recoveredBackups.size) {
+        "The node returned duplicate recovered backups."
+    }
+    require(status.hasConsistentRecoveryPhase()) {
+        "The node returned a contradictory recovery status."
+    }
+    return status
+}
+
+private fun RecoveryStatus.hasConsistentRecoveryPhase(): Boolean = when (phase) {
+    RecoveryPhase.NOT_CONFIGURED ->
+        recoveredBackups.isEmpty() &&
+            queriedProviderIds.isEmpty() &&
+            configuredProviderIds.isEmpty() &&
+            failures.isEmpty() &&
+            !newerSnapshotMayExist
+    RecoveryPhase.PENDING ->
+        recoveredBackups.isEmpty() &&
+            queriedProviderIds.isEmpty() &&
+            failures.isEmpty() &&
+            newerSnapshotMayExist
+    RecoveryPhase.IMPORTED ->
+        recoveredBackups.isNotEmpty() &&
+            queriedProviderIds == configuredProviderIds &&
+            failures.isEmpty() &&
+            !newerSnapshotMayExist
+    RecoveryPhase.PARTIAL -> recoveredBackups.isNotEmpty() && newerSnapshotMayExist
+    RecoveryPhase.BLOCKED -> recoveredBackups.isEmpty() && newerSnapshotMayExist
+    RecoveryPhase.NO_CATALOGS ->
+        recoveredBackups.isEmpty() &&
+            queriedProviderIds == configuredProviderIds &&
+            failures.isEmpty() &&
+            !newerSnapshotMayExist
+}
+
+private fun JSONArray.toProviderIdSet(): Set<String> {
+    require(length() <= MAX_RECOVERY_PROVIDER_IDS) { "The node returned too many recovery providers." }
+    val values = List(length()) { index -> requireUuid(getString(index), "provider ID") }
+    require(values.toSet().size == values.size) { "The node returned duplicate recovery providers." }
+    return values.toSet()
+}
+
+private fun requireUuid(value: String, label: String): String {
+    val parsed = runCatching { UUID.fromString(value) }.getOrNull()
+    require(value.matches(SAFE_UUID) && parsed?.toString() == value) {
+        "The node returned an invalid $label."
+    }
+    return value
+}
+
+private fun requireSelectedRoot(value: String) {
+    require(
+        value.length in 1..MAX_SELECTED_ROOT_CHARS && value.startsWith('/') &&
+            value.none(Char::isISOControl),
+    ) { "The selected folder path is invalid." }
+}
+
+private fun JSONObject.toFolderSyncMutation(): FolderSyncMutation {
+    requireJsonKeys(this, setOf("schemaVersion", "offerId", "lifecycle", "issue"))
+    check(getInt("schemaVersion") == COVALENT_PROTOCOL_VERSION)
+    return FolderSyncMutation(
+        offerId = optionalString("offerId")?.let { requireUuid(it, "folder offer ID") },
+        lifecycle = folderSyncLifecycle(getString("lifecycle")),
+        issue = optionalString("issue")?.let(::folderSyncIssue),
+    )
+}
+
+private fun JSONObject.toFolderSyncStatus(): FolderSyncStatus {
+    requireJsonKeys(
+        this,
+        setOf("schemaVersion", "availability", "lifecycle", "issue", "healthFreshness", "peers", "shares", "folders"),
+        setOf("connectionFreshness"),
+    )
+    check(getInt("schemaVersion") == COVALENT_PROTOCOL_VERSION)
+    val peerValues = getJSONArray("peers")
+    val shareValues = getJSONArray("shares")
+    val folderValues = getJSONArray("folders")
+    check(peerValues.length() <= MAX_FOLDER_SYNC_PEERS)
+    check(shareValues.length() <= MAX_FOLDER_SYNC_SHARES)
+    check(folderValues.length() <= MAX_FOLDER_SYNC_FOLDERS)
+    val peers = List(peerValues.length()) { index ->
+        peerValues.getJSONObject(index).let { peer ->
+            requireJsonKeys(peer, setOf("peerId", "displayName"), setOf("address"))
+            FolderSyncPeer(
+                requireUuid(peer.getString("peerId"), "folder-sync peer ID"),
+                peer.getString("displayName").also {
+                    check(it.isNotBlank() && it.length <= 128 && it.none(Char::isISOControl))
+                },
+                if (peer.has("address")) {
+                    (peer.get("address") as? String)?.also { requireNumericPeerAddress(it) }
+                        ?: error("The node returned an invalid folder-sync peer address.")
+                } else null,
+            )
+        }
+    }
+    check(peers.map(FolderSyncPeer::peerId).toSet().size == peers.size)
+    val shares = List(shareValues.length()) { index ->
+        shareValues.getJSONObject(index).let { share ->
+            requireJsonKeys(
+                share,
+                setOf("offerId", "folderId", "label", "peerId", "incoming", "phase", "expiresAtUnixMs", "expired"),
+                setOf("peerConnection", "supersededOfferIds", "remoteRemovalPending", "linkPolicy", "linkSettings"),
+            )
+            FolderShare(
+                offerId = requireUuid(share.getString("offerId"), "folder offer ID"),
+                folderId = requireUuid(share.getString("folderId"), "folder ID"),
+                label = share.getString("label").also {
+                    check(it.isNotBlank() && it.length <= MAX_FOLDER_LABEL_CHARS && it.none(Char::isISOControl))
+                },
+                peerId = requireUuid(share.getString("peerId"), "folder-sync peer ID"),
+                incoming = share.getBoolean("incoming"),
+                phase = when (share.getString("phase")) {
+                    "offered" -> FolderSharePhase.OFFERED
+                    "awaitingCommit" -> FolderSharePhase.AWAITING_COMMIT
+                    "ready" -> FolderSharePhase.READY
+                    "paused" -> FolderSharePhase.PAUSED
+                    "removed" -> FolderSharePhase.REMOVED
+                    else -> error("The node returned an unknown folder-share phase.")
+                },
+                expiresAtUnixMs = share.optionalLong("expiresAtUnixMs")?.also { check(it > 0) },
+                expired = share.getBoolean("expired"),
+                peerConnection = when (if (share.has("peerConnection")) share.getString("peerConnection") else "unknown") {
+                    "unknown" -> PeerConnectionState.UNKNOWN
+                    "connected" -> PeerConnectionState.CONNECTED
+                    "disconnected" -> PeerConnectionState.DISCONNECTED
+                    "paused" -> PeerConnectionState.PAUSED
+                    else -> error("The node returned an unknown peer connection state.")
+                },
+                supersededOfferIds = if (share.has("supersededOfferIds")) {
+                    val oldIds = share.getJSONArray("supersededOfferIds")
+                    check(oldIds.length() <= 128)
+                    List(oldIds.length()) {
+                        requireUuid(oldIds.getString(it), "superseded offer ID").also { id ->
+                            check(id != "00000000-0000-0000-0000-000000000000")
+                        }
+                    }
+                } else emptyList(),
+                remoteRemovalPending = if (share.has("remoteRemovalPending")) {
+                    (share.get("remoteRemovalPending") as? Boolean)
+                        ?: error("The node returned an invalid removal status.")
+                } else false,
+                linkPolicy = if (share.has("linkPolicy") && !share.isNull("linkPolicy")) {
+                    share.getJSONObject("linkPolicy").let { policy ->
+                        requireJsonKeys(
+                            policy,
+                            setOf("propagateSourceDeletions", "restoreLocalDeletions"),
+                        )
+                        FolderLinkPolicy(
+                            propagateSourceDeletions = (policy.get("propagateSourceDeletions") as? Boolean)
+                                ?: error("The node returned an invalid source deletion policy."),
+                            restoreLocalDeletions = (policy.get("restoreLocalDeletions") as? Boolean)
+                                ?: error("The node returned an invalid destination deletion policy."),
+                        )
+                    }
+                } else null,
+                linkSettings = if (share.has("linkSettings") && !share.isNull("linkSettings")) {
+                    share.getJSONObject("linkSettings").toFolderLinkSettingsState()
+                } else null,
+            ).also { parsed ->
+                parsed.linkSettings?.let { state ->
+                    check(parsed.linkPolicy == state.settings.deletionPolicy) {
+                        "The node returned inconsistent current link settings."
+                    }
+                    listOfNotNull(state.pendingChange, state.conflictedChange).forEach { change ->
+                        check(change.folderId == parsed.folderId) {
+                            "The node returned settings for another folder."
+                        }
+                        if (parsed.incoming) check(change.sourceId == parsed.peerId) {
+                            "The node returned settings from another source."
+                        }
+                    }
+                }
+            }
+        }
+    }
+    check(shares.map(FolderShare::offerId).toSet().size == shares.size)
+    val retainedOfferIds = shares.map(FolderShare::offerId).toMutableSet()
+    shares.forEach { share ->
+        check(!share.remoteRemovalPending || share.phase == FolderSharePhase.REMOVED)
+        share.supersededOfferIds.forEach { check(retainedOfferIds.add(it)) }
+    }
+    check(shares.all { share ->
+        share.phase == FolderSharePhase.REMOVED || peers.any { it.peerId == share.peerId }
+    })
+    val folders = List(folderValues.length()) { index ->
+        folderValues.getJSONObject(index).let { folder ->
+            requireJsonKeys(
+                folder,
+                setOf("folderId", "state", "stateChanged", "remainingFiles", "remainingBytes", "scanPullErrorCount", "reportedErrorRows", "statusError", "watchError"),
+            )
+            FolderHealth(
+                folderId = requireUuid(folder.getString("folderId"), "folder health ID"),
+                state = folder.getString("state").also {
+                    check(it in FOLDER_STATES) { "The node returned an unknown folder state." }
+                },
+                remainingFiles = folder.getLong("remainingFiles").also { check(it >= 0) },
+                remainingBytes = folder.getLong("remainingBytes").also { check(it >= 0) },
+                scanPullErrorCount = folder.getLong("scanPullErrorCount").also { check(it >= 0) },
+                reportedErrorRows = folder.getInt("reportedErrorRows").also { check(it in 0..128) },
+                statusError = folder.getBoolean("statusError"),
+                watchError = folder.getBoolean("watchError"),
+            ).also {
+                check(folder.getString("stateChanged").let { value ->
+                    value.length in 1..64 && value.none(Char::isISOControl)
+                }) { "The node returned an invalid folder state timestamp." }
+            }
+        }
+    }
+    check(folders.map(FolderHealth::folderId).toSet().size == folders.size)
+    return FolderSyncStatus(
+        availability = when (getString("availability")) {
+            "notPackaged" -> FolderSyncAvailability.NOT_PACKAGED
+            "needsAttention" -> FolderSyncAvailability.NEEDS_ATTENTION
+            "available" -> FolderSyncAvailability.AVAILABLE
+            else -> error("The node returned an unknown folder-sync availability.")
+        },
+        lifecycle = folderSyncLifecycle(getString("lifecycle")),
+        issue = optionalString("issue")?.let(::folderSyncIssue),
+        healthFreshness = when (getString("healthFreshness")) {
+            "neverObserved" -> FolderHealthFreshness.NEVER_OBSERVED
+            "fresh" -> FolderHealthFreshness.FRESH
+            "stale" -> FolderHealthFreshness.STALE
+            else -> error("The node returned an unknown folder-health freshness.")
+        },
+        connectionFreshness = when (if (has("connectionFreshness")) getString("connectionFreshness") else "neverObserved") {
+            "neverObserved" -> PeerConnectionFreshness.NEVER_OBSERVED
+            "fresh" -> PeerConnectionFreshness.FRESH
+            "stale" -> PeerConnectionFreshness.STALE
+            else -> error("The node returned an unknown peer connection freshness.")
+        },
+        peers = peers,
+        shares = shares,
+        folders = folders,
+    )
+}
+
+private fun FolderLinkSettings.toJson() = JSONObject()
+    .put(
+        "deletionPolicy",
+        JSONObject()
+            .put("propagateSourceDeletions", deletionPolicy.propagateSourceDeletions)
+            .put("restoreLocalDeletions", deletionPolicy.restoreLocalDeletions),
+    )
+    .put("paused", paused)
+
+private fun JSONObject.toFolderLinkSettings(): FolderLinkSettings {
+    requireJsonKeys(this, setOf("deletionPolicy", "paused"))
+    val policy = getJSONObject("deletionPolicy")
+    requireJsonKeys(policy, setOf("propagateSourceDeletions", "restoreLocalDeletions"))
+    return FolderLinkSettings(
+        deletionPolicy = FolderLinkPolicy(
+            propagateSourceDeletions = (policy.get("propagateSourceDeletions") as? Boolean)
+                ?: error("The node returned an invalid source deletion policy."),
+            restoreLocalDeletions = (policy.get("restoreLocalDeletions") as? Boolean)
+                ?: error("The node returned an invalid destination deletion policy."),
+        ),
+        paused = (get("paused") as? Boolean) ?: error("The node returned an invalid link pause setting."),
+    )
+}
+
+private fun JSONObject.toFolderLinkSettingsChange(): FolderLinkSettingsChange {
+    requireJsonKeys(
+        this,
+        setOf("folderId", "sourceId", "requesterId", "changeId", "expectedRevision", "settings"),
+    )
+    return FolderLinkSettingsChange(
+        folderId = requireUuid(getString("folderId"), "settings folder ID"),
+        sourceId = requireUuid(getString("sourceId"), "settings source ID"),
+        requesterId = requireUuid(getString("requesterId"), "settings requester ID"),
+        changeId = requireUuid(getString("changeId"), "settings change ID").also {
+            check(it != "00000000-0000-0000-0000-000000000000")
+        },
+        expectedRevision = getLong("expectedRevision").also { check(it >= 0) },
+        settings = getJSONObject("settings").toFolderLinkSettings(),
+    )
+}
+
+private fun JSONObject.toFolderLinkSettingsState(): FolderLinkSettingsState {
+    requireJsonKeys(
+        this,
+        setOf("revision", "settings", "changeId", "changedBy", "confirmed", "pendingChange", "conflictedChange"),
+    )
+    return FolderLinkSettingsState(
+        revision = getLong("revision").also { check(it >= 0) },
+        settings = getJSONObject("settings").toFolderLinkSettings(),
+        changeId = requireUuid(getString("changeId"), "committed settings change ID"),
+        changedBy = requireUuid(getString("changedBy"), "settings author ID"),
+        confirmed = (get("confirmed") as? Boolean)
+            ?: error("The node returned an invalid settings confirmation state."),
+        pendingChange = if (isNull("pendingChange")) null
+        else getJSONObject("pendingChange").toFolderLinkSettingsChange(),
+        conflictedChange = if (isNull("conflictedChange")) null
+        else getJSONObject("conflictedChange").toFolderLinkSettingsChange(),
+    ).also { state ->
+        check((state.revision == 0L) == (state.changeId == "00000000-0000-0000-0000-000000000000")) {
+            "The node returned an invalid settings revision."
+        }
+    }
+}
+
+private fun folderSyncLifecycle(value: String): FolderSyncLifecycle = when (value) {
+    "stopped" -> FolderSyncLifecycle.STOPPED
+    "initialScanning" -> FolderSyncLifecycle.INITIAL_SCANNING
+    "running" -> FolderSyncLifecycle.RUNNING
+    "stillStopping" -> FolderSyncLifecycle.STILL_STOPPING
+    "needsAttention" -> FolderSyncLifecycle.NEEDS_ATTENTION
+    else -> error("The node returned an unknown folder-sync lifecycle.")
+}
+
+private fun folderSyncIssue(value: String): FolderSyncIssue = when (value) {
+    "installation" -> FolderSyncIssue.INSTALLATION
+    "folderAccess" -> FolderSyncIssue.FOLDER_ACCESS
+    "initialScan" -> FolderSyncIssue.INITIAL_SCAN
+    "journal" -> FolderSyncIssue.JOURNAL
+    "workerLaunch" -> FolderSyncIssue.WORKER_LAUNCH
+    "workerHealth" -> FolderSyncIssue.WORKER_HEALTH
+    "workerStop" -> FolderSyncIssue.WORKER_STOP
+    "peerRevocation" -> FolderSyncIssue.PEER_REVOCATION
+    else -> error("The node returned an unknown folder-sync issue.")
+}
+
+private fun requireJsonKeys(
+    value: JSONObject,
+    expected: Set<String>,
+    optional: Set<String> = emptySet(),
+) {
+    val actual = buildSet {
+        val keys = value.keys()
+        while (keys.hasNext()) add(keys.next())
+    }
+    check(actual.containsAll(expected) && actual.all { it in expected || it in optional }) {
+        "The node returned an unexpected folder-sync response."
+    }
+}
+
+private val FOLDER_STATES = setOf(
+    "starting", "idle", "scanning", "scan-waiting", "sync-waiting", "sync-preparing",
+    "syncing", "cleaning", "clean-waiting", "error",
+)
 
 private data class TargetInventoryUpload(
     val inventoryId: String,

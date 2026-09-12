@@ -23,6 +23,12 @@ struct IOSRootView: View {
             NavigationStack {
                 IOSDevicesView(model: model)
             }
+            .tabItem { Label("Folders", systemImage: "folder") }
+            .tag(AppSection.folders)
+
+            NavigationStack {
+                IOSDevicesView(model: model)
+            }
             .tabItem { Label("Devices", systemImage: "laptopcomputer.and.iphone") }
             .tag(AppSection.devices)
 
@@ -55,6 +61,8 @@ struct IOSRootView: View {
                 }
             case .importSettings:
                 IOSSettingsImportView(model: model)
+            case .firstLaunchSetup:
+                EmptyView()
             }
         }
         .sheet(item: $model.restoreSetupRequest) { request in

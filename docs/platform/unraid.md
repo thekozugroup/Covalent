@@ -1,7 +1,10 @@
 # Unraid operation
 
-Start with [Back up your first folder](../getting-started.md), then return here
-for Unraid-specific paths and recovery rules.
+Docker is the accepted Unraid path for the current
+[one-way link product](../product/synchronization.md). Atlas is offline; no
+Atlas runtime validation is claimed. The complete simplified release remains
+under development. The provisioning and historical backup operations below
+are retained until the final image and installation guide are published.
 
 Unraid is Tier 1. The template is intentionally unprivileged (`99:100`),
 read-only, capability-free, and uses `no-new-privileges` with a temporary

@@ -51,23 +51,31 @@
 #      8,222,272 (-146,976, -1.8%) and x86_64 9,942,680 -> 9,790,600
 #      (-152,080, -1.5%).
 #
-# The numbers below are measured *after* both reductions.
+# The numbers below were measured *after* both reductions.
 #
 #   toolchain: rustc 1.97.1, Android NDK 27.1.12297006, cargo-ndk 4.1.2
 #   arm64-v8a  8,222,272 bytes
 #   x86_64     9,790,600 bytes   <- worst ABI, the budget is derived from this
 #
-# Ceiling = worst measured ABI + 12%, rounded up to the next 64 KiB. It was
-# derived when the worst ABI was 9,942,680:
-#   9,942,680 * 1.12 = 11,135,802 -> ceil to 64 KiB -> 170 * 65536 = 11,141,120
+# Checkpoint 37 added the authenticated peer-address refresh and durable folder
+# sharing paths to the runtime linked into JNI. Both hosted Android jobs built
+# the same release objects before the old ceiling stopped them (run
+# 34297173842, jobs 102296207486 and 102296207553):
 #
-# The env-filter trim moved the worst ABI down to 9,790,600 and the ceiling was
-# deliberately left where it is, so the margin today is 11,141,120 - 9,790,600 =
-# 1,350,520 bytes, or 13.8%. Re-deriving the ceiling downwards after every
-# saving would ratchet it onto whatever the last build happened to measure and
-# make an ordinary, deliberate increase fail; 12% is the minimum margin this
-# gate is willing to leave, not a figure to re-round to. A saving widens the
-# margin, a regression still has to be measured and argued for.
+#   arm64-v8a  9,481,568 bytes
+#   x86_64    11,154,960 bytes   <- worst ABI, the ceiling is derived from this
+#
+# This is an intended production capability, not code-generation drift or
+# debug information. The size-focused node/JNI profiles, fat LTO, one codegen
+# unit, packed relocations, stripping and export audit all remain enabled.
+# Rebase the finite ceiling on the measured worst ABI plus the same 12% margin,
+# rounded up to the next 64 KiB:
+#
+#   11,154,960 * 1.12 = 12,493,555.2
+#   ceil to 64 KiB = 191 * 65,536 = 12,517,376
+#
+# The resulting headroom is 1,362,416 bytes (12.2%) over the measured x86_64
+# object. Future growth must still be measured and argued for.
 #
 # Why 12% and not a rounder, more comfortable number: the thin -> fat LTO swing
 # measured on this exact artefact was 9.2-9.6%. That is a real, observed bound
@@ -83,50 +91,65 @@
 # So there is also a floor, at 4 MiB: 5.6x above the broken artefact and 1.96x
 # below the smallest real one, which is wide enough that no legitimate build
 # lands in between by accident.
-COVALENT_JNI_MAX_BYTES=11141120
+COVALENT_JNI_MAX_BYTES=12517376
 COVALENT_JNI_MIN_BYTES=4194304
+
+# Official Syncthing v2.1.3 Android helpers measured by the isolated API-37
+# proof at commit 024afda5 (run 34237780913): arm64-v8a 30,787,168 bytes and
+# x86_64 32,646,984 bytes. The common ceiling is the 32,646,984-byte worst ABI
+# plus 12%, rounded up to 64 KiB. The 16 MiB floor catches a missing or stubbed
+# engine while leaving substantial room for legitimate linker variation.
+COVALENT_SYNC_ENGINE_MAX_BYTES=36569088
+COVALENT_SYNC_ENGINE_MIN_BYTES=16777216
+
+# The same proof measured the reviewed guardian at 14,912 bytes (arm64) and
+# 14,616 bytes (x86_64). Its ceiling is the 14,912-byte worst ABI plus 12%,
+# rounded up to 4 KiB. It remains separately bounded because a tiny guardian
+# must not inherit the worker's much larger allowance.
+COVALENT_ENGINE_GUARDIAN_MAX_BYTES=20480
+COVALENT_ENGINE_GUARDIAN_MIN_BYTES=8192
 
 # ---------------------------------------------------------------------------
 # Whole-package budget
 # ---------------------------------------------------------------------------
 #
 # There are no `splits { abi { } }` in apps/android/app/build.gradle.kts, so the
-# APK is universal and carries both ABIs: 8,222,272 + 9,790,600 = 18,012,872
-# bytes of native code before anything else. `useLegacyPackaging` is unset and
-# minSdk is 26, so AGP stores .so entries uncompressed and page-aligned - the
-# native libraries cost their full on-disk size in the APK, and `unzip -l`
-# Length for those entries equals the .so size exactly.
+# universal APK carries both ABIs. The executable helper requires legacy native
+# packaging so PackageManager extracts it into the installer-owned
+# nativeLibraryDir. Package compression may make the APK smaller, but the safe
+# release ceiling is still derived from every ELF's uncompressed upper bound.
 #
 # The AAB has no `bundle { abi { enableSplit = false } }` override, so ABI
-# splitting is on by default: a Play install delivers one ABI, not both. What a
-# user actually downloads is therefore ~8.2 MB of native code on any arm64
-# phone. The universal APK on the GitHub release is the both-ABI case.
+# splitting is on by default: a Play install delivers one JNI library, worker,
+# and guardian rather than both ABI sets. The universal APK on the GitHub
+# release remains the both-ABI case.
 #
-# Measured on the release build (2026-08-21, isMinifyEnabled + isShrinkResources),
-# taken before the env-filter trim, so its native half is the older 18,311,928:
+# The app-only remainder was measured on the release build (2026-08-21,
+# isMinifyEnabled + isShrinkResources), before adding the folder engine:
 #   universal APK  20,040,528 bytes  <- worst case, both ABIs
 #   AAB            12,745,116 bytes
 #
-# Of that APK, 18,311,928 bytes (91.4%) was the two native libraries, which the
-# per-ABI ceiling above already governs. Only the remaining 1,728,600 bytes are
-# dex, resources, manifest and signing blocks, and the trim did not touch them:
-# the same package built today is 18,012,872 + 1,728,600 = 19,741,472 bytes. It
-# is that non-native remainder, not the total, that this budget has to allow
-# for, so the package budget is derived from the per-ABI ceiling rather than
-# being an independent guess:
+# Of that APK, 18,311,928 bytes (91.4%) was the two JNI libraries. Only the
+# remaining 1,728,600 bytes were dex, resources, manifest and signing blocks.
+# The package budget now derives from all six bounded ELF files plus that
+# independently measured app remainder rather than guessing a new total:
 #
-#   2 * COVALENT_JNI_MAX_BYTES  (both ABIs at their ceiling)  22,282,240
-# + 4 MiB                       (non-native allowance)         4,194,304
-# = 26,476,544 bytes
+#   2 * COVALENT_JNI_MAX_BYTES
+# + 2 * COVALENT_SYNC_ENGINE_MAX_BYTES
+# + 2 * COVALENT_ENGINE_GUARDIAN_MAX_BYTES
+# + 4 MiB for dex/resources/manifests/signing
+# = 102,408,192 bytes
 #
 # The 4 MiB non-native allowance is 2.4x the 1,728,600 bytes of non-native
 # content measured today, which is room for real feature growth in the Compose
 # app without being so loose that a regression hides in it.
 #
-# This replaces a flat 80 MiB. That number was never measured: it sat 4.2x above
-# the largest artefact the project has ever produced, so no plausible regression
-# could have tripped it - the same failure mode as the 2 MiB per-ABI budget it
-# shipped alongside, in the opposite direction. Deriving it from the per-ABI
-# ceiling also means the two budgets can no longer contradict each other: raise
-# the per-ABI number and the package number follows.
-COVALENT_ANDROID_PACKAGE_MAX_BYTES=$((2 * COVALENT_JNI_MAX_BYTES + 4 * 1024 * 1024))
+# Each helper still has its own measured floor, ceiling, packaged size, and
+# manifest digest gate, so compression cannot conceal a stub or substituted
+# executable inside this broader whole-package ceiling.
+COVALENT_ANDROID_PACKAGE_MAX_BYTES=$((
+  2 * COVALENT_JNI_MAX_BYTES +
+  2 * COVALENT_SYNC_ENGINE_MAX_BYTES +
+  2 * COVALENT_ENGINE_GUARDIAN_MAX_BYTES +
+  4 * 1024 * 1024
+))

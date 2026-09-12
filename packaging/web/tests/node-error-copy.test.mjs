@@ -38,6 +38,7 @@ function engineErrorCodes() {
     "crates/covalent-node/src/pairing_transport.rs",
     "crates/covalent-node/src/network_pairing.rs",
     "crates/covalent-node/src/transport.rs",
+    "crates/covalent-node/src/sync_api.rs",
   ];
   const codes = new Set();
   for (const relative of sources) {
@@ -46,6 +47,12 @@ function engineErrorCodes() {
     const constructed = new RegExp(`(?:ApiError|Self)::(?:${CONSTRUCTORS})\\s*\\(\\s*"([a-z0-9_]+)"`, "g");
     for (const match of text.matchAll(constructed)) codes.add(match[1]);
     for (const match of text.matchAll(/code:\s*"([a-z0-9_]+)"/g)) codes.add(match[1]);
+    // Some endpoints select between two fixed codes from a typed error before
+    // constructing one ApiError. Keep those branches in the same coverage
+    // gate as direct `code: "..."` fields.
+    for (const block of text.matchAll(/code:\s*if\b([\s\S]*?),\s*message:/g)) {
+      for (const match of block[1].matchAll(/"([a-z0-9_]+)"/g)) codes.add(match[1]);
+    }
   }
   codes.delete("ok");
   if (codes.size < 50) {
@@ -81,6 +88,12 @@ test("mapped engine codes produce their intended sentence and next step", () => 
     ["pairing_rejected", 409, "That device turned down the pairing request. Nothing was trusted.", "chooseAnotherDevice"],
     ["node_busy", 503, "Your backup server is busy with something else. Try again in a moment.", "retry"],
     ["backup_corrupt", 422, "Some of this backup's encrypted data is damaged. Verify the backup to see what can still be restored.", "none"],
+    ["invalid_peer_address", 400, "Enter the device address as a numeric IP address and port, such as 192.168.1.20:8787, then try again.", "none"],
+    ["peer_address_changed", 409, "The saved device address changed before this update finished. Refresh the saved device, then try again.", "retry"],
+    ["peer_address_unreachable", 502, "Covalent could not authenticate the trusted device at the new address. Check the address and network connection, then try again.", "retry"],
+    ["folder_sync_unavailable", 409, "Folder sync is unavailable on this server. Check its folder-sync package and mounted folder, then try again.", "retry"],
+    ["folder_sync_busy", 503, "Another folder change is still in progress. Try again shortly.", "retry"],
+    ["folder_sync_needs_attention", 409, "Folder sync needs attention before it can continue. Check the folder status, then try again.", "retry"],
   ];
   for (const [code, status, summary, recovery] of cases) {
     const failure = copy.describeApi(status, code, "engine text nobody should read", false);

@@ -4,7 +4,38 @@ import Foundation
 
 @MainActor
 public protocol LocalNodeBootstrapping: AnyObject {
-    func start() async throws -> NodeConnectionConfiguration
+    /// Must not create a directory, Keychain item, process, or identity.
+    func startupDisposition() throws -> LocalNodeStartupDisposition
+    /// Resolves and retains every persisted folder-sync scope before the helper
+    /// starts. A failed restoration must prevent launch.
+    func prepareFolderSyncDirectoryGrants(_ grants: [SelectedDirectoryGrant]) async throws
+    func start(mode: LocalNodeStartupMode) async throws -> NodeConnectionConfiguration
+    /// Replaces the helper after a new folder-sync grant is durably saved so its
+    /// process inherits the complete retained security scopes.
+    func restartForFolderSyncDirectoryGrants(_ grants: [SelectedDirectoryGrant]) async throws
+      -> NodeConnectionConfiguration
+    /// Restarts backup-only while inheriting a replacement capability. The
+    /// node must not start folder sync until its repair journal acknowledges
+    /// the exact selected root.
+    func restartForPendingFolderRepairDirectoryGrants(
+      _ grants: [SelectedDirectoryGrant]
+    ) async throws -> NodeConnectionConfiguration
+}
+
+extension LocalNodeBootstrapping {
+    public func prepareFolderSyncDirectoryGrants(_ grants: [SelectedDirectoryGrant]) async throws {}
+
+    public func restartForFolderSyncDirectoryGrants(_ grants: [SelectedDirectoryGrant]) async throws
+      -> NodeConnectionConfiguration
+    {
+      throw NodeClientError.invalidResponse
+    }
+
+    public func restartForPendingFolderRepairDirectoryGrants(
+      _ grants: [SelectedDirectoryGrant]
+    ) async throws -> NodeConnectionConfiguration {
+      throw NodeClientError.invalidResponse
+    }
 }
 
 public enum ServicePhase: Equatable, Sendable {
@@ -17,6 +48,7 @@ public enum ServicePhase: Equatable, Sendable {
 public enum AppSection: String, CaseIterable, Identifiable, Sendable {
     case overview
     case backups
+    case folders
     case devices
     case settings
 
@@ -26,6 +58,7 @@ public enum AppSection: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .overview: "Overview"
         case .backups: "Backups"
+        case .folders: "Folders"
         case .devices: "Devices"
         case .settings: "Settings"
         }
@@ -35,6 +68,7 @@ public enum AppSection: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .overview: "square.grid.2x2"
         case .backups: "externaldrive"
+        case .folders: "folder"
         case .devices: "laptopcomputer.and.iphone"
         case .settings: "gearshape"
         }
@@ -47,6 +81,7 @@ public enum AppPresentation: String, Identifiable, Sendable {
     case pairDevice
     case networkPairing
     case importSettings
+    case firstLaunchSetup
 
     public var id: String { rawValue }
 }
@@ -167,6 +202,19 @@ public final class CovalentAppModel: ObservableObject {
     @Published public private(set) var status: NodeStatus?
     @Published public private(set) var settings: ExportedDeviceSettings?
     @Published public private(set) var providers: [ProviderConnection] = []
+    @Published public private(set) var folderSyncStatus: FolderSyncStatus?
+    @Published public private(set) var folderSyncLoading = false
+    /// A fixed, user-actionable message. Technical API errors stay in the
+    /// normal alert detail and are never shown in the folder list.
+    @Published public private(set) var folderSyncError: String?
+    @Published public private(set) var folderSyncMutationInFlight = false
+    /// A failed helper restart must retry releasing retired sandbox scopes even
+    /// after their bookmarks have already been removed from persistence.
+    private var folderSyncScopeRefreshRequired = false
+    /// The last folder-capability launch request that subsequently produced
+    /// authenticated folder-service evidence. Revalidate it before skipping a
+    /// restart so a dead helper or backup-only fallback cannot strand access.
+    private var folderSyncLaunchState: FolderSyncLaunchState?
     @Published public private(set) var backups: [BackupSummary] = []
     @Published public private(set) var discoveryCandidates: [DiscoveryCandidate] = []
     @Published public var backupDraftBackupId: UUID?
@@ -175,6 +223,8 @@ public final class CovalentAppModel: ObservableObject {
     @Published public private(set) var startingPairingCandidateID: String?
     @Published public private(set) var startingPairingAddress: String?
     @Published public private(set) var directoryGrants: [SelectedDirectoryGrant] = []
+    @Published public private(set) var pendingFolderRepairs: [PendingFolderAccessRepair] = []
+    @Published public private(set) var pendingFolderLinkSettingsChanges: [PendingFolderLinkSettingsChange] = []
     @Published public private(set) var snapshots: [SnapshotRecord] = []
     @Published public private(set) var activeTask: ActiveTask?
     @Published public var restoreSetupRequest: RestoreSetupRequest?
@@ -182,6 +232,8 @@ public final class CovalentAppModel: ObservableObject {
     @Published public private(set) var lastRestoreResult: RestoreResponse?
     @Published public private(set) var lastRefreshedAt: Date?
     @Published public var alert: AppAlert?
+    @Published public private(set) var recoveryStatus: RecoveryStatus?
+    @Published public private(set) var needsFirstLaunchChoice = false
 
     /// The operation "Try Again" re-runs. Held outside ``AppAlert`` so the
     /// alert itself stays `Equatable` and `Sendable`.
@@ -196,6 +248,8 @@ public final class CovalentAppModel: ObservableObject {
     private var configuration: NodeConnectionConfiguration
     private var client: NodeClient
     private var didStart = false
+    private var recoveryCheckInFlight = false
+    private var recoveryExportInFlight = false
 
     public init(
         connectionStore: SecureNodeConnectionStore = SecureNodeConnectionStore(),
@@ -406,11 +460,28 @@ public final class CovalentAppModel: ObservableObject {
         didStart = true
         do {
             async let grants = persistence.loadDirectoryGrants()
+            async let pendingRepairs = persistence.loadPendingFolderRepairs()
+            async let pendingLinkSettings = persistence.loadPendingFolderLinkSettingsChanges()
             async let history = persistence.loadSnapshots()
             directoryGrants = try await grants
+            pendingFolderRepairs = try await pendingRepairs
+            pendingFolderLinkSettingsChanges = try await pendingLinkSettings
             snapshots = try await history.sorted { $0.createdAt > $1.createdAt }
         } catch {
             report(error, title: "Saved access could not be loaded")
+        }
+        do {
+            if let localNodeBootstrapper,
+               try localNodeBootstrapper.startupDisposition() != .existingIdentity {
+                needsFirstLaunchChoice = true
+                phase = .needsAuthorization
+                presentation = .firstLaunchSetup
+                return
+            }
+        } catch {
+            report(error, title: "Local recovery state could not be checked")
+            phase = .offline
+            return
         }
         await refresh()
         if phase == .ready {
@@ -420,10 +491,24 @@ public final class CovalentAppModel: ObservableObject {
     }
 
     public func refresh() async {
+        guard !needsFirstLaunchChoice else {
+            presentation = .firstLaunchSetup
+            phase = .needsAuthorization
+            return
+        }
+        _ = await refreshManaged(mode: .normal)
+    }
+
+    /// Creates or adopts the managed local service only after the initial
+    /// setup choice has explicitly selected a path.
+    @discardableResult
+    private func refreshManaged(mode: LocalNodeStartupMode) async -> Bool {
         phase = .starting
         do {
             if let localNodeBootstrapper {
-                let managedConfiguration = try await localNodeBootstrapper.start()
+                try await localNodeBootstrapper.prepareFolderSyncDirectoryGrants(directoryGrants)
+                let managedConfiguration = try await localNodeBootstrapper.start(mode: mode)
+                folderSyncLaunchState = nil
                 if managedConfiguration != configuration {
                     configuration = managedConfiguration
                     client = NodeClient(configuration: managedConfiguration)
@@ -434,10 +519,12 @@ public final class CovalentAppModel: ObservableObject {
             guard configuration.apiToken != nil else {
                 settings = nil
                 providers = []
+                folderSyncStatus = nil
+                folderSyncError = "Connect to this Mac's local service to manage folders."
                 backups = []
                 discoveryCandidates = []
                 phase = .needsAuthorization
-                return
+                return false
             }
             async let exportedSettings = client.exportSettings()
             async let providerConnections = client.providers()
@@ -445,15 +532,31 @@ public final class CovalentAppModel: ObservableObject {
             settings = try await exportedSettings
             providers = try await providerConnections
             backups = try await backupSummaries
+            await refreshFolders()
+            if folderSyncStatus?.availability == "available" {
+                folderSyncLaunchState = folderSyncLaunchState(
+                  grants: directoryGrants,
+                  mode: .normal
+                )
+            } else {
+                folderSyncLaunchState = nil
+            }
             discoveryCandidates = (try? await client.discoveryCandidates()) ?? []
             lastRefreshedAt = Date()
             phase = .ready
+            needsFirstLaunchChoice = false
+            return true
         } catch NodeClientError.missingToken {
+            folderSyncLaunchState = nil
             phase = .needsAuthorization
+            return false
         } catch NodeClientError.unauthorized {
+            folderSyncLaunchState = nil
             phase = .needsAuthorization
             report(NodeClientError.unauthorized, title: "Reconnect this app")
+            return false
         } catch {
+            folderSyncLaunchState = nil
             phase = .offline
             report(
                 error,
@@ -463,6 +566,897 @@ public final class CovalentAppModel: ObservableObject {
             ) { [weak self] in
                 await self?.refresh()
             }
+            return false
+        }
+    }
+
+    public func refreshFolders() async {
+      guard !folderSyncLoading, beginFolderMutation() else { return }
+      defer { folderSyncMutationInFlight = false }
+      await refreshFoldersDuringMutation()
+    }
+
+    /// Status can rebind or retire saved grants, so it shares the mutation lock.
+    private func refreshFoldersDuringMutation() async {
+      guard configuration.apiToken != nil else {
+        folderSyncStatus = nil
+        folderSyncError = "Connect to this Mac's local service to manage folders."
+        return
+      }
+
+      folderSyncLoading = true
+      defer { folderSyncLoading = false }
+
+      do {
+        let snapshot = try await reconciledFolderStatus()
+        folderSyncStatus = snapshot
+        if snapshot.availability == "available", localNodeBootstrapper != nil {
+          folderSyncLaunchState = folderSyncLaunchState(
+            grants: directoryGrants,
+            mode: .normal
+          )
+        } else {
+          folderSyncLaunchState = nil
+        }
+        folderSyncError = nil
+      } catch {
+        folderSyncLaunchState = nil
+        folderSyncStatus = nil
+        folderSyncError = "Folder sync status is unavailable. Try again."
+      }
+    }
+
+    private func reconciledFolderStatus() async throws -> FolderSyncStatus {
+      // Each restart below retires at least one of the bounded 128 bookmarks.
+      // Fetch again afterward so the UI never publishes pre-restart health.
+      for _ in 0...128 {
+        if folderSyncScopeRefreshRequired {
+          try await restartForFolderSyncDirectoryGrants(force: true)
+          folderSyncScopeRefreshRequired = false
+        }
+        let snapshot = try await client.folderSyncStatus()
+        let updated = try FolderSyncGrantReconciliation.reconcile(directoryGrants, with: snapshot)
+        let retainedIDs = Set(updated.map(\.id))
+        let retiredScope = directoryGrants.contains {
+          $0.purpose == .folderSync && !retainedIDs.contains($0.id)
+        }
+        if updated != directoryGrants {
+          try await persistence.saveDirectoryGrants(updated)
+          directoryGrants = updated
+        }
+        if retiredScope {
+          folderSyncScopeRefreshRequired = true
+        }
+        // The relationship was validated above. Pending repair bookmarks must
+        // also be retired when their consent is withdrawn or replaced.
+        let retiredOffers = Set(snapshot.shares.flatMap { share -> [UUID] in
+          if share.phase == .removed { return [share.offerId] + share.supersededOfferIds }
+          return share.incoming ? share.supersededOfferIds : []
+        })
+        let retainedRepairs = pendingFolderRepairs.filter { !retiredOffers.contains($0.offerId) }
+        if retainedRepairs != pendingFolderRepairs {
+          try await persistence.savePendingFolderRepairs(retainedRepairs)
+          pendingFolderRepairs = retainedRepairs
+          folderSyncScopeRefreshRequired = true
+        }
+        if folderSyncScopeRefreshRequired {
+          continue
+        }
+        try await reconcilePendingFolderLinkSettingsChanges(with: snapshot)
+        return snapshot
+      }
+      throw NodeClientError.invalidResponse
+    }
+
+    @discardableResult
+    public func offerFolder(
+      peerId: UUID,
+      folderId: UUID,
+      label: String,
+      grant: SelectedDirectoryGrant,
+      linkPolicy: FolderLinkPolicy = FolderLinkPolicy()
+    ) async -> Bool {
+      guard beginFolderMutation() else { return false }
+      defer { folderSyncMutationInFlight = false }
+
+      do {
+        try await submitFolderOffer(
+          FolderOfferDraft(
+            peerId: peerId,
+            folderId: folderId,
+            label: label,
+            grant: grant,
+            linkPolicy: linkPolicy,
+            permitsSharedRoot: false
+          )
+        )
+        return true
+      } catch {
+        invalidateFolderSyncLaunchState(unlessInitialScanBusy: error)
+        report(error, title: "Folder couldn't be shared") { [weak self] in
+          _ = await self?.offerFolder(
+            peerId: peerId,
+            folderId: folderId,
+            label: label,
+            grant: grant,
+            linkPolicy: linkPolicy
+          )
+        }
+        return false
+      }
+    }
+
+    /// Add one paired destination to an existing one-way source link. The new
+    /// offer reuses the source link's identity, settings, and saved folder scope.
+    @discardableResult
+    public func addFolderDestination(from offerId: UUID, to peerId: UUID) async -> Bool {
+      guard beginFolderMutation() else { return false }
+      defer { folderSyncMutationInFlight = false }
+
+      do {
+        let draft = try folderDestinationOffer(from: offerId, to: peerId)
+        do {
+          try await submitFolderOffer(draft)
+          return true
+        } catch {
+          invalidateFolderSyncLaunchState(unlessInitialScanBusy: error)
+          report(error, title: "Destination couldn't be added") { [weak self] in
+            await self?.retryFolderDestination(draft)
+          }
+          return false
+        }
+      } catch {
+        report(error, title: "Destination couldn't be added")
+        return false
+      }
+    }
+
+    private func retryFolderDestination(_ draft: FolderOfferDraft) async {
+      guard beginFolderMutation() else { return }
+      defer { folderSyncMutationInFlight = false }
+      do {
+        try await submitFolderOffer(draft)
+      } catch {
+        invalidateFolderSyncLaunchState(unlessInitialScanBusy: error)
+        report(error, title: "Destination couldn't be added")
+      }
+    }
+
+    private struct FolderOfferDraft: Sendable {
+      let peerId: UUID
+      let folderId: UUID
+      let label: String
+      let grant: SelectedDirectoryGrant
+      let linkPolicy: FolderLinkPolicy
+      let permitsSharedRoot: Bool
+    }
+
+    private func folderDestinationOffer(from offerId: UUID, to peerId: UUID) throws -> FolderOfferDraft {
+      guard let status = folderSyncStatus,
+            status.peers.contains(where: { $0.peerId == peerId }),
+            let source = status.shares.first(where: {
+              $0.offerId == offerId && !$0.incoming && $0.phase != .removed
+            }),
+            let linkPolicy = source.linkPolicy
+      else { throw NodeClientError.invalidResponse }
+
+      let shares = status.shares.filter { $0.folderId == source.folderId && $0.phase != .removed }
+      guard !shares.isEmpty,
+            shares.allSatisfy({
+              !$0.incoming && $0.label == source.label && $0.linkPolicy == linkPolicy
+            }),
+            !shares.contains(where: { $0.peerId == peerId })
+      else { throw NodeClientError.invalidResponse }
+      let settingsStates = Set(shares.compactMap(\.linkSettings))
+      guard settingsStates.count == 1,
+            let settingsState = settingsStates.first,
+            shares.allSatisfy({ $0.linkSettings == settingsState }),
+            settingsState.confirmed,
+            settingsState.pendingChange == nil,
+            settingsState.conflictedChange == nil
+      else { throw NodeClientError.invalidResponse }
+
+      let offerIds = Set(shares.map(\.offerId))
+      guard let saved = directoryGrants.first(where: {
+        $0.purpose == .folderSync && $0.folderOfferId.map(offerIds.contains) == true
+      }) else { throw FolderAccessRepairError.savedGrantMissing }
+
+      let reused = SelectedDirectoryGrant(
+        displayName: saved.displayName,
+        purpose: .folderSync,
+        bookmarkData: saved.bookmarkData,
+        capturedAt: saved.capturedAt
+      )
+      return FolderOfferDraft(
+        peerId: peerId,
+        folderId: source.folderId,
+        label: source.label,
+        grant: reused,
+        linkPolicy: linkPolicy,
+        permitsSharedRoot: true
+      )
+    }
+
+    private func submitFolderOffer(_ draft: FolderOfferDraft) async throws {
+      let savedGrant = try await persistFolderSyncGrant(
+        draft.grant,
+        permitsSharedRoot: draft.permitsSharedRoot
+      )
+      try await restartForFolderSyncDirectoryGrants()
+      let root = try savedGrant.resolve()
+      let client = self.client
+      let request = FolderOfferRequest(
+        peerId: draft.peerId,
+        folderId: draft.folderId,
+        label: draft.label,
+        selectedRoot: try await root.withCoordinatedRead { $0.path },
+        linkPolicy: draft.linkPolicy
+      )
+      let mutation = try await root.withCoordinatedRead { url in
+        guard url.path == request.selectedRoot else { throw NodeClientError.invalidResponse }
+        return try await Self.retryFolderSyncBusy {
+          try await client.offerFolder(request)
+        }
+      }
+      guard let offerId = mutation.offerId else { throw NodeClientError.invalidResponse }
+      try await bindFolderSyncGrant(savedGrant, to: offerId)
+      await refreshFoldersDuringMutation()
+    }
+
+    @discardableResult
+    public func acceptFolder(offerId: UUID, grant: SelectedDirectoryGrant) async -> Bool {
+      guard beginFolderMutation() else { return false }
+      defer { folderSyncMutationInFlight = false }
+
+      do {
+        let boundGrant = grant.bound(toFolderOfferId: offerId)
+        let savedGrant = try await persistFolderSyncGrant(boundGrant)
+        try await restartForFolderSyncDirectoryGrants()
+        let root = try savedGrant.resolve()
+        let client = self.client
+        let request = FolderAcceptRequest(
+          offerId: offerId,
+          selectedRoot: try await root.withCoordinatedRead { $0.path }
+        )
+        _ = try await root.withCoordinatedWrite { url in
+          guard url.path == request.selectedRoot else { throw NodeClientError.invalidResponse }
+          return try await Self.retryFolderSyncBusy {
+            try await client.acceptFolder(request)
+          }
+        }
+        await refreshFoldersDuringMutation()
+        return true
+      } catch {
+        invalidateFolderSyncLaunchState(unlessInitialScanBusy: error)
+        report(error, title: "Folder couldn't be accepted") { [weak self] in
+          _ = await self?.acceptFolder(offerId: offerId, grant: grant)
+        }
+        return false
+      }
+    }
+
+    @discardableResult
+    public func renewFolderInvitation(_ offerId: UUID) async -> Bool {
+      guard beginFolderMutation() else { return false }
+      defer { folderSyncMutationInFlight = false }
+      do {
+        guard let share = folderSyncStatus?.shares.first(where: { $0.offerId == offerId }),
+              !share.incoming, share.expired, (share.phase == .offered || share.phase == .paused),
+              let grant = directoryGrants.first(where: {
+                $0.purpose == .folderSync && $0.folderOfferId == offerId
+              }) else { throw NodeClientError.invalidResponse }
+        let result = try await client.renewFolder(FolderReferenceRequest(offerId: offerId))
+        guard let replacementID = result.offerId, replacementID != offerId else {
+          throw NodeClientError.invalidResponse
+        }
+        // The old binding is already durable. A lost response or failed save is
+        // repaired by the next authenticated status relationship after restart.
+        try await bindFolderSyncGrant(grant, to: replacementID, replacing: offerId)
+        await refreshFoldersDuringMutation()
+        return true
+      } catch {
+        report(error, title: "Invitation couldn't be renewed")
+        return false
+      }
+    }
+
+    /// Repairs one exact durable share after the user explicitly chooses its
+    /// local folder again. The replacement is journaled locally first, then a
+    /// backup-only helper inherits the scope, and only the authenticated node
+    /// may authorize folder sync for that root.
+    @discardableResult
+    public func repairFolderAccess(
+      offerId: UUID,
+      grant selectedGrant: SelectedDirectoryGrant
+    ) async -> Bool {
+      guard beginFolderMutation() else { return false }
+      defer { folderSyncMutationInFlight = false }
+
+      do {
+        guard folderSyncStatus?.issue == "folderAccess" else {
+          throw FolderAccessRepairError.repairNotRequired
+        }
+        guard folderSyncStatus?.shares.contains(where: {
+          $0.offerId == offerId && $0.phase != .removed
+        }) == true else {
+          throw FolderAccessRepairError.shareMissing
+        }
+        let proposedReplacement = selectedGrant.bound(toFolderOfferId: offerId)
+        // Validate identity and legacy migration before writing even the local
+        // pending journal. An ambiguous multi-share state changes nothing.
+        _ = try await folderRepairCandidates(
+          offerId: offerId,
+          replacement: proposedReplacement
+        )
+        let pending = try await preparePendingFolderRepair(
+          offerId: offerId,
+          selectedGrant: proposedReplacement
+        )
+        let candidates = try await folderRepairCandidates(
+          offerId: offerId,
+          replacement: pending.replacementGrant
+        )
+        let launchGrants = try await folderRepairLaunchGrants(
+          from: candidates,
+          replacementGrantId: pending.replacementGrant.id
+        )
+        try await restartForPendingFolderRepairDirectoryGrants(launchGrants)
+        let root = try pending.replacementGrant.resolve()
+        let client = self.client
+        let mutation = try await root.withCoordinatedWrite { url in
+          guard url.path == pending.selectedRoot else {
+            throw FolderAccessRepairError.invalidSavedRepair
+          }
+          return try await client.repairFolder(
+            FolderRepairRequest(offerId: offerId, selectedRoot: pending.selectedRoot)
+          )
+        }
+        guard mutation.offerId == offerId else { throw NodeClientError.invalidResponse }
+
+        // Promotion follows node acknowledgement. Keeping the pending record
+        // through the normal restart makes every crash point retryable.
+        try await persistence.saveDirectoryGrants(candidates)
+        directoryGrants = candidates
+        try await restartForFolderSyncDirectoryGrants()
+        try await removePendingFolderRepair(offerId: offerId)
+        await refreshFoldersDuringMutation()
+        return true
+      } catch {
+        report(error, title: "Folder access couldn't be restored") { [weak self] in
+          await self?.retryFolderAccessRepair(offerId: offerId)
+        }
+        return false
+      }
+    }
+
+    @discardableResult
+    public func retryFolderAccessRepair(offerId: UUID) async -> Bool {
+      guard let pending = pendingFolderRepairs.first(where: { $0.offerId == offerId }) else {
+        report(FolderAccessRepairError.pendingRepairMissing, title: "Choose the folder again")
+        return false
+      }
+      return await repairFolderAccess(offerId: offerId, grant: pending.replacementGrant)
+    }
+
+    public func hasPendingFolderAccessRepair(for offerId: UUID) -> Bool {
+      pendingFolderRepairs.contains { $0.offerId == offerId }
+    }
+
+    public func setFolderPaused(_ offerId: UUID, paused: Bool) async {
+      guard let share = folderSyncStatus?.shares.first(where: { $0.offerId == offerId }) else {
+        report(NodeClientError.invalidResponse, title: "Folder couldn't be updated")
+        return
+      }
+      if let state = share.linkSettings {
+        _ = await updateFolderLinkSettings(
+          folderId: share.folderId,
+          expectedRevision: state.revision,
+          settings: FolderLinkSettings(
+            deletionPolicy: state.settings.deletionPolicy,
+            paused: paused
+          )
+        )
+        return
+      }
+      guard share.linkPolicy == nil, beginFolderMutation() else {
+        report(NodeClientError.invalidResponse, title: "Folder couldn't be updated")
+        return
+      }
+      defer { folderSyncMutationInFlight = false }
+      do {
+        _ = try await client.pauseFolder(FolderPauseRequest(offerId: offerId, paused: paused))
+        await refreshFoldersDuringMutation()
+      } catch {
+        report(error, title: "Folder couldn't be updated")
+      }
+    }
+
+    @discardableResult
+    public func updateFolderLinkSettings(
+      folderId: UUID,
+      expectedRevision: UInt64,
+      settings: FolderLinkSettings
+    ) async -> Bool {
+      guard beginFolderMutation() else { return false }
+      defer { folderSyncMutationInFlight = false }
+      do {
+        let change = try await prepareFolderLinkSettingsChange(
+          folderId: folderId,
+          expectedRevision: expectedRevision,
+          settings: settings
+        )
+        return await submitFolderLinkSettingsChange(change)
+      } catch {
+        report(error, title: "Link settings couldn't be saved")
+        return false
+      }
+    }
+
+    @discardableResult
+    public func retryFolderLinkSettingsChange(folderId: UUID) async -> Bool {
+      guard beginFolderMutation() else { return false }
+      defer { folderSyncMutationInFlight = false }
+      guard let change = pendingFolderLinkSettingsChanges.first(where: {
+        $0.folderId == folderId && !$0.requiresReview
+      }) else {
+        report(NodeClientError.invalidResponse, title: "Review the link settings")
+        return false
+      }
+      return await submitFolderLinkSettingsChange(change)
+    }
+
+    public func reviewPendingFolderLinkSettingsChange(folderId: UUID) async {
+      let retained = pendingFolderLinkSettingsChanges.filter { $0.folderId != folderId }
+      guard retained != pendingFolderLinkSettingsChanges else { return }
+      do {
+        try await persistence.savePendingFolderLinkSettingsChanges(retained)
+        pendingFolderLinkSettingsChanges = retained
+      } catch {
+        report(error, title: "Link settings couldn't be reviewed")
+      }
+    }
+
+    private func prepareFolderLinkSettingsChange(
+      folderId: UUID,
+      expectedRevision: UInt64,
+      settings: FolderLinkSettings
+    ) async throws -> PendingFolderLinkSettingsChange {
+      if let existing = pendingFolderLinkSettingsChanges.first(where: { $0.folderId == folderId }) {
+        guard !existing.requiresReview,
+              existing.expectedRevision == expectedRevision,
+              existing.settings == settings
+        else { throw NodeClientError.invalidResponse }
+        return existing
+      }
+      let shares = folderSyncStatus?.shares.filter {
+        $0.folderId == folderId && $0.phase != .removed && $0.linkPolicy != nil
+      } ?? []
+      let states = Set(shares.compactMap(\.linkSettings))
+      guard !shares.isEmpty,
+            states.count == 1,
+            let state = states.first,
+            state.revision == expectedRevision,
+            state.pendingChange == nil
+      else { throw NodeClientError.invalidResponse }
+      let change = PendingFolderLinkSettingsChange(
+        folderId: folderId,
+        expectedRevision: expectedRevision,
+        settings: settings
+      )
+      guard pendingFolderLinkSettingsChanges.count < 128 else {
+        throw SelectedDirectoryError.tooManyFolderSyncGrants
+      }
+      let updated = pendingFolderLinkSettingsChanges + [change]
+      try await persistence.savePendingFolderLinkSettingsChanges(updated)
+      pendingFolderLinkSettingsChanges = updated
+      return change
+    }
+
+    private func submitFolderLinkSettingsChange(
+      _ change: PendingFolderLinkSettingsChange
+    ) async -> Bool {
+      do {
+        _ = try await client.updateFolderLinkSettings(
+          FolderLinkSettingsRequest(
+            folderId: change.folderId,
+            changeId: change.changeId,
+            expectedRevision: change.expectedRevision,
+            settings: change.settings
+          )
+        )
+        await refreshFoldersDuringMutation()
+        return true
+      } catch let error as NodeClientError {
+        if case let .api(_, code, _, _) = error,
+           code == "link_settings_pending" || code == "link_settings_conflict" {
+          await markFolderLinkSettingsChangeForReview(change)
+          await refreshFoldersDuringMutation()
+          report(error, title: "Review the link settings")
+          return false
+        }
+        report(error, title: "Link settings couldn't be saved") { [weak self] in
+          _ = await self?.retryFolderLinkSettingsChange(folderId: change.folderId)
+        }
+        return false
+      } catch {
+        report(error, title: "Link settings couldn't be saved") { [weak self] in
+          _ = await self?.retryFolderLinkSettingsChange(folderId: change.folderId)
+        }
+        return false
+      }
+    }
+
+    private func markFolderLinkSettingsChangeForReview(
+      _ change: PendingFolderLinkSettingsChange
+    ) async {
+      guard let index = pendingFolderLinkSettingsChanges.firstIndex(where: {
+        $0.folderId == change.folderId && $0.changeId == change.changeId
+      }) else { return }
+      var updated = pendingFolderLinkSettingsChanges
+      updated[index] = updated[index].markedForReview()
+      do {
+        try await persistence.savePendingFolderLinkSettingsChanges(updated)
+        pendingFolderLinkSettingsChanges = updated
+      } catch {
+        report(error, title: "Link settings couldn't be saved")
+      }
+    }
+
+    private func reconcilePendingFolderLinkSettingsChanges(
+      with status: FolderSyncStatus
+    ) async throws {
+      let activeFolders = Set(status.shares.filter {
+        $0.phase != .removed && $0.linkPolicy != nil
+      }.map(\.folderId))
+      var updated: [PendingFolderLinkSettingsChange] = []
+      for saved in pendingFolderLinkSettingsChanges where activeFolders.contains(saved.folderId) {
+        let states = Set(status.shares.filter { $0.folderId == saved.folderId }
+          .compactMap(\.linkSettings))
+        guard states.count <= 1 else { throw NodeClientError.invalidResponse }
+        guard let state = states.first else {
+          updated.append(saved)
+          continue
+        }
+        let observed = state.changeId == saved.changeId
+          || state.pendingChange?.changeId == saved.changeId
+          || state.conflictedChange?.changeId == saved.changeId
+        if observed { continue }
+        if saved.requiresReview || state.revision != saved.expectedRevision
+          || state.pendingChange != nil || state.conflictedChange != nil {
+          updated.append(saved.markedForReview())
+        } else {
+          updated.append(saved)
+        }
+      }
+      if updated != pendingFolderLinkSettingsChanges {
+        try await persistence.savePendingFolderLinkSettingsChanges(updated)
+        pendingFolderLinkSettingsChanges = updated
+      }
+    }
+
+    public func removeFolder(_ offerId: UUID) async {
+      guard beginFolderMutation() else { return }
+      defer { folderSyncMutationInFlight = false }
+
+      do {
+        _ = try await client.removeFolder(FolderReferenceRequest(offerId: offerId))
+        let retained = directoryGrants.filter { $0.folderOfferId != offerId }
+        if retained != directoryGrants {
+          try await persistence.saveDirectoryGrants(retained)
+          directoryGrants = retained
+          folderSyncScopeRefreshRequired = true
+          folderSyncStatus = nil
+          try await restartForFolderSyncDirectoryGrants(force: true)
+          folderSyncScopeRefreshRequired = false
+        }
+        try await removePendingFolderRepair(offerId: offerId)
+        await refreshFoldersDuringMutation()
+      } catch {
+        report(error, title: "Folder couldn't be removed")
+      }
+    }
+
+    public func retryFolderSync() async {
+      guard beginFolderMutation() else { return }
+      defer { folderSyncMutationInFlight = false }
+
+      do {
+        _ = try await client.retryFolderSync()
+        await refreshFoldersDuringMutation()
+      } catch {
+        report(error, title: "Folder sync needs attention")
+      }
+    }
+
+    /// Authenticates and adopts a paired device's new numeric endpoint.
+    ///
+    /// The returned state deliberately keeps an uncertain request intact. A
+    /// concurrency conflict instead returns the newly observed address and
+    /// requires a fresh confirmation, so the old expectation is never retried
+    /// against a different routing record.
+    public func refreshPeerAddress(
+      _ request: PeerAddressRefreshRequest
+    ) async -> PeerAddressRefreshOutcome {
+      guard beginFolderMutation() else {
+        return .failed(ErrorPresenter.present(AppModelError.operationInProgress))
+      }
+      defer { folderSyncMutationInFlight = false }
+      let expectsProvider = providers.contains { $0.peerId == request.peerId }
+
+      do {
+        _ = try await client.refreshPeerAddress(request)
+        return await confirmPeerAddressRefresh(request, expectsProvider: expectsProvider)
+      } catch let error as NodeClientError {
+        if case let .api(_, code, _, _) = error, code == "peer_address_changed" {
+          return await reloadPeerAddressAfterConflict(request, error: error)
+        }
+        if isUncertainPeerAddressResult(error) {
+          return await recoverUncertainPeerAddressRefresh(request, error: error)
+        }
+        let failure = ErrorPresenter.present(error)
+        if failure.recovery == .retry {
+          return .retryExact(request, failure: failure)
+        }
+        return .failed(failure)
+      } catch {
+        return .retryExact(request, failure: ErrorPresenter.present(error))
+      }
+    }
+
+    private func confirmPeerAddressRefresh(
+      _ request: PeerAddressRefreshRequest,
+      expectsProvider: Bool
+    ) async -> PeerAddressRefreshOutcome {
+      do {
+        let snapshot = try await reconciledFolderStatus()
+        folderSyncStatus = snapshot
+        folderSyncError = nil
+        guard let peer = snapshot.peers.first(where: { $0.peerId == request.peerId }),
+              let address = peer.address
+        else { throw NodeClientError.invalidResponse }
+        guard address == request.candidateAddress else {
+          markProviderAddressUnknown(peerId: request.peerId, address: address)
+          return .requiresConfirmation(
+            currentPeer: peer,
+            candidateAddress: request.candidateAddress,
+            failure: NodeClientFailure(
+              summary: "The saved device address changed again. Review the current address before saving.",
+              recovery: .none
+            )
+          )
+        }
+        return await finishPeerAddressRefresh(peer: peer, expectsProvider: expectsProvider)
+      } catch {
+        folderSyncStatus = nil
+        folderSyncError = "The address update was accepted, but current device status needs to be reloaded."
+        markProviderAddressUnknown(peerId: request.peerId, address: request.candidateAddress)
+        return .savedNeedsReload(
+          peerId: request.peerId,
+          acceptedAddress: request.candidateAddress,
+          failure: NodeClientFailure(
+            summary: "The address update was accepted, but Covalent couldn't reload current device status.",
+            detail: ErrorPresenter.detail(for: error),
+            recovery: .retry
+          )
+        )
+      }
+    }
+
+    private func finishPeerAddressRefresh(
+      peer: FolderSyncPeer,
+      expectsProvider: Bool
+    ) async -> PeerAddressRefreshOutcome {
+      guard let address = peer.address else {
+        return .failed(ErrorPresenter.present(NodeClientError.invalidResponse))
+      }
+      guard expectsProvider else { return .saved(peer) }
+      do {
+        let refreshedProviders = try await client.providers()
+        guard refreshedProviders.contains(where: {
+          $0.peerId == peer.peerId && $0.address == address
+        }) else { throw NodeClientError.invalidResponse }
+        providers = refreshedProviders
+        return .saved(peer)
+      } catch {
+        markProviderAddressUnknown(peerId: peer.peerId, address: address)
+        return .savedNeedsReload(
+          peerId: peer.peerId,
+          acceptedAddress: address,
+          failure: NodeClientFailure(
+            summary: "The new address was saved, but Covalent couldn't reload this device's connection status.",
+            detail: ErrorPresenter.detail(for: error),
+            recovery: .retry
+          )
+        )
+      }
+    }
+
+    private func reloadPeerAddressAfterConflict(
+      _ request: PeerAddressRefreshRequest,
+      error: NodeClientError
+    ) async -> PeerAddressRefreshOutcome {
+      let failure = ErrorPresenter.present(error)
+      do {
+        let snapshot = try await reconciledFolderStatus()
+        folderSyncStatus = snapshot
+        folderSyncError = nil
+        guard let peer = snapshot.peers.first(where: { $0.peerId == request.peerId }),
+              let address = peer.address
+        else { throw NodeClientError.invalidResponse }
+        markProviderAddressUnknown(peerId: peer.peerId, address: address)
+        return .requiresConfirmation(
+          currentPeer: peer,
+          candidateAddress: request.candidateAddress,
+          failure: NodeClientFailure(
+            summary: "The saved device address changed before this update. Review the current address and confirm again.",
+            detail: failure.detail,
+            recovery: .none
+          )
+        )
+      } catch {
+        folderSyncStatus = nil
+        folderSyncError = "The saved device address changed, and current device status couldn't be reloaded."
+        return .failed(NodeClientFailure(
+          summary: "Covalent couldn't reload the current device address. Close this sheet and refresh Devices before trying again.",
+          detail: ErrorPresenter.detail(for: error),
+          recovery: .none
+        ))
+      }
+    }
+
+    private func recoverUncertainPeerAddressRefresh(
+      _ request: PeerAddressRefreshRequest,
+      error: NodeClientError
+    ) async -> PeerAddressRefreshOutcome {
+      var candidateObserved = false
+      do {
+        let snapshot = try await reconciledFolderStatus()
+        folderSyncStatus = snapshot
+        folderSyncError = nil
+        guard let peer = snapshot.peers.first(where: { $0.peerId == request.peerId }),
+              let address = peer.address
+        else { throw NodeClientError.invalidResponse }
+        if address == request.candidateAddress {
+          // Core can expose the candidate route before the provider/journal
+          // barrier is durably finalized. Only an acknowledged idempotent POST
+          // can complete that transition and release this exact request.
+          candidateObserved = true
+          markProviderAddressUnknown(peerId: peer.peerId, address: address)
+        } else {
+          markProviderAddressUnknown(peerId: peer.peerId, address: address)
+          if address != request.expectedAddress {
+            return .requiresConfirmation(
+              currentPeer: peer,
+              candidateAddress: request.candidateAddress,
+              failure: NodeClientFailure(
+                summary: "The saved device address changed while Covalent was checking the update. Review it and confirm again.",
+                detail: ErrorPresenter.detail(for: error),
+                recovery: .none
+              )
+            )
+          }
+        }
+      } catch {
+        folderSyncStatus = nil
+        folderSyncError = "The device address update has an uncertain result. Retry the same update or reload Devices."
+      }
+      return .retryExact(
+        request,
+        failure: NodeClientFailure(
+          summary: candidateObserved
+            ? "The new address is visible, but Covalent couldn't confirm that saving finished. Try the same update again."
+            : "Covalent couldn't confirm whether the address changed. Try the same update again.",
+          detail: ErrorPresenter.detail(for: error),
+          recovery: .retry
+        )
+      )
+    }
+
+    private func isUncertainPeerAddressResult(_ error: NodeClientError) -> Bool {
+      switch error {
+      case .transport, .invalidResponse, .invalidPayload:
+        true
+      default:
+        false
+      }
+    }
+
+    /// An acknowledged address without a fresh provider probe must never keep
+    /// displaying a prior green reachability result. Preserve the signed
+    /// certificate identity while making address and freshness truthful.
+    private func markProviderAddressUnknown(peerId: UUID, address: String) {
+      providers = providers.map { provider in
+        guard provider.peerId == peerId else { return provider }
+        return ProviderConnection(
+          peerId: provider.peerId,
+          address: address,
+          certificateFingerprint: provider.certificateFingerprint
+        )
+      }
+    }
+
+    public func beginNormalFirstLaunch() async {
+        guard needsFirstLaunchChoice else { return }
+        presentation = nil
+        let succeeded = await refreshManaged(mode: .normal)
+        guard !succeeded, let localNodeBootstrapper else { return }
+        // A normal launch may have created its identity before a later
+        // readiness failure. Do not offer recovery over that identity.
+        if (try? localNodeBootstrapper.startupDisposition()) == .existingIdentity {
+            needsFirstLaunchChoice = false
+        }
+    }
+
+    public func beginRecoveryFirstLaunch(recoveryKitFile: URL, recoveryKeyFile: URL) async {
+        guard needsFirstLaunchChoice else { return }
+        presentation = nil
+        let succeeded = await refreshManaged(
+            mode: .recover(recoveryKitFile: recoveryKitFile, recoveryKeyFile: recoveryKeyFile)
+        )
+        guard !succeeded, let localNodeBootstrapper else { return }
+        // A cancelled/failed bootstrap must leave a visible way to retry. Do
+        // not create an identity merely to escape this state.
+        do {
+            switch try localNodeBootstrapper.startupDisposition() {
+            case .existingIdentity:
+                // Core may have durably published the recovered identity before a
+                // later readiness error. Resume normal startup; recovery cannot
+                // overwrite that state.
+                needsFirstLaunchChoice = false
+                await refresh()
+            case .resumableRecovery, .needsFirstLaunchChoice:
+                needsFirstLaunchChoice = true
+                phase = .needsAuthorization
+                presentation = .firstLaunchSetup
+            }
+        } catch {
+            // We cannot safely infer that an identity exists. Leave the
+            // recovery choice reachable so a transient inspection failure
+            // cannot strand the owner after a cancelled recovery.
+            needsFirstLaunchChoice = true
+            phase = .needsAuthorization
+            presentation = .firstLaunchSetup
+            report(error, title: "Local recovery state could not be checked")
+        }
+    }
+
+    public func loadRecoveryStatus() async {
+        guard configuration.apiToken != nil, !recoveryCheckInFlight else { return }
+        recoveryCheckInFlight = true
+        defer { recoveryCheckInFlight = false }
+        do {
+            recoveryStatus = try await client.recoveryStatus()
+        } catch {
+            recoveryStatus = nil
+            report(error, title: "Recovery status could not be checked")
+        }
+    }
+
+    public func retryRecovery() async {
+        guard !recoveryCheckInFlight else { return }
+        recoveryCheckInFlight = true
+        defer { recoveryCheckInFlight = false }
+        do {
+            recoveryStatus = try await client.retryRecovery(confirmed: true)
+            if recoveryStatus?.phase == .imported || recoveryStatus?.phase == .noCatalogs {
+                await refresh()
+            }
+        } catch {
+            report(error, title: "Recovery check did not finish") { [weak self] in
+                await self?.retryRecovery()
+            }
+        }
+    }
+
+    public func exportRecoveryKit() async -> RecoveryKitExport? {
+        guard !recoveryExportInFlight else { return nil }
+        recoveryExportInFlight = true
+        defer { recoveryExportInFlight = false }
+        do {
+            return try await client.exportRecoveryKit(confirmed: true)
+        } catch {
+            report(error, title: "Recovery kit could not be created")
+            return nil
         }
     }
 
@@ -524,12 +1518,314 @@ public final class CovalentAppModel: ObservableObject {
         providers = []
         backups = []
         discoveryCandidates = []
+        recoveryStatus = nil
         phase = .needsAuthorization
         presentation = .connection
     }
 
     public func currentConnectionAddress() -> String {
         configuration.baseURL.absoluteString
+    }
+
+    private func beginFolderMutation() -> Bool {
+      guard !folderSyncMutationInFlight else { return false }
+      folderSyncMutationInFlight = true
+      return true
+    }
+
+    /// Persist the sandbox bookmark before asking the local node to start a
+    /// worker. If the request outcome is uncertain, retaining the grant lets a
+    /// subsequent helper restart regain the same user-authorized folder.
+    private func persistFolderSyncGrant(
+      _ grant: SelectedDirectoryGrant,
+      permitsSharedRoot: Bool = false
+    ) async throws -> SelectedDirectoryGrant {
+      guard grant.purpose == .folderSync else {
+        throw SelectedDirectoryError.notAFileURL
+      }
+      if let existing = directoryGrants.first(where: { $0.id == grant.id }) {
+        return existing
+      }
+      let selectedRoot = try await grant.resolve().withCoordinatedRead { url in
+        url.standardizedFileURL.resolvingSymlinksInPath()
+      }
+      for (index, existing) in directoryGrants.enumerated()
+        where existing.purpose == .folderSync {
+        try Task.checkCancellation()
+        guard let existingRoot = try? await existing.resolve().withCoordinatedRead({ url in
+          url.standardizedFileURL.resolvingSymlinksInPath()
+        }) else { continue }
+        if existingRoot == selectedRoot {
+          if permitsSharedRoot {
+            continue
+          }
+          guard let offerId = grant.folderOfferId else { return existing }
+          guard existing.folderOfferId == nil || existing.folderOfferId == offerId else {
+            throw FolderAccessRepairError.folderAlreadyUsed
+          }
+          let bound = existing.bound(toFolderOfferId: offerId)
+          guard bound != existing else { return existing }
+          var updatedGrants = directoryGrants
+          updatedGrants[index] = bound
+          try await persistence.saveDirectoryGrants(updatedGrants)
+          directoryGrants = updatedGrants
+          return bound
+        }
+      }
+      try Task.checkCancellation()
+      guard directoryGrants.filter({ $0.purpose == .folderSync }).count < 128 else {
+        throw SelectedDirectoryError.tooManyFolderSyncGrants
+      }
+      var updatedGrants = directoryGrants
+      updatedGrants.append(grant)
+      try await persistence.saveDirectoryGrants(updatedGrants)
+      directoryGrants = updatedGrants
+      return grant
+    }
+
+    private struct FolderSyncAccessFingerprint: Equatable {
+      let id: UUID
+      let bookmarkData: Data
+    }
+
+    private enum FolderSyncLaunchMode: Equatable {
+      case normal
+      case pendingRepair
+    }
+
+    private struct FolderSyncLaunchState: Equatable {
+      let mode: FolderSyncLaunchMode
+      let grants: [FolderSyncAccessFingerprint]
+    }
+
+    private func folderSyncLaunchState(
+      grants: [SelectedDirectoryGrant],
+      mode: FolderSyncLaunchMode
+    ) -> FolderSyncLaunchState {
+      FolderSyncLaunchState(
+        mode: mode,
+        grants: grants.filter { $0.purpose == .folderSync }
+          .map { FolderSyncAccessFingerprint(id: $0.id, bookmarkData: $0.bookmarkData) }
+          .sorted { $0.id.uuidString < $1.id.uuidString }
+      )
+    }
+
+    private func restartForFolderSyncDirectoryGrants(force: Bool = false) async throws {
+      guard let localNodeBootstrapper else { return }
+      let desired = folderSyncLaunchState(grants: directoryGrants, mode: .normal)
+      if !force, await revalidatedFolderSyncLaunchState(desired) { return }
+      let replacement = try await localNodeBootstrapper.restartForFolderSyncDirectoryGrants(
+        directoryGrants)
+      folderSyncLaunchState = desired
+      if replacement != configuration {
+        configuration = replacement
+        client = NodeClient(configuration: replacement)
+      }
+    }
+
+    private func revalidatedFolderSyncLaunchState(_ desired: FolderSyncLaunchState) async -> Bool {
+      guard folderSyncLaunchState == desired else { return false }
+      do {
+        let snapshot = try await client.folderSyncStatus()
+        guard snapshot.availability == "available" else {
+          folderSyncLaunchState = nil
+          return false
+        }
+        return true
+      } catch let error as NodeClientError where Self.isInitialScanBusy(error) {
+        // This authenticated response proves that the existing helper is live
+        // and has started the safety scan for the requested capability set.
+        return true
+      } catch {
+        folderSyncLaunchState = nil
+        return false
+      }
+    }
+
+    private func invalidateFolderSyncLaunchState(unlessInitialScanBusy error: Error) {
+      guard !Self.isInitialScanBusy(error) else { return }
+      folderSyncLaunchState = nil
+    }
+
+    private nonisolated static func isInitialScanBusy(_ error: Error) -> Bool {
+      guard case let NodeClientError.api(_, code, _, retryable) = error else { return false }
+      return code == "folder_sync_busy" && retryable
+    }
+
+    private func restartForPendingFolderRepairDirectoryGrants(
+      _ grants: [SelectedDirectoryGrant]
+    ) async throws {
+      guard let localNodeBootstrapper else { return }
+      let replacement = try await localNodeBootstrapper
+        .restartForPendingFolderRepairDirectoryGrants(grants)
+      folderSyncLaunchState = folderSyncLaunchState(grants: grants, mode: .pendingRepair)
+      if replacement != configuration {
+        configuration = replacement
+        client = NodeClient(configuration: replacement)
+      }
+    }
+
+    /// The initial scan deliberately rejects mutations. Retry only that typed,
+    /// pre-mutation response against the same request and running helper. A
+    /// later user retry reuses the installed launch state instead of creating
+    /// another scan gate.
+    private nonisolated static func retryFolderSyncBusy<Value: Sendable>(
+      _ operation: @escaping @Sendable () async throws -> Value
+    ) async throws -> Value {
+      let clock = ContinuousClock()
+      let deadline = clock.now.advanced(by: .seconds(30))
+      while true {
+        try Task.checkCancellation()
+        do {
+          return try await operation()
+        } catch let error as NodeClientError {
+          guard isInitialScanBusy(error),
+                clock.now < deadline
+          else { throw error }
+          try await Task.sleep(for: .milliseconds(250))
+        }
+      }
+    }
+
+    private func bindFolderSyncGrant(
+      _ grant: SelectedDirectoryGrant,
+      to offerId: UUID,
+      replacing expectedOfferId: UUID? = nil
+    ) async throws {
+      guard let index = directoryGrants.firstIndex(where: { $0.id == grant.id }) else {
+        throw FolderAccessRepairError.savedGrantMissing
+      }
+      if directoryGrants[index].folderOfferId == offerId { return }
+      guard directoryGrants[index].folderOfferId == expectedOfferId else {
+        throw NodeClientError.invalidResponse
+      }
+      var updated = directoryGrants
+      updated[index] = updated[index].bound(toFolderOfferId: offerId)
+      try await persistence.saveDirectoryGrants(updated)
+      directoryGrants = updated
+    }
+
+    private func preparePendingFolderRepair(
+      offerId: UUID,
+      selectedGrant: SelectedDirectoryGrant
+    ) async throws -> PendingFolderAccessRepair {
+      guard selectedGrant.purpose == .folderSync else {
+        throw SelectedDirectoryError.notAFileURL
+      }
+      let selectedRoot = try await canonicalRoot(for: selectedGrant)
+      if let existing = pendingFolderRepairs.first(where: { $0.offerId == offerId }),
+         let existingRoot = try? await canonicalRoot(for: existing.replacementGrant) {
+        guard existingRoot == selectedRoot else {
+          throw FolderAccessRepairError.differentRepairAlreadyPending
+        }
+        return existing
+      }
+      var updated = pendingFolderRepairs.filter { $0.offerId != offerId }
+      guard updated.count < 128 else { throw SelectedDirectoryError.tooManyFolderSyncGrants }
+      let pending = PendingFolderAccessRepair(
+        offerId: offerId,
+        replacementGrant: selectedGrant,
+        selectedRoot: try await selectedGrant.resolve().withCoordinatedRead { $0.path }
+      )
+      updated.append(pending)
+      try await persistence.savePendingFolderRepairs(updated)
+      pendingFolderRepairs = updated
+      return pending
+    }
+
+    private func folderRepairCandidates(
+      offerId: UUID,
+      replacement: SelectedDirectoryGrant
+    ) async throws -> [SelectedDirectoryGrant] {
+      let folderGrants = directoryGrants.filter { $0.purpose == .folderSync }
+      let bound = folderGrants.filter { $0.folderOfferId == offerId }
+      guard bound.count <= 1 else { throw FolderAccessRepairError.ambiguousSavedAccess }
+
+      var replacedIDs = Set(bound.map(\.id))
+      var refreshedSiblings: [SelectedDirectoryGrant] = []
+      if !bound.isEmpty {
+        let liveShares = folderSyncStatus?.shares.filter { $0.phase != .removed } ?? []
+        guard let repairedShare = liveShares.first(where: { $0.offerId == offerId }) else {
+          throw FolderAccessRepairError.shareMissing
+        }
+        if !repairedShare.incoming, let policy = repairedShare.linkPolicy {
+          let siblings = liveShares.filter { $0.folderId == repairedShare.folderId }
+          guard siblings.allSatisfy({
+            !$0.incoming && $0.label == repairedShare.label && $0.linkPolicy == policy
+          }) else { throw FolderAccessRepairError.ambiguousSavedAccess }
+          let siblingOfferIDs = Set(siblings.map(\.offerId))
+          let siblingGrants = folderGrants.filter {
+            $0.folderOfferId.map(siblingOfferIDs.contains) == true
+          }
+          guard siblingGrants.count == siblingOfferIDs.count,
+                Set(siblingGrants.compactMap(\.folderOfferId)) == siblingOfferIDs
+          else { throw FolderAccessRepairError.ambiguousSavedAccess }
+          replacedIDs.formUnion(siblingGrants.map(\.id))
+          refreshedSiblings = siblingGrants.compactMap { existing in
+            guard existing.folderOfferId != offerId else { return nil }
+            return SelectedDirectoryGrant(
+              id: existing.id,
+              displayName: replacement.displayName,
+              purpose: .folderSync,
+              bookmarkData: replacement.bookmarkData,
+              capturedAt: replacement.capturedAt,
+              folderOfferId: existing.folderOfferId
+            )
+          }
+        }
+      }
+      if bound.isEmpty {
+        let liveShares = folderSyncStatus?.shares.filter { $0.phase != .removed } ?? []
+        let legacy = folderGrants.filter { $0.folderOfferId == nil }
+        guard liveShares.count == 1, legacy.count == 1 else {
+          throw FolderAccessRepairError.ambiguousSavedAccess
+        }
+        replacedIDs.insert(legacy[0].id)
+      }
+
+      let selectedRoot = try await canonicalRoot(for: replacement)
+      for existing in folderGrants where !replacedIDs.contains(existing.id) {
+        try Task.checkCancellation()
+        if let existingRoot = try? await canonicalRoot(for: existing), existingRoot == selectedRoot {
+          throw FolderAccessRepairError.folderAlreadyUsed
+        }
+      }
+      return directoryGrants.filter { !replacedIDs.contains($0.id) }
+        + refreshedSiblings
+        + [replacement.bound(toFolderOfferId: offerId)]
+    }
+
+    private func canonicalRoot(for grant: SelectedDirectoryGrant) async throws -> URL {
+      try await grant.resolve().withCoordinatedRead { url in
+        url.standardizedFileURL.resolvingSymlinksInPath()
+      }
+    }
+
+    /// Other shares may have invalid bookmarks too. They stay durably bound,
+    /// but cannot be required to open the newly selected scope or call the
+    /// access-unavailable repair API for this exact share.
+    private func folderRepairLaunchGrants(
+      from candidates: [SelectedDirectoryGrant],
+      replacementGrantId: UUID
+    ) async throws -> [SelectedDirectoryGrant] {
+      var launchGrants = candidates.filter { $0.purpose != .folderSync }
+      for grant in candidates where grant.purpose == .folderSync {
+        try Task.checkCancellation()
+        if grant.id == replacementGrantId {
+          _ = try await canonicalRoot(for: grant)
+          launchGrants.append(grant)
+        } else if (try? await canonicalRoot(for: grant)) != nil {
+          launchGrants.append(grant)
+        }
+      }
+      return launchGrants
+    }
+
+    private func removePendingFolderRepair(offerId: UUID) async throws {
+      let updated = pendingFolderRepairs.filter { $0.offerId != offerId }
+      guard updated != pendingFolderRepairs else { return }
+      try await persistence.savePendingFolderRepairs(updated)
+      pendingFolderRepairs = updated
     }
 
     public func addDirectoryGrant(url: URL, purpose: DirectoryAccessPurpose) async -> SelectedDirectoryGrant? {
@@ -548,6 +1844,14 @@ public final class CovalentAppModel: ObservableObject {
     }
 
     public func removeDirectoryGrant(id: UUID) async {
+        guard let grant = directoryGrants.first(where: { $0.id == id }) else { return }
+        guard grant.purpose != .folderSync else {
+            alert = AppAlert(
+                title: "Manage this folder in Folders",
+                message: "Stop sharing the folder from Folders before removing its access."
+            )
+            return
+        }
         directoryGrants.removeAll { $0.id == id }
         do {
             try await persistence.saveDirectoryGrants(directoryGrants)
@@ -1361,7 +2665,7 @@ public final class CovalentAppModel: ObservableObject {
 /// UI-test launch metadata contains only this relative, non-secret basename. The
 /// harness pre-provisions the file in the target app's Application Support
 /// container; production launches never enter this code path.
-private func readPrivateUITestToken(relativePath: String) -> String? {
+func readPrivateUITestToken(relativePath: String) -> String? {
     guard relativePath.hasPrefix("ui-token-"),
           relativePath.utf8.count > "ui-token-".utf8.count,
           (1...96).contains(relativePath.utf8.count),

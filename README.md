@@ -1,12 +1,18 @@
 # Covalent
 
-Covalent is a lightweight, self-hosted backup and restore system for devices you control. It pairs directly over a LAN or Tailnet, stores encrypted verified chunks on devices you explicitly choose, and restores relative paths only beneath a destination you authorize.
+Covalent is being simplified into a native, self-hosted wrapper for one-way file links: choose a source, pair destinations, configure the link once, and monitor transfers. macOS, Android, and Docker/Unraid are the supported targets.
+
+**Development scope changed on 2026-09-12.** The current checkout contains a working pairing and transfer foundation plus earlier backup features. The new one-way workflows are not yet complete. Follow the [current product requirements](docs/product/requirements.md) and [verified progress](docs/release/completion-progress.md); the older backup instructions below describe the existing foundation.
 
 ## Start here
 
-**[Back up your first folder](docs/getting-started.md)** is the single setup
-guide. It takes you from prerequisites through a small backup, Verify, and a
-restore test. Start there instead of reading the release or architecture docs.
+**[Create your first one-way link](docs/getting-started-links.md)** is the
+primary setup guide. Pair devices, choose a source folder, review deletion
+settings, then authorize one or more destinations. It describes the current
+development state and what is verified.
+
+The previous [backup setup guide](docs/getting-started.md) is a legacy
+reference for the superseded backup workflow.
 
 Current personal-use paths do not require an Apple Developer ID or Android
 production signing:
@@ -61,9 +67,10 @@ ID/notarization is excluded. See
 [the v0.2.0 candidate notes](docs/release/notes/v0.2.0.md) before planning an
 upgrade.
 
-Setup belongs in [the getting-started guide](docs/getting-started.md). Per-release
-provenance lives in [docs/release/notes](docs/release/notes), and maintainer-only
-publishing detail lives in [docs/release/publishing.md](docs/release/publishing.md).
+Primary setup belongs in [the one-way link guide](docs/getting-started-links.md).
+The [backup setup guide](docs/getting-started.md) remains a legacy reference.
+Per-release provenance lives in [docs/release/notes](docs/release/notes), and
+maintainer-only publishing detail lives in [docs/release/publishing.md](docs/release/publishing.md).
 
 ## Repository map
 
@@ -87,7 +94,7 @@ Prerequisites by area: Rust 1.97.1 for the shared engine; an Apple Silicon Mac w
 cargo run -p covalent-cli -- doctor
 ```
 
-Use `apple`, `android`, `container`, or `all` with both scripts for broader work. Android headed validation additionally requires the exact `Covalent_API_37` AVD and an explicit `ANDROID_SERIAL`; Apple UI gates use the bounded scripts under `apps/apple/Scripts`. Container validation includes TLS-only management, the three-node disaster drill, and artifact budgets. Public package promotion and a physical Unraid drill remain release gates. Apple Developer ID/notarization is excluded, and Android production signing is deferred.
+Use `apple`, `android`, `container`, or `all` with both scripts for broader work. Android headed validation additionally requires the exact `Covalent_API_37` AVD and an explicit `ANDROID_SERIAL`; Apple UI gates use the bounded scripts under `apps/apple/Scripts`. Container validation includes TLS-only management, the three-node disaster drill, and artifact budgets. Public package promotion remains required. Docker is the accepted Unraid validation target while Atlas is offline; a physical Atlas drill does not gate the current scope. Apple Developer ID/notarization is excluded, and Android production signing is deferred.
 
 Bootstrap checks tools; it does not start a node. A headless node requires an
 explicitly provisioned KEK, and network access requires the TLS container path.

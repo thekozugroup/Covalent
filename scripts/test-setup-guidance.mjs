@@ -7,6 +7,7 @@ import process from "node:process";
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const setupFiles = [
   "README.md",
+  "docs/getting-started-links.md",
   "docs/getting-started.md",
   "docs/troubleshooting.md",
   "docs/platform/macos.md",
@@ -81,7 +82,7 @@ function requireText(file, needle, purpose) {
   if (!text.includes(needle)) errors.push(`${file}: missing ${purpose}: ${needle}`);
 }
 
-requireText("README.md", "[Back up your first folder](docs/getting-started.md)", "primary setup link");
+requireText("README.md", "[Create your first one-way link](docs/getting-started-links.md)", "primary setup link");
 requireText("docs/getting-started.md", "Apple Developer ID/notarization is not part", "macOS personal-use scope");
 requireText("docs/getting-started.md", "Android production signing is deferred", "Android personal-use scope");
 requireText("docs/getting-started.md", "Unraid template and Atlas deployment remain blocked", "honest unavailable-server scope");
@@ -99,7 +100,7 @@ requireText("packaging/docker/README.md", "first-backup.txt", "restorable Docker
 requireText("packaging/docker/README.md", "COVALENT_HTTPS_BIND_IP=192.168.1.50", "ordinary LAN publishing example");
 requireText("packaging/docker/README.md", 'covalent_host_root="$HOME/.covalent-server"', "Docker Desktop shared host root");
 requireText("packaging/docker/README.md", "## Enroll or remove the claimed CA", "exact CA enrollment anchor");
-requireText("docs/platform/atlas-tailscale.md", "operator@atlas.example-tailnet.ts.net sh -s", "remote Atlas path validation");
+requireText("docs/platform/atlas-tailscale.md", "root@atlas.example-tailnet.ts.net sh -s", "remote Atlas path validation");
 for (const file of ["docs/platform/unraid.md", "docs/platform/atlas-tailscale.md"]) {
   requireText(file, "../../packaging/docker/README.md#enroll-or-remove-the-claimed-ca", "exact CA enrollment link");
 }
@@ -131,6 +132,7 @@ for (const heading of orderedHeadings) {
 
 const activeSetup = [
   "README.md",
+  "docs/getting-started-links.md",
   "docs/getting-started.md",
   "docs/troubleshooting.md",
   "docs/platform/macos.md",

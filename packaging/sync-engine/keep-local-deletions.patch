@@ -1,0 +1,803 @@
+diff --git a/lib/config/config_test.go b/lib/config/config_test.go
+index a82d8e9..e2cb169 100644
+--- a/lib/config/config_test.go
++++ b/lib/config/config_test.go
+@@ -658,6 +658,41 @@ func TestPrepare(t *testing.T) {
+ 	}
+ }
+ 
++func TestLocalDeletionOptionsOnlyReceiveOnly(t *testing.T) {
++	devices := map[protocol.DeviceID]*DeviceConfiguration{
++		device1: {DeviceID: device1},
++	}
++	for _, folderType := range []FolderType{
++		FolderTypeSendReceive,
++		FolderTypeSendOnly,
++		FolderTypeReceiveOnly,
++		FolderTypeReceiveEncrypted,
++	} {
++		folder := FolderConfiguration{
++			Type:                  folderType,
++			KeepLocalDeletions:    true,
++			RestoreLocalDeletions: true,
++		}
++		folder.prepare(device1, devices)
++
++		if got, want := folder.KeepLocalDeletions, folderType == FolderTypeReceiveOnly; got != want {
++			t.Errorf("type %v: got keepLocalDeletions=%v, want %v", folderType, got, want)
++		}
++		if folder.RestoreLocalDeletions {
++			t.Errorf("type %v: ambiguous restoreLocalDeletions remained enabled", folderType)
++		}
++	}
++
++	folder := FolderConfiguration{
++		Type:                  FolderTypeReceiveOnly,
++		RestoreLocalDeletions: true,
++	}
++	folder.prepare(device1, devices)
++	if !folder.RestoreLocalDeletions || folder.KeepLocalDeletions {
++		t.Fatalf("explicit restore-only config changed: %+v", folder)
++	}
++}
++
+ func TestCopy(t *testing.T) {
+ 	wrapper, wrapperCancel, err := copyAndLoad(testFs, "example.xml", device1)
+ 	defer wrapperCancel()
+diff --git a/lib/config/folderconfiguration.go b/lib/config/folderconfiguration.go
+index 58c244e..2a5f212 100644
+--- a/lib/config/folderconfiguration.go
++++ b/lib/config/folderconfiguration.go
+@@ -67,6 +67,8 @@ type FolderConfiguration struct {
+ 	Hashers                 int                         `json:"hashers" xml:"hashers"`
+ 	Order                   PullOrder                   `json:"order" xml:"order"`
+ 	IgnoreDelete            bool                        `json:"ignoreDelete" xml:"ignoreDelete"`
++	KeepLocalDeletions      bool                        `json:"keepLocalDeletions" xml:"keepLocalDeletions"`
++	RestoreLocalDeletions   bool                        `json:"restoreLocalDeletions" xml:"restoreLocalDeletions"`
+ 	ScanProgressIntervalS   int                         `json:"scanProgressIntervalS" xml:"scanProgressIntervalS"`
+ 	PullerPauseS            int                         `json:"pullerPauseS" xml:"pullerPauseS"`
+ 	PullerDelayS            float64                     `json:"pullerDelayS" xml:"pullerDelayS" default:"1"`
+@@ -323,6 +325,13 @@ func (f *FolderConfiguration) prepare(myID protocol.DeviceID, existingDevices ma
+ 	if f.Type == FolderTypeReceiveEncrypted {
+ 		f.IgnorePerms = true
+ 	}
++	if f.Type != FolderTypeReceiveOnly {
++		f.KeepLocalDeletions = false
++		f.RestoreLocalDeletions = false
++	} else if f.KeepLocalDeletions && f.RestoreLocalDeletions {
++		// Retaining a deletion is the safer behavior for an ambiguous config.
++		f.RestoreLocalDeletions = false
++	}
+ }
+ 
+ // RequiresRestartOnly returns a copy with only the attributes that require
+diff --git a/lib/model/folder.go b/lib/model/folder.go
+index 9f9f572..7950b56 100644
+--- a/lib/model/folder.go
++++ b/lib/model/folder.go
+@@ -421,19 +421,21 @@ func (f *folder) pull(ctx context.Context) (success bool, err error) {
+ 		f.sl.DebugContext(ctx, "Skipping pull due to folder error", slogutil.Error(err))
+ 		return false, err
+ 	}
+-
+ 	// If there is nothing to do, don't even enter sync-waiting state.
+ 	needCount, err := f.db.CountNeed(f.folderID, protocol.LocalDeviceID)
+ 	if err != nil {
+ 		return false, err
+ 	}
+-	if needCount.TotalItems() == 0 {
++	if needCount.TotalItems() == 0 && !(f.Type == config.FolderTypeReceiveOnly && f.RestoreLocalDeletions) {
+ 		// Clears pull failures on items that were needed before, but aren't anymore.
+ 		f.errorsMut.Lock()
+ 		f.pullErrors = nil
+ 		f.errorsMut.Unlock()
+ 		return true, nil
+ 	}
++	if f.Type == config.FolderTypeReceiveOnly && f.allRemoteDevicesPaused() {
++		return true, nil
++	}
+ 
+ 	// Send only folder doesn't do any io, it only checks for out-of-sync
+ 	// items that differ in metadata and updates those.
+@@ -476,6 +478,21 @@ func (f *folder) pull(ctx context.Context) (success bool, err error) {
+ 	return false, err
+ }
+ 
++func (f *folder) allRemoteDevicesPaused() bool {
++	found := false
++	for _, id := range f.DeviceIDs() {
++		if id == f.model.id {
++			continue
++		}
++		device, ok := f.model.cfg.Device(id)
++		if !ok || !device.Paused {
++			return false
++		}
++		found = true
++	}
++	return found
++}
++
+ func (f *folder) scanSubdirs(ctx context.Context, subDirs []string) error {
+ 	f.sl.DebugContext(ctx, "Scanning")
+ 
+diff --git a/lib/model/folder_recvonly_test.go b/lib/model/folder_recvonly_test.go
+index 6e3be24..0675c3f 100644
+--- a/lib/model/folder_recvonly_test.go
++++ b/lib/model/folder_recvonly_test.go
+@@ -9,7 +9,10 @@ package model
+ import (
+ 	"bytes"
+ 	"context"
++	"fmt"
++	"io"
+ 	"path/filepath"
++	"reflect"
+ 	"testing"
+ 	"time"
+ 
+@@ -555,6 +558,409 @@ func TestRecvOnlyLocalChangeDoesNotCauseConflict(t *testing.T) {
+ 	}
+ }
+ 
++func TestRecvOnlyKeepLocalDeletions(t *testing.T) {
++	m, f, wcfgCancel := setupROFolderWithOptions(t, true, false, false)
++	defer wcfgCancel()
++	defer cleanupModel(m)
++	ffs := f.Filesystem()
++	must(t, ffs.MkdirAll(".stfolder", 0o755))
++	conn := addFakeConn(m, device1, f.ID)
++
++	conn.addFile("exact", 0o644, protocol.FileInfoTypeFile, []byte("one"))
++	conn.addFile("during", 0o644, protocol.FileInfoTypeFile, []byte("during one"))
++	conn.addFile("late", 0o644, protocol.FileInfoTypeFile, []byte("late one"))
++	conn.addFile("tree", 0o755, protocol.FileInfoTypeDirectory, nil)
++	conn.addFile("tree/old", 0o644, protocol.FileInfoTypeFile, []byte("old one"))
++	conn.sendIndexUpdate()
++	pullReceiveOnlyNow(t, f)
++	originalFilesystem := f.mtimefs
++	f.mtimefs = fs.NewFilesystem(fs.FilesystemType("unavailable"), "")
++	keep, err := f.keepLocalDeletion(conn.files[0], make(chan string, 1))
++	f.mtimefs = originalFilesystem
++	if err == nil || keep {
++		t.Fatalf("filesystem error treated as deletion: keep=%v err=%v", keep, err)
++	}
++
++	// Simulate deletion after the queue-time guard, while a temporary update
++	// is ready to install. The finish-time guard must retain the deletion.
++	late, ok, err := m.sdb.GetGlobalFile(f.ID, "late")
++	must(t, err)
++	if !ok {
++		t.Fatal("late remote file is missing")
++	}
++	lateLocal, ok, err := m.sdb.GetDeviceFile(f.ID, protocol.LocalDeviceID, "late")
++	must(t, err)
++	if !ok {
++		t.Fatal("late local file is missing")
++	}
++	lateTemp := fs.TempName("late")
++	writeFilePerm(t, ffs, lateTemp, []byte("late two"), 0o644)
++	must(t, ffs.Remove("late"))
++	dbUpdateChan := make(chan dbUpdateJob, 1)
++	scanChan := make(chan string, 1)
++	kept, err := f.performFinish(late, lateLocal, true, lateTemp, dbUpdateChan, scanChan)
++	must(t, err)
++	if !kept {
++		t.Fatal("finish-time local deletion was not retained")
++	}
++	if _, err := ffs.Lstat("late"); !fs.IsNotExist(err) {
++		t.Fatalf("finish-time guard recreated late: %v", err)
++	}
++	if _, err := ffs.Lstat(lateTemp); !fs.IsNotExist(err) {
++		t.Fatalf("finish-time guard retained temporary file: %v", err)
++	}
++	select {
++	case name := <-scanChan:
++		if name != "late" {
++			t.Fatalf("finish-time guard queued scan for %q", name)
++		}
++	default:
++		t.Fatal("finish-time guard did not queue a scan")
++	}
++	select {
++	case update := <-dbUpdateChan:
++		t.Fatalf("finish-time guard queued database update: %+v", update)
++	default:
++	}
++
++	during, ok, err := m.sdb.GetGlobalFile(f.ID, "during")
++	must(t, err)
++	if !ok {
++		t.Fatal("during remote file is missing")
++	}
++	duringLocal, ok, err := m.sdb.GetDeviceFile(f.ID, protocol.LocalDeviceID, "during")
++	must(t, err)
++	if !ok {
++		t.Fatal("during local file is missing")
++	}
++	duringTemp := fs.TempName("during")
++	writeFilePerm(t, ffs, duringTemp, []byte("during two"), 0o644)
++	removeDuringFinish := &removeOnSecondLstatFilesystem{
++		Filesystem: f.mtimefs,
++		name:       "during",
++	}
++	f.mtimefs = removeDuringFinish
++	kept, err = f.performFinish(during, duringLocal, true, duringTemp, dbUpdateChan, scanChan)
++	f.mtimefs = removeDuringFinish.Filesystem
++	must(t, err)
++	if !kept || removeDuringFinish.calls != 2 {
++		t.Fatalf("concurrent finish deletion was not retained: keep=%v lstatCalls=%d", kept, removeDuringFinish.calls)
++	}
++	if _, err := ffs.Lstat("during"); !fs.IsNotExist(err) {
++		t.Fatalf("finish recreated concurrently deleted file: %v", err)
++	}
++	if _, err := ffs.Lstat(duringTemp); !fs.IsNotExist(err) {
++		t.Fatalf("finish retained concurrent temporary file: %v", err)
++	}
++	select {
++	case name := <-scanChan:
++		if name != "during" {
++			t.Fatalf("concurrent finish guard queued scan for %q", name)
++		}
++	default:
++		t.Fatal("concurrent finish guard did not queue a scan")
++	}
++	must(t, m.ScanFolder(f.ID))
++
++	must(t, ffs.Remove("exact"))
++	must(t, ffs.RemoveAll("tree"))
++
++	// Deliver a newer source version before the local deletion scan. The pull
++	// must defer to that scan instead of recreating either path.
++	conn.updateFile("exact", 0o644, protocol.FileInfoTypeFile, []byte("two"))
++	conn.updateFile("tree/old", 0o644, protocol.FileInfoTypeFile, []byte("old two"))
++	conn.addFile("tree/new", 0o644, protocol.FileInfoTypeFile, []byte("new"))
++	requests := conn.RequestCallCount()
++	conn.sendIndexUpdate()
++	pullReceiveOnlyNow(t, f)
++	must(t, m.ScanFolder(f.ID))
++	pullReceiveOnlyNow(t, f)
++	pullReceiveOnlyNow(t, f)
++
++	for _, name := range []string{"exact", "tree", "tree/old", "tree/new"} {
++		if _, err := ffs.Lstat(name); !fs.IsNotExist(err) {
++			t.Errorf("%s was recreated: %v", name, err)
++		}
++	}
++	if got := conn.RequestCallCount(); got != requests {
++		t.Fatalf("suppressed pulls requested remote blocks: got %d calls, want %d", got, requests)
++	}
++
++	// A later source deletion must not erase the local deletion marker. The
++	// same source path and descendants remain suppressed after recreation.
++	for _, name := range []string{"exact", "tree/old", "tree/new", "tree"} {
++		conn.deleteFile(name)
++	}
++	conn.sendIndexUpdate()
++	pullReceiveOnlyNow(t, f)
++	conn.updateFile("exact", 0o644, protocol.FileInfoTypeFile, []byte("three"))
++	conn.updateFile("tree", 0o755, protocol.FileInfoTypeDirectory, nil)
++	conn.updateFile("tree/old", 0o644, protocol.FileInfoTypeFile, []byte("old three"))
++	conn.updateFile("tree/new", 0o644, protocol.FileInfoTypeFile, []byte("new three"))
++	conn.sendIndexUpdate()
++	pullReceiveOnlyNow(t, f)
++	for _, name := range []string{"exact", "tree", "tree/old", "tree/new"} {
++		if _, err := ffs.Lstat(name); !fs.IsNotExist(err) {
++			t.Errorf("%s was recreated after source delete/recreate: %v", name, err)
++		}
++	}
++
++	f.Revert()
++	pullReceiveOnlyNow(t, f)
++	for name, want := range map[string]string{
++		"exact":    "three",
++		"tree/old": "old three",
++		"tree/new": "new three",
++	} {
++		got := readReceiveOnlyFile(t, ffs, name)
++		if string(got) != want {
++			t.Errorf("%s restored %q, want %q", name, got, want)
++		}
++	}
++}
++
++type removeOnSecondLstatFilesystem struct {
++	fs.Filesystem
++	name  string
++	calls int
++}
++
++func (f *removeOnSecondLstatFilesystem) Lstat(name string) (fs.FileInfo, error) {
++	if name == f.name {
++		f.calls++
++		if f.calls == 2 {
++			if err := f.Filesystem.Remove(name); err != nil {
++				return nil, err
++			}
++		}
++	}
++	return f.Filesystem.Lstat(name)
++}
++
++func TestRecvOnlyKeepLocalDeletionsDefaultsOff(t *testing.T) {
++	m, f, wcfgCancel := setupROFolder(t)
++	defer wcfgCancel()
++	defer cleanupModel(m)
++	ffs := f.Filesystem()
++	must(t, ffs.MkdirAll(".stfolder", 0o755))
++	conn := addFakeConn(m, device1, f.ID)
++
++	conn.addFile("file", 0o644, protocol.FileInfoTypeFile, []byte("one"))
++	conn.sendIndexUpdate()
++	pullReceiveOnlyNow(t, f)
++	must(t, ffs.Remove("file"))
++	must(t, m.ScanFolder(f.ID))
++	conn.updateFile("file", 0o644, protocol.FileInfoTypeFile, []byte("two"))
++	conn.sendIndexUpdate()
++	pullReceiveOnlyNow(t, f)
++
++	got := readReceiveOnlyFile(t, ffs, "file")
++	if string(got) != "two" {
++		t.Fatalf("got %q, want stock receive-only update", got)
++	}
++}
++
++func TestRecvOnlyKeepLocalDeletionsPreservesRemoteDeletePolicy(t *testing.T) {
++	for _, ignoreDelete := range []bool{false, true} {
++		t.Run(fmt.Sprintf("ignoreDelete=%v", ignoreDelete), func(t *testing.T) {
++			m, f, wcfgCancel := setupROFolderWithOptions(t, true, false, ignoreDelete)
++			defer wcfgCancel()
++			defer cleanupModel(m)
++			ffs := f.Filesystem()
++			must(t, ffs.MkdirAll(".stfolder", 0o755))
++			conn := addFakeConn(m, device1, f.ID)
++
++			conn.addFile("file", 0o644, protocol.FileInfoTypeFile, []byte("one"))
++			conn.sendIndexUpdate()
++			pullReceiveOnlyNow(t, f)
++			conn.deleteFile("file")
++			conn.sendIndexUpdate()
++			pullReceiveOnlyNow(t, f)
++
++			_, err := ffs.Lstat("file")
++			if ignoreDelete && err != nil {
++				t.Fatalf("ignoreDelete removed file: %v", err)
++			}
++			if !ignoreDelete && !fs.IsNotExist(err) {
++				t.Fatalf("remote deletion was not applied: %v", err)
++			}
++		})
++	}
++}
++
++func TestRecvOnlyRestoreLocalDeletionsAfterConfigChange(t *testing.T) {
++	m, f, wcfgCancel := setupROFolder(t)
++	defer wcfgCancel()
++	defer cleanupModel(m)
++	ffs := f.Filesystem()
++	must(t, ffs.MkdirAll(".stfolder", 0o755))
++	conn := addFakeConn(m, device1, f.ID)
++
++	conn.addFile("deleted", 0o644, protocol.FileInfoTypeFile, []byte("source"))
++	conn.addFile("tree", 0o755, protocol.FileInfoTypeDirectory, nil)
++	conn.addFile("tree/child", 0o644, protocol.FileInfoTypeFile, []byte("child"))
++	conn.addFile("modified", 0o644, protocol.FileInfoTypeFile, []byte("source"))
++	conn.sendIndexUpdate()
++	pullReceiveOnlyNow(t, f)
++
++	must(t, ffs.Remove("deleted"))
++	must(t, ffs.RemoveAll("tree"))
++	writeFilePerm(t, ffs, "modified", []byte("local"), 0o644)
++	must(t, m.ScanFolder(f.ID))
++
++	folderConfig, ok := m.cfg.Folder(f.ID)
++	if !ok {
++		t.Fatal("receive-only folder config is missing")
++	}
++	folderConfig.RestoreLocalDeletions = true
++	setFolder(t, m.cfg, folderConfig)
++
++	// Changing the option restarts the folder. The initial scan must schedule
++	// restoration even though the remote index has no ordinary needed items.
++	deadline := time.Now().Add(10 * time.Second)
++	for {
++		_, deletedErr := ffs.Lstat("deleted")
++		_, childErr := ffs.Lstat("tree/child")
++		if deletedErr == nil && childErr == nil {
++			break
++		}
++		if time.Now().After(deadline) {
++			t.Fatalf("background restoration did not complete: deleted=%v child=%v", deletedErr, childErr)
++		}
++		time.Sleep(10 * time.Millisecond)
++	}
++
++	for name, want := range map[string]string{
++		"deleted":    "source",
++		"tree/child": "child",
++		"modified":   "local",
++	} {
++		if got := string(readReceiveOnlyFile(t, ffs, name)); got != want {
++			t.Errorf("%s contains %q, want %q", name, got, want)
++		}
++	}
++}
++
++func TestRecvOnlyRestoreWaitsForUnpausedPeer(t *testing.T) {
++	m, f, wcfgCancel := setupROFolderWithOptions(t, true, false, false)
++	defer wcfgCancel()
++	defer cleanupModel(m)
++	ffs := f.Filesystem()
++	must(t, ffs.MkdirAll(".stfolder", 0o755))
++	conn := addFakeConn(m, device1, f.ID)
++
++	conn.addFile("deleted", 0o644, protocol.FileInfoTypeFile, []byte("source"))
++	conn.sendIndexUpdate()
++	pullReceiveOnlyNow(t, f)
++	must(t, ffs.Remove("deleted"))
++	must(t, m.ScanFolder(f.ID))
++	before, ok, err := m.sdb.GetDeviceFile(f.ID, protocol.LocalDeviceID, "deleted")
++	must(t, err)
++	if !ok || !before.Deleted {
++		t.Fatalf("local deletion was not indexed: ok=%v deleted=%v", ok, before.Deleted)
++	}
++	requests := conn.RequestCallCount()
++
++	pauseDevice(t, m.cfg, device1, true)
++	folderConfig, ok := m.cfg.Folder(f.ID)
++	if !ok {
++		t.Fatal("receive-only folder config is missing")
++	}
++	folderConfig.KeepLocalDeletions = false
++	folderConfig.RestoreLocalDeletions = true
++	setFolder(t, m.cfg, folderConfig)
++	m.mut.RLock()
++	runner, ok := m.folderRunners.Get(f.ID)
++	m.mut.RUnlock()
++	if !ok {
++		t.Fatal("receive-only folder runner is missing")
++	}
++	f = runner.(*receiveOnlyFolder)
++	must(t, m.ScanFolder(f.ID))
++
++	after, ok, err := m.sdb.GetDeviceFile(f.ID, protocol.LocalDeviceID, "deleted")
++	must(t, err)
++	if !ok || !reflect.DeepEqual(after, before) {
++		t.Fatalf("paused restore rewrote local deletion: ok=%v before=%v after=%v", ok, before, after)
++	}
++	if _, err := ffs.Lstat("deleted"); !fs.IsNotExist(err) {
++		t.Fatalf("paused restore recreated file: %v", err)
++	}
++	if got := conn.RequestCallCount(); got != requests {
++		t.Fatalf("paused restore requested remote blocks: got %d calls, want %d", got, requests)
++	}
++
++	err = f.doInSync(func(ctx context.Context) error {
++		originalFilesystem := f.mtimefs
++		f.mtimefs = fs.NewFilesystem(fs.FilesystemType("unavailable"), "")
++		defer func() { f.mtimefs = originalFilesystem }()
++		return f.scanSubdirs(ctx, nil)
++	})
++	if err == nil && len(f.Errors()) == 0 {
++		t.Fatal("paused peer guard hid local full scan error")
++	}
++
++	var pullSuccess bool
++	var pullErr error
++	must(t, f.doInSync(func(ctx context.Context) error {
++		if err := ffs.Remove(".stfolder"); err != nil {
++			return err
++		}
++		pullSuccess, pullErr = f.folder.pull(ctx)
++		return ffs.MkdirAll(".stfolder", 0o755)
++	}))
++	if pullErr == nil || pullSuccess {
++		t.Fatalf("paused peer guard hid missing folder marker: success=%v err=%v", pullSuccess, pullErr)
++	}
++
++	pauseDevice(t, m.cfg, device1, false)
++	resumed := addFakeConn(m, device1, f.ID)
++	resumed.addFile("deleted", 0o644, protocol.FileInfoTypeFile, []byte("source"))
++	resumed.sendIndexUpdate()
++	deadline := time.Now().Add(10 * time.Second)
++	for {
++		if receiveOnlyFileEquals(ffs, "deleted", "source") {
++			break
++		}
++		if time.Now().After(deadline) {
++			t.Fatal("normal pull scheduling did not restore after device unpause")
++		}
++		time.Sleep(10 * time.Millisecond)
++	}
++}
++
++func receiveOnlyFileEquals(ffs fs.Filesystem, name, want string) bool {
++	fd, err := ffs.Open(name)
++	if err != nil {
++		return false
++	}
++	defer fd.Close()
++	data, err := io.ReadAll(fd)
++	return err == nil && string(data) == want
++}
++
++func pullReceiveOnlyNow(t *testing.T, f *receiveOnlyFolder) {
++	t.Helper()
++	must(t, f.doInSync(func(ctx context.Context) error {
++		_, err := f.pull(ctx)
++		return err
++	}))
++}
++
++func readReceiveOnlyFile(t *testing.T, ffs fs.Filesystem, name string) []byte {
++	t.Helper()
++	fd, err := ffs.Open(name)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer fd.Close()
++	data, err := io.ReadAll(fd)
++	if err != nil {
++		t.Fatal(err)
++	}
++	return data
++}
++
+ func setupKnownFiles(t *testing.T, ffs fs.Filesystem, data []byte) []protocol.FileInfo {
+ 	t.Helper()
+ 
+@@ -595,6 +1001,11 @@ func setupKnownFiles(t *testing.T, ffs fs.Filesystem, data []byte) []protocol.Fi
+ 
+ func setupROFolder(t *testing.T) (*testModel, *receiveOnlyFolder, context.CancelFunc) {
+ 	t.Helper()
++	return setupROFolderWithOptions(t, false, false, false)
++}
++
++func setupROFolderWithOptions(t *testing.T, keepLocalDeletions, restoreLocalDeletions, ignoreDelete bool) (*testModel, *receiveOnlyFolder, context.CancelFunc) {
++	t.Helper()
+ 
+ 	w, cancel := newConfigWrapper(defaultCfg)
+ 	cfg := w.RawCopy()
+@@ -602,6 +1013,9 @@ func setupROFolder(t *testing.T) (*testModel, *receiveOnlyFolder, context.Cancel
+ 	fcfg.ID = "ro"
+ 	fcfg.Label = "ro"
+ 	fcfg.Type = config.FolderTypeReceiveOnly
++	fcfg.KeepLocalDeletions = keepLocalDeletions
++	fcfg.RestoreLocalDeletions = restoreLocalDeletions
++	fcfg.IgnoreDelete = ignoreDelete
+ 	cfg.Folders = []config.FolderConfiguration{fcfg}
+ 	replace(t, w, cfg)
+ 
+diff --git a/lib/model/folder_sendrecv.go b/lib/model/folder_sendrecv.go
+index 316cb8b..26c4ee0 100644
+--- a/lib/model/folder_sendrecv.go
++++ b/lib/model/folder_sendrecv.go
+@@ -169,6 +169,9 @@ func newSendReceiveFolder(model *model, ignores *ignore.Matcher, cfg config.Fold
+ // the device in sync with the global state.
+ func (f *sendReceiveFolder) pull(ctx context.Context) (bool, error) {
+ 	f.sl.DebugContext(ctx, "Pulling")
++	if err := f.restoreLocalDeletions(); err != nil {
++		return false, err
++	}
+ 
+ 	scanChan := make(chan string)
+ 	go f.pullScannerRoutine(ctx, scanChan)
+@@ -240,6 +243,41 @@ func (f *sendReceiveFolder) pull(ctx context.Context) (bool, error) {
+ 	return changed == 0 && pullErrNum == 0, nil
+ }
+ 
++// restoreLocalDeletions makes only intentional receive-only deletions older
++// than a live global item. Other receive-only changes remain untouched.
++func (f *sendReceiveFolder) restoreLocalDeletions() error {
++	if f.Type != config.FolderTypeReceiveOnly || !f.RestoreLocalDeletions {
++		return nil
++	}
++
++	batch := NewFileInfoBatch(func(files []protocol.FileInfo) error {
++		f.updateLocalsFromScanning(files)
++		return nil
++	})
++	for local, err := range itererr.Zip(f.db.AllLocalFiles(f.folderID, protocol.LocalDeviceID)) {
++		if err != nil {
++			return err
++		}
++		if !local.IsDeleted() || !local.IsReceiveOnlyChanged() {
++			continue
++		}
++		global, ok, err := f.db.GetGlobalFile(f.folderID, local.Name)
++		if err != nil {
++			return err
++		}
++		if !ok || global.IsDeleted() || global.IsInvalid() || global.IsReceiveOnlyChanged() {
++			continue
++		}
++		local.LocalFlags &^= protocol.FlagLocalReceiveOnly
++		local.Version = protocol.Vector{}
++		batch.Append(local)
++		if err := batch.FlushIfFull(); err != nil {
++			return err
++		}
++	}
++	return batch.Flush()
++}
++
+ // pullerIteration runs a single puller iteration for the given folder and
+ // returns the number items that should have been synced (even those that
+ // might have failed). One puller iteration handles all files currently
+@@ -333,6 +371,15 @@ loop:
+ 		default:
+ 		}
+ 
++		keep, err := f.keepLocalDeletion(file, scanChan)
++		if err != nil {
++			return nil, nil, err
++		}
++		if keep {
++			f.sl.DebugContext(ctx, "Keeping local receive-only deletion", slogutil.FilePath(file.FileName()))
++			continue
++		}
++
+ 		if f.IgnoreDelete && file.IsDeleted() {
+ 			f.sl.DebugContext(ctx, "Ignoring file deletion per config", slogutil.FilePath(file.FileName()))
+ 			continue
+@@ -514,6 +561,42 @@ nextFile:
+ 	return fileDeletions, dirDeletions, nil
+ }
+ 
++// keepLocalDeletion reports whether a live remote item is hidden by an exact
++// local deletion or a deleted local directory. A missing item that has not yet
++// been scanned is deferred so the serialized post-pull scan can record it
++// before another pull. Other filesystem errors remain pull errors.
++func (f *sendReceiveFolder) keepLocalDeletion(file protocol.FileInfo, scanChan chan<- string) (bool, error) {
++	if f.Type != config.FolderTypeReceiveOnly || !f.KeepLocalDeletions ||
++		f.ignores.Match(file.Name).IsIgnored() || (build.IsWindows && fs.WindowsInvalidFilename(file.Name) != nil) {
++		return false, nil
++	}
++
++	for name := file.Name; name != "."; name = filepath.Dir(name) {
++		local, ok, err := f.model.sdb.GetDeviceFile(f.folderID, protocol.LocalDeviceID, name)
++		if err != nil {
++			return false, err
++		}
++		if !ok {
++			continue
++		}
++		if local.IsDeleted() && local.IsReceiveOnlyChanged() {
++			return true, nil
++		}
++		if local.IsDeleted() {
++			continue
++		}
++		if _, err := f.mtimefs.Lstat(name); err != nil {
++			if !fs.IsNotExist(err) {
++				return false, err
++			}
++			scanChan <- name
++			return true, nil
++		}
++	}
++
++	return false, nil
++}
++
+ func popCandidate(buckets map[string][]protocol.FileInfo, key string) (protocol.FileInfo, bool) {
+ 	cands := buckets[key]
+ 	if len(cands) == 0 {
+@@ -1081,7 +1164,7 @@ func (f *sendReceiveFolder) renameFile(cur, source, target protocol.FileInfo, db
+ 	// of the source and the creation of the target temp file. Fix-up the metadata,
+ 	// update the local index of the target file and rename from temp to real name.
+ 
+-	if err = f.performFinish(target, curTarget, true, tempName, dbUpdateChan, scanChan); err != nil {
++	if _, err = f.performFinish(target, curTarget, true, tempName, dbUpdateChan, scanChan); err != nil {
+ 		return err
+ 	}
+ 
+@@ -1662,17 +1745,31 @@ loop:
+ 	out <- state.sharedPullerState
+ }
+ 
+-func (f *sendReceiveFolder) performFinish(file, curFile protocol.FileInfo, hasCurFile bool, tempName string, dbUpdateChan chan<- dbUpdateJob, scanChan chan<- string) error {
++func (f *sendReceiveFolder) performFinish(file, curFile protocol.FileInfo, hasCurFile bool, tempName string, dbUpdateChan chan<- dbUpdateJob, scanChan chan<- string) (bool, error) {
++	discardTemporary := func() (bool, error) {
++		if err := f.mtimefs.Remove(tempName); err != nil && !fs.IsNotExist(err) {
++			return false, fmt.Errorf("removing suppressed temporary file: %w", err)
++		}
++		return true, nil
++	}
++	keep, err := f.keepLocalDeletion(file, scanChan)
++	if err != nil {
++		return false, err
++	}
++	if keep {
++		return discardTemporary()
++	}
++
+ 	// Set the correct permission bits on the new file
+ 	if !f.IgnorePerms && !file.NoPermissions {
+ 		if err := f.mtimefs.Chmod(tempName, fs.FileMode(file.Permissions&0o777)); err != nil {
+-			return fmt.Errorf("setting permissions: %w", err)
++			return false, fmt.Errorf("setting permissions: %w", err)
+ 		}
+ 	}
+ 
+ 	// Set file xattrs and ownership.
+ 	if err := f.setPlatformData(&file, tempName); err != nil {
+-		return fmt.Errorf("setting metadata: %w", err)
++		return false, fmt.Errorf("setting metadata: %w", err)
+ 	}
+ 
+ 	if stat, err := f.mtimefs.Lstat(file.Name); err == nil {
+@@ -1680,7 +1777,7 @@ func (f *sendReceiveFolder) performFinish(file, curFile protocol.FileInfo, hasCu
+ 		// handle that.
+ 
+ 		if err := f.scanIfItemChanged(file.Name, stat, curFile, hasCurFile, false, scanChan); err != nil {
+-			return fmt.Errorf("checking existing file: %w", err)
++			return false, fmt.Errorf("checking existing file: %w", err)
+ 		}
+ 
+ 		if !curFile.IsDirectory() && !curFile.IsSymlink() && file.InConflictWith(curFile) {
+@@ -1696,16 +1793,22 @@ func (f *sendReceiveFolder) performFinish(file, curFile protocol.FileInfo, hasCu
+ 			err = f.deleteItemOnDisk(curFile, scanChan)
+ 		}
+ 		if err != nil {
+-			return fmt.Errorf("moving for conflict: %w", err)
++			return false, fmt.Errorf("moving for conflict: %w", err)
+ 		}
+ 	} else if !fs.IsNotExist(err) {
+-		return fmt.Errorf("checking existing file: %w", err)
++		return false, fmt.Errorf("checking existing file: %w", err)
++	} else if f.Type == config.FolderTypeReceiveOnly && f.KeepLocalDeletions &&
++		hasCurFile && !curFile.IsDeleted() {
++		// The indexed path disappeared after the queue-time check. Defer its
++		// install so the post-pull scanner can record the local deletion.
++		scanChan <- file.Name
++		return discardTemporary()
+ 	}
+ 
+ 	// Replace the original content with the new one. If it didn't work,
+ 	// leave the temp file in place for reuse.
+ 	if err := osutil.RenameOrCopy(f.CopyRangeMethod.ToFS(), f.mtimefs, f.mtimefs, tempName, file.Name); err != nil {
+-		return fmt.Errorf("replacing file: %w", err)
++		return false, fmt.Errorf("replacing file: %w", err)
+ 	}
+ 
+ 	// Set the correct timestamp on the new file
+@@ -1713,7 +1816,7 @@ func (f *sendReceiveFolder) performFinish(file, curFile protocol.FileInfo, hasCu
+ 
+ 	// Record the updated file in the index
+ 	dbUpdateChan <- dbUpdateJob{file, dbUpdateHandleFile}
+-	return nil
++	return false, nil
+ }
+ 
+ func (f *sendReceiveFolder) finisherRoutine(ctx context.Context, in <-chan *sharedPullerState, dbUpdateChan chan<- dbUpdateJob, scanChan chan<- string) {
+@@ -1723,12 +1826,15 @@ func (f *sendReceiveFolder) finisherRoutine(ctx context.Context, in <-chan *shar
+ 
+ 			f.queue.Done(state.file.Name)
+ 
++			kept := false
+ 			if err == nil {
+-				err = f.performFinish(state.file, state.curFile, state.hasCurFile, state.tempName, dbUpdateChan, scanChan)
++				kept, err = f.performFinish(state.file, state.curFile, state.hasCurFile, state.tempName, dbUpdateChan, scanChan)
+ 			}
+ 
+ 			if err != nil {
+ 				f.newPullError(state.file.Name, fmt.Errorf("finishing: %w", err))
++			} else if kept {
++				f.sl.DebugContext(ctx, "Keeping local receive-only deletion before install", slogutil.FilePath(state.file.FileName()))
+ 			} else {
+ 				slog.InfoContext(ctx, "Synced file", f.LogAttr(), state.file.LogAttr(), slog.Group("blocks", slog.Int("local", state.reused+state.copyTotal), slog.Int("download", state.pullTotal)))
+ 
+diff --git a/lib/model/folder_sendrecv_test.go b/lib/model/folder_sendrecv_test.go
+index 1daba2c..2025078 100644
+--- a/lib/model/folder_sendrecv_test.go
++++ b/lib/model/folder_sendrecv_test.go
+@@ -1062,7 +1062,7 @@ func TestPullCaseOnlyPerformFinish(t *testing.T) {
+ 	scanChan := make(chan string, 1)
+ 	dbUpdateChan := make(chan dbUpdateJob, 1)
+ 
+-	err := f.performFinish(remote, cur, hasCur, temp, dbUpdateChan, scanChan)
++	_, err := f.performFinish(remote, cur, hasCur, temp, dbUpdateChan, scanChan)
+ 
+ 	select {
+ 	case <-dbUpdateChan: // boring case sensitive filesystem
