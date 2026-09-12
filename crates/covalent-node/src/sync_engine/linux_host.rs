@@ -32,6 +32,9 @@ const ENGINE_VERSION: &str = "v2.1.3";
 const ENGINE_COMMIT: &str = "946e2b83a1f6c6ae119427c09e0a5802940b82ff";
 const SOURCE_ARCHIVE_SHA256: &str =
     "dbcc9498602286a843f29a7104833bd1422082999aa51ff92eef493172d47959";
+const SOURCE_PATCH_SHA256: &str =
+    "e58e7d133a388576a54cacc6a5a5094e6607c483c0daabac552de1a1854d92ac";
+const SOURCE_STATE: &str = "modified";
 const GUARDIAN_SOURCE_SHA256: &str =
     "c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579";
 const LICENSE_SHA256: &str = "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04";
@@ -180,6 +183,8 @@ fn validate_manifest(manifest: &PackageManifest) -> Result<(), LinuxHostError> {
         || manifest.engine.version != ENGINE_VERSION
         || manifest.engine.commit != ENGINE_COMMIT
         || manifest.engine.source_archive_sha256 != SOURCE_ARCHIVE_SHA256
+        || manifest.engine.source_patch_sha256 != SOURCE_PATCH_SHA256
+        || manifest.engine.source_state != SOURCE_STATE
         || manifest.engine.go_version != "go1.26.7"
         || manifest.guardian.source_sha256 != GUARDIAN_SOURCE_SHA256
         || manifest.notices.license_sha256 != LICENSE_SHA256
@@ -405,6 +410,8 @@ struct EngineRecord {
     version: String,
     commit: String,
     source_archive_sha256: String,
+    source_patch_sha256: String,
+    source_state: String,
     go_version: String,
 }
 
@@ -584,6 +591,8 @@ mod tests {
                     "version": ENGINE_VERSION,
                     "commit": ENGINE_COMMIT,
                     "sourceArchiveSha256": SOURCE_ARCHIVE_SHA256,
+                    "sourcePatchSha256": SOURCE_PATCH_SHA256,
+                    "sourceState": SOURCE_STATE,
                     "goVersion": "go1.26.7",
                 },
                 "guardian": { "sourceSha256": GUARDIAN_SOURCE_SHA256 },
@@ -645,6 +654,64 @@ mod tests {
             config.runtime_parent,
             fs::canonicalize(fixture.runtime).unwrap()
         );
+    }
+
+    #[test]
+    fn source_provenance_must_be_complete_exact_and_closed() {
+        for (field, value) in [
+            ("sourcePatchSha256", serde_json::json!("0".repeat(64))),
+            ("sourceState", serde_json::json!("unmodified")),
+        ] {
+            let fixture = fixture();
+            let mut manifest: serde_json::Value =
+                serde_json::from_slice(&fs::read(&fixture.manifest).unwrap()).unwrap();
+            manifest["engine"][field] = value;
+            fs::write(&fixture.manifest, serde_json::to_vec(&manifest).unwrap()).unwrap();
+            assert_error(
+                discover_at(
+                    &fixture.manifest,
+                    &fixture.guardian,
+                    &fixture.worker,
+                    &fixture.runtime,
+                ),
+                LinuxHostError::InvalidPackage,
+            );
+            assert!(!fixture.runtime.exists());
+        }
+
+        for field in ["sourcePatchSha256", "sourceState"] {
+            let fixture = fixture();
+            let mut manifest: serde_json::Value =
+                serde_json::from_slice(&fs::read(&fixture.manifest).unwrap()).unwrap();
+            manifest["engine"].as_object_mut().unwrap().remove(field);
+            fs::write(&fixture.manifest, serde_json::to_vec(&manifest).unwrap()).unwrap();
+            assert_error(
+                discover_at(
+                    &fixture.manifest,
+                    &fixture.guardian,
+                    &fixture.worker,
+                    &fixture.runtime,
+                ),
+                LinuxHostError::InvalidPackage,
+            );
+            assert!(!fixture.runtime.exists());
+        }
+
+        let fixture = fixture();
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&fixture.manifest).unwrap()).unwrap();
+        manifest["engine"]["unreviewedSource"] = serde_json::json!(true);
+        fs::write(&fixture.manifest, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        assert_error(
+            discover_at(
+                &fixture.manifest,
+                &fixture.guardian,
+                &fixture.worker,
+                &fixture.runtime,
+            ),
+            LinuxHostError::InvalidPackage,
+        );
+        assert!(!fixture.runtime.exists());
     }
 
     #[test]

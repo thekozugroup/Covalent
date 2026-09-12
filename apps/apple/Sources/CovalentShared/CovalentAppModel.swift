@@ -1695,6 +1695,7 @@ public final class CovalentAppModel: ObservableObject {
       guard let index = directoryGrants.firstIndex(where: { $0.id == grant.id }) else {
         throw FolderAccessRepairError.savedGrantMissing
       }
+      if directoryGrants[index].folderOfferId == offerId { return }
       guard directoryGrants[index].folderOfferId == expectedOfferId else {
         throw NodeClientError.invalidResponse
       }

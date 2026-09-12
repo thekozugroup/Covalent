@@ -20,6 +20,7 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -54,6 +55,7 @@ import life.michaelwong.covalent.R
 import life.michaelwong.covalent.data.CovalentNodeClient
 import life.michaelwong.covalent.model.FolderSharePhase
 import life.michaelwong.covalent.model.FolderHealthFreshness
+import life.michaelwong.covalent.model.FolderLinkPolicy
 import life.michaelwong.covalent.model.FolderSyncAvailability
 import life.michaelwong.covalent.model.FolderSyncIssue
 import life.michaelwong.covalent.model.FolderSyncLifecycle
@@ -173,6 +175,13 @@ class FolderSyncJourneyInstrumentedTest {
             compose.onNodeWithTag("folder-sync-list").performScrollToNode(labelMatcher)
             compose.onNode(labelMatcher).performTextInput(FOLDER_LABEL)
             clickScreenText("API 37 isolated peer")
+            visibleScreenText(context.getString(R.string.folder_link_direction)).assertIsDisplayed()
+            visibleScreenText(context.getString(R.string.folder_link_source_folder, rootA)).assertIsDisplayed()
+            visibleScreenText(
+                context.getString(R.string.folder_link_destination_peer, "API 37 isolated peer"),
+            ).assertIsDisplayed()
+            visibleScreenText(context.getString(R.string.folder_link_source_deletions_detail)).assertIsDisplayed()
+            visibleScreenText(context.getString(R.string.folder_link_destination_deletions_detail)).assertIsDisplayed()
             clickScreenText(context.getString(R.string.folder_sync_offer))
             offerId = awaitValue("native folder offer recorded") {
                 client.folderSyncStatus(connectionA.baseUrl, connectionA.token).shares
@@ -200,19 +209,25 @@ class FolderSyncJourneyInstrumentedTest {
                 throw AssertionError("Forward transfer failed: $states helpers=$helpers", failure)
             }
             awaitExactHelperCounts(workers = 2, guardians = 2)
+            assertAnyVisibleScreenText(context.getString(R.string.folder_link_one_way))
+            assertAnyVisibleScreenText(context.getString(R.string.folder_link_source_deletions_keep))
+            assertAnyVisibleScreenText(context.getString(R.string.folder_link_destination_deletions_keep))
 
             val reverse = "api37-reverse-before-restart\n".toByteArray(StandardCharsets.UTF_8)
             writeNew(File(rootB, "reverse.txt"), reverse)
-            awaitFile("reverse transfer", File(rootA, "reverse.txt"), reverse)
+            assertFileAbsentFor(
+                File(rootA, "reverse.txt"),
+                "A destination-created file reached the one-way source",
+                NEGATIVE_WINDOW_MILLIS,
+            )
 
-            clickScreenText(context.getString(R.string.action_refresh_backups))
-            clickScreenText(context.getString(R.string.action_pause))
+            clickScreenText(context.getString(R.string.folder_link_pause))
             await("paused service worker stop") {
                 exactHelperCounts() == HelperCounts(workers = 1, guardians = 1)
             }
             overwrite(File(rootA, "forward.txt"), PAUSED_CONTENT)
             assertFileUnchangedFor(File(rootB, "forward.txt"), forward, NEGATIVE_WINDOW_MILLIS)
-            clickScreenText(context.getString(R.string.action_resume))
+            clickScreenText(context.getString(R.string.folder_link_resume))
             awaitFile("resumed transfer", File(rootB, "forward.txt"), PAUSED_CONTENT)
             awaitExactHelperCounts(workers = 2, guardians = 2)
 
@@ -258,10 +273,10 @@ class FolderSyncJourneyInstrumentedTest {
                 connections = listOf(connectionA, connectionB),
             )
             writeNew(File(rootB, "after-address-reverse.txt"), AFTER_ADDRESS_REVERSE_CONTENT)
-            awaitFile(
-                "reverse transfer after native address refresh",
+            assertFileAbsentFor(
                 File(rootA, "after-address-reverse.txt"),
-                AFTER_ADDRESS_REVERSE_CONTENT,
+                "A destination-created file reached the source after address refresh",
+                NEGATIVE_WINDOW_MILLIS,
             )
 
             stopServiceAndAwaitWorkers(checkNotNull(manager.localConnectionForFolderSync()), remainingWorkers = 1)
@@ -279,8 +294,96 @@ class FolderSyncJourneyInstrumentedTest {
                 File(rootB, "after-address-cold-forward.txt"),
                 AFTER_ADDRESS_COLD_FORWARD_CONTENT,
             )
-            writeNew(File(rootB, "after-restart.txt"), AFTER_RESTART_CONTENT)
-            awaitFile("transfer after cold service restart", File(rootA, "after-restart.txt"), AFTER_RESTART_CONTENT)
+            writeNew(File(rootA, "after-restart.txt"), AFTER_RESTART_CONTENT)
+            awaitFile(
+                "one-way transfer after cold service restart",
+                File(rootB, "after-restart.txt"),
+                AFTER_RESTART_CONTENT,
+                connections = listOf(restartedA, connectionB),
+            )
+            assertFileAbsentFor(
+                File(rootA, "reverse.txt"),
+                "A destination-created file reached the source after service restart",
+                NEGATIVE_WINDOW_MILLIS,
+            )
+
+            val initialSettings = awaitValue("initial one-way settings") {
+                client.folderSyncStatus(restartedA.baseUrl, restartedA.token).shares
+                    .singleOrNull { it.offerId == offerId }
+                    ?.linkSettings
+                    ?.takeIf { it.confirmed && it.pendingChange == null && it.conflictedChange == null }
+            }
+            assertEquals(FolderLinkPolicy(false, false), initialSettings.settings.deletionPolicy)
+            assertAnyVisibleScreenText(
+                context.getString(R.string.folder_link_settings_revision, initialSettings.revision),
+            )
+            clickScreenText(context.getString(R.string.folder_link_settings_edit))
+            clickToggle("folder-link-settings-source-deletions")
+            clickToggle("folder-link-settings-destination-deletions")
+            clickDialogText(context.getString(R.string.folder_link_settings_save))
+            assertDialogText(
+                context.getString(R.string.folder_link_settings_confirm_source_deletions),
+            )
+            assertDialogText(
+                context.getString(R.string.folder_link_settings_confirm_restore_deletions),
+            )
+            clickDialogText(context.getString(R.string.folder_link_settings_confirm))
+            assertAnyVisibleScreenText(
+                context.getString(R.string.folder_link_settings_revision, initialSettings.revision + 1),
+            )
+            val updatedSettings = try {
+                awaitValue("shared one-way settings applied") {
+                    val sourceState = client.folderSyncStatus(restartedA.baseUrl, restartedA.token).shares
+                        .singleOrNull { it.offerId == offerId }
+                        ?.linkSettings
+                    val destinationState = client.folderSyncStatus(connectionB.baseUrl, connectionB.token).shares
+                        .singleOrNull { it.offerId == offerId }
+                        ?.linkSettings
+                    sourceState?.takeIf {
+                        it.revision == initialSettings.revision + 1 &&
+                            it.confirmed && it.pendingChange == null && it.conflictedChange == null &&
+                            it.settings.deletionPolicy == FolderLinkPolicy(true, true) &&
+                            destinationState?.revision == it.revision &&
+                            destinationState.confirmed && destinationState.pendingChange == null &&
+                            destinationState.conflictedChange == null &&
+                            destinationState.settings == it.settings
+                    }
+                }
+            } catch (failure: AssertionError) {
+                throw AssertionError(
+                    "Shared settings did not converge: source=${settingsDiagnostic(restartedA)} " +
+                        "destination=${settingsDiagnostic(connectionB)}",
+                    failure,
+                )
+            }
+            visibleScreenText(
+                context.getString(R.string.folder_link_settings_revision, updatedSettings.revision),
+            ).assertIsDisplayed()
+            visibleScreenText(context.getString(R.string.folder_link_source_deletions_propagate)).assertIsDisplayed()
+            visibleScreenText(context.getString(R.string.folder_link_destination_deletions_restore)).assertIsDisplayed()
+
+            val restoredContent = "api37-restored-destination-deletion\n".toByteArray(StandardCharsets.UTF_8)
+            val restoredSource = File(rootA, "restore-destination.txt")
+            val restoredDestination = File(rootB, "restore-destination.txt")
+            writeNew(restoredSource, restoredContent)
+            awaitFile("settings restore seed", restoredDestination, restoredContent)
+            assertTrue(restoredDestination.delete())
+            awaitFile(
+                "destination deletion restored by shared settings",
+                restoredDestination,
+                restoredContent,
+                connections = listOf(restartedA, connectionB),
+            )
+
+            val deletedContent = "api37-propagated-source-deletion\n".toByteArray(StandardCharsets.UTF_8)
+            val deletedSource = File(rootA, "propagate-source.txt")
+            val deletedDestination = File(rootB, "propagate-source.txt")
+            writeNew(deletedSource, deletedContent)
+            awaitFile("settings deletion seed", deletedDestination, deletedContent)
+            assertTrue(deletedSource.delete())
+            await("source deletion propagated by shared settings", TRANSFER_TIMEOUT_MILLIS) {
+                !deletedDestination.exists()
+            }
 
             // Leave exactly the production service worker alive. The host now
             // launches the ordinary activity, proves that persisted startup has
@@ -400,10 +503,8 @@ class FolderSyncJourneyInstrumentedTest {
                 AFTER_ADDRESS_FORWARD_CONTENT,
                 readBounded(File(rootB, "after-address-forward.txt")),
             )
-            assertArrayEquals(
-                AFTER_ADDRESS_REVERSE_CONTENT,
-                readBounded(File(rootA, "after-address-reverse.txt")),
-            )
+            assertFalse(File(rootA, "reverse.txt").exists())
+            assertFalse(File(rootA, "after-address-reverse.txt").exists())
             assertArrayEquals(
                 AFTER_ADDRESS_REVERSE_CONTENT,
                 readBounded(File(rootB, "after-address-reverse.txt")),
@@ -418,6 +519,16 @@ class FolderSyncJourneyInstrumentedTest {
             )
             assertArrayEquals(AFTER_RESTART_CONTENT, readBounded(File(rootA, "after-restart.txt")))
             assertArrayEquals(AFTER_RESTART_CONTENT, readBounded(File(rootB, "after-restart.txt")))
+            assertArrayEquals(
+                "api37-restored-destination-deletion\n".toByteArray(StandardCharsets.UTF_8),
+                readBounded(File(rootA, "restore-destination.txt")),
+            )
+            assertArrayEquals(
+                "api37-restored-destination-deletion\n".toByteArray(StandardCharsets.UTF_8),
+                readBounded(File(rootB, "restore-destination.txt")),
+            )
+            assertFalse(File(rootA, "propagate-source.txt").exists())
+            assertFalse(File(rootB, "propagate-source.txt").exists())
             manager.reconnectIfEnabled()
             val restored = awaitValue("restored local node API") { manager.liveConnection() }
             await("removed share remains durable after access restoration") {
@@ -482,8 +593,46 @@ class FolderSyncJourneyInstrumentedTest {
         target.performClick()
     }
 
+    private fun assertDialogText(value: String): SemanticsNodeInteraction {
+        val target = compose.onNode(hasText(value) and hasAnyAncestor(isDialog()))
+        compose.waitUntil(timeoutMillis = DEFAULT_TIMEOUT_MILLIS) {
+            runCatching { target.assertIsDisplayed(); true }.getOrDefault(false)
+        }
+        return target
+    }
+
+    private fun clickDialogText(value: String) {
+        val target = assertDialogText(value)
+        compose.waitUntil(timeoutMillis = DEFAULT_TIMEOUT_MILLIS) {
+            runCatching { target.assertIsEnabled(); true }.getOrDefault(false)
+        }
+        target.performClick()
+    }
+
+    private fun assertAnyVisibleScreenText(value: String) {
+        val list = compose.onNodeWithTag("folder-sync-list")
+        val candidates = compose.onAllNodesWithText(value)
+        compose.waitUntil(timeoutMillis = DEFAULT_TIMEOUT_MILLIS) {
+            runCatching { list.performScrollToNode(hasText(value)) }
+            candidates.fetchSemanticsNodes().indices.any { index ->
+                runCatching { candidates[index].assertIsDisplayed(); true }.getOrDefault(false)
+            }
+        }
+    }
+
     private fun clickScreenTag(value: String) {
         val target = compose.onNodeWithTag(value)
+        compose.waitUntil(timeoutMillis = DEFAULT_TIMEOUT_MILLIS) {
+            runCatching { target.assertIsDisplayed().assertIsEnabled(); true }.getOrDefault(false)
+        }
+        target.performClick()
+    }
+
+    private fun clickToggle(cardTag: String) {
+        val target = compose.onNode(
+            isToggleable() and hasAnyAncestor(hasTestTag(cardTag)),
+            useUnmergedTree = true,
+        )
         compose.waitUntil(timeoutMillis = DEFAULT_TIMEOUT_MILLIS) {
             runCatching { target.assertIsDisplayed().assertIsEnabled(); true }.getOrDefault(false)
         }
@@ -801,10 +950,30 @@ class FolderSyncJourneyInstrumentedTest {
         }
     }
 
+    private fun settingsDiagnostic(connection: NodeConnection): String = runCatching {
+        val status = client.folderSyncStatus(connection.baseUrl, connection.token)
+        val share = status.shares.single { it.offerId == offerId }
+        val settings = share.linkSettings
+        "${status.availability}/${status.lifecycle}/${status.issue} " +
+            "freshness=${status.healthFreshness}/${status.connectionFreshness} " +
+            "share=${share.phase}/${share.peerConnection} policy=${share.linkPolicy} " +
+            "settings=${settings?.let { "rev=${it.revision},confirmed=${it.confirmed}," +
+                "pending=${it.pendingChange != null},conflict=${it.conflictedChange != null}," +
+                "policy=${it.settings.deletionPolicy},paused=${it.settings.paused}" } ?: "none"}"
+    }.getOrElse { "diagnosticError=${it.javaClass.name}" }
+
     private fun assertFileUnchangedFor(file: File, expected: ByteArray, durationMillis: Long) {
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(durationMillis)
         while (System.nanoTime() < deadline) {
             assertArrayEquals("A paused folder exchanged an edit", expected, readBounded(file))
+            Thread.sleep(POLL_MILLIS)
+        }
+    }
+
+    private fun assertFileAbsentFor(file: File, message: String, durationMillis: Long) {
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(durationMillis)
+        while (System.nanoTime() < deadline) {
+            assertFalse(message, file.exists())
             Thread.sleep(POLL_MILLIS)
         }
     }
@@ -1155,7 +1324,7 @@ class FolderSyncJourneyInstrumentedTest {
             "api37-reverse-after-address-refresh\n".toByteArray(StandardCharsets.UTF_8)
         val AFTER_ADDRESS_COLD_FORWARD_CONTENT =
             "api37-forward-after-address-cold-restart\n".toByteArray(StandardCharsets.UTF_8)
-        val AFTER_RESTART_CONTENT = "api37-reverse-after-service-restart\n".toByteArray(StandardCharsets.UTF_8)
+        val AFTER_RESTART_CONTENT = "api37-forward-after-service-restart\n".toByteArray(StandardCharsets.UTF_8)
         val RECEIPT_KEYS = setOf(
             RECEIPT_RUN_ID,
             RECEIPT_STAGE,

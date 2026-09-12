@@ -313,7 +313,7 @@ if [ -n "$image" ]; then
   distribution_container=''
   cleanup_distribution_evidence() {
     if [ -n "$distribution_container" ]; then
-      docker rm -f "$distribution_container" >/dev/null 2>&1 || true
+      docker rm -f -v "$distribution_container" >/dev/null 2>&1 || true
     fi
     rm -rf "$distribution_temp"
   }

@@ -62,11 +62,11 @@ verify_notice() {
 }
 verify_notice "$license" 3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04
 verify_notice "$authors" 5a0044d13ddf6f013bdd5c2bc419bf45d6123c356567510237e82f304d113d48
-verify_notice "$provenance" 94f3b2bd71120d3dc6f3bdc400a0b538ca8e6be04e740144e140bda4439decc9
-verify_notice "$source_build" 4e603f44b00ed564be92568c6615b7399f29c0a7ad8d1acb49ae094a9ede0cac
-verify_notice "$notice_index" 34355beb1e337124c8b22f9f2744da16f1911e4e99fffa31060dea0ea2ebd310
-verify_notice "$target_notice_manifest" 422afb7c2a27e2882e3791dbf8c059e2c96ee529d9ec5773e8cc369f375caa11
-verify_notice "$combined_notices" 87e9c362fac963404229addf563d77dfccb23747a8e06a96c5b77d13b675c2fb
+verify_notice "$provenance" 188ac2754745d1de364b4a578b663c5362c4dbf8e1588d0a8d2956cbf385936b
+verify_notice "$source_build" 791bc025a57f7b7b98a3d4936bacd338921b50c9c3c93f21c31fcd20523e97c7
+verify_notice "$notice_index" 8db6f4974a331d6e4d4f4ac97c5a608908f2bc8ebc72f44e61c5d0418301e768
+verify_notice "$target_notice_manifest" 87c83ffa61ced680fc667766b557f7c68256a2b8919d8db591164568163181d1
+verify_notice "$combined_notices" b4b10073a975764cf8bdfb576499587550a53a1da5a547894c2741586622d060
 
 sign_one() {
   identifier=$1
@@ -117,19 +117,19 @@ value = {
         "upstreamArchiveSha256": "dbcc9498602286a843f29a7104833bd1422082999aa51ff92eef493172d47959",
         "sourceExportSha256": "eb60efd57d1662af75ffb2f7b89abab7200362c654838486138a34bee00fed29",
         "goVersion": "go1.26.7",
-        "unsignedExecutableSha256": "4df1dea892fac3c9d1c0e822827c9a4c57711dcddaaf56a61edaab41d5337bbb",
+        "unsignedExecutableSha256": "355c0d4f648da179ed33c1b97a89c1898d79a71a2732bb777bba1c47305e2d59",
     },
     "guardian": {
         "sourceSha256": "c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579",
     },
     "notices": {
-        "PROVENANCE.txt": "94f3b2bd71120d3dc6f3bdc400a0b538ca8e6be04e740144e140bda4439decc9",
+        "PROVENANCE.txt": "188ac2754745d1de364b4a578b663c5362c4dbf8e1588d0a8d2956cbf385936b",
         "Syncthing-AUTHORS.txt": "5a0044d13ddf6f013bdd5c2bc419bf45d6123c356567510237e82f304d113d48",
         "Syncthing-LICENSE.txt": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
-        "source-build.json": "4e603f44b00ed564be92568c6615b7399f29c0a7ad8d1acb49ae094a9ede0cac",
-        "notices-index.txt": "34355beb1e337124c8b22f9f2744da16f1911e4e99fffa31060dea0ea2ebd310",
-        "notices/manifest.json": "422afb7c2a27e2882e3791dbf8c059e2c96ee529d9ec5773e8cc369f375caa11",
-        "notices/THIRD-PARTY-NOTICES.txt": "87e9c362fac963404229addf563d77dfccb23747a8e06a96c5b77d13b675c2fb",
+        "source-build.json": "791bc025a57f7b7b98a3d4936bacd338921b50c9c3c93f21c31fcd20523e97c7",
+        "notices-index.txt": "8db6f4974a331d6e4d4f4ac97c5a608908f2bc8ebc72f44e61c5d0418301e768",
+        "notices/manifest.json": "87c83ffa61ced680fc667766b557f7c68256a2b8919d8db591164568163181d1",
+        "notices/THIRD-PARTY-NOTICES.txt": "b4b10073a975764cf8bdfb576499587550a53a1da5a547894c2741586622d060",
     },
     "executables": {
         "covalent-engine-guardian": {

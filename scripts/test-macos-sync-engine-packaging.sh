@@ -7,12 +7,19 @@ repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 package_script="$repo_root/apps/apple/Scripts/package-sync-engine.sh"
 sign_script="$repo_root/apps/apple/Scripts/sign-sync-engine-bundle.sh"
 build_script="$repo_root/scripts/build-macos-sync-engine.sh"
+mac_host="$repo_root/crates/covalent-node/src/sync_engine/mac_host.rs"
+bundle_verifier="$repo_root/scripts/verify-apple-silicon-bundle.sh"
 guardian_source="$repo_root/packaging/sync-engine/engine-guardian.c"
 provenance="$repo_root/apps/apple/SyncEngine/PROVENANCE.txt"
 
 fail() {
   printf '%s\n' "$1" >&2
   exit 1
+}
+
+require_pin_count() {
+  actual=$(grep -Foc -- "$1" "$2" || true)
+  test "$actual" -eq "$3" || fail "sync-engine pin consumers disagree: $2"
 }
 
 for script in "$package_script" "$sign_script" "$build_script"; do
@@ -30,7 +37,7 @@ for contract in \
   dbcc9498602286a843f29a7104833bd1422082999aa51ff92eef493172d47959 \
   eb60efd57d1662af75ffb2f7b89abab7200362c654838486138a34bee00fed29 \
   e58e7d133a388576a54cacc6a5a5094e6607c483c0daabac552de1a1854d92ac \
-  4df1dea892fac3c9d1c0e822827c9a4c57711dcddaaf56a61edaab41d5337bbb \
+  355c0d4f648da179ed33c1b97a89c1898d79a71a2732bb777bba1c47305e2d59 \
   c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579 \
   Syncthing-LICENSE.txt \
   Syncthing-AUTHORS.txt \
@@ -59,6 +66,25 @@ for contract in \
 do
   grep -Fq -- "$contract" "$sign_script" "$repo_root/apps/apple/Config/CovalentNode.entitlements" ||
     fail "missing signing contract: $contract"
+done
+
+worker_pin=$(sed -nE 's/.*"unsignedExecutableSha256": "([0-9a-f]{64})".*/\1/p' \
+  "$sign_script")
+printf '%s\n' "$worker_pin" | grep -Eq '^[0-9a-f]{64}$' ||
+  fail "signer must define one unsigned sync-engine pin"
+require_pin_count "$worker_pin" "$package_script" 1
+require_pin_count "$worker_pin" "$sign_script" 1
+require_pin_count "$worker_pin" "$mac_host" 1
+require_pin_count "$worker_pin" "$bundle_verifier" 1
+
+notice_pins=$(sed -nE 's/^verify_notice .* ([0-9a-f]{64})$/\1/p' "$sign_script")
+test "$(printf '%s\n' "$notice_pins" | wc -l | tr -d '[:space:]')" -eq 7 &&
+  test "$(printf '%s\n' "$notice_pins" | LC_ALL=C sort -u | wc -l | tr -d '[:space:]')" -eq 7 ||
+  fail "signer notice pins are incomplete"
+for pin in $notice_pins; do
+  require_pin_count "$pin" "$sign_script" 2
+  require_pin_count "$pin" "$mac_host" 2
+  require_pin_count "$pin" "$bundle_verifier" 1
 done
 
 grep -Fq 'Mozilla Public License 2.0' "$provenance" ||

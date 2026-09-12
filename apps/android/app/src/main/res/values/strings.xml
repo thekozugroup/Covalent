@@ -6,7 +6,6 @@
 
     <string name="action_accept_invitation">Accept invitation</string>
     <string name="action_back">Back</string>
-    <string name="action_backup">Backup</string>
     <string name="action_cancel">Cancel</string>
     <string name="action_clear">Clear</string>
     <string name="action_done">Done</string>
@@ -44,14 +43,12 @@
     <string name="action_change_replicas">Change extra copies</string>
     <string name="action_reconnect">Reconnect</string>
     <string name="action_refresh_backups">Refresh backups</string>
-    <string name="action_restore">Restore</string>
     <string name="action_resume">Resume</string>
     <string name="action_retry">Retry</string>
     <string name="action_settings">Settings</string>
     <string name="action_share_invitation">Share invitation</string>
     <string name="action_share_signed_session">Share signed session</string>
     <string name="action_verify">Verify</string>
-    <string name="folder_sync_open">Shared folders</string>
     <string name="folder_sync_title">Shared folders</string>
     <string name="folder_sync_subtitle">Keep one folder in sync with a paired device. You choose the folder and device explicitly.</string>
     <string name="folder_sync_personal_build_only">Direct folder sync is available only in the personal debug build. The production app does not request broad file access.</string>

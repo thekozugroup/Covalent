@@ -10,4 +10,6 @@ Updated 2026-09-12. The owner narrowed the release to native one-way links.
 
 The [product requirements](requirements.md) define scope. The [completion ledger](../release/completion-progress.md) records verified progress.
 
+macOS, Android, and Docker/Unraid are Tier 1 release targets. iOS and Windows are not supported; the retained iOS CI lane is informational.
+
 The previous backup, bidirectional sync, and disaster-recovery roadmap remains in Git history at checkpoint 46. Those unfinished features no longer gate this release. Existing user files and identities remain protected. iOS and Windows stay out of scope. Docker is the accepted Unraid target while Atlas is offline.
