@@ -547,6 +547,7 @@ python3 "$inventory_tool" \
 go_root=$(go env GOROOT)
 go_root=$(CDPATH='' cd -- "$go_root" && pwd -P)
 notices="$assets_root/sync-engine-notices"
+# AGP expands .gz assets and removes that suffix. .tgz keeps the manifest name and gzip bytes.
 python3 "$notice_tool" \
   --inventory "$inventory" \
   --source-root "$build_source" \
@@ -557,6 +558,7 @@ python3 "$notice_tool" \
   --ofl-license "$ofl_license" \
   --toolchain-notice "Android NDK $expected_ndk / NOTICE" NOTICE "$ndk_dir/NOTICE" "$ndk_notice_sha" \
   --toolchain-notice "Android NDK $expected_ndk / NOTICE.toolchain" NOTICE.toolchain "$ndk_dir/NOTICE.toolchain" "$ndk_toolchain_notice_sha" \
+  --source-archive-suffix .tgz \
   --output "$notices"
 
 python3 - "$reports_root" "$notices/manifest.json" "$hash_file" "$guardian_hash_file" <<'PY'

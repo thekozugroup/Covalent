@@ -643,7 +643,10 @@ def build_bundle(
     ofl_license: pathlib.Path,
     output: pathlib.Path,
     toolchain_notice_inputs: list[tuple[str, str, pathlib.Path, str]] | None = None,
+    source_archive_suffix: str = ".tar.gz",
 ) -> dict[str, Any]:
+    if source_archive_suffix not in {".tar.gz", ".tgz"}:
+        raise NoticeError("source archive suffix is unsupported")
     inventory, inventory_raw = _read_inventory(inventory_path)
     source_root = _safe_root(source_root)
     module_caches = [_safe_root(path) for path in module_caches]
@@ -857,7 +860,9 @@ def build_bundle(
         }
         if "MPL-2.0" in recognized:
             archive = _source_archive(
-                root, output / "sources" / f"{index:04d}-source.tar.gz", source_budget
+                root,
+                output / "sources" / f"{index:04d}-source{source_archive_suffix}",
+                source_budget,
             )
             budget.files += 1
             budget.bytes += archive["bytes"]
@@ -1023,6 +1028,12 @@ def main(argv: Iterable[str] | None = None) -> int:
         metavar=("LABEL", "NAME", "PATH", "SHA256"),
         default=[],
     )
+    parser.add_argument(
+        "--source-archive-suffix",
+        choices=(".tar.gz", ".tgz"),
+        default=".tar.gz",
+        help="suffix for gzip-compressed corresponding-source archives",
+    )
     parser.add_argument("--output", required=True, type=pathlib.Path)
     arguments = parser.parse_args(argv)
     try:
@@ -1035,10 +1046,11 @@ def main(argv: Iterable[str] | None = None) -> int:
             arguments.project_license,
             arguments.ofl_license,
             arguments.output,
-            [
+            toolchain_notice_inputs=[
                 (label, name, pathlib.Path(path), digest)
                 for label, name, path, digest in arguments.toolchain_notice
             ],
+            source_archive_suffix=arguments.source_archive_suffix,
         )
     except (NoticeError, UnicodeDecodeError) as error:
         print(f"error: {error}", file=sys.stderr)

@@ -123,7 +123,7 @@ class Fixture:
             encoding="utf-8",
         )
 
-    def build(self) -> dict[str, object]:
+    def build(self, source_archive_suffix: str = ".tar.gz") -> dict[str, object]:
         return notices.build_bundle(
             self.inventory,
             self.source,
@@ -133,6 +133,7 @@ class Fixture:
             REPOSITORY / "LICENSE",
             REPOSITORY / "docs/licenses/sync-engine/OFL-1.1.txt",
             self.output,
+            source_archive_suffix=source_archive_suffix,
         )
 
     def close(self) -> None:
@@ -192,6 +193,18 @@ class NoticeBundleTests(unittest.TestCase):
         self.assertIn(b"MPL-2.0 corresponding source", combined)
         self.assertIn(source_record["archive"]["sha256"].encode(), combined)
         self.assertIn(b"github.com/syncthing/syncthing/tree/", combined)
+
+    def test_android_asset_source_archive_keeps_gzip_bytes_under_tgz_name(self) -> None:
+        manifest = self.fixture.build(source_archive_suffix=".tgz")
+        archive_record = manifest["correspondingSources"][0]["archive"]
+        self.assertEqual(archive_record["bundlePath"], "sources/0000-source.tgz")
+        archive = self.fixture.output / archive_record["bundlePath"]
+        data = archive.read_bytes()
+        self.assertTrue(data.startswith(b"\x1f\x8b"))
+        self.assertEqual(archive_record["bytes"], len(data))
+        self.assertEqual(archive_record["sha256"], hashlib.sha256(data).hexdigest())
+        with tarfile.open(archive, "r:gz") as source_tar:
+            self.assertIn("source/LICENSE", source_tar.getnames())
 
     def test_exact_toolchain_notices_are_bundled_without_changing_other_callers(self) -> None:
         ndk_notice = self.fixture.root / "NOTICE"
