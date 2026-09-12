@@ -202,23 +202,6 @@ RUN abuild-keygen -a -i -n \
     && test "$(find /home/package-builder/output/keys -type f -name '*.rsa.pub' | wc -l)" -eq 1
 
 FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40 AS runtime-base
-ARG VCS_REF=unknown
-ARG COVALENT_SOURCE_FINGERPRINT=unknown
-ARG RELEASE_VERSION=development
-LABEL org.opencontainers.image.title="Covalent" \
-      org.opencontainers.image.description="Private distributed backup node" \
-      org.opencontainers.image.source="https://github.com/thekozugroup/Covalent" \
-      org.opencontainers.image.revision="$VCS_REF" \
-      io.covalent.source.fingerprint="$COVALENT_SOURCE_FINGERPRINT" \
-      org.opencontainers.image.version="$RELEASE_VERSION" \
-      org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.base.name="docker.io/library/alpine:3.23" \
-      org.opencontainers.image.base.digest="sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40" \
-      io.covalent.sync-engine.version="v2.1.3" \
-      io.covalent.sync-engine.commit="946e2b83a1f6c6ae119427c09e0a5802940b82ff" \
-      io.covalent.sync-engine.source-sha256="dbcc9498602286a843f29a7104833bd1422082999aa51ff92eef493172d47959" \
-      io.covalent.runtime.openssl.version="3.5.8-r0"
-
 # Alpine published the fixed OpenSSL security revision after the pinned 3.23.5
 # base image was assembled. Install only those two signed repository packages
 # at exact versions: a future repository change can fail this build, but cannot
@@ -259,11 +242,6 @@ RUN apk add --no-cache python3=3.12.14-r0 \
     && sha256sum /bin/busybox /bin/sh /usr/bin/ssl_client > /packages/runtime-payload.sha256
 
 FROM runtime-base AS runtime-patched
-LABEL io.covalent.runtime.busybox.version="1.37.0-r1000" \
-      io.covalent.runtime.busybox.source-sha256="3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4" \
-      io.covalent.runtime.busybox.patch-sha256="bdd8391fa2e4020079df71557d880e475f5f517fa949b5e80ef633cdafc71a2a" \
-      io.covalent.runtime.busybox.alpine-aports-commit="1e823a60eb85606954b3a5af5f8e5bbd1ea680cf" \
-      io.covalent.runtime.busybox.original-apkbuild-sha256="fb2323ac3121c6cd1122c42cabbd19ec28a29a1cf434a4c0759792c63a1c63a8"
 # Depending on the tested stage forces all wire checks to pass for this target.
 # The command-scoped public key and APK files exist only in this read-only mount.
 RUN --mount=type=bind,from=busybox-package-test,source=/packages,target=/tmp/busybox-backport,readonly \
@@ -302,7 +280,37 @@ RUN collect-alpine-runtime-evidence --arch "$TARGETARCH" \
       --local-sources /alpine-source/busybox-cve-2025-60876 \
       --cache /tmp/alpine-source-cache --download --output /alpine-evidence
 
-FROM runtime-patched
+# Copy the complete patched runtime filesystem once so superseded Alpine
+# package bytes do not remain in lower image layers. Keep the installed package
+# database, permissions and ownership; all source and notice layers follow.
+# COPY does not inherit image configuration, so runtime metadata is explicit.
+FROM scratch AS runtime
+COPY --from=runtime-patched / /
+ARG VCS_REF=unknown
+ARG COVALENT_SOURCE_FINGERPRINT=unknown
+ARG RELEASE_VERSION=development
+LABEL org.opencontainers.image.title="Covalent" \
+      org.opencontainers.image.description="Private distributed backup node" \
+      org.opencontainers.image.source="https://github.com/thekozugroup/Covalent" \
+      org.opencontainers.image.revision="$VCS_REF" \
+      io.covalent.source.fingerprint="$COVALENT_SOURCE_FINGERPRINT" \
+      org.opencontainers.image.version="$RELEASE_VERSION" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.base.name="docker.io/library/alpine:3.23" \
+      org.opencontainers.image.base.digest="sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40" \
+      io.covalent.sync-engine.version="v2.1.3" \
+      io.covalent.sync-engine.commit="946e2b83a1f6c6ae119427c09e0a5802940b82ff" \
+      io.covalent.sync-engine.source-sha256="dbcc9498602286a843f29a7104833bd1422082999aa51ff92eef493172d47959" \
+      io.covalent.runtime.openssl.version="3.5.8-r0"
+
+LABEL io.covalent.runtime.busybox.version="1.37.0-r1000" \
+      io.covalent.runtime.busybox.source-sha256="3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4" \
+      io.covalent.runtime.busybox.patch-sha256="bdd8391fa2e4020079df71557d880e475f5f517fa949b5e80ef633cdafc71a2a" \
+      io.covalent.runtime.busybox.alpine-aports-commit="1e823a60eb85606954b3a5af5f8e5bbd1ea680cf" \
+      io.covalent.runtime.busybox.original-apkbuild-sha256="fb2323ac3121c6cd1122c42cabbd19ec28a29a1cf434a4c0759792c63a1c63a8"
+ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+FROM runtime
 COPY --from=builder /source/target/release/covalent-node /usr/local/bin/covalent-node
 COPY --from=builder /source/target/release/covalent /usr/local/bin/covalent
 COPY --from=caddy /caddy.unprivileged /usr/local/bin/caddy
