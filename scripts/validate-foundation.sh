@@ -160,6 +160,10 @@ node ./scripts/test-setup-guidance.mjs
 ./scripts/test-macos-sync-engine-packaging.sh
 ./scripts/test-android-native-package.sh
 python3 -B ./scripts/test-collect-sync-engine-notices.py
+python3 -B ./scripts/test-collect-caddy-distribution-evidence.py
+python3 -B ./scripts/test-verify-caddy-distribution-evidence.py
+python3 -B ./scripts/test-collect-alpine-runtime-evidence.py
+python3 -B ./scripts/test-verify-alpine-runtime-evidence.py
 python3 -B ./scripts/test-collect-android-native-link-provenance.py
 python3 -B ./scripts/test-collect-android-native-distribution-summary.py
 python3 -B ./scripts/test-android-native-library-directory.py

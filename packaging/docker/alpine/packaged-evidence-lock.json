@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "sourceLockSHA256": "ade9c8a633fb2a20a7cc27a6c59d5ed970793f71743fb662545709f923904383",
+  "targets": {
+    "amd64": {
+      "noticeBundle": {
+        "bytes": 132340,
+        "path": "THIRD-PARTY-NOTICES.txt",
+        "sha256": "8582d12f2f00acee6eb420ec3cd383277b7702a015c58c3c5d0233811c44b947"
+      },
+      "sourceReadmeSHA256": "ce088c422e53653cc1f2c77feeb01e740629194499d745b4464f5f949b4a5686",
+      "sourceManifestSHA256": "a98701049ef3dc6318298b4bd8d15d52593f08a71d04285cfa8707deaa051ccd",
+      "sourceFiles": 161,
+      "builderInstalledDatabaseSHA256": "ee901a1bd0ac592eb270ad6ff62f09ef9205bbc076ae8c2302e3ae0fb20bd664"
+    },
+    "arm64": {
+      "noticeBundle": {
+        "bytes": 132355,
+        "path": "THIRD-PARTY-NOTICES.txt",
+        "sha256": "d698314a2d0d3a071c7795f68c3d576b8bc3e370ef108e154ae204f7a70d6804"
+      },
+      "sourceReadmeSHA256": "ce088c422e53653cc1f2c77feeb01e740629194499d745b4464f5f949b4a5686",
+      "sourceManifestSHA256": "a98701049ef3dc6318298b4bd8d15d52593f08a71d04285cfa8707deaa051ccd",
+      "sourceFiles": 161,
+      "builderInstalledDatabaseSHA256": "4eca637e7036de8f5e9d90689853e2bf8b9bbc7d3a5f810a7a902c6d4f9505b2"
+    }
+  },
+  "scope": "Reviewed source/readme/notices from retained exact source inputs. arm64 collection uses the actual isolated runtime-patched APK database; amd64 collection uses an explicitly marked candidate database. Final images and their actual database identities still require separate runtime contract validation."
+}

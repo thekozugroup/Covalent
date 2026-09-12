@@ -45,12 +45,25 @@ text. They are not a compatibility opinion.
 | MPL-2.0 and BSD-3-Clause | `github.com/hashicorp/golang-lru/v2` (compiled `simplelru`) | 1 |
 | MPL-2.0 with embedded MIT and OFL-1.1 GUI assets | `github.com/syncthing/syncthing` | 1 |
 | MIT | `github.com/Azure/go-ntlmssp`, `github.com/alecthomas/kong`, `github.com/beorn7/perks`, `github.com/calmh/incontainer`, `github.com/calmh/xdr`, `github.com/cespare/xxhash/v2`, `github.com/cpuguy83/go-md2man/v2`, `github.com/go-asn1-ber/asn1-ber`, `github.com/go-ldap/ldap/v3`, `github.com/gobwas/glob`, `github.com/jmoiron/sqlx`, `github.com/kballard/go-shellquote`, `github.com/mattn/go-sqlite3`, `github.com/miscreant/miscreant.go`, `github.com/posener/complete`, `github.com/quic-go/quic-go`, `github.com/riywo/loginshell`, `github.com/stretchr/objx`, `github.com/stretchr/testify`, `github.com/syncthing/notify`, `github.com/thejerf/suture/v4`, `github.com/urfave/cli`, `github.com/willabides/kongplete` | 23 |
-| Apache-2.0 | `github.com/ccding/go-stun`, `github.com/jackpal/go-nat-pmp`, `github.com/prometheus/client_model`, `github.com/prometheus/common`, `github.com/prometheus/procfs`, `github.com/tklauser/numcpus` | 6 |
+| Apache-2.0 | `github.com/ebitengine/purego` (macOS), `github.com/ccding/go-stun`, `github.com/jackpal/go-nat-pmp`, `github.com/prometheus/client_model`, `github.com/prometheus/common`, `github.com/prometheus/procfs`, `github.com/tklauser/numcpus` | 7 |
 | Apache-2.0 and BSD-3-Clause | `github.com/prometheus/client_golang` (compiled gddo code), `github.com/vitrun/qart` | 2 |
 | MIT and Apache-2.0 | `gopkg.in/yaml.v3` | 1 |
 | BSD-3-Clause | `github.com/gofrs/flock`, `github.com/golang/snappy`, `github.com/google/uuid`, `github.com/jackpal/gateway`, `github.com/julienschmidt/httprouter`, `github.com/munnerz/goautoneg`, `github.com/pierrec/lz4/v4`, `github.com/shirou/gopsutil/v4`, `github.com/tklauser/go-sysconf`, `github.com/wlynxg/anet`, `golang.org/x/crypto`, `golang.org/x/exp`, `golang.org/x/net`, `golang.org/x/sys`, `golang.org/x/text`, `golang.org/x/time`, `google.golang.org/protobuf` | 17 |
 | BSD-2-Clause | `github.com/pkg/errors`, `github.com/pmezard/go-difflib`, `github.com/rcrowley/go-metrics`, `github.com/russross/blackfriday/v2`, `github.com/syndtr/goleveldb` | 5 |
 | ISC | `github.com/davecgh/go-spew` | 1 |
+
+The table now covers the 61-module union of the retained macOS and Android
+inventories: macOS has 58 modules, Android has 60, and 57 are shared. The sole
+Mac-only module is `github.com/ebitengine/purego v0.10.0`. Its retained packaged
+root `LICENSE` is 11,357 bytes, SHA-256
+`b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1`,
+and contains the full Apache License 2.0. Android-only `prometheus/procfs`,
+`tklauser/numcpus` and `wlynxg/anet` were already classified above. The exact
+comparison is SHA-256
+`5d5915907b076bfd038480b5894ce0514fecbe10a2d19b8763b3e8cdf3ecf7bf`.
+The newer packaged Mac manifest was compared by module set and exact purego
+bytes; its input inventory is not claimed byte-identical to the older retained
+Mac inventory. Linux target differences still require their own comparison.
 
 No GPL, LGPL, or AGPL license text appeared in the 60-module Android target
 inventory. That statement is scoped to this exact report and candidate scan.

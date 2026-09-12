@@ -574,6 +574,34 @@ def main(argv: Iterable[str] | None = None) -> int:
         "candidateFiles": inventory["scanBounds"]["candidateFilesObserved"],
         "missingLicenseEvidence": inventory["missingLicenseEvidence"],
     }, sort_keys=True))
+    # These bounded identities let a reviewer compare an exact hosted target with
+    # retained source/license evidence without exposing full source or license text.
+    encoded = (json.dumps(inventory, sort_keys=True, indent=2) + "\n").encode("utf-8")
+    summaries = []
+    for module in inventory["modules"][:128]:
+        candidates = module["licenseAndNoticeFiles"]
+        summaries.append({
+            "path": module["path"], "version": module["version"],
+            "targets": module["targets"], "moduleSum": module["moduleSum"],
+            "candidateCount": len(candidates),
+            "candidatesSHA256": hashlib.sha256(
+                json.dumps(candidates, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+        })
+    retained = 0
+    printed = 0
+    for row in summaries:
+        line = "GO_MODULE_EVIDENCE " + json.dumps(row, sort_keys=True, separators=(",", ":"))
+        if retained + len(line.encode()) > 64 * 1024:
+            break
+        print(line)
+        retained += len(line.encode())
+        printed += 1
+    print("GO_INVENTORY_EVIDENCE " + json.dumps({
+        "inventorySHA256": hashlib.sha256(encoded).hexdigest(),
+        "inventoryBytes": len(encoded), "moduleCount": inventory["moduleCount"],
+        "printedModules": printed, "truncated": printed != inventory["moduleCount"],
+    }, sort_keys=True, separators=(",", ":")))
     return 0 if inventory["status"] != "incomplete" else 1
 
 

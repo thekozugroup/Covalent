@@ -1875,3 +1875,30 @@ native-package regression fixtures and the JNI contract. The diagnosis comes
 from the checked-in build sequence and the permitted checkpoint 41 job log;
 fresh hosted APK verification must confirm it. No local Android compilation,
 new instrumentation pass or milestone increase is claimed.
+
+### Checkpoint 42 terminal result and checkpoint 43 entry diagnostics
+
+CI run `34697464167`, PR merge `7de465dc883c5b904db20cb5252472aa42fc64b8`,
+passes all main jobs except Android and the aggregate release gate. Android
+foundation `103563297849` and device `103563297870` both assemble successfully,
+then report `required Android package entry is missing or exceeds its bound`.
+No prebuilt stamp is written and zero instrumentation tests run. This is a
+later collector failure than the previous native-byte mismatch. The generic
+message does not identify its entry or distinguish absent, empty, directory
+and oversized entries; no specific asset omission is established.
+
+Checkpoint 43 adds bounded ZIP-entry diagnostics and missing/oversized-entry
+fixtures. It retains every required file, digest comparison and size limit.
+Eight focused collector tests pass. A fresh hosted run must identify the exact
+entry before changing packaging behavior. This is a diagnostic change, not an
+Android journey pass. Acceptance remains 14 of 20 milestones (70%).
+
+The same checkpoint integrates the independently reviewed Caddy/Alpine final
+image evidence and BusyBox backport. Schema 2 source collection binds the
+actual local package metadata, both original and modified recipe trees and the
+exact reviewed patch. All 23 collector, 12 verifier and nine container contract
+tests pass. The retained arm64 database from Atmos passes offline source and
+package verification; amd64 uses an explicitly marked candidate until native
+execution. The Docker build now requires the 13 request-target checks and
+tested payload equality before constructing its patched runtime. Final images,
+their vulnerability classification and the unchanged size cap remain open.

@@ -14,6 +14,13 @@ claim_script="$repo_root/scripts/check-container-claim.sh"
 apple_tls_script="$repo_root/scripts/apple-package-tls-e2e.sh"
 caddy_gomod="$repo_root/packaging/docker/caddy/go.mod"
 caddy_gosum="$repo_root/packaging/docker/caddy/go.sum"
+caddy_collector="$repo_root/scripts/collect-caddy-distribution-evidence.py"
+caddy_verifier="$repo_root/scripts/verify-caddy-distribution-evidence.py"
+caddy_evidence_documentation="$repo_root/docs/security/caddy-target-license-inventory.md"
+alpine_collector="$repo_root/scripts/collect-alpine-runtime-evidence.py"
+alpine_verifier="$repo_root/scripts/verify-alpine-runtime-evidence.py"
+alpine_lock="$repo_root/packaging/docker/alpine/runtime-source-lock.json"
+alpine_packaged_lock="$repo_root/packaging/docker/alpine/packaged-evidence-lock.json"
 runtime_digest="sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40"
 
 require_text() {
@@ -58,6 +65,39 @@ require_text "github.com/klauspost/compress v1.18.7" "$caddy_gomod"
 require_text "cel-go drifted from reviewed v0.30.0" "$dockerfile"
 require_text "go-chi drifted from reviewed v5.3.0" "$dockerfile"
 require_text "klauspost/compress drifted from reviewed v1.18.7" "$dockerfile"
+require_text 'go build -buildvcs=false -trimpath -ldflags "-s -w"' "$dockerfile"
+require_text "FROM caddy AS caddy-evidence" "$dockerfile"
+require_text "collect-caddy-distribution-evidence" "$dockerfile"
+require_text "COPY --from=caddy-evidence /caddy-evidence/ /usr/local/share/covalent/caddy/" "$dockerfile"
+require_text 'target-specific Caddy distribution evidence' "$documentation"
+require_text 'Observed unclassified license evidence: **none**.' "$caddy_evidence_documentation"
+[ -x "$caddy_collector" ] || {
+  echo "Caddy evidence collector is missing or not executable: $caddy_collector" >&2
+  exit 1
+}
+[ -x "$caddy_verifier" ] || {
+  echo "Caddy evidence verifier is missing or not executable: $caddy_verifier" >&2
+  exit 1
+}
+require_text 'FROM caddy-evidence AS alpine-evidence' "$dockerfile"
+require_text 'COPY --from=runtime-patched /lib/apk/db/installed /tmp/alpine-runtime-installed' "$dockerfile"
+require_text 'COPY --from=caddy /lib/apk/db/installed /tmp/alpine-builder-installed' "$dockerfile"
+require_text 'COPY --from=caddy /etc/ssl/certs/ca-certificates.crt /tmp/alpine-ca.crt' "$dockerfile"
+require_text 'collect-alpine-runtime-evidence --arch "$TARGETARCH"' "$dockerfile"
+require_text 'COPY --from=alpine-evidence /alpine-evidence/ /usr/local/share/covalent/alpine/' "$dockerfile"
+require_text 'exact Alpine package database and copied CA' "$documentation"
+for alpine_tool in "$alpine_collector" "$alpine_verifier"; do
+  [ -x "$alpine_tool" ] || {
+    echo "Alpine evidence tool is missing or not executable: $alpine_tool" >&2
+    exit 1
+  }
+done
+for alpine_input in "$alpine_lock" "$alpine_packaged_lock"; do
+  [ -s "$alpine_input" ] || {
+    echo "Alpine evidence lock is missing or empty: $alpine_input" >&2
+    exit 1
+  }
+done
 if [ ! -s "$caddy_gosum" ]; then
   echo "container contract requires a non-empty $caddy_gosum for -mod=readonly" >&2
   exit 1
@@ -69,6 +109,14 @@ require_text 'org.opencontainers.image.version="$RELEASE_VERSION"' "$dockerfile"
 require_text 'ARG COVALENT_SOURCE_FINGERPRINT=unknown' "$dockerfile"
 require_text 'io.covalent.source.fingerprint="$COVALENT_SOURCE_FINGERPRINT"' "$dockerfile"
 require_text 'io.covalent.runtime.openssl.version="3.5.8-r0"' "$dockerfile"
+require_text 'FROM runtime-base AS busybox-package-test' "$dockerfile"
+require_text 'FROM runtime-base AS runtime-patched' "$dockerfile"
+require_text '--mount=type=bind,from=busybox-package-test,source=/packages,target=/tmp/busybox-backport,readonly' "$dockerfile"
+require_text 'sha256sum -c /tmp/busybox-backport/runtime-payload.sha256' "$dockerfile"
+require_text '/test_wget_request_target.py --busybox /bin/busybox' "$dockerfile"
+require_text 'io.covalent.runtime.busybox.version="1.37.0-r1000"' "$dockerfile"
+require_text 'io.covalent.runtime.busybox.patch-sha256="bdd8391fa2e4020079df71557d880e475f5f517fa949b5e80ef633cdafc71a2a"' "$dockerfile"
+require_text 'Covalent-local BusyBox revision `1.37.0-r1000`' "$documentation"
 require_text 'libcrypto3=3.5.8-r0' "$dockerfile"
 require_text 'libssl3=3.5.8-r0' "$dockerfile"
 require_text 'Alpine 3.23 runtime base' "$documentation"
@@ -209,6 +257,11 @@ if [ -n "$image" ]; then
   test "$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.base.name"}}')" = docker.io/library/alpine:3.23
   test "$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.base.digest"}}')" = "$runtime_digest"
   test "$(docker image inspect "$image" --format '{{index .Config.Labels "io.covalent.runtime.openssl.version"}}')" = 3.5.8-r0
+  test "$(docker image inspect "$image" --format '{{index .Config.Labels "io.covalent.runtime.busybox.version"}}')" = 1.37.0-r1000
+  test "$(docker image inspect "$image" --format '{{index .Config.Labels "io.covalent.runtime.busybox.source-sha256"}}')" = 3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4
+  test "$(docker image inspect "$image" --format '{{index .Config.Labels "io.covalent.runtime.busybox.patch-sha256"}}')" = bdd8391fa2e4020079df71557d880e475f5f517fa949b5e80ef633cdafc71a2a
+  test "$(docker image inspect "$image" --format '{{index .Config.Labels "io.covalent.runtime.busybox.alpine-aports-commit"}}')" = 1e823a60eb85606954b3a5af5f8e5bbd1ea680cf
+  test "$(docker image inspect "$image" --format '{{index .Config.Labels "io.covalent.runtime.busybox.original-apkbuild-sha256"}}')" = fb2323ac3121c6cd1122c42cabbd19ec28a29a1cf434a4c0759792c63a1c63a8
   test "$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.licenses"}}')" = MIT
   actual_version=$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')
   [ -n "$actual_version" ] || { echo "container OCI version label is empty" >&2; exit 1; }
@@ -235,6 +288,50 @@ if [ -n "$image" ]; then
     echo "packaged Caddy reports '$caddy_version', expected v2.11.5-0.20260711231708-b2693fb63a30" >&2
     exit 1
   fi
+  distribution_temp=$(mktemp -d "${TMPDIR:-/tmp}/covalent-distribution-evidence.XXXXXX")
+  distribution_container=''
+  cleanup_distribution_evidence() {
+    if [ -n "$distribution_container" ]; then
+      docker rm -f "$distribution_container" >/dev/null 2>&1 || true
+    fi
+    rm -rf "$distribution_temp"
+  }
+  trap cleanup_distribution_evidence EXIT INT TERM HUP
+  distribution_container=$(docker create "$image")
+  mkdir "$distribution_temp/caddy-evidence" "$distribution_temp/alpine-evidence"
+  docker cp \
+    "$distribution_container:/usr/local/share/covalent/caddy/." \
+    "$distribution_temp/caddy-evidence"
+  docker cp \
+    "$distribution_container:/usr/local/bin/caddy" \
+    "$distribution_temp/caddy"
+  docker cp \
+    "$distribution_container:/etc/ssl/certs/ca-certificates.crt" \
+    "$distribution_temp/ca-certificates.crt"
+  docker cp \
+    "$distribution_container:/usr/local/share/covalent/alpine/." \
+    "$distribution_temp/alpine-evidence"
+  docker cp \
+    "$distribution_container:/lib/apk/db/installed" \
+    "$distribution_temp/alpine-installed"
+  container_architecture=$(docker image inspect "$image" --format '{{.Architecture}}')
+  case "$container_architecture" in
+    amd64|arm64) ;;
+    *) echo "container has unsupported architecture '$container_architecture'" >&2; exit 1 ;;
+  esac
+  python3 -B "$caddy_verifier" \
+    --root "$distribution_temp/caddy-evidence" \
+    --binary "$distribution_temp/caddy" \
+    --ca-bundle "$distribution_temp/ca-certificates.crt" \
+    --target "linux-$container_architecture"
+  python3 -B "$alpine_verifier" \
+    --bundle "$distribution_temp/alpine-evidence" \
+    --installed "$distribution_temp/alpine-installed" \
+    --ca-bundle "$distribution_temp/ca-certificates.crt" \
+    --lock "$alpine_lock" --packaged-lock "$alpine_packaged_lock" \
+    --arch "$container_architecture"
+  cleanup_distribution_evidence
+  trap - EXIT INT TERM HUP
   if [ -n "$expected_revision" ]; then
     actual_revision=$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
     if [ "$actual_revision" != "$expected_revision" ]; then

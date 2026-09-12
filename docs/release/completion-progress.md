@@ -1,12 +1,16 @@
 # Completion progress
 
-Updated: 2026-09-12. Published checkpoint 41 is commit
-`14850c7a74e6cf9e49b82cbff5a25186e11fb0a1`. Its hosted results are complete.
-Android compilation succeeds, but package verification fails before device
-tests start. The aggregate release gate therefore fails.
-Checkpoint 42 prevents AGP from changing the already stripped JNI library and
-adds precise mismatch diagnostics. Local foundation checks pass; its fresh
-hosted Android build and device journey remain required.
+Updated: 2026-09-12. Checkpoint 42, commit
+`8c380bf3ef4ecdd2eadf5b16680f0cbdbbb3d4c4`, has terminal hosted results.
+Android compilation succeeds, but package verification reports a required entry
+that is missing or outside its byte bounds. Zero instrumentation tests run and
+the aggregate release gate fails; all other main CI jobs pass. Checkpoint 43
+adds the exact entry name and declared size to that diagnostic. It preserves
+all package requirements and limits; the exact packaging correction still
+requires evidence from its hosted run.
+Checkpoint 43 also integrates the reviewed Caddy/Alpine source evidence and
+BusyBox security backport. Local foundation and native arm64 intermediate
+runtime checks pass; both complete patched Docker images still need validation.
 
 **70% of acceptance milestones are verified: 14 of 20.** This is a milestone
 count, not an estimate of elapsed time or remaining effort. Each milestone has
