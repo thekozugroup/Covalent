@@ -1,9 +1,9 @@
 # ADR 0006: Two-way folder synchronization
 
-Status: superseded for the initial automatic-sync implementation by
-[ADR 0007](0007-maintained-folder-sync-engine.md). The tested custom foundations
-remain isolated; their protocol guarantees are not claims for the maintained
-engine backend.
+Status: historical. [ADR 0007](0007-maintained-folder-sync-engine.md) replaced
+this custom implementation; [ADR 0008](0008-rclone-one-way-links.md) now defines
+the one-way rclone product. The obsolete custom implementation has been removed.
+The decisions below describe the former scope, not the current product.
 
 ## Context
 
