@@ -183,15 +183,36 @@ final class RealFolderLinkUITests: XCTestCase {
         recordPhase("Covalent phase: manual idle wait entered")
         let idle = app.staticTexts["Idle. Run this link when you want to transfer changes."]
         scrollTo(idle, in: linksScrollView)
-        XCTAssertTrue(idle.waitForExistence(timeout: transferTimeout))
+        guard idle.waitForExistence(timeout: transferTimeout) else {
+            attachFolderLinkState(
+                reason: "manual idle status did not appear",
+                app: app,
+                linksScrollView: linksScrollView
+            )
+            throw FixtureError.missing("manual idle status")
+        }
         recordPhase("Covalent phase: manual idle wait completed")
         recordPhase("Covalent phase: manual link completed")
 
         recordPhase("Covalent phase: first run entered")
         let run = app.buttons["Run Mac UI Link now"]
         scrollTo(run, in: linksScrollView)
-        XCTAssertTrue(run.waitForExistence(timeout: transitionTimeout))
-        XCTAssertTrue(run.isHittable)
+        guard run.waitForExistence(timeout: transitionTimeout) else {
+            attachFolderLinkState(
+                reason: "Run Now control did not appear",
+                app: app,
+                linksScrollView: linksScrollView
+            )
+            throw FixtureError.missing("Run Now control")
+        }
+        guard run.isHittable else {
+            attachFolderLinkState(
+                reason: "Run Now control was not hittable",
+                app: app,
+                linksScrollView: linksScrollView
+            )
+            throw FixtureError.missing("hittable Run Now control")
+        }
         run.click()
         let copiedForward = await waitForFile(
             destinationRoot + "/forward.txt",
@@ -319,6 +340,49 @@ final class RealFolderLinkUITests: XCTestCase {
         }
         return "Transfers picker target: folder-link-cadence; pop-up buttons=\(popUpButtons.count); "
             + "first entries: \(entries)"
+    }
+
+    private func attachFolderLinkState(
+        reason: String,
+        app: XCUIApplication,
+        linksScrollView: XCUIElement
+    ) {
+        let frontmost = NSWorkspace.shared.frontmostApplication.map {
+            $0.bundleIdentifier == "life.michaelwong.covalent.macos"
+        }
+        let fixedElements: [(String, XCUIElement)] = [
+            ("linkLabel", app.staticTexts["Mac UI Link"]),
+            ("manualIdle", app.staticTexts["Idle. Run this link when you want to transfer changes."]),
+            ("runNow", app.buttons["Run Mac UI Link now"]),
+            ("checkingFolders", app.staticTexts["Checking Folder Sync…"]),
+            ("foldersUnavailable", app.staticTexts["Folder Sync Is Unavailable"]),
+            ("waitingForSourceSettings", app.staticTexts["Waiting for confirmed source settings"]),
+            ("settingsPending", app.staticTexts["Waiting for the source to apply this settings change"]),
+            ("settingsUnconfirmed", app.staticTexts["Settings change is not confirmed"]),
+            ("retrySettings", app.buttons["Try Sending Settings Again"]),
+        ]
+        let fixedState = fixedElements.map { name, element in
+            elementDiagnostic(name: name, element: element)
+        }.joined(separator: "; ")
+        let frontmostDescription = frontmost.map { String(describing: $0) } ?? "unknown"
+        let snapshot = [
+            "UI test failure: folder-link state snapshot",
+            "reason=\(reason)",
+            "appState=\(String(describing: app.state))",
+            "windows=\(app.windows.count) sheets=\(app.sheets.count) alerts=\(app.alerts.count)",
+            "frontmostIsTarget=\(frontmostDescription)",
+            elementDiagnostic(name: "linksView", element: linksScrollView),
+            fixedState,
+        ].joined(separator: "\n")
+        let attachment = XCTAttachment(string: snapshot + "\n")
+        attachment.name = "Real folder-link bounded state"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    private func elementDiagnostic(name: String, element: XCUIElement) -> String {
+        let exists = element.exists
+        return "\(name)=exists:\(exists),hittable:\(exists && element.isHittable),enabled:\(exists && element.isEnabled)"
     }
 
     private func launchManagedApp() -> XCUIApplication {
