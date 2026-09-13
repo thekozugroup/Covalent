@@ -7,7 +7,7 @@ use std::io::{Read as _, Write as _};
 use std::net::SocketAddr;
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _, symlink};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -17,7 +17,9 @@ use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
 use super::android_saf::{AndroidSafGrantError, AndroidSafGrantRegistry};
-use super::config::{EngineDeviceId, EngineFolderConfig, EngineFolderRole, EnginePeerConfig};
+use super::config::{EngineDeviceId, EngineFolderRole};
+use super::controller::{EngineSessionSettings, FolderRootLease};
+use super::installation::{EngineInstallation, EngineWorkerLease};
 use super::supervisor::OwnedRcloneCommand;
 use super::{EngineIndexSnapshot, EngineSessionError, VerifiedEngineExecutable};
 
@@ -64,6 +66,8 @@ pub(super) struct RclonePeer {
     pub ssh_public_key: String,
 }
 
+type CommandInputs = (Vec<OsString>, Vec<(OsString, OsString)>);
+
 pub(super) struct RcloneRuntime {
     guardian: Arc<VerifiedEngineExecutable>,
     executable: Arc<VerifiedEngineExecutable>,
@@ -73,6 +77,9 @@ pub(super) struct RcloneRuntime {
     folders: BTreeMap<Uuid, RcloneFolder>,
     peers: BTreeMap<EngineDeviceId, RclonePeer>,
     policy_directory: PathBuf,
+    installation: Arc<EngineInstallation>,
+    roots: Arc<Vec<FolderRootLease>>,
+    worker_lease: Weak<EngineWorkerLease>,
     grants: AndroidSafGrantRegistry,
     active_grants: BTreeSet<Uuid>,
 }
@@ -155,6 +162,8 @@ struct FolderPolicyState {
     suppressions: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pending: Option<PendingTransfer>,
+    #[serde(default)]
+    copy_completed: bool,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -187,14 +196,17 @@ impl RcloneRuntime {
         guardian: Arc<VerifiedEngineExecutable>,
         executable: Arc<VerifiedEngineExecutable>,
         runtime_parent: &Path,
-        policy_directory: &Path,
-        identity_key: &str,
-        folders: &[EngineFolderConfig],
-        peers: &[EnginePeerConfig],
+        settings: &EngineSessionSettings,
+        worker_lease: Weak<EngineWorkerLease>,
+        installation: Arc<EngineInstallation>,
+        roots: Arc<Vec<FolderRootLease>>,
     ) -> Result<Self, EngineSessionError> {
         executable
             .recheck()
             .map_err(|_| EngineSessionError::LaunchFailed)?;
+        let policy_directory = installation
+            .database_directory()
+            .map_err(|_| EngineSessionError::RuntimeUnavailable)?;
         let runtime = tempfile::Builder::new()
             .prefix("cv-rclone-")
             .permissions(fs::Permissions::from_mode(0o700))
@@ -211,11 +223,15 @@ impl RcloneRuntime {
             return Err(EngineSessionError::RuntimeUnavailable);
         }
         let key_file = runtime_path.join("identity.pem");
-        write_private_new(&key_file, identity_key.as_bytes(), 4096)?;
+        write_private_new(
+            &key_file,
+            installation.identity().private_key_pem().as_bytes(),
+            4096,
+        )?;
         let grants = executable.android_saf_grants();
         let mut active_grants = BTreeSet::new();
         let mut resolved_folders = BTreeMap::new();
-        for folder in folders {
+        for folder in &settings.folders {
             if matches!(folder.role(), EngineFolderRole::LegacyTwoWay) {
                 return Err(EngineSessionError::InvalidConfiguration);
             }
@@ -245,7 +261,7 @@ impl RcloneRuntime {
         }
         let mut resolved_peers = BTreeMap::new();
         let mut known_hosts = BTreeMap::new();
-        for peer in peers {
+        for peer in &settings.peers {
             let key = peer
                 .ssh_public_key()
                 .ok_or(EngineSessionError::InvalidConfiguration)?;
@@ -271,7 +287,7 @@ impl RcloneRuntime {
             serde_json::to_vec(&map).map_err(|_| EngineSessionError::InvalidConfiguration)?;
         write_private_new(&map_path, &map_bytes, 1024 * 1024)?;
         for folder_id in resolved_folders.keys() {
-            let (policy, staged) = policy_paths(policy_directory, *folder_id);
+            let (policy, staged) = policy_paths(&policy_directory, *folder_id);
             load_policy(&policy, &staged)?;
         }
         Ok(Self {
@@ -282,7 +298,10 @@ impl RcloneRuntime {
             known_hosts,
             folders: resolved_folders,
             peers: resolved_peers,
-            policy_directory: policy_directory.to_path_buf(),
+            policy_directory,
+            installation,
+            roots,
+            worker_lease,
             grants,
             active_grants,
         })
@@ -291,7 +310,7 @@ impl RcloneRuntime {
     pub(super) fn server_inputs(
         &self,
         listener: SocketAddr,
-    ) -> Result<(Vec<OsString>, Vec<(OsString, OsString)>), EngineSessionError> {
+    ) -> Result<CommandInputs, EngineSessionError> {
         if !self
             .folders
             .values()
@@ -378,9 +397,10 @@ impl RcloneRuntime {
             } => (propagate_source_deletions, restore_local_deletions),
             _ => return Err(EngineSessionError::InvalidConfiguration),
         };
-        if state.pending.is_some() {
-            // The transfer may have completed before the process stopped. Replaying
-            // could restore a destination deletion that happened after that point.
+        if state.pending.is_some() && !state.copy_completed && !restore {
+            // An interrupted copy has uncertain ownership. Once copy completion
+            // and ownership are durable, a fresh run can preserve local deletions.
+            // Explicit restoration also authorizes retrying uncertain downloads.
             return Err(EngineSessionError::RuntimeUnavailable);
         }
         let mut suppressions = if restore {
@@ -428,6 +448,7 @@ impl RcloneRuntime {
             propagate_source_deletions: propagate,
         };
         state.pending = Some(pending.clone());
+        state.copy_completed = false;
         save_policy(&policy_path, &policy_staged, &policy)?;
         let list = self.write_files_list(folder_id, &pending.allowed)?;
         let verified = pending
@@ -491,6 +512,7 @@ impl RcloneRuntime {
             state.delivered.extend(source);
         }
         state.pending = None;
+        state.copy_completed = false;
         save_policy(&policy_path, &policy_staged, &next)?;
         Ok(source_index)
     }
@@ -715,6 +737,12 @@ impl RcloneRuntime {
                 self.runtime.path().as_os_str().to_owned(),
             ),
         ]);
+        let worker_lease = self
+            .worker_lease
+            .upgrade()
+            .ok_or(RcloneCommandFailure::Uncertain(
+                EngineSessionError::LaunchFailed,
+            ))?;
         let command = OwnedRcloneCommand::launch(
             &self.guardian,
             &self.executable,
@@ -722,7 +750,12 @@ impl RcloneRuntime {
             &owned_environment,
             self.runtime.path(),
             MAX_OUTPUT_BYTES,
-            Box::new(Arc::clone(&self.runtime)),
+            Box::new((
+                Arc::clone(&self.runtime),
+                Arc::clone(&self.installation),
+                Arc::clone(&self.roots),
+                worker_lease,
+            )),
         )
         .map_err(|_| RcloneCommandFailure::Uncertain(EngineSessionError::LaunchFailed))?;
         let output = tokio::time::timeout(COMMAND_TIMEOUT, command.wait())
@@ -951,6 +984,7 @@ fn record_completed_copy(
             .filter(|candidate| pending.source.contains_key(*candidate))
             .cloned(),
     );
+    state.copy_completed = true;
     save_policy(path, staged, &policy)
 }
 
@@ -966,6 +1000,7 @@ fn clear_known_pending(
         return Err(EngineSessionError::RuntimeUnavailable);
     }
     state.pending = None;
+    state.copy_completed = false;
     save_policy(path, staged, &policy)
 }
 
@@ -1124,6 +1159,12 @@ mod tests {
         save_policy(&path, &staged, &policy).unwrap();
 
         record_completed_copy(&path, &staged, folder, &pending).unwrap();
+        let interrupted = load_policy(&path, &staged).unwrap();
+        assert!(interrupted.folders[&folder].copy_completed);
+        assert_eq!(
+            interrupted.folders[&folder].owned,
+            BTreeSet::from([source.path.clone()])
+        );
         clear_known_pending(&path, &staged, folder, &pending).unwrap();
 
         let state = load_policy(&path, &staged).unwrap();
@@ -1131,5 +1172,6 @@ mod tests {
         assert_eq!(folder_state.owned, BTreeSet::from([source.path]));
         assert!(folder_state.delivered.is_empty());
         assert!(folder_state.pending.is_none());
+        assert!(!folder_state.copy_completed);
     }
 }

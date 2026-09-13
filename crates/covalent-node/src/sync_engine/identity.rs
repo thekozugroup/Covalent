@@ -189,7 +189,7 @@ impl EngineIdentity {
         wire.extend_from_slice(&11_u32.to_be_bytes());
         wire.extend_from_slice(b"ssh-ed25519");
         wire.extend_from_slice(&32_u32.to_be_bytes());
-        wire.extend_from_slice(&raw);
+        wire.extend_from_slice(raw);
         Ok(STANDARD.encode(wire))
     }
 

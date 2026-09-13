@@ -80,6 +80,16 @@ impl Device {
             certificate_fingerprint: tls.certificate_fingerprint(),
         }
     }
+
+    fn engine_binding(&self, direct_address: &str) -> SyncEngineBinding {
+        SyncEngineBinding::new_authenticated(
+            self.engine.device_id(),
+            self.installation.device_id().as_str(),
+            &self.installation.identity().ssh_public_key().unwrap(),
+            direct_address,
+        )
+        .unwrap()
+    }
 }
 
 fn pair(first: &Device, second: &Device) {
@@ -148,6 +158,7 @@ fn share(
         .receive_acceptance(offer.offer_id, accepted.clone(), 2003)
         .unwrap();
     b.receive_commit(offer.offer_id, committed.clone()).unwrap();
+    deliver_link_settings(a, b);
     (offer, accepted, committed)
 }
 
@@ -519,6 +530,8 @@ fn one_destination_confirmation_and_both_signatures_precede_any_membership() {
     assert_eq!(first.desired_settings().unwrap().folders.len(), 1);
     assert!(second.desired_settings().unwrap().folders.is_empty());
     second.receive_commit(offer.offer_id, commit).unwrap();
+    assert!(second.desired_settings().unwrap().folders.is_empty());
+    deliver_link_settings(&mut first, &mut second);
     let settings = second.desired_settings().unwrap();
     assert_eq!(settings.folders[0].id(), offer.folder_id);
     assert_eq!(settings.folders[0].root(), b.files());
@@ -571,12 +584,13 @@ fn expired_offer_renewal_is_idempotent_replayable_and_rejects_stale_acceptance()
     let mut first = a.journal();
     let mut second = b.journal();
     let offer = first
-        .offer(
+        .offer_with_policy(
             b.engine.device_id(),
             Uuid::new_v4(),
             "Documents",
             &a.files(),
             2000,
+            None,
         )
         .unwrap();
     second.receive_offer(offer.clone(), 2001).unwrap();
@@ -1602,14 +1616,15 @@ fn one_folder_accepts_multiple_peers_but_rejects_inconsistent_labels_before_pers
         .receive_acceptance(offer.offer_id, accepted, 3003)
         .unwrap();
     third.receive_commit(offer.offer_id, committed).unwrap();
+    deliver_link_settings(&mut first, &mut third);
     let settings = first.desired_settings().unwrap();
     assert_eq!(settings.folders.len(), 1);
     assert_eq!(settings.folders[0].members().len(), 3);
     assert_eq!(settings.peers.len(), 2);
     first.set_paused(original.offer_id, true).unwrap();
     let settings = first.desired_settings().unwrap();
-    assert_eq!(settings.folders[0].members().len(), 2);
-    assert_eq!(settings.peers[0].id(), c.installation.device_id());
+    assert!(settings.folders.is_empty());
+    assert!(settings.peers.is_empty());
 }
 
 #[test]
@@ -1739,9 +1754,10 @@ fn conflicting_signed_engine_bindings_cannot_poison_existing_membership() {
                 2100,
             )
             .unwrap();
-        let binding = SyncEngineBinding::new(
+        let binding = SyncEngineBinding::new_authenticated(
             target.engine.device_id(),
             claimed_engine.as_str(),
+            &target.installation.identity().ssh_public_key().unwrap(),
             &target.address.to_string(),
         )
         .unwrap();
@@ -2161,7 +2177,24 @@ fn paused_share_can_renew_exact_root_but_cannot_move_it() {
     pair(&a, &b);
     let mut first = a.journal();
     let mut second = b.journal();
-    let (offer, acceptance, commit) = share(&a, &b, &mut first, &mut second);
+    let offer = first
+        .offer_with_policy(
+            b.engine.device_id(),
+            Uuid::new_v4(),
+            "Documents",
+            &a.files(),
+            2000,
+            None,
+        )
+        .unwrap();
+    second.receive_offer(offer.clone(), 2001).unwrap();
+    let acceptance = second.accept(offer.offer_id, &b.files(), 2002).unwrap();
+    let commit = first
+        .receive_acceptance(offer.offer_id, acceptance.clone(), 2003)
+        .unwrap();
+    second
+        .receive_commit(offer.offer_id, commit.clone())
+        .unwrap();
     first.set_paused(offer.offer_id, true).unwrap();
     let paused_revision = first.revision();
 
@@ -2357,12 +2390,7 @@ fn address_refresh_is_revision_bound_and_recovers_without_any_folder() {
     let expected = b.transport();
     let mut candidate = expected.clone();
     candidate.address = "127.0.0.1:53402".into();
-    let candidate_engine = SyncEngineBinding::new(
-        b.engine.device_id(),
-        b.installation.device_id().as_str(),
-        "127.0.0.1:53403",
-    )
-    .unwrap();
+    let candidate_engine = b.engine_binding("127.0.0.1:53403");
     let prepared = journal
         .prepare_peer_address_refresh(
             b.engine.device_id(),
@@ -2434,12 +2462,7 @@ fn refreshed_routes_preserve_signed_share_history_and_drive_settings() {
     let expected = b.transport();
     let mut candidate = expected.clone();
     candidate.address = "127.0.0.1:53412".into();
-    let candidate_engine = SyncEngineBinding::new(
-        b.engine.device_id(),
-        b.installation.device_id().as_str(),
-        "127.0.0.1:53413",
-    )
-    .unwrap();
+    let candidate_engine = b.engine_binding("127.0.0.1:53413");
     let prepared = first
         .prepare_peer_address_refresh(
             b.engine.device_id(),
@@ -2481,12 +2504,7 @@ fn cold_core_new_address_recovery_preserves_and_retargets_removal_outbox() {
     let expected = b.transport();
     let mut candidate = expected.clone();
     candidate.address = "127.0.0.1:53416".into();
-    let candidate_engine = SyncEngineBinding::new(
-        b.engine.device_id(),
-        b.installation.device_id().as_str(),
-        "127.0.0.1:53417",
-    )
-    .unwrap();
+    let candidate_engine = b.engine_binding("127.0.0.1:53417");
     let prepared = first
         .prepare_peer_address_refresh(
             b.engine.device_id(),
@@ -2552,12 +2570,7 @@ fn signed_probe_can_refresh_engine_listener_without_changing_control_address() {
     pair(&a, &b);
     let mut journal = a.journal();
     let transport = b.transport();
-    let candidate_engine = SyncEngineBinding::new(
-        b.engine.device_id(),
-        b.installation.device_id().as_str(),
-        "127.0.0.1:53427",
-    )
-    .unwrap();
+    let candidate_engine = b.engine_binding("127.0.0.1:53427");
     let grant = peer_grant(&a, b.engine.device_id());
     let prepared = journal
         .prepare_peer_address_refresh(

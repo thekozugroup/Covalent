@@ -53,7 +53,7 @@ confirms it. Separate links have independent settings.
 | --- | --- |
 | **Manual** | Use **Run Now** on any linked device to request one transfer from the source to all destinations. The transfer worker stops when finished. |
 | **Scheduled** | The source starts transfers at the chosen interval, from 15 minutes to one year. You can also use **Run Now**. The source displays the next due time. |
-| **Continuous** | The transfer worker stays available and watches for source changes while the link is enabled. |
+| **Continuous** | Covalent checks for source changes periodically while the link is enabled. |
 
 Timing, pause, and Android conditions belong to the whole link. Change them on
 any authorized member; the source confirms and distributes the change. An

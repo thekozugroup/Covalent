@@ -2,7 +2,7 @@
 
 Updated 2026-09-13 after the owner reaffirmed the lightweight one-way scope. The active goal is defined in [Product requirements](../product/requirements.md#active-completion-goal).
 
-**Current scope: 40% verified, 4 of 10 complete acceptance checks.** This counts complete user journeys, not remaining time or reusable code. Native apps, pairing, permissions, worker supervision, Docker packages, and successful transfers form a working baseline. Independent fan-out, collection isolation, deletion/restoration, and shared-setting behavior now pass real three-node journeys. The remaining six checks are open. These proofs use the current Syncthing baseline. The owner has selected rclone as the required replacement. Migration and remaining verification continue; existing Syncthing evidence does not approve the rclone implementation.
+**Current scope: 40% verified, 4 of 10 complete acceptance checks.** This counts complete user journeys, not remaining time or reusable code. Native apps, pairing, permissions, worker supervision, Docker packages, and successful transfers form a working baseline. Independent fan-out, collection isolation, deletion/restoration, and shared-setting behavior now pass real three-node journeys. The remaining six checks are open. These four acceptance proofs use the previous Syncthing baseline. The owner has selected rclone as the required replacement. The active branch now uses rclone; remaining verification continues, and earlier Syncthing evidence does not approve the rclone implementation.
 
 **Previous scope: 75%, 15 of 20 checks**, recorded at checkpoint 46 (c47003113e28b6e934a8ab4823040614fb07fb30). That score belongs to the superseded bidirectional/backup scope. Source and evidence remain in Git history.
 
@@ -30,12 +30,17 @@ and detection of same-size, same-mtime content corruption. The authorization
 helper's boundary tests pass. Mac packaging/signing and Android worker
 packaging/provenance/notices pass; these are components, not final app acceptance.
 The simplified web console passes a real browser fixture journey; native Mac
-sources typecheck for macOS 15. The Rust runtime, Android app integration,
-full device journeys, and final release remain in progress. Syncthing build
-scripts, source patch, and package assets have been removed from the integration
-checkout. [ADR 0008](../adr/0008-rclone-one-way-links.md) records the settled choice.
+sources typecheck for macOS 15. The rclone Rust runtime and Android SAF bridge are integrated in the active
+branch. Consolidated foundation checks, 70 web tests, and 179 Swift tests pass;
+two live-service Swift checks remain skipped. Android passes the real system
+folder picker and nested file-access proof. The rclone three-node journey
+advances through deletion and source-edit checks but fails restoration after a
+settings change; cancellation recovery is being corrected. Final native app,
+Linux package execution, performance, and release acceptance remain open.
+Syncthing runtime modules, build scripts, source patch, and package assets have
+been removed. [ADR 0008](../adr/0008-rclone-one-way-links.md) records the settled choice.
 
-Implementation evidence: the full Rust workspace run passed 908 tests (real worker tests run separately). The current Android build, lint, and 175 JVM tests pass. All 24 Mac production Swift sources compiled and linked, and eight focused Swift tests passed. The web console passed 128 tests. The integrated three-node runtime passes one-way fan-out with an offline destination, retained deletions, source deletion propagation, restoration after restart, and shared/offline/conflicting settings. A separate three-node collection journey passes distinct child-folder ownership, identical filename isolation, overlapping-root rejection, independent settings, and scoped deletion. Missing source mounts and failed source scans preserve destination files while the healthy contributor keeps transferring; restoring the source resumes transfers. The full foundation check and strict integration-test Clippy pass.
+Previous-engine evidence: the full Rust workspace run passed 908 tests (real worker tests run separately). The current Android build, lint, and 175 JVM tests pass. All 24 Mac production Swift sources compiled and linked, and eight focused Swift tests passed. The web console passed 128 tests. The integrated three-node runtime passes one-way fan-out with an offline destination, retained deletions, source deletion propagation, restoration after restart, and shared/offline/conflicting settings. A separate three-node collection journey passes distinct child-folder ownership, identical filename isolation, overlapping-root rejection, independent settings, and scoped deletion. Missing source mounts and failed source scans preserve destination files while the healthy contributor keeps transferring; restoring the source resumes transfers. The full foundation check and strict integration-test Clippy pass.
 
 Checkpoint 47 hosted CI found Android error-catalog omissions, Docker manifest rejection, and Mac packaging/model-test failures. Corrections now pass Android's full build gate, all 175 Swift tests, Mac engine packaging/signing, and seven host-validation tests on each platform. The fresh Atmos arm64 image passes its dynamic contract and 13-check one-way transfer gate; original server containers, tagged images, networks, and volumes are restored. Android's actual API 37 device journey passes pairing, one-way transfer, pause/resume, address changes, cold restart, visible deletion-setting confirmation, authenticated settings convergence, restoration, deletion propagation, permission loss, recovery, and safe removal. The native deletion explanations and the independently tested failed-scan protection complete row 3. The historical test selector still contains BothWays; its assertions now verify one-way behavior. Scheduling, native HIG/device acceptance, final packages, performance, and publication remain open.
 

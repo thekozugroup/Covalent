@@ -68,7 +68,7 @@ pub struct ManagedEngineSession {
     guardian: Arc<VerifiedEngineExecutable>,
     runtime: Arc<RcloneRuntime>,
     installation: Arc<EngineInstallation>,
-    worker_lease: Option<EngineWorkerLease>,
+    worker_lease: Option<Arc<EngineWorkerLease>>,
     roots: Arc<Vec<FolderRootLease>>,
     settings: EngineSessionSettings,
     jobs: BTreeMap<Uuid, JoinHandle<Result<EngineIndexSnapshot, EngineSessionError>>>,
@@ -116,7 +116,7 @@ impl fmt::Debug for ManagedEngineSession {
     }
 }
 
-struct FolderRootLease {
+pub(super) struct FolderRootLease {
     path: PathBuf,
     file: File,
     identity: (u64, u64),
@@ -126,7 +126,7 @@ struct ServerKeepalive {
     _runtime: Arc<RcloneRuntime>,
     _installation: Arc<EngineInstallation>,
     _roots: Arc<Vec<FolderRootLease>>,
-    _worker_lease: EngineWorkerLease,
+    _worker_lease: Arc<EngineWorkerLease>,
 }
 
 impl ManagedEngineSession {
@@ -160,9 +160,11 @@ impl ManagedEngineSession {
         installation
             .revalidate()
             .map_err(|_| EngineSessionError::InvalidConfiguration)?;
-        let worker_lease = installation
-            .claim_worker()
-            .map_err(|_| EngineSessionError::LaunchFailed)?;
+        let worker_lease = Arc::new(
+            installation
+                .claim_worker()
+                .map_err(|_| EngineSessionError::LaunchFailed)?,
+        );
         let roots = Arc::new(
             settings
                 .folders
@@ -176,9 +178,6 @@ impl ManagedEngineSession {
                 .map(|folder| admit_root(folder.root(), installation.root()))
                 .collect::<Result<Vec<_>, _>>()?,
         );
-        let policy_directory = installation
-            .database_directory()
-            .map_err(|_| EngineSessionError::RuntimeUnavailable)?;
         let runtime = Arc::new(
             RcloneRuntime::prepare(
                 Arc::new(
@@ -192,10 +191,10 @@ impl ManagedEngineSession {
                         .map_err(|_| EngineSessionError::LaunchFailed)?,
                 ),
                 runtime_parent,
-                &policy_directory,
-                installation.identity().private_key_pem(),
-                &settings.folders,
-                &settings.peers,
+                &settings,
+                Arc::downgrade(&worker_lease),
+                Arc::clone(&installation),
+                Arc::clone(&roots),
             )
             .await?,
         );
@@ -221,7 +220,9 @@ impl ManagedEngineSession {
         let runtime = Arc::clone(&self.runtime);
         let installation = Arc::clone(&self.installation);
         let roots = Arc::clone(&self.roots);
+        let worker_lease = self.worker_lease.clone();
         InitialScanTask::new(tokio::spawn(async move {
+            let _worker_lease = worker_lease;
             revalidate(&installation, &roots)?;
             runtime.initial_scan().await?;
             revalidate(&installation, &roots)
@@ -268,7 +269,8 @@ impl ManagedEngineSession {
             _roots: Arc::clone(&self.roots),
             _worker_lease: self
                 .worker_lease
-                .take()
+                .as_ref()
+                .cloned()
                 .ok_or(EngineSessionError::LaunchFailed)?,
         };
         let worker = OwnedEngineWorker::launch_rclone(
@@ -433,11 +435,25 @@ impl ManagedEngineSession {
         for (_, task) in std::mem::take(&mut self.jobs) {
             let _ = task.await;
         }
-        if let Some(worker) = &mut self.worker {
-            return worker.stop().await;
+        let status = if let Some(worker) = &mut self.worker {
+            match worker.stop().await? {
+                StopOutcome::Exited(status) => status,
+                StopOutcome::StillStopping => return Ok(StopOutcome::StillStopping),
+            }
+        } else {
+            ExitStatus::from_raw(0)
+        };
+        // Command reapers retain the same lease after their tasks are cancelled.
+        // Keep the existing stopping lifecycle until no command can still write.
+        if self
+            .worker_lease
+            .as_ref()
+            .is_some_and(|lease| Arc::strong_count(lease) > 1)
+        {
+            return Ok(StopOutcome::StillStopping);
         }
         self.worker_lease.take();
-        Ok(StopOutcome::Exited(ExitStatus::from_raw(0)))
+        Ok(StopOutcome::Exited(status))
     }
 
     pub fn close_lifeline(&mut self) {

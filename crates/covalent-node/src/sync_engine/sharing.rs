@@ -1056,7 +1056,14 @@ impl FolderSharingJournal {
         selected_root: &Path,
         now: u64,
     ) -> Result<FolderShareOffer, SharingError> {
-        self.offer_with_policy(peer_id, folder_id, label, selected_root, now, None)
+        self.offer_with_policy(
+            peer_id,
+            folder_id,
+            label,
+            selected_root,
+            now,
+            Some(covalent_protocol::FolderLinkPolicy::default()),
+        )
     }
 
     pub fn offer_with_policy(

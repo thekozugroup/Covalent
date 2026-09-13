@@ -117,6 +117,16 @@ impl Device {
         self.engine.config().unwrap().trusted_peers[&peer].clone()
     }
 
+    fn engine_binding(&self, direct_address: &str) -> covalent_protocol::SyncEngineBinding {
+        covalent_protocol::SyncEngineBinding::new_authenticated(
+            self.engine.device_id(),
+            self.installation.device_id().as_str(),
+            &self.installation.identity().ssh_public_key().unwrap(),
+            direct_address,
+        )
+        .unwrap()
+    }
+
     fn service(
         &self,
         journal: FolderSharingJournal,
@@ -226,6 +236,26 @@ async fn make_ready_folder_at(
         .receive_commit(offer.offer_id, commit.clone())
         .await
         .unwrap();
+    let settings = source
+        .outbound_records()
+        .await
+        .unwrap()
+        .into_value()
+        .into_iter()
+        .find_map(|delivery| match delivery.record {
+            FolderShareRecord::SettingsCommit(commit)
+                if delivery.peer_transport.peer_id == second.engine.device_id()
+                    && commit.folder_id == folder =>
+            {
+                Some(commit)
+            }
+            _ => None,
+        })
+        .unwrap();
+    target
+        .receive_link_settings_commit(&settings)
+        .await
+        .unwrap();
     (offer.offer_id, commit)
 }
 
@@ -288,12 +318,7 @@ async fn peer_address_refresh_is_durable_without_a_folder_or_worker() {
     let expected = second.transport();
     let mut candidate = expected.clone();
     candidate.address = "127.0.0.1:54302".into();
-    let candidate_engine = covalent_protocol::SyncEngineBinding::new(
-        second.engine.device_id(),
-        second.installation.device_id().as_str(),
-        "127.0.0.1:54303",
-    )
-    .unwrap();
+    let candidate_engine = second.engine_binding("127.0.0.1:54303");
 
     let committed = service
         .refresh_peer_address(
@@ -349,12 +374,7 @@ async fn active_address_refresh_reaps_before_core_change_and_requires_explicit_r
     let expected = second.transport();
     let mut candidate = expected.clone();
     candidate.address = "127.0.0.1:54304".into();
-    let candidate_engine = covalent_protocol::SyncEngineBinding::new(
-        second.engine.device_id(),
-        second.installation.device_id().as_str(),
-        "127.0.0.1:54305",
-    )
-    .unwrap();
+    let candidate_engine = second.engine_binding("127.0.0.1:54305");
 
     assert_eq!(
         source
@@ -399,9 +419,10 @@ async fn invalid_address_refresh_keeps_worker_and_failed_reap_keeps_core_old() {
     let expected = second.transport();
     let mut candidate = expected.clone();
     candidate.address = "127.0.0.1:54306".into();
-    let wrong_owner = covalent_protocol::SyncEngineBinding::new(
+    let wrong_owner = covalent_protocol::SyncEngineBinding::new_authenticated(
         stranger.engine.device_id(),
         second.installation.device_id().as_str(),
+        &second.installation.identity().ssh_public_key().unwrap(),
         "127.0.0.1:54307",
     )
     .unwrap();
@@ -422,12 +443,7 @@ async fn invalid_address_refresh_keeps_worker_and_failed_reap_keeps_core_old() {
     assert_eq!(unchanged.stop_calls, before.stop_calls);
     assert_eq!(unchanged.active, 1);
 
-    let valid = covalent_protocol::SyncEngineBinding::new(
-        second.engine.device_id(),
-        second.installation.device_id().as_str(),
-        "127.0.0.1:54307",
-    )
-    .unwrap();
+    let valid = second.engine_binding("127.0.0.1:54307");
     first_backend.push_stop(TestStopBehavior::StillStopping);
     assert_eq!(
         source
@@ -466,12 +482,7 @@ async fn grant_change_while_worker_reaps_rejects_the_prepared_address_transition
     let expected_grant = first.grant(second.engine.device_id());
     let mut candidate = expected.clone();
     candidate.address = "127.0.0.1:54309".into();
-    let candidate_engine = covalent_protocol::SyncEngineBinding::new(
-        second.engine.device_id(),
-        second.installation.device_id().as_str(),
-        "127.0.0.1:54310",
-    )
-    .unwrap();
+    let candidate_engine = second.engine_binding("127.0.0.1:54310");
     let peer_id = second.engine.device_id();
     let gate = Arc::new(Notify::new());
     first_backend.push_stop(TestStopBehavior::Wait(Arc::clone(&gate)));
@@ -540,12 +551,7 @@ async fn provider_persistence_failure_keeps_the_address_barrier_until_exact_retr
     let expected_grant = first.grant(second.engine.device_id());
     let mut candidate = expected.clone();
     candidate.address = "127.0.0.1:54311".into();
-    let candidate_engine = covalent_protocol::SyncEngineBinding::new(
-        second.engine.device_id(),
-        second.installation.device_id().as_str(),
-        "127.0.0.1:54312",
-    )
-    .unwrap();
+    let candidate_engine = second.engine_binding("127.0.0.1:54312");
     service
         .refresh_peer_address(
             second.engine.device_id(),
@@ -1044,6 +1050,23 @@ async fn signed_consent_launches_only_after_both_durable_decisions() {
     let commit_record = commit.into_value();
     let target = second_service
         .receive_commit(offer.offer_id, commit_record.clone())
+        .await
+        .unwrap();
+    assert_eq!(target.lifecycle(), FolderSyncLifecycle::Stopped);
+    assert_eq!(second_backend.snapshot().launches, 0);
+    let settings = first_service
+        .outbound_records()
+        .await
+        .unwrap()
+        .into_value()
+        .into_iter()
+        .find_map(|delivery| match delivery.record {
+            FolderShareRecord::SettingsCommit(commit) => Some(commit),
+            _ => None,
+        })
+        .unwrap();
+    let target = second_service
+        .receive_link_settings_commit(&settings)
         .await
         .unwrap();
     assert_eq!(target.lifecycle(), FolderSyncLifecycle::Running);
@@ -2081,7 +2104,7 @@ async fn folder_offer_api_preserves_shared_pause_and_rejects_other_setting_misma
 }
 
 #[tokio::test]
-async fn manual_batch_waits_for_fresh_scan_and_current_connected_completion_then_reaps_workers() {
+async fn manual_batch_waits_for_fresh_scan_and_exact_completion_then_reaps_workers() {
     use super::connection::EnginePeerConnectionState;
     use super::run_observation::EngineRunObservation;
     let first = Device::new("Source", 44501);
@@ -2294,13 +2317,10 @@ async fn manual_batch_waits_for_fresh_scan_and_current_connected_completion_then
     );
     target_backend.set_connection_states(vec![EnginePeerConnectionState::Disconnected]);
     target.advance_runs_for_test().await;
-    assert_eq!(target_backend.snapshot().active, 1);
-    target_backend.set_connection_states(vec![EnginePeerConnectionState::Connected]);
-    target.advance_runs_for_test().await;
     assert_eq!(
         target_backend.snapshot().active,
         0,
-        "durable completion stops target before report ACK"
+        "exact durable completion stops target before report ACK"
     );
     let report = target
         .outbound_records()
