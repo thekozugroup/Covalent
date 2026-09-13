@@ -455,6 +455,16 @@
     return describeTransport(error, context);
   }
 
+  async function initializeUnlockedConsole({ authorize, initializeLinks, refreshPairings, onLinksError }) {
+    await authorize();
+    try {
+      await initializeLinks();
+    } catch (error) {
+      onLinksError(error);
+    }
+    await refreshPairings();
+  }
+
   const nodeErrorCopy = Object.freeze({
     CATALOG,
     RECOVERY,
@@ -464,6 +474,7 @@
     describeApi,
     describeProtocol,
     describeTransport,
+    initializeUnlockedConsole,
   });
   scope.CovalentNodeErrorCopy = nodeErrorCopy;
   if (typeof module === "object" && module.exports) module.exports = nodeErrorCopy;
@@ -480,38 +491,12 @@ const message = $("[data-message]");
 const messageDetails = $("[data-message-details]");
 const messageDetail = $("[data-message-detail]");
 let token = "";
-let restorePlan = null;
-let restorePage = null;
-let restoreCursor = null;
-let restoreCursorHistory = [];
-let activeRestorePreviewRevision = 0;
 let networkPairing = null;
 let networkPoll = null;
-let providerConnections = [];
-let manualProviderConfirmation = null;
-let backupSubmissionInFlight = false;
-let failedBackupAttempt = null;
-let verificationInFlight = false;
-let rememberedRestoreChoices = [];
-let restoreExecutionInFlight = false;
 const pairing = globalThis.CovalentPairingFlow;
-const restore = globalThis.CovalentRestorePlanFlow;
-const restorePreview = globalThis.CovalentRestorePreviewFlow.coordinator();
-const backupTerminal = globalThis.CovalentBackupTerminalFlow;
-const backupVerification = globalThis.CovalentBackupVerification;
-const backupSelection = globalThis.CovalentBackupSelectionFlow;
-const recovery = globalThis.CovalentRecoveryFlow;
-const recoverySession = recovery.session();
-let recoveryGeneration = 0;
-let recoveryStatusInFlight = false;
 const tabFlow = globalThis.CovalentTabFlow;
 const errorCopy = globalThis.CovalentNodeErrorCopy;
 const folderSync = globalThis.CovalentFolderSyncFlow;
-const pairingStorageKey = "covalent.pairing-session.v1";
-const backupServerContext = backupTerminal.requireContext({
-  origin: globalThis.location.origin,
-  protocolVersion: PROTOCOL_VERSION,
-});
 let folderDeviceId = null;
 const folderController = folderSync.coordinator({
   api: folderApi,
@@ -522,6 +507,10 @@ const folderController = folderSync.coordinator({
 
 function folderApi(path, options) {
   return api(path, options, folderSync.readJson);
+}
+
+function formData(form) {
+  return new FormData(form);
 }
 
 class NodeApiError extends Error {
@@ -1150,23 +1139,13 @@ function pairedDeviceItem(peer) {
       : "Retrying the exact saved address request…";
     input.disabled = true;
     try {
-      const completion = await folderSync.refreshPeerAddressAndProviders(
-        folderController,
-        peer.peerId,
-        input.value,
-        loadProviders,
-      );
-      state.textContent = "Address verified and saved. Checking whether the device is reachable.";
+      await folderController.refreshPeerAddress(peer.peerId, input.value);
+      state.textContent = "Address verified and saved.";
       submit.textContent = "Verify and save";
       form.hidden = true;
       update.setAttribute("aria-expanded", "false");
       update.focus();
-      say("Address verified and saved. Covalent is checking the device connection.");
-      if (completion.providerError !== null) {
-        const failure = errorCopy.describe(completion.providerError);
-        console.debug("Covalent provider refresh failed after saving an address", completion.providerError);
-        say(`Address verified and saved. ${failure.summary}`, true, failure.detail);
-      }
+      say("Address verified and saved for this paired device.");
     } catch (error) {
       if (folderController.pendingPeerAddressRefresh()?.peerId === peer.peerId) {
         submit.textContent = "Retry saved update";
@@ -1374,289 +1353,6 @@ function clearFolderSyncAccess() {
   empty.textContent = "Unlock the console to load paired devices.";
 }
 
-function backupSummaryCopy(backup) {
-  const snapshots = `${backup.snapshotCount} retained snapshot${backup.snapshotCount === 1 ? "" : "s"}`;
-  if (!backup.latestSnapshotId) return `${backup.name} — no completed snapshots yet.`;
-  const selected = backup.selectedProviderIds.length;
-  const protection = selected === 0
-    ? "Local only; it will not protect against losing this device."
-    : `${selected} selected extra backup device${selected === 1 ? "" : "s"}.`;
-  return `${backup.name} — ${snapshots}; ${protection}`;
-}
-
-async function loadBackups() {
-  if (!token) return;
-  const [backups, receipt] = await Promise.all([
-    api("/api/v1/backups"),
-    backupTerminal.load(globalThis.localStorage, backupServerContext).catch(() => null),
-  ]);
-  rememberedRestoreChoices = backupSelection.choices(backups, receipt);
-  renderRestoreChoices(rememberedRestoreChoices);
-  const list = $("[data-backups-list]");
-  list.replaceChildren();
-  backups.forEach((backup) => {
-    const item = document.createElement("li");
-    item.textContent = backupSummaryCopy(backup);
-    if (backup.latestSnapshotId) {
-      const actions = document.createElement("div");
-      actions.className = "button-row";
-      const verifyButton = document.createElement("button");
-      verifyButton.type = "button";
-      verifyButton.className = "secondary";
-      verifyButton.dataset.backupVerify = "";
-      verifyButton.textContent = "Verify backup";
-      verifyButton.setAttribute("aria-label", `Verify ${backup.name}`);
-      verifyButton.disabled = verificationInFlight;
-      const verificationStatus = document.createElement("p");
-      verificationStatus.setAttribute("role", "status");
-      verificationStatus.setAttribute("aria-live", "polite");
-      verifyButton.addEventListener("click", () => verifyBackup(backup, verificationStatus, verifyButton));
-      actions.append(verifyButton);
-      item.append(actions, verificationStatus);
-    }
-    list.append(item);
-  });
-  $("[data-backups-empty]").hidden = backups.length > 0;
-  if (backups.length === 0) $("[data-backups-empty]").textContent = "No remembered backups on this node.";
-}
-
-function restoreIdentifierInputs() {
-  const form = $("[data-restore-preview]");
-  return {
-    backupId: form.elements.namedItem("backupId"),
-    snapshotId: form.elements.namedItem("snapshotId"),
-  };
-}
-
-function invalidateRestorePreview() {
-  restorePreview.invalidate();
-  activeRestorePreviewRevision = 0;
-  const previous = restorePlan;
-  clearRestorePreview();
-  return previous;
-}
-
-function discardRestorePreviewForChangedInput() {
-  const previous = invalidateRestorePreview();
-  if (previous) {
-    void restore.discard(api, previous).catch((error) => fail(error));
-  }
-}
-
-function restoreChoiceHelp(choice = null) {
-  const help = $("[data-restore-choice-help]");
-  help.textContent = choice === null
-    ? (rememberedRestoreChoices.length === 0
-      ? "No completed remembered backups are available. Open Manual recovery only when you have exact identifiers."
-      : "Choose a completed backup to use its latest snapshot, or open Manual recovery when you have exact identifiers.")
-    : `${choice.label}. ${choice.detail}`;
-}
-
-function renderRestoreChoices(choices) {
-  const select = $("[data-restore-choice]");
-  const selectedKey = select.value;
-  select.replaceChildren();
-  const placeholder = document.createElement("option");
-  placeholder.value = "";
-  placeholder.textContent = choices.length === 0 ? "No completed backups available" : "Choose a completed backup";
-  select.append(placeholder);
-  for (const choice of choices) {
-    const option = document.createElement("option");
-    option.value = choice.key;
-    option.textContent = choice.label;
-    select.append(option);
-  }
-  select.disabled = choices.length === 0;
-  const preserved = choices.find((choice) => choice.key === selectedKey) ?? null;
-  if (preserved !== null) {
-    select.value = preserved.key;
-    restoreChoiceHelp(preserved);
-    return;
-  }
-  select.value = "";
-  restoreChoiceHelp();
-  if (selectedKey !== "") {
-    const identifiers = restoreIdentifierInputs();
-    identifiers.backupId.value = "";
-    identifiers.snapshotId.value = "";
-    discardRestorePreviewForChangedInput();
-  }
-}
-
-async function verifyBackup(backup, status, trigger) {
-  if (!requireUnlocked() || verificationInFlight) return;
-  verificationInFlight = true;
-  const list = $("[data-backups-list]");
-  list.setAttribute("aria-busy", "true");
-  document.querySelectorAll("[data-backup-verify]").forEach((button) => { button.disabled = true; });
-  status.textContent = "Checking this backup and its selected copies…";
-  try {
-    const result = await backupVerification.verify(api, backup);
-    status.textContent = result.summary;
-    say(result.summary, !result.intact);
-  } catch (error) {
-    status.textContent = errorCopy.describe(error).summary;
-    fail(error);
-  } finally {
-    verificationInFlight = false;
-    list.setAttribute("aria-busy", "false");
-    document.querySelectorAll("[data-backup-verify]").forEach((button) => { button.disabled = false; });
-    // Disabling the active control can move keyboard focus to the page body.
-    // Restore it only if the user has not moved elsewhere while waiting.
-    if (trigger.isConnected && document.activeElement === document.body) trigger.focus();
-  }
-}
-
-function formatBytes(bytes) {
-  const units = ["bytes", "KiB", "MiB", "GiB", "TiB", "PiB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return unit === 0 ? `${value} ${units[unit]}` : `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unit]}`;
-}
-
-function renderProviders(providers) {
-  const form = $("[data-backup-form]");
-  const previouslySelected = new Set(selected(form, "providers"));
-  const list = $("[data-providers-list]");
-  const empty = $("[data-providers-empty]");
-  list.replaceChildren();
-  for (const provider of providers) {
-    const availability = pairing.providers.availability(provider);
-    const item = document.createElement("li");
-    const label = document.createElement("label");
-    const choice = document.createElement("input");
-    choice.type = "checkbox";
-    choice.name = "providers";
-    choice.value = provider.peerId;
-    choice.disabled = !availability.eligible;
-    choice.checked = availability.eligible && previouslySelected.has(provider.peerId);
-    const details = document.createElement("span");
-    const name = document.createElement("strong");
-    name.textContent = provider.displayName;
-    const identity = document.createElement("code");
-    identity.textContent = provider.peerId;
-    const status = document.createElement("span");
-    if (availability.eligible) {
-      status.textContent = `Ready — ${formatBytes(provider.usableBytes)} usable; ${formatBytes(provider.allocatedBytes)} allocated of ${formatBytes(provider.quotaBytes)}.`;
-    } else {
-      status.textContent = availability.status;
-    }
-    details.append(name, document.createElement("br"), identity, document.createElement("br"), status);
-    label.append(choice, details);
-    item.append(label);
-    list.append(item);
-  }
-  empty.hidden = providers.length > 0;
-  if (providers.length === 0) {
-    empty.textContent = "No connected backup devices yet. Pair one first, or make a local-only copy.";
-  }
-}
-
-async function loadProviders() {
-  if (!token) return [];
-  providerConnections = await pairing.providers.listNamed(api);
-  renderProviders(providerConnections);
-  return providerConnections;
-}
-
-function formData(form) { return new FormData(form); }
-function selected(form, name) { return [...form.querySelectorAll(`[name="${name}"]:checked`)].map((input) => input.value); }
-function randomId(prefix) { return `${prefix}-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`; }
-function display(value) { return JSON.stringify(value, null, 2); }
-
-function updateAutomaticBackupName() {
-  const form = $("[data-backup-form]");
-  const field = form.elements.namedItem("displayName");
-  if (field.dataset.automaticName !== "true" && field.value.trim() !== "") return;
-  field.value = backupSelection.defaultBackupName(form.elements.namedItem("sourceRoot").value);
-  field.dataset.automaticName = "true";
-}
-
-function clearGeneratedSnapshotId() {
-  const field = $("[data-backup-form]").elements.namedItem("snapshotId");
-  if (field.dataset.generatedSnapshot === "true") {
-    field.value = "";
-    delete field.dataset.generatedSnapshot;
-  }
-}
-
-function renderRestorePage(page, entries) {
-  restorePage = page;
-  const first = page.entries.length === 0 ? 0 : page.entryOffset + 1;
-  const last = page.entryOffset + page.entries.length;
-  $("[data-restore-summary]").textContent = restorePlan.totalEntries
-    + " items will be handled in " + restorePlan.authorizedRoot
-    + ". Showing " + first + "–" + last + ".";
-  const list = $("[data-restore-plan]");
-  list.replaceChildren();
-  entries.forEach((entry) => {
-    const item = document.createElement("li");
-    const action = document.createElement("strong");
-    action.textContent = entry.action;
-    const destinationLabel = document.createElement("span");
-    destinationLabel.textContent = " Destination: ";
-    const destination = document.createElement("code");
-    destination.textContent = entry.destination;
-    item.append(action, destinationLabel, destination);
-    if (entry.renamed) {
-      const sourceLabel = document.createElement("span");
-      sourceLabel.textContent = " Original backup path: ";
-      const source = document.createElement("code");
-      source.textContent = entry.source;
-      item.append(sourceLabel, source);
-    }
-    list.append(item);
-  });
-  $("[data-restore-previous]").disabled = restoreCursorHistory.length === 0;
-  $("[data-restore-next]").disabled = page.nextCursor === null;
-}
-
-async function loadRestorePage(cursor, rememberCurrent = false) {
-  const plan = restorePlan;
-  const revision = activeRestorePreviewRevision;
-  if (!plan || revision === 0) return;
-  let page;
-  try {
-    page = await restore.page(api, plan, cursor, 100);
-  } catch (error) {
-    if (restorePreview.isCurrentPlan(revision, plan, restorePlan)) throw error;
-    return;
-  }
-  if (!restorePreview.isCurrentPlan(revision, plan, restorePlan)) return;
-  let entries;
-  try {
-    entries = restore.describePage(page, plan.authorizedRoot);
-  } catch (error) {
-    const previous = invalidateRestorePreview();
-    if (previous) void restore.discard(api, previous).catch((discardError) => fail(discardError));
-    throw error;
-  }
-  if (rememberCurrent) restoreCursorHistory.push(restoreCursor);
-  restoreCursor = cursor;
-  renderRestorePage(page, entries);
-}
-
-function clearRestorePreview() {
-  restorePlan = null;
-  restorePage = null;
-  restoreCursor = null;
-  restoreCursorHistory = [];
-  $("[data-restore-result]").hidden = true;
-  $("[data-restore-confirm]").checked = false;
-  $("[data-restore-execute]").disabled = true;
-}
-
-// ------------------------------------------------------------ network pairing
-//
-// The same four steps the phone and Mac apps use: look for devices, start with
-// one, compare the short code on both screens, confirm. The node runs the
-// exchange itself, so nothing signed passes through this browser and there is
-// no JSON to copy anywhere on this path.
-
 function requireUnlocked() {
   if (token) return true;
   say("Unlock the console with the local access token first.", true);
@@ -1735,7 +1431,7 @@ async function refreshNetworkPairings() {
     const priorState = networkPairing.state;
     const updated = pending.find((item) => item.pairingId === networkPairing.pairingId);
     renderNetworkPairing(updated ?? null);
-    if (updated?.state === "complete" && priorState !== "complete") await loadProviders();
+    if (updated?.state === "complete" && priorState !== "complete") await loadFolders(false);
     return;
   }
   // An incoming request is the other device asking to pair with this one; it is
@@ -1743,7 +1439,7 @@ async function refreshNetworkPairings() {
   const incoming = pending.find((item) => item.direction === "incoming" && item.state !== "failed");
   if (incoming !== undefined) {
     renderNetworkPairing(incoming);
-    if (incoming.state === "complete") await loadProviders();
+    if (incoming.state === "complete") await loadFolders(false);
   }
 }
 
@@ -1756,18 +1452,16 @@ async function startNetworkPairing(candidateAddress) {
 }
 
 $("[data-token-form]").addEventListener("submit", async (event) => {
-  closeRecoveryFiles();
   event.preventDefault();
   token = formData(event.currentTarget).get("token").trim();
   try {
-    await api("/api/v1/config/export", { method: "POST" });
-    await loadBackups();
-    await loadProviders();
-    await refreshNetworkPairings();
-    try { await initializeFolderSync(); }
-    catch (error) { clearFolderSyncAccess(); renderFolderError(error); }
-    const resumedBackup = await resumeBackupTerminalReceipt();
-    if (!resumedBackup) say("Console unlocked for this tab only.");
+    await errorCopy.initializeUnlockedConsole({
+      authorize: () => api("/api/v1/config/export", { method: "POST" }),
+      initializeLinks: initializeFolderSync,
+      refreshPairings: refreshNetworkPairings,
+      onLinksError(error) { clearFolderSyncAccess(); renderFolderError(error); },
+    });
+    say("Console unlocked for this tab only.");
   }
   catch (error) { token = ""; clearFolderSyncAccess(); fail(error); }
 });
@@ -1775,7 +1469,7 @@ $("[data-token-form]").addEventListener("submit", async (event) => {
 $("[data-refresh]").addEventListener("click", async () => {
   await loadStatus();
   if (!token) return;
-  try { await Promise.all([loadBackups(), loadProviders(), loadFolders(false)]); }
+  try { await Promise.all([loadFolders(false), refreshNetworkPairings()]); }
   catch (error) { fail(error); }
 });
 $("[data-folders-refresh]").addEventListener("click", async () => {
@@ -1859,17 +1553,8 @@ $('[data-link-run-discard]').addEventListener("click", () => {
     say("Saved Run Now retry discarded. No new run request was sent.");
   } catch (error) { fail(error); }
 });
-$("[data-backups-refresh]").addEventListener("click", async () => {
-  try { await loadBackups(); say("Backup list refreshed from the node."); }
-  catch (error) { fail(error); }
-});
-$("[data-providers-refresh]").addEventListener("click", async () => {
-  if (!requireUnlocked()) return;
-  try { await loadProviders(); say("Connected backup devices and capacity refreshed from the node."); }
-  catch (error) { fail(error); }
-});
 tabFlow.install(document);
-document.querySelectorAll("[data-tab], [data-tool-panel]").forEach((tab) => {
+document.querySelectorAll("[data-tab]").forEach((tab) => {
   tab.addEventListener("click", () => queueMicrotask(() => syncFolderPolling(true)));
   tab.addEventListener("keydown", () => queueMicrotask(() => syncFolderPolling(true)));
 });
@@ -1900,9 +1585,9 @@ $("[data-network-confirm]").addEventListener("click", async () => {
   try {
     const confirmed = await pairing.network.confirm(api, networkPairing);
     renderNetworkPairing(confirmed);
-    if (confirmed.state === "complete") await loadProviders();
+    if (confirmed.state === "complete") await loadFolders(false);
     say(confirmed.state === "complete"
-      ? "Backup device added. Its signed identity and current capacity are now available in the Backup tab."
+      ? "Device paired. Its signed identity is now available for one-way links."
       : "Confirmed here. Waiting for the other device.");
   } catch (error) { fail(error); }
 });
@@ -1919,491 +1604,8 @@ $("[data-network-cancel]").addEventListener("click", async () => {
   catch (error) { fail(error); }
 });
 
-$("[data-pair-create]").addEventListener("submit", async (event) => {
-  event.preventDefault(); const data = formData(event.currentTarget);
-  try {
-    const invitation = await api("/api/v1/pair/invitations", { method: "POST", body: JSON.stringify({ endpoints: [data.get("endpoint")], lifetimeMs: Number(data.get("minutes")) * 60000 }) });
-    say(`Invitation created. Copy this JSON to the other device:\n${display(invitation)}`);
-  } catch (error) { fail(error); }
-});
-
-$("[data-pair-accept]").addEventListener("submit", async (event) => {
-  event.preventDefault(); const data = formData(event.currentTarget);
-  try {
-    const session = await api("/api/v1/pair/accept", { method: "POST", body: JSON.stringify({ invitation: JSON.parse(data.get("invitation")), responderName: data.get("name"), responderRoles: selected(event.currentTarget, "responderRole"), inviterRoles: selected(event.currentTarget, "inviterRole") }) });
-    const details = showPairingSession(session);
-    say(`Compare identities, exact roles, and this code on both devices: ${details.code}\nThe accepted session is preserved below. Add one confirmation, then send the updated JSON to the other device.`);
-  } catch (error) { fail(error); }
-});
-
-$("[data-pair-confirm]").addEventListener("submit", async (event) => {
-  event.preventDefault(); const data = formData(event.currentTarget); const submitter = event.submitter;
-  try {
-    const session = JSON.parse(data.get("session")); const side = submitter.value;
-    if (submitter.dataset.pairAction === "confirm") {
-      const confirmed = await pairing.confirm(api, session, side, data.get("code"));
-      const details = showPairingSession(confirmed);
-      say(details.mutuallyConfirmed
-        ? `Both signed confirmations are present. Send this exact session to the other device, then finalize on each device:\n${display(confirmed)}`
-        : `This device signed the exchange. Finalize is still locked. Send this updated session to the other device for its confirmation:\n${display(confirmed)}`);
-      return;
-    }
-    const confirmation = await pairing.finalize(api, session, side);
-    clearPairingSession();
-    if (showManualProviderActivation(confirmation)) {
-      say("Pairing finalized on this device. Review the signed backup-device connection below before adding it.");
-    } else {
-      say("Pairing finalized on this device. The other device must finalize the same mutually signed session. This pairing did not grant a backup-device role here.");
-    }
-  } catch (error) { fail(error); }
-});
-$("[data-pair-confirm] [name=session]").addEventListener("input", (event) => {
-  try { showPairingSession(JSON.parse(event.currentTarget.value)); } catch (_) {
-    $("[data-pair-consent]").hidden = true;
-    $("[data-pair-confirm]").querySelectorAll("[data-pair-action=finalize]").forEach((button) => { button.disabled = true; });
-  }
-});
-$("[data-pair-clear]").addEventListener("click", () => { clearPairingSession(); say("Pairing exchange cleared from this browser tab."); });
-
-function clearManualProviderActivation() {
-  manualProviderConfirmation = null;
-  $("[data-manual-provider-card]").hidden = true;
-}
-
-function showManualProviderActivation(confirmation) {
-  if (!confirmation || confirmation.peerTransport === null || confirmation.peerTransport === undefined) {
-    clearManualProviderActivation();
-    return false;
-  }
-  const transport = pairing.providers.finalizedTransport(confirmation);
-  manualProviderConfirmation = confirmation;
-  $("[data-manual-provider-summary]").textContent = `${transport.displayName} · immutable ID ${transport.peerId}`;
-  $("[data-manual-provider-connect]").disabled = false;
-  $("[data-manual-provider-card]").hidden = false;
-  return true;
-}
-
-$("[data-manual-provider-connect]").addEventListener("click", async () => {
-  if (!requireUnlocked() || manualProviderConfirmation === null) return;
-  const button = $("[data-manual-provider-connect]");
-  button.disabled = true;
-  try {
-    const activation = await pairing.providers.activate(api, manualProviderConfirmation);
-    providerConnections = activation.providers;
-    renderProviders(providerConnections);
-    const availability = pairing.providers.availability(activation.provider);
-    say(availability.eligible
-      ? "Backup device connected and ready to select in the Backup tab."
-      : `Backup device was connected, but ${availability.status}`);
-  } catch (error) {
-    button.disabled = false;
-    fail(error);
-  }
-});
-
-function setBackupSubmissionState(state, detail = "") {
-  const form = $("[data-backup-form]");
-  const submit = $("[data-backup-submit]");
-  const retry = $("[data-backup-retry]");
-  const status = $("[data-backup-status]");
-  const inFlight = state === "starting" || state === "acknowledging";
-  const confirmationPending = state === "ack_failed" || state === "receipt_blocked" || state === "lock_busy";
-  backupSubmissionInFlight = inFlight;
-  form.setAttribute("aria-busy", String(inFlight));
-  form.querySelectorAll("input, textarea, button").forEach((control) => {
-    if (control !== retry) control.disabled = inFlight || confirmationPending;
-  });
-  submit.textContent = state === "starting" ? "Starting backup…"
-    : state === "acknowledging" ? "Confirming receipt…"
-      : "Start backup";
-  retry.hidden = state !== "failed" && state !== "ack_failed" && state !== "lock_busy";
-  retry.textContent = state === "ack_failed" ? "Confirm receipt"
-    : state === "lock_busy" ? "Check again"
-      : "Try again";
-  retry.disabled = inFlight;
-  status.textContent = detail;
-  status.classList.toggle(
-    "error",
-    state === "failed" || state === "ack_failed" || state === "receipt_blocked" || state === "lock_busy",
-  );
-}
-
-function withBackupTerminalLock(callback) {
-  return backupTerminal.withExclusiveLock(callback, globalThis.navigator?.locks);
-}
-
-function newBackupAttempt(form) {
-  const data = formData(form);
-  const snapshotField = form.elements.namedItem("snapshotId");
-  const suppliedSnapshot = String(data.get("snapshotId") ?? "").trim();
-  const snapshotId = suppliedSnapshot || backupSelection.nextSnapshotId(() => crypto.randomUUID());
-  if (suppliedSnapshot === "") snapshotField.dataset.generatedSnapshot = "true";
-  snapshotField.value = snapshotId;
-  return backupTerminal.requireAttempt({
-    sourceRoot: data.get("sourceRoot"),
-    displayName: data.get("displayName"),
-    snapshotId,
-    selectedProviderIds: pairing.providers.selectedIds(providerConnections, selected(form, "providers")),
-    // Retry reuses this ID if a response was interrupted after acceptance.
-    jobId: randomId("backup"),
-  });
-}
-
-function backupCompletionCopy(result, attempt) {
-  const name = typeof attempt?.displayName === "string" && attempt.displayName.length > 0
-    ? attempt.displayName
-    : "Backup";
-  const items = `${result.entries} item${result.entries === 1 ? "" : "s"}`;
-  const protection = result.selectedProviders === 0
-    ? "This is a local-only backup, so it does not protect against losing this device."
-    : `${result.selectedProviders} selected extra backup device${result.selectedProviders === 1 ? "" : "s"} received a copy.`;
-  return `Backup complete: ${name} — ${items}. ${protection}`;
-}
-
-async function requestBackupTerminalResult(attempt) {
-  const response = await apiResponse("/api/v1/backups", {
-    method: "POST",
-    body: JSON.stringify(attempt),
-  });
-  const acknowledgement = response.headers.get("x-covalent-job-ack-required");
-  if (acknowledgement !== "true") {
-    throw backupTerminal.guidance("This backup response had an invalid receipt-confirmation instruction, so it was not accepted.");
-  }
-  return {
-    result: response.body,
-    acknowledgementRequired: true,
-  };
-}
-
-async function refreshBackupsAfterTerminalResult(complete) {
-  try { await loadBackups(); }
-  catch (error) {
-    setBackupSubmissionState("complete", `${complete} The list could not refresh: ${errorCopy.describe(error).summary}`);
-  }
-}
-
-async function acknowledgeBackupTerminalReceipt(receipt = null) {
-  if (receipt === null) {
-    receipt = await backupTerminal.load(globalThis.localStorage, backupServerContext);
-  }
-  if (receipt === null || receipt.phase !== "receipt") return false;
-  const complete = backupCompletionCopy(receipt.result, receipt.attempt);
-  // The decoded result is already rendered below before this function is
-  // called. Only now may the terminal server result be acknowledged.
-  setBackupSubmissionState("acknowledging", `${complete} Confirming this receipt with the backup server…`);
-  try {
-    await backupTerminal.acknowledge(
-      globalThis.localStorage,
-      backupServerContext,
-      apiResponse,
-    );
-    clearGeneratedSnapshotId();
-    setBackupSubmissionState("complete", `${complete} Receipt confirmed.`);
-    await refreshBackupsAfterTerminalResult(complete);
-    return true;
-  } catch (error) {
-    setBackupSubmissionState(
-      "ack_failed",
-      `${complete} Covalent could not confirm receipt yet. Use Confirm receipt to retry the same completed backup.`,
-    );
-    const failure = errorCopy.describe(error);
-    say(`Backup completed, but its receipt still needs confirmation. ${failure.summary}`, true, failure.detail);
-    return false;
-  }
-}
-
-async function resumeBackupTerminalReceipt() {
-  try {
-    return await withBackupTerminalLock(async () => {
-      const pending = await backupTerminal.load(globalThis.localStorage, backupServerContext);
-      if (pending === null) return false;
-      if (pending.phase === "request") {
-        failedBackupAttempt = pending.attempt;
-        setBackupSubmissionState(
-          "failed",
-          "A previous backup request may have reached the server. Use Try again to resume the same backup job safely.",
-        );
-        return true;
-      }
-      failedBackupAttempt = null;
-      const complete = backupCompletionCopy(pending.result, pending.attempt);
-      setBackupSubmissionState("complete", `${complete} Resuming receipt confirmation…`);
-      say(`${complete} Resuming receipt confirmation.`);
-      await acknowledgeBackupTerminalReceipt(pending);
-      return true;
-    });
-  } catch (error) {
-    setBackupSubmissionState(
-      error?.covalentBackupLockFailure === "busy" ? "lock_busy" : "receipt_blocked",
-      error?.covalentBackupLockFailure === "busy"
-        ? "Another tab is handling the durable backup receipt. Use Check again after that tab closes."
-        : "A durable backup receipt cannot be verified or locked. Covalent kept it and blocked new backups to protect the server result.",
-    );
-    fail(error);
-    return true;
-  }
-}
-
-async function submitBackupLocked(attempt) {
-  failedBackupAttempt = null;
-  setBackupSubmissionState("starting", "Starting backup. Covalent is asking the backup server to read the selected folder.");
-  const receipt = await backupTerminal.submit(
-    globalThis.localStorage,
-    backupServerContext,
-    attempt,
-    requestBackupTerminalResult,
-  );
-  const complete = backupCompletionCopy(receipt.result, receipt.attempt);
-  setBackupSubmissionState("complete", complete);
-  say(complete);
-  // The exclusive same-origin lock remains held while the checked result is
-  // rendered and until the exact receipt is acknowledged or safely retained.
-  if (receipt.phase === "receipt") {
-    await acknowledgeBackupTerminalReceipt(receipt);
-  } else {
-    await refreshBackupsAfterTerminalResult(complete);
-  }
-}
-
-async function handleBackupTerminalFailure(error, attempt) {
-  if (error?.covalentBackupLockFailure) {
-    failedBackupAttempt = null;
-    const busy = error.covalentBackupLockFailure === "busy";
-    setBackupSubmissionState(
-      busy ? "lock_busy" : "receipt_blocked",
-      busy
-        ? "Another tab is handling a backup. Use Check again after that tab closes."
-        : "This browser cannot lock durable backup work across tabs, so no backup was sent.",
-    );
-    fail(error);
-    return;
-  }
-  let durableReceiptBlocked = false;
-  try {
-    await withBackupTerminalLock(() => backupTerminal.load(globalThis.localStorage, backupServerContext));
-  } catch (_) { durableReceiptBlocked = true; }
-  failedBackupAttempt = durableReceiptBlocked ? null : attempt;
-  setBackupSubmissionState(
-    durableReceiptBlocked ? "receipt_blocked" : "failed",
-    durableReceiptBlocked
-      ? "A durable backup receipt cannot be verified. Covalent kept it and blocked new backups to protect the server result."
-      : `Backup needs attention. ${errorCopy.describe(error).summary} Try again when ready.`,
-  );
-  fail(error);
-}
-
-async function submitBackup(attempt) {
-  if (backupSubmissionInFlight) return;
-  try {
-    await withBackupTerminalLock(() => submitBackupLocked(attempt));
-  } catch (error) {
-    await handleBackupTerminalFailure(error, attempt);
-  }
-}
-
-$("[data-backup-form]").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (backupSubmissionInFlight) return;
-  try { await submitBackup(newBackupAttempt(event.currentTarget)); }
-  catch (error) { fail(error); }
-});
-$("[data-backup-form]").elements.namedItem("sourceRoot").addEventListener("input", updateAutomaticBackupName);
-$("[data-backup-form]").elements.namedItem("displayName").addEventListener("input", (event) => {
-  event.currentTarget.dataset.automaticName = "false";
-});
-$("[data-backup-form]").elements.namedItem("snapshotId").addEventListener("input", (event) => {
-  delete event.currentTarget.dataset.generatedSnapshot;
-});
-updateAutomaticBackupName();
-$("[data-backup-retry]").addEventListener("click", async () => {
-  if (backupSubmissionInFlight) return;
-  try {
-    await withBackupTerminalLock(async () => {
-      const pending = await backupTerminal.load(globalThis.localStorage, backupServerContext);
-      if (pending?.phase === "receipt") {
-        await acknowledgeBackupTerminalReceipt(pending);
-        return;
-      }
-      const retryAttempt = pending?.phase === "request" ? pending.attempt : failedBackupAttempt;
-      if (retryAttempt !== null && retryAttempt !== undefined) {
-        await submitBackupLocked(retryAttempt);
-      } else {
-        setBackupSubmissionState("complete", "No pending backup receipt remains in this browser.");
-        await loadBackups();
-      }
-    });
-  } catch (error) { await handleBackupTerminalFailure(error, failedBackupAttempt); }
-});
-
-$("[data-restore-preview]").addEventListener("submit", async (event) => {
-  event.preventDefault(); const data = formData(event.currentTarget);
-  const previewRevision = restorePreview.begin();
-  let candidate = null;
-  try {
-    const previous = restorePlan;
-    const selectedBackup = backupSelection.resolve(rememberedRestoreChoices, data.get("rememberedRestore"), {
-      backupId: data.get("backupId"), snapshotId: data.get("snapshotId"),
-    });
-    candidate = restore.requireReference(await api("/api/v1/restores/preview", { method: "POST", body: JSON.stringify({ backupId: selectedBackup.backupId, snapshotId: selectedBackup.snapshotId, targetRoot: data.get("targetRoot"), conflictPolicy: data.get("conflictPolicy"), jobId: randomId("restore") }) }));
-    if (await restorePreview.discardIfStale(previewRevision, candidate, (plan) => restore.discard(api, plan))) return;
-    const firstPage = await restore.page(api, candidate, null, 100);
-    if (await restorePreview.discardIfStale(previewRevision, candidate, (plan) => restore.discard(api, plan))) return;
-    const firstEntries = restore.describePage(firstPage, candidate.authorizedRoot);
-    if (previous) await restore.discard(api, previous).catch(() => {});
-    if (await restorePreview.discardIfStale(previewRevision, candidate, (plan) => restore.discard(api, plan))) return;
-    restorePlan = candidate;
-    activeRestorePreviewRevision = previewRevision;
-    restoreCursor = null; restoreCursorHistory = [];
-    renderRestorePage(firstPage, firstEntries);
-    $("[data-restore-result]").hidden = false; $("[data-restore-confirm]").checked = false; $("[data-restore-execute]").disabled = true;
-    say("Preview complete. Review the target and conflict actions before authorizing the write.");
-  } catch (error) { if (candidate) await restore.discard(api, candidate).catch(() => {}); fail(error); }
-});
-$("[data-restore-choice]").addEventListener("change", (event) => {
-  const selectedChoice = rememberedRestoreChoices.find((choice) => choice.key === event.currentTarget.value) ?? null;
-  const identifiers = restoreIdentifierInputs();
-  identifiers.backupId.value = selectedChoice?.backupId ?? "";
-  identifiers.snapshotId.value = selectedChoice?.snapshotId ?? "";
-  restoreChoiceHelp(selectedChoice);
-  discardRestorePreviewForChangedInput();
-});
-const restoreForm = $("[data-restore-preview]");
-for (const name of ["backupId", "snapshotId", "targetRoot"]) {
-  restoreForm.elements.namedItem(name).addEventListener("input", discardRestorePreviewForChangedInput);
-}
-restoreForm.elements.namedItem("conflictPolicy").addEventListener("change", discardRestorePreviewForChangedInput);
-$("[data-restore-next]").addEventListener("click", async () => {
-  if (!restorePage?.nextCursor) return;
-  try { await loadRestorePage(restorePage.nextCursor, true); } catch (error) { fail(error); }
-});
-$("[data-restore-previous]").addEventListener("click", async () => {
-  if (restoreCursorHistory.length === 0) return;
-  const cursor = restoreCursorHistory.pop();
-  try { await loadRestorePage(cursor); } catch (error) { fail(error); }
-});
-$("[data-restore-discard]").addEventListener("click", async () => {
-  const plan = invalidateRestorePreview();
-  try { await restore.discard(api, plan); say("Restore preview discarded without writing files."); } catch (error) { fail(error); }
-});
-$("[data-restore-confirm]").addEventListener("change", (event) => { $("[data-restore-execute]").disabled = !event.currentTarget.checked || !restorePlan || restoreExecutionInFlight; });
-$("[data-restore-execute]").addEventListener("click", async () => {
-  if (!restorePlan || restoreExecutionInFlight) return;
-  const button = $("[data-restore-execute]");
-  const plan = restorePlan;
-  restoreExecutionInFlight = true;
-  button.disabled = true;
-  try {
-    restorePreview.invalidate();
-    activeRestorePreviewRevision = 0;
-    const result = await restore.execute(api, plan);
-    await restore.discard(api, plan).catch(() => {});
-    if (restorePlan === plan) clearRestorePreview();
-    say(`Restore complete: ${result.filesRestored} file${result.filesRestored === 1 ? "" : "s"} restored, ${result.directoriesCreated} folder${result.directoriesCreated === 1 ? "" : "s"} created.`);
-  }
-  catch (error) { fail(error); }
-  finally {
-    restoreExecutionInFlight = false;
-    if (restorePlan === plan) button.disabled = !$("[data-restore-confirm]").checked;
-  }
-});
-
-function closeRecoveryFiles() {
-  recoveryGeneration += 1;
-  recoverySession.dispose();
-  $("[data-recovery-downloads]").hidden = true;
-  $("[data-recovery-save-status]").textContent = "";
-  $("[data-recovery-export]").reset();
-  $("[data-recovery-create]").disabled = false;
-  $("[data-recovery-kit]").disabled = true;
-  $("[data-recovery-code]").disabled = true;
-}
-
-function recoveryApi(path, options) {
-  return api(path, options, recovery.readJson);
-}
-
-$("[data-recovery-export]").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (formData(event.currentTarget).get("confirmed") !== "on") return;
-  const generation = recoveryGeneration;
-  $("[data-recovery-create]").disabled = true;
-  $("[data-recovery-downloads]").hidden = false;
-  $("[data-recovery-save-status]").textContent = "Preparing recovery files…";
-  try {
-    if (!await recoverySession.generate(recoveryApi) || generation !== recoveryGeneration) return;
-    $("[data-recovery-kit]").disabled = false;
-    $("[data-recovery-code]").disabled = false;
-    $("[data-recovery-save-status]").textContent = "Ready. Save both files before closing this panel.";
-  } catch (error) {
-    if (generation === recoveryGeneration) { closeRecoveryFiles(); fail(error); }
-  }
-});
-
-function saveRecoveryBytes(bytes, filename, mime) {
-  const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
-  try {
-    const link = Object.assign(document.createElement("a"), { href: url, download: filename });
-    document.body.append(link);
-    try { link.click(); } finally { link.remove(); }
-  } finally {
-    // Give the browser time to acquire the download; never keep the URL around
-    // as session state or put secret bytes into document text/attributes.
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
-}
-
-for (const [kind, filename, mime] of [
-  ["kit", "covalent.covalent-recovery", "application/octet-stream"],
-  ["code", "covalent.covalent-recovery-key", "text/plain"],
-]) {
-  $("[data-recovery-" + kind + "]").addEventListener("click", () => {
-    try {
-      recoverySession.download(kind, (bytes) => saveRecoveryBytes(bytes, filename, mime));
-      $("[data-recovery-save-status]").textContent = "Download requested. Check that both the recovery file and recovery code were saved successfully.";
-    } catch (error) { fail(error); }
-  });
-}
-$("[data-recovery-close]").addEventListener("click", () => {
-  closeRecoveryFiles();
-  $("[data-recovery-create]").focus();
-  say("Recovery files cleared from this tab. Keep any downloaded copies safe.");
-});
-globalThis.addEventListener("pagehide", closeRecoveryFiles);
-
-async function loadRecoveryStatus(retry = false) {
-  if (recoveryStatusInFlight) return;
-  recoveryStatusInFlight = true;
-  const buttons = [$("[data-recovery-refresh]"), $("[data-recovery-retry] button")];
-  buttons.forEach((button) => { button.disabled = true; });
-  try {
-    const status = retry
-      ? await recoveryApi("/api/v1/recovery/retry", { method: "POST", body: JSON.stringify({ confirmed: true }) })
-      : await recoveryApi("/api/v1/recovery/status");
-    const result = recovery.status(status);
-    $("[data-recovery-status]").textContent = result.summary + " " + result.detail;
-    $("[data-recovery-warning]").textContent = result.warning;
-    $("[data-recovery-warning]").hidden = !result.warning;
-    $("[data-recovery-retry]").hidden = !result.canRetry;
-    $("[data-recovery-retry]").reset();
-    if (retry) await loadBackups();
-  } catch (error) {
-    $("[data-recovery-status]").textContent = "Recovery progress could not be checked. Try again when this server is available.";
-    $("[data-recovery-warning]").hidden = true;
-    $("[data-recovery-retry]").hidden = true;
-    fail(error);
-  } finally {
-    recoveryStatusInFlight = false;
-    buttons.forEach((button) => { button.disabled = false; });
-  }
-}
-$("[data-recovery-refresh]").addEventListener("click", () => { void loadRecoveryStatus(); });
-$("[data-recovery-retry]").addEventListener("submit", (event) => {
-  event.preventDefault();
-  if (formData(event.currentTarget).get("confirmed") === "on") void loadRecoveryStatus(true);
-});
-
 $("[data-settings-export]").addEventListener("click", async () => {
-  try { const settings = await api("/api/v1/config/export", { method: "POST" }); const blob = new Blob([display(settings)], { type: "application/json" }); const link = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: "covalent-settings.json" }); link.click(); URL.revokeObjectURL(link.href); say("Safe settings downloaded."); }
+  try { const settings = await api("/api/v1/config/export", { method: "POST" }); const blob = new Blob([JSON.stringify(settings, null, 2)], { type: "application/json" }); const link = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: "covalent-settings.json" }); link.click(); URL.revokeObjectURL(link.href); say("Safe settings downloaded."); }
   catch (error) { fail(error); }
 });
 $("[data-settings-import]").addEventListener("submit", async (event) => {
@@ -2412,39 +1614,5 @@ $("[data-settings-import]").addEventListener("submit", async (event) => {
   catch (error) { fail(error); }
 });
 
-// Kept as the single write point for the tab-scoped exchange the loader below
-// reads back. The JSON exchange is the fallback path now, so nothing on the
-// network-pairing flow depends on it.
-function persistPairingSession(session) {
-  try { pairing.storage.saveTabSession(globalThis.sessionStorage, pairingStorageKey, session); } catch (_) {}
-}
-
-function clearPairingSession() {
-  try { pairing.storage.clearTabSession(globalThis.sessionStorage, pairingStorageKey); } catch (_) {}
-  clearManualProviderActivation();
-  const form = $("[data-pair-confirm]");
-  form.reset();
-  $("[data-pair-consent]").hidden = true;
-  form.querySelectorAll("[data-pair-action=finalize]").forEach((button) => { button.disabled = true; });
-}
-
-function showPairingSession(session) {
-  const details = pairing.summary(session);
-  const form = $("[data-pair-confirm]");
-  form.elements.session.value = display(session);
-  $("[data-pair-inviter]").textContent = `${details.inviter.name} (${details.inviter.id}) — ${details.inviter.roles}`;
-  $("[data-pair-responder]").textContent = `${details.responder.name} (${details.responder.id}) — ${details.responder.roles}`;
-  $("[data-pair-code]").textContent = details.code;
-  $("[data-pair-signatures]").textContent = `Creator ${details.inviter.confirmed ? "signed" : "waiting"}; accepter ${details.responder.confirmed ? "signed" : "waiting"}.`;
-  $("[data-pair-consent]").hidden = false;
-  form.querySelectorAll("[data-pair-action=finalize]").forEach((button) => { button.disabled = !details.mutuallyConfirmed; });
-  persistPairingSession(session);
-  return details;
-}
-
-try {
-  const savedPairingSession = pairing.storage.loadTabSession(globalThis.sessionStorage, pairingStorageKey);
-  if (savedPairingSession) showPairingSession(savedPairingSession);
-} catch (_) { /* invalid or unavailable tab storage starts a fresh exchange */ }
 loadStatus();
 }

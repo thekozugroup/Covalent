@@ -477,22 +477,6 @@
     });
   }
 
-  async function refreshPeerAddressAndProviders(controller, peerId, candidateAddress, refreshProviders) {
-    if (!controller || typeof controller.refreshPeerAddress !== "function"
-      || typeof refreshProviders !== "function") {
-      throw new TypeError("address refresh requires a controller and provider refresh");
-    }
-    const result = await controller.refreshPeerAddress(peerId, candidateAddress);
-    try {
-      await refreshProviders();
-      return Object.freeze({ result, providerError: null });
-    } catch (providerError) {
-      // The address transition is already confirmed. Preserve that outcome and
-      // report the independent provider-list refresh failure separately.
-      return Object.freeze({ result, providerError });
-    }
-  }
-
   function idleBatchView(share) {
     const settings = share.linkSettings;
     const run = share.linkRun;
@@ -1226,7 +1210,6 @@
     }),
     requireStatus,
     readJson,
-    refreshPeerAddressAndProviders,
     shareView,
     statusSummary,
   });

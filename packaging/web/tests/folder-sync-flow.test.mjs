@@ -706,21 +706,6 @@ test("a busy mutation cannot fabricate a pending address request", async () => {
   await active;
 });
 
-test("provider refresh failure cannot turn a confirmed address save into failure", async () => {
-  const committed = { schemaVersion: 1, lifecycle: "stopped", issue: null };
-  const providerFailure = new TypeError("provider response lost");
-  const calls = [];
-  const completion = await folders.refreshPeerAddressAndProviders({
-    async refreshPeerAddress(id, candidate) {
-      calls.push({ id, candidate });
-      return committed;
-    },
-  }, peerId, "192.0.2.20:8787", async () => { throw providerFailure; });
-  assert.deepEqual(calls, [{ id: peerId, candidate: "192.0.2.20:8787" }]);
-  assert.equal(completion.result, committed);
-  assert.equal(completion.providerError, providerFailure);
-});
-
 test("address refresh rejects unknown or legacy peers and cancellation clears its retry", async () => {
   let calls = 0;
   const controller = folders.coordinator({
@@ -774,7 +759,7 @@ test("the primary Links tab uses server paths, confirmed names, and visible unlo
   assert.match(html, /data-tab="folders">Links<\/button>/);
   assert.ok(html.indexOf('data-tab="pair"') < html.indexOf('data-tab="folders"'));
   assert.ok(html.indexOf('data-tab="folders"') < html.indexOf('data-tab="settings"'));
-  assert.match(html, /<summary>Older backup and restore tools<\/summary>[\s\S]*data-tool-panel="backup"[\s\S]*data-tool-panel="restore"/);
+  assert.doesNotMatch(html, /data-tool-panel|data-backup-form|data-restore-preview/);
   assert.match(html, /Advanced server folder path/);
   assert.match(html, /name="selectedRoot" value="\/sync"/);
   assert.match(html, /data-paired-devices/);

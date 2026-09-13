@@ -128,7 +128,6 @@ const clientTrees = [
     calls: {
       folderApi: { path: { index: 0 }, method: { kind: "options", index: 1, default: "webDefault" } },
       mutate: { path: { index: 0 }, method: { kind: "derived", derivation: "folderMutation" } },
-      recoveryApi: { path: { index: 0 }, method: { kind: "options", index: 1, default: "webDefault" } },
       api: { path: { index: 0 }, method: { kind: "options", index: 1, default: "webDefault" } },
       apiResponse: { path: { index: 0 }, method: { kind: "options", index: 1, default: "webDefault" } },
     },
@@ -141,7 +140,6 @@ const clientTrees = [
     },
     wiring: [
       { description: "bounded folder parsing preserves console path and method forwarding", file: webConsoleFile, pattern: /function folderApi\(path, options\) \{ return api\(path, options, folderSync\.readJson\); \}/g },
-      { description: "bounded recovery parsing preserves console path and method forwarding", file: webConsoleFile, pattern: /function recoveryApi\(path, options\) \{ return api\(path, options, recovery\.readJson\); \}/g },
       { description: "the console apiResponse() helper takes its method from the caller's options", file: webConsoleFile, pattern: /async function apiResponse\(path, options = \{\}(?:, readJson = \(response\) => response\.json\(\))?\)/g },
       { description: "the console api() helper forwards its path and options to apiResponse()", file: webConsoleFile, pattern: /return \(await apiResponse\(path, options(?:, readJson)?\)\)\.body;/g },
     ],

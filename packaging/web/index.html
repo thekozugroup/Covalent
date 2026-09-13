@@ -8,12 +8,6 @@
     <link rel="stylesheet" href="/assets/app.css" />
     <script src="/assets/folder-sync-flow.js" defer></script>
     <script src="/assets/pairing-flow.js" defer></script>
-    <script src="/assets/restore-plan-flow.js" defer></script>
-    <script src="/assets/restore-preview-flow.js" defer></script>
-    <script src="/assets/backup-terminal-flow.js" defer></script>
-    <script src="/assets/backup-verification-flow.js" defer></script>
-    <script src="/assets/backup-selection-flow.js" defer></script>
-    <script src="/assets/recovery-flow.js" defer></script>
     <script src="/assets/tab-flow.js" defer></script>
     <script src="/assets/app.js" defer></script>
   </head>
@@ -21,7 +15,7 @@
     <a class="skip-link" href="#content">Skip to console</a>
     <header>
       <div>
-        <p class="eyebrow">Private distributed backup</p>
+        <p class="eyebrow">Private one-way file links</p>
         <h1>Covalent</h1>
       </div>
       <p class="tier">Tier 1 node</p>
@@ -53,14 +47,6 @@
         <button id="folders-tab" role="tab" aria-selected="true" aria-controls="folders-panel" tabindex="0" data-tab="folders">Links</button>
         <button id="settings-tab" role="tab" aria-selected="false" aria-controls="settings-panel" tabindex="-1" data-tab="settings">Settings</button>
       </nav>
-
-      <details class="advanced">
-        <summary>Older backup and restore tools</summary>
-        <nav class="tabs" aria-label="Older tools">
-          <button id="backup-tool" type="button" aria-controls="backup-panel" data-tool-panel="backup">Backup</button>
-          <button id="restore-tool" type="button" aria-controls="restore-panel" data-tool-panel="restore">Restore</button>
-        </nav>
-      </details>
 
       <section id="folders-panel" role="tabpanel" aria-labelledby="folders-tab" tabindex="0" data-panel="folders">
         <div class="panel-heading"><div><h2>Your links</h2><p class="muted">Send files from one source to one or more destinations. Destination files stay on their own device.</p></div></div>
@@ -172,146 +158,25 @@
         <section class="card pairing-consent" data-network-card hidden aria-live="polite">
           <h3 data-network-peer></h3>
           <p class="muted" data-network-direction></p>
-          <p>Compare this code on both physical devices. Continue only if every group matches. Once both devices finish, Covalent verifies the connected backup device and its current capacity before it can be selected.</p>
+          <p>Compare this code on both physical devices. Continue only if every group matches. Once both devices finish, the paired device becomes available as a link destination.</p>
           <p class="pairing-code" data-network-code role="status"></p>
           <p class="muted" data-network-expires></p>
           <p data-network-state></p>
           <div class="button-row">
-            <button type="button" data-network-confirm disabled>Codes match — use as backup device</button>
+            <button type="button" data-network-confirm disabled>Codes match — pair device</button>
             <button type="button" class="quiet" data-network-cancel>Cancel pairing</button>
           </div>
         </section>
 
-        <details class="advanced">
-          <summary>Pair by copying a signed invitation instead</summary>
-          <p class="muted">Use this only when the two devices cannot reach each other directly. Every step below has to be copied between the devices by hand.</p>
-        <div class="two-column">
-          <form class="card" data-pair-create>
-            <h3>Create invitation</h3>
-            <label>Reachable endpoint <input name="endpoint" placeholder="node-a.tailnet.ts.net:8787" required /></label>
-            <label>Expires in minutes <input name="minutes" type="number" min="1" max="15" value="10" required /></label>
-            <button>Create invitation</button>
-          </form>
-          <form class="card" data-pair-accept>
-            <h3>Accept invitation</h3>
-            <label>Your device name <input name="name" maxlength="80" required /></label>
-            <label>Invitation JSON <textarea name="invitation" rows="5" required></textarea></label>
-            <fieldset><legend>Roles granted to this accepting device</legend><label><input type="checkbox" name="responderRole" value="storage_provider" /> Store selected encrypted copies</label><label><input type="checkbox" name="responderRole" value="backup_reader" /> Serve restore reads</label></fieldset>
-            <fieldset><legend>Roles granted to the invitation creator</legend><label><input type="checkbox" name="inviterRole" value="backup_writer" /> Send selected encrypted copies</label><label><input type="checkbox" name="inviterRole" value="backup_reader" /> Request restore reads</label></fieldset>
-            <button>Accept and show code</button>
-          </form>
-        </div>
-        <form class="card" data-pair-confirm>
-          <h3>Confirm, exchange, then finish</h3>
-          <p class="muted">Paste the latest session on each device. Compare identities, roles, and code. Each side adds one signature, exchanges the updated JSON, and finalizes only after both signatures are present.</p>
-          <label>Pairing session JSON <textarea name="session" rows="7" required></textarea></label>
-          <label>Code shown on both devices <input name="code" autocomplete="off" required /></label>
-          <section class="pairing-consent" data-pair-consent hidden aria-live="polite">
-            <h4>Signed consent</h4>
-            <dl><div><dt>Creator</dt><dd data-pair-inviter></dd></div><div><dt>Accepter</dt><dd data-pair-responder></dd></div><div><dt>Comparison code</dt><dd data-pair-code></dd></div><div><dt>Signatures</dt><dd data-pair-signatures></dd></div></dl>
-          </section>
-          <div class="button-row"><button name="side" value="responder" data-pair-action="confirm">Add accepter confirmation</button><button name="side" value="inviter" data-pair-action="confirm" class="secondary">Add creator confirmation</button></div>
-          <div class="button-row"><button name="side" value="responder" data-pair-action="finalize" disabled>Finalize as accepter</button><button name="side" value="inviter" data-pair-action="finalize" class="secondary" disabled>Finalize as creator</button><button type="button" class="quiet" data-pair-clear>Clear exchange</button></div>
-        </form>
-        <section class="card pairing-consent" data-manual-provider-card hidden aria-live="polite">
-          <h3>Use this finalized device for backups</h3>
-          <p class="muted" data-manual-provider-summary></p>
-          <p>Use only the signed connection from this completed pairing. Covalent will verify the node retained that exact certificate pin and show its current capacity before it is selectable.</p>
-          <div class="button-row"><button type="button" data-manual-provider-connect>Use as backup device</button></div>
-        </section>
-        </details>
-      </section>
-
-      <section id="backup-panel" role="region" aria-labelledby="backup-tool" tabindex="0" data-panel="backup" hidden>
-        <div class="panel-heading"><div><h2>Back up selected files</h2><p class="muted">Only read-only source mounts such as <code>/source</code> or <code>/boot-source</code> should be selected. Extra copies are made only on the currently verified backup devices you choose.</p></div></div>
-        <section class="card" aria-live="polite">
-          <div class="button-row"><h3>Your backups</h3><button type="button" class="secondary" data-backups-refresh>Refresh list</button></div>
-          <p class="muted">Verify checks the latest backup and the extra copies on your selected backup devices. It does not change your files.</p>
-          <p class="muted" data-backups-empty>Unlock the console to load authoritative node backups.</p>
-          <ul data-backups-list></ul>
-        </section>
-        <form class="card" data-backup-form>
-          <label>Source directory <input name="sourceRoot" value="/source" required /></label>
-          <label>Backup name <input name="displayName" data-backup-name maxlength="120" required /></label>
-          <details class="advanced">
-            <summary>Advanced backup identifiers</summary>
-            <p class="muted">Covalent creates a safe snapshot ID when you start. Enter one only when continuing a manual recovery procedure.</p>
-            <label>Snapshot ID <input name="snapshotId" pattern="[A-Za-z0-9_-]+" autocomplete="off" /></label>
-          </details>
-          <fieldset data-provider-selection>
-            <legend>Backup devices</legend>
-            <p class="muted" data-providers-empty>Unlock the console to inspect connected backup devices.</p>
-            <ul class="device-list" data-providers-list></ul>
-            <button type="button" class="secondary" data-providers-refresh>Refresh device capacity</button>
-          </fieldset>
-          <p class="notice">Provider selection is explicit. Unreachable, out-of-date, unknown, or full devices cannot be selected. Leave all devices clear for a local-only copy.</p>
-          <p data-backup-status role="status" aria-live="polite"></p>
-          <div class="button-row">
-            <button data-backup-submit>Start backup</button>
-            <button type="button" class="secondary" data-backup-retry hidden>Try again</button>
-          </div>
-        </form>
-      </section>
-
-      <section id="restore-panel" role="region" aria-labelledby="restore-tool" tabindex="0" data-panel="restore" hidden>
-        <div class="panel-heading"><div><h2>Preview before restore</h2><p class="muted">Choose an existing folder on your backup server. Review where each file will go and how conflicts will be handled before anything is written.</p></div></div>
-        <form class="card" data-restore-preview>
-          <label>Completed backup <select name="rememberedRestore" data-restore-choice aria-describedby="restore-choice-help"><option value="">Unlock the console to load completed backups</option></select></label>
-          <p id="restore-choice-help" class="muted" data-restore-choice-help>Choose a remembered backup to use its latest completed snapshot.</p>
-          <details class="advanced">
-            <summary>Manual recovery identifiers</summary>
-            <p class="muted">Use this only when a support or recovery procedure gave you exact identifiers.</p>
-            <label>Backup ID <input name="backupId" autocomplete="off" /></label>
-            <label>Snapshot ID <input name="snapshotId" pattern="[A-Za-z0-9_-]+" autocomplete="off" /></label>
-          </details>
-          <label>Restore folder on the backup server <input name="targetRoot" value="/restore" required /></label>
-          <label>Conflict policy <select name="conflictPolicy"><option value="fail">Stop on conflicts (safest)</option><option value="skip">Skip existing files</option><option value="rename">Create renamed copies</option><option value="replace">Replace regular files</option></select></label>
-          <button>Preview restore</button>
-        </form>
-        <section class="card" aria-live="polite" data-restore-result hidden>
-          <h3>Restore preview</h3><p data-restore-summary></p><ol class="restore-preview-list" data-restore-plan></ol>
-          <div class="button-row" aria-label="Restore preview pages">
-            <button type="button" class="secondary" data-restore-previous disabled>Previous page</button>
-            <button type="button" class="secondary" data-restore-next disabled>Next page</button>
-            <button type="button" class="secondary" data-restore-discard>Discard preview</button>
-          </div>
-          <label class="confirmation"><input type="checkbox" data-restore-confirm /> I reviewed the file actions and want to restore to the folder shown above.</label>
-          <button type="button" data-restore-execute disabled>Restore this preview</button>
-        </section>
       </section>
 
       <section id="settings-panel" role="tabpanel" aria-labelledby="settings-tab" tabindex="0" data-panel="settings" hidden>
         <div class="panel-heading"><div><h2>Settings and reachability</h2><p class="muted">LAN discovery is <strong data-discovery>Unknown</strong>. It can remain off when you use explicit LAN addresses or Tailscale; neither method bypasses pairing.</p></div></div>
-        <section class="card" aria-labelledby="recovery-heading">
-          <h3 id="recovery-heading">Recover after losing this device</h3>
-          <p>Save a recovery file and its separate recovery code somewhere safe, away from this backup server. You need both to recover its identity and find backups on your other devices. Anyone with both can access those backups.</p>
-          <p class="muted">Create a fresh pair after adding backups or changing trusted devices. Safe settings alone cannot recover your files.</p>
-          <form data-recovery-export>
-            <label class="confirmation"><input type="checkbox" name="confirmed" required /> I want to create recovery files and will keep both safe.</label>
-            <button data-recovery-create>Create recovery files</button>
-          </form>
-          <div data-recovery-downloads hidden>
-            <p data-recovery-save-status aria-live="polite">Preparing recovery files…</p>
-            <div class="button-row">
-              <button type="button" data-recovery-kit disabled>Save recovery file</button>
-              <button type="button" data-recovery-code disabled>Save recovery code</button>
-              <button type="button" data-recovery-close>Close and discard this copy</button>
-            </div>
-            <p class="muted">Check that both downloads finished before closing. Keep the code separately from the recovery file. This tab does not remember them after you close it.</p>
-          </div>
-          <h4>Last recovery attempt</h4>
-          <p data-recovery-status>Unlock the console, then check recovery progress.</p>
-          <p data-recovery-warning role="status" hidden></p>
-          <button type="button" data-recovery-refresh>Check recovery progress</button>
-          <form data-recovery-retry hidden>
-            <label class="confirmation"><input type="checkbox" name="confirmed" required /> Check my backup devices again for recoverable backups.</label>
-            <button>Retry recovery</button>
-          </form>
-        </section>
         <div class="two-column">
-          <section class="card"><h3>Export safe settings</h3><p class="muted">Exports name, discovery preference, and remembered backups. It excludes identity keys, backup keys, grants, and provider credentials.</p><button type="button" data-settings-export>Download settings</button></section>
+          <section class="card"><h3>Export safe settings</h3><p class="muted">Exports safe node settings. It excludes identity keys, backup keys, grants, and provider credentials.</p><button type="button" data-settings-export>Download settings</button></section>
           <form class="card" data-settings-import><h3>Import safe settings</h3><label>Settings JSON <textarea name="settings" rows="5" required></textarea></label><label class="confirmation"><input type="checkbox" name="confirmed" required /> I understand this replaces safe settings, not identity keys.</label><button>Import settings</button></form>
         </div>
+        <aside><h3>Advanced archive tools</h3><p>Existing backup, restore, and recovery data remains available through the command line. Run <code>covalent backups</code>, <code>covalent backup --help</code>, <code>covalent restore-preview --help</code>, <code>covalent restore-execute --help</code>, or <code>covalent-node --help</code> from a trusted terminal. Removing these screens does not delete files, keys, archives, or settings. Covalent does not migrate them automatically.</p></aside>
         <aside><h3>Container network choices</h3><p>Bridge mode exposes HTTPS management on TCP 8443 and peer traffic on UDP 8787. Enroll the package CA or use a system-trusted same-host proxy before entering a token. Host networking can improve multicast discovery; a Tailscale sidecar or host Tailnet address is optional.</p></aside>
       </section>
       <output class="toast" data-message aria-live="polite"></output>

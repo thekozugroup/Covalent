@@ -274,7 +274,7 @@ test("the console has exactly one error renderer and it never reads a raw messag
 
   // Sentences the flow modules throw are marked, so the presenter can keep them
   // instead of collapsing them into the generic fallback.
-  for (const relative of ["packaging/web/pairing-flow.js", "packaging/web/restore-plan-flow.js"]) {
+  for (const relative of ["packaging/web/pairing-flow.js"]) {
     const source = readFileSync(resolve(repositoryRoot, relative), "utf8");
     assert.ok(!source.includes("throw new Error("), `${relative} throws an unmarked Error; use guidance() so its copy survives`);
   }
