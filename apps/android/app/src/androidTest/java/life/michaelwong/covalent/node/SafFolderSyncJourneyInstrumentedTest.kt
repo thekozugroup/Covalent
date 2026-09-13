@@ -1,6 +1,7 @@
 package life.michaelwong.covalent.node
 
 import android.Manifest
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -901,23 +902,56 @@ class SafFolderSyncJourneyInstrumentedTest {
         check(SAF_PICKER_COMPONENT.matches(fixture) && SAF_PICKER_COMPONENT.matches(folder))
         val pickerWaitStarted = System.nanoTime()
         var lastRootCategory = "unavailable"
+        val uiAutomation = instrumentation.uiAutomation
+        val originalServiceFlags = runCatching { uiAutomation.serviceInfo.flags }.getOrNull()
+        var primaryFailure: Throwable? = null
         try {
-            await("system folder picker") {
-                val rootPackage = instrumentation.uiAutomation.rootInActiveWindow?.packageName?.toString()
-                lastRootCategory = pickerPackageCategory(rootPackage)
-                rootPackage == DOCUMENTS_UI_PACKAGE
+            val interactiveWindowRetrievalEnabled = if (originalServiceFlags == null) {
+                false
+            } else {
+                runCatching {
+                    val diagnosticServiceInfo = uiAutomation.serviceInfo
+                    diagnosticServiceInfo.flags =
+                        diagnosticServiceInfo.flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+                    uiAutomation.serviceInfo = diagnosticServiceInfo
+                    (uiAutomation.serviceInfo.flags and
+                        AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS) != 0
+                }.getOrDefault(false)
             }
-        } catch (failure: AssertionError) {
-            val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - pickerWaitStarted)
-            val currentRootCategory = pickerPackageCategory(runCatching {
-                instrumentation.uiAutomation.rootInActiveWindow?.packageName?.toString()
-            }.getOrNull())
-            throw AssertionError(
-                "${failure.message} elapsedMillis=$elapsedMillis " +
-                    "lastRoot=$lastRootCategory currentRoot=$currentRootCategory " +
-                    pickerWindowDiagnostic(),
-                failure,
-            )
+            try {
+                await("system folder picker") {
+                    val rootPackage = uiAutomation.rootInActiveWindow?.packageName?.toString()
+                    lastRootCategory = pickerPackageCategory(rootPackage)
+                    rootPackage == DOCUMENTS_UI_PACKAGE
+                }
+            } catch (failure: AssertionError) {
+                val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - pickerWaitStarted)
+                val currentRootCategory = pickerPackageCategory(runCatching {
+                    uiAutomation.rootInActiveWindow?.packageName?.toString()
+                }.getOrNull())
+                throw AssertionError(
+                    "${failure.message} elapsedMillis=$elapsedMillis " +
+                        "lastRoot=$lastRootCategory currentRoot=$currentRootCategory " +
+                        pickerWindowDiagnostic(interactiveWindowRetrievalEnabled),
+                    failure,
+                )
+            }
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            if (originalServiceFlags != null) {
+                try {
+                    val restoredServiceInfo = uiAutomation.serviceInfo
+                    restoredServiceInfo.flags = originalServiceFlags
+                    uiAutomation.serviceInfo = restoredServiceInfo
+                    check(uiAutomation.serviceInfo.flags == originalServiceFlags) {
+                        "UiAutomation service flags were not restored after the system picker wait."
+                    }
+                } catch (restorationFailure: Throwable) {
+                    primaryFailure?.addSuppressed(restorationFailure) ?: throw restorationFailure
+                }
+            }
         }
         if (systemPickerHasText("Files in source") || systemPickerHasText("Files in destination")) {
             shell("input keyevent KEYCODE_BACK")
@@ -945,17 +979,28 @@ class SafFolderSyncJourneyInstrumentedTest {
         DOCUMENTS_UI_PACKAGE -> "DocumentsUI"
         context.packageName -> "target"
         instrumentation.context.packageName -> "test-host"
+        SETTINGS_PACKAGE -> "settings-or-fallback-home"
+        SYSTEM_UI_PACKAGE -> "system-ui"
+        NEXUS_LAUNCHER_PACKAGE -> "disabled-launcher"
         else -> "other"
     }
 
-    private fun pickerWindowDiagnostic(): String = runCatching {
+    private fun pickerWindowDiagnostic(interactiveWindowRetrievalEnabled: Boolean): String = runCatching {
         val windows = instrumentation.uiAutomation.windows
         val categories = windows.take(MAX_DIAGNOSTIC_WINDOWS).joinToString(prefix = "[", postfix = "]") {
             val category = pickerPackageCategory(it.root?.packageName?.toString())
             "$category(active=${it.isActive},focused=${it.isFocused})"
         }
-        "accessibilityWindowCount=${windows.size} accessibilityWindows=$categories"
-    }.getOrElse { "accessibilityWindowCount=unavailable accessibilityWindows=[]" }
+        val documentsUiWindowPresent = windows.any {
+            pickerPackageCategory(it.root?.packageName?.toString()) == "DocumentsUI"
+        }
+        "interactiveWindowRetrievalEnabled=$interactiveWindowRetrievalEnabled " +
+            "accessibilityWindowCount=${windows.size} " +
+            "documentsUiWindowPresent=$documentsUiWindowPresent accessibilityWindows=$categories"
+    }.getOrElse {
+        "interactiveWindowRetrievalEnabled=$interactiveWindowRetrievalEnabled " +
+            "accessibilityWindowCount=unavailable documentsUiWindowPresent=unavailable accessibilityWindows=[]"
+    }
 
     private fun assertExactPickerTree(grant: SafFolderGrant, fixture: String, folder: String) {
         assertEquals(
@@ -1428,6 +1473,9 @@ class SafFolderSyncJourneyInstrumentedTest {
         const val SAF_FOLDER_LABEL = "API 37 SAF manual journey"
         const val SAF_FIXTURE_PREFIX = "CovalentFinal-"
         const val DOCUMENTS_UI_PACKAGE = "com.google.android.documentsui"
+        const val SETTINGS_PACKAGE = "com.android.settings"
+        const val SYSTEM_UI_PACKAGE = "com.android.systemui"
+        const val NEXUS_LAUNCHER_PACKAGE = "com.google.android.apps.nexuslauncher"
         const val SECOND_DATA_PREFIX = "journey-"
         const val ADDRESS_CLASS_PRIVATE_LAN = 0
         const val ADDRESS_CLASS_TAILNET = 1

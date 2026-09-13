@@ -221,7 +221,7 @@ struct MacFoldersView: View {
         if let policy = share.linkPolicy {
           Label {
             Text(share.incoming ? "Receives files from the source" : "Sends files to the destination")
-              .font(.body.weight(.medium))
+              .font(.body.weight(.semibold))
               .foregroundStyle(.primary)
           } icon: {
             Image(systemName: share.incoming ? "arrow.down.circle" : "arrow.up.circle")
@@ -230,7 +230,7 @@ struct MacFoldersView: View {
             .font(.body.weight(.medium))
             .foregroundStyle(.primary)
           Text(policy.destinationDeletionExplanation)
-            .font(.body.weight(.medium))
+            .font(.body.weight(.semibold))
             .foregroundStyle(.primary)
           if isSettingsRow(share, status: status), let settings = share.linkSettings {
             linkSettingsStatus(settings, share: share)
@@ -566,7 +566,7 @@ struct MacFoldersView: View {
           ? AnyShapeStyle(.orange) : AnyShapeStyle(.primary)
         Label {
           Text(runPhaseLabel(phase))
-            .font(.body.weight(.medium))
+            .font(.body.weight(.semibold))
             .foregroundStyle(runStyle)
         } icon: {
           Image(systemName: runPhaseSymbol(phase))
@@ -580,6 +580,8 @@ struct MacFoldersView: View {
               .foregroundStyle(.primary)
           } label: {
             Text(peer?.displayName ?? (share.incoming ? "This Mac" : "Destination"))
+              .font(.body.weight(.semibold))
+              .foregroundStyle(.primary)
           }
         }
         if run.destinations.contains(where: { $0.result == .failed }) {
@@ -697,7 +699,7 @@ struct MacFoldersView: View {
           Text("This Mac is the source. Changes on the destination never change files on this Mac.")
             .font(.callout.weight(.medium))
             .secondaryLabelStyle()
-          LabeledContent("When Source Files Are Deleted") {
+          LabeledContent {
             MacPopUpPicker(
               selection: $linkPolicy.propagateSourceDeletions,
               choices: [
@@ -708,6 +710,10 @@ struct MacFoldersView: View {
               accessibilityLabel: "When Source Files Are Deleted",
               accessibilityHelp: "Chooses whether source deletions remove destination copies."
             )
+          } label: {
+            Text("When Source Files Are Deleted")
+              .font(.body.weight(.semibold))
+              .foregroundStyle(.primary)
           }
           .disabled(pendingOffer != nil)
           Text(linkPolicy.sourceDeletionExplanation)
@@ -727,13 +733,13 @@ struct MacFoldersView: View {
           }
           .disabled(pendingOffer != nil)
           Text(linkPolicy.destinationDeletionExplanation)
-            .font(.callout.weight(.medium))
-            .secondaryLabelStyle()
+            .font(.body.weight(.semibold))
+            .foregroundStyle(.primary)
           FolderCadenceControls(cadence: $cadence)
             .disabled(pendingOffer != nil)
           Toggle(isOn: $androidConditions.wifiOnly) {
             Text("Use Wi-Fi only on Android devices")
-              .font(.body.weight(.medium))
+              .font(.body.weight(.semibold))
               .foregroundStyle(.primary)
           }
             .disabled(pendingOffer != nil)

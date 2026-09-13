@@ -8,39 +8,45 @@ Rclone is the sole transfer engine. Pairing, one-way transfers, fan-out,
 collection isolation, destination-deletion/restoration, cadence, and shared
 settings have working validation evidence. The project is not release-complete.
 
-Source `65445e9` passes the Android device job, Rust/contracts, Android foundation,
-Mac packaging, 181 Swift tests, live Mac integration, both Docker architectures,
-dependency checks, CodeQL, and version checks. The Mac UI suite completes with
-five of seven tests passing and no skips. Its folder chooser succeeds and no
-transfer assertion fails. Populated Links has eight contrast findings and four
-missing accessibility actions, down from fourteen contrast findings. The menu
-selection assertions pass. VoiceOver's system-keyboard preflight is denied before
-any key event is posted. These results do not explain the earlier intermittent
-chooser failure or timeout.
+Source `cf8e38d` passes Rust/contracts, Android foundation, Mac packaging,
+181 Swift tests, live Mac integration, both Docker architectures, dependency
+checks, CodeQL, and version checks. The native Mac suite has five of seven tests
+passing and no skips. All four native popup controls now expose their required
+accessibility actions, and their selection assertions pass. Populated Links still
+reports seven contrast occurrences across six distinct text strings. The folder
+journey reaches its final menu/status checks at 241.08 seconds, exceeding its
+unchanged 240-second allowance. No transfer assertion fails. VoiceOver's
+system-keyboard preflight is denied before any key event is posted; actual
+VoiceOver speech and actions remain unverified.
 
-The current follow-up styles the eight affected text children directly and uses
-native AppKit popup controls with real press and selection actions. Duplicate
-device names retain separate choices. Parsing and independent source review pass;
-hosted accessibility behavior remains unverified. The integrated runtime reports
+The current follow-up strengthens the seven affected text sites and styles the
+two implicit labels directly. Native popup controls and duplicate device choices
+remain in place. Hosted contrast and full-journey verification are still required.
+The integrated runtime reports
 an uncertain copy that cannot safely resume as a failed destination run, with
 conditional recovery guidance. Ownership, deletion settings, transient retries,
 protocol values, seven-test coverage, and deadlines remain unchanged.
 
-Android's latest full job passes 195 JVM tests, 82 device baseline tests in
-67.729 seconds, and the complete SAF journey in 415.871 seconds. This is the third
-subsequent full pass following an earlier source-deletion timeout on `ec49a3d`.
-The two earlier passes used unchanged Android and Rust inputs; this run includes
-the terminal-recovery reporting change. These passes do not explain the
-intermittent failure. Source-deletion stability and Android acceptance remain
-under review; earlier passes are retained as evidence, not a claim that the fault
-is fixed.
+Android's current job passes 195 JVM tests and all 82 device baseline tests in
+77.962 seconds. Its full SAF journey fails at the initial destination folder
+picker, before any transfer. The picker wait reaches its unchanged 90-second
+deadline while another package owns the active accessibility root. Existing
+diagnostics do not identify that package; a zero window count is inconclusive
+because interactive-window retrieval was not enabled. The follow-up adds bounded
+picker diagnostics and restores the instrumentation service flags afterward.
+It does not claim to fix the picker or change its navigation or deadline.
+
+The preceding `65445e9` complete SAF journey passed in 415.871 seconds, the third
+full pass after the `ec49a3d` source-deletion timeout. Those passes remain useful
+evidence but do not explain that failure. Source-deletion stability and final
+Android acceptance remain open.
 
 An earlier exact-source Android Docker fixture built in six seconds, with 56
 cached stages, successful cache export, freshness validation, and the full device
 journey passing. Previous cold builds took 542 and 719 seconds. This measures CI
 build reuse across different runs, not product transfer speed or battery use.
-After the Rust source changed, the latest fixture took 557 seconds with 36 cached
-stages and successful export; the remaining compilation still required work.
+The current fixture took 545 seconds with 48 cached stages and successful export;
+an uncached compilation step still took 495.9 seconds.
 
 The real interrupted-copy journey passes in 57.53 seconds using the existing
 test-only helper-signing procedure. It observes an active rclone sync after the
@@ -73,7 +79,7 @@ have been removed while preserving the tested candidate and durable evidence.
 | 5 | Manual, scheduled, and continuous transfers respect platform limits; idle batch workers stop. | Verified |
 | 6 | Settings edited on any authorized member converge across the link; pending/stale edits remain visible. | Verified |
 | 7 | Mac setup, links, settings, and per-link menu bar status pass native HIG/keyboard/VoiceOver checks. | Open |
-| 8 | Tomato-inspired Android floating actions, typography, data/status visuals, and top bar; actual pairing, permission, transfer, and background journeys pass. | Open: latest pass; earlier deletion timeout unresolved |
+| 8 | Tomato-inspired Android floating actions, typography, data/status visuals, and top bar; actual pairing, permission, transfer, and background journeys pass. | Open: current picker failure; earlier deletion timeout unresolved |
 | 9 | Installable Mac/Android/Docker candidates pass real laptop–Atmos transfers and server mount handling; use an Unraid plugin only for a demonstrated Docker limitation. | Open |
 | 10 | Relevant fault/security checks pass; idle/transfer performance is measured; temporary fixtures are removed; GitHub releases and installation guidance are published. | Open |
 
