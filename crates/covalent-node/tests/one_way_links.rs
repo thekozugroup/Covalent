@@ -1734,191 +1734,342 @@ async fn scheduled_link_waits_for_source_due_time_transfers_and_stops_workers() 
         .expect("stop scheduled destination");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires explicit maintained rclone worker and freshly compiled guardian paths"]
-async fn interrupted_real_copy_preserves_unowned_bytes_and_fails_promptly_after_restart() {
-    fn sha256_hex(digest: [u8; 32]) -> String {
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-        let mut encoded = String::with_capacity(64);
-        for byte in digest {
-            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
-            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
-        }
-        encoded
+fn sha256_hex(digest: [u8; 32]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(64);
+    for byte in digest {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
     }
+    encoded
+}
 
-    fn process_is_alive(pid: rustix::process::Pid) -> bool {
-        rustix::process::test_kill_process(pid).is_ok()
-    }
+fn process_is_alive(pid: rustix::process::Pid) -> bool {
+    rustix::process::test_kill_process(pid).is_ok()
+}
 
-    fn read_worker_receipt(path: &Path) -> Option<(&'static str, rustix::process::Pid)> {
-        let receipt = fs::read_to_string(path).ok()?;
-        let (kind, raw_pid) = receipt.trim().split_once('\t')?;
-        let kind = match kind {
-            "copy" => "copy",
-            "sync" => "sync",
-            _ => return None,
-        };
-        let pid = raw_pid
-            .parse()
-            .ok()
-            .and_then(rustix::process::Pid::from_raw)?;
-        Some((kind, pid))
-    }
+fn read_worker_receipt(path: &Path) -> Option<(&'static str, rustix::process::Pid)> {
+    let receipt = fs::read_to_string(path).ok()?;
+    let (kind, raw_pid) = receipt.trim().split_once('\t')?;
+    let kind = match kind {
+        "copy" => "copy",
+        "sync" => "sync",
+        _ => return None,
+    };
+    let pid = raw_pid
+        .parse()
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)?;
+    Some((kind, pid))
+}
 
-    async fn wait_for_active_transfer(
-        receipt: &Path,
-        sentinel: &Path,
-        sentinel_bytes: &[u8],
-        tail: &Path,
-    ) -> (&'static str, rustix::process::Pid) {
-        fn receipt_state(path: &Path) -> String {
-            match fs::read_to_string(path) {
-                Ok(contents) => match read_worker_receipt(path) {
-                    Some((kind, pid)) => format!(
+async fn wait_for_active_transfer(
+    receipt: &Path,
+    sentinel: &Path,
+    sentinel_bytes: &[u8],
+    tail: &Path,
+) -> (&'static str, rustix::process::Pid) {
+    fn receipt_state(path: &Path) -> String {
+        match fs::read_to_string(path) {
+            Ok(contents) => match read_worker_receipt(path) {
+                Some((kind, pid)) => {
+                    format!(
                         "valid kind={kind} pid={pid} alive={}",
                         process_is_alive(pid)
-                    ),
-                    None => format!("malformed bytes={}", contents.len()),
-                },
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => "absent".to_owned(),
-                Err(error) => format!("error kind={:?}", error.kind()),
-            }
-        }
-
-        fn file_state(path: &Path, expected: Option<&[u8]>) -> String {
-            match fs::read(path) {
-                Ok(bytes) => match expected {
-                    Some(expected) => {
-                        format!("present bytes={} exact={}", bytes.len(), bytes == expected)
-                    }
-                    None => format!("present bytes={}", bytes.len()),
-                },
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => "absent".to_owned(),
-                Err(error) => format!("error kind={:?}", error.kind()),
-            }
-        }
-
-        let deadline = Instant::now() + WAIT_LIMIT;
-        loop {
-            if let Some((kind, pid)) = read_worker_receipt(receipt)
-                && process_is_alive(pid)
-                && fs::read(sentinel).is_ok_and(|bytes| bytes == sentinel_bytes)
-                && !tail.exists()
-            {
-                return (kind, pid);
-            }
-            if Instant::now() >= deadline {
-                panic!(
-                    "never observed the exact real copy/sync worker alive after publishing the sentinel while the final tail was absent; receipt={}; sentinel={}; final_tail={}; partial_tail={}",
-                    receipt_state(receipt),
-                    file_state(sentinel, Some(sentinel_bytes)),
-                    file_state(tail, None),
-                    file_state(&tail.with_file_name("99-tail.bin.partial"), None),
-                );
-            }
-            tokio::time::sleep(POLL_INTERVAL).await;
+                    )
+                }
+                None => format!("malformed bytes={}", contents.len()),
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => "absent".to_owned(),
+            Err(error) => format!("error kind={:?}", error.kind()),
         }
     }
 
-    async fn wait_for_process_exit(pid: rustix::process::Pid) {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            match rustix::process::test_kill_process(pid) {
-                Err(rustix::io::Errno::SRCH) => return,
-                Ok(()) => {}
-                Err(error) => panic!("check exact worker process {pid}: {error}"),
-            }
-            assert!(
-                Instant::now() < deadline,
-                "managed destination stop did not reap exact worker process {pid}"
+    fn file_state(path: &Path, expected: Option<&[u8]>) -> String {
+        match fs::read(path) {
+            Ok(bytes) => match expected {
+                Some(expected) => {
+                    format!("present bytes={} exact={}", bytes.len(), bytes == expected)
+                }
+                None => format!("present bytes={}", bytes.len()),
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => "absent".to_owned(),
+            Err(error) => format!("error kind={:?}", error.kind()),
+        }
+    }
+
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        if let Some((kind, pid)) = read_worker_receipt(receipt)
+            && process_is_alive(pid)
+            && fs::read(sentinel).is_ok_and(|bytes| bytes == sentinel_bytes)
+            && !tail.exists()
+        {
+            return (kind, pid);
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "never observed the exact real copy/sync worker alive after publishing the sentinel while the final tail was absent; receipt={}; sentinel={}; final_tail={}; partial_tail={}",
+                receipt_state(receipt),
+                file_state(sentinel, Some(sentinel_bytes)),
+                file_state(tail, None),
+                file_state(&tail.with_file_name("99-tail.bin.partial"), None),
             );
-            tokio::time::sleep(POLL_INTERVAL).await;
         }
+        tokio::time::sleep(POLL_INTERVAL).await;
     }
+}
 
-    async fn start_registered_node(
-        spec: &NodeSpec,
-        binaries: &TestBinaries,
-        registry: &Arc<std::sync::Mutex<Vec<Arc<NodeRuntime>>>>,
-    ) -> Arc<NodeRuntime> {
-        let node = Arc::new(start_node(spec, binaries).await);
-        registry
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(Arc::clone(&node));
-        node
+async fn wait_for_process_exit(pid: rustix::process::Pid) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match rustix::process::test_kill_process(pid) {
+            Err(rustix::io::Errno::SRCH) => return,
+            Ok(()) => {}
+            Err(error) => panic!("check exact worker process {pid}: {error}"),
+        }
+        assert!(
+            Instant::now() < deadline,
+            "managed destination stop did not reap exact worker process {pid}"
+        );
+        tokio::time::sleep(POLL_INTERVAL).await;
     }
+}
 
-    fn has_access_unavailable_folder(status: &Value, folder: Uuid) -> bool {
-        status["folders"].as_array().is_some_and(|folders| {
-            folders.iter().any(|candidate| {
-                candidate["folderId"] == folder.to_string()
-                    && candidate["accessUnavailable"] == true
-            })
+async fn wait_for_natural_process_exit(pid: rustix::process::Pid) {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        match rustix::process::test_kill_process(pid) {
+            Err(rustix::io::Errno::SRCH) => return,
+            Ok(()) => {}
+            Err(error) => panic!("check exact worker process {pid}: {error}"),
+        }
+        assert!(
+            Instant::now() < deadline,
+            "real Continuous worker process {pid} did not exit naturally"
+        );
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+async fn start_registered_node(
+    spec: &NodeSpec,
+    binaries: &TestBinaries,
+    registry: &Arc<std::sync::Mutex<Vec<Arc<NodeRuntime>>>>,
+) -> Arc<NodeRuntime> {
+    let node = Arc::new(start_node(spec, binaries).await);
+    registry
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(Arc::clone(&node));
+    node
+}
+
+fn has_access_unavailable_folder(status: &Value, folder: Uuid) -> bool {
+    status["folders"].as_array().is_some_and(|folders| {
+        folders.iter().any(|candidate| {
+            candidate["folderId"] == folder.to_string() && candidate["accessUnavailable"] == true
         })
-    }
+    })
+}
 
-    let original_binaries = test_binaries();
-    let root = tempfile::Builder::new()
-        .prefix("covalent-interrupted-copy-")
-        .tempdir()
-        .expect("isolated interrupted-copy test root");
-    let bin_directory = root.path().join("bin");
+fn instrumented_real_worker(
+    root: &Path,
+    receipt_name: &str,
+    wrapper_name: &str,
+    bandwidth_limit: &str,
+    provenance_prefix: &str,
+) -> (TestBinaries, PathBuf) {
+    assert!(
+        !bandwidth_limit.is_empty()
+            && bandwidth_limit
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || byte == b'K'),
+        "test bandwidth limit must be a simple KiB rate"
+    );
+    let original = test_binaries();
+    let bin_directory = root.join("bin");
     private_directory(&bin_directory);
     let real_rclone = bin_directory.join("real-rclone");
-    fs::copy(&original_binaries.worker, &real_rclone).expect("copy reviewed rclone privately");
+    fs::copy(&original.worker, &real_rclone).expect("copy reviewed rclone privately");
     let private_worker_sha256: [u8; 32] = Sha256::digest(
         fs::read(&real_rclone).expect("read private rclone immediately after copying"),
     )
     .into();
     assert_eq!(
-        private_worker_sha256, original_binaries.worker_sha256,
+        private_worker_sha256, original.worker_sha256,
         "private rclone copy changed after executable verification"
     );
     fs::set_permissions(&real_rclone, fs::Permissions::from_mode(0o500))
         .expect("make private rclone executable");
     let real_rclone = fs::canonicalize(real_rclone).expect("canonical private rclone path");
-    let receipt = fs::canonicalize(root.path())
-        .expect("canonical interrupted-copy root")
-        .join("worker-receipt");
+    let receipt = fs::canonicalize(root)
+        .expect("canonical real-worker test root")
+        .join(receipt_name);
     assert!(
         !real_rclone.to_string_lossy().contains('\'') && !receipt.to_string_lossy().contains('\''),
         "private executable paths must be shell-safe"
     );
-    let wrapper = bin_directory.join("rclone-interruption-wrapper");
+    let wrapper = bin_directory.join(wrapper_name);
     fs::write(
         &wrapper,
         format!(
-            "#!/bin/sh\numask 077\ncase \"$1\" in\n  copy|sync)\n    printf '%s\\t%s\\n' \"$1\" \"$$\" > '{}'\n    exec '{}' \"$@\" --check-first --transfers 1 --order-by name,ascending --bwlimit 16K\n    ;;\n  *)\n    exec '{}' \"$@\"\n    ;;\nesac\n",
+            "#!/bin/sh\numask 077\ncase \"$1\" in\n  copy|sync)\n    printf '%s\\t%s\\n' \"$1\" \"$$\" > '{}'\n    exec '{}' \"$@\" --check-first --transfers 1 --order-by name,ascending --bwlimit {}\n    ;;\n  *)\n    exec '{}' \"$@\"\n    ;;\nesac\n",
             receipt.display(),
             real_rclone.display(),
+            bandwidth_limit,
             real_rclone.display(),
         ),
     )
-    .expect("write private interruption wrapper");
+    .expect("write private real-worker wrapper");
     fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o500))
-        .expect("make private interruption wrapper executable");
-    let wrapper = fs::canonicalize(wrapper).expect("canonical interruption wrapper path");
+        .expect("make private real-worker wrapper executable");
+    let wrapper = fs::canonicalize(wrapper).expect("canonical real-worker wrapper path");
     let wrapper_sha256: [u8; 32] = Sha256::digest(
-        fs::read(&wrapper).expect("read private interruption wrapper for verification"),
+        fs::read(&wrapper).expect("read private real-worker wrapper for verification"),
     )
     .into();
     eprintln!(
-        "INTERRUPTED_COPY_PROVENANCE temp_root={} worker_sha256={} wrapper_sha256={} guardian_sha256={}",
-        root.path().display(),
+        "{provenance_prefix} temp_root={} worker_sha256={} wrapper_sha256={} guardian_sha256={}",
+        root.display(),
         sha256_hex(private_worker_sha256),
         sha256_hex(wrapper_sha256),
-        sha256_hex(original_binaries.guardian_sha256),
+        sha256_hex(original.guardian_sha256),
     );
-    let binaries = TestBinaries {
-        worker: wrapper,
-        worker_sha256: wrapper_sha256,
-        guardian: original_binaries.guardian,
-        guardian_sha256: original_binaries.guardian_sha256,
-    };
+    (
+        TestBinaries {
+            worker: wrapper,
+            worker_sha256: wrapper_sha256,
+            guardian: original.guardian,
+            guardian_sha256: original.guardian_sha256,
+        },
+        receipt,
+    )
+}
 
+async fn finish_registered_scenario(
+    root: TempDir,
+    registry: Arc<std::sync::Mutex<Vec<Arc<NodeRuntime>>>>,
+    scenario: tokio::task::JoinHandle<()>,
+    scenario_name: &str,
+    event_prefix: &str,
+) {
+    let scenario = scenario.await;
     let owned_root = root.path().to_path_buf();
+    let runtimes = registry
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let mut cleanup_errors = Vec::new();
+    for (index, runtime) in runtimes.iter().enumerate().rev() {
+        if let Err(error) = runtime.stop().await {
+            cleanup_errors.push(format!("stop runtime {index}: {error:#}"));
+        }
+    }
+    drop(runtimes);
+    registry
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
+    drop(registry);
+
+    if cleanup_errors.is_empty() {
+        if let Err(error) = root.close() {
+            cleanup_errors.push(format!("remove owned temp root: {error}"));
+        }
+    } else {
+        let _preserved_root = root.keep();
+    }
+    if cleanup_errors.is_empty() {
+        assert!(
+            !owned_root.exists(),
+            "owned {scenario_name} temporary root was not removed: {}",
+            owned_root.display()
+        );
+        eprintln!(
+            "{event_prefix}_CLEANUP temp_root={} runtimes_stopped=true temp_root_absent=true",
+            owned_root.display(),
+        );
+    } else {
+        eprintln!(
+            "{event_prefix}_CLEANUP_FAILED temp_root={} preserved={} errors={cleanup_errors:?}",
+            owned_root.display(),
+            owned_root.exists(),
+        );
+    }
+
+    match scenario {
+        Ok(()) if cleanup_errors.is_empty() => {}
+        Ok(()) => panic!("{scenario_name} cleanup failed: {cleanup_errors:?}"),
+        Err(error) if error.is_panic() => {
+            if !cleanup_errors.is_empty() {
+                eprintln!("{event_prefix}_CLEANUP_ERRORS {cleanup_errors:?}");
+            }
+            std::panic::resume_unwind(error.into_panic());
+        }
+        Err(error) => panic!("{scenario_name} scenario task failed: {error}"),
+    }
+}
+
+fn pending_copy_diagnostic(
+    data_directory: &Path,
+    folder: Uuid,
+    sentinel: &str,
+    source_root: &Path,
+    target_root: &Path,
+) -> String {
+    let policy = fs::read(
+        data_directory
+            .join("folder-sync/database")
+            .join(format!("rclone-policy-{folder}.v1.json")),
+    )
+    .ok()
+    .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+    let folder_key = folder.to_string();
+    let state = policy
+        .as_ref()
+        .and_then(|value| value.get("folders"))
+        .and_then(|folders| folders.get(&folder_key));
+    let pending = state.and_then(|value| value.get("pending"));
+    let set_contains = |value: Option<&Value>| {
+        value
+            .and_then(Value::as_array)
+            .is_some_and(|values| values.iter().any(|value| value.as_str() == Some(sentinel)))
+    };
+    format!(
+        "policyReadable={} folderState={} pending={} copyCompleted={} sentinelAllowed={} sentinelInPendingSource={} sentinelOwned={} sourcePresent={} targetPresent={}",
+        policy.is_some(),
+        state.is_some(),
+        pending.is_some_and(|value| !value.is_null()),
+        state
+            .and_then(|value| value.get("copyCompleted"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        set_contains(pending.and_then(|value| value.get("allowed"))),
+        pending
+            .and_then(|value| value.get("source"))
+            .is_some_and(|source| source.get(sentinel).is_some()),
+        set_contains(state.and_then(|value| value.get("owned"))),
+        source_root.join(sentinel).exists(),
+        target_root.join(sentinel).exists(),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires explicit maintained rclone worker and freshly compiled guardian paths"]
+async fn interrupted_real_copy_preserves_unowned_bytes_and_fails_promptly_after_restart() {
+    let root = tempfile::Builder::new()
+        .prefix("covalent-interrupted-copy-")
+        .tempdir()
+        .expect("isolated interrupted-copy test root");
+    let (binaries, receipt) = instrumented_real_worker(
+        root.path(),
+        "worker-receipt",
+        "rclone-interruption-wrapper",
+        "16K",
+        "INTERRUPTED_COPY_PROVENANCE",
+    );
+
     let source_spec = NodeSpec::new(root.path(), "interrupted-source", 0xC1);
     let mut destination_spec = NodeSpec::new(root.path(), "interrupted-destination", 0xC2);
     let source_root = root.path().join("source-files");
@@ -2011,8 +2162,7 @@ async fn interrupted_real_copy_preserves_unowned_bytes_and_fails_promptly_after_
             .expect("delete source sentinel after proved interruption");
         drop(destination);
         let restart_started_at = Instant::now();
-        destination =
-            start_registered_node(&destination_spec, &binaries, &scenario_registry).await;
+        destination = start_registered_node(&destination_spec, &binaries, &scenario_registry).await;
 
         let source_incomplete = wait_batch(&source, folder, 1, "incomplete").await;
         assert!(
@@ -2068,60 +2218,251 @@ async fn interrupted_real_copy_preserves_unowned_bytes_and_fails_promptly_after_
             tail_bytes,
             "destination interruption or restart changed the source tail"
         );
-    })
+    });
+
+    finish_registered_scenario(
+        root,
+        registry,
+        scenario,
+        "interrupted-copy",
+        "INTERRUPTED_COPY",
+    )
     .await;
+}
 
-    let runtimes = registry
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone();
-    let mut cleanup_errors = Vec::new();
-    for (index, runtime) in runtimes.iter().enumerate().rev() {
-        if let Err(error) = runtime.stop().await {
-            cleanup_errors.push(format!("stop runtime {index}: {error:#}"));
-        }
-    }
-    drop(runtimes);
-    registry
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clear();
-    drop(registry);
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires explicit maintained rclone worker and freshly compiled guardian paths"]
+async fn continuous_real_copy_propagates_source_deletion_without_authored_stop() {
+    const SENTINEL: &str = "00-sentinel.bin";
+    const TAIL: &str = "99-tail.bin";
+    const DELETION_LIMIT: Duration = Duration::from_secs(120);
 
-    if cleanup_errors.is_empty() {
-        if let Err(error) = root.close() {
-            cleanup_errors.push(format!("remove owned temp root: {error}"));
-        }
-    } else {
-        let _preserved_root = root.keep();
+    fn healthy(status: &Value, folder: Uuid) -> bool {
+        status["availability"] == "available"
+            && status["lifecycle"] == "running"
+            && status["issue"].is_null()
+            && status["folders"].as_array().is_some_and(|folders| {
+                folders.iter().any(|candidate| {
+                    candidate["folderId"] == folder.to_string()
+                        && candidate["state"] != "error"
+                        && candidate["accessUnavailable"] != true
+                        && candidate["scanPullErrorCount"] == 0
+                        && candidate["reportedErrorRows"] == 0
+                        && candidate["statusError"] == false
+                        && candidate["watchError"] == false
+                })
+            })
     }
-    if cleanup_errors.is_empty() {
+
+    let root = tempfile::Builder::new()
+        .prefix("covalent-continuous-source-delete-")
+        .tempdir()
+        .expect("isolated Continuous source-deletion test root");
+    let (binaries, receipt) = instrumented_real_worker(
+        root.path(),
+        "continuous-worker-receipt",
+        "rclone-continuous-wrapper",
+        "64K",
+        "CONTINUOUS_SOURCE_DELETE_PROVENANCE",
+    );
+    let source_spec = NodeSpec::new(root.path(), "continuous-source", 0xD1);
+    let destination_spec = NodeSpec::new(root.path(), "continuous-destination", 0xD2);
+    let destination_data_directory = destination_spec.data_directory.clone();
+    let source_root = root.path().join("source-files");
+    let destination_root = root.path().join("destination-files");
+    private_directory(&source_root);
+    private_directory(&destination_root);
+    let registry = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let scenario_registry = Arc::clone(&registry);
+    let scenario_receipt = receipt.clone();
+    let scenario = tokio::spawn(async move {
+        let source = start_registered_node(&source_spec, &binaries, &scenario_registry).await;
+        let destination =
+            start_registered_node(&destination_spec, &binaries, &scenario_registry).await;
+        let destination_id = pair(&source, &destination, "Continuous destination").await;
+        let folder = Uuid::new_v4();
+        offer_and_accept_at_cadence(
+            &source,
+            &destination,
+            &destination_id,
+            folder,
+            &source_root,
+            &destination_root,
+            json!({"mode": "continuous"}),
+        )
+        .await;
+        post_ok(
+            &source,
+            "/api/v1/sync/settings",
+            json!({
+                "folderId": folder,
+                "changeId": Uuid::new_v4(),
+                "expectedRevision": 0,
+                "settings": {
+                    "deletionPolicy": {
+                        "propagateSourceDeletions": true,
+                        "restoreLocalDeletions": true,
+                    },
+                    "paused": false,
+                    "cadence": {"mode": "continuous"},
+                    "androidConditions": {"wifiOnly": false, "chargingOnly": false},
+                },
+            }),
+        )
+        .await;
+        for node in [&source, &destination] {
+            wait_for_status(node, "confirmed Continuous deletion settings", |value| {
+                shares_ready_at(value, folder, 1, 1, true, true)
+                    && folder_shares(value, folder).iter().all(|share| {
+                        share["linkSettings"]["settings"]["cadence"]
+                            == json!({"mode": "continuous"})
+                    })
+            })
+            .await;
+        }
+
+        let sentinel_bytes = vec![0x53; 64 * 1024];
+        let tail_bytes = vec![0x54; 2 * 1024 * 1024];
+        let source_control_bytes = b"source control remains exact\n";
+        let destination_unowned_bytes = b"destination-created and unowned\n";
+        write(&source_root, SENTINEL, &sentinel_bytes);
+        write(&source_root, "50-source-control.txt", source_control_bytes);
+        write(&source_root, TAIL, &tail_bytes);
+        write(
+            &destination_root,
+            "destination-unowned.txt",
+            destination_unowned_bytes,
+        );
+        let destination_sentinel = destination_root.join(SENTINEL);
+        let destination_tail = destination_root.join(TAIL);
+        let (transfer_kind, worker_pid) = wait_for_active_transfer(
+            &scenario_receipt,
+            &destination_sentinel,
+            &sentinel_bytes,
+            &destination_tail,
+        )
+        .await;
+        assert_eq!(
+            transfer_kind, "sync",
+            "Continuous deletion propagation must use real rclone sync"
+        );
+        let active = wait_for_status(&source, "active Continuous source generation", |value| {
+            let shares = folder_shares(value, folder);
+            !shares.is_empty()
+                && shares.iter().all(|share| {
+                    share["linkRun"]["phase"] == "running"
+                        && share["linkRun"]["generation"].is_u64()
+                })
+        })
+        .await;
+        let observed_generation = folder_shares(&active, folder)[0]["linkRun"]["generation"]
+            .as_u64()
+            .expect("active Continuous generation");
         assert!(
-            !owned_root.exists(),
-            "owned interrupted-copy temporary root was not removed: {}",
-            owned_root.display()
+            process_is_alive(worker_pid),
+            "exact real sync worker exited before source deletion"
+        );
+        let deletion_deadline = Instant::now() + DELETION_LIMIT;
+        fs::remove_file(source_root.join(SENTINEL))
+            .expect("delete source sentinel during active real sync");
+        assert!(
+            process_is_alive(worker_pid),
+            "exact real sync worker was not alive immediately after source deletion"
         );
         eprintln!(
-            "INTERRUPTED_COPY_CLEANUP temp_root={} runtimes_stopped=true temp_root_absent=true",
-            owned_root.display(),
+            "CONTINUOUS_SOURCE_DELETE_ACTIVE kind={transfer_kind} pid={worker_pid} generation={observed_generation} sentinel_exact=true tail_final_absent=true"
         );
-    } else {
-        eprintln!(
-            "INTERRUPTED_COPY_CLEANUP_FAILED temp_root={} preserved={} errors={cleanup_errors:?}",
-            owned_root.display(),
-            owned_root.exists(),
-        );
-    }
 
-    match scenario {
-        Ok(()) if cleanup_errors.is_empty() => {}
-        Ok(()) => panic!("interrupted-copy cleanup failed: {cleanup_errors:?}"),
-        Err(error) if error.is_panic() => {
-            if !cleanup_errors.is_empty() {
-                eprintln!("INTERRUPTED_COPY_CLEANUP_ERRORS {cleanup_errors:?}");
-            }
-            std::panic::resume_unwind(error.into_panic());
+        wait_for_natural_process_exit(worker_pid).await;
+        while destination_sentinel.exists() && Instant::now() < deletion_deadline {
+            tokio::time::sleep(POLL_INTERVAL).await;
         }
-        Err(error) => panic!("interrupted-copy scenario task failed: {error}"),
-    }
+        if destination_sentinel.exists() {
+            panic!(
+                "Continuous source deletion did not remove the destination sentinel; {}",
+                pending_copy_diagnostic(
+                    &destination_data_directory,
+                    folder,
+                    SENTINEL,
+                    &source_root,
+                    &destination_root,
+                )
+            );
+        }
+        wait_file(
+            &destination_tail,
+            &tail_bytes,
+            "bounded tail after propagated deletion",
+        )
+        .await;
+        let completed =
+            wait_for_status(&source, "fresh Continuous generation completed", |value| {
+                let shares = folder_shares(value, folder);
+                !shares.is_empty()
+                    && shares.iter().all(|share| {
+                        share["linkRun"]["generation"]
+                            .as_u64()
+                            .is_some_and(|generation| generation > observed_generation)
+                            && share["linkRun"]["phase"] == "succeeded"
+                    })
+            })
+            .await;
+        let completed_generation = folder_shares(&completed, folder)[0]["linkRun"]["generation"]
+            .as_u64()
+            .expect("completed fresh Continuous generation");
+        wait_batch(&destination, folder, completed_generation, "succeeded").await;
+        for node in [&source, &destination] {
+            wait_for_status(node, "healthy after Continuous source deletion", |value| {
+                healthy(value, folder)
+            })
+            .await;
+        }
+
+        assert_absent(
+            &source_root.join(SENTINEL),
+            "source sentinel returned after deletion",
+        );
+        assert_absent(
+            &destination_sentinel,
+            "destination sentinel returned after propagated deletion",
+        );
+        assert_eq!(
+            fs::read(source_root.join("50-source-control.txt")).expect("read exact source control"),
+            source_control_bytes
+        );
+        assert_eq!(
+            fs::read(destination_root.join("50-source-control.txt"))
+                .expect("read exact destination control"),
+            source_control_bytes
+        );
+        assert_eq!(
+            fs::read(source_root.join(TAIL)).expect("read exact source tail"),
+            tail_bytes
+        );
+        assert_eq!(
+            fs::read(&destination_tail).expect("read exact destination tail"),
+            tail_bytes
+        );
+        assert_eq!(
+            fs::read(destination_root.join("destination-unowned.txt"))
+                .expect("read preserved destination-created file"),
+            destination_unowned_bytes
+        );
+        assert_absent(
+            &source_root.join("destination-unowned.txt"),
+            "destination-created file reached source",
+        );
+        eprintln!(
+            "CONTINUOUS_SOURCE_DELETE_COMPLETE initial_generation={observed_generation} completed_generation={completed_generation} sentinel_removed=true tail_exact=true healthy=true"
+        );
+    });
+
+    finish_registered_scenario(
+        root,
+        registry,
+        scenario,
+        "Continuous source-deletion",
+        "CONTINUOUS_SOURCE_DELETE",
+    )
+    .await;
 }

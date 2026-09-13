@@ -5,7 +5,7 @@ set -eu
 test "$#" -eq 2 || { echo "usage: $0 /repo/packaging/rclone /new/output" >&2; exit 64; }
 source_dir=$1
 output_root=$2
-repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
 expected_source="$repo_root/packaging/rclone"
 guardian_source="$repo_root/packaging/sync-engine/engine-guardian.c"
 inventory_tool="$repo_root/scripts/collect-go-target-license-inventory.py"

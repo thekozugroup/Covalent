@@ -4,7 +4,7 @@ set -eu
 test "$#" = 2 || { echo "usage: $0 /repo/packaging/rclone /generated/output" >&2; exit 2; }
 source_dir=${1:?Pass the repository rclone module}
 output_root=${2:?Pass the generated output directory}
-repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
 expected_source="$repo_root/packaging/rclone"
 guardian_source="$repo_root/packaging/sync-engine/engine-guardian.c"
 inventory_tool="$repo_root/scripts/collect-go-target-license-inventory.py"

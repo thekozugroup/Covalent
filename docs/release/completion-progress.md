@@ -2,62 +2,60 @@
 
 Updated 2026-09-13. The active goal is defined in [Product requirements](../product/requirements.md#active-completion-goal).
 
-**Current scope: 50% verified, 5 of 10 complete acceptance checks. Rclone migration: 100%.**
+**Current scope: 70% verified, 7 of 10 complete acceptance checks. Rclone migration: 100%.**
 These percentages count accepted user journeys, not remaining development time.
 Rclone is the sole transfer engine. Pairing, one-way transfers, fan-out,
-collection isolation, destination-deletion/restoration, cadence, and shared
-settings have working validation evidence. The project is not release-complete.
+collection isolation, both deletion policies, restoration, cadence, shared
+settings, and the current Android journey have working validation evidence.
+The project is not release-complete.
 
-Source `cf8e38d` passes Rust/contracts, Android foundation, Mac packaging,
-181 Swift tests, live Mac integration, both Docker architectures, dependency
-checks, CodeQL, and version checks. The native Mac suite has five of seven tests
-passing and no skips. All four native popup controls now expose their required
-accessibility actions, and their selection assertions pass. Populated Links still
-reports seven contrast occurrences across six distinct text strings. The folder
-journey reaches its final menu/status checks at 241.08 seconds, exceeding its
-unchanged 240-second allowance. No transfer assertion fails. VoiceOver's
-system-keyboard preflight is denied before any key event is posted; actual
-VoiceOver speech and actions remain unverified.
+Source `0e5bcaf` passes Rust/contracts, Android foundation and device checks,
+Mac packaging, 181 Swift tests, live Mac integration, both Docker architectures,
+dependency checks, CodeQL, and version checks. The only direct platform failure
+is the Mac UI job; the aggregate software gate therefore also fails.
 
-The current follow-up strengthens the seven affected text sites and styles the
-two implicit labels directly. Native popup controls and duplicate device choices
-remain in place. Hosted contrast and full-journey verification are still required.
-The integrated runtime reports
-an uncertain copy that cannot safely resume as a failed destination run, with
-conditional recovery guidance. Ownership, deletion settings, transient retries,
-protocol values, seven-test coverage, and deadlines remain unchanged.
+The native Mac suite passes five of seven tests with no skips. All four popup
+selections and the functional transfer, relaunch, menu, and status phases
+complete. The folder journey reaches its final menu/status checks at 248.48
+seconds, exceeding its unchanged 240-second allowance while accessibility
+checks report six contrast occurrences across five strings. VoiceOver's system
+keyboard preflight is denied before enablement, speech, or setup action. Local
+validation found and corrected logical `/tmp` versus physical `/private/tmp`
+comparisons in both package builders. The Mac test harness now selects ad-hoc
+signing explicitly and checks captured signature output without a short-circuit
+pipeline. The local build and signature checks pass. XCTest then times out while
+enabling automation mode, before any product test starts. Developer authorization
+is disabled on this Mac; enabling it still needs the user's confirmation and
+does not itself prove that UI automation or VoiceOver will work.
 
-Android's current job passes 195 JVM tests and all 82 device baseline tests in
-77.962 seconds. Its full SAF journey fails at the initial destination folder
-picker, before any transfer. The picker wait reaches its unchanged 90-second
-deadline while another package owns the active accessibility root. Existing
-diagnostics do not identify that package; a zero window count is inconclusive
-because interactive-window retrieval was not enabled. The follow-up adds bounded
-picker diagnostics and restores the instrumentation service flags afterward.
-It does not claim to fix the picker or change its navigation or deadline.
+Android on `0e5bcaf` passes 195 JVM tests, all 82 baseline device tests in
+63.081 seconds, and the unchanged full SAF journey in 413.129 seconds. The
+source-derived 83-test contract passes, restoring Android acceptance check 8.
+This pass does not explain the earlier `ec49a3d` immediate source-deletion
+timeout. That failure remains recorded alongside the new current-source proof
+below; discovering its unrecorded internal state is not an additional release gate.
 
-The preceding `65445e9` complete SAF journey passed in 415.871 seconds, the third
-full pass after the `ec49a3d` source-deletion timeout. Those passes remain useful
-evidence but do not explain that failure. Source-deletion stability and final
-Android acceptance remain open.
+The `0e5bcaf` Android Docker fixture build step completes in 15 seconds with 57
+numbered cached BuildKit steps, two cache-manifest imports, successful export,
+and source-fingerprint validation. Previous cold builds took 542 and 719 seconds.
+This measures CI build reuse, not product transfer speed or battery use.
 
-An earlier exact-source Android Docker fixture built in six seconds, with 56
-cached stages, successful cache export, freshness validation, and the full device
-journey passing. Previous cold builds took 542 and 719 seconds. This measures CI
-build reuse across different runs, not product transfer speed or battery use.
-The current fixture took 545 seconds with 48 cached stages and successful export;
-an uncached compilation step still took 495.9 seconds.
+The real Continuous source-deletion journey passes in 148.03 seconds. It deletes
+a source file while the same rclone process is still copying, without stopping
+or reconfiguring the link. The destination copy disappears within the fixed
+120-second deletion allowance, remaining files are exact, unrelated destination
+files stay intact, and a newer generation succeeds on both devices.
 
-The real interrupted-copy journey passes in 57.53 seconds using the existing
-test-only helper-signing procedure. It observes an active rclone sync after the
-first file arrives, stops and reaps that worker, deletes the source file, and
-restarts the receiver. Unowned destination bytes remain intact; both devices
-report an incomplete run with a failed destination result. Source files remain
-unchanged, and temporary folders and helper processes are cleared. Two earlier
-attempts failed before the transfer. Their packaged guardian requires a
-sandboxed parent; the command-line test has none. Those failures
-remain recorded. This separate fault proof does not establish the cause of the
-earlier Android deletion timeout or validate production sandbox inheritance.
+The interrupted-copy regression passes again in 57.38 seconds after shared test
+helpers were extracted. Stopping the receiver reaps its worker in 105 ms; after
+restart, both devices report an incomplete run and the destination reports
+failure. Unowned bytes remain intact. If interruption leaves a published copy
+whose ownership cannot be confirmed, recovery requires restoring the source file
+or removing only that uncertain copy before retrying. This safety limitation is
+visible as a failed run, never success. Both fixtures, worker processes, and the
+private test helper are cleaned up; strict Clippy passes. These command-line
+tests do not establish the historical Android failure's cause or production
+sandbox inheritance.
 
 The retained personal Android candidate from `6499ded` passed its complete SAF
 journey in 394.998 seconds. Its seven installable files are retained; its owned
@@ -74,12 +72,12 @@ have been removed while preserving the tested candidate and durable evidence.
 | --- | --- | --- |
 | 1 | Native setup pairs devices and creates a source/destination link; files never flow backward. | Verified |
 | 2 | Fan-out destinations work independently; multiple sources contribute safely to one collection. | Verified |
-| 3 | Both source-deletion options work with clear explanations and failed-scan protection. | Open: intermittent propagation timeout unresolved |
+| 3 | Both source-deletion options work with clear explanations and failed-scan protection. | Verified; ambiguous interrupted copies require explicit recovery |
 | 4 | Destination deletions stay local across source edits/restarts; explicit restoration works. | Verified |
 | 5 | Manual, scheduled, and continuous transfers respect platform limits; idle batch workers stop. | Verified |
 | 6 | Settings edited on any authorized member converge across the link; pending/stale edits remain visible. | Verified |
 | 7 | Mac setup, links, settings, and per-link menu bar status pass native HIG/keyboard/VoiceOver checks. | Open |
-| 8 | Tomato-inspired Android floating actions, typography, data/status visuals, and top bar; actual pairing, permission, transfer, and background journeys pass. | Open: current picker failure; earlier deletion timeout unresolved |
+| 8 | Tomato-inspired Android floating actions, typography, data/status visuals, and top bar; actual pairing, permission, transfer, and background journeys pass. | Verified |
 | 9 | Installable Mac/Android/Docker candidates pass real laptop–Atmos transfers and server mount handling; use an Unraid plugin only for a demonstrated Docker limitation. | Open |
 | 10 | Relevant fault/security checks pass; idle/transfer performance is measured; temporary fixtures are removed; GitHub releases and installation guidance are published. | Open |
 

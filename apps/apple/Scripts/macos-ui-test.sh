@@ -453,6 +453,11 @@ if ! run_bounded 600 xcodebuild \
   -destination 'platform=macOS,arch=arm64' \
   ARCHS=arm64 \
   EXCLUDED_ARCHS=x86_64 \
+  CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY=- \
+  DEVELOPMENT_TEAM="" \
+  PROVISIONING_PROFILE_SPECIFIER="" \
+  OTHER_CODE_SIGN_FLAGS="" \
   -destination-timeout 30 \
   -parallel-testing-enabled NO \
   -maximum-parallel-testing-workers 1 \
@@ -480,7 +485,8 @@ do
     exit 1
   }
 done
-if ! codesign -d --verbose=4 "$built_app" 2>&1 | grep -Fq 'Signature=adhoc'; then
+if ! app_signature=$(codesign -d --verbose=4 "$built_app" 2>&1) \
+  || [[ "$app_signature" != *'Signature=adhoc'* ]]; then
   print -u2 -- "managed-node UI cleanup supports only this hosted ad-hoc Debug app"
   exit 1
 fi
