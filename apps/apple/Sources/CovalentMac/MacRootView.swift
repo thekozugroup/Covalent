@@ -16,13 +16,21 @@ struct MacRootView: View {
                         sidebarLabel(for: section)
                     }
                 }
-                Section("Legacy and Advanced") {
+                Section {
                     ForEach([AppSection.backups, .settings]) { section in
                         sidebarLabel(for: section)
                     }
+                } header: {
+                    Text("Legacy and Advanced")
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("Legacy and Advanced")
                 }
-                Section("Local Service") {
+                Section {
                     serviceState
+                } header: {
+                    Text("Local Service")
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("Local Service")
                 }
             }
             .listStyle(.sidebar)

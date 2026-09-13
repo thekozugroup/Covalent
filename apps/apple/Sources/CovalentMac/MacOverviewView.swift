@@ -28,10 +28,16 @@ struct MacOverviewView: View {
 
             Section("This Mac") {
                 if let status = model.status {
-                    LabeledContent("Device", value: status.deviceName)
-                        .accessibilityIdentifier("status.device")
+                    LabeledContent("Device") {
+                        Text(status.deviceName)
+                            .foregroundStyle(.primary)
+                    }
+                    .accessibilityIdentifier("status.device")
                 }
-                LabeledContent("Local Service", value: model.serviceStatusLabel)
+                LabeledContent("Local Service") {
+                    Text(model.serviceStatusLabel)
+                        .foregroundStyle(.primary)
+                }
                 if model.phase != .ready {
                     Label(serviceGuidance, systemImage: serviceSymbol)
                         .foregroundStyle(.secondary)

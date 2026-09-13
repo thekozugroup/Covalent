@@ -187,7 +187,7 @@ emit_failed_result_details() {
       [[ -f "$file" && ! -L "$file" ]] || continue
       bytes=$(stat -f '%z' "$file" 2>/dev/null || print 0)
       (( bytes > 0 && bytes <= 65536 )) || continue
-      LC_ALL=C grep -q '^Accessibility audit:' "$file" || continue
+      LC_ALL=C grep -Eq '^(Accessibility audit:|UI test failure:)' "$file" || continue
       if (( count == 0 )); then
         print -u2 -- "--- accessibility audit elements from xcresult ---"
       fi

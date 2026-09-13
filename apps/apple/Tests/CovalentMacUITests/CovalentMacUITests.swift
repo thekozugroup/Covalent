@@ -3,6 +3,17 @@ import XCTest
 
 @MainActor
 final class CovalentMacUITests: XCTestCase {
+    override func record(_ issue: XCTIssue) {
+        let location = issue.sourceCodeContext.location
+        let details = "UI test failure: \(issue.compactDescription)\n"
+            + "\(location?.fileURL.path ?? "unknown file"):\(location?.lineNumber ?? 0)\n"
+        let attachment = XCTAttachment(string: details)
+        attachment.name = "UI test failure location"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        super.record(issue)
+    }
+
     /// How long a screen transition may take before the test gives up.
     ///
     /// This is a tolerance for runner contention, not an assertion. Three

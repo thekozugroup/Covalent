@@ -230,8 +230,11 @@ class Fixture:
         current = row["linkSettings"]
         if not current["confirmed"] or current["pendingChange"] is not None:
             raise GateError("link settings are not ready for an edit")
+        current_settings = current["settings"]
         settings = {"deletionPolicy": {"propagateSourceDeletions": propagate,
-                                        "restoreLocalDeletions": restore}, "paused": False}
+                                        "restoreLocalDeletions": restore}, "paused": False,
+                    "cadence": current_settings["cadence"],
+                    "androidConditions": current_settings["androidConditions"]}
         body = {"folderId": folder_id, "changeId": str(uuid.uuid4()),
                 "expectedRevision": current["revision"], "settings": settings}
         self.wait(lambda: self.request(key, "/api/v1/sync/settings", body)["schemaVersion"] == 1,
@@ -269,6 +272,11 @@ class Fixture:
                         "phase": {"offered", "awaitingCommit", "ready", "paused", "removed"},
                         "peerConnection": {"unknown", "connected", "disconnected", "paused"},
                     }.items() if isinstance(value := share.get(name), str) and value in allowed}
+                    | ({"runPhase": run_phase} if isinstance(share.get("linkRun"), dict)
+                       and (run_phase := share["linkRun"].get("phase")) in {
+                           "preparing", "running", "succeeded", "incomplete", "interrupted", "cancelled"
+                       }
+                       else {})
                     for share in status.get("shares", [])[:8] if isinstance(share, dict)
                 ]
                 row["folders"] = [
@@ -314,6 +322,36 @@ class Fixture:
         self.phase = "folder acceptance and forward transfer"
         self.request("b", "/api/v1/sync/accept", {"offerId": offer_id, "selectedRoot": "/sync"})
         self.wait(lambda: self.matches("b", "forward.txt", payload), "forward transfer")
+
+        def completed_continuous_generation():
+            generation = None
+            for key in ("a", "b"):
+                current = self.status(key)
+                rows = [row for row in current["shares"] if row["offerId"] == offer_id]
+                if len(rows) != 1 or current["lifecycle"] != "stopped":
+                    return None
+                settings = rows[0]["linkSettings"]["settings"]
+                if (settings["cadence"] != {"mode": "continuous"}
+                        or settings["androidConditions"] != {"wifiOnly": False,
+                                                              "chargingOnly": False}):
+                    return None
+                run = rows[0].get("linkRun") or {}
+                if run.get("phase") != "succeeded" or type(run.get("generation")) is not int:
+                    return None
+                if generation is not None and run["generation"] != generation:
+                    return None
+                generation = run["generation"]
+            return generation
+
+        completed = {}
+        def retain_initial_generation():
+            generation = completed_continuous_generation()
+            if generation is None:
+                return False
+            completed["initial"] = generation
+            return True
+        self.wait(retain_initial_generation, "initial default continuous batch completion")
+        initial_generation = completed["initial"]
         self.checks.append("idempotent-offer-dual-consent-full-scan-and-forward-transfer")
         self.phase = "pause and resume"
         self.request("a", "/api/v1/sync/pause", {"offerId": offer_id, "paused": True})
@@ -327,6 +365,8 @@ class Fixture:
             time.sleep(0.25)
         self.request("a", "/api/v1/sync/pause", {"offerId": offer_id, "paused": False})
         self.wait(lambda: self.matches("b", "forward.txt", paused_payload), "resumed transfer")
+        self.wait(lambda: (completed_continuous_generation() or 0) > initial_generation,
+                  "resumed batch completion before cold restart")
         self.checks.append("pause-withholds-edit-and-resume-converges")
         self.phase = "cold restart and one-way direction"
         before = self.request("b", "/api/v1/transport/identity")
