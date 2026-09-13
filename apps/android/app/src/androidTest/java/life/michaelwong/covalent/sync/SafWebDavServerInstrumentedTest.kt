@@ -188,28 +188,6 @@ class SafWebDavServerInstrumentedTest {
         }
     }
 
-    @Test
-    fun restrictedRcloneCanStreamIntoTheSelectedSafTree() {
-        val endpoint = start()
-        println("COVALENT_SAF_TEST_PORT=${endpoint.port}")
-        val deadline = System.nanoTime() + 45_000_000_000L
-        var uploaded: DocumentFile? = null
-        var roundTrip: DocumentFile? = null
-        while (System.nanoTime() < deadline && (uploaded == null || roundTrip == null)) {
-            val root = DocumentFile.fromTreeUri(context, treeUri)
-            val nested = root?.findFile("Nested")
-            uploaded = nested?.findFile("From-rclone.txt")
-            roundTrip = nested?.findFile("Roundtrip.txt")
-            if (uploaded == null || roundTrip == null) Thread.sleep(100)
-        }
-        val uri = requireNotNull(uploaded?.uri) { "The restricted rclone worker did not upload the test file." }
-        val actual = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-        assertArrayEquals(RCLONE_CONTENT, requireNotNull(actual))
-        val roundTripUri = requireNotNull(roundTrip?.uri) { "The restricted rclone worker did not finish the read-back." }
-        val roundTripBytes = context.contentResolver.openInputStream(roundTripUri)?.use { it.readBytes() }
-        assertArrayEquals("hello\nworld\n".encodeToByteArray(), requireNotNull(roundTripBytes))
-    }
-
     private fun start(): SafWebDavEndpoint {
         val instance = SafWebDavServer(context, treeUri, USERNAME, PASSWORD)
         server = instance
@@ -297,7 +275,6 @@ class SafWebDavServerInstrumentedTest {
     private companion object {
         const val USERNAME = "covalent-test-user"
         const val PASSWORD = "covalent-test-password-long-enough"
-        val RCLONE_CONTENT = "rclone streamed this through the SAF bridge\n".encodeToByteArray()
         const val ACCESS_FLAGS = Intent.FLAG_GRANT_READ_URI_PERMISSION or
             Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
 

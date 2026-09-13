@@ -283,30 +283,23 @@ render_log "$real_suite" "$real_count" > "$work_dir/real.log"
 accept "a synthetic clean run of the repository's own $real_count-test suite" \
   "$work_dir/real.log" "$real_suite"
 
-# The folder journey intentionally keeps one source-level test name while its
-# permission transitions run in three separate target processes. Prove that the
-# host partition still covers every derived name exactly once, and that each
-# execution of the one journey name must independently be a real passing run.
-journey_test='life.michaelwong.covalent.node.FolderSyncJourneyInstrumentedTest#nativeFolderScreenSyncsBothWaysAcrossPauseRestartAccessLossAndRemoval'
-if [ "$(grep -Fxc "$journey_test" "$real_suite")" -ne 1 ]; then
-  echo "the repository suite does not contain exactly one host-phased folder journey" >&2
+# Partition the entire self-contained SAF class. Adding a second test must not
+# silently exclude it from instrumentation while leaving it in the baseline.
+journey_class=life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest
+awk -v prefix="$journey_class#" 'index($0, prefix) != 1' "$real_suite" > "$work_dir/real-base-suite.txt"
+awk -v prefix="$journey_class#" 'index($0, prefix) == 1' "$real_suite" > "$work_dir/real-journey-suite.txt"
+base_count=$(grep -c '^' "$work_dir/real-base-suite.txt")
+journey_count=$(grep -c '^' "$work_dir/real-journey-suite.txt" || true)
+if [ "$journey_count" -eq 0 ] || [ "$((base_count + journey_count))" -ne "$real_count" ]; then
+  echo "the SAF journey partition does not cover the repository suite" >&2
   failures=$((failures + 1))
 else
-  grep -Fxv "$journey_test" "$real_suite" > "$work_dir/real-base-suite.txt"
-  printf '%s\n' "$journey_test" > "$work_dir/real-journey-suite.txt"
-  if [ "$(grep -c '^' "$work_dir/real-base-suite.txt")" -ne "$((real_count - 1))" ]; then
-    echo "the host-phased partition does not cover the repository suite" >&2
-    failures=$((failures + 1))
-  fi
-  render_log "$work_dir/real-base-suite.txt" "$((real_count - 1))" \
-    > "$work_dir/real-base.log"
+  render_log "$work_dir/real-base-suite.txt" "$base_count" > "$work_dir/real-base.log"
   accept "the exact non-journey suite in its own process" \
     "$work_dir/real-base.log" "$work_dir/real-base-suite.txt"
-  for phase in setup denied restored; do
-    render_log "$work_dir/real-journey-suite.txt" 1 > "$work_dir/real-$phase.log"
-    accept "the folder journey $phase phase in its own process" \
-      "$work_dir/real-$phase.log" "$work_dir/real-journey-suite.txt"
-  done
+  render_log "$work_dir/real-journey-suite.txt" "$journey_count" > "$work_dir/real-journey.log"
+  accept "the exact SAF journey suite in its own process" \
+    "$work_dir/real-journey.log" "$work_dir/real-journey-suite.txt"
 fi
 
 if [ "$failures" -ne 0 ]; then

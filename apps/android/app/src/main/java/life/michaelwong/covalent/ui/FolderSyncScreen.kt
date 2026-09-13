@@ -727,7 +727,7 @@ internal fun FolderSyncScreen(
                                         stringResource(R.string.folder_link_direction),
                                         fontWeight = FontWeight.SemiBold,
                                     )
-                                    Text(stringResource(R.string.folder_link_source_folder, checkNotNull(selectedFolder)))
+                                    Text(stringResource(R.string.folder_link_source_folder, selectedFolderLabel ?: selectedFolderFallback))
                                     Text(stringResource(R.string.folder_link_destination_peer, peerName))
                                 }
                             }
