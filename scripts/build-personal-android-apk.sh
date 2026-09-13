@@ -191,11 +191,7 @@ export ANDROID_SDK_ROOT="$android_sdk"
 export COVALENT_ANDROID_NDK_HOME="$android_sdk/ndk/$ndk_version"
 
 command -v go >/dev/null 2>&1 || fail "install Go 1.26.7 to build the folder sync engine"
-if [ -z "${SYNCTHING_SOURCE_DIR:-}" ]; then
-  SYNCTHING_SOURCE_DIR="$repo_root/artifacts/vendor/syncthing"
-  "$repo_root/scripts/prepare-sync-engine-source.sh" "$SYNCTHING_SOURCE_DIR"
-  export SYNCTHING_SOURCE_DIR
-fi
+test -f "$repo_root/packaging/rclone/go.mod" || fail "restricted rclone module is missing"
 
 echo "2/4 Build the debug-signed APK and both native ABIs"
 "$repo_root/apps/android/gradlew" -p "$repo_root/apps/android" --no-daemon \

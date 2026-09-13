@@ -19,8 +19,8 @@ mkdir -p \
   "$fixture/packaging/web" \
   "$fixture/packaging/docker/caddy" \
   "$fixture/packaging/docker/alpine/licenses" \
+  "$fixture/packaging/rclone" \
   "$fixture/packaging/sync-engine" \
-  "$fixture/docs/licenses/sync-engine" \
   "$fixture/scripts" \
   "$fixture/target"
 printf 'target\n' > "$fixture/.dockerignore"
@@ -35,6 +35,8 @@ printf '{}\n' > "$fixture/packaging/docker/Caddyfile"
 printf '#!/bin/sh\n' > "$fixture/packaging/docker/entrypoint.sh"
 printf 'module caddy\n' > "$fixture/packaging/docker/caddy/go.mod"
 printf 'package main\n' > "$fixture/packaging/docker/caddy/main.go"
+printf 'module rclone\n' > "$fixture/packaging/rclone/go.mod"
+printf 'package main\n' > "$fixture/packaging/rclone/main.go"
 printf 'int main(void) { return 0; }\n' > "$fixture/packaging/sync-engine/engine-guardian.c"
 printf '#!/bin/sh\n' > "$fixture/scripts/build-linux-sync-engine.sh"
 printf '#!/usr/bin/env python3\n' > "$fixture/scripts/collect-caddy-distribution-evidence.py"
@@ -44,7 +46,6 @@ printf '{}\n' > "$fixture/packaging/docker/alpine/packaged-evidence-lock.json"
 printf 'license\n' > "$fixture/packaging/docker/alpine/licenses/MIT-terms.txt"
 printf '#!/usr/bin/env python3\n' > "$fixture/scripts/collect-go-target-license-inventory.py"
 printf '#!/usr/bin/env python3\n' > "$fixture/scripts/collect-sync-engine-notices.py"
-printf 'go license\n' > "$fixture/docs/licenses/sync-engine/Go-1.26.7-LICENSE.txt"
 git -C "$fixture" add .
 git -C "$fixture" -c user.name=Covalent -c user.email=release@covalent.invalid \
   commit -qm fixture
@@ -104,8 +105,8 @@ fi
 # Every new native producer input must invalidate a cached image.
 for input in \
   LICENSE \
+  packaging/rclone/main.go \
   packaging/sync-engine/engine-guardian.c \
-  docs/licenses/sync-engine/Go-1.26.7-LICENSE.txt \
   scripts/build-linux-sync-engine.sh \
   scripts/collect-caddy-distribution-evidence.py \
   scripts/collect-alpine-runtime-evidence.py \

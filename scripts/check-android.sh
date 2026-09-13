@@ -221,8 +221,8 @@ set -- \
   --record "$jni_reports/jni-link-provenance-x86_64.json" \
   --record "$engine_reports/guardian-link-provenance-arm64-v8a.json" \
   --record "$engine_reports/guardian-link-provenance-x86_64.json" \
-  --record "$engine_reports/syncthing-link-provenance-arm64-v8a.json" \
-  --record "$engine_reports/syncthing-link-provenance-x86_64.json" \
+  --record "$engine_reports/rclone-link-provenance-arm64-v8a.json" \
+  --record "$engine_reports/rclone-link-provenance-x86_64.json" \
   --debug-package "$repo_root/apps/android/app/build/outputs/apk/debug/app-debug.apk" \
   --release-package "$repo_root/apps/android/app/build/outputs/apk/release/app-release-unsigned.apk" \
   --android-sbom "$android_sbom" \

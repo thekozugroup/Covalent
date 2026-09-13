@@ -708,7 +708,7 @@ def collect(args) -> dict:
     archive, packaged = source_bundle(lock, inputs, local)
     lines = ['Covalent Alpine runtime notices', '',
              'This inventory covers installed Alpine packages and the CA file copied from the',
-             'pinned Go builder. Separate Caddy and Syncthing notices cover those binaries.',
+             'pinned Go builder. Separate Caddy and rclone notices cover those binaries.',
              'Package license expressions come from the exact Alpine installed database.',
              'Full corresponding source for every GPL/MPL origin is in runtime-source.tar.gz.',
              'The archive also includes small permissive components. OpenSSL source remains',

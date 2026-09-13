@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a bounded notice bundle from an exact Syncthing target inventory.
+"""Build a bounded notice bundle from an exact restricted rclone target inventory.
 
 The input inventory is the output of the target `go list -deps -json` evidence
 collector. This tool copies byte-exact license and notice files; it does not
@@ -22,18 +22,16 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 
-ENGINE_VERSION = "v2.1.3"
-ENGINE_COMMIT = "946e2b83a1f6c6ae119427c09e0a5802940b82ff"
-MAIN_MODULE = "github.com/syncthing/syncthing"
+ENGINE_VERSION = "v1.75.1"
+ENGINE_COMMIT = "687d264b689b8c49a67e2e52a8a5e0caa01c04ce"
+MAIN_MODULE = "github.com/thekozugroup/Covalent/packaging/rclone"
 GO_VERSION = "go1.26.7"
 GO_LICENSE_SHA256 = "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
 GO_PATENTS_SHA256 = "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
 GO_BORING_LICENSE_SHA256 = "56210f826b8f0fbac3160dfe55c97f4019eb6cdda3963b5a0eab8a8bdb62360e"
-SYNCTHING_LICENSE_SHA256 = "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04"
-SYNCTHING_AUTHORS_SHA256 = "5a0044d13ddf6f013bdd5c2bc419bf45d6123c356567510237e82f304d113d48"
+RCLONE_LICENSE_SHA256 = "9266eae9c6a441de0f6847f19ac8f09b280d55612b079eca03b3d49b822c1a71"
 GUARDIAN_SHA256 = "c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579"
 COVALENT_LICENSE_SHA256 = "ff9bc316792502655bcae384b8e5a4604da93385fda00552b77d85c334b94acd"
-OFL_LICENSE_SHA256 = "1d361a8f8e8ce6e68457dcd93fb56e162e6baa3bbb7e7573a290d44399f6b57e"
 SAFE_MODULE = re.compile(r"[A-Za-z0-9._~+/-]{1,512}")
 SAFE_VERSION = re.compile(r"v[0-9A-Za-z.+~-]{1,255}")
 SAFE_TARGET = re.compile(r"[A-Za-z0-9_.+-]{1,64}")
@@ -71,7 +69,7 @@ MAX_SOURCE_ENTRIES = 100_000
 MAX_SOURCE_NAME_BYTES = 32 * 1024 * 1024
 MAX_SOURCE_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
 MAX_SOURCE_ARCHIVE_BYTES = 64 * 1024 * 1024
-RECOGNIZED_LICENSE_TEXTS = {"MPL-2.0"}
+RECOGNIZED_LICENSE_TEXTS = {"MIT", "MPL-2.0"}
 
 
 def _read_regular(path: pathlib.Path, maximum: int) -> bytes:
@@ -117,7 +115,7 @@ def _sha256(data: bytes) -> str:
 
 
 def _recognized_license_texts(data: bytes) -> set[str]:
-    """Recognize only texts that need corresponding-source packaging.
+    """Recognize license texts needed by bundle records.
 
     This is deliberately not a general SPDX classifier or legal conclusion.
     """
@@ -127,6 +125,8 @@ def _recognized_license_texts(data: bytes) -> set[str]:
         or b"mozilla public license, version 2.0" in normalized
     ):
         return {"MPL-2.0"}
+    if b"permission is hereby granted, free of charge" in normalized:
+        return {"MIT"}
     return set()
 
 
@@ -478,7 +478,6 @@ def _combined_notice(
     module_rows: list[dict[str, Any]],
     source_archives: list[dict[str, Any]],
     toolchain_notices: list[dict[str, Any]],
-    source_patches: list[dict[str, Any]],
 ) -> bytes:
     sections: list[tuple[str, str]] = []
     for item in go_files:
@@ -498,18 +497,13 @@ def _combined_notice(
                     item["bundlePath"],
                 )
             )
-    sections.extend(
-        (
-            ("Covalent engine guardian / MIT license", "guardian/Covalent-LICENSE.txt"),
-            ("Embedded Fork Awesome assets / OFL-1.1", "supplemental/OFL-1.1.txt"),
-        )
+    sections.append(
+        ("Covalent engine guardian / MIT license", "guardian/Covalent-LICENSE.txt")
     )
     for item in toolchain_notices:
         sections.append((item["label"], item["bundlePath"]))
-    for item in source_patches:
-        sections.append((item["label"], item["bundlePath"]))
     combined = bytearray(
-        b"Covalent synchronized-folder engine notices\n"
+        b"Covalent rclone engine notices\n"
         b"Exact copied texts for the compiled target graph; release review remains required.\n"
     )
     if source_archives:
@@ -532,22 +526,6 @@ def _combined_notice(
                 combined.extend(
                     f"  Go module content sum: {item['moduleSum']}\n".encode("utf-8")
                 )
-    if source_patches:
-        combined.extend(
-            b"\n===== Covalent source modifications =====\n"
-            b"The bundled main-module source archive contains these applied patches.\n"
-        )
-        for item in source_patches:
-            combined.extend(
-                (
-                    f"{item['label']}\n"
-                    f"  bundled patch: {item['bundlePath']}\n"
-                    f"  patch SHA-256: {item['sha256']}\n"
-                    f"  patch bytes: {item['bytes']}\n"
-                    f"  modified source archive: {item['modifiedSourceArchive']['bundlePath']}\n"
-                    f"  modified source SHA-256: {item['modifiedSourceArchive']['sha256']}\n"
-                ).encode("utf-8")
-            )
     for label, relative in sections:
         data = _read_regular(_safe_child(output, relative), MAX_CANDIDATE_BYTES)
         combined.extend(f"\n===== {label} =====\n".encode("utf-8"))
@@ -659,10 +637,8 @@ def build_bundle(
     go_root: pathlib.Path,
     guardian_source: pathlib.Path,
     project_license: pathlib.Path,
-    ofl_license: pathlib.Path,
     output: pathlib.Path,
     toolchain_notice_inputs: list[tuple[str, str, pathlib.Path, str]] | None = None,
-    source_patch_inputs: list[tuple[str, str, pathlib.Path, str]] | None = None,
     source_archive_suffix: str = ".tar.gz",
 ) -> dict[str, Any]:
     if source_archive_suffix not in {".tar.gz", ".tgz"}:
@@ -679,7 +655,6 @@ def build_bundle(
     budget = Budget()
     source_budget = SourceBudget()
     toolchain_notice_inputs = toolchain_notice_inputs or []
-    source_patch_inputs = source_patch_inputs or []
     toolchain_notices: list[dict[str, Any]] = []
     seen_toolchain_names: set[str] = set()
     for label, name, path, expected_digest in toolchain_notice_inputs:
@@ -704,43 +679,6 @@ def build_bundle(
             {
                 "label": label,
                 "sourceName": name,
-                "bundlePath": destination,
-                "bytes": len(data),
-                "sha256": expected_digest,
-            }
-        )
-
-    source_patches: list[dict[str, Any]] = []
-    seen_patch_names: set[str] = set()
-    for label, name, path, expected_digest in source_patch_inputs:
-        if (
-            not label
-            or len(label.encode("utf-8")) > 256
-            or any(ord(character) < 0x20 for character in label)
-            or SAFE_TOOLCHAIN_NAME.fullmatch(name) is None
-            or name in seen_patch_names
-            or HEX_SHA256.fullmatch(expected_digest) is None
-        ):
-            raise NoticeError("source patch descriptor is malformed")
-        seen_patch_names.add(name)
-        data = _exact_file(path, expected_digest, MAX_CANDIDATE_BYTES)
-        source_copy = _exact_file(
-            _safe_child(source_root, f"covalent-patches/{name}"),
-            expected_digest,
-            MAX_CANDIDATE_BYTES,
-        )
-        if source_copy != data:
-            raise NoticeError("modified source patch copy differs")
-        destination = f"patches/{name}"
-        _write_new(output / destination, data)
-        budget.files += 1
-        budget.bytes += len(data)
-        if budget.files > MAX_CANDIDATES or budget.bytes > MAX_TOTAL_BYTES:
-            raise NoticeError("notice bundle aggregate bound exceeded")
-        source_patches.append(
-            {
-                "label": label,
-                "sourcePath": f"covalent-patches/{name}",
                 "bundlePath": destination,
                 "bytes": len(data),
                 "sha256": expected_digest,
@@ -930,7 +868,7 @@ def build_bundle(
             source_version = replacement["version"] if replacement else version_value
             if path == MAIN_MODULE:
                 external_source = (
-                    "https://github.com/syncthing/syncthing/tree/" + ENGINE_COMMIT
+                    "https://github.com/rclone/rclone/tree/" + ENGINE_COMMIT
                 )
             else:
                 external_source = (
@@ -955,67 +893,33 @@ def build_bundle(
             module_row
         )
 
-    if source_patches:
-        main_source = next(
-            (item for item in source_archives if item["path"] == MAIN_MODULE),
-            None,
-        )
-        if main_source is None:
-            raise NoticeError("modified main-module source archive is unavailable")
-        main_source["sourceState"] = "modified"
-        main_source["modifications"] = [
-            {
-                "bundlePath": item["bundlePath"],
-                "bytes": item["bytes"],
-                "sha256": item["sha256"],
-            }
-            for item in source_patches
-        ]
-        for item in source_patches:
-            item["modifiedSourceArchive"] = dict(main_source["archive"])
-
     source_license = next(
         (
             file
             for module in module_rows
             if module["path"] == MAIN_MODULE
             for file in module["files"]
-            if file["sourcePath"] == "LICENSE"
-        ),
-        None,
-    )
-    source_authors = next(
-        (
-            file
-            for module in module_rows
-            if module["path"] == MAIN_MODULE
-            for file in module["files"]
-            if file["sourcePath"] == "AUTHORS"
+            if file["sourcePath"] == "LICENSE.rclone"
         ),
         None,
     )
     if (
         source_license is None
-        or source_license["sha256"] != SYNCTHING_LICENSE_SHA256
-        or source_authors is None
-        or source_authors["sha256"] != SYNCTHING_AUTHORS_SHA256
+        or source_license["sha256"] != RCLONE_LICENSE_SHA256
     ):
-        raise NoticeError("Syncthing license or author evidence differs")
+        raise NoticeError("rclone license evidence differs")
 
     guardian = _exact_file(guardian_source, GUARDIAN_SHA256, 128 * 1024)
     covalent_license = _exact_file(project_license, COVALENT_LICENSE_SHA256, 128 * 1024)
-    ofl = _exact_file(ofl_license, OFL_LICENSE_SHA256, 128 * 1024)
     _write_new(output / "guardian" / "engine-guardian.c", guardian)
     _write_new(output / "guardian" / "Covalent-LICENSE.txt", covalent_license)
-    _write_new(output / "supplemental" / "OFL-1.1.txt", ofl)
-    budget.files += 3
-    budget.bytes += len(guardian) + len(covalent_license) + len(ofl)
+    budget.files += 2
+    budget.bytes += len(guardian) + len(covalent_license)
     if budget.files > MAX_CANDIDATES or budget.bytes > MAX_TOTAL_BYTES:
         raise NoticeError("notice bundle aggregate bound exceeded")
 
     combined = _combined_notice(
-        output, go_files, module_rows, source_archives, toolchain_notices,
-        source_patches
+        output, go_files, module_rows, source_archives, toolchain_notices
     )
     combined_digest = _sha256(combined)
     budget.files += 1
@@ -1045,14 +949,7 @@ def build_bundle(
             "sourceBundlePath": "guardian/engine-guardian.c",
             "licenseBundlePath": "guardian/Covalent-LICENSE.txt",
         },
-        "supplementalLicenses": [
-            {
-                "reason": "The embedded Fork Awesome font names OFL-1.1 but its upstream candidate file contains only a reference.",
-                "license": "OFL-1.1",
-                "sha256": OFL_LICENSE_SHA256,
-                "bundlePath": "supplemental/OFL-1.1.txt",
-            }
-        ],
+        "supplementalLicenses": [],
         "combinedNotice": {
             "bundlePath": "THIRD-PARTY-NOTICES.txt",
             "bytes": len(combined),
@@ -1083,8 +980,6 @@ def build_bundle(
             "Never substitute an inventory from another GOOS, GOARCH, CGO, or build-tag combination.",
             "Confirm the recipient-facing source locations remain available for the externally distributed executable.",
         ]
-    if source_patches:
-        manifest["sourceModifications"] = source_patches
     encoded = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
     if len(encoded) > MAX_INVENTORY_BYTES:
         raise NoticeError("notice manifest bound exceeded")
@@ -1100,7 +995,6 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--go-root", required=True, type=pathlib.Path)
     parser.add_argument("--guardian-source", required=True, type=pathlib.Path)
     parser.add_argument("--project-license", required=True, type=pathlib.Path)
-    parser.add_argument("--ofl-license", required=True, type=pathlib.Path)
     parser.add_argument(
         "--toolchain-notice",
         action="append",
@@ -1114,13 +1008,6 @@ def main(argv: Iterable[str] | None = None) -> int:
         default=".tar.gz",
         help="suffix for gzip-compressed corresponding-source archives",
     )
-    parser.add_argument(
-        "--source-patch",
-        action="append",
-        nargs=4,
-        metavar=("LABEL", "NAME", "PATH", "SHA256"),
-        default=[],
-    )
     parser.add_argument("--output", required=True, type=pathlib.Path)
     arguments = parser.parse_args(argv)
     try:
@@ -1131,15 +1018,10 @@ def main(argv: Iterable[str] | None = None) -> int:
             arguments.go_root,
             arguments.guardian_source,
             arguments.project_license,
-            arguments.ofl_license,
             arguments.output,
             toolchain_notice_inputs=[
                 (label, name, pathlib.Path(path), digest)
                 for label, name, path, digest in arguments.toolchain_notice
-            ],
-            source_patch_inputs=[
-                (label, name, pathlib.Path(path), digest)
-                for label, name, path, digest in arguments.source_patch
             ],
             source_archive_suffix=arguments.source_archive_suffix,
         )

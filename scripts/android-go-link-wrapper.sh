@@ -18,14 +18,14 @@ case "$kind" in
     ;;
   final)
     mkdir "$COVALENT_LINK_MARKER" 2>/dev/null || {
-      echo "Syncthing final external linker was invoked more than once" >&2
+      echo "rclone final external linker was invoked more than once" >&2
       exit 1
     }
     "$COVALENT_REAL_CLANG" -### "$@" "-Wl,-Map,$COVALENT_LINK_MAP" \
       >/dev/null 2> "$COVALENT_DRIVER_TRACE"
     trace_size=$(wc -c < "$COVALENT_DRIVER_TRACE" | tr -d '[:space:]')
     test "$trace_size" -gt 0 && test "$trace_size" -le 4194304 || {
-      echo "Syncthing Clang driver trace is empty or exceeds 4 MiB" >&2
+      echo "rclone Clang driver trace is empty or exceeds 4 MiB" >&2
       exit 1
     }
     exec "$COVALENT_REAL_CLANG" "$@" "-Wl,-Map,$COVALENT_LINK_MAP"

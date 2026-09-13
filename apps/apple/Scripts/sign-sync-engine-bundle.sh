@@ -24,10 +24,9 @@ script_directory=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 apple_directory=$(CDPATH='' cd -- "$script_directory/.." && pwd)
 entitlements="$apple_directory/Config/CovalentNode.entitlements"
 guardian="$macos_directory/covalent-engine-guardian"
-worker="$macos_directory/covalent-syncthing"
+worker="$macos_directory/covalent-rclone"
 manifest="$resource_directory/manifest.json"
-license="$resource_directory/Syncthing-LICENSE.txt"
-authors="$resource_directory/Syncthing-AUTHORS.txt"
+license="$resource_directory/rclone-LICENSE.txt"
 provenance="$resource_directory/PROVENANCE.txt"
 source_build="$resource_directory/source-build.json"
 notice_index="$resource_directory/notices-index.txt"
@@ -60,13 +59,12 @@ verify_notice() {
     exit 1
   fi
 }
-verify_notice "$license" 3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04
-verify_notice "$authors" 5a0044d13ddf6f013bdd5c2bc419bf45d6123c356567510237e82f304d113d48
-verify_notice "$provenance" d41289725ed1e7c76eda0cc6a3f44c5f7bebd07d578fe6c546bc04911e46ac5e
-verify_notice "$source_build" 1b4a74cb976130a4bea7d4f059b3bdd282c09ed44507b1671e0256385ed35164
-verify_notice "$notice_index" 545bed4faff39aebfe587e80cc439c15d407e3a8de721e319d9832129ac7304f
-verify_notice "$target_notice_manifest" 85dca7cc49ffe72b75e5dc0ba49191384cf724816972e4514e2f075fed5f8b31
-verify_notice "$combined_notices" 1428276dd703546c78b86c210b61b74c7ebe64fe5ee2def57fe4c8f2d4673d52
+verify_notice "$license" 9266eae9c6a441de0f6847f19ac8f09b280d55612b079eca03b3d49b822c1a71
+verify_notice "$provenance" ce9886f37cd7bc7b62e755375f0d5f23d5f97f60670f6f857dac632b33f5e0ef
+verify_notice "$source_build" 122b3ee828fb92c7149346ab02f306e53f6633cb907c5d05d7deac44ac307a2d
+verify_notice "$notice_index" 59ab37c92bac32b1b3533ce8be192c282c9b7d25a81f03b2f63b7651faa4ab51
+verify_notice "$target_notice_manifest" 9a624a53020218aea6927c2baa254daa7ce9099c83eeddcfed371001e889bd6d
+verify_notice "$combined_notices" 9374aa12dc9da1416da235f6a664b6b5817081adf00b94a13d2c58d4a8ca68d4
 
 sign_one() {
   identifier=$1
@@ -88,7 +86,7 @@ sign_one() {
 }
 
 sign_one life.michaelwong.covalent.engine-guardian "$guardian"
-sign_one life.michaelwong.covalent.syncthing "$worker"
+sign_one life.michaelwong.covalent.rclone "$worker"
 
 guardian_sha=$(shasum -a 256 "$guardian" | awk '{print $1}')
 worker_sha=$(shasum -a 256 "$worker" | awk '{print $1}')
@@ -111,32 +109,30 @@ path, guardian_sha, worker_sha = sys.argv[1:]
 value = {
     "schema": 1,
     "engine": {
-        "name": "Syncthing",
-        "version": "v2.1.3",
-        "commit": "946e2b83a1f6c6ae119427c09e0a5802940b82ff",
-        "upstreamArchiveSha256": "dbcc9498602286a843f29a7104833bd1422082999aa51ff92eef493172d47959",
-        "sourceExportSha256": "eb60efd57d1662af75ffb2f7b89abab7200362c654838486138a34bee00fed29",
+        "name": "rclone",
+        "version": "v1.75.1",
+        "commit": "687d264b689b8c49a67e2e52a8a5e0caa01c04ce",
+        "sourceState": "upstream-unmodified",
         "goVersion": "go1.26.7",
-        "unsignedExecutableSha256": "9545a14bcc3116123233a7b5b1c62700f74fea1160ae95e3f9138dec54e62014",
+        "unsignedExecutableSha256": "d606a368fe4b83b81080aa9913d9f24b382c601e995d25f63ab80a49e2c8dee9",
     },
     "guardian": {
         "sourceSha256": "c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579",
     },
     "notices": {
-        "PROVENANCE.txt": "d41289725ed1e7c76eda0cc6a3f44c5f7bebd07d578fe6c546bc04911e46ac5e",
-        "Syncthing-AUTHORS.txt": "5a0044d13ddf6f013bdd5c2bc419bf45d6123c356567510237e82f304d113d48",
-        "Syncthing-LICENSE.txt": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
-        "source-build.json": "1b4a74cb976130a4bea7d4f059b3bdd282c09ed44507b1671e0256385ed35164",
-        "notices-index.txt": "545bed4faff39aebfe587e80cc439c15d407e3a8de721e319d9832129ac7304f",
-        "notices/manifest.json": "85dca7cc49ffe72b75e5dc0ba49191384cf724816972e4514e2f075fed5f8b31",
-        "notices/THIRD-PARTY-NOTICES.txt": "1428276dd703546c78b86c210b61b74c7ebe64fe5ee2def57fe4c8f2d4673d52",
+        "PROVENANCE.txt": "ce9886f37cd7bc7b62e755375f0d5f23d5f97f60670f6f857dac632b33f5e0ef",
+        "rclone-LICENSE.txt": "9266eae9c6a441de0f6847f19ac8f09b280d55612b079eca03b3d49b822c1a71",
+        "source-build.json": "122b3ee828fb92c7149346ab02f306e53f6633cb907c5d05d7deac44ac307a2d",
+        "notices-index.txt": "59ab37c92bac32b1b3533ce8be192c282c9b7d25a81f03b2f63b7651faa4ab51",
+        "notices/manifest.json": "9a624a53020218aea6927c2baa254daa7ce9099c83eeddcfed371001e889bd6d",
+        "notices/THIRD-PARTY-NOTICES.txt": "9374aa12dc9da1416da235f6a664b6b5817081adf00b94a13d2c58d4a8ca68d4",
     },
     "executables": {
         "covalent-engine-guardian": {
             "architecture": "arm64",
             "signedSha256": guardian_sha,
         },
-        "covalent-syncthing": {
+        "covalent-rclone": {
             "architecture": "arm64",
             "signedSha256": worker_sha,
         },

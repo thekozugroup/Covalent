@@ -3,11 +3,9 @@ set -euo pipefail
 
 repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 build_script="$repo_root/scripts/build-linux-sync-engine.sh"
-grep -Fq 'SOURCE_PATCH_SHA256=bdbab1565d0adce1fc2dc77cfe3a0581a83333b93910a0ac43e3081ba0b678ca' "$build_script"
-grep -Fq 'git -C "$source_dir" apply --check "$source_patch"' "$build_script"
-grep -Fq 'covalent-patches/keep-local-deletions.patch' "$build_script"
-grep -Fq 'test ! -e "$source_dir/.git" && test ! -L "$source_dir/.git"' "$build_script"
-grep -Fq 'expendable extracted archive without .git' "$build_script"
+grep -Fq 'ENGINE_VERSION=v1.75.1' "$build_script"
+grep -Fq 'CGO_ENABLED=0' "$build_script"
+grep -Fq 'covalent-rclone' "$build_script"
 tmp_root=${TMPDIR:-/tmp}
 case "$tmp_root" in /*) ;; *) tmp_root=/tmp ;; esac
 fixture=$(mktemp -d "$tmp_root/covalent-linux-notice-package.XXXXXX")
@@ -48,38 +46,18 @@ esac
 EOF
 chmod 0555 "$fixture/bin/uname" "$fixture/bin/cc" "$fixture/bin/readelf"
 
-mkdir -p "$fixture/source-with-git-dir/.git" \
-  "$fixture/source-with-git-file" "$fixture/source-with-git-symlink"
-printf 'gitdir: elsewhere\n' > "$fixture/source-with-git-file/.git"
-ln -s missing-gitdir "$fixture/source-with-git-symlink/.git"
-printf 'patch\n' > "$fixture/source.patch"
-for kind in dir file symlink; do
-  if "$build_script" worker "$fixture/source-with-git-$kind" \
-      "$fixture/rejected-worker-$kind" amd64 "$fixture/source.patch" \
-      >"$fixture/git-rejection-$kind.log" 2>&1; then
-    echo "Linux worker builder accepted source .git kind $kind" >&2
-    exit 1
-  fi
-  grep -Fq 'expendable extracted archive without .git' \
-    "$fixture/git-rejection-$kind.log"
-  test ! -e "$fixture/rejected-worker-$kind"
-done
-
-dd if=/dev/zero of="$fixture/worker/covalent-syncthing" \
+dd if=/dev/zero of="$fixture/worker/covalent-rclone" \
   bs=1048576 count=16 status=none
-chmod 0555 "$fixture/worker/covalent-syncthing"
-cp "$repo_root/packaging/docker/sync-engine-notices/Syncthing-LICENSE.txt" \
-  "$fixture/worker/Syncthing-LICENSE.txt"
-cp "$repo_root/packaging/docker/sync-engine-notices/Syncthing-AUTHORS.txt" \
-  "$fixture/worker/Syncthing-AUTHORS.txt"
+chmod 0555 "$fixture/worker/covalent-rclone"
+cp "$repo_root/packaging/rclone/LICENSE.rclone" "$fixture/worker/rclone-LICENSE.txt"
 printf '{"ImportPath":"example"}\n' > "$fixture/worker/go-target-deps.ndjson"
-printf 'path\tgithub.com/syncthing/syncthing/cmd/syncthing\nbuild\tgo1.26.7\n' \
+printf 'path\tgithub.com/thekozugroup/Covalent/packaging/rclone\nbuild\tgo1.26.7\n' \
   > "$fixture/worker/go-version.txt"
 cat > "$fixture/worker/target-license-inventory.json" <<'EOF'
 {
   "status": "evidence-collected-review-required",
   "targets": [{
-    "buildTags": ["noupgrade"],
+    "buildTags": [],
     "cgoEnabled": false,
     "goarch": "amd64",
     "goos": "linux"

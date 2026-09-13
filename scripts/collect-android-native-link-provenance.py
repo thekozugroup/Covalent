@@ -367,7 +367,7 @@ def _dynamic_libraries(report: str, component: str) -> list[str]:
     libraries = sorted(set(NEEDED.findall(report)))
     allowed = {
         "guardian": {"libc.so"},
-        "syncthing": {"libc.so", "libdl.so", "liblog.so", "libm.so"},
+        "rclone": {"libc.so", "libdl.so", "liblog.so", "libm.so"},
         "jni": {"libc.so", "libdl.so", "liblog.so", "libm.so"},
     }[component]
     if not libraries or not set(libraries).issubset(allowed):
@@ -385,7 +385,7 @@ def collect(
     dynamic_path: pathlib.Path,
     binary_path: pathlib.Path,
 ) -> dict[str, Any]:
-    if component not in {"syncthing", "guardian", "jni"}:
+    if component not in {"rclone", "guardian", "jni"}:
         raise ProvenanceError("unknown native component")
     if SAFE_ABI.fullmatch(abi) is None:
         raise ProvenanceError("ABI is malformed")
@@ -498,7 +498,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             return 1
         return 0
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--component", required=True, choices=("syncthing", "guardian", "jni"))
+    parser.add_argument("--component", required=True, choices=("rclone", "guardian", "jni"))
     parser.add_argument("--abi", required=True)
     parser.add_argument("--ndk-root", required=True, type=pathlib.Path)
     parser.add_argument("--expected-revision", required=True)

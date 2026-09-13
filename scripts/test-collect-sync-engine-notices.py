@@ -33,12 +33,8 @@ class Fixture:
         self.cache.mkdir()
         self.go.mkdir()
         self._copy(
-            REPOSITORY / "packaging/docker/sync-engine-notices/Syncthing-LICENSE.txt",
-            self.source / "LICENSE",
-        )
-        self._copy(
-            REPOSITORY / "packaging/docker/sync-engine-notices/Syncthing-AUTHORS.txt",
-            self.source / "AUTHORS",
+            REPOSITORY / "packaging/rclone/LICENSE.rclone",
+            self.source / "LICENSE.rclone",
         )
         (self.go / "VERSION").write_text("go1.26.7\ntime fixture\n", encoding="utf-8")
         self._copy(
@@ -80,10 +76,9 @@ class Fixture:
                 "status": "observed",
                 "targets": ["fixture"],
                 "moduleSum": None,
-                "recognizedLicenseTexts": ["MPL-2.0"],
+                "recognizedLicenseTexts": ["MIT"],
                 "licenseAndNoticeFiles": [
-                    self._candidate(self.source, "AUTHORS", "notice"),
-                    self._candidate(self.source, "LICENSE", "license"),
+                    self._candidate(self.source, "LICENSE.rclone", "license"),
                 ],
             },
             {
@@ -126,7 +121,6 @@ class Fixture:
     def build(
         self,
         source_archive_suffix: str = ".tar.gz",
-        source_patch_inputs: list[tuple[str, str, pathlib.Path, str]] | None = None,
     ) -> dict[str, object]:
         return notices.build_bundle(
             self.inventory,
@@ -135,9 +129,7 @@ class Fixture:
             self.go,
             REPOSITORY / "packaging/sync-engine/engine-guardian.c",
             REPOSITORY / "LICENSE",
-            REPOSITORY / "docs/licenses/sync-engine/OFL-1.1.txt",
             self.output,
-            source_patch_inputs=source_patch_inputs,
             source_archive_suffix=source_archive_suffix,
         )
 
@@ -157,19 +149,8 @@ class NoticeBundleTests(unittest.TestCase):
 
         self.assertEqual(manifest["status"], "texts-collected-review-required")
         self.assertEqual(len(manifest["modules"]), 2)
-        self.assertEqual(manifest["bounds"]["files"], 10)
-        self.assertEqual(len(manifest["correspondingSources"]), 1)
-        source_record = manifest["correspondingSources"][0]
-        archive_path = self.fixture.output / source_record["archive"]["bundlePath"]
-        self.assertEqual(
-            hashlib.sha256(archive_path.read_bytes()).hexdigest(),
-            source_record["archive"]["sha256"],
-        )
-        with tarfile.open(archive_path, "r:gz") as archive:
-            self.assertEqual(
-                sorted(archive.getnames()),
-                ["source", "source/AUTHORS", "source/LICENSE"],
-            )
+        self.assertEqual(manifest["bounds"]["files"], 7)
+        self.assertEqual(manifest["correspondingSources"], [])
         self.assertEqual(
             (self.fixture.output / "modules/0001/LICENSE").read_bytes(),
             self.fixture.module_license,
@@ -195,14 +176,21 @@ class NoticeBundleTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(combined).hexdigest(), manifest["combinedNotice"]["sha256"])
         self.assertIn(self.fixture.module_license, combined)
         self.assertIn(b"Go go1.26.7 / LICENSE", combined)
-        self.assertIn(b"MPL-2.0 corresponding source", combined)
-        self.assertIn(source_record["archive"]["sha256"].encode(), combined)
-        self.assertIn(b"github.com/syncthing/syncthing/tree/", combined)
+        self.assertNotIn(b"MPL-2.0 corresponding source", combined)
+        self.assertIn(b"LICENSE.rclone", combined)
 
     def test_android_asset_source_archive_keeps_gzip_bytes_under_tgz_name(self) -> None:
+        mpl = b"Mozilla Public License, version 2.0\nfixture dependency\n"
+        (self.fixture.module / "LICENSE").write_bytes(mpl)
+        document = json.loads(self.fixture.inventory.read_text())
+        document["modules"][1]["licenseAndNoticeFiles"] = [
+            self.fixture._candidate(self.fixture.module, "LICENSE", "license")
+        ]
+        document["modules"][1]["recognizedLicenseTexts"] = ["MPL-2.0"]
+        self.fixture.inventory.write_text(json.dumps(document), encoding="utf-8")
         manifest = self.fixture.build(source_archive_suffix=".tgz")
         archive_record = manifest["correspondingSources"][0]["archive"]
-        self.assertEqual(archive_record["bundlePath"], "sources/0000-source.tgz")
+        self.assertEqual(archive_record["bundlePath"], "sources/0001-source.tgz")
         archive = self.fixture.output / archive_record["bundlePath"]
         data = archive.read_bytes()
         self.assertTrue(data.startswith(b"\x1f\x8b"))
@@ -210,39 +198,6 @@ class NoticeBundleTests(unittest.TestCase):
         self.assertEqual(archive_record["sha256"], hashlib.sha256(data).hexdigest())
         with tarfile.open(archive, "r:gz") as source_tar:
             self.assertIn("source/LICENSE", source_tar.getnames())
-
-    def test_source_patch_is_bound_to_modified_source_and_recipient_notices(self) -> None:
-        patch = self.fixture.root / "keep-local-deletions.patch"
-        patch.write_bytes(b"diff --git a/old b/new\n")
-        digest = hashlib.sha256(patch.read_bytes()).hexdigest()
-        source_patch = self.fixture.source / "covalent-patches" / patch.name
-        source_patch.parent.mkdir()
-        source_patch.write_bytes(patch.read_bytes())
-
-        manifest = self.fixture.build(
-            source_patch_inputs=[
-                ("Covalent keep-local-deletions patch", patch.name, patch, digest)
-            ]
-        )
-
-        self.assertEqual(manifest["sourceModifications"][0]["sha256"], digest)
-        self.assertEqual(
-            (self.fixture.output / "patches" / patch.name).read_bytes(),
-            patch.read_bytes(),
-        )
-        main_source = manifest["correspondingSources"][0]
-        self.assertEqual(main_source["sourceState"], "modified")
-        self.assertEqual(main_source["modifications"][0]["sha256"], digest)
-        archive_path = self.fixture.output / main_source["archive"]["bundlePath"]
-        with tarfile.open(archive_path, "r:gz") as archive:
-            member = archive.extractfile(
-                "source/covalent-patches/keep-local-deletions.patch"
-            )
-            self.assertIsNotNone(member)
-            self.assertEqual(member.read(), patch.read_bytes())
-        combined = (self.fixture.output / "THIRD-PARTY-NOTICES.txt").read_bytes()
-        self.assertIn(digest.encode(), combined)
-        self.assertIn(main_source["archive"]["sha256"].encode(), combined)
 
     def test_exact_toolchain_notices_are_bundled_without_changing_other_callers(self) -> None:
         ndk_notice = self.fixture.root / "NOTICE"
@@ -270,7 +225,6 @@ class NoticeBundleTests(unittest.TestCase):
             self.fixture.go,
             REPOSITORY / "packaging/sync-engine/engine-guardian.c",
             REPOSITORY / "LICENSE",
-            REPOSITORY / "docs/licenses/sync-engine/OFL-1.1.txt",
             self.fixture.output,
             inputs,
         )
@@ -297,7 +251,6 @@ class NoticeBundleTests(unittest.TestCase):
             self.fixture.go,
             REPOSITORY / "packaging/sync-engine/engine-guardian.c",
             REPOSITORY / "LICENSE",
-            REPOSITORY / "docs/licenses/sync-engine/OFL-1.1.txt",
         )
         with self.assertRaisesRegex(notices.NoticeError, "differs"):
             notices.build_bundle(
@@ -368,8 +321,8 @@ class NoticeBundleTests(unittest.TestCase):
             )
         finally:
             second_fixture.close()
-        self.assertEqual(len(first["correspondingSources"]), 2)
-        dependency = first["correspondingSources"][1]
+        self.assertEqual(len(first["correspondingSources"]), 1)
+        dependency = first["correspondingSources"][0]
         self.assertEqual(dependency["moduleSum"], "h1:" + "A" * 43 + "=")
         self.assertIn("proxy.golang.org/example.org/!mixed", dependency["externalSourceUrl"])
         self.assertNotIn(
@@ -378,21 +331,37 @@ class NoticeBundleTests(unittest.TestCase):
         )
 
     def test_mpl_source_symlink_and_archive_bound_fail_closed(self) -> None:
+        mpl = b"Mozilla Public License, version 2.0\nfixture dependency\n"
+        (self.fixture.module / "LICENSE").write_bytes(mpl)
+        document = json.loads(self.fixture.inventory.read_text())
+        document["modules"][1]["licenseAndNoticeFiles"] = [
+            self.fixture._candidate(self.fixture.module, "LICENSE", "license")
+        ]
+        document["modules"][1]["recognizedLicenseTexts"] = ["MPL-2.0"]
+        self.fixture.inventory.write_text(json.dumps(document), encoding="utf-8")
         outside = self.fixture.root / "outside.go"
         outside.write_text("package outside\n")
-        (self.fixture.source / "linked.go").symlink_to(outside)
+        (self.fixture.module / "linked.go").symlink_to(outside)
         with self.assertRaisesRegex(notices.NoticeError, "symbolic link"):
             self.fixture.build()
         self.assertFalse((self.fixture.output / "manifest.json").exists())
 
         self.fixture.output = self.fixture.root / "bounded"
-        (self.fixture.source / "linked.go").unlink()
-        with mock.patch.object(notices, "MAX_SOURCE_ARCHIVE_BYTES", 512):
+        (self.fixture.module / "linked.go").unlink()
+        with mock.patch.object(notices, "MAX_SOURCE_ARCHIVE_BYTES", 64):
             with self.assertRaisesRegex(notices.NoticeError, "archive byte bound"):
                 self.fixture.build()
         self.assertFalse((self.fixture.output / "manifest.json").exists())
 
     def test_source_mutation_during_archival_rejects_success_manifest(self) -> None:
+        mpl = b"Mozilla Public License, version 2.0\nfixture dependency\n"
+        (self.fixture.module / "LICENSE").write_bytes(mpl)
+        document = json.loads(self.fixture.inventory.read_text())
+        document["modules"][1]["licenseAndNoticeFiles"] = [
+            self.fixture._candidate(self.fixture.module, "LICENSE", "license")
+        ]
+        document["modules"][1]["recognizedLicenseTexts"] = ["MPL-2.0"]
+        self.fixture.inventory.write_text(json.dumps(document), encoding="utf-8")
         original = notices._source_snapshot
         calls = 0
 
@@ -400,9 +369,7 @@ class NoticeBundleTests(unittest.TestCase):
             nonlocal calls
             calls += 1
             if calls == 2:
-                (root / "LICENSE").write_bytes(
-                    (root / "LICENSE").read_bytes() + b"changed\n"
-                )
+                (root / "LICENSE").write_bytes((root / "LICENSE").read_bytes() + b"changed\n")
             return original(root)
 
         with mock.patch.object(

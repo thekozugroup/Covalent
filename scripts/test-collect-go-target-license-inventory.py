@@ -31,14 +31,13 @@ class Fixture:
         self.source.mkdir()
         self.modules.mkdir()
         self.reports.mkdir()
-        go_mod = b"module github.com/syncthing/syncthing\n"
+        go_mod = f"module {licenses.MAIN_MODULE}\n".encode()
         go_sum = b"fixture checksum evidence\n"
         (self.source / "go.mod").write_bytes(go_mod)
         (self.source / "go.sum").write_bytes(go_sum)
-        (self.source / "LICENSE").write_text(
-            "Mozilla Public License Version 2.0\n", encoding="utf-8"
+        (self.source / "LICENSE.rclone").write_text(
+            "Permission is hereby granted, free of charge, to any person\n", encoding="utf-8"
         )
-        (self.source / "AUTHORS").write_text("fixture authors\n", encoding="utf-8")
         licenses.GO_MOD_SHA256 = hashlib.sha256(go_mod).hexdigest()
         licenses.GO_SUM_SHA256 = hashlib.sha256(go_sum).hexdigest()
 
@@ -85,7 +84,7 @@ class Fixture:
         return report
 
     def target(self, name: str, report: pathlib.Path) -> licenses.Target:
-        return licenses.Target(name, "linux", name, False, ("noupgrade",), report)
+        return licenses.Target(name, "linux", name, False, (), report)
 
     def close(self) -> None:
         self.temp.cleanup()
@@ -127,9 +126,9 @@ class GoTargetLicenseInventoryTests(unittest.TestCase):
         rows = {row["path"]: row for row in first["modules"]}
         self.assertEqual(rows["example.org/arm"]["targets"], ["arm64"])
         self.assertEqual(rows["example.org/common"]["targets"], ["amd64", "arm64"])
-        self.assertEqual(first["targets"][0]["buildTags"], ["noupgrade"])
+        self.assertEqual(first["targets"][0]["buildTags"], [])
         self.assertEqual(
-            rows[licenses.MAIN_MODULE]["recognizedLicenseTexts"], ["MPL-2.0"]
+            rows[licenses.MAIN_MODULE]["recognizedLicenseTexts"], ["MIT"]
         )
         self.assertEqual(rows["example.org/common"]["recognizedLicenseTexts"], [])
         self.assertEqual(rows["example.org/common"]["moduleSum"], "h1:" + "A" * 43 + "=")

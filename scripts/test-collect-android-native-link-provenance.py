@@ -24,7 +24,7 @@ SPEC.loader.exec_module(provenance)
 
 
 class Fixture:
-    def __init__(self, component: str = "syncthing") -> None:
+    def __init__(self, component: str = "rclone") -> None:
         self.temp = tempfile.TemporaryDirectory(dir="/tmp", prefix="cv-link-proof-")
         self.root = pathlib.Path(self.temp.name).resolve(strict=True)
         self.ndk = self.root / "ndk"
@@ -103,7 +103,7 @@ class LinkProvenanceTests(unittest.TestCase):
 
     def test_realistic_pie_map_classifies_requested_and_extracted_inputs(self) -> None:
         value = self.fixture.collect()
-        self.assertEqual(value["component"], "syncthing")
+        self.assertEqual(value["component"], "rclone")
         self.assertEqual(value["evidence"]["binary"]["bytes"], len(self.fixture.binary.read_bytes()))
         self.assertEqual(value["dynamicLibraries"], ["libc.so", "libdl.so", "liblog.so"])
         self.assertEqual(
@@ -198,7 +198,7 @@ class LinkProvenanceTests(unittest.TestCase):
     def test_bad_revision_symlink_notice_and_evidence_bounds_fail_closed(self) -> None:
         with self.assertRaisesRegex(provenance.ProvenanceError, "revision differs"):
             provenance.collect(
-                "syncthing", "arm64-v8a", self.fixture.ndk, "27.1.999", self.fixture.map,
+                "rclone", "arm64-v8a", self.fixture.ndk, "27.1.999", self.fixture.map,
                 self.fixture.trace, self.fixture.dynamic, self.fixture.binary,
             )
         notice = self.fixture.ndk / "NOTICE"
@@ -388,7 +388,7 @@ class LinkProvenanceTests(unittest.TestCase):
         with redirect_stderr(io.StringIO()):
             status = provenance.main(
                 [
-                    "--component", "syncthing", "--abi", "arm64-v8a",
+                    "--component", "rclone", "--abi", "arm64-v8a",
                     "--ndk-root", str(self.fixture.ndk), "--expected-revision", "27.1.12297006",
                     "--link-map", str(self.fixture.map), "--driver-trace", str(self.fixture.trace),
                     "--dynamic-report", str(self.fixture.dynamic), "--binary", str(self.fixture.binary),

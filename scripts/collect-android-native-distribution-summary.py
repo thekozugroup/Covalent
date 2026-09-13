@@ -23,11 +23,11 @@ from typing import Any, Iterable
 
 
 ABIS = ("arm64-v8a", "x86_64")
-COMPONENTS = ("guardian", "jni", "syncthing")
+COMPONENTS = ("guardian", "jni", "rclone")
 LIBRARIES = {
     "guardian": "libengineguardian.so",
     "jni": "libcovalent_android_jni.so",
-    "syncthing": "libsyncthing.so",
+    "rclone": "librclone.so",
 }
 GRAPHICS_PATH_COORDINATE = ("androidx.graphics", "graphics-path", "1.0.1")
 GRAPHICS_PATH_LIBRARY = "libandroidx.graphics.path.so"
@@ -560,7 +560,7 @@ def _package_summary(
                 )
                 for component, asset in (
                     ("guardian", "engine-guardian-sha256.txt"),
-                    ("syncthing", "syncthing-sha256.txt"),
+                    ("rclone", "rclone-sha256.txt"),
                 )
             }
             native: list[dict[str, Any]] = []

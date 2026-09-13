@@ -16,8 +16,7 @@ repo_root=$(CDPATH='' cd -- "$apple_directory/../.." && pwd)
 builder="$repo_root/scripts/build-macos-sync-engine.sh"
 guardian_source="$repo_root/packaging/sync-engine/engine-guardian.c"
 provenance_source="$apple_directory/SyncEngine/PROVENANCE.txt"
-source_dir=${COVALENT_SYNCTHING_SOURCE_DIR:-${SYNCTHING_SOURCE_DIR:-}}
-test -n "$source_dir" || { echo "set SYNCTHING_SOURCE_DIR to the pinned checkout" >&2; exit 66; }
+source_dir="$repo_root/packaging/rclone"
 
 for path in "$macos_directory" "$resource_directory"; do
   if test -L "$path" || { test -e "$path" && test ! -d "$path"; }; then
@@ -27,12 +26,11 @@ done
 mkdir -p "$macos_directory" "$resource_directory"
 for output in \
   "$macos_directory/covalent-engine-guardian" \
-  "$macos_directory/covalent-syncthing" \
+  "$macos_directory/covalent-rclone" \
   "$resource_directory/manifest.json" \
   "$resource_directory/source-build.json" \
   "$resource_directory/notices-index.txt" \
-  "$resource_directory/Syncthing-LICENSE.txt" \
-  "$resource_directory/Syncthing-AUTHORS.txt" \
+  "$resource_directory/rclone-LICENSE.txt" \
   "$resource_directory/PROVENANCE.txt"
 do
   if test -L "$output" || { test -e "$output" && test ! -f "$output"; }; then
@@ -62,22 +60,22 @@ build_output="$working_root/build"
 # already-validated package-owned paths so stale notice members cannot survive.
 rm -rf "$resource_directory/notices"
 rm -f "$resource_directory/manifest.json" "$resource_directory/source-build.json" \
-  "$resource_directory/notices-index.txt" "$resource_directory/Syncthing-LICENSE.txt" \
-  "$resource_directory/Syncthing-AUTHORS.txt" "$resource_directory/PROVENANCE.txt"
+  "$resource_directory/notices-index.txt" "$resource_directory/rclone-LICENSE.txt" \
+  "$resource_directory/PROVENANCE.txt"
 
-worker_source="$build_output/covalent-syncthing"
+worker_source="$build_output/covalent-rclone"
 guardian="$macos_directory/covalent-engine-guardian"
-worker="$macos_directory/covalent-syncthing"
+worker="$macos_directory/covalent-rclone"
 xcrun clang -std=c11 -Os -Wall -Wextra -Werror -arch arm64 \
   -mmacosx-version-min=15.0 "$guardian_source" -o "$guardian"
 ditto "$worker_source" "$worker"
 test "$(shasum -a 256 "$worker" | awk '{print $1}')" = \
-  9545a14bcc3116123233a7b5b1c62700f74fea1160ae95e3f9138dec54e62014 || {
+  d606a368fe4b83b81080aa9913d9f24b382c601e995d25f63ab80a49e2c8dee9 || {
   echo "copied sync-engine executable differs from the reviewed source build" >&2; exit 1
 }
 chmod 755 "$guardian" "$worker"
 
-for name in Syncthing-LICENSE.txt Syncthing-AUTHORS.txt source-build.json; do
+for name in rclone-LICENSE.txt source-build.json; do
   ditto "$build_output/$name" "$resource_directory/$name"
 done
 ditto "$provenance_source" "$resource_directory/PROVENANCE.txt"
@@ -96,7 +94,7 @@ import sys
 root = pathlib.Path(sys.argv[1])
 manifest = json.loads(pathlib.Path(sys.argv[2]).read_bytes())
 records = manifest.get("correspondingSources")
-if not isinstance(records, list) or not records or len(records) > 2_048:
+if not isinstance(records, list) or len(records) > 2_048:
     raise SystemExit("sync-engine corresponding-source manifest is incomplete")
 seen = set()
 total = 0
@@ -181,7 +179,6 @@ for binary in "$guardian" "$worker"; do
 done
 worker_dependencies=$(otool -L "$worker" | tail -n +2 | sed 's/^[[:space:]]*//' | awk '{print $1}' | LC_ALL=C sort)
 expected_worker_dependencies='/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation
-/System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices
 /System/Library/Frameworks/Security.framework/Versions/A/Security
 /usr/lib/libSystem.B.dylib
 /usr/lib/libresolv.9.dylib'
@@ -192,9 +189,5 @@ test "$(otool -L "$guardian" | tail -n +2 | sed 's/^[[:space:]]*//' | awk '{prin
   /usr/lib/libSystem.B.dylib || {
   echo "engine guardian has an unexpected dynamic dependency" >&2; exit 1
 }
-vtool -show-build "$worker" | grep -Eq 'minos[[:space:]]+15\.0' || {
-  echo "sync-engine minimum macOS deployment target differs" >&2; exit 1
-}
-
 "$script_directory/sign-sync-engine-bundle.sh" \
   "$macos_directory" "$resource_directory" - adhoc

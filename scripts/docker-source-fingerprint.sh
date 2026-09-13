@@ -25,8 +25,8 @@ exec "$script_dir/android-source-fingerprint.sh" "$repo_root" \
   packaging/docker/entrypoint.sh \
   packaging/docker/caddy \
   packaging/docker/alpine \
+  packaging/rclone \
   packaging/sync-engine \
-  docs/licenses/sync-engine \
   scripts/build-linux-sync-engine.sh \
   scripts/collect-caddy-distribution-evidence.py \
   scripts/collect-alpine-runtime-evidence.py \

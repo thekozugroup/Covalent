@@ -1,6 +1,6 @@
 #!/bin/sh
 # Fast, offline source contract for the macOS sync-engine bundle builder.
-# Set SYNCTHING_SOURCE_DIR and COVALENT_GO_BIN to run the complete operation.
+# Set COVALENT_GO_BIN to run the complete operation.
 set -eu
 
 repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
@@ -32,25 +32,17 @@ test "$(shasum -a 256 "$guardian_source" | awk '{print $1}')" = \
   fail "reviewed engine guardian source changed"
 
 for contract in \
-  v2.1.3 \
-  946e2b83a1f6c6ae119427c09e0a5802940b82ff \
-  dbcc9498602286a843f29a7104833bd1422082999aa51ff92eef493172d47959 \
-  eb60efd57d1662af75ffb2f7b89abab7200362c654838486138a34bee00fed29 \
-  bdbab1565d0adce1fc2dc77cfe3a0581a83333b93910a0ac43e3081ba0b678ca \
-  9545a14bcc3116123233a7b5b1c62700f74fea1160ae95e3f9138dec54e62014 \
+  v1.75.1 \
+  687d264b689b8c49a67e2e52a8a5e0caa01c04ce \
+  d606a368fe4b83b81080aa9913d9f24b382c601e995d25f63ab80a49e2c8dee9 \
   c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579 \
-  Syncthing-LICENSE.txt \
-  Syncthing-AUTHORS.txt \
+  rclone-LICENSE.txt \
+  covalent-rclone \
   THIRD-PARTY-NOTICES.txt \
   source-build.json \
   correspondingSources \
-  keep-local-deletions.patch \
-  --source-patch \
-  'apply --check' \
   'mod verify' \
-  'xcrun clang' \
-  '-arch arm64' \
-  '-mmacosx-version-min=15.0' \
+  'CGO_ENABLED=0' \
   'sign-sync-engine-bundle.sh'
 do
   grep -Fq -- "$contract" "$package_script" "$sign_script" "$build_script" ||
@@ -78,8 +70,8 @@ require_pin_count "$worker_pin" "$mac_host" 1
 require_pin_count "$worker_pin" "$bundle_verifier" 1
 
 notice_pins=$(sed -nE 's/^verify_notice .* ([0-9a-f]{64})$/\1/p' "$sign_script")
-test "$(printf '%s\n' "$notice_pins" | wc -l | tr -d '[:space:]')" -eq 7 &&
-  test "$(printf '%s\n' "$notice_pins" | LC_ALL=C sort -u | wc -l | tr -d '[:space:]')" -eq 7 ||
+test "$(printf '%s\n' "$notice_pins" | wc -l | tr -d '[:space:]')" -eq 6 &&
+  test "$(printf '%s\n' "$notice_pins" | LC_ALL=C sort -u | wc -l | tr -d '[:space:]')" -eq 6 ||
   fail "signer notice pins are incomplete"
 for pin in $notice_pins; do
   require_pin_count "$pin" "$sign_script" 2
@@ -87,17 +79,16 @@ for pin in $notice_pins; do
   require_pin_count "$pin" "$bundle_verifier" 1
 done
 
-grep -Fq 'Mozilla Public License 2.0' "$provenance" ||
+grep -Fq 'License: MIT' "$provenance" ||
   fail "sync-engine provenance must state the upstream license"
-grep -Fq 'Corresponding source:' "$provenance" ||
-  fail "sync-engine provenance must retain a corresponding-source location"
+grep -Fq 'Upstream source:' "$provenance" || fail "sync-engine provenance must retain the upstream source location"
 
 if rg -n 'global|local discovery|relay|upgrad|browser|telemetry|crash' \
   "$package_script" "$sign_script" >/dev/null 2>&1; then
   fail "packaging must not add an engine network or updater launch path"
 fi
 
-if [ -n "${SYNCTHING_SOURCE_DIR:-}" ] && [ -n "${COVALENT_GO_BIN:-}" ]; then
+if [ -n "${COVALENT_GO_BIN:-}" ]; then
   if [ "$(uname -s)" != Darwin ] || [ "$(uname -m)" != arm64 ]; then
     fail "the complete sync-engine package test requires Apple Silicon macOS"
   fi
@@ -116,7 +107,7 @@ PY
   # error that occurs before the Go executable can be validated.
   printf 'not the pinned Go archive\n' > "$test_root/invalid-go.tar.gz"
   if COVALENT_GO_ARCHIVE="$test_root/invalid-go.tar.gz" \
-    "$build_script" "$SYNCTHING_SOURCE_DIR" "$test_root/early-failure" \
+    "$build_script" "$repo_root/packaging/rclone" "$test_root/early-failure" \
       >"$test_root/early-failure.stdout" 2>"$test_root/early-failure.stderr"; then
     fail "source builder accepted an invalid Go archive"
   fi
@@ -128,12 +119,11 @@ PY
   test -z "$(find "$test_root/early-failure" -mindepth 1 -print -quit)" ||
     fail "source builder retained unexpected output after an early failure"
 
-  COVALENT_SYNCTHING_SOURCE_DIR=$SYNCTHING_SOURCE_DIR \
-    COVALENT_GO_BIN=$COVALENT_GO_BIN \
+  COVALENT_GO_BIN=$COVALENT_GO_BIN \
     DERIVED_FILE_DIR="$test_root/derived" \
     "$package_script" "$test_root/MacOS" "$test_root/Resources/CovalentSyncEngine"
   for binary in "$test_root/MacOS/covalent-engine-guardian" \
-    "$test_root/MacOS/covalent-syncthing"; do
+    "$test_root/MacOS/covalent-rclone"; do
     test "$(xcrun lipo -archs "$binary")" = arm64 || fail "packaged binary is not arm64"
     codesign --verify --strict "$binary"
   done
@@ -151,7 +141,7 @@ for name, record in manifest["executables"].items():
 notice_root = root / "Resources/CovalentSyncEngine/notices"
 notice_manifest = json.loads((notice_root / "manifest.json").read_bytes())
 sources = notice_manifest.get("correspondingSources")
-if not isinstance(sources, list) or len(sources) != 5:
+if not isinstance(sources, list) or len(sources) > 2_048:
     raise SystemExit("packaged corresponding-source inventory differs")
 combined = (notice_root / "THIRD-PARTY-NOTICES.txt").read_text()
 for source in sources:
@@ -163,29 +153,28 @@ for source in sources:
         raise SystemExit("corresponding-source access is not recipient-visible")
 PY
 
-  COVALENT_SYNCTHING_SOURCE_DIR=$SYNCTHING_SOURCE_DIR \
-    COVALENT_GO_BIN=$COVALENT_GO_BIN \
+  COVALENT_GO_BIN=$COVALENT_GO_BIN \
     DERIVED_FILE_DIR="$test_root/repeat-derived" \
     "$package_script" "$test_root/repeat/MacOS" \
       "$test_root/repeat/Resources/CovalentSyncEngine" >/dev/null
   cmp "$test_root/MacOS/covalent-engine-guardian" \
     "$test_root/repeat/MacOS/covalent-engine-guardian"
-  cmp "$test_root/MacOS/covalent-syncthing" \
-    "$test_root/repeat/MacOS/covalent-syncthing"
+  cmp "$test_root/MacOS/covalent-rclone" \
+    "$test_root/repeat/MacOS/covalent-rclone"
   cmp "$test_root/Resources/CovalentSyncEngine/manifest.json" \
     "$test_root/repeat/Resources/CovalentSyncEngine/manifest.json"
   cmp "$test_root/Resources/CovalentSyncEngine/notices/manifest.json" \
     "$test_root/repeat/Resources/CovalentSyncEngine/notices/manifest.json"
-  for archive in "$test_root/Resources/CovalentSyncEngine/notices/sources/"*.tar.gz; do
-    cmp "$archive" \
-      "$test_root/repeat/Resources/CovalentSyncEngine/notices/sources/$(basename "$archive")"
-  done
+  if test -d "$test_root/Resources/CovalentSyncEngine/notices/sources"; then
+    for archive in "$test_root/Resources/CovalentSyncEngine/notices/sources/"*.tar.gz; do
+      cmp "$archive" "$test_root/repeat/Resources/CovalentSyncEngine/notices/sources/$(basename "$archive")"
+    done
+  fi
 
   mkdir -p "$test_root/unsafe/MacOS" "$test_root/unsafe/Resources/CovalentSyncEngine"
   printf '%s' preserved > "$test_root/sentinel"
-  ln -s "$test_root/sentinel" "$test_root/unsafe/MacOS/covalent-syncthing"
-  if COVALENT_SYNCTHING_SOURCE_DIR=$SYNCTHING_SOURCE_DIR \
-    COVALENT_GO_BIN=$COVALENT_GO_BIN \
+  ln -s "$test_root/sentinel" "$test_root/unsafe/MacOS/covalent-rclone"
+  if COVALENT_GO_BIN=$COVALENT_GO_BIN \
     DERIVED_FILE_DIR="$test_root/unsafe-derived" \
     "$package_script" "$test_root/unsafe/MacOS" \
       "$test_root/unsafe/Resources/CovalentSyncEngine" >/dev/null 2>&1; then

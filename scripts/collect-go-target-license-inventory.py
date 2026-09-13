@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inventory bounded license/notice evidence for exact Syncthing target graphs.
+"""Inventory bounded license/notice evidence for exact rclone target graphs.
 
 This consumes one or more `go list -deps -json` reports produced with the same
 GOOS, GOARCH, CGO and build tags as the shipped worker. It does not identify
@@ -20,13 +20,12 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 
-PINNED_COMMIT = "946e2b83a1f6c6ae119427c09e0a5802940b82ff"
-PINNED_VERSION = "v2.1.3"
-SOURCE_ARCHIVE_SHA256 = "dbcc9498602286a843f29a7104833bd1422082999aa51ff92eef493172d47959"
-GO_MOD_SHA256 = "a129d6ae9cf20593fab4b1fb04ac09b176c4942d3a4bec9394f9c888fe2d1bd1"
-GO_SUM_SHA256 = "7e9606117eca33e9263181a3d0141e403c940c55022a061d8ed9e22d4bda2acd"
-MAIN_MODULE = "github.com/syncthing/syncthing"
-ROOT_PACKAGE = f"{MAIN_MODULE}/cmd/syncthing"
+PINNED_COMMIT = "687d264b689b8c49a67e2e52a8a5e0caa01c04ce"
+PINNED_VERSION = "v1.75.1"
+GO_MOD_SHA256 = "1708132fb012d15c89e7863a79abea50c66895e78d8b85037275db213c1d103f"
+GO_SUM_SHA256 = "801fcfc81dd2f84417d5410c04aa4fd5936387246372eaf8920c2b0492ffa89b"
+MAIN_MODULE = "github.com/thekozugroup/Covalent/packaging/rclone"
+ROOT_PACKAGE = MAIN_MODULE
 SAFE_TARGET = re.compile(r"[A-Za-z0-9_.+-]{1,64}")
 SAFE_MODULE = re.compile(r"[A-Za-z0-9._~+/-]{1,512}")
 SAFE_VERSION = re.compile(r"v[0-9A-Za-z.+~-]{1,255}")
@@ -218,7 +217,7 @@ def _hash_regular(path: pathlib.Path, maximum: int) -> tuple[int, str]:
 
 
 def _recognized_license_texts(path: pathlib.Path, maximum: int) -> set[str]:
-    """Recognize only license texts needed for source-access packaging.
+    """Recognize license texts that affect source or package records.
 
     This deliberately is not a general SPDX classifier. The notice collector
     repeats the check against the copied bytes before creating source access
@@ -230,6 +229,8 @@ def _recognized_license_texts(path: pathlib.Path, maximum: int) -> set[str]:
         or b"mozilla public license, version 2.0" in normalized
     ):
         return {"MPL-2.0"}
+    if b"permission is hereby granted, free of charge" in normalized:
+        return {"MIT"}
     return set()
 
 
@@ -344,7 +345,6 @@ def build_inventory(
             SAFE_TARGET.fullmatch(target.name) is None
             or SAFE_TARGET.fullmatch(target.goos) is None
             or SAFE_TARGET.fullmatch(target.goarch) is None
-            or not target.tags
             or tuple(sorted(set(target.tags))) != target.tags
             or any(SAFE_TARGET.fullmatch(tag) is None for tag in target.tags)
         ):
@@ -413,7 +413,7 @@ def build_inventory(
                     raise EvidenceError("compiled module has conflicting source bindings")
                 existing["targets"].add(target.name)
         if ROOT_PACKAGE not in imports:
-            raise EvidenceError("target dependency graph lacks Syncthing root package")
+            raise EvidenceError("target dependency graph lacks the restricted rclone root package")
         standard_packages[target.name] = standard
         target_package_counts[target.name] = len(imports)
 
@@ -444,9 +444,9 @@ def build_inventory(
             }),
         }
         if module["path"] == MAIN_MODULE:
-            row["declaredLicense"] = "MPL-2.0"
+            row["declaredLicense"] = "MIT"
             row["sourceDistributionReview"] = (
-                "Review MPL-2.0 notice and corresponding-source obligations for the exact shipped modifications."
+                "Retain the bundled rclone MIT license with every shipped worker."
             )
         module_rows.append(row)
 
@@ -474,7 +474,6 @@ def build_inventory(
         "source": {
             "version": PINNED_VERSION,
             "commit": PINNED_COMMIT,
-            "archiveSha256": SOURCE_ARCHIVE_SHA256,
             "goModSha256": GO_MOD_SHA256,
             "goSumSha256": GO_SUM_SHA256,
         },
@@ -540,7 +539,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         action="append",
         nargs=6,
         metavar=("NAME", "GOOS", "GOARCH", "CGO", "TAGS", "REPORT"),
-        help="exact target: name GOOS GOARCH 0|1 comma-separated-tags report.ndjson",
+        help="exact target: name GOOS GOARCH 0|1 comma-separated-tags-or-- report.ndjson",
     )
     parser.add_argument("--output", required=True, type=pathlib.Path)
     arguments = parser.parse_args(argv)
@@ -555,7 +554,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                     goos=goos,
                     goarch=goarch,
                     cgo_enabled=cgo == "1",
-                    tags=tuple(sorted(raw_tags.split(","))),
+                    tags=() if raw_tags == "-" else tuple(sorted(raw_tags.split(","))),
                     report=pathlib.Path(raw_report),
                 )
             )

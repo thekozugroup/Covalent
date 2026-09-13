@@ -119,21 +119,19 @@ grep -Fq 'nativeStart' "$native"
 # reviewed for the macOS package, and no prebuilt ELF is tracked here.
 test "$(shasum -a 256 "$sync_guardian" | awk '{print $1}')" = \
   c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579
-grep -Fq 'expected_commit=946e2b83a1f6c6ae119427c09e0a5802940b82ff' "$sync_builder"
+grep -Fq 'engine_commit=687d264b689b8c49a67e2e52a8a5e0caa01c04ce' "$sync_builder"
 grep -Fq "expected_go='go version go1.26.7 '" "$sync_builder"
 grep -Fq 'expected_ndk=27.1.12297006' "$sync_builder"
-grep -Fq 'source_patch_sha=bdbab1565d0adce1fc2dc77cfe3a0581a83333b93910a0ac43e3081ba0b678ca' "$sync_builder"
-grep -Fq 'git -C "$source_dir" archive --format=tar "$expected_commit"' "$sync_builder"
-grep -Fq 'git -C "$build_source" apply --check "$source_patch"' "$sync_builder"
-grep -Fq -- '--source-patch "Covalent keep-local-deletions patch"' "$sync_builder"
-grep -Fq 'GOFLAGS=-mod=readonly' "$sync_builder"
+grep -Fq 'packaging/rclone' "$sync_builder"
+grep -Fq "export GOFLAGS='-buildvcs=false -mod=readonly -trimpath'" "$sync_builder"
 grep -Fq 'GOTMPDIR=' "$sync_builder"
 grep -Fq 'TMPDIR=' "$sync_builder"
-grep -Fq -- '-goos android' "$sync_builder"
-grep -Fq -- '-no-upgrade' "$sync_builder"
-grep -Fq -- '-version v2.1.3' "$sync_builder"
+grep -Fq 'GOOS=android' "$sync_builder"
+grep -Fq 'GOARCH="$goarch"' "$sync_builder"
+grep -Fq 'CGO_ENABLED=1' "$sync_builder"
+grep -Fq 'go build -buildmode=pie' "$sync_builder"
 grep -Fq 'max-page-size=16384' "$sync_builder"
-grep -Fq 'syncthing-link-provenance-$abi.json' "$sync_builder"
+grep -Fq 'rclone-link-provenance-$abi.json' "$sync_builder"
 grep -Fq 'guardian-link-provenance-$abi.json' "$sync_builder"
 grep -Fq 'android-go-link-wrapper.sh' "$sync_builder"
 grep -Fq 'COVALENT_LINK_PRIVATE_ROOT=' "$sync_builder"
@@ -146,7 +144,7 @@ grep -Fq -- '-###' "$go_link_wrapper"
 grep -Fq -- '-###' "$repo_root/scripts/build-android-jni.sh"
 grep -Fq 'useLegacyPackaging = true' "$gradle_build"
 grep -Fq 'keepDebugSymbols += "**/libcovalent_android_jni.so"' "$gradle_build"
-grep -Fq 'keepDebugSymbols += "**/libsyncthing.so"' "$gradle_build"
+grep -Fq 'keepDebugSymbols += "**/libcovalentrclone.so"' "$gradle_build"
 grep -Fq 'keepDebugSymbols += "**/libengineguardian.so"' "$gradle_build"
 grep -Fq 'it.name.startsWith("merge") && it.name.endsWith("Assets")' "$gradle_build"
 grep -Fq 'mustRunAfter(buildAndroidSyncEngine)' "$gradle_build"
@@ -160,7 +158,7 @@ grep -Fq 'folderSyncAccessUnavailable' "$native"
 grep -Fq 'backupProviderEnabled' "$native"
 grep -Fq 'folderSyncAccessUnavailable()' "$manager"
 if git -C "$repo_root" ls-files '*.so' | \
-  grep -E '(^|/)(libsyncthing|libengineguardian)\.so$' >/dev/null; then
+  grep -E '(^|/)(libcovalentrclone|libengineguardian)\.so$' >/dev/null; then
   echo "Prebuilt folder-engine executables must not be committed to the product source" >&2
   exit 1
 fi

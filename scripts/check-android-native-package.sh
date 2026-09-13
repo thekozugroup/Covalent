@@ -228,10 +228,10 @@ with zipfile.ZipFile(package) as archive:
     if len(archive.namelist()) != len(set(archive.namelist())):
         raise SystemExit("package contains duplicate archive member names")
     workers = parse_manifest(
-        archive, "syncthing-sha256.txt", worker_min, worker_max)
+        archive, "rclone-sha256.txt", worker_min, worker_max)
     guardians = parse_manifest(
         archive, "engine-guardian-sha256.txt", guardian_min, guardian_max)
-    verify_helpers(archive, "libsyncthing.so", workers)
+    verify_helpers(archive, "librclone.so", workers)
     verify_helpers(archive, "libengineguardian.so", guardians)
     verify_notices(archive)
 PY

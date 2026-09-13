@@ -94,12 +94,12 @@
 COVALENT_JNI_MAX_BYTES=12517376
 COVALENT_JNI_MIN_BYTES=4194304
 
-# Official Syncthing v2.1.3 Android helpers measured by the isolated API-37
-# proof at commit 024afda5 (run 34237780913): arm64-v8a 30,787,168 bytes and
-# x86_64 32,646,984 bytes. The common ceiling is the 32,646,984-byte worst ABI
-# plus 12%, rounded up to 64 KiB. The 16 MiB floor catches a missing or stubbed
-# engine while leaving substantial room for legitimate linker variation.
-COVALENT_SYNC_ENGINE_MAX_BYTES=36569088
+# Restricted rclone v1.75.1 Android helpers measured with Go 1.26.7 and NDK
+# 27.1.12297006 as API-26 PIE executables with 16 KiB maximum page alignment:
+# arm64-v8a 21,614,432 bytes; x86_64 23,188,384 bytes. The ceiling is the
+# 23,188,384-byte worst ABI plus 12%, rounded up to 64 KiB. The 16 MiB floor
+# catches a missing or stubbed worker.
+COVALENT_SYNC_ENGINE_MAX_BYTES=26017792
 COVALENT_SYNC_ENGINE_MIN_BYTES=16777216
 
 # The same proof measured the reviewed guardian at 14,912 bytes (arm64) and

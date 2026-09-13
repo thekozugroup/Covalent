@@ -192,7 +192,7 @@ class Fixture:
             )
             for component, asset in (
                 ("guardian", "engine-guardian-sha256.txt"),
-                ("syncthing", "syncthing-sha256.txt"),
+                ("rclone", "rclone-sha256.txt"),
             ):
                 rows = []
                 for abi in summary.ABIS:
@@ -396,7 +396,7 @@ class NativeDistributionSummaryTests(unittest.TestCase):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             with zipfile.ZipFile(self.fixture.release, "a") as archive:
-                archive.writestr("lib/arm64-v8a/libsyncthing.so", b"duplicate")
+                archive.writestr("lib/arm64-v8a/librclone.so", b"duplicate")
         with self.assertRaisesRegex(summary.SummaryError, "duplicate entries"):
             self.fixture.collect()
 

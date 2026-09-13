@@ -3,43 +3,30 @@ ARG TARGETARCH
 ENV CGO_ENABLED=0 \
     GOTOOLCHAIN=local \
     GOFLAGS=-mod=readonly
-ADD --checksum=sha256:dbcc9498602286a843f29a7104833bd1422082999aa51ff92eef493172d47959 \
-    https://github.com/syncthing/syncthing/archive/946e2b83a1f6c6ae119427c09e0a5802940b82ff.tar.gz \
-    /tmp/syncthing-source.tar.gz
-RUN mkdir -m 0700 /tmp/syncthing-source \
-    && tar -xzf /tmp/syncthing-source.tar.gz --strip-components=1 -C /tmp/syncthing-source
+COPY packaging/rclone /tmp/rclone-source
 COPY --chmod=0555 scripts/build-linux-sync-engine.sh /usr/local/bin/build-linux-sync-engine
 COPY --chmod=0555 scripts/collect-go-target-license-inventory.py /usr/local/bin/collect-go-target-license-inventory
 COPY --chmod=0555 scripts/collect-sync-engine-notices.py /usr/local/bin/collect-sync-engine-notices
 COPY --chmod=0444 packaging/sync-engine/engine-guardian.c /tmp/engine-guardian.c
-COPY --chmod=0444 packaging/sync-engine/keep-local-deletions.patch /tmp/keep-local-deletions.patch
 COPY --chmod=0444 LICENSE /tmp/Covalent-LICENSE.txt
-COPY --chmod=0444 docs/licenses/sync-engine/OFL-1.1.txt /tmp/OFL-1.1.txt
 RUN apk add --no-cache \
-      git=2.52.0-r0 \
       python3=3.12.14-r0 \
-    && test "$(git --version)" = "git version 2.52.0" \
     && test "$(python3 --version)" = "Python 3.12.14" \
-    && build-linux-sync-engine worker /tmp/syncthing-source /engine-worker "$TARGETARCH" \
-      /tmp/keep-local-deletions.patch \
+    && build-linux-sync-engine worker /tmp/rclone-source /engine-worker "$TARGETARCH" \
     && mkdir -m 0700 /engine-evidence \
     && collect-go-target-license-inventory \
-      --source-root /tmp/syncthing-source \
+      --source-root /tmp/rclone-source \
       --module-cache /go/pkg/mod \
-      --target "linux-$TARGETARCH" linux "$TARGETARCH" 0 noupgrade \
+      --target "linux-$TARGETARCH" linux "$TARGETARCH" 0 - \
         /engine-worker/go-target-deps.ndjson \
       --output /engine-evidence/target-license-inventory.json \
     && collect-sync-engine-notices \
       --inventory /engine-evidence/target-license-inventory.json \
-      --source-root /tmp/syncthing-source \
+      --source-root /tmp/rclone-source \
       --module-cache /go/pkg/mod \
       --go-root /usr/local/go \
       --guardian-source /tmp/engine-guardian.c \
       --project-license /tmp/Covalent-LICENSE.txt \
-      --ofl-license /tmp/OFL-1.1.txt \
-      --source-patch "Covalent keep-local-deletions patch" \
-        keep-local-deletions.patch /tmp/keep-local-deletions.patch \
-        bdbab1565d0adce1fc2dc77cfe3a0581a83333b93910a0ac43e3081ba0b678ca \
       --output /engine-notices \
     && install -m 0444 /engine-evidence/target-license-inventory.json \
       /engine-worker/target-license-inventory.json
@@ -306,10 +293,9 @@ LABEL org.opencontainers.image.title="Covalent" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.base.name="docker.io/library/alpine:3.23" \
       org.opencontainers.image.base.digest="sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40" \
-      io.covalent.sync-engine.version="v2.1.3" \
-      io.covalent.sync-engine.commit="946e2b83a1f6c6ae119427c09e0a5802940b82ff" \
-      io.covalent.sync-engine.source-sha256="dbcc9498602286a843f29a7104833bd1422082999aa51ff92eef493172d47959" \
-      io.covalent.sync-engine.patch-sha256="bdbab1565d0adce1fc2dc77cfe3a0581a83333b93910a0ac43e3081ba0b678ca" \
+      io.covalent.sync-engine.name="rclone" \
+      io.covalent.sync-engine.version="v1.75.1" \
+      io.covalent.sync-engine.commit="687d264b689b8c49a67e2e52a8a5e0caa01c04ce" \
       io.covalent.runtime.openssl.version="3.5.8-r0"
 
 LABEL io.covalent.runtime.busybox.version="1.37.0-r1000" \

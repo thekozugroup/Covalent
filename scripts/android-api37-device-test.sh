@@ -720,7 +720,7 @@ if ! native_preflight=$(
 fi
 native_library_directory=$(printf '%s\n' "$native_preflight" | head -1)
 printf 'Verified installed base APK proposes native helper directory: %s\n' "$native_library_directory"
-for helper in libsyncthing.so libengineguardian.so; do
+for helper in librclone.so libengineguardian.so; do
   if ! "$adb" -s "$serial" shell -T run-as life.michaelwong.covalent \
     test -x "$native_library_directory/$helper" >/dev/null; then
     echo "The installed immutable helper $helper is unavailable." >&2
@@ -893,7 +893,7 @@ helper_counts() {
   # Run this bounded read-only /proc walk as the app UID so Android's procfs
   # restrictions do not hide the UID's own immutable helper executables.
   "$adb" -s "$serial" shell -T run-as life.michaelwong.covalent sh -s \
-    "$native_library_directory/libsyncthing.so" \
+    "$native_library_directory/librclone.so" \
     "$native_library_directory/libengineguardian.so" <<'SH'
 worker=$1
 guardian=$2
