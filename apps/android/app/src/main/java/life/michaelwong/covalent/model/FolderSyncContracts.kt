@@ -180,6 +180,7 @@ data class FolderHealth(
     val reportedErrorRows: Int,
     val statusError: Boolean,
     val watchError: Boolean,
+    val accessUnavailable: Boolean = false,
 )
 
 data class FolderSyncMutation(

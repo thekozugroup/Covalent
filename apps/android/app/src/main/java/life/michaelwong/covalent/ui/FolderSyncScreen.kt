@@ -1106,7 +1106,9 @@ private fun FolderShareCard(
             if (share.phase != FolderSharePhase.REMOVED && share.expired) Text(stringResource(
                 if (share.incoming) R.string.folder_sync_renew_incoming_detail else R.string.folder_sync_renew_detail,
             ), color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (status.issue == FolderSyncIssue.FOLDER_ACCESS && share.phase != FolderSharePhase.REMOVED) {
+            val folderAccessUnavailable = status.issue == FolderSyncIssue.FOLDER_ACCESS ||
+                status.folders.singleOrNull { it.folderId == share.folderId }?.accessUnavailable == true
+            if (folderAccessUnavailable && share.phase != FolderSharePhase.REMOVED) {
                 Text(
                     stringResource(R.string.folder_sync_choose_again_detail),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1124,7 +1126,7 @@ private fun FolderShareCard(
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (status.issue != FolderSyncIssue.FOLDER_ACCESS && !share.incoming && share.expired &&
+                if (!folderAccessUnavailable && !share.incoming && share.expired &&
                     share.phase in setOf(FolderSharePhase.OFFERED, FolderSharePhase.PAUSED)
                 ) {
                     Button(onClick = { mutate("renew") }, enabled = !busy) {

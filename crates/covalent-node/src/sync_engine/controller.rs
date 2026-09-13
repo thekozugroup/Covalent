@@ -40,6 +40,7 @@ pub struct EngineSessionSettings {
 pub enum EngineSessionError {
     InvalidConfiguration,
     RuntimeUnavailable,
+    FolderUnavailable,
     LaunchFailed,
     StartupTimeout,
     StartupMismatch,
@@ -52,6 +53,7 @@ impl fmt::Display for EngineSessionError {
         formatter.write_str(match self {
             Self::InvalidConfiguration => "folder sync configuration is invalid",
             Self::RuntimeUnavailable => "folder sync runtime storage is unavailable",
+            Self::FolderUnavailable => "folder access is unavailable",
             Self::LaunchFailed => "folder sync worker could not start",
             Self::StartupTimeout => "folder sync worker did not become ready",
             Self::StartupMismatch => "folder sync worker failed startup verification",
@@ -321,23 +323,27 @@ impl ManagedEngineSession {
             .settings
             .folders
             .iter()
-            .map(|folder| FolderHealth {
-                folder: folder.id(),
-                // An absent runtime-only capability is a per-folder state. It
-                // stays visible without converting a healthy sibling into a
-                // worker-wide reported error.
-                lifecycle: if self.unavailable_folders.contains(&folder.id()) {
-                    FolderLifecycle::Error
-                } else {
-                    FolderLifecycle::Idle
-                },
-                state_changed: now,
-                remaining_files: 0,
-                remaining_bytes: 0,
-                scan_pull_error_count: 0,
-                reported_error_rows: 0,
-                status_error: false,
-                watch_error: false,
+            .map(|folder| {
+                let access_unavailable = self.unavailable_folders.contains(&folder.id());
+                FolderHealth {
+                    folder: folder.id(),
+                    // An absent runtime-only capability is a per-folder state. It
+                    // stays visible without converting a healthy sibling into a
+                    // worker-wide reported error.
+                    lifecycle: if access_unavailable {
+                        FolderLifecycle::Error
+                    } else {
+                        FolderLifecycle::Idle
+                    },
+                    access_unavailable,
+                    state_changed: now,
+                    remaining_files: 0,
+                    remaining_bytes: 0,
+                    scan_pull_error_count: 0,
+                    reported_error_rows: 0,
+                    status_error: false,
+                    watch_error: false,
+                }
             })
             .collect())
     }
@@ -376,7 +382,7 @@ impl ManagedEngineSession {
     ) -> Result<super::run_observation::EngineRunObservation, EngineSessionError> {
         self.revalidate_roots()?;
         if self.unavailable_folders.contains(&folder) {
-            return Err(EngineSessionError::RuntimeUnavailable);
+            return Err(EngineSessionError::FolderUnavailable);
         }
         let role = self
             .settings

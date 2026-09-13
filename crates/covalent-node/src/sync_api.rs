@@ -845,8 +845,8 @@ mod lifecycle_tests {
     use covalent_protocol::{PeerGrant, TransportBinding};
 
     use super::{
-        ShareResponse, ensure_run_admitted, lifecycle_fields, peer_connection_field,
-        peer_responses, service_error,
+        FolderResponse, ShareResponse, ensure_run_admitted, lifecycle_fields,
+        peer_connection_field, peer_responses, service_error,
     };
     use crate::sync_engine::{
         FolderSyncIssue, FolderSyncLifecycle, PeerConnectionState, SharingPhase,
@@ -864,6 +864,26 @@ mod lifecycle_tests {
             )),
             ("needsAttention", Some("initialScan"))
         );
+    }
+
+    #[test]
+    fn folder_access_unavailable_is_an_optional_per_folder_signal() {
+        let response = |access_unavailable| FolderResponse {
+            folder_id: uuid::Uuid::new_v4(),
+            state: if access_unavailable { "error" } else { "idle" },
+            access_unavailable,
+            state_changed: "1970-01-01T00:00:00Z".to_owned(),
+            remaining_files: 0,
+            remaining_bytes: 0,
+            scan_pull_error_count: 0,
+            reported_error_rows: 0,
+            status_error: false,
+            watch_error: false,
+        };
+        let unavailable = serde_json::to_value(response(true)).expect("unavailable folder");
+        assert_eq!(unavailable["accessUnavailable"], true);
+        let available = serde_json::to_value(response(false)).expect("available folder");
+        assert!(available.get("accessUnavailable").is_none());
     }
 
     #[test]
@@ -1084,6 +1104,8 @@ struct ShareResponse {
 struct FolderResponse {
     folder_id: uuid::Uuid,
     state: &'static str,
+    #[serde(skip_serializing_if = "is_false")]
+    access_unavailable: bool,
     state_changed: String,
     remaining_files: u64,
     remaining_bytes: u64,
@@ -1091,6 +1113,10 @@ struct FolderResponse {
     reported_error_rows: u16,
     status_error: bool,
     watch_error: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl SyncStatusResponse {
@@ -1180,6 +1206,7 @@ pub(crate) async fn status(
                         FolderLifecycle::CleanWaiting => "clean-waiting",
                         FolderLifecycle::Error => "error",
                     },
+                    access_unavailable: folder.access_unavailable,
                     state_changed: folder
                         .state_changed
                         .format(&time::format_description::well_known::Rfc3339)

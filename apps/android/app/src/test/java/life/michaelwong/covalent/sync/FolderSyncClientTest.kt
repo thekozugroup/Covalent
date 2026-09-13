@@ -312,6 +312,28 @@ class FolderSyncClientTest {
     }
 
     @Test
+    fun folderAccessUnavailableIsPerFolderAndDefaultsOff() {
+        val folder = """{"folderId":"$FOLDER","state":"error","stateChanged":"2026-09-13T00:00:00Z","remainingFiles":0,"remainingBytes":0,"scanPullErrorCount":0,"reportedErrorRows":0,"statusError":false,"watchError":false}"""
+        val localized = STATUS.replace("\"folders\":[]", "\"folders\":[${folder.dropLast(1)},\"accessUnavailable\":true}]")
+        val legacy = STATUS.replace("\"folders\":[]", "\"folders\":[$folder]")
+        val malformed = STATUS.replace("\"folders\":[]", "\"folders\":[${folder.dropLast(1)},\"accessUnavailable\":\"true\"}]")
+        val server = MockWebServer().apply {
+            enqueue(MockResponse().setBody(localized))
+            enqueue(MockResponse().setBody(legacy))
+            enqueue(MockResponse().setBody(malformed))
+            start()
+        }
+        try {
+            val base = server.url("/").toString().removeSuffix("/")
+            assertTrue(CovalentNodeClient().folderSyncStatus(base, "token").folders.single().accessUnavailable)
+            assertFalse(CovalentNodeClient().folderSyncStatus(base, "token").folders.single().accessUnavailable)
+            assertTrue(runCatching { CovalentNodeClient().folderSyncStatus(base, "token") }.isFailure)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
     fun olderStatusDefaultsReachabilityToUnknownButMalformedValuesFail() {
         val legacy = STATUS
             .replace(",\"connectionFreshness\":\"fresh\"", "")

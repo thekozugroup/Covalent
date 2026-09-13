@@ -281,12 +281,19 @@ impl Session {
         &mut self,
         folder: Uuid,
         expected: Option<&super::EngineIndexSnapshot>,
-    ) -> Result<super::run_observation::EngineRunObservation, ()> {
+    ) -> Result<super::run_observation::EngineRunObservation, RunObservationError> {
         match self {
-            Self::Production(session) => session
-                .run_observation(folder, expected)
-                .await
-                .map_err(|_| ()),
+            Self::Production(session) => {
+                session
+                    .run_observation(folder, expected)
+                    .await
+                    .map_err(|error| match error {
+                        EngineSessionError::FolderUnavailable => {
+                            RunObservationError::FolderUnavailable
+                        }
+                        _ => RunObservationError::Retryable,
+                    })
+            }
             #[cfg(test)]
             Self::Test(session) => session.run_observation(folder),
         }
@@ -354,6 +361,12 @@ impl Session {
             Self::Test(session) => session.health().await,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RunObservationError {
+    FolderUnavailable,
+    Retryable,
 }
 
 struct ServiceInner {
@@ -834,11 +847,18 @@ impl FolderSyncService {
                 return Err(map_journal_error(error));
             }
         };
+        let repaired_folder = prepared.folder_id();
         quiesce(&mut inner, FolderSyncLifecycle::Stopped, false).await?;
         inner
             .journal
             .commit_root_repair(prepared)
             .map_err(map_journal_error)?;
+        inner
+            .folder_health
+            .retain(|health| health.folder != repaired_folder);
+        if inner.folder_health.is_empty() {
+            inner.health_freshness = FolderHealthFreshness::NeverObserved;
+        }
         let lifecycle = reconcile_committed(&self.shared, &mut inner).await;
         Ok(CommittedMutation {
             value: (),
@@ -1165,8 +1185,14 @@ async fn apply_desired(
         if settings.folders.is_empty() {
             inner.applied_settings = None;
             inner.applied_batch_generations.clear();
-            inner.folder_health.clear();
-            inner.health_freshness = FolderHealthFreshness::NeverObserved;
+            inner
+                .folder_health
+                .retain(|health| health.access_unavailable);
+            inner.health_freshness = if inner.folder_health.is_empty() {
+                FolderHealthFreshness::NeverObserved
+            } else {
+                FolderHealthFreshness::Stale
+            };
             inner.peer_connections.clear();
             inner.connection_freshness = PeerConnectionFreshness::NeverObserved;
             inner.lifecycle = FolderSyncLifecycle::Stopped;
@@ -1595,8 +1621,43 @@ async fn advance_run_completion(shared: &ServiceShared, inner: &mut ServiceInner
             super::LinkRunWorkItem::PrepareSource { .. } => None,
             super::LinkRunWorkItem::ObserveDestination { source_index, .. } => Some(source_index),
         };
-        let Ok(observed) = session.run_observation(folder_id, expected).await else {
-            continue;
+        let observed = match session.run_observation(folder_id, expected).await {
+            Ok(observed) => observed,
+            Err(RunObservationError::Retryable) => continue,
+            Err(RunObservationError::FolderUnavailable) => {
+                if !run_still_active(inner, folder_id, generation) {
+                    continue;
+                }
+                let outcome = match item {
+                    super::LinkRunWorkItem::PrepareSource { .. } => inner
+                        .journal
+                        .interrupt_link_run(folder_id, generation, crate::now_unix_ms()),
+                    super::LinkRunWorkItem::ObserveDestination { source_index, .. } => inner
+                        .journal
+                        .complete_link_run(
+                            folder_id,
+                            generation,
+                            source_index,
+                            super::LinkRunDestinationResult::Failed,
+                            crate::now_unix_ms(),
+                        )
+                        .map(|_| ()),
+                };
+                match outcome {
+                    Ok(()) => changed = true,
+                    Err(SharingError::RunConflict) => {}
+                    Err(_) => {
+                        let _ = quiesce(
+                            inner,
+                            FolderSyncLifecycle::NeedsAttention(FolderSyncIssue::Journal),
+                            false,
+                        )
+                        .await;
+                        return;
+                    }
+                }
+                continue;
+            }
         };
         let outcome = match item {
             super::LinkRunWorkItem::PrepareSource { .. } => {
@@ -1728,7 +1789,7 @@ fn map_start_issue(issue: FolderSyncIssue) -> FolderSyncServiceError {
 }
 
 #[cfg(test)]
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 #[cfg(test)]
 use std::sync::Mutex as StdMutex;
 #[cfg(test)]
@@ -1755,6 +1816,7 @@ pub(super) enum TestScanBehavior {
 #[derive(Default)]
 struct TestBackendState {
     run_observations: BTreeMap<Uuid, VecDeque<super::run_observation::EngineRunObservation>>,
+    unavailable_run_folders: BTreeSet<Uuid>,
     fail_launches: usize,
     fail_resets: usize,
     fail_promotions: usize,
@@ -1822,6 +1884,14 @@ impl TestBackend {
             .unwrap()
             .run_observations
             .insert(folder, observations.into());
+    }
+
+    pub(super) fn set_run_folder_unavailable(&self, folder: Uuid) {
+        self.state
+            .lock()
+            .unwrap()
+            .unavailable_run_folders
+            .insert(folder);
     }
 
     pub(super) fn set_health_observation(&self, observation: Vec<FolderHealth>) {
@@ -1917,13 +1987,24 @@ impl TestSession {
     fn run_observation(
         &self,
         folder: Uuid,
-    ) -> Result<super::run_observation::EngineRunObservation, ()> {
+    ) -> Result<super::run_observation::EngineRunObservation, RunObservationError> {
         let mut state = self.backend.state.lock().unwrap();
-        let observations = state.run_observations.get_mut(&folder).ok_or(())?;
+        if state.unavailable_run_folders.contains(&folder) {
+            return Err(RunObservationError::FolderUnavailable);
+        }
+        let observations = state
+            .run_observations
+            .get_mut(&folder)
+            .ok_or(RunObservationError::Retryable)?;
         if observations.len() > 1 {
-            observations.pop_front().ok_or(())
+            observations
+                .pop_front()
+                .ok_or(RunObservationError::Retryable)
         } else {
-            observations.front().cloned().ok_or(())
+            observations
+                .front()
+                .cloned()
+                .ok_or(RunObservationError::Retryable)
         }
     }
 

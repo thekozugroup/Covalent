@@ -244,7 +244,7 @@ fn validate_manifest(manifest: &PackageManifest) -> Result<(), MacHostError> {
         || manifest.notices.license
             != "9266eae9c6a441de0f6847f19ac8f09b280d55612b079eca03b3d49b822c1a71"
         || manifest.notices.source_build
-            != "122b3ee828fb92c7149346ab02f306e53f6633cb907c5d05d7deac44ac307a2d"
+            != "4adca055de0df90833b81c674354ffb5e5d45e57fdc20b5dbfff54117edbc70d"
         || manifest.notices.index
             != "59ab37c92bac32b1b3533ce8be192c282c9b7d25a81f03b2f63b7651faa4ab51"
         || manifest.notices.target_manifest
@@ -372,7 +372,7 @@ mod tests {
             "notices": {
                 "PROVENANCE.txt": "ce9886f37cd7bc7b62e755375f0d5f23d5f97f60670f6f857dac632b33f5e0ef",
                 "rclone-LICENSE.txt": "9266eae9c6a441de0f6847f19ac8f09b280d55612b079eca03b3d49b822c1a71",
-                "source-build.json": "122b3ee828fb92c7149346ab02f306e53f6633cb907c5d05d7deac44ac307a2d",
+                "source-build.json": "4adca055de0df90833b81c674354ffb5e5d45e57fdc20b5dbfff54117edbc70d",
                 "notices-index.txt": "59ab37c92bac32b1b3533ce8be192c282c9b7d25a81f03b2f63b7651faa4ab51",
                 "notices/manifest.json": "9a624a53020218aea6927c2baa254daa7ce9099c83eeddcfed371001e889bd6d",
                 "notices/THIRD-PARTY-NOTICES.txt": "9374aa12dc9da1416da235f6a664b6b5817081adf00b94a13d2c58d4a8ca68d4",

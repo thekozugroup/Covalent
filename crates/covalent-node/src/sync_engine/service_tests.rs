@@ -260,6 +260,225 @@ async fn make_ready_folder_at(
 }
 
 #[tokio::test]
+async fn unavailable_source_folder_interrupts_only_its_active_run() {
+    let first = Device::new("Android source", 44291);
+    let second = Device::new("Target", 44292);
+    pair(&first, &second);
+    let source_backend = Arc::new(TestBackend::default());
+    let target_backend = Arc::new(TestBackend::default());
+    let source = first.service(first.journal(), Arc::clone(&source_backend));
+    let target = second.service(second.journal(), target_backend);
+    let folders = [Uuid::new_v4(), Uuid::new_v4()];
+    let source_roots = [first.root.join("source-a"), first.root.join("source-b")];
+    let target_roots = [second.root.join("target-a"), second.root.join("target-b")];
+    for root in source_roots.iter().chain(target_roots.iter()) {
+        std::fs::create_dir(root).unwrap();
+    }
+    let settings = FolderLinkSettings {
+        deletion_policy: covalent_protocol::FolderLinkPolicy::default(),
+        paused: false,
+        cadence: LinkCadence::Manual,
+        android_conditions: AndroidLinkConditions::default(),
+    };
+    let mut revisions = BTreeMap::new();
+    let mut offer_ids = BTreeMap::new();
+    for ((folder, source_root), target_root) in folders
+        .iter()
+        .zip(source_roots.iter())
+        .zip(target_roots.iter())
+    {
+        let offer = source
+            .offer_with_settings(
+                second.engine.device_id(),
+                *folder,
+                "Documents",
+                source_root,
+                2000,
+                settings,
+            )
+            .await
+            .unwrap()
+            .into_value();
+        offer_ids.insert(*folder, offer.offer_id);
+        target.receive_offer(offer.clone(), 2001).await.unwrap();
+        let acceptance = target
+            .accept(offer.offer_id, target_root, 2002)
+            .await
+            .unwrap()
+            .into_value();
+        let commit = source
+            .receive_acceptance(offer.offer_id, acceptance, 2003)
+            .await
+            .unwrap()
+            .into_value();
+        target.receive_commit(offer.offer_id, commit).await.unwrap();
+        let settings_commit = source
+            .outbound_records()
+            .await
+            .unwrap()
+            .into_value()
+            .into_iter()
+            .find_map(|delivery| match delivery.record {
+                FolderShareRecord::SettingsCommit(commit) if commit.folder_id == *folder => {
+                    Some(commit)
+                }
+                _ => None,
+            })
+            .unwrap();
+        revisions.insert(*folder, settings_commit.revision);
+        target
+            .receive_link_settings_commit(&settings_commit)
+            .await
+            .unwrap();
+    }
+
+    for folder in folders {
+        let admission = source
+            .request_link_run(folder, Uuid::new_v4(), 0, revisions[&folder])
+            .await
+            .unwrap()
+            .into_value();
+        assert!(matches!(admission, LinkRunAdmission::Accepted(_)));
+    }
+    source_backend.set_health_observation(
+        folders
+            .into_iter()
+            .map(|folder| FolderHealth {
+                folder,
+                lifecycle: if folder == folders[0] {
+                    FolderLifecycle::Error
+                } else {
+                    FolderLifecycle::Idle
+                },
+                access_unavailable: folder == folders[0],
+                state_changed: OffsetDateTime::UNIX_EPOCH,
+                remaining_files: 0,
+                remaining_bytes: 0,
+                scan_pull_error_count: 0,
+                reported_error_rows: 0,
+                status_error: false,
+                watch_error: false,
+            })
+            .collect(),
+    );
+    source_backend.set_run_folder_unavailable(folders[0]);
+    source_backend.set_run_observations(
+        folders[1],
+        vec![EngineRunObservation {
+            local_index: Some(EngineIndexSnapshot {
+                index_id: "0x0123456789ABCDEF".into(),
+                sequence: 1,
+            }),
+            completions: BTreeMap::new(),
+            failures: BTreeSet::new(),
+        }],
+    );
+    source.advance_runs_for_test().await;
+    source.advance_runs_for_test().await;
+
+    let status = source.status().await.unwrap();
+    let inaccessible = status
+        .shares()
+        .iter()
+        .find(|share| share.folder_id == folders[0])
+        .unwrap();
+    assert_eq!(
+        inaccessible.link_run.as_ref().unwrap().phase,
+        Some(LinkRunPhase::Interrupted)
+    );
+    assert!(
+        inaccessible
+            .link_run
+            .as_ref()
+            .unwrap()
+            .destinations
+            .iter()
+            .all(|destination| destination.result == LinkRunDestinationResult::Interrupted)
+    );
+    assert!(status.folder_health().iter().any(|health| {
+        health.folder == folders[0]
+            && health.lifecycle == FolderLifecycle::Error
+            && health.access_unavailable
+    }));
+    let healthy = status
+        .shares()
+        .iter()
+        .find(|share| share.folder_id == folders[1])
+        .unwrap();
+    assert_eq!(
+        healthy.link_run.as_ref().unwrap().phase,
+        Some(LinkRunPhase::Running)
+    );
+
+    let interrupted = source
+        .outbound_records()
+        .await
+        .unwrap()
+        .into_value()
+        .into_iter()
+        .find_map(|delivery| match delivery.record {
+            FolderShareRecord::RunCommit(commit)
+                if commit.folder_id == folders[0]
+                    && delivery.peer_transport.peer_id == second.engine.device_id() =>
+            {
+                Some(commit)
+            }
+            _ => None,
+        })
+        .expect("interrupted state must be delivered to this link's target");
+    assert_eq!(
+        interrupted.state.as_ref().unwrap().phase,
+        LinkRunPhase::Interrupted
+    );
+    target.receive_link_run_commit(&interrupted).await.unwrap();
+    let target_status = target.status().await.unwrap();
+    assert_eq!(
+        target_status
+            .shares()
+            .iter()
+            .find(|share| share.folder_id == folders[0])
+            .unwrap()
+            .link_run
+            .as_ref()
+            .unwrap()
+            .phase,
+        Some(LinkRunPhase::Interrupted)
+    );
+    let reopened = first.reopen();
+    assert_eq!(
+        reopened
+            .summaries()
+            .unwrap()
+            .into_iter()
+            .find(|share| share.folder_id == folders[0])
+            .unwrap()
+            .link_run
+            .unwrap()
+            .phase,
+        Some(LinkRunPhase::Interrupted)
+    );
+
+    source.remove(offer_ids[&folders[1]]).await.unwrap();
+    let stopped = source.status().await.unwrap();
+    assert_eq!(stopped.lifecycle(), FolderSyncLifecycle::Stopped);
+    assert_eq!(stopped.health_freshness(), FolderHealthFreshness::Stale);
+    assert_eq!(stopped.folder_health().len(), 1);
+    assert!(stopped.folder_health()[0].access_unavailable);
+
+    source
+        .repair_root(offer_ids[&folders[0]], &source_roots[0])
+        .await
+        .unwrap();
+    let repaired = source.status().await.unwrap();
+    assert_eq!(repaired.lifecycle(), FolderSyncLifecycle::Stopped);
+    assert_eq!(
+        repaired.health_freshness(),
+        FolderHealthFreshness::NeverObserved
+    );
+    assert!(repaired.folder_health().is_empty());
+}
+
+#[tokio::test]
 async fn concurrent_expired_offer_renewals_converge_on_one_durable_replacement() {
     let first = Device::new("Mac", 44311);
     let second = Device::new("Server", 44312);
@@ -1523,6 +1742,7 @@ async fn health_failure_closes_and_reaps_before_reporting_attention() {
     let observed = FolderHealth {
         folder: Uuid::new_v4(),
         lifecycle: FolderLifecycle::Idle,
+        access_unavailable: false,
         state_changed: OffsetDateTime::UNIX_EPOCH,
         remaining_files: 0,
         remaining_bytes: 0,
@@ -1573,6 +1793,7 @@ async fn reported_folder_error_is_retained_and_reaps_worker() {
     let observed = FolderHealth {
         folder: Uuid::new_v4(),
         lifecycle: FolderLifecycle::Error,
+        access_unavailable: false,
         state_changed: OffsetDateTime::UNIX_EPOCH,
         remaining_files: 1,
         remaining_bytes: 7,
@@ -2200,6 +2421,7 @@ async fn manual_batch_waits_for_fresh_scan_and_exact_completion_then_reaps_worke
     let health = FolderHealth {
         folder,
         lifecycle: FolderLifecycle::Idle,
+        access_unavailable: false,
         state_changed: OffsetDateTime::UNIX_EPOCH,
         remaining_files: 3,
         remaining_bytes: 90,

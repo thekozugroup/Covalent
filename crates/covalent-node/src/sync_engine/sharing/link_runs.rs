@@ -343,6 +343,40 @@ impl FolderSharingJournal {
         Ok(result)
     }
 
+    pub(crate) fn interrupt_link_run(
+        &mut self,
+        folder_id: Uuid,
+        generation: u64,
+        now_unix_ms: u64,
+    ) -> Result<(), SharingError> {
+        if now_unix_ms == 0 || self.link_source(folder_id)? != self.engine.device_id() {
+            return Err(SharingError::InvalidRecord);
+        }
+        let mut next = self.snapshot.clone();
+        let state = next
+            .link_runs
+            .get_mut(&folder_id)
+            .and_then(|slot| slot.authoritative.as_mut())
+            .ok_or(SharingError::InvalidState)?;
+        if state.generation != generation
+            || state.phase != LinkRunPhase::Preparing
+            || now_unix_ms < state.started_at_unix_ms
+            || now_unix_ms >= state.deadline_unix_ms
+        {
+            return Err(SharingError::RunConflict);
+        }
+        for destination in state.destinations.values_mut() {
+            if destination.result == LinkRunDestinationResult::Pending {
+                destination.result = LinkRunDestinationResult::Interrupted;
+                destination.ended_at_unix_ms = Some(now_unix_ms);
+            }
+        }
+        state.phase = LinkRunPhase::Interrupted;
+        state.ended_at_unix_ms = Some(now_unix_ms);
+        state.state_revision = next_state_revision(state.state_revision)?;
+        self.persist(next)
+    }
+
     pub fn complete_link_run(
         &mut self,
         folder_id: Uuid,

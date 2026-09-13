@@ -328,7 +328,7 @@ class Fixture:
             for key in ("a", "b"):
                 current = self.status(key)
                 rows = [row for row in current["shares"] if row["offerId"] == offer_id]
-                if len(rows) != 1 or current["lifecycle"] != "stopped":
+                if len(rows) != 1:
                     return None
                 settings = rows[0]["linkSettings"]["settings"]
                 if (settings["cadence"] != {"mode": "continuous"}
@@ -336,6 +336,9 @@ class Fixture:
                                                               "chargingOnly": False}):
                     return None
                 run = rows[0].get("linkRun") or {}
+                # Continuous links keep their read-only source service ready.
+                # The terminal generation is the transfer completion barrier;
+                # stopped workers are required for manual/scheduled batches.
                 if run.get("phase") != "succeeded" or type(run.get("generation")) is not int:
                     return None
                 if generation is not None and run["generation"] != generation:

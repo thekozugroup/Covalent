@@ -23,6 +23,8 @@ pub enum FolderLifecycle {
 pub struct FolderHealth {
     pub folder: Uuid,
     pub lifecycle: FolderLifecycle,
+    /// The runtime lacks the registered capability for this exact folder.
+    pub access_unavailable: bool,
     /// Time of the runtime observation.
     pub state_changed: OffsetDateTime,
     pub remaining_files: u64,

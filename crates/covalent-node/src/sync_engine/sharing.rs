@@ -327,6 +327,12 @@ impl fmt::Debug for PreparedRootRepair {
     }
 }
 
+impl PreparedRootRepair {
+    pub(crate) fn folder_id(&self) -> Uuid {
+        self.folder_id
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Tombstone {

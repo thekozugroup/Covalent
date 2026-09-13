@@ -1149,6 +1149,7 @@ private fun JSONObject.toFolderSyncStatus(): FolderSyncStatus {
             requireJsonKeys(
                 folder,
                 setOf("folderId", "state", "stateChanged", "remainingFiles", "remainingBytes", "scanPullErrorCount", "reportedErrorRows", "statusError", "watchError"),
+                setOf("accessUnavailable"),
             )
             FolderHealth(
                 folderId = requireUuid(folder.getString("folderId"), "folder health ID"),
@@ -1161,6 +1162,10 @@ private fun JSONObject.toFolderSyncStatus(): FolderSyncStatus {
                 reportedErrorRows = folder.getInt("reportedErrorRows").also { check(it in 0..128) },
                 statusError = folder.getBoolean("statusError"),
                 watchError = folder.getBoolean("watchError"),
+                accessUnavailable = if (folder.has("accessUnavailable")) {
+                    (folder.get("accessUnavailable") as? Boolean)
+                        ?: error("The node returned an invalid folder access status.")
+                } else false,
             ).also {
                 check(folder.getString("stateChanged").let { value ->
                     value.length in 1..64 && value.none(Char::isISOControl)

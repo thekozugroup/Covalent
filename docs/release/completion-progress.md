@@ -39,11 +39,25 @@ passes source edits, retained destination deletions, restoration after settings
 changes and restart, and shared/offline/conflicting settings. The manual journey
 passes empty runs, retained deletions, and restart. The collection journey passes
 independent contributors, missing mounts, unreadable source scans, deletion
-protection, and recovery. Android startup now registers saved folder capabilities
-before starting transfers and isolates unavailable grants. Its fresh APK passes
-package integrity and provenance checks; the full device journey is running.
-The hosted Mac app bundle passes. Final native app,
-Linux package execution, performance, and release acceptance remain open.
+protection, and recovery. A real 15-minute scheduled run also passes: the source
+owns the due time, no file or transfer worker appears before it, the automatic
+copy completes, and both batch workers stop. A fresh manual empty-run and
+deletion/restart regression passes after the no-op optimization.
+
+Android startup registers saved folder capabilities before starting transfers
+and isolates unavailable grants. The actual API 37 device passes two manual
+SAF-to-SAF transfers through paired nodes, including service restart and saved
+permission registration. Revoked access exposed a stalled run and missing repair
+action; the targeted terminal-state and per-folder recovery fix is under final
+device verification. Component screenshots establish the link and shared-setting
+controls, not acceptance of the complete Android navigation design.
+
+Hosted Rust/contracts and Android foundation checks pass on `8aa2f0d`. The latest
+Mac UI job stops before tests during a SwiftPM dependency fetch; earlier native
+UI findings have source fixes awaiting execution. Mac source-build provenance
+pins and Docker's continuous-run completion assertion have reviewed corrections.
+Final native app, Linux package execution, Android background conditions,
+performance, and release acceptance remain open.
 Syncthing runtime modules, build scripts, source patch, and package assets have
 been removed. [ADR 0008](../adr/0008-rclone-one-way-links.md) records the settled choice.
 
