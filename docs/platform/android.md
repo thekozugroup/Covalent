@@ -36,9 +36,12 @@ From the repository root, run one command:
 ```
 
 It checks prerequisites, builds both native ABIs, verifies the debug signer,
-package, version, alignment, and native libraries, then writes an APK and its
-SHA-256 file under the ignored `artifacts/install/` directory. It does not
-connect to or change any Android device. Gradle's intermediate file is
+package, version, alignment, and native libraries, then writes an APK, its
+SHA-256 file, the Android SBOM and license inventory, readable third-party
+notices and their manifest, and a source/native/signing build receipt under the
+ignored `artifacts/install/` directory. The receipt marks device testing as
+required separately and binds that requirement to the exact APK SHA-256. It
+does not connect to or change any Android device. Gradle's intermediate file is
 `apps/android/app/build/outputs/apk/debug/app-debug.apk`; install the verified
 copy under `artifacts/install/`.
 
@@ -48,10 +51,16 @@ SHA-256, for example:
 ```text
 artifacts/install/Covalent-v0.2.0-android-personal-debug-0123456789abcdef.apk
 artifacts/install/Covalent-v0.2.0-android-personal-debug-0123456789abcdef.apk.sha256
+artifacts/install/Covalent-v0.2.0-android-personal-debug-0123456789abcdef-SBOM.cdx.json
+artifacts/install/Covalent-v0.2.0-android-personal-debug-0123456789abcdef-license-inventory.json
+artifacts/install/Covalent-v0.2.0-android-personal-debug-0123456789abcdef-THIRD-PARTY-NOTICES.txt
+artifacts/install/Covalent-v0.2.0-android-personal-debug-0123456789abcdef-notices-manifest.json
+artifacts/install/Covalent-v0.2.0-android-personal-debug-0123456789abcdef-build-receipt.json
 ```
 
-Existing artifacts are never overwritten. An identical verified build is
-reused; a conflicting file stops the command.
+Existing artifacts are never overwritten. Identical verified files are reused;
+a conflicting file stops the command. For a release, retain the exact APK's
+separate device-test receipt beside this build evidence.
 
 If the prerequisite check reports missing tools, install the exact Android and
 Rust inputs below. Set `ANDROID_HOME` to your SDK directory first. On macOS,
