@@ -6,6 +6,8 @@ apple_dir=${script_dir:h}
 repo_root=${apple_dir:h:h}
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/covalent-macos-ui.XXXXXX")
 node_pid=""
+real_source_pid=""
+real_responder_pid=""
 app_token_directory=""
 app_token_file=""
 artifact_root=${COVALENT_TEST_ARTIFACT_DIR:-$test_root}
@@ -42,10 +44,12 @@ cleanup() {
   if [[ -n "$app_token_file" && -n "$app_token_directory" && "$app_token_file" == "$app_token_directory/"* ]]; then
     rm -f -- "$app_token_file"
   fi
-  if [[ -n "$node_pid" ]]; then
-    kill "$node_pid" 2>/dev/null || true
-    wait "$node_pid" 2>/dev/null || true
-  fi
+  for pid in "$real_responder_pid" "$real_source_pid" "$node_pid"; do
+    if [[ -n "$pid" ]]; then
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+    fi
+  done
   if [[ "$test_root" == *covalent-macos-ui.* && -d "$test_root" ]]; then
     rm -r "$test_root"
   fi
@@ -233,6 +237,196 @@ if ! run_bounded 600 xcodebuild \
   exit 1
 fi
 
+# Exercise the real packaged engine from an unsandboxed test node. The node
+# itself is the raw debug binary; only the reviewed worker, guardian, and
+# resources come from the built app. This matches mac_host's bundle lookup
+# without launching a sandbox-inherit helper outside its app parent.
+built_app="$derived_data/Build/Products/Debug/Covalent.app"
+built_macos="$built_app/Contents/MacOS"
+built_engine_resources="$built_app/Contents/Resources/CovalentSyncEngine"
+for required in \
+  "$node_binary" \
+  "$built_macos/covalent-rclone" \
+  "$built_macos/covalent-engine-guardian" \
+  "$built_engine_resources/manifest.json" \
+  "$built_engine_resources/notices-index.txt"
+do
+  [[ -f "$required" && ! -L "$required" ]] || {
+    print -u2 -- "real macOS folder-link fixture is missing a packaged engine input"
+    exit 1
+  }
+done
+
+real_fixture="$test_root/real-folder-link"
+real_source_contents="$real_fixture/source/Covalent.app/Contents"
+real_responder_contents="$real_fixture/responder/Covalent.app/Contents"
+for contents in "$real_source_contents" "$real_responder_contents"; do
+  mkdir -p "$contents/MacOS" "$contents/Resources"
+  ditto "$node_binary" "$contents/MacOS/covalent-node"
+  ditto "$built_macos/covalent-rclone" "$contents/MacOS/covalent-rclone"
+  ditto "$built_macos/covalent-engine-guardian" "$contents/MacOS/covalent-engine-guardian"
+  ditto "$built_engine_resources" "$contents/Resources/CovalentSyncEngine"
+  chmod 755 "$contents/MacOS/covalent-node" \
+    "$contents/MacOS/covalent-rclone" \
+    "$contents/MacOS/covalent-engine-guardian"
+done
+
+read -r real_source_port real_responder_port < <(python3 - <<'PY'
+import socket
+sockets = []
+ports = []
+for _ in range(2):
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    sockets.append(sock)
+    ports.append(sock.getsockname()[1])
+print(*ports)
+for sock in sockets:
+    sock.close()
+PY
+)
+real_source_data="$real_fixture/source-data"
+real_responder_data="$real_fixture/responder-data"
+real_source_runtime="$real_fixture/source-runtime"
+real_responder_runtime="$real_fixture/responder-runtime"
+real_source_root="$real_fixture/source-folder"
+real_destination_root="$real_fixture/destination-folder"
+for runtime_path in "$real_source_runtime" "$real_responder_runtime"; do
+  runtime_path_bytes=$(LC_ALL=C print -rn -- "$runtime_path" | wc -c | tr -d '[:space:]')
+  [[ "$runtime_path" == /* && "$runtime_path_bytes" -le 900 ]] || {
+    print -u2 -- "real macOS folder-link runtime path exceeds the packaged host bound"
+    exit 1
+  }
+done
+mkdir -m 700 "$real_source_data" "$real_responder_data" \
+  "$real_source_runtime" "$real_responder_runtime" \
+  "$real_source_root" "$real_destination_root"
+print -n -- 'packaged-rclone-forward-content' > "$real_source_root/forward.txt"
+print -n -- 'destination-must-not-write-back' > "$real_destination_root/destination-only.txt"
+
+real_source_key="$real_fixture/source-kek"
+real_responder_key="$real_fixture/responder-kek"
+real_responder_token="$real_fixture/responder-token"
+"$node_binary" provision-key --key-file "$real_source_key" --key-version 1 \
+  >"$real_fixture/source-provision-key.log"
+"$node_binary" provision-key --key-file "$real_responder_key" --key-version 1 \
+  >"$real_fixture/responder-provision-key.log"
+python3 - "$real_responder_token" <<'PY'
+import base64
+import os
+import secrets
+import sys
+
+descriptor = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(descriptor, "wb") as output:
+    output.write(base64.urlsafe_b64encode(secrets.token_bytes(48)).rstrip(b"=") + b"\n")
+PY
+
+COVALENT_SYNC_RUNTIME_DIR="$real_source_runtime" \
+  "$real_source_contents/MacOS/covalent-node" serve \
+  --listen "127.0.0.1:$real_source_port" \
+  --peer-listen "127.0.0.1:$real_source_port" \
+  --data-dir "$real_source_data" \
+  --device-name "Mac UI Source" \
+  --platform-tier tier1 \
+  --key-encryption-key-file "$real_source_key" \
+  --key-encryption-key-version 1 \
+  --api-token-file "$token_file" \
+  >"$real_fixture/source-node.log" 2>&1 &
+real_source_pid=$!
+# The fixed 8789 listener is started only for EngineFolderRole::Source.
+# The responder becomes Destination and runs bounded pull jobs, so it does not
+# bind a second server listener when this one-way link is accepted.
+COVALENT_SYNC_RUNTIME_DIR="$real_responder_runtime" \
+  "$real_responder_contents/MacOS/covalent-node" serve \
+  --listen "127.0.0.1:$real_responder_port" \
+  --peer-listen "127.0.0.1:$real_responder_port" \
+  --data-dir "$real_responder_data" \
+  --device-name "Responder UI Peer" \
+  --platform-tier tier1 \
+  --key-encryption-key-file "$real_responder_key" \
+  --key-encryption-key-version 1 \
+  --api-token-file "$real_responder_token" \
+  >"$real_fixture/responder-node.log" 2>&1 &
+real_responder_pid=$!
+
+for health_port in "$real_source_port" "$real_responder_port"; do
+  for _ in {1..150}; do
+    if curl --fail --silent "http://127.0.0.1:$health_port/healthz" >/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+  if ! curl --fail --silent "http://127.0.0.1:$health_port/healthz" >/dev/null; then
+    print -u2 -- "real macOS folder-link fixture node did not become ready"
+    sed -n '1,160p' "$real_fixture/source-node.log" >&2
+    sed -n '1,160p' "$real_fixture/responder-node.log" >&2
+    exit 1
+  fi
+done
+
+# Shell exports are not the UI test host contract. Put these values into the
+# generated format-v2 xctestrun EnvironmentVariables dictionary documented by
+# xcodebuild.xctestrun(5), then execute that exact test run file below.
+xctestrun_files=("$derived_data"/Build/Products/*.xctestrun(N))
+(( ${#xctestrun_files} == 1 )) || {
+  print -u2 -- "expected exactly one generated macOS xctestrun file"
+  exit 1
+}
+xctestrun_file=${xctestrun_files[1]}
+[[ -f "$xctestrun_file" && ! -L "$xctestrun_file" ]] || {
+  print -u2 -- "generated macOS xctestrun file is unsafe"
+  exit 1
+}
+python3 - "$xctestrun_file" \
+  "$real_source_port" "$real_responder_port" "$real_responder_token" \
+  "$real_source_root" "$real_destination_root" <<'PY'
+import os
+import plistlib
+import stat
+import sys
+import tempfile
+
+path = sys.argv[1]
+values = dict(zip(
+    (
+        "COVALENT_REAL_UI_SOURCE_PORT",
+        "COVALENT_REAL_UI_RESPONDER_PORT",
+        "COVALENT_REAL_UI_RESPONDER_TOKEN_FILE",
+        "COVALENT_REAL_UI_SOURCE_ROOT",
+        "COVALENT_REAL_UI_DESTINATION_ROOT",
+    ),
+    sys.argv[2:],
+    strict=True,
+))
+with open(path, "rb") as source:
+    document = plistlib.load(source)
+targets = [
+    target
+    for configuration in document.get("TestConfigurations", [])
+    for target in configuration.get("TestTargets", [])
+    if target.get("BlueprintName") == "CovalentMacUITests"
+]
+if len(targets) != 1:
+    raise SystemExit("generated xctestrun does not contain exactly one CovalentMacUITests target")
+environment = targets[0].setdefault("EnvironmentVariables", {})
+if not isinstance(environment, dict):
+    raise SystemExit("generated xctestrun test environment is malformed")
+environment.update(values)
+metadata = os.stat(path, follow_symlinks=False)
+descriptor, temporary = tempfile.mkstemp(prefix=".covalent-xctestrun.", dir=os.path.dirname(path))
+try:
+    with os.fdopen(descriptor, "wb") as output:
+        plistlib.dump(document, output, fmt=plistlib.FMT_BINARY, sort_keys=False)
+        output.flush()
+        os.fsync(output.fileno())
+    os.chmod(temporary, stat.S_IMODE(metadata.st_mode))
+    os.replace(temporary, path)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+PY
+
 # Xcode 26 can sign the generated macOS UI-test runner before its embedded
 # test bundle is finalized. Re-seal the complete runner, verify it, and then
 # execute without rebuilding so testmanagerd can attach to a valid worker.
@@ -249,19 +443,13 @@ codesign --verify --deep --strict --verbose=2 "$runner"
 
 # A hang detector, not a quality gate: it decides when to kill a wedged run,
 # not whether the app is fast enough. CI run 32461742319 executed the
-# then-three-test suite in 43s on a real runner; the fourth first-launch test
-# remains within the same deliberately generous 480s hang detector. 900s was
+# then-three-test suite in 43s on a real runner; the six-test suite remains
+# within the same deliberately generous 480s hang detector. 900s was
 # set when this lane had never passed and nothing had been measured.
 if ! run_bounded 480 xcodebuild \
   -quiet \
-  -project Covalent.xcodeproj \
-  -scheme CovalentMac \
-  -configuration Debug \
-  -xcconfig "$test_settings" \
-  -derivedDataPath "$derived_data" \
+  -xctestrun "$xctestrun_file" \
   -destination 'platform=macOS,arch=arm64' \
-  ARCHS=arm64 \
-  EXCLUDED_ARCHS=x86_64 \
   -destination-timeout 30 \
   -parallel-testing-enabled NO \
   -maximum-parallel-testing-workers 1 \
@@ -301,12 +489,12 @@ if ! tests=$(xcrun xcresulttool get test-results tests --compact --path "$result
 fi
 if ! jq -e '
   .result == "Passed" and
-  .totalTestCount == 5 and
-  .passedTests == 5 and
+  .totalTestCount == 6 and
+  .passedTests == 6 and
   .failedTests == 0 and
   .skippedTests == 0
 ' <<<"$summary" >/dev/null; then
-  print -u2 -- "macOS UI test result did not prove exactly five passing, unskipped tests."
+  print -u2 -- "macOS UI test result did not prove exactly six passing, unskipped tests."
   print -u2 -- "$summary"
   exit 1
 fi
@@ -315,7 +503,8 @@ for expected_test in \
   'testTierOneNavigationAndPrimaryWorkflowsAreReachable()' \
   'testStatusPassesSystemAccessibilityAudit()' \
   'testLinksPassesSystemAccessibilityAudit()' \
-  'testNativeMenuBarQuickActionsAreReachable()'
+  'testNativeMenuBarQuickActionsAreReachable()' \
+  'testPackagedManualFolderLinkTransfersOneWayAndUpdatesMenuBar()'
 do
   if ! jq -e --arg expected_test "$expected_test" '
     [.. | objects | select(.nodeType == "Test Case") | .name] |
