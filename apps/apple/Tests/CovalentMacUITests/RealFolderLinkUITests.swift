@@ -104,7 +104,7 @@ final class RealFolderLinkUITests: XCTestCase {
         app.typeKey("1", modifierFlags: .command)
         let linksScrollView = app.scrollViews["links.view"]
         XCTAssertTrue(linksScrollView.waitForExistence(timeout: transitionTimeout))
-        let peerPicker = linksScrollView.menuButtons["links.new.peer"]
+        let peerPicker = linksScrollView.popUpButtons["links.new.peer"]
         scrollTo(peerPicker, in: linksScrollView)
         XCTAssertTrue(peerPicker.waitForExistence(timeout: transitionTimeout))
         XCTAssertTrue(peerPicker.isHittable)
@@ -129,7 +129,7 @@ final class RealFolderLinkUITests: XCTestCase {
         let sourceDeletion = app.staticTexts["Deleting a source file leaves destination copies untouched."]
         scrollTo(sourceDeletion, in: linksScrollView)
         XCTAssertTrue(sourceDeletion.waitForExistence(timeout: transitionTimeout))
-        let sourceDeletionMenu = linksScrollView.menuButtons["links.new.sourceDeletion"]
+        let sourceDeletionMenu = linksScrollView.popUpButtons["links.new.sourceDeletion"]
         scrollTo(sourceDeletionMenu, in: linksScrollView)
         XCTAssertTrue(sourceDeletionMenu.waitForExistence(timeout: transitionTimeout))
         XCTAssertTrue(sourceDeletionMenu.isHittable)
@@ -145,7 +145,7 @@ final class RealFolderLinkUITests: XCTestCase {
         let destinationDeletion = app.staticTexts["Files deleted at a destination stay deleted there, even if the source changes. The source and other destinations stay untouched."]
         scrollTo(destinationDeletion, in: linksScrollView)
         XCTAssertTrue(destinationDeletion.waitForExistence(timeout: transitionTimeout))
-        let destinationDeletionMenu = linksScrollView.menuButtons["links.new.destinationDeletion"]
+        let destinationDeletionMenu = linksScrollView.popUpButtons["links.new.destinationDeletion"]
         scrollTo(destinationDeletionMenu, in: linksScrollView)
         XCTAssertTrue(destinationDeletionMenu.waitForExistence(timeout: transitionTimeout))
         XCTAssertTrue(destinationDeletionMenu.isHittable)
@@ -158,7 +158,7 @@ final class RealFolderLinkUITests: XCTestCase {
         recordPhase("Covalent phase: manual destination guidance completed")
 
         recordPhase("Covalent phase: manual cadence selection entered")
-        let cadence = linksScrollView.menuButtons["folder-link-cadence"]
+        let cadence = linksScrollView.popUpButtons["folder-link-cadence"]
         scrollTo(cadence, in: linksScrollView)
         guard cadence.waitForExistence(timeout: transitionTimeout) else {
             throw FixtureError.missing(cadencePickerDiagnostic(app: app))
@@ -353,11 +353,11 @@ final class RealFolderLinkUITests: XCTestCase {
     }
 
     private func cadencePickerDiagnostic(app: XCUIApplication) -> String {
-        let menuButtons = app.menuButtons
-        let entries = menuButtons.allElementsBoundByIndex.prefix(8).map {
+        let popUpButtons = app.popUpButtons
+        let entries = popUpButtons.allElementsBoundByIndex.prefix(8).map {
             "identifier=\($0.identifier.debugDescription) label=\($0.label.debugDescription)"
         }
-        return "Transfers menu target: folder-link-cadence; menu buttons=\(menuButtons.count); "
+        return "Transfers picker target: folder-link-cadence; pop-up buttons=\(popUpButtons.count); "
             + "first entries: \(entries)"
     }
 

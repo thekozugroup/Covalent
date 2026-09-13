@@ -8,35 +8,50 @@ Rclone is the sole transfer engine. Pairing, one-way transfers, fan-out,
 collection isolation, destination-deletion/restoration, cadence, and shared
 settings have working validation evidence. The project is not release-complete.
 
-Source `7d3a4e8` passes the Android device job, Rust/contracts, Android foundation,
+Source `65445e9` passes the Android device job, Rust/contracts, Android foundation,
 Mac packaging, 181 Swift tests, live Mac integration, both Docker architectures,
 dependency checks, CodeQL, and version checks. The Mac UI suite completes with
 five of seven tests passing and no skips. Its folder chooser succeeds and no
-transfer assertion fails. Populated Links fails contrast and picker-action
-audits; three menu assertions incorrectly require the native item's empty label
-property. VoiceOver does not start on the hosted runner. These results do not
-explain the earlier intermittent chooser failure or timeout.
+transfer assertion fails. Populated Links has eight contrast findings and four
+missing accessibility actions, down from fourteen contrast findings. The menu
+selection assertions pass. VoiceOver's system-keyboard preflight is denied before
+any key event is posted. These results do not explain the earlier intermittent
+chooser failure or timeout.
 
-The current follow-up uses the existing readable Mac text styles and native
-menus with real selection actions, corrects the menu assertions, and checks
-hosted system-keyboard capability before attempting actual VoiceOver commands.
-It also reports an uncertain copy that cannot safely resume as a failed run,
-with conditional recovery guidance. Ownership, deletion settings, transient
-retries, protocol values, seven-test coverage, and deadlines remain unchanged.
-These changes require verification on their exact source before acceptance.
+The current follow-up styles the eight affected text children directly and uses
+native AppKit popup controls with real press and selection actions. Duplicate
+device names retain separate choices. Parsing and independent source review pass;
+hosted accessibility behavior remains unverified. The integrated runtime reports
+an uncertain copy that cannot safely resume as a failed destination run, with
+conditional recovery guidance. Ownership, deletion settings, transient retries,
+protocol values, seven-test coverage, and deadlines remain unchanged.
 
 Android's latest full job passes 195 JVM tests, 82 device baseline tests in
-74.61 seconds, and the complete SAF journey in 401.4 seconds. This is the second
-subsequent full pass following an earlier source-deletion timeout on
-`ec49a3d` with unchanged Android and Rust inputs. This later pass does not explain
-the intermittent failure. Source-deletion stability and Android acceptance remain
+67.729 seconds, and the complete SAF journey in 415.871 seconds. This is the third
+subsequent full pass following an earlier source-deletion timeout on `ec49a3d`.
+The two earlier passes used unchanged Android and Rust inputs; this run includes
+the terminal-recovery reporting change. These passes do not explain the
+intermittent failure. Source-deletion stability and Android acceptance remain
 under review; earlier passes are retained as evidence, not a claim that the fault
 is fixed.
 
-The exact-source Android Docker fixture now builds in six seconds, with 56
+An earlier exact-source Android Docker fixture built in six seconds, with 56
 cached stages, successful cache export, freshness validation, and the full device
 journey passing. Previous cold builds took 542 and 719 seconds. This measures CI
 build reuse across different runs, not product transfer speed or battery use.
+After the Rust source changed, the latest fixture took 557 seconds with 36 cached
+stages and successful export; the remaining compilation still required work.
+
+The real interrupted-copy journey passes in 57.53 seconds using the existing
+test-only helper-signing procedure. It observes an active rclone sync after the
+first file arrives, stops and reaps that worker, deletes the source file, and
+restarts the receiver. Unowned destination bytes remain intact; both devices
+report an incomplete run with a failed destination result. Source files remain
+unchanged, and temporary folders and helper processes are cleared. Two earlier
+attempts failed before the transfer. Their packaged guardian requires a
+sandboxed parent; the command-line test has none. Those failures
+remain recorded. This separate fault proof does not establish the cause of the
+earlier Android deletion timeout or validate production sandbox inheritance.
 
 The retained personal Android candidate from `6499ded` passed its complete SAF
 journey in 394.998 seconds. Its seven installable files are retained; its owned
