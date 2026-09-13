@@ -36,7 +36,6 @@ struct MacLegacyBackupsView: View {
         }
         .navigationTitle("Legacy Backups")
         .background(Color(nsColor: .windowBackgroundColor))
-        .accessibilityIdentifier("legacyBackups.view")
         .onAppear {
             if selectedSnapshotId == nil {
                 selectedSnapshotId = model.snapshots.first?.id

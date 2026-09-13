@@ -22,16 +22,16 @@ struct MacRootView: View {
                     }
                 } header: {
                     Text("Legacy and Advanced")
-                        .accessibilityElement(children: .combine)
-                        .accessibilityLabel("Legacy and Advanced")
                 }
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Legacy and Advanced")
                 Section {
                     serviceState
                 } header: {
                     Text("Local Service")
-                        .accessibilityElement(children: .combine)
-                        .accessibilityLabel("Local Service")
                 }
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Local Service")
             }
             .listStyle(.sidebar)
             .accessibilityLabel("Covalent sidebar")

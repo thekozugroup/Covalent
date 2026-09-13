@@ -8,6 +8,7 @@ use covalent_core::Engine;
 use covalent_protocol::DeviceId;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
+use tokio::time::{Instant, Interval};
 
 use crate::sync_control::{FolderControlOperation, FolderControlPayload, send_folder_control};
 use crate::sync_engine::{FolderShareDelivery, FolderShareRecord, FolderSyncService};
@@ -78,6 +79,25 @@ impl DeliveryCursor {
     }
 }
 
+fn record_completion(
+    cursor: &mut DeliveryCursor,
+    interval: &mut Interval,
+    earliest_retry: &mut Option<Instant>,
+    key: Option<[u8; 32]>,
+) {
+    if let Some(key) = key {
+        cursor.acknowledged.insert(key);
+        if earliest_retry.is_none_or(|retry_at| retry_at <= Instant::now()) {
+            *earliest_retry = None;
+            interval.reset_immediately();
+        }
+    } else {
+        let retry_at = Instant::now() + CADENCE;
+        *earliest_retry = Some(retry_at);
+        interval.reset_at(retry_at);
+    }
+}
+
 pub(crate) async fn run(
     engine: Arc<Engine>,
     service: Arc<FolderSyncService>,
@@ -89,6 +109,7 @@ pub(crate) async fn run(
     let mut requests = JoinSet::new();
     let mut request_peers = HashMap::new();
     let mut busy_peers = BTreeSet::new();
+    let mut earliest_retry = None;
     loop {
         if *shutdown.borrow() {
             abort_and_reap(&mut requests).await;
@@ -110,11 +131,10 @@ pub(crate) async fn run(
                 if let Some(peer) = request_peers.remove(&id) {
                     busy_peers.remove(&peer);
                 }
-                if let Some(key) = key {
-                    cursor.acknowledged.insert(key);
-                }
+                record_completion(&mut cursor, &mut interval, &mut earliest_retry, key);
             }
             _ = interval.tick() => {
+                earliest_retry = None;
                 let capacity = MAX_PEERS_PER_BATCH.saturating_sub(requests.len());
                 if capacity == 0 {
                     continue;
@@ -354,6 +374,48 @@ mod tests {
         let next = cursor.batch(records, 2, &BTreeSet::from([slow]), 3);
         assert_eq!(next.len(), 1);
         assert_eq!(next[0].delivery.peer_transport.peer_id, ready);
+    }
+
+    #[tokio::test]
+    async fn acknowledgement_drains_immediately_without_shortening_mixed_peer_failure_backoff() {
+        let mut cursor = DeliveryCursor::default();
+        let mut interval = tokio::time::interval(CADENCE);
+        interval.tick().await;
+        let mut earliest_retry = None;
+
+        record_completion(&mut cursor, &mut interval, &mut earliest_retry, None);
+        let failure_deadline = earliest_retry.expect("failure must set a retry deadline");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), interval.tick())
+                .await
+                .is_err(),
+            "a failed delivery must retain the ordinary cadence"
+        );
+
+        let key = [7; 32];
+        record_completion(&mut cursor, &mut interval, &mut earliest_retry, Some(key));
+        assert!(cursor.acknowledged.contains(&key));
+        assert_eq!(earliest_retry, Some(failure_deadline));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), interval.tick())
+                .await
+                .is_err(),
+            "another peer's acknowledgement must not shorten failure backoff"
+        );
+
+        let mut healthy_interval = tokio::time::interval(CADENCE);
+        healthy_interval.tick().await;
+        let healthy_key = [8; 32];
+        let mut no_retry = None;
+        record_completion(
+            &mut cursor,
+            &mut healthy_interval,
+            &mut no_retry,
+            Some(healthy_key),
+        );
+        tokio::time::timeout(Duration::from_millis(100), healthy_interval.tick())
+            .await
+            .expect("an acknowledgement without failed peers must schedule the next pass");
     }
 
     #[tokio::test]

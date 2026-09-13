@@ -115,10 +115,6 @@ final class CovalentMacUITests: XCTestCase {
         app.buttons["Done"].click()
 
         app.descendants(matching: .any).matching(identifier: "sidebar.backups").firstMatch.click()
-        XCTAssertTrue(
-            app.descendants(matching: .any)["legacyBackups.view"]
-                .waitForExistence(timeout: uiTransitionTimeout)
-        )
         assertEmptyState("No Legacy Backups Found", in: app)
         XCTAssertFalse(app.buttons["New Backup"].exists)
     }
@@ -141,7 +137,10 @@ final class CovalentMacUITests: XCTestCase {
 
     private func assertEmptyState(_ title: String, in app: XCUIApplication) {
         let emptyState = app.descendants(matching: .any)["mac.emptyState"].firstMatch
-        XCTAssertTrue(emptyState.waitForExistence(timeout: uiTransitionTimeout))
+        XCTAssertTrue(
+            emptyState.waitForExistence(timeout: uiTransitionTimeout),
+            "Expected the '\(title)' empty state to be reachable."
+        )
         let text = accessibilityText(of: emptyState)
         XCTAssertTrue(
             text.contains(title),
