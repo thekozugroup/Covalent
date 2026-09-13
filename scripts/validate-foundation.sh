@@ -110,13 +110,10 @@ done
 for path in README.md docs/product/requirements.md docs/product/roadmap.md docs/architecture/overview.md docs/release/validation-matrix.md; do
   grep -q "Tier 1" "$path"
   grep -Eqi 'iOS (and Windows are|is) not (a )?supported|iOS native \| Not a blocker — unsupported platform' "$path"
-  grep -Eqi 'informational|not a required check|not gated|not gated on' "$path"
 done
 
-# iOS source and CI may remain for shared-code diagnostics, but current product
-# documentation must not revive the withdrawn supported-Tier-2 policy. ADR 0005
-# is deliberately excluded because it preserves that wording as historical
-# context for the policy change.
+# Keep unsupported platforms out of the current product contract. ADR 0005
+# preserves the former policy as historical context.
 scan_must_not_match "current documentation describes iOS as a supported Tier 2 platform" \
   -i --glob '*.md' --glob '!docs/adr/0005-tiered-platform-readiness.md' \
   --glob '!docs/release/notes/**' \

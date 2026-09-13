@@ -1,8 +1,7 @@
 # Platform capabilities
 
 Supported platforms are Unraid, macOS, and Android. iOS and Windows are not
-supported. Windows has no client or packaging at all. iOS has code and a CI lane
-but is not a supported platform — see the note under the table.
+supported. Neither has a release client or CI lane.
 
 | Platform | Release tier | Node ownership | File-access bridge | Release gate |
 | --- | --- | --- | --- | --- |
@@ -11,29 +10,8 @@ but is not a supported platform — see the note under the table.
 | Docker | Tier 1 | Pinned Alpine 3.23 runtime images for `linux/amd64` and `linux/arm64` own the same Rust node and authenticated local web console. | Explicit read-only backup mounts, a durable data volume, and explicit writable restore mounts. | Per-architecture 128 MiB budgets, OCI base-label assertion, rootless/read-only runtime probe, and three-node Compose disaster-recovery E2E. |
 | Unraid | Tier 1 | Docker node configured by the Unraid template. | Selected shares are read-only; restore destinations are separately writable; boot-drive backup is opt-in and read-only. | Template validation plus clean-install, upgrade, share, boot-drive, and restore drills on Unraid. |
 
-## iOS is not supported
+## Unsupported platforms
 
-The Apple package contains a `CovalentIOS` target built from the same shared
-sources, and CI still builds it and runs its bounded UI and accessibility script
-in the informational iOS CI job. None of that makes iOS a supported platform:
-
-- No iOS build is published or installable — there is no App Store listing, no
-  TestFlight, and no signed artifact in any release.
-- The informational iOS lane is deliberately **not** a required check for any release
-  workflow, so an iOS failure neither blocks nor is blocked by a release. The
-  omission is declared and enforced in `scripts/check-required-checks.sh`.
-- The behaviour that was previously described here — document-provider folder
-  selection, security-scoped access, bounded background execution — exists in
-  the code but is not validated against the release gates and carries no
-  support promise. Process-termination rehydration of the original
-  security-scoped archive request was never completed.
-
-Treat the iOS target as unreleased work in progress that is not currently being
-invested in.
-
-## Windows is not supported
-
-There is no Windows client and no Windows packaging. Nothing in this repository
-builds or targets Windows.
+iOS and Windows have no release clients or CI lanes.
 
 All supported platforms share protocol version 1 backup summaries and machine-readable errors. Rust, Swift, and Android decode the committed settings, manifest, pairing, backup-summary, progress, event, and error fixtures under `fixtures/contracts`. Replica placement is always an exact user-selected provider set; no client or node automatically chooses another device.

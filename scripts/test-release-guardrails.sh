@@ -449,13 +449,12 @@ if rg -q '<string name="(?:setup_handoff|field_node_address)[^"]*">[^<]*covalent
 fi
 grep -Fq '<string name="tailscale_candidate_example">nas.tailnet-name.ts.net:8787</string>' "$android_strings"
 grep -Fq 'nas.tailnet-name.ts.net:8787' apps/apple/Sources/CovalentMac/MacDevicesView.swift
-grep -Fq 'nas.tailnet-name.ts.net:8787' apps/apple/Sources/CovalentIOS/IOSDevicesView.swift
 grep -Fq 'access-token file created by the Covalent claim command on your trusted computer' apps/apple/Sources/CovalentMac/MacSetupViews.swift
 if rg -q 'backup server shows this token' apps/apple/Sources/CovalentMac; then
   echo "macOS setup copy must use trusted CLI claim output" >&2
   exit 1
 fi
-if rg -n 'nas\.tailnet-name\.ts\.net:8788' apps/android apps/apple/Sources/CovalentMac apps/apple/Sources/CovalentIOS docs packaging/docker; then
+if rg -n 'nas\.tailnet-name\.ts\.net:8788' apps/android apps/apple/Sources/CovalentMac docs packaging/docker; then
   echo "user-facing Tailnet peer examples must use UDP 8787" >&2
   exit 1
 fi

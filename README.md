@@ -33,13 +33,7 @@ and each must pass its production gates before a release.
 | macOS on Apple Silicon | arm64-only ad-hoc app bundle for personal use | Must pass product and package gates; Developer ID/notarization is excluded. |
 | Android | Debug-signed APK for personal use | Must pass product and install gates; production signing is deferred. |
 
-**iOS and Windows are not supported.** There is no iOS or Windows build to
-install, neither is covered by the release gates, and neither is being worked
-toward right now. The Apple package in this repository does still contain an iOS
-target built from the same shared sources, and the `iOS Tier 2` CI job still
-compiles and exercises it — that is a statement about what the code contains,
-not a promise of support. That job is deliberately not a required check for any
-release workflow, so it can never block or unblock one.
+**iOS and Windows are not supported.** Neither has a release client or CI lane.
 
 Hosted accounts, automatic replica placement, and restores outside an authorized root are also out of scope.
 
@@ -77,9 +71,8 @@ maintainer-only publishing detail lives in [docs/release/publishing.md](docs/rel
 - `crates/covalent-core`: storage, verification, restore safety, and shared domain logic.
 - `crates/covalent-protocol`: versioned wire and persisted contract types.
 - `crates/covalent-node`: local daemon, health API, and embedded accessible console.
-- `crates/covalent-ffi`: stable service facade for native clients.
 - `crates/covalent-cli`: deterministic operator and developer commands.
-- `apps/apple`: native SwiftUI macOS app, plus an unsupported iOS target, built from shared code.
+- `apps/apple`: native SwiftUI macOS app and shared Swift models.
 - `apps/android`: native Kotlin and Jetpack Compose app.
 - `packaging`: Docker, Unraid, and embedded web assets.
 - `docs`: product, security, protocol, architecture decisions, and release gates.

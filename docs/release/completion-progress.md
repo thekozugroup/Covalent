@@ -1,6 +1,6 @@
 # Completion progress
 
-Updated 2026-09-12 after the owner narrowed the product to one-way links.
+Updated 2026-09-13 after the owner reaffirmed the lightweight one-way scope. The active goal is defined in [Product requirements](../product/requirements.md#active-completion-goal).
 
 **Current scope: 40% verified, 4 of 10 complete acceptance checks.** This counts complete user journeys, not remaining time or reusable code. Native apps, pairing, permissions, worker supervision, Docker packages, and successful transfers form a working baseline. Independent fan-out, collection isolation, deletion/restoration, and shared-setting behavior now pass real three-node journeys. The remaining six checks are open.
 
@@ -15,8 +15,8 @@ Updated 2026-09-12 after the owner narrowed the product to one-way links.
 | 5 | Manual, scheduled, and continuous transfers respect platform limits; idle batch workers stop. | Open |
 | 6 | Settings edited on any authorized member converge across the link; pending/stale edits remain visible. | Verified |
 | 7 | Mac setup, links, settings, and per-link menu bar status pass native HIG/keyboard/VoiceOver checks. | Open |
-| 8 | Android design and actual pairing, permission, transfer, status, and background journeys pass. | Open |
-| 9 | Installable Mac/Android/Docker candidates pass real laptop–Atmos transfers and server mount handling. | Open |
+| 8 | Tomato-inspired Android floating actions, typography, data/status visuals, and top bar; actual pairing, permission, transfer, and background journeys pass. | Open |
+| 9 | Installable Mac/Android/Docker candidates pass real laptop–Atmos transfers and server mount handling; use an Unraid plugin only for a demonstrated Docker limitation. | Open |
 | 10 | Relevant fault/security checks pass; idle/transfer performance is measured; temporary fixtures are removed; GitHub releases and installation guidance are published. | Open |
 
 [Current requirements](../product/requirements.md). Atlas remains offline; Docker is the accepted Unraid target. Queued builds, source inspection, and unverified agent claims cannot complete a check.

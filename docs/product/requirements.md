@@ -1,6 +1,42 @@
 # Product requirements
 
-Updated 2026-09-12 from the owner's explicit scope reduction and subsequent clarifications.
+Updated 2026-09-13. The owner explicitly reaffirmed this reduced scope as the active completion goal.
+
+## Active completion goal
+
+Complete and release the smallest robust Covalent product that makes one-way
+file transfers easy to pair, configure, and monitor. Support one source to one
+or many destinations, plus independent family contributions to separate folders
+in one collection. Keep ordinary destination files accessible.
+
+Ship native Android with the Tomato-inspired floating action bar, typography,
+data visuals, and top bar; native Apple HIG macOS with per-link menu bar status
+and a small status icon; and Docker for Unraid and other container hosts. Build
+an Unraid plugin only for a demonstrated Docker limitation involving the required
+use case. Explain and test appdata consistency and explicitly mounted boot-file
+limits before making backup or recovery claims.
+
+Reuse and bundle mature open-source transfer tools wherever they satisfy the
+required behavior. Rclone, rsync, and the existing maintained Syncthing integration
+are available approaches to assess; they are not three backends to implement.
+Covalent owns the intuitive pairing, permissions, shared link settings, scheduling,
+and monitoring wrapper. Do not reimplement file-transfer algorithms or build a
+second sync engine. Keep any unavoidable upstream changes small, documented,
+licensed correctly, and covered by the required behavior checks.
+
+Prefer existing code, the selected maintained transfer engine, and native platform APIs.
+Remove superseded backup and bidirectional flows from the primary interface while
+preserving existing files, identities, and access to legacy data. Establish
+stability first, then measure idle resources and transfer performance and optimize
+observed problems. Do not add abstractions or alternative engines without need.
+
+Validate on this laptop and isolated temporary fixtures on Atmos; Atlas stays
+offline. Keep test builds and data in owned temporary directories, clean obsolete
+resources as work proceeds, and remove remaining owned fixtures and caches at
+completion. Publish the accepted final packages and installation guidance on
+GitHub. Report verified progress periodically and completion in four STAR lines.
+This goal supersedes the old bidirectional and distributed-backup scope; completion
+still requires all ten current acceptance checks, with evidence.
 
 ## Product promise
 
@@ -8,7 +44,7 @@ Covalent makes one-way file transfers easy to pair, configure, and monitor. A li
 
 Supported products: native macOS, native Android, and Docker for Unraid and other Docker hosts. Atlas is offline; Docker and isolated Atmos tests are the accepted server targets.
 
-These are the Tier 1 release targets. iOS and Windows are not supported; the retained iOS CI lane is informational.
+These are the Tier 1 release targets. iOS and Windows are not supported and have no release clients or CI lanes.
 
 This contract supersedes the distributed encrypted-backup and bidirectional-sync release scope. Preserve existing user files and identities; never silently migrate their behavior. The previous source and evidence remain in Git history at checkpoint 46, commit c47003113e28b6e934a8ab4823040614fb07fb30.
 
