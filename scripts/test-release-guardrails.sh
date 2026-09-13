@@ -448,7 +448,11 @@ if rg -q '<string name="(?:setup_handoff|field_node_address)[^"]*">[^<]*covalent
   exit 1
 fi
 grep -Fq '<string name="tailscale_candidate_example">nas.tailnet-name.ts.net:8787</string>' "$android_strings"
-grep -Fq 'nas.tailnet-name.ts.net:8787' apps/apple/Sources/CovalentMac/MacDevicesView.swift
+if ! grep -Eq 'TextField\("Device address".*prompt: Text\("[^"]+:8787"\)' \
+  apps/apple/Sources/CovalentMac/MacDevicesView.swift; then
+  echo "macOS device-address example must use the pairing port 8787" >&2
+  exit 1
+fi
 grep -Fq 'access-token file created by the Covalent claim command on your trusted computer' apps/apple/Sources/CovalentMac/MacSetupViews.swift
 if rg -q 'backup server shows this token' apps/apple/Sources/CovalentMac; then
   echo "macOS setup copy must use trusted CLI claim output" >&2

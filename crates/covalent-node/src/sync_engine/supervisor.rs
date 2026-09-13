@@ -26,9 +26,6 @@ use zeroize::Zeroizing;
 use super::android_saf::{AndroidSafGrantError, AndroidSafGrantRegistry, PasswordObscurer};
 
 pub const MAX_EXECUTABLE_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_CONFIG_BYTES: u64 = 4 * 1024 * 1024;
-const MAX_CERTIFICATE_BYTES: u64 = 24 * 1024;
-const MAX_KEY_BYTES: u64 = 4 * 1024;
 const GUARDIAN_GRACE_MS: &str = "2000";
 const STOP_TIMEOUT: Duration = Duration::from_secs(4);
 
@@ -39,7 +36,6 @@ pub enum EngineSupervisorError {
     InvalidExecutable,
     ExecutableChanged,
     ExecutableDigestMismatch,
-    InvalidRuntimeFile,
     InvalidRuntimeDirectory,
     SpawnFailed,
     ReaperUnavailable,
@@ -58,7 +54,6 @@ impl fmt::Display for EngineSupervisorError {
             Self::InvalidExecutable => "sync engine executable is invalid",
             Self::ExecutableChanged => "sync engine executable changed",
             Self::ExecutableDigestMismatch => "sync engine executable digest mismatch",
-            Self::InvalidRuntimeFile => "sync engine runtime file is invalid",
             Self::InvalidRuntimeDirectory => "sync engine runtime directory is invalid",
             Self::SpawnFailed => "sync engine could not be started",
             Self::ReaperUnavailable => "sync engine reaper is unavailable",
@@ -463,92 +458,6 @@ impl OwnedEngineWorker {
         })
     }
 
-    /// Launch the exact verified guardian and engine with the fixed worker
-    /// contract. Runtime files are existing controller-owned inputs; this
-    /// primitive never creates defaults or removes them.
-    pub fn launch(
-        guardian: &VerifiedEngineExecutable,
-        engine: &VerifiedEngineExecutable,
-        config_dir: impl Into<PathBuf>,
-        data_dir: impl Into<PathBuf>,
-        keepalive: WorkerKeepalive,
-    ) -> Result<Self, EngineSupervisorError> {
-        let config_dir = config_dir.into();
-        let data_dir = data_dir.into();
-        let (config_dir, data_dir) = validate_runtime_inputs(&config_dir, &data_dir)?;
-        guardian.recheck_at_spawn()?;
-        engine.recheck_at_spawn()?;
-
-        // Start the reaper and establish its handoff channel before spawning.
-        // If the child handoff fails, the sending side retains the exact Child
-        // and synchronously closes/reaps it before returning an error.
-        let (child_tx, child_rx) = mpsc::sync_channel::<(Child, WorkerKeepalive)>(1);
-        let (result_tx, result_rx) = oneshot::channel();
-        spawn_reaper(child_rx, result_tx)?;
-
-        // The pinned upstream locations module resolves the real OS home at
-        // process initialization, even with explicit config/data flags. Keep
-        // this one non-secret OS value on desktop/server hosts. Android app
-        // processes omit HOME; Go uses its Android default there. Explicit
-        // config/data paths below still keep all worker state app-private.
-        #[cfg(not(target_os = "android"))]
-        let os_home = std::env::var_os("HOME")
-            .filter(|home| !home.is_empty())
-            .map(PathBuf::from)
-            .filter(|home| home.is_absolute() && home.is_dir())
-            .ok_or(EngineSupervisorError::InvalidRuntimeDirectory)?;
-        let mut command = Command::new(guardian.path());
-        command
-            .arg("--grace-ms")
-            .arg(GUARDIAN_GRACE_MS)
-            .arg("--")
-            .arg(engine.path())
-            .arg("--config")
-            .arg(&config_dir)
-            .arg("--data")
-            .arg(&data_dir)
-            .arg("serve")
-            .arg("--no-browser")
-            .arg("--no-restart")
-            .arg("--no-upgrade")
-            .arg("--no-port-probing")
-            .env_clear()
-            .env("STMONITORED", "1")
-            .env("STNOUPGRADE", "1")
-            .env("TMPDIR", &config_dir)
-            .env("GOMAXPROCS", "2")
-            .current_dir(&data_dir)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        #[cfg(not(target_os = "android"))]
-        command.env("HOME", os_home);
-
-        let mut child = command
-            .spawn()
-            .map_err(|_| EngineSupervisorError::SpawnFailed)?;
-        let lifeline = match child.stdin.take() {
-            Some(stdin) => stdin,
-            None => {
-                reap_after_handoff_failure(&mut child, None, keepalive);
-                return Err(EngineSupervisorError::SpawnFailed);
-            }
-        };
-        if let Err(error) = child_tx.send((child, keepalive)) {
-            let (mut child, keepalive) = error.0;
-            // Dropping stdin closes the guardian's lifeline before reaping the
-            // exact owned child. No process lookup or group kill is involved.
-            reap_after_handoff_failure(&mut child, Some(lifeline), keepalive);
-            return Err(EngineSupervisorError::ReaperUnavailable);
-        }
-        Ok(Self {
-            lifeline: Some(lifeline),
-            reaped: Some(result_rx),
-            stop_started: false,
-            terminal_status: None,
-        })
-    }
-
     /// Close the guardian lifeline. Repeated calls are harmless.
     pub fn close_lifeline(&mut self) {
         self.lifeline.take();
@@ -780,45 +689,6 @@ fn spawn_bounded_output_reader<R: Read + Send + 'static>(
     Ok(result_rx)
 }
 
-fn validate_runtime_inputs(
-    config_dir: &Path,
-    data_dir: &Path,
-) -> Result<(PathBuf, PathBuf), EngineSupervisorError> {
-    let config_dir = canonical_private_directory(config_dir)?;
-    let data_dir = canonical_private_directory(data_dir)?;
-    // The config directory must contain the exact engine configuration and
-    // identity material. Do not generate or repair any of these files here.
-    for (name, max_size) in [
-        ("config.xml", MAX_CONFIG_BYTES),
-        ("cert.pem", MAX_CERTIFICATE_BYTES),
-        ("key.pem", MAX_KEY_BYTES),
-    ] {
-        let path = config_dir.join(name);
-        let _ = canonical_private_file(&path, 0o600, max_size)?;
-    }
-    Ok((config_dir, data_dir))
-}
-
-fn canonical_private_file(
-    path: &Path,
-    mode: u32,
-    max_size: u64,
-) -> Result<PathBuf, EngineSupervisorError> {
-    if !path.is_absolute()
-        || path
-            .components()
-            .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
-        return Err(EngineSupervisorError::InvalidRuntimeFile);
-    }
-    let metadata =
-        fs::symlink_metadata(path).map_err(|_| EngineSupervisorError::InvalidRuntimeFile)?;
-    validate_private_file_metadata(&metadata, mode, max_size)?;
-    let canonical =
-        fs::canonicalize(path).map_err(|_| EngineSupervisorError::InvalidRuntimeFile)?;
-    Ok(canonical)
-}
-
 fn canonical_private_directory(path: &Path) -> Result<PathBuf, EngineSupervisorError> {
     if !path.is_absolute()
         || path
@@ -840,24 +710,6 @@ fn canonical_private_directory(path: &Path) -> Result<PathBuf, EngineSupervisorE
     let canonical =
         fs::canonicalize(path).map_err(|_| EngineSupervisorError::InvalidRuntimeDirectory)?;
     Ok(canonical)
-}
-
-fn validate_private_file_metadata(
-    metadata: &fs::Metadata,
-    required_mode: u32,
-    max_size: u64,
-) -> Result<(), EngineSupervisorError> {
-    let uid = rustix::process::geteuid().as_raw();
-    if !metadata.is_file()
-        || metadata.uid() != uid
-        || metadata.mode() & 0o7777 != required_mode
-        || metadata.nlink() != 1
-        || metadata.len() == 0
-        || metadata.len() > max_size
-    {
-        return Err(EngineSupervisorError::InvalidRuntimeFile);
-    }
-    Ok(())
 }
 
 fn validate_executable_metadata(metadata: &fs::Metadata) -> Result<(), EngineSupervisorError> {

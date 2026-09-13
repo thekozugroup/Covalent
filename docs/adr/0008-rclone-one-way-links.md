@@ -1,6 +1,6 @@
 # ADR 0008: Rclone for simple one-way links
 
-Status: accepted; integration in progress, 2026-09-13.
+Status: accepted; sole active engine, release verification in progress, 2026-09-13.
 
 The user requires rclone as Covalent's transfer engine. The product sends files
 from one source to one or more destinations. It does not need a two-way conflict

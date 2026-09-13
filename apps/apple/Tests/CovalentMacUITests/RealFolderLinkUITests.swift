@@ -41,13 +41,41 @@ final class RealFolderLinkUITests: XCTestCase {
             textFieldDiagnostics(in: devicesScrollView)
         )
         address.click()
-        address.typeText("127.0.0.1:\(responderPort)")
+        let responderAddress = "127.0.0.1:\(responderPort)"
+        address.typeText(responderAddress)
+        XCTAssertEqual(address.value as? String, responderAddress)
         let pair = devicesScrollView.buttons["Pair Device"]
         scrollTo(pair, in: devicesScrollView)
+        let pairEnabled = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == true"),
+            object: pair
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [pairEnabled], timeout: transitionTimeout),
+            .completed,
+            "Pair Device did not become enabled after the node was ready and the address was entered"
+        )
         XCTAssertTrue(pair.isHittable)
         pair.click()
 
-        let pending = try await waitForIncomingPairing(port: responderPort, token: responderToken)
+        let pending: [String: Any]
+        do {
+            pending = try await waitForIncomingPairing(port: responderPort, token: responderToken)
+        } catch let error as FixtureError {
+            if case let .timeout(phase) = error, phase == "incoming network pairing" {
+                let contactingDeviceVisible = app.staticTexts["Contacting device…"].exists
+                let securePairingFailureVisible = app.staticTexts["Secure pairing couldn't start"].exists
+                let quickPairingUnavailableVisible = app.staticTexts["Quick pairing isn't available"].exists
+                print(
+                    "Incoming pairing timeout diagnostics: "
+                        + "pairEnabled=\(pair.isEnabled) "
+                        + "contactingDeviceVisible=\(contactingDeviceVisible) "
+                        + "securePairingFailureVisible=\(securePairingFailureVisible) "
+                        + "quickPairingUnavailableVisible=\(quickPairingUnavailableVisible)"
+                )
+            }
+            throw error
+        }
         let pairingID = try string(pending, "pairingId")
         let code = try string(pending, "authenticationString")
         let comparisonCode = app.staticTexts[

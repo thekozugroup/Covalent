@@ -15,27 +15,16 @@ fn private_mode(path: &Path, mode: u32) {
     fs::set_permissions(path, fs::Permissions::from_mode(mode)).expect("set fixture mode");
 }
 
-fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let root = tempfile::tempdir().expect("fixture directory");
     private_mode(root.path(), 0o700);
-    let data = root.path().join("data");
-    fs::create_dir(&data).expect("data directory");
-    private_mode(&data, 0o700);
-    let config = root.path().join("config.xml");
-    fs::write(&config, b"<configuration/>\n").expect("config");
-    private_mode(&config, 0o600);
-    for name in ["cert.pem", "key.pem"] {
-        let path = root.path().join(name);
-        fs::write(path, b"fixture\n").expect("identity fixture");
-        private_mode(&root.path().join(name), 0o600);
-    }
     let guardian = root.path().join("guardian");
     fs::write(&guardian, b"#!/bin/sh\ncat >/dev/null\n").expect("guardian");
     private_mode(&guardian, 0o700);
     let engine = root.path().join("engine");
     fs::write(&engine, b"#!/bin/sh\nexit 0\n").expect("engine");
     private_mode(&engine, 0o700);
-    (root, guardian, engine, config)
+    (root, guardian, engine)
 }
 
 #[test]
@@ -54,7 +43,7 @@ fn executable_owner_policy_rejects_foreign_apps_and_scopes_android_system_uid() 
 
 #[test]
 fn executable_checks_pin_digest_and_rejects_symlink_or_broad_mode() {
-    let (root, guardian, _engine, _config) = fixture();
+    let (root, guardian, _engine) = fixture();
     let expected = digest(&guardian);
     let verified = VerifiedEngineExecutable::open(&guardian, expected).expect("verified fixture");
     assert_eq!(verified.path(), guardian);
@@ -89,13 +78,11 @@ fn executable_checks_pin_digest_and_rejects_symlink_or_broad_mode() {
 
 #[tokio::test]
 async fn worker_drop_closes_lifeline_and_reaper_reports_exit() {
-    let (_root, guardian, engine, config) = fixture();
-    let config_dir = config.parent().unwrap().to_owned();
-    let data_dir = guardian.parent().unwrap().join("data");
+    let (root, guardian, engine) = fixture();
     let guardian = VerifiedEngineExecutable::open(&guardian, digest(&guardian)).expect("guardian");
     let engine = VerifiedEngineExecutable::open(&engine, digest(&engine)).expect("engine");
     let mut worker =
-        OwnedEngineWorker::launch(&guardian, &engine, config_dir, data_dir, Box::new(()))
+        OwnedEngineWorker::launch_rclone(&guardian, &engine, &[], &[], root.path(), Box::new(()))
             .expect("launch fixture");
     assert!(!worker.stop_started());
     let outcome = worker.stop().await.expect("reap fixture");
@@ -118,7 +105,7 @@ impl Drop for DropProbe {
 
 #[tokio::test]
 async fn keepalive_is_dropped_after_reap_even_when_worker_handle_drops() {
-    let (root, _guardian, engine, config) = fixture();
+    let (root, _guardian, engine) = fixture();
     let slow_guardian = root.path().join("slow-guardian");
     fs::write(&slow_guardian, b"#!/bin/sh\nsleep 1\ncat >/dev/null\n").expect("slow guardian");
     private_mode(&slow_guardian, 0o700);
@@ -126,11 +113,12 @@ async fn keepalive_is_dropped_after_reap_even_when_worker_handle_drops() {
         .expect("slow guardian");
     let engine = VerifiedEngineExecutable::open(&engine, digest(&engine)).expect("engine");
     let probe = Arc::new(AtomicBool::new(false));
-    let worker = OwnedEngineWorker::launch(
+    let worker = OwnedEngineWorker::launch_rclone(
         &guardian,
         &engine,
-        config.parent().unwrap().to_owned(),
-        root.path().join("data"),
+        &[],
+        &[],
+        root.path(),
         Box::new(DropProbe(probe.clone())),
     )
     .expect("launch fixture");

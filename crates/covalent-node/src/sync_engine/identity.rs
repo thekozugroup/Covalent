@@ -48,13 +48,14 @@ struct IdentityPayload {
     private_key_pem: Zeroizing<String>,
 }
 
-/// Per-installation TLS identity, independent of Covalent's recovery identity.
+/// Per-installation Ed25519 identity, independent of Covalent's recovery identity.
 /// Generation happens entirely in memory. Persistent storage receives only an
 /// authenticated envelope, bound by the caller to its canonical state root and
 /// installation. The supervising controller owns any plaintext runtime files.
 /// The certificate is a pinned device identifier, not a Web PKI credential:
 /// loading deliberately does not apply browser expiry/CA trust policy. The
-/// worker authenticates the certificate digest against the explicit peer list.
+/// certificate digest preserves existing device identifiers; rclone authenticates
+/// the corresponding SSH public key against the explicit peer list.
 pub struct EngineIdentity(IdentityPayload);
 
 impl fmt::Debug for EngineIdentity {
@@ -64,8 +65,8 @@ impl fmt::Debug for EngineIdentity {
 }
 
 impl EngineIdentity {
-    /// Create an Ed25519 key and self-signed certificate, as the pinned upstream
-    /// engine does for synchronization (its browser certificate is separate).
+    /// Create an Ed25519 key and certificate in the retained device-identity
+    /// format. The legacy certificate names do not select a transfer engine.
     pub fn generate() -> Result<Self, EngineIdentityError> {
         let key = KeyPair::generate_for(&PKCS_ED25519)
             .map_err(|_| EngineIdentityError::GenerationFailed)?;

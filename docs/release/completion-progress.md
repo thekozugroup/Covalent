@@ -2,7 +2,7 @@
 
 Updated 2026-09-13 after the owner reaffirmed the lightweight one-way scope. The active goal is defined in [Product requirements](../product/requirements.md#active-completion-goal).
 
-**Current scope: 60% verified, 6 of 10 complete acceptance checks.** This counts complete user journeys, not remaining time or reusable code. The active branch uses rclone as the sole transfer engine. Native Android setup, independent fan-out, collection isolation, deletion/restoration, shared settings, and transfer cadence pass real rclone journeys. The remaining four checks are open. Earlier Syncthing evidence is retained as history and does not approve the replacement.
+**Current scope: 70% verified, 7 of 10 complete acceptance checks.** This counts complete user journeys, not remaining time or reusable code. The active branch uses rclone as the sole transfer engine. Native Android setup and UI, independent fan-out, collection isolation, deletion/restoration, shared settings, and transfer cadence pass real rclone journeys. The remaining three checks are open. Earlier Syncthing evidence is retained as history and does not approve the replacement.
 
 **Previous scope: 75%, 15 of 20 checks**, recorded at checkpoint 46 (c47003113e28b6e934a8ab4823040614fb07fb30). That score belongs to the superseded bidirectional/backup scope. Source and evidence remain in Git history.
 
@@ -15,7 +15,7 @@ Updated 2026-09-13 after the owner reaffirmed the lightweight one-way scope. The
 | 5 | Manual, scheduled, and continuous transfers respect platform limits; idle batch workers stop. | Verified |
 | 6 | Settings edited on any authorized member converge across the link; pending/stale edits remain visible. | Verified |
 | 7 | Mac setup, links, settings, and per-link menu bar status pass native HIG/keyboard/VoiceOver checks. | Open |
-| 8 | Tomato-inspired Android floating actions, typography, data/status visuals, and top bar; actual pairing, permission, transfer, and background journeys pass. | Open |
+| 8 | Tomato-inspired Android floating actions, typography, data/status visuals, and top bar; actual pairing, permission, transfer, and background journeys pass. | Verified |
 | 9 | Installable Mac/Android/Docker candidates pass real laptop–Atmos transfers and server mount handling; use an Unraid plugin only for a demonstrated Docker limitation. | Open |
 | 10 | Relevant fault/security checks pass; idle/transfer performance is measured; temporary fixtures are removed; GitHub releases and installation guidance are published. | Open |
 
@@ -51,19 +51,20 @@ permission registration. The self-contained device journey also completes
 selection in the real system folder picker with exact child-folder assertions,
 Unicode transfer, revoked-access interruption, exact-folder reselection, and
 recovery transfer. Real charging and Wi-Fi changes block and resume transfers.
-The complete focused replacement journey now passes in 350.05 seconds: native
-pairing and source offer, Manual transfer, persisted access after restart,
-permission recovery, shared deletion settings, Continuous transfer, pause/resume,
-and safe removal. Both Setup accessibility checks pass. This device proof uses
-the `d634321` runtime plus the tested Android UI changes; the integrated source
-still needs its exact-commit hosted run. The current test adds native peer-address
-editing, a transfer to the moved peer, and persistence across cold restart;
-that added coverage awaits device execution. The ordinary MainActivity file-transfer
+The current hosted API 37 run passes all 82 tests for PR source `6260187`:
+81 baseline tests in 73.77 seconds and the complete SAF journey in 412.12 seconds.
+The latter covers native pairing and source offer, Manual transfer, peer-address
+editing and transfer to the moved peer, cold restart, permission recovery,
+shared deletion settings, Continuous transfer, pause/resume, both deletion
+policies, and safe removal. Final helper counts are zero and device framework
+processes remain stable. Both Setup accessibility checks pass.
+The ordinary MainActivity file-transfer
 screen now reuses the floating Pair/Links toolbar. Device review passes normal
 and 2× text, both navigation actions, content clearance at the end of the list,
 and cold reopening. A weighted status label fixes the narrow Refresh button at
-large text sizes. This visual build reuses previously verified native helpers;
-it does not replace the current-source device transfer run.
+large text sizes. The visual build's UI source matches `6260187`; its reused
+native helpers are independently covered by the fresh hosted native build and
+complete device run. Together these complete Android acceptance check 8.
 
 Row 5 combines the complete Manual/Continuous Android journey, the complete
 15-minute source-owned scheduled run, and the recorded real charging/Wi-Fi
@@ -76,32 +77,39 @@ Row 1 uses the completed API 37 SAF journey: native initiating-device pairing,
 system folder selection, native Manual link creation and Run Now, exact forward
 bytes, and a bounded check that a destination-only file stays off the source.
 The responder confirms pairing and accepts the destination through the fixture's
-authenticated API. The tested rclone runtime and reviewed Android changes are
-recorded above; this is not an exact-current-commit claim. The added address-edit
-journey remains a regression check rather than a new condition for row 1.
+authenticated API. The tested rclone runtime and Android changes are recorded
+above. The newer hosted run also passes the added address-edit regression.
 
-Hosted Rust/contracts, Android foundation, the Mac app bundle, and Docker on
-amd64 and arm64 pass for PR source `8420180`. CodeQL and release-version checks
-also pass. Android passes all 81 baseline device tests; the final SAF journey
-passes address changes, transfer, recovery, settings, and pause/resume, then
-times out propagating a source deletion immediately after its copy appears.
-The cause is unresolved. The next run retains that timing and the 120-second
-assertion, adding only stage timestamps and public state diagnostics on failure.
-The earlier unused-resource and xctestrun-format
-failures are resolved; the Mac launcher reaches all six native UI tests.
+Hosted Android foundation/device tests, the Mac app bundle, and Docker on amd64
+and arm64 pass for PR source `6260187`. CodeQL and release-version checks also
+pass. The Rust job stops before its tests at an obsolete Mac address-placeholder
+assertion; its corrected pairing-port check and the full local foundation pass.
+The earlier `8420180` Android run timed out propagating a source deletion.
+The new run retains the immediate deletion timing and 120-second assertion and
+passes. No production transfer change separates those runs, and the earlier
+timeout's cause is not established.
 
 The Mac UI job passes five of six tests, including both accessibility audits
 and the corrected legacy empty state. The sixth native Links/menu bar journey
-stops at an unmatched pairing address field. The current fix gives that field
-an explicit Device address accessibility label and identifier, supports bounded
-scrolling in the test, and describes both LAN and Tailscale addresses. The
-production and test sources typecheck; native verification remains. Its isolated nodes
+now reaches the pairing action but times out waiting for the responder's
+incoming request. The test now checks the entered fixture address and waits
+within its existing bound for Pair Device to become enabled. Failure-only
+diagnostics distinguish the visible pairing states. Fresh native verification
+remains. Its isolated nodes
 use production-built helpers with test-only signatures; it does not approve
 production sandbox inheritance or Keychain startup. Android's earlier hosted
 baseline passes 79 of 82 tests. The obsolete setup expectations, external-driver
 prototype, and broad-storage journey are replaced in `e9fdf8f`. The source-derived
 test contract covers all 82 tests exactly once: 81 baseline tests and one
 self-contained SAF journey.
+
+A separate bounded rclone fault test confirms that an aggregate failed copy can
+leave completed files at the destination. The wrapper now preserves ownership
+from exact completed-copy records while retaining unresolved pending state;
+explicit restoration cannot discard an unconfirmed file whose source vanished.
+Six policy tests and four process-supervision tests pass locally, with their
+temporary build targets removed. This later change is not credited to the
+passing `6260187` Android run and still needs its integrated verification.
 
 An optimized local measurement passes the exact 101-file transfer and unchanged
 repeat. Two runtimes together use 0.01 seconds of sampled CPU during roughly
@@ -113,8 +121,7 @@ transfer completes in 25.34 seconds versus 34.88 seconds; the unchanged repeat
 takes 30.46 seconds, with no improvement. These are single local loopback
 measurements in a shared test process, not whole-app or Android battery figures.
 Both measurement worktrees, build targets, fixtures, and processes were removed.
-Final native app, complete Android device acceptance, remote validation, and release
-acceptance remain open.
+Final Mac native acceptance, remote validation, and release acceptance remain open.
 Syncthing runtime modules, build scripts, source patch, and package assets have
 been removed. [ADR 0008](../adr/0008-rclone-one-way-links.md) records the settled choice.
 
@@ -144,3 +151,6 @@ private build cache are removed. Its exact proof APKs and screenshots remain.
 The obsolete Syncthing adapter's ignored Cargo target is also removed after
 process, handle, and reference checks; it reported 30,461,364 KiB through `du`.
 That checkout's uncommitted source and compact evidence are preserved.
+The unused Syncthing process launcher and its legacy runtime-file validation
+are removed, reducing those files by 160 net lines. Existing stop/reaper tests
+now exercise the active rclone launcher and pass.

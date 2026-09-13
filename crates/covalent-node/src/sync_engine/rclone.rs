@@ -175,14 +175,14 @@ struct PolicyState {
 
 enum RcloneCommandFailure {
     Uncertain(EngineSessionError),
-    ReapedNonzero,
+    ReapedNonzero { stderr: Vec<u8> },
 }
 
 impl RcloneCommandFailure {
     fn into_session_error(self) -> EngineSessionError {
         match self {
             Self::Uncertain(error) => error,
-            Self::ReapedNonzero => EngineSessionError::EngineUnavailable,
+            Self::ReapedNonzero { .. } => EngineSessionError::EngineUnavailable,
         }
     }
 }
@@ -400,10 +400,9 @@ impl RcloneRuntime {
             } => (propagate_source_deletions, restore_local_deletions),
             _ => return Err(EngineSessionError::InvalidConfiguration),
         };
-        if state.pending.is_some() && !state.copy_completed && !restore {
-            // An interrupted copy has uncertain ownership. Once copy completion
-            // and ownership are durable, a fresh run can preserve local deletions.
-            // Explicit restoration also authorizes retrying uncertain downloads.
+        if !can_retry_pending(state, &source, &target, restore) {
+            // Restoration permits another download, but cannot establish who
+            // owns a target whose source disappeared during an uncertain copy.
             return Err(EngineSessionError::RuntimeUnavailable);
         }
         let (allowed, suppressions) = plan_transfer(state, &source, &target, propagate, restore);
@@ -433,8 +432,7 @@ impl RcloneRuntime {
         let verification_list =
             self.write_files_list_with_suffix(folder_id, "verify", &verified)?;
         let result = async {
-            self.run_transfer(folder, peer, &list, pending.propagate_source_deletions)
-                .await?;
+            self.run_transfer(folder, peer, &list, &pending).await?;
             record_completed_copy(&policy_path, &policy_staged, folder_id, &pending)?;
             let after_copy = self
                 .list_sftp(folder.id, peer)
@@ -586,7 +584,7 @@ impl RcloneRuntime {
         folder: &RcloneFolder,
         peer: &RclonePeer,
         files_from: &Path,
-        propagate: bool,
+        pending: &PendingTransfer,
     ) -> Result<(), EngineSessionError> {
         let mut environment = sftp_environment(
             peer,
@@ -599,7 +597,11 @@ impl RcloneRuntime {
         let (target, target_environment) = backend_remote("target", &folder.backend);
         environment.extend(target_environment);
         let args = vec![
-            OsString::from(if propagate { "sync" } else { "copy" }),
+            OsString::from(if pending.propagate_source_deletions {
+                "sync"
+            } else {
+                "copy"
+            }),
             OsString::from("source:"),
             target,
             OsString::from("--files-from0"),
@@ -612,11 +614,19 @@ impl RcloneRuntime {
             OsString::from("0"),
             OsString::from("--no-update-modtime"),
             OsString::from("--ignore-times"),
+            OsString::from("--use-json-log"),
+            OsString::from("--log-level"),
+            OsString::from("INFO"),
         ];
-        self.run(&args, &environment)
-            .await
-            .map(|_| ())
-            .map_err(RcloneCommandFailure::into_session_error)
+        match self.run(&args, &environment).await {
+            Ok(_) => Ok(()),
+            Err(RcloneCommandFailure::ReapedNonzero { stderr }) => {
+                let (path, staged) = policy_paths(&self.policy_directory, folder.id);
+                record_partial_copy(&path, &staged, folder.id, pending, &stderr)?;
+                Err(EngineSessionError::EngineUnavailable)
+            }
+            Err(error) => Err(error.into_session_error()),
+        }
     }
 
     async fn check_transfer(
@@ -652,7 +662,7 @@ impl RcloneRuntime {
             .await
             .map(|_| ())
             .map_err(|error| match error {
-                RcloneCommandFailure::ReapedNonzero => EngineSessionError::TransferFailed,
+                RcloneCommandFailure::ReapedNonzero { .. } => EngineSessionError::TransferFailed,
                 RcloneCommandFailure::Uncertain(error) => error,
             })
     }
@@ -727,7 +737,9 @@ impl RcloneRuntime {
             .map_err(|_| RcloneCommandFailure::Uncertain(EngineSessionError::EngineUnavailable))?
             .map_err(|_| RcloneCommandFailure::Uncertain(EngineSessionError::EngineUnavailable))?;
         if !output.status.success() {
-            return Err(RcloneCommandFailure::ReapedNonzero);
+            return Err(RcloneCommandFailure::ReapedNonzero {
+                stderr: output.stderr,
+            });
         }
         let _discarded_stderr = output.stderr;
         Ok(output.stdout)
@@ -893,6 +905,24 @@ fn inventory_index(entries: &[InventoryEntry]) -> EngineIndexSnapshot {
     }
 }
 
+fn can_retry_pending(
+    state: &FolderPolicyState,
+    source: &BTreeMap<String, InventoryEntry>,
+    target: &BTreeMap<String, InventoryEntry>,
+    restore: bool,
+) -> bool {
+    let Some(pending) = state.pending.as_ref().filter(|_| !state.copy_completed) else {
+        return true;
+    };
+    restore
+        && !pending.allowed.iter().any(|path| {
+            pending.source.contains_key(path)
+                && !source.contains_key(path)
+                && target.contains_key(path)
+                && !state.owned.contains(path)
+        })
+}
+
 fn plan_transfer(
     state: &FolderPolicyState,
     source: &BTreeMap<String, InventoryEntry>,
@@ -992,6 +1022,69 @@ fn verify_transfer(
         return Err(EngineSessionError::EngineUnavailable);
     }
     Ok(())
+}
+
+fn record_partial_copy(
+    path: &Path,
+    staged: &Path,
+    folder_id: Uuid,
+    pending: &PendingTransfer,
+    stderr: &[u8],
+) -> Result<(), EngineSessionError> {
+    let mut copied = BTreeSet::new();
+    for line in stderr
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+    {
+        let record: serde_json::Value =
+            serde_json::from_slice(line).map_err(|_| EngineSessionError::RuntimeUnavailable)?;
+        let message = record
+            .get("msg")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let action = message
+            .split_once(" to: ")
+            .map_or(message, |(action, _)| action);
+        if record.get("level").and_then(serde_json::Value::as_str) != Some("info")
+            || !matches!(
+                action,
+                "Copied (new)"
+                    | "Copied (replaced existing)"
+                    | "Multi-thread Copied (new)"
+                    | "Multi-thread Copied (replaced existing)"
+                    | "Copied (Rcat, new)"
+                    | "Copied (Rcat, replaced existing)"
+                    | "Copied (server-side copy)"
+            )
+        {
+            continue;
+        }
+        let candidate = record
+            .get("object")
+            .and_then(serde_json::Value::as_str)
+            .ok_or(EngineSessionError::RuntimeUnavailable)?;
+        let entry = pending
+            .source
+            .get(candidate)
+            .filter(|_| pending.allowed.contains(candidate))
+            .ok_or(EngineSessionError::RuntimeUnavailable)?;
+        if record.get("size").and_then(serde_json::Value::as_i64) != Some(entry.size) {
+            return Err(EngineSessionError::RuntimeUnavailable);
+        }
+        copied.insert(candidate.to_owned());
+    }
+    if copied.is_empty() {
+        return Ok(());
+    }
+    let mut policy = load_policy(path, staged)?;
+    let state = policy.folders.entry(folder_id).or_default();
+    if state.pending.as_ref() != Some(pending) {
+        return Err(EngineSessionError::RuntimeUnavailable);
+    }
+    // Completed files survive an aggregate failure. Keep the pending operation:
+    // missing log records never prove that its other files were left untouched.
+    state.owned.extend(copied);
+    save_policy(path, staged, &policy)
 }
 
 fn record_completed_copy(
@@ -1290,5 +1383,106 @@ mod tests {
         assert!(folder_state.delivered.is_empty());
         assert!(folder_state.pending.is_none());
         assert!(!folder_state.copy_completed);
+    }
+
+    #[test]
+    fn partial_copy_preserves_confirmed_ownership_without_clearing_uncertainty() {
+        let directory = tempfile::tempdir().unwrap();
+        let folder = Uuid::new_v4();
+        let (path, staged) = policy_paths(directory.path(), folder);
+        let source = ["copied.txt", "replaced.txt", "unfinished.txt"]
+            .map(|name| {
+                let entry = InventoryEntry {
+                    path: name.into(),
+                    size: 4,
+                    modified_unix_seconds: 1,
+                    sha256: Some("11".repeat(32)),
+                };
+                (entry.path.clone(), entry)
+            })
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        let pending = PendingTransfer {
+            source_index: inventory_index(&source.values().cloned().collect::<Vec<_>>()),
+            source: source.clone(),
+            allowed: source.keys().cloned().collect(),
+            suppressions: BTreeSet::new(),
+            propagate_source_deletions: true,
+        };
+        let policy = PolicyState {
+            version: 1,
+            folders: BTreeMap::from([(
+                folder,
+                FolderPolicyState {
+                    pending: Some(pending.clone()),
+                    ..FolderPolicyState::default()
+                },
+            )]),
+        };
+        save_policy(&path, &staged, &policy).unwrap();
+        let log = b"{\"level\":\"info\",\"msg\":\"Copied (new)\",\"object\":\"copied.txt\",\"size\":4}\n\
+            {\"level\":\"info\",\"msg\":\"Multi-thread Copied (replaced existing) to: replaced.txt\",\"object\":\"replaced.txt\",\"size\":4}\n\
+            {\"level\":\"error\",\"msg\":\"Failed to copy\",\"object\":\"unfinished.txt\"}\n";
+        record_partial_copy(&path, &staged, folder, &pending, log).unwrap();
+        let recovered = load_policy(&path, &staged).unwrap();
+        let state = &recovered.folders[&folder];
+        assert_eq!(
+            state.owned,
+            BTreeSet::from(["copied.txt".into(), "replaced.txt".into()])
+        );
+        assert!(state.delivered.is_empty());
+        assert_eq!(state.pending.as_ref(), Some(&pending));
+        assert!(!state.copy_completed);
+
+        let mut target = source.clone();
+        target.insert("unrelated.txt".into(), source["copied.txt"].clone());
+        let mut after_source_deletion = source.clone();
+        after_source_deletion.remove("copied.txt");
+        assert!(can_retry_pending(
+            state,
+            &after_source_deletion,
+            &target,
+            true
+        ));
+        let (allowed, _) = plan_transfer(state, &after_source_deletion, &target, true, true);
+        assert!(allowed.contains("copied.txt"));
+        assert!(!allowed.contains("unrelated.txt"));
+
+        target.remove("copied.txt");
+        let (allowed, suppressions) = plan_transfer(state, &source, &target, false, false);
+        assert!(!allowed.contains("copied.txt"));
+        assert!(suppressions.contains("copied.txt"));
+        assert!(!can_retry_pending(state, &source, &target, false));
+
+        // A WebDAV write can appear before an error without a completed-copy
+        // record. Restoration must not discard that unknown file's ownership.
+        let mut missing_unconfirmed_source = source.clone();
+        missing_unconfirmed_source.remove("unfinished.txt");
+        assert!(!can_retry_pending(
+            state,
+            &missing_unconfirmed_source,
+            &target,
+            true
+        ));
+        target.remove("unfinished.txt");
+        assert!(can_retry_pending(
+            state,
+            &missing_unconfirmed_source,
+            &target,
+            true
+        ));
+
+        let before_invalid = fs::read(&path).unwrap();
+        for invalid in [
+            b"{\"level\":\"info\",\"msg\":\"Copied (new)\",\"object\":\"unrelated.txt\",\"size\":4}".as_slice(),
+            b"{\"level\":\"info\",\"msg\":\"Copied (new)\",\"object\":\"unfinished.txt\",\"size\":5}",
+            b"{\"level\":\"info\",\"msg\":\"Copied (new)\",\"object\":\"unfinished.txt\",\"size\":4}\n{",
+        ] {
+            assert_eq!(
+                record_partial_copy(&path, &staged, folder, &pending, invalid),
+                Err(EngineSessionError::RuntimeUnavailable)
+            );
+            assert_eq!(fs::read(&path).unwrap(), before_invalid);
+        }
     }
 }
