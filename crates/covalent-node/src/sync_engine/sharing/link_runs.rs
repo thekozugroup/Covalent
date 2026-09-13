@@ -7,6 +7,7 @@ use crate::sync_engine::EngineIndexSnapshot;
 
 pub const LINK_RUN_DEADLINE_MS: u64 = 24 * 60 * 60 * 1_000;
 const ANDROID_CONDITION_TTL: Duration = Duration::from_secs(90);
+const CONTINUOUS_CHECK_INTERVAL_MS: u64 = 15_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -241,7 +242,8 @@ impl FolderSharingJournal {
         };
         if source_id == self.engine.device_id() {
             let mut next = self.snapshot.clone();
-            let (admission, changed) = admit_source_request(&mut next, &request, now_unix_ms)?;
+            let (admission, changed) =
+                admit_source_request(&mut next, &request, now_unix_ms, false)?;
             if changed {
                 self.persist(next)?;
             }
@@ -299,7 +301,7 @@ impl FolderSharingJournal {
         }
         validate_request_membership(&self.snapshot, request)?;
         let mut next = self.snapshot.clone();
-        let (_, changed) = admit_source_request(&mut next, request, now_unix_ms)?;
+        let (_, changed) = admit_source_request(&mut next, request, now_unix_ms, false)?;
         let mut commit = commit_for_target(&next, request.folder_id, request.requester_id)?;
         commit.acknowledged_request_id = Some(request.request_id);
         if changed {
@@ -657,8 +659,12 @@ impl FolderSharingJournal {
                 {
                     return None;
                 }
-                let LinkCadence::Scheduled { interval_minutes } = settings.settings.cadence else {
-                    return None;
+                let interval_ms = match settings.settings.cadence {
+                    LinkCadence::Continuous => CONTINUOUS_CHECK_INTERVAL_MS,
+                    LinkCadence::Scheduled { interval_minutes } => {
+                        u64::from(interval_minutes) * 60_000
+                    }
+                    LinkCadence::Manual => return None,
                 };
                 let base = self
                     .snapshot
@@ -667,7 +673,7 @@ impl FolderSharingJournal {
                     .and_then(|slot| slot.authoritative.as_ref())
                     .and_then(|state| state.ended_at_unix_ms)
                     .unwrap_or(settings.accepted_at_unix_ms);
-                let due_at = base.checked_add(u64::from(interval_minutes) * 60_000)?;
+                let due_at = base.checked_add(interval_ms)?;
                 (base != 0 && now_unix_ms >= due_at).then_some(*folder_id)
             })
             .collect::<Vec<_>>();
@@ -692,7 +698,7 @@ impl FolderSharingJournal {
                 settings_revision,
             };
             if let (LinkRunAdmission::Accepted(state), _) =
-                admit_source_request(&mut next, &request, now_unix_ms)?
+                admit_source_request(&mut next, &request, now_unix_ms, true)?
             {
                 admitted.push(state);
             }
@@ -872,6 +878,7 @@ fn admit_source_request(
     snapshot: &mut Snapshot,
     request: &LinkRunRequest,
     now_unix_ms: u64,
+    allow_automatic_continuous: bool,
 ) -> Result<(LinkRunAdmission, bool), SharingError> {
     if now_unix_ms == 0 {
         return Err(SharingError::InvalidRecord);
@@ -883,7 +890,7 @@ fn admit_source_request(
         .ok_or(SharingError::InvalidState)?;
     if !settings.confirmed
         || settings.settings.paused
-        || settings.settings.cadence == LinkCadence::Continuous
+        || (settings.settings.cadence == LinkCadence::Continuous && !allow_automatic_continuous)
         || now_unix_ms < settings.accepted_at_unix_ms
     {
         return Err(SharingError::InvalidState);

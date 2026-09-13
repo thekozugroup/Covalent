@@ -177,6 +177,22 @@ impl EngineIdentity {
         self.0.private_key_pem.as_str()
     }
 
+    /// Canonical base64 SSH Ed25519 wire blob bound into signed link records.
+    pub fn ssh_public_key(&self) -> Result<String, EngineIdentityError> {
+        let (remaining, certificate) = x509_parser::parse_x509_certificate(self.certificate_der())
+            .map_err(|_| EngineIdentityError::InvalidIdentity)?;
+        let raw = certificate.public_key().subject_public_key.data.as_ref();
+        if !remaining.is_empty() || raw.len() != 32 {
+            return Err(EngineIdentityError::InvalidIdentity);
+        }
+        let mut wire = Vec::with_capacity(51);
+        wire.extend_from_slice(&11_u32.to_be_bytes());
+        wire.extend_from_slice(b"ssh-ed25519");
+        wire.extend_from_slice(&32_u32.to_be_bytes());
+        wire.extend_from_slice(&raw);
+        Ok(STANDARD.encode(wire))
+    }
+
     fn validate(&self) -> Result<(), EngineIdentityError> {
         if self.0.schema_version != 1
             || self.0.certificate_der.is_empty()
@@ -227,6 +243,7 @@ mod tests {
             EngineIdentity::from_protected(&record, &protector(1), b"installation one").unwrap();
         assert_eq!(restored.certificate_sha256(), digest);
         assert!(restored.private_key_pem() == original_key.as_str());
+        assert_eq!(restored.ssh_public_key().unwrap().len(), 68);
         let certificate_pem = restored.certificate_pem();
         let (rest, pem) = x509_parser::pem::parse_x509_pem(certificate_pem.as_bytes()).unwrap();
         assert!(rest.is_empty());

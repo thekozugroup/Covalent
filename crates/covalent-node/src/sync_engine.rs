@@ -5,14 +5,12 @@
 //! clients must use Covalent's own authorization and folder-sharing workflow.
 
 mod access_recovery;
-mod client;
+mod android_saf;
 pub mod config;
 mod connection;
 #[cfg(test)]
 mod connection_tests;
 mod controller;
-#[cfg(test)]
-mod controller_tests;
 mod health;
 mod host;
 mod identity;
@@ -21,7 +19,7 @@ mod installation;
 mod linux_host;
 #[cfg(target_os = "macos")]
 mod mac_host;
-mod recovery;
+mod rclone;
 mod run_observation;
 mod service;
 #[cfg(test)]
@@ -31,11 +29,9 @@ mod state;
 mod supervisor;
 
 pub use access_recovery::FolderSyncAccessRecovery;
-pub use client::{EngineApiClient, EngineApiError, EngineEndpoint};
-pub use connection::{
-    EnginePeerConnection, EnginePeerConnectionState, PeerConnectionError, collect_peer_connections,
-};
-pub use health::{FolderHealth, FolderHealthError, FolderLifecycle, collect_folder_health};
+pub use android_saf::{AndroidSafGrantError, AndroidSafGrantRegistry};
+pub use connection::{EnginePeerConnection, EnginePeerConnectionState};
+pub use health::{FolderHealth, FolderLifecycle};
 pub use host::FolderSyncRuntimeConfig;
 pub(crate) use host::FolderSyncRuntimeState;
 pub use identity::{EngineIdentity, EngineIdentityError};
@@ -50,10 +46,6 @@ pub use installation::{EngineInstallation, EngineInstallationError};
 pub use linux_host::{LinuxHostError, discover_packaged_engine as discover_packaged_linux_engine};
 #[cfg(target_os = "macos")]
 pub use mac_host::{MacHostError, discover_packaged_engine};
-pub use recovery::{
-    MAX_RECOVERY_FILE_BYTES, RecoverAsCopyRequest, RecoveryError, RecoveryReceipt, SelectedVersion,
-    SimpleVersionerConfig, VersionMetadata, recover_selected_version_as_copy,
-};
 pub use run_observation::EngineIndexSnapshot;
 pub use service::{
     CommittedMutation, FolderHealthFreshness, FolderSyncIssue, FolderSyncLifecycle,

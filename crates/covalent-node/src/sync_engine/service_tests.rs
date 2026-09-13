@@ -1,3 +1,5 @@
+use super::config::EngineDeviceId;
+use super::run_observation::EngineRunObservation;
 use super::service::{TestBackend, TestScanBehavior, TestStopBehavior};
 use super::*;
 use crate::transport::TlsIdentity;
@@ -5,7 +7,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use covalent_core::{Engine, EngineOptions, KeyProtector, StaticKeyProtector};
 use covalent_protocol::{DeviceId, FolderShareCommit, PeerGrant, PeerRole, TransportBinding};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,6 +17,24 @@ use tokio::sync::Notify;
 use uuid::Uuid;
 
 const QUIET_HEALTH: Duration = Duration::from_secs(3600);
+
+#[test]
+fn known_destination_failure_is_reportable_for_the_admitted_index() {
+    let source = EngineDeviceId::from_certificate_der(b"failed transfer source").unwrap();
+    let expected = EngineIndexSnapshot {
+        index_id: "0x0123456789ABCDEF".into(),
+        sequence: 1,
+    };
+    let observed = EngineRunObservation {
+        local_index: None,
+        completions: BTreeMap::new(),
+        failures: BTreeSet::from([source.clone()]),
+    };
+    assert_eq!(
+        super::service::destination_observation_result(&observed, &source, &expected),
+        Some(LinkRunDestinationResult::Failed)
+    );
+}
 
 struct Device {
     _temporary: tempfile::TempDir,
@@ -2064,8 +2084,6 @@ async fn folder_offer_api_preserves_shared_pause_and_rejects_other_setting_misma
 async fn manual_batch_waits_for_fresh_scan_and_current_connected_completion_then_reaps_workers() {
     use super::connection::EnginePeerConnectionState;
     use super::run_observation::EngineRunObservation;
-    use std::collections::BTreeMap;
-
     let first = Device::new("Source", 44501);
     let second = Device::new("Target", 44502);
     pair(&first, &second);
@@ -2173,6 +2191,7 @@ async fn manual_batch_waits_for_fresh_scan_and_current_connected_completion_then
         vec![EngineRunObservation {
             local_index: Some(proof.clone()),
             completions: BTreeMap::new(),
+            failures: BTreeSet::new(),
         }],
     );
     source.advance_runs_for_test().await;
@@ -2193,6 +2212,7 @@ async fn manual_batch_waits_for_fresh_scan_and_current_connected_completion_then
             EngineRunObservation {
                 local_index: Some(proof.clone()),
                 completions: BTreeMap::new(),
+                failures: BTreeSet::new(),
             },
             EngineRunObservation {
                 local_index: Some(EngineIndexSnapshot {
@@ -2200,6 +2220,7 @@ async fn manual_batch_waits_for_fresh_scan_and_current_connected_completion_then
                     ..proof.clone()
                 }),
                 completions: BTreeMap::new(),
+                failures: BTreeSet::new(),
             },
         ],
     );
@@ -2218,6 +2239,7 @@ async fn manual_batch_waits_for_fresh_scan_and_current_connected_completion_then
         vec![EngineRunObservation {
             local_index: Some(proof.clone()),
             completions: BTreeMap::new(),
+            failures: BTreeSet::new(),
         }],
     );
     source.advance_runs_for_test().await;
@@ -2257,6 +2279,7 @@ async fn manual_batch_waits_for_fresh_scan_and_current_connected_completion_then
         vec![EngineRunObservation {
             local_index: None,
             completions: BTreeMap::from([(first.installation.device_id().clone(), wrong_index)]),
+            failures: BTreeSet::new(),
         }],
     );
     target.advance_runs_for_test().await;
@@ -2266,6 +2289,7 @@ async fn manual_batch_waits_for_fresh_scan_and_current_connected_completion_then
         vec![EngineRunObservation {
             local_index: None,
             completions: BTreeMap::from([(first.installation.device_id().clone(), proof.clone())]),
+            failures: BTreeSet::new(),
         }],
     );
     target_backend.set_connection_states(vec![EnginePeerConnectionState::Disconnected]);

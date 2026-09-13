@@ -546,6 +546,7 @@ dependencies = [
 name = "covalent-protocol"
 version = "0.2.0"
 dependencies = [
+ "base64",
  "proptest",
  "serde",
  "serde_json",

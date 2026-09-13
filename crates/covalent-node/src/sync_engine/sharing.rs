@@ -115,6 +115,8 @@ pub struct ShareSummary {
     pub label: String,
     pub peer_id: DeviceId,
     pub incoming: bool,
+    /// This retained link predates authenticated rclone transport or one-way policy.
+    pub pairing_upgrade_required: bool,
     pub link_policy: Option<covalent_protocol::FolderLinkPolicy>,
     pub link_settings: Option<LinkSettingsState>,
     pub link_run: Option<LinkRunSummary>,
@@ -177,6 +179,8 @@ struct LocalRoot {
     path: PathBuf,
     device: u64,
     inode: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    grant_id: Option<Uuid>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -366,9 +370,13 @@ impl FolderSharingJournal {
         listener: SocketAddr,
         advertised: SocketAddr,
     ) -> Result<Self, SharingError> {
-        let binding = SyncEngineBinding::new(
+        let binding = SyncEngineBinding::new_authenticated(
             engine.device_id(),
             installation.device_id().as_str(),
+            &installation
+                .identity()
+                .ssh_public_key()
+                .map_err(|_| SharingError::InvalidState)?,
             &advertised.to_string(),
         )
         .map_err(|_| SharingError::InvalidState)?;
@@ -452,20 +460,32 @@ impl FolderSharingJournal {
             android_host: false,
             android_condition_observation: None,
         };
-        if let Some((listener, advertised)) = route {
-            validate_listener_route(listener, advertised)?;
-            let binding = SyncEngineBinding::new(
-                journal.engine.device_id(),
-                journal.installation.device_id().as_str(),
-                &advertised.to_string(),
-            )
-            .map_err(|_| SharingError::InvalidState)?;
-            if journal.snapshot.listener != listener || journal.snapshot.binding != binding {
-                let mut next = journal.snapshot.clone();
-                next.listener = listener;
-                next.binding = binding;
-                journal.persist(next)?;
+        let (listener, advertised) = match route {
+            Some((listener, advertised)) => {
+                validate_listener_route(listener, advertised)?;
+                (listener, advertised.to_string())
             }
+            None => (
+                journal.snapshot.listener,
+                journal.snapshot.binding.direct_address.clone(),
+            ),
+        };
+        let binding = SyncEngineBinding::new_authenticated(
+            journal.engine.device_id(),
+            journal.installation.device_id().as_str(),
+            &journal
+                .installation
+                .identity()
+                .ssh_public_key()
+                .map_err(|_| SharingError::InvalidState)?,
+            &advertised,
+        )
+        .map_err(|_| SharingError::InvalidState)?;
+        if journal.snapshot.listener != listener || journal.snapshot.binding != binding {
+            let mut next = journal.snapshot.clone();
+            next.listener = listener;
+            next.binding = binding;
+            journal.persist(next)?;
         }
         if journal.snapshot.pending_peer_address_refresh.is_none() {
             journal.reconcile_trust()?;
@@ -863,6 +883,7 @@ impl FolderSharingJournal {
                 label: share.offer.label.clone(),
                 peer_id: share.peer_identity.device_id,
                 incoming: share.offer.target_device_id == self.engine.device_id(),
+                pairing_upgrade_required: self.pairing_upgrade_required(share),
                 link_policy: self
                     .snapshot
                     .link_settings
@@ -943,6 +964,7 @@ impl FolderSharingJournal {
                     label: removed.label.clone(),
                     peer_id: removed.peer_id,
                     incoming: removed.incoming,
+                    pairing_upgrade_required: false,
                     link_policy: None,
                     link_settings: None,
                     link_run: None,
@@ -959,6 +981,25 @@ impl FolderSharingJournal {
                 }),
         );
         Ok(summaries)
+    }
+
+    fn pairing_upgrade_required(&self, share: &Share) -> bool {
+        if share.offer.link_policy.is_none() {
+            return true;
+        }
+        let historical = if share.offer.source_device_id == self.engine.device_id() {
+            share
+                .acceptance
+                .as_ref()
+                .map(|acceptance| &acceptance.target_engine)
+        } else {
+            Some(&share.offer.source_engine)
+        };
+        self.snapshot
+            .current_peer_routes
+            .get(&share.peer_identity.device_id)
+            .or(historical)
+            .is_none_or(|binding| binding.require_ssh_public_key().is_err())
     }
 
     /// Reconcile current Covalent trust before an offline, worker-free status
@@ -984,6 +1025,7 @@ impl FolderSharingJournal {
                 && !share.paused
                 && share.commit.is_some()
                 && self.link_allows_transfer(share)
+                && !self.pairing_upgrade_required(share)
         }) {
             let binding = if share.offer.source_device_id == self.engine.device_id() {
                 &share
@@ -1981,6 +2023,7 @@ impl FolderSharingJournal {
                 && !s.paused
                 && s.commit.is_some()
                 && self.link_allows_transfer_at(s, now_unix_ms, observed_at)
+                && !self.pairing_upgrade_required(s)
         }) {
             let current_trust = observe_trust(&configuration, share.peer_identity.device_id)?
                 .ok_or(SharingError::UntrustedPeer)?;
@@ -2013,7 +2056,11 @@ impl FolderSharingJournal {
                 .get(&share.peer_identity.device_id)
                 .ok_or(SharingError::UntrustedPeer)?
                 .display_name;
+            let key = peer_binding
+                .require_ssh_public_key()
+                .map_err(|_| SharingError::InvalidRecord)?;
             let peer = EnginePeerConfig::new(id.clone(), name, address)
+                .and_then(|peer| peer.with_ssh_public_key(key))
                 .map_err(|_| SharingError::InvalidRecord)?;
             if let Some(old) = peers.insert(share.peer_identity.device_id, peer)
                 && (old.id() != &id || old.address() != address)
@@ -2408,14 +2455,19 @@ fn validate_snapshot(
                 return Err(SharingError::InvalidState);
             }
             if let Some(root) = &share.root {
-                if !root.path.is_absolute()
-                    || root.path.as_os_str().len() > 4096
-                    || root
-                        .path
-                        .components()
-                        .any(|c| matches!(c, std::path::Component::ParentDir))
-                    || root.path.starts_with(installation.root())
-                    || installation.root().starts_with(&root.path)
+                let grant = super::android_saf::parse_token(&root.path)
+                    .map_err(|_| SharingError::InvalidState)?;
+                if grant != root.grant_id
+                    || grant.is_some() && (root.device != 0 || root.inode != 0)
+                    || grant.is_none()
+                        && (!root.path.is_absolute()
+                            || root.path.as_os_str().len() > 4096
+                            || root
+                                .path
+                                .components()
+                                .any(|c| matches!(c, std::path::Component::ParentDir))
+                            || root.path.starts_with(installation.root())
+                            || installation.root().starts_with(&root.path))
                 {
                     return Err(SharingError::InvalidState);
                 }
@@ -2648,6 +2700,16 @@ fn validate_removal_notice(
 }
 
 fn capture_root(path: &Path, installation: &EngineInstallation) -> Result<LocalRoot, SharingError> {
+    if let Some(grant_id) =
+        super::android_saf::parse_token(path).map_err(|_| SharingError::FolderUnavailable)?
+    {
+        return Ok(LocalRoot {
+            path: path.to_path_buf(),
+            device: 0,
+            inode: 0,
+            grant_id: Some(grant_id),
+        });
+    }
     let admitted = EngineFolderConfig::new(
         Uuid::new_v4(),
         "Selected folder",
@@ -2664,6 +2726,7 @@ fn capture_root(path: &Path, installation: &EngineInstallation) -> Result<LocalR
         path: path.to_path_buf(),
         device: metadata.dev(),
         inode: metadata.ino(),
+        grant_id: None,
     })
 }
 
@@ -2741,6 +2804,14 @@ fn historical_peer_engine(snapshot: &Snapshot, owner: DeviceId, peer: DeviceId) 
 }
 
 fn validate_current_root(root: &LocalRoot) -> Result<(), SharingError> {
+    if super::android_saf::parse_token(&root.path).map_err(|_| SharingError::FolderUnavailable)?
+        == root.grant_id
+        && root.grant_id.is_some()
+        && root.device == 0
+        && root.inode == 0
+    {
+        return Ok(());
+    }
     let canonical =
         std::fs::canonicalize(&root.path).map_err(|_| SharingError::FolderUnavailable)?;
     let metadata =

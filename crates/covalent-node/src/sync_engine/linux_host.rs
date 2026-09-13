@@ -15,7 +15,7 @@ use super::{FolderSyncRuntimeConfig, VerifiedEngineExecutable};
 
 const MANIFEST: &str = "/usr/local/share/covalent/sync-engine/manifest.json";
 const GUARDIAN: &str = "/usr/local/libexec/covalent-sync-engine/covalent-engine-guardian";
-const WORKER: &str = "/usr/local/libexec/covalent-sync-engine/covalent-syncthing";
+const WORKER: &str = "/usr/local/libexec/covalent-sync-engine/covalent-rclone";
 const RUNTIME_PARENT: &str = "/tmp/cvs";
 const MAX_MANIFEST_BYTES: u64 = 8 * 1024;
 const MAX_NOTICE_BYTES: u64 = 64 * 1024;
@@ -23,22 +23,17 @@ const MAX_COMBINED_NOTICE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_TARGET_EVIDENCE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_BUILD_METADATA_BYTES: u64 = 1024 * 1024;
 const MAX_RUNTIME_PARENT_BYTES: usize = 74;
-const MIN_WORKER_BYTES: u64 = 16 * 1024 * 1024;
+const MIN_WORKER_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_WORKER_BYTES: u64 = 48 * 1024 * 1024;
 const MIN_GUARDIAN_BYTES: u64 = 8 * 1024;
 const MAX_GUARDIAN_BYTES: u64 = 128 * 1024;
 const ENGINE_LISTENER_PORT: u16 = 8789;
-const ENGINE_VERSION: &str = "v2.1.3";
-const ENGINE_COMMIT: &str = "946e2b83a1f6c6ae119427c09e0a5802940b82ff";
-const SOURCE_ARCHIVE_SHA256: &str =
-    "dbcc9498602286a843f29a7104833bd1422082999aa51ff92eef493172d47959";
-const SOURCE_PATCH_SHA256: &str =
-    "bdbab1565d0adce1fc2dc77cfe3a0581a83333b93910a0ac43e3081ba0b678ca";
-const SOURCE_STATE: &str = "modified";
+const ENGINE_VERSION: &str = "v1.75.1";
+const ENGINE_COMMIT: &str = "687d264b689b8c49a67e2e52a8a5e0caa01c04ce";
+const SOURCE_STATE: &str = "upstream-unmodified";
 const GUARDIAN_SOURCE_SHA256: &str =
     "c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579";
-const LICENSE_SHA256: &str = "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04";
-const AUTHORS_SHA256: &str = "5a0044d13ddf6f013bdd5c2bc419bf45d6123c356567510237e82f304d113d48";
+const LICENSE_SHA256: &str = "9266eae9c6a441de0f6847f19ac8f09b280d55612b079eca03b3d49b822c1a71";
 
 /// Fixed host errors never include image paths, manifest bytes, or hashes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -102,8 +97,7 @@ fn discover_at(
     runtime_parent: &Path,
 ) -> Result<Option<FolderSyncRuntimeConfig>, LinuxHostError> {
     let notices = [
-        manifest_path.with_file_name("Syncthing-LICENSE.txt"),
-        manifest_path.with_file_name("Syncthing-AUTHORS.txt"),
+        manifest_path.with_file_name("rclone-LICENSE.txt"),
         manifest_path.with_file_name("PROVENANCE.txt"),
     ];
     let artifacts = [
@@ -112,7 +106,6 @@ fn discover_at(
         worker_path,
         notices[0].as_path(),
         notices[1].as_path(),
-        notices[2].as_path(),
     ];
     let mut present = 0_usize;
     for artifact in artifacts {
@@ -142,13 +135,9 @@ fn discover_at(
     // Notices are a distribution obligation and package-integrity signal. The
     // executable authorization still comes only from the strict manifest.
     let license = read_bounded_file(&notices[0], MAX_NOTICE_BYTES)?;
-    let authors = read_bounded_file(&notices[1], MAX_NOTICE_BYTES)?;
-    let _provenance = read_bounded_file(&notices[2], MAX_NOTICE_BYTES)?;
+    let _provenance = read_bounded_file(&notices[1], MAX_NOTICE_BYTES)?;
     let license_digest: [u8; 32] = Sha256::digest(&license).into();
-    let authors_digest: [u8; 32] = Sha256::digest(&authors).into();
-    if license_digest != parse_lower_hex(LICENSE_SHA256)?
-        || authors_digest != parse_lower_hex(AUTHORS_SHA256)?
-    {
+    if license_digest != parse_lower_hex(LICENSE_SHA256)? {
         return Err(LinuxHostError::InvalidPackage);
     }
     let manifest_bytes = read_bounded_file(manifest_path, MAX_MANIFEST_BYTES)?;
@@ -179,16 +168,13 @@ fn discover_at(
 
 fn validate_manifest(manifest: &PackageManifest) -> Result<(), LinuxHostError> {
     if manifest.schema != 1
-        || manifest.engine.name != "Syncthing"
+        || manifest.engine.name != "rclone"
         || manifest.engine.version != ENGINE_VERSION
         || manifest.engine.commit != ENGINE_COMMIT
-        || manifest.engine.source_archive_sha256 != SOURCE_ARCHIVE_SHA256
-        || manifest.engine.source_patch_sha256 != SOURCE_PATCH_SHA256
         || manifest.engine.source_state != SOURCE_STATE
         || manifest.engine.go_version != "go1.26.7"
         || manifest.guardian.source_sha256 != GUARDIAN_SOURCE_SHA256
         || manifest.notices.license_sha256 != LICENSE_SHA256
-        || manifest.notices.authors_sha256 != AUTHORS_SHA256
         || manifest.notices.third_party_status != "target-texts-collected-review-required"
         || manifest.architecture != std::env::consts::ARCH
         || !(MIN_WORKER_BYTES..=MAX_WORKER_BYTES).contains(&manifest.executables.worker.bytes)
@@ -409,8 +395,6 @@ struct EngineRecord {
     name: String,
     version: String,
     commit: String,
-    source_archive_sha256: String,
-    source_patch_sha256: String,
     source_state: String,
     go_version: String,
 }
@@ -425,7 +409,6 @@ struct GuardianRecord {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct NoticeRecord {
     license_sha256: String,
-    authors_sha256: String,
     third_party_status: String,
     target_manifest_sha256: String,
     combined_sha256: String,
@@ -546,21 +529,12 @@ mod tests {
         fs::create_dir(&bin).unwrap();
         fs::create_dir(&share).unwrap();
         let guardian = bin.join("covalent-engine-guardian");
-        let worker = bin.join("covalent-syncthing");
+        let worker = bin.join("covalent-rclone");
         executable(&guardian, MIN_GUARDIAN_BYTES);
         executable(&worker, MIN_WORKER_BYTES);
         fs::write(
-            share.join("Syncthing-LICENSE.txt"),
-            include_bytes!(
-                "../../../../packaging/docker/sync-engine-notices/Syncthing-LICENSE.txt"
-            ),
-        )
-        .unwrap();
-        fs::write(
-            share.join("Syncthing-AUTHORS.txt"),
-            include_bytes!(
-                "../../../../packaging/docker/sync-engine-notices/Syncthing-AUTHORS.txt"
-            ),
+            share.join("rclone-LICENSE.txt"),
+            include_bytes!("../../../../packaging/rclone/LICENSE.rclone"),
         )
         .unwrap();
         fs::write(
@@ -587,18 +561,15 @@ mod tests {
             serde_json::to_vec(&serde_json::json!({
                 "schema": 1,
                 "engine": {
-                    "name": "Syncthing",
+                    "name": "rclone",
                     "version": ENGINE_VERSION,
                     "commit": ENGINE_COMMIT,
-                    "sourceArchiveSha256": SOURCE_ARCHIVE_SHA256,
-                    "sourcePatchSha256": SOURCE_PATCH_SHA256,
                     "sourceState": SOURCE_STATE,
                     "goVersion": "go1.26.7",
                 },
                 "guardian": { "sourceSha256": GUARDIAN_SOURCE_SHA256 },
                 "notices": {
                     "licenseSha256": LICENSE_SHA256,
-                    "authorsSha256": AUTHORS_SHA256,
                     "thirdPartyStatus": "target-texts-collected-review-required",
                     "targetManifestSha256": evidence_sha,
                     "combinedSha256": evidence_sha,
@@ -658,60 +629,56 @@ mod tests {
 
     #[test]
     fn source_provenance_must_be_complete_exact_and_closed() {
-        for (field, value) in [
-            ("sourcePatchSha256", serde_json::json!("0".repeat(64))),
-            ("sourceState", serde_json::json!("unmodified")),
-        ] {
-            let fixture = fixture();
-            let mut manifest: serde_json::Value =
-                serde_json::from_slice(&fs::read(&fixture.manifest).unwrap()).unwrap();
-            manifest["engine"][field] = value;
-            fs::write(&fixture.manifest, serde_json::to_vec(&manifest).unwrap()).unwrap();
-            assert_error(
-                discover_at(
-                    &fixture.manifest,
-                    &fixture.guardian,
-                    &fixture.worker,
-                    &fixture.runtime,
-                ),
-                LinuxHostError::InvalidPackage,
-            );
-            assert!(!fixture.runtime.exists());
-        }
-
-        for field in ["sourcePatchSha256", "sourceState"] {
-            let fixture = fixture();
-            let mut manifest: serde_json::Value =
-                serde_json::from_slice(&fs::read(&fixture.manifest).unwrap()).unwrap();
-            manifest["engine"].as_object_mut().unwrap().remove(field);
-            fs::write(&fixture.manifest, serde_json::to_vec(&manifest).unwrap()).unwrap();
-            assert_error(
-                discover_at(
-                    &fixture.manifest,
-                    &fixture.guardian,
-                    &fixture.worker,
-                    &fixture.runtime,
-                ),
-                LinuxHostError::InvalidPackage,
-            );
-            assert!(!fixture.runtime.exists());
-        }
-
-        let fixture = fixture();
+        let modified = fixture();
         let mut manifest: serde_json::Value =
-            serde_json::from_slice(&fs::read(&fixture.manifest).unwrap()).unwrap();
-        manifest["engine"]["unreviewedSource"] = serde_json::json!(true);
-        fs::write(&fixture.manifest, serde_json::to_vec(&manifest).unwrap()).unwrap();
+            serde_json::from_slice(&fs::read(&modified.manifest).unwrap()).unwrap();
+        manifest["engine"]["sourceState"] = serde_json::json!("modified");
+        fs::write(&modified.manifest, serde_json::to_vec(&manifest).unwrap()).unwrap();
         assert_error(
             discover_at(
-                &fixture.manifest,
-                &fixture.guardian,
-                &fixture.worker,
-                &fixture.runtime,
+                &modified.manifest,
+                &modified.guardian,
+                &modified.worker,
+                &modified.runtime,
             ),
             LinuxHostError::InvalidPackage,
         );
-        assert!(!fixture.runtime.exists());
+        assert!(!modified.runtime.exists());
+
+        let missing = fixture();
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&missing.manifest).unwrap()).unwrap();
+        manifest["engine"]
+            .as_object_mut()
+            .unwrap()
+            .remove("sourceState");
+        fs::write(&missing.manifest, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        assert_error(
+            discover_at(
+                &missing.manifest,
+                &missing.guardian,
+                &missing.worker,
+                &missing.runtime,
+            ),
+            LinuxHostError::InvalidPackage,
+        );
+        assert!(!missing.runtime.exists());
+
+        let unknown = fixture();
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&unknown.manifest).unwrap()).unwrap();
+        manifest["engine"]["unreviewedSource"] = serde_json::json!(true);
+        fs::write(&unknown.manifest, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        assert_error(
+            discover_at(
+                &unknown.manifest,
+                &unknown.guardian,
+                &unknown.worker,
+                &unknown.runtime,
+            ),
+            LinuxHostError::InvalidPackage,
+        );
+        assert!(!unknown.runtime.exists());
     }
 
     #[test]

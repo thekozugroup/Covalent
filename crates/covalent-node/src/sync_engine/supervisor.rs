@@ -6,19 +6,24 @@
 //! public diagnostics. The packaged files are expected to be immutable; the
 //! path checks are not a promise against an arbitrary same-UID path race.
 
+use std::ffi::OsString;
 use std::fmt;
 use std::fs::{self, File};
-use std::io::{Read as _, Seek as _, SeekFrom};
+use std::io::{Read, Seek as _, SeekFrom, Write as _};
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::Duration;
 
 use sha2::{Digest as _, Sha256};
 use tokio::sync::oneshot;
+use zeroize::Zeroizing;
+
+use super::android_saf::{AndroidSafGrantError, AndroidSafGrantRegistry, PasswordObscurer};
 
 pub const MAX_EXECUTABLE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_CONFIG_BYTES: u64 = 4 * 1024 * 1024;
@@ -39,6 +44,7 @@ pub enum EngineSupervisorError {
     SpawnFailed,
     ReaperUnavailable,
     WaitFailed,
+    OutputTooLarge,
 }
 
 /// Controller-owned state kept alive until the exact guardian has been
@@ -57,6 +63,7 @@ impl fmt::Display for EngineSupervisorError {
             Self::SpawnFailed => "sync engine could not be started",
             Self::ReaperUnavailable => "sync engine reaper is unavailable",
             Self::WaitFailed => "sync engine could not be reaped",
+            Self::OutputTooLarge => "sync engine output exceeded its limit",
         })
     }
 }
@@ -69,6 +76,56 @@ struct FileIdentity {
     inode: u64,
 }
 
+struct ExecutableObscurer {
+    path: PathBuf,
+    identity: FileIdentity,
+    expected_sha256: [u8; 32],
+}
+
+impl PasswordObscurer for ExecutableObscurer {
+    fn obscure(
+        &self,
+        password: Zeroizing<String>,
+    ) -> Result<Zeroizing<String>, AndroidSafGrantError> {
+        recheck_path(&self.path, self.identity, self.expected_sha256)
+            .map_err(|_| AndroidSafGrantError::Unavailable)?;
+        let mut child = Command::new(&self.path)
+            .args(["obscure", "-"])
+            .env_clear()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|_| AndroidSafGrantError::Unavailable)?;
+        let Some(mut stdin) = child.stdin.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(AndroidSafGrantError::Unavailable);
+        };
+        stdin
+            .write_all(password.as_bytes())
+            .and_then(|()| stdin.write_all(b"\n"))
+            .map_err(|_| AndroidSafGrantError::Unavailable)?;
+        drop(stdin);
+        let output = child
+            .wait_with_output()
+            .map_err(|_| AndroidSafGrantError::Unavailable)?;
+        if !output.status.success() || output.stdout.len() > 4097 {
+            return Err(AndroidSafGrantError::Unavailable);
+        }
+        let value =
+            String::from_utf8(output.stdout).map_err(|_| AndroidSafGrantError::Unavailable)?;
+        let value = value.strip_suffix('\n').unwrap_or(&value);
+        if value.is_empty()
+            || value.len() > 4096
+            || value.bytes().any(|byte| matches!(byte, b'\r' | b'\n' | 0))
+        {
+            return Err(AndroidSafGrantError::Unavailable);
+        }
+        Ok(Zeroizing::new(value.to_owned()))
+    }
+}
+
 /// A manifest-pinned executable opened through an `O_NOFOLLOW` descriptor.
 /// The descriptor is retained for the lifetime of this value so the initial
 /// digest is of the object that was actually opened, not a later path lookup.
@@ -77,6 +134,7 @@ pub struct VerifiedEngineExecutable {
     file: File,
     identity: FileIdentity,
     expected_sha256: [u8; 32],
+    android_saf_grants: AndroidSafGrantRegistry,
 }
 
 impl fmt::Debug for VerifiedEngineExecutable {
@@ -129,11 +187,17 @@ impl VerifiedEngineExecutable {
         }
         file.seek(SeekFrom::Start(0))
             .map_err(|_| EngineSupervisorError::InvalidExecutable)?;
+        let obscurer = Arc::new(ExecutableObscurer {
+            path: path.clone(),
+            identity,
+            expected_sha256,
+        });
         Ok(Self {
             path,
             file,
             identity,
             expected_sha256,
+            android_saf_grants: AndroidSafGrantRegistry::with_obscurer(obscurer),
         })
     }
 
@@ -155,6 +219,12 @@ impl VerifiedEngineExecutable {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Runtime-only SAF grants associated with this verified worker handle.
+    #[must_use]
+    pub fn android_saf_grants(&self) -> AndroidSafGrantRegistry {
+        self.android_saf_grants.clone()
     }
 
     /// Recheck the pinned object immediately before constructing the child.
@@ -204,6 +274,46 @@ impl VerifiedEngineExecutable {
         }
         Ok(())
     }
+
+    pub(super) fn recheck(&self) -> Result<(), EngineSupervisorError> {
+        self.recheck_at_spawn()
+    }
+
+    pub(super) fn try_clone(&self) -> Result<Self, EngineSupervisorError> {
+        Ok(Self {
+            path: self.path.clone(),
+            file: self
+                .file
+                .try_clone()
+                .map_err(|_| EngineSupervisorError::InvalidExecutable)?,
+            identity: self.identity,
+            expected_sha256: self.expected_sha256,
+            android_saf_grants: self.android_saf_grants.clone(),
+        })
+    }
+}
+
+fn recheck_path(
+    path: &Path,
+    expected_identity: FileIdentity,
+    expected_sha256: [u8; 32],
+) -> Result<(), EngineSupervisorError> {
+    let mut current = open_nofollow(path).map_err(|_| EngineSupervisorError::ExecutableChanged)?;
+    let metadata = current
+        .metadata()
+        .map_err(|_| EngineSupervisorError::ExecutableChanged)?;
+    validate_executable_metadata(&metadata)?;
+    if (FileIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    }) != expected_identity
+        || digest_file(&mut current, MAX_EXECUTABLE_BYTES)
+            .map_err(|_| EngineSupervisorError::ExecutableChanged)?
+            != expected_sha256
+    {
+        return Err(EngineSupervisorError::ExecutableChanged);
+    }
+    Ok(())
 }
 
 /// Result of asking the guardian to stop. `StillStopping` is intentionally not
@@ -224,6 +334,32 @@ pub struct OwnedEngineWorker {
     terminal_status: Option<ExitStatus>,
 }
 
+/// A guarded one-shot rclone command. Dropping this value, including through
+/// async cancellation, closes the guardian lifeline. Capture threads continue
+/// draining bounded output until the exact guardian child has been reaped.
+pub(super) struct OwnedRcloneCommand {
+    worker: OwnedEngineWorker,
+    stdout: oneshot::Receiver<Result<BoundedOutput, EngineSupervisorError>>,
+    stderr: oneshot::Receiver<Result<BoundedOutput, EngineSupervisorError>>,
+}
+
+pub(super) struct RcloneCommandOutput {
+    pub(super) status: ExitStatus,
+    pub(super) stdout: Vec<u8>,
+    pub(super) stderr: Vec<u8>,
+}
+
+struct SpawnedRclone {
+    worker: OwnedEngineWorker,
+    stdout: Option<ChildStdout>,
+    stderr: Option<ChildStderr>,
+}
+
+struct BoundedOutput {
+    bytes: Vec<u8>,
+    exceeded_limit: bool,
+}
+
 impl fmt::Debug for OwnedEngineWorker {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("OwnedEngineWorker([PRIVATE])")
@@ -231,6 +367,102 @@ impl fmt::Debug for OwnedEngineWorker {
 }
 
 impl OwnedEngineWorker {
+    /// Launch a verified rclone receiver through the same exact guardian and
+    /// reaper contract. Arguments and environment come only from controller
+    /// validated values.
+    pub(super) fn launch_rclone(
+        guardian: &VerifiedEngineExecutable,
+        engine: &VerifiedEngineExecutable,
+        args: &[OsString],
+        environment: &[(OsString, OsString)],
+        runtime_dir: &Path,
+        keepalive: WorkerKeepalive,
+    ) -> Result<Self, EngineSupervisorError> {
+        Ok(Self::launch_rclone_common(
+            guardian,
+            engine,
+            args,
+            environment,
+            runtime_dir,
+            false,
+            keepalive,
+        )?
+        .worker)
+    }
+
+    fn launch_rclone_common(
+        guardian: &VerifiedEngineExecutable,
+        engine: &VerifiedEngineExecutable,
+        args: &[OsString],
+        environment: &[(OsString, OsString)],
+        runtime_dir: &Path,
+        capture_output: bool,
+        keepalive: WorkerKeepalive,
+    ) -> Result<SpawnedRclone, EngineSupervisorError> {
+        guardian.recheck_at_spawn()?;
+        engine.recheck_at_spawn()?;
+        let runtime_dir = fs::canonicalize(runtime_dir)
+            .map_err(|_| EngineSupervisorError::InvalidRuntimeDirectory)?;
+        canonical_private_directory(&runtime_dir)?;
+        let (child_tx, child_rx) = mpsc::sync_channel::<(Child, WorkerKeepalive)>(1);
+        let (result_tx, result_rx) = oneshot::channel();
+        spawn_reaper(child_rx, result_tx)?;
+        let mut command = Command::new(guardian.path());
+        command
+            .arg("--grace-ms")
+            .arg(GUARDIAN_GRACE_MS)
+            .arg("--")
+            .arg(engine.path())
+            .args(args)
+            .env_clear()
+            .envs(environment.iter().cloned())
+            .env("TMPDIR", &runtime_dir)
+            .env("GOMAXPROCS", "2")
+            .current_dir(&runtime_dir)
+            .stdin(Stdio::piped());
+        if capture_output {
+            command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        } else {
+            command.stdout(Stdio::null()).stderr(Stdio::null());
+        }
+        #[cfg(not(target_os = "android"))]
+        if let Some(home) = std::env::var_os("HOME")
+            .filter(|home| !home.is_empty())
+            .map(PathBuf::from)
+            .filter(|home| home.is_absolute() && home.is_dir())
+        {
+            command.env("HOME", home);
+        }
+        let mut child = command
+            .spawn()
+            .map_err(|_| EngineSupervisorError::SpawnFailed)?;
+        let lifeline = child
+            .stdin
+            .take()
+            .ok_or(EngineSupervisorError::SpawnFailed)?;
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        if capture_output && (stdout.is_none() || stderr.is_none()) {
+            reap_after_handoff_failure(&mut child, Some(lifeline), keepalive);
+            return Err(EngineSupervisorError::SpawnFailed);
+        }
+        if let Err(error) = child_tx.send((child, keepalive)) {
+            let (mut child, keepalive) = error.0;
+            reap_after_handoff_failure(&mut child, Some(lifeline), keepalive);
+            return Err(EngineSupervisorError::ReaperUnavailable);
+        }
+        Ok(SpawnedRclone {
+            worker: Self {
+                lifeline: Some(lifeline),
+                reaped: Some(result_rx),
+                stop_started: false,
+                terminal_status: None,
+            },
+            stdout,
+            stderr,
+        })
+    }
+
     /// Launch the exact verified guardian and engine with the fixed worker
     /// contract. Runtime files are existing controller-owned inputs; this
     /// primitive never creates defaults or removes them.
@@ -392,6 +624,78 @@ impl OwnedEngineWorker {
     pub fn stop_started(&self) -> bool {
         self.stop_started
     }
+
+    async fn wait_for_exit(mut self) -> Result<ExitStatus, EngineSupervisorError> {
+        let receiver = self
+            .reaped
+            .as_mut()
+            .ok_or(EngineSupervisorError::ReaperUnavailable)?;
+        let status = receiver
+            .await
+            .map_err(|_| EngineSupervisorError::ReaperUnavailable)??;
+        self.terminal_status = Some(status);
+        self.reaped.take();
+        Ok(status)
+    }
+}
+
+impl OwnedRcloneCommand {
+    pub(super) fn launch(
+        guardian: &VerifiedEngineExecutable,
+        engine: &VerifiedEngineExecutable,
+        args: &[OsString],
+        environment: &[(OsString, OsString)],
+        runtime_dir: &Path,
+        max_output_bytes: u64,
+        keepalive: WorkerKeepalive,
+    ) -> Result<Self, EngineSupervisorError> {
+        let spawned = OwnedEngineWorker::launch_rclone_common(
+            guardian,
+            engine,
+            args,
+            environment,
+            runtime_dir,
+            true,
+            keepalive,
+        )?;
+        let stdout = spawn_bounded_output_reader(
+            "covalent-rclone-stdout",
+            spawned.stdout.ok_or(EngineSupervisorError::SpawnFailed)?,
+            max_output_bytes,
+        )?;
+        let stderr = spawn_bounded_output_reader(
+            "covalent-rclone-stderr",
+            spawned.stderr.ok_or(EngineSupervisorError::SpawnFailed)?,
+            max_output_bytes,
+        )?;
+        Ok(Self {
+            worker: spawned.worker,
+            stdout,
+            stderr,
+        })
+    }
+
+    /// Wait for natural command completion. This keeps the lifeline open while
+    /// waiting; cancellation drops `self` and closes it through the worker.
+    pub(super) async fn wait(self) -> Result<RcloneCommandOutput, EngineSupervisorError> {
+        let Self {
+            worker,
+            stdout,
+            stderr,
+        } = self;
+        let status = worker.wait_for_exit().await?;
+        let (stdout, stderr) = tokio::join!(stdout, stderr);
+        let stdout = stdout.map_err(|_| EngineSupervisorError::WaitFailed)??;
+        let stderr = stderr.map_err(|_| EngineSupervisorError::WaitFailed)??;
+        if stdout.exceeded_limit || stderr.exceeded_limit {
+            return Err(EngineSupervisorError::OutputTooLarge);
+        }
+        Ok(RcloneCommandOutput {
+            status,
+            stdout: stdout.bytes,
+            stderr: stderr.bytes,
+        })
+    }
 }
 
 impl Drop for OwnedEngineWorker {
@@ -438,6 +742,42 @@ fn wait_until_reaped(child: &mut Child) -> ExitStatus {
             Err(_) => thread::sleep(Duration::from_millis(100)),
         }
     }
+}
+
+fn spawn_bounded_output_reader<R: Read + Send + 'static>(
+    name: &str,
+    mut reader: R,
+    max_output_bytes: u64,
+) -> Result<oneshot::Receiver<Result<BoundedOutput, EngineSupervisorError>>, EngineSupervisorError>
+{
+    let (result_tx, result_rx) = oneshot::channel();
+    thread::Builder::new()
+        .name(name.to_owned())
+        .spawn(move || {
+            let mut bytes = Vec::with_capacity(max_output_bytes.min(8192) as usize);
+            let mut buffer = [0_u8; 8192];
+            let mut exceeded_limit = false;
+            loop {
+                let count = match reader.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(count) => count,
+                    Err(_) => {
+                        let _ = result_tx.send(Err(EngineSupervisorError::WaitFailed));
+                        return;
+                    }
+                };
+                let remaining = max_output_bytes.saturating_sub(bytes.len() as u64);
+                let retained = (count as u64).min(remaining) as usize;
+                bytes.extend_from_slice(&buffer[..retained]);
+                exceeded_limit |= count > retained;
+            }
+            let _ = result_tx.send(Ok(BoundedOutput {
+                bytes,
+                exceeded_limit,
+            }));
+        })
+        .map_err(|_| EngineSupervisorError::ReaperUnavailable)?;
+    Ok(result_rx)
 }
 
 fn validate_runtime_inputs(

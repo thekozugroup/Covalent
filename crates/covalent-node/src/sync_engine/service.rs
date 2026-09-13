@@ -216,6 +216,28 @@ enum SessionStop {
 }
 
 impl Launcher {
+    fn validate_selected_root(&self, selected_root: &Path) -> Result<(), FolderSyncServiceError> {
+        let Some(_) = super::android_saf::parse_token(selected_root)
+            .map_err(|_| FolderSyncServiceError::InvalidConfiguration)?
+        else {
+            return Ok(());
+        };
+        match self {
+            Self::Production(launcher) => launcher
+                .engine
+                .android_saf_grants()
+                .contains_token(selected_root)
+                .map_err(|_| FolderSyncServiceError::InvalidConfiguration)
+                .and_then(|present| {
+                    present
+                        .then_some(())
+                        .ok_or(FolderSyncServiceError::InvalidConfiguration)
+                }),
+            #[cfg(test)]
+            Self::Test(_) => Err(FolderSyncServiceError::InvalidConfiguration),
+        }
+    }
+
     async fn launch(
         &self,
         settings: EngineSessionSettings,
@@ -258,9 +280,13 @@ impl Session {
     async fn run_observation(
         &mut self,
         folder: Uuid,
+        expected: Option<&super::EngineIndexSnapshot>,
     ) -> Result<super::run_observation::EngineRunObservation, ()> {
         match self {
-            Self::Production(session) => session.run_observation(folder).await.map_err(|_| ()),
+            Self::Production(session) => session
+                .run_observation(folder, expected)
+                .await
+                .map_err(|_| ()),
             #[cfg(test)]
             Self::Test(session) => session.run_observation(folder),
         }
@@ -528,6 +554,7 @@ impl FolderSyncService {
         selected_root: &Path,
         now: u64,
     ) -> Result<CommittedMutation<FolderShareOffer>, FolderSyncServiceError> {
+        self.shared.launcher.validate_selected_root(selected_root)?;
         self.mutate(|journal| journal.offer(peer_id, folder_id, label, selected_root, now))
             .await
     }
@@ -541,6 +568,7 @@ impl FolderSyncService {
         now: u64,
         policy: Option<covalent_protocol::FolderLinkPolicy>,
     ) -> Result<CommittedMutation<FolderShareOffer>, FolderSyncServiceError> {
+        self.shared.launcher.validate_selected_root(selected_root)?;
         self.mutate(|journal| {
             journal.offer_with_policy(peer_id, folder_id, label, selected_root, now, policy)
         })
@@ -556,6 +584,7 @@ impl FolderSyncService {
         now: u64,
         settings: super::FolderLinkSettings,
     ) -> Result<CommittedMutation<FolderShareOffer>, FolderSyncServiceError> {
+        self.shared.launcher.validate_selected_root(selected_root)?;
         self.mutate(|journal| {
             journal.offer_with_settings(peer_id, folder_id, label, selected_root, now, settings)
         })
@@ -686,6 +715,7 @@ impl FolderSyncService {
         selected_root: &Path,
         now: u64,
     ) -> Result<CommittedMutation<FolderShareAcceptance>, FolderSyncServiceError> {
+        self.shared.launcher.validate_selected_root(selected_root)?;
         self.mutate(|journal| journal.accept(offer_id, selected_root, now))
             .await
     }
@@ -789,6 +819,7 @@ impl FolderSyncService {
         offer_id: Uuid,
         selected_root: &Path,
     ) -> Result<CommittedMutation<()>, FolderSyncServiceError> {
+        self.shared.launcher.validate_selected_root(selected_root)?;
         let mut inner = self.try_inner()?;
         let before_revision = inner.journal.revision();
         let prepared = match inner.journal.prepare_root_repair(offer_id, selected_root) {
@@ -1560,7 +1591,11 @@ async fn advance_run_completion(shared: &ServiceShared, inner: &mut ServiceInner
         let Some(session) = &mut inner.session else {
             return;
         };
-        let Ok(observed) = session.run_observation(folder_id).await else {
+        let expected = match &item {
+            super::LinkRunWorkItem::PrepareSource { .. } => None,
+            super::LinkRunWorkItem::ObserveDestination { source_index, .. } => Some(source_index),
+        };
+        let Ok(observed) = session.run_observation(folder_id, expected).await else {
             continue;
         };
         let outcome = match item {
@@ -1571,7 +1606,7 @@ async fn advance_run_completion(shared: &ServiceShared, inner: &mut ServiceInner
                 // The worker reads local IndexID and sequence separately. Two
                 // identical healthy samples after this generation's positive
                 // full scan prevent combining values from an index reset.
-                let Ok(second) = session.run_observation(folder_id).await else {
+                let Ok(second) = session.run_observation(folder_id, None).await else {
                     continue;
                 };
                 if second.local_index.as_ref() != Some(&first)
@@ -1585,20 +1620,17 @@ async fn advance_run_completion(shared: &ServiceShared, inner: &mut ServiceInner
                     .map(|_| ())
             }
             super::LinkRunWorkItem::ObserveDestination {
-                source_id,
+                source_id: _,
                 source_engine_id,
                 source_index,
                 ..
             } => {
-                if inner.connection_freshness != PeerConnectionFreshness::Fresh
-                    || inner.peer_connections.get(&source_id)
-                        != Some(&PeerConnectionState::Connected)
-                    || !observed
-                        .completions
-                        .get(&source_engine_id)
-                        .is_some_and(|index| index.reaches(&source_index))
-                    || !run_still_active(inner, folder_id, generation)
-                {
+                let Some(result) =
+                    destination_observation_result(&observed, &source_engine_id, &source_index)
+                else {
+                    continue;
+                };
+                if !run_still_active(inner, folder_id, generation) {
                     continue;
                 }
                 inner
@@ -1607,7 +1639,7 @@ async fn advance_run_completion(shared: &ServiceShared, inner: &mut ServiceInner
                         folder_id,
                         generation,
                         source_index,
-                        super::LinkRunDestinationResult::Succeeded,
+                        result,
                         crate::now_unix_ms(),
                     )
                     .map(|_| ())
@@ -1629,6 +1661,24 @@ async fn advance_run_completion(shared: &ServiceShared, inner: &mut ServiceInner
     }
     if changed {
         reconcile_committed(shared, inner).await;
+    }
+}
+
+pub(super) fn destination_observation_result(
+    observed: &super::run_observation::EngineRunObservation,
+    source: &super::config::EngineDeviceId,
+    expected: &super::EngineIndexSnapshot,
+) -> Option<super::LinkRunDestinationResult> {
+    if observed
+        .completions
+        .get(source)
+        .is_some_and(|index| index.reaches(expected))
+    {
+        Some(super::LinkRunDestinationResult::Succeeded)
+    } else if observed.failures.contains(source) {
+        Some(super::LinkRunDestinationResult::Failed)
+    } else {
+        None
     }
 }
 

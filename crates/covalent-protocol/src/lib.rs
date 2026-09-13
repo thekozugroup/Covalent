@@ -446,6 +446,12 @@ pub enum SyncEngineBindingError {
     /// The engine identity was not exact canonical Base32 with valid checks.
     #[error("invalid folder-sync engine identity")]
     InvalidDeviceId,
+    /// A current transfer binding must authenticate one SSH Ed25519 key.
+    #[error("folder-sync pairing must be upgraded")]
+    MissingSshPublicKey,
+    /// The SSH public key was not one canonical Ed25519 wire blob.
+    #[error("invalid folder-sync SSH identity")]
+    InvalidSshPublicKey,
     /// The direct endpoint was not one unambiguous canonical socket address.
     #[error("invalid folder-sync engine endpoint")]
     InvalidEndpoint,
@@ -583,6 +589,10 @@ pub struct SyncEngineBinding {
     pub covalent_device_id: DeviceId,
     /// Canonical public Syncthing certificate identity.
     pub engine_device_id: SyncEngineDeviceId,
+    /// Canonical base64 SSH Ed25519 wire blob. Missing only in legacy records,
+    /// which remain readable but cannot authorize a current transfer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_public_key: Option<String>,
     /// Canonical numeric socket address used for direct TCP synchronization.
     pub direct_address: String,
 }
@@ -603,8 +613,22 @@ impl SyncEngineBinding {
             schema_version: FOLDER_SHARE_SCHEMA_VERSION,
             covalent_device_id,
             engine_device_id,
+            ssh_public_key: None,
             direct_address: direct_address.to_owned(),
         })
+    }
+
+    /// Construct a current binding that cryptographically names its SFTP key.
+    pub fn new_authenticated(
+        covalent_device_id: DeviceId,
+        engine_device_id: &str,
+        ssh_public_key: &str,
+        direct_address: &str,
+    ) -> Result<Self, SyncEngineBindingError> {
+        let mut binding = Self::new(covalent_device_id, engine_device_id, direct_address)?;
+        validate_ssh_ed25519_wire(ssh_public_key)?;
+        binding.ssh_public_key = Some(ssh_public_key.to_owned());
+        Ok(binding)
     }
 
     /// Revalidate an untrusted decoded binding.
@@ -618,8 +642,38 @@ impl SyncEngineBinding {
         // The strongly typed identity validates during decoding, but repeat the
         // check so a future internal constructor cannot bypass canonical form.
         SyncEngineDeviceId::parse(self.engine_device_id.as_str())?;
+        if let Some(key) = &self.ssh_public_key {
+            validate_ssh_ed25519_wire(key)?;
+        }
         validate_sync_engine_endpoint(&self.direct_address)
     }
+
+    /// Return the authenticated transfer key. Legacy bindings fail closed and
+    /// require the peers to pair again.
+    pub fn require_ssh_public_key(&self) -> Result<&str, SyncEngineBindingError> {
+        let key = self
+            .ssh_public_key
+            .as_deref()
+            .ok_or(SyncEngineBindingError::MissingSshPublicKey)?;
+        validate_ssh_ed25519_wire(key)?;
+        Ok(key)
+    }
+}
+
+fn validate_ssh_ed25519_wire(value: &str) -> Result<(), SyncEngineBindingError> {
+    use base64::Engine as _;
+
+    const PREFIX: &[u8] = b"\0\0\0\x0bssh-ed25519\0\0\0\x20";
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(value)
+        .map_err(|_| SyncEngineBindingError::InvalidSshPublicKey)?;
+    if decoded.len() != PREFIX.len() + 32
+        || !decoded.starts_with(PREFIX)
+        || base64::engine::general_purpose::STANDARD.encode(&decoded) != value
+    {
+        return Err(SyncEngineBindingError::InvalidSshPublicKey);
+    }
+    Ok(())
 }
 
 fn validate_sync_engine_endpoint(value: &str) -> Result<SocketAddr, SyncEngineBindingError> {

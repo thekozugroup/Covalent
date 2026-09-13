@@ -19,17 +19,14 @@ const MAX_RUNTIME_PARENT_BYTES: usize = 900;
 const RUNTIME_DIRECTORY_NAME: &str = "cvs";
 const MANIFEST_RELATIVE_PATH: &str = "../Resources/CovalentSyncEngine/manifest.json";
 const GUARDIAN_NAME: &str = "covalent-engine-guardian";
-const WORKER_NAME: &str = "covalent-syncthing";
+const WORKER_NAME: &str = "covalent-rclone";
 const ENGINE_LISTENER_PORT: u16 = 8789;
 
-const ENGINE_VERSION: &str = "v2.1.3";
-const ENGINE_COMMIT: &str = "946e2b83a1f6c6ae119427c09e0a5802940b82ff";
-const SOURCE_ARCHIVE_SHA256: &str =
-    "dbcc9498602286a843f29a7104833bd1422082999aa51ff92eef493172d47959";
-const SOURCE_EXPORT_SHA256: &str =
-    "eb60efd57d1662af75ffb2f7b89abab7200362c654838486138a34bee00fed29";
+const ENGINE_VERSION: &str = "v1.75.1";
+const ENGINE_COMMIT: &str = "687d264b689b8c49a67e2e52a8a5e0caa01c04ce";
+const SOURCE_STATE: &str = "upstream-unmodified";
 const UNSIGNED_ENGINE_SHA256: &str =
-    "9545a14bcc3116123233a7b5b1c62700f74fea1160ae95e3f9138dec54e62014";
+    "d606a368fe4b83b81080aa9913d9f24b382c601e995d25f63ab80a49e2c8dee9";
 const GUARDIAN_SOURCE_SHA256: &str =
     "c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579";
 
@@ -102,7 +99,7 @@ fn discover_at(
     )
     .map_err(|_| MacHostError::InvalidPackage)?;
     let worker_digest = VerifiedEngineExecutable::parse_sha256_hex(
-        &parsed.executables.covalent_syncthing.signed_sha256,
+        &parsed.executables.covalent_rclone.signed_sha256,
     )
     .map_err(|_| MacHostError::InvalidPackage)?;
     let guardian = VerifiedEngineExecutable::open(guardian, guardian_digest)
@@ -233,30 +230,27 @@ fn read_manifest(path: &Path) -> Result<PackageManifest, MacHostError> {
 
 fn validate_manifest(manifest: &PackageManifest) -> Result<(), MacHostError> {
     if manifest.schema != 1
-        || manifest.engine.name != "Syncthing"
+        || manifest.engine.name != "rclone"
         || manifest.engine.version != ENGINE_VERSION
         || manifest.engine.commit != ENGINE_COMMIT
-        || manifest.engine.upstream_archive_sha256 != SOURCE_ARCHIVE_SHA256
-        || manifest.engine.source_export_sha256 != SOURCE_EXPORT_SHA256
+        || manifest.engine.source_state != SOURCE_STATE
         || manifest.engine.go_version != "go1.26.7"
         || manifest.engine.unsigned_executable_sha256 != UNSIGNED_ENGINE_SHA256
         || manifest.guardian.source_sha256 != GUARDIAN_SOURCE_SHA256
         || manifest.executables.covalent_engine_guardian.architecture != "arm64"
-        || manifest.executables.covalent_syncthing.architecture != "arm64"
+        || manifest.executables.covalent_rclone.architecture != "arm64"
         || manifest.notices.provenance
-            != "d41289725ed1e7c76eda0cc6a3f44c5f7bebd07d578fe6c546bc04911e46ac5e"
-        || manifest.notices.authors
-            != "5a0044d13ddf6f013bdd5c2bc419bf45d6123c356567510237e82f304d113d48"
+            != "ce9886f37cd7bc7b62e755375f0d5f23d5f97f60670f6f857dac632b33f5e0ef"
         || manifest.notices.license
-            != "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04"
+            != "9266eae9c6a441de0f6847f19ac8f09b280d55612b079eca03b3d49b822c1a71"
         || manifest.notices.source_build
-            != "1b4a74cb976130a4bea7d4f059b3bdd282c09ed44507b1671e0256385ed35164"
+            != "122b3ee828fb92c7149346ab02f306e53f6633cb907c5d05d7deac44ac307a2d"
         || manifest.notices.index
-            != "545bed4faff39aebfe587e80cc439c15d407e3a8de721e319d9832129ac7304f"
+            != "59ab37c92bac32b1b3533ce8be192c282c9b7d25a81f03b2f63b7651faa4ab51"
         || manifest.notices.target_manifest
-            != "85dca7cc49ffe72b75e5dc0ba49191384cf724816972e4514e2f075fed5f8b31"
+            != "9a624a53020218aea6927c2baa254daa7ce9099c83eeddcfed371001e889bd6d"
         || manifest.notices.combined
-            != "1428276dd703546c78b86c210b61b74c7ebe64fe5ee2def57fe4c8f2d4673d52"
+            != "9374aa12dc9da1416da235f6a664b6b5817081adf00b94a13d2c58d4a8ca68d4"
     {
         return Err(MacHostError::InvalidPackage);
     }
@@ -279,8 +273,7 @@ struct EngineRecord {
     name: String,
     version: String,
     commit: String,
-    upstream_archive_sha256: String,
-    source_export_sha256: String,
+    source_state: String,
     go_version: String,
     unsigned_executable_sha256: String,
 }
@@ -296,9 +289,7 @@ struct GuardianRecord {
 struct NoticeRecord {
     #[serde(rename = "PROVENANCE.txt")]
     provenance: String,
-    #[serde(rename = "Syncthing-AUTHORS.txt")]
-    authors: String,
-    #[serde(rename = "Syncthing-LICENSE.txt")]
+    #[serde(rename = "rclone-LICENSE.txt")]
     license: String,
     #[serde(rename = "source-build.json")]
     source_build: String,
@@ -315,8 +306,8 @@ struct NoticeRecord {
 struct ExecutableInventory {
     #[serde(rename = "covalent-engine-guardian")]
     covalent_engine_guardian: ExecutableRecord,
-    #[serde(rename = "covalent-syncthing")]
-    covalent_syncthing: ExecutableRecord,
+    #[serde(rename = "covalent-rclone")]
+    covalent_rclone: ExecutableRecord,
 }
 
 #[derive(Deserialize)]
@@ -370,23 +361,21 @@ mod tests {
         let manifest = serde_json::json!({
             "schema": 1,
             "engine": {
-                "name": "Syncthing",
+                "name": "rclone",
                 "version": ENGINE_VERSION,
                 "commit": ENGINE_COMMIT,
-                "upstreamArchiveSha256": SOURCE_ARCHIVE_SHA256,
-                "sourceExportSha256": SOURCE_EXPORT_SHA256,
+                "sourceState": SOURCE_STATE,
                 "goVersion": "go1.26.7",
                 "unsignedExecutableSha256": UNSIGNED_ENGINE_SHA256,
             },
             "guardian": { "sourceSha256": GUARDIAN_SOURCE_SHA256 },
             "notices": {
-                "PROVENANCE.txt": "d41289725ed1e7c76eda0cc6a3f44c5f7bebd07d578fe6c546bc04911e46ac5e",
-                "Syncthing-AUTHORS.txt": "5a0044d13ddf6f013bdd5c2bc419bf45d6123c356567510237e82f304d113d48",
-                "Syncthing-LICENSE.txt": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
-                "source-build.json": "1b4a74cb976130a4bea7d4f059b3bdd282c09ed44507b1671e0256385ed35164",
-                "notices-index.txt": "545bed4faff39aebfe587e80cc439c15d407e3a8de721e319d9832129ac7304f",
-                "notices/manifest.json": "85dca7cc49ffe72b75e5dc0ba49191384cf724816972e4514e2f075fed5f8b31",
-                "notices/THIRD-PARTY-NOTICES.txt": "1428276dd703546c78b86c210b61b74c7ebe64fe5ee2def57fe4c8f2d4673d52",
+                "PROVENANCE.txt": "ce9886f37cd7bc7b62e755375f0d5f23d5f97f60670f6f857dac632b33f5e0ef",
+                "rclone-LICENSE.txt": "9266eae9c6a441de0f6847f19ac8f09b280d55612b079eca03b3d49b822c1a71",
+                "source-build.json": "122b3ee828fb92c7149346ab02f306e53f6633cb907c5d05d7deac44ac307a2d",
+                "notices-index.txt": "59ab37c92bac32b1b3533ce8be192c282c9b7d25a81f03b2f63b7651faa4ab51",
+                "notices/manifest.json": "9a624a53020218aea6927c2baa254daa7ce9099c83eeddcfed371001e889bd6d",
+                "notices/THIRD-PARTY-NOTICES.txt": "9374aa12dc9da1416da235f6a664b6b5817081adf00b94a13d2c58d4a8ca68d4",
             },
             "executables": {
                 GUARDIAN_NAME: { "architecture": "arm64", "signedSha256": signed },
@@ -455,10 +444,10 @@ mod tests {
     #[test]
     fn every_source_build_and_notice_binding_is_required() {
         for path in [
-            "/engine/upstreamArchiveSha256",
-            "/engine/sourceExportSha256",
+            "/engine/sourceState",
             "/engine/goVersion",
             "/engine/unsignedExecutableSha256",
+            "/notices/rclone-LICENSE.txt",
             "/notices/source-build.json",
             "/notices/notices-index.txt",
             "/notices/notices~1manifest.json",
