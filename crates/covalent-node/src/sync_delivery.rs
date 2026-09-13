@@ -1,6 +1,6 @@
 //! Bounded, restartable delivery of already durable folder-consent records.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -27,7 +27,13 @@ struct DeliveryCursor {
 }
 
 impl DeliveryCursor {
-    fn batch(&mut self, deliveries: Vec<FolderShareDelivery>, now: u64) -> Vec<Pending> {
+    fn batch(
+        &mut self,
+        deliveries: Vec<FolderShareDelivery>,
+        now: u64,
+        busy_peers: &BTreeSet<DeviceId>,
+        limit: usize,
+    ) -> Vec<Pending> {
         let mut retained = BTreeSet::new();
         let mut per_peer = BTreeMap::new();
         for delivery in deliveries {
@@ -44,7 +50,9 @@ impl DeliveryCursor {
             };
             let key = *blake3::hash(&bytes).as_bytes();
             retained.insert(key);
-            if !self.acknowledged.contains(&key) {
+            if !busy_peers.contains(&delivery.peer_transport.peer_id)
+                && !self.acknowledged.contains(&key)
+            {
                 per_peer
                     .entry(delivery.peer_transport.peer_id)
                     .or_insert(Pending { key, delivery });
@@ -59,7 +67,7 @@ impl DeliveryCursor {
             peers.partition_point(|id| *id <= last) % peers.len()
         });
         let mut selected = Vec::new();
-        for offset in 0..MAX_PEERS_PER_BATCH.min(peers.len()) {
+        for offset in 0..MAX_PEERS_PER_BATCH.min(limit).min(peers.len()) {
             let peer = peers[(start + offset) % peers.len()];
             self.last_peer = Some(peer);
             if let Some(pending) = per_peer.remove(&peer) {
@@ -78,47 +86,70 @@ pub(crate) async fn run(
     let mut interval = tokio::time::interval(CADENCE);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut cursor = DeliveryCursor::default();
+    let mut requests = JoinSet::new();
+    let mut request_peers = HashMap::new();
+    let mut busy_peers = BTreeSet::new();
     loop {
         if *shutdown.borrow() {
+            abort_and_reap(&mut requests).await;
             return;
         }
         tokio::select! {
             changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() { return; }
+                if changed.is_err() || *shutdown.borrow() {
+                    abort_and_reap(&mut requests).await;
+                    return;
+                }
+            }
+            result = requests.join_next_with_id(), if !requests.is_empty() => {
+                let Some(result) = result else { continue; };
+                let (id, key) = match result {
+                    Ok((id, key)) => (id, key),
+                    Err(error) => (error.id(), None),
+                };
+                if let Some(peer) = request_peers.remove(&id) {
+                    busy_peers.remove(&peer);
+                }
+                if let Some(key) = key {
+                    cursor.acknowledged.insert(key);
+                }
             }
             _ = interval.tick() => {
+                let capacity = MAX_PEERS_PER_BATCH.saturating_sub(requests.len());
+                if capacity == 0 {
+                    continue;
+                }
                 let records = tokio::select! {
-                    changed = shutdown.changed() => { let _ = changed; return; }
+                    changed = shutdown.changed() => {
+                        let _ = changed;
+                        abort_and_reap(&mut requests).await;
+                        return;
+                    }
                     records = service.outbound_records() => records,
                 };
                 let Ok(records) = records else { continue; };
-                let batch = cursor.batch(records.into_value(), crate::now_unix_ms());
-                let mut requests = JoinSet::new();
+                let batch = cursor.batch(
+                    records.into_value(),
+                    crate::now_unix_ms(),
+                    &busy_peers,
+                    capacity,
+                );
                 for pending in batch {
+                    let peer = pending.delivery.peer_transport.peer_id;
                     let engine = Arc::clone(&engine);
                     let service = Arc::clone(&service);
-                    requests.spawn(async move {
-                        deliver(engine, service, pending).await
-                    });
-                }
-                while !requests.is_empty() {
-                    tokio::select! {
-                        changed = shutdown.changed() => {
-                            let _ = changed;
-                            requests.abort_all();
-                            while requests.join_next().await.is_some() {}
-                            return;
-                        }
-                        result = requests.join_next() => {
-                            if let Some(Ok(Some(key))) = result {
-                                cursor.acknowledged.insert(key);
-                            }
-                        }
-                    }
+                    let handle = requests.spawn(async move { deliver(engine, service, pending).await });
+                    request_peers.insert(handle.id(), peer);
+                    busy_peers.insert(peer);
                 }
             }
         }
     }
+}
+
+async fn abort_and_reap<T: 'static>(requests: &mut JoinSet<T>) {
+    requests.abort_all();
+    while requests.join_next().await.is_some() {}
 }
 
 async fn deliver(
@@ -231,6 +262,7 @@ async fn deliver(
 mod tests {
     use super::*;
     use covalent_protocol::{FolderShareCommit, TransportBinding};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use uuid::Uuid;
 
     fn delivery(peer: DeviceId, offer_id: Uuid) -> FolderShareDelivery {
@@ -261,8 +293,8 @@ mod tests {
             .map(|i| delivery(DeviceId::from_uuid(Uuid::from_u128(i)), Uuid::new_v4()))
             .collect::<Vec<_>>();
         let mut cursor = DeliveryCursor::default();
-        let first = cursor.batch(deliveries.clone(), 1);
-        let second = cursor.batch(deliveries.clone(), 2);
+        let first = cursor.batch(deliveries.clone(), 1, &BTreeSet::new(), usize::MAX);
+        let second = cursor.batch(deliveries.clone(), 2, &BTreeSet::new(), 4);
         assert_eq!(first.len(), 4);
         assert_eq!(second.len(), 4);
         let first_peers = first
@@ -277,9 +309,74 @@ mod tests {
         cursor
             .acknowledged
             .extend(first.iter().chain(second.iter()).map(|item| item.key));
-        assert!(cursor.batch(deliveries.clone(), 3).is_empty());
-        assert_eq!(DeliveryCursor::default().batch(deliveries, 4).len(), 4);
-        assert!(cursor.batch(Vec::new(), 5).is_empty());
+        assert!(
+            cursor
+                .batch(deliveries.clone(), 3, &BTreeSet::new(), 4)
+                .is_empty()
+        );
+        assert_eq!(
+            DeliveryCursor::default()
+                .batch(deliveries, 4, &BTreeSet::new(), 4)
+                .len(),
+            4
+        );
+        assert!(cursor.batch(Vec::new(), 5, &BTreeSet::new(), 4).is_empty());
         assert!(cursor.acknowledged.is_empty());
+    }
+
+    #[test]
+    fn busy_peer_does_not_block_later_records_for_a_ready_peer() {
+        let slow = DeviceId::from_uuid(Uuid::from_u128(1));
+        let ready = DeviceId::from_uuid(Uuid::from_u128(2));
+        let records = vec![
+            delivery(slow, Uuid::from_u128(1)),
+            delivery(ready, Uuid::from_u128(2)),
+            delivery(slow, Uuid::from_u128(3)),
+            delivery(ready, Uuid::from_u128(4)),
+        ];
+        let mut cursor = DeliveryCursor::default();
+        let first = cursor.batch(records.clone(), 1, &BTreeSet::new(), 4);
+        assert_eq!(first.len(), 2);
+        assert_eq!(
+            first
+                .iter()
+                .map(|pending| pending.delivery.peer_transport.peer_id)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            first.len(),
+            "only one request per peer may be in flight"
+        );
+        let ready_first = first
+            .iter()
+            .find(|pending| pending.delivery.peer_transport.peer_id == ready)
+            .unwrap();
+        cursor.acknowledged.insert(ready_first.key);
+        let next = cursor.batch(records, 2, &BTreeSet::from([slow]), 3);
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].delivery.peer_transport.peer_id, ready);
+    }
+
+    #[tokio::test]
+    async fn shutdown_aborts_and_reaps_in_flight_deliveries() {
+        struct Dropped(Arc<AtomicUsize>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let mut requests = JoinSet::new();
+        for _ in 0..MAX_PEERS_PER_BATCH {
+            let dropped = Arc::clone(&dropped);
+            requests.spawn(async move {
+                let _guard = Dropped(dropped);
+                std::future::pending::<()>().await;
+            });
+        }
+        tokio::task::yield_now().await;
+        abort_and_reap(&mut requests).await;
+        assert!(requests.is_empty());
+        assert_eq!(dropped.load(Ordering::SeqCst), MAX_PEERS_PER_BATCH);
     }
 }
