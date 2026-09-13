@@ -5,7 +5,7 @@
 
 use std::fs::{self, DirBuilder};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
-use std::os::unix::fs::DirBuilderExt as _;
+use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -1305,15 +1305,21 @@ async fn collection_links_isolate_sources_and_preserve_files_when_a_source_canno
         "one link deleted another source's identically named photo"
     );
 
-    // A missing folder marker must fail the mandatory scan before the source
-    // can publish apparent deletions. Keep all removed data inside this fixture.
+    // An unreadable child folder must fail the mandatory source scan before
+    // apparent deletions can be published. Keep removed data in this fixture.
     a.stop().await.expect("stop source before scan failure");
     drop(a);
-    let missing_marker = root.path().join("saved-source-marker");
+    let unreadable = a_root.join("unreadable-child");
     let missing_photo = root.path().join("saved-source-photo.jpg");
-    fs::rename(a_root.join(".stfolder"), &missing_marker).expect("remove source marker");
     fs::rename(a_root.join("a-only.jpg"), &missing_photo)
         .expect("withhold indexed photo during failed scan");
+    fs::create_dir(&unreadable).expect("create owned unreadable child");
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0))
+        .expect("deny source child access");
+    assert!(
+        fs::read_dir(&unreadable).is_err(),
+        "source permission-failure journey requires an unprivileged test user"
+    );
     a = start_node(&a_spec, &binaries).await;
     wait_for_status(&a, "failed source scan remains blocked", |value| {
         value.get("lifecycle").and_then(Value::as_str) == Some("needsAttention")
@@ -1338,7 +1344,9 @@ async fn collection_links_isolate_sources_and_preserve_files_when_a_source_canno
     );
     a.stop().await.expect("stop source after scan failure");
     drop(a);
-    fs::rename(&missing_marker, a_root.join(".stfolder")).expect("restore source marker");
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o700))
+        .expect("restore source child access");
+    fs::remove_dir(&unreadable).expect("remove owned source scan fixture");
     fs::rename(&missing_photo, a_root.join("a-only.jpg")).expect("restore indexed photo");
     a = start_node(&a_spec, &binaries).await;
     write(&a_root, "scan-recovered.jpg", b"scan recovered\n");

@@ -4,9 +4,9 @@
   "targets": {
     "amd64": {
       "noticeBundle": {
-        "bytes": 132340,
+        "bytes": 132337,
         "path": "THIRD-PARTY-NOTICES.txt",
-        "sha256": "8582d12f2f00acee6eb420ec3cd383277b7702a015c58c3c5d0233811c44b947"
+        "sha256": "a72ec89585a9256e5b63f1d8de060003eb7cfaa0be77b0d61ba835165f15aafe"
       },
       "sourceReadmeSHA256": "ce088c422e53653cc1f2c77feeb01e740629194499d745b4464f5f949b4a5686",
       "sourceManifestSHA256": "a98701049ef3dc6318298b4bd8d15d52593f08a71d04285cfa8707deaa051ccd",
@@ -15,9 +15,9 @@
     },
     "arm64": {
       "noticeBundle": {
-        "bytes": 132355,
+        "bytes": 132352,
         "path": "THIRD-PARTY-NOTICES.txt",
-        "sha256": "d698314a2d0d3a071c7795f68c3d576b8bc3e370ef108e154ae204f7a70d6804"
+        "sha256": "546d4a1730911997684d2cf41bfd863f9c17bb0bccd1e7141d4b4d9a063d557f"
       },
       "sourceReadmeSHA256": "ce088c422e53653cc1f2c77feeb01e740629194499d745b4464f5f949b4a5686",
       "sourceManifestSHA256": "a98701049ef3dc6318298b4bd8d15d52593f08a71d04285cfa8707deaa051ccd",
