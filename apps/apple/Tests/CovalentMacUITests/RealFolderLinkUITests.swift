@@ -58,24 +58,7 @@ final class RealFolderLinkUITests: XCTestCase {
         XCTAssertTrue(pair.isHittable)
         pair.click()
 
-        let pending: [String: Any]
-        do {
-            pending = try await waitForIncomingPairing(port: responderPort, token: responderToken)
-        } catch let error as FixtureError {
-            if case let .timeout(phase) = error, phase == "incoming network pairing" {
-                let contactingDeviceVisible = app.staticTexts["Contacting device…"].exists
-                let securePairingFailureVisible = app.staticTexts["Secure pairing couldn't start"].exists
-                let quickPairingUnavailableVisible = app.staticTexts["Quick pairing isn't available"].exists
-                print(
-                    "Incoming pairing timeout diagnostics: "
-                        + "pairEnabled=\(pair.isEnabled) "
-                        + "contactingDeviceVisible=\(contactingDeviceVisible) "
-                        + "securePairingFailureVisible=\(securePairingFailureVisible) "
-                        + "quickPairingUnavailableVisible=\(quickPairingUnavailableVisible)"
-                )
-            }
-            throw error
-        }
+        let pending = try await waitForIncomingPairing(port: responderPort, token: responderToken)
         let pairingID = try string(pending, "pairingId")
         let code = try string(pending, "authenticationString")
         let comparisonCode = app.staticTexts[

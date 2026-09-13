@@ -406,10 +406,13 @@ with os.fdopen(descriptor, "wb") as output:
     output.write(base64.urlsafe_b64encode(secrets.token_bytes(48)).rstrip(b"=") + b"\n")
 PY
 
+# Both peers stay on loopback. Their signed pairing addresses must match the
+# addresses the test dials; automatic LAN advertisement cannot describe this fixture.
 COVALENT_SYNC_RUNTIME_DIR="$real_source_runtime" \
   "$real_source_contents/MacOS/covalent-node" serve \
   --listen "127.0.0.1:$real_source_port" \
   --peer-listen "127.0.0.1:$real_source_port" \
+  --advertised-peer-address "127.0.0.1:$real_source_port" \
   --data-dir "$real_source_data" \
   --device-name "Mac UI Source" \
   --platform-tier tier1 \
@@ -425,6 +428,7 @@ COVALENT_SYNC_RUNTIME_DIR="$real_responder_runtime" \
   "$real_responder_contents/MacOS/covalent-node" serve \
   --listen "127.0.0.1:$real_responder_port" \
   --peer-listen "127.0.0.1:$real_responder_port" \
+  --advertised-peer-address "127.0.0.1:$real_responder_port" \
   --data-dir "$real_responder_data" \
   --device-name "Responder UI Peer" \
   --platform-tier tier1 \

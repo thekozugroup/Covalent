@@ -174,7 +174,22 @@ class SafFolderSyncJourneyInstrumentedTest {
             assertSafFileAbsentFor(destinationGrant, "manual.txt", NEGATIVE_WINDOW_MILLIS)
             clickScreenText(context.getString(R.string.folder_link_run_now))
             retrySavedRunIfVisible()
-            awaitSafFile("public Manual Run Now through SAF", destinationGrant, "manual.txt", SAF_MANUAL_CONTENT)
+            try {
+                awaitSafFile(
+                    "public Manual Run Now through SAF",
+                    destinationGrant,
+                    "manual.txt",
+                    SAF_MANUAL_CONTENT,
+                )
+            } catch (failure: AssertionError) {
+                throw AssertionError(
+                    "${failure.message}\n" +
+                        recoveryDiagnostic("source", connectionA, "initial-manual") +
+                        "\n" +
+                        recoveryDiagnostic("destination", connectionB, "initial-manual"),
+                    failure,
+                )
+            }
             awaitSafFile(
                 "Unicode filename through SAF",
                 destinationGrant,
