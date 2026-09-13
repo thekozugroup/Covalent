@@ -6,18 +6,25 @@ Updated 2026-09-13 after the owner reaffirmed the lightweight one-way scope. The
 complete user journeys, not remaining time or reusable code. Rclone is the sole
 transfer engine and its migration is complete. Setup, fan-out, collection
 isolation, deletion/restoration, cadence, shared settings, and Android are
-verified. On exact head `b8c005c` and tested merge `52abc0c`, all 10 foundation,
-packaging, security, and version jobs pass. Android passes 82 baseline device
-tests, but its separate SAF journey
-fails at paired-device selection before link creation or transfer. Check 8
-remains verified by the complete `5b8c60f` Android run because the Android app,
-tests, engine, packaging, and workflow inputs are identical between the two
-heads. Replacing two ambiguous Back events with explicit keyboard dismissal
-then passes the complete local Android journey in 394.504 seconds on a fresh
-production build. Final-source hosted acceptance is still required. The Mac UI
-lane passes five of six tests, but the managed journey cannot find its Idle and
-Run controls before transfer. Mac, Atmos, wholly green final-source acceptance,
-and final release acceptance remain open.
+verified. On head `6499ded` and tested merge `e846d29`, ten foundation,
+packaging, security, and version jobs pass. Both Docker architectures pass their
+13-check packaged transfer journeys. The actual personal Android builder produces
+a clean-source candidate whose exact installed APK passes the full SAF journey
+in 394.998 seconds. Its owned emulator, private ADB, worktree, and build files
+are removed; the seven installable candidate files are retained.
+
+Mac's initial-settings validation now accepts revision zero with a nil change ID,
+matching the source contract. A production-client regression fails before the fix
+and passes after it. One hosted journey then proves the first forward transfer;
+the subsequent trimmed-test runs fail at that transfer's original file deadline.
+Source review identifies a reachable race: Mac exposes Run Now before the source
+observes destination acceptance. The controls and model now require an accepted
+destination, and the native test waits for the existing readiness label and an
+enabled button. The focused model regression passes and confirms that pending
+invitations do not block ready destinations. A separate ambiguous Quit selector is scoped to the status-item
+menu. Native validation of these changes and relaunch remain open. Mac native acceptance,
+Atmos package validation, wholly green final-source checks, and release publication
+remain open. No failed aggregate run is presented as passing.
 Earlier Syncthing evidence is retained only as history.
 
 **Previous scope: 75%, 15 of 20 checks**, recorded at checkpoint 46 (c47003113e28b6e934a8ab4823040614fb07fb30). That score belongs to the superseded bidirectional/backup scope. Source and evidence remain in Git history.

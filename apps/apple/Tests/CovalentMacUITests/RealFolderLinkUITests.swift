@@ -181,10 +181,10 @@ final class RealFolderLinkUITests: XCTestCase {
         recordPhase("Covalent phase: manual offer and accept completed")
 
         recordPhase("Covalent phase: manual idle wait entered")
-        let idle = app.staticTexts["Idle. Run this link when you want to transfer changes."]
-        scrollTo(idle, in: linksScrollView)
-        guard idle.waitForExistence(timeout: transferTimeout) else {
-            throw FixtureError.missing("manual idle status")
+        let ready = app.staticTexts["Ready for Run Now"]
+        scrollTo(ready, in: linksScrollView)
+        guard ready.waitForExistence(timeout: transferTimeout) else {
+            throw FixtureError.missing("manual Run Now readiness")
         }
         recordPhase("Covalent phase: manual idle wait completed")
         recordPhase("Covalent phase: manual link completed")
@@ -195,6 +195,9 @@ final class RealFolderLinkUITests: XCTestCase {
         guard run.waitForExistence(timeout: transitionTimeout) else {
             throw FixtureError.missing("Run Now control")
         }
+        guard await waitForEnabled(run, timeout: transitionTimeout) else {
+            throw FixtureError.missing("enabled Run Now control")
+        }
         guard run.isHittable else {
             throw FixtureError.missing("hittable Run Now control")
         }
@@ -203,10 +206,9 @@ final class RealFolderLinkUITests: XCTestCase {
             destinationRoot + "/forward.txt",
             bytes: Data("packaged-rclone-forward-content".utf8)
         )
-        XCTAssertTrue(
-            copiedForward,
-            "rclone test fixture did not copy the source file to the responder."
-        )
+        guard copiedForward else {
+            throw FixtureError.timeout("rclone test fixture did not copy the source file to the responder")
+        }
         XCTAssertFalse(
             FileManager.default.fileExists(atPath: sourceRoot + "/destination-only.txt"),
             "Destination-only content must never write back to the source."
@@ -226,7 +228,7 @@ final class RealFolderLinkUITests: XCTestCase {
         statusItemBeforeRelaunch.coordinate(
             withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
         ).click()
-        let quit = app.menuItems["Quit Covalent"]
+        let quit = statusItemBeforeRelaunch.menuItems["Quit Covalent"]
         XCTAssertTrue(quit.waitForExistence(timeout: transitionTimeout))
         XCTAssertTrue(quit.isHittable)
         quit.click()
@@ -463,6 +465,15 @@ final class RealFolderLinkUITests: XCTestCase {
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
         return false
+    }
+
+    private func waitForEnabled(_ element: XCUIElement, timeout: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if element.isEnabled { return true }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+        return element.isEnabled
     }
 
     private func string(_ object: [String: Any], _ key: String) throws -> String {

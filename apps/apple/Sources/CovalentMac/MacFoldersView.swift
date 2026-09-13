@@ -320,6 +320,7 @@ struct MacFoldersView: View {
             }
           } else if settings.confirmed, settings.pendingChange == nil,
                     settings.conflictedChange == nil,
+                    status.shares.contains(where: { $0.folderId == share.folderId && $0.phase == .ready }),
                     settings.settings.permitsRunNow,
                     share.linkRun?.pendingRequest == nil,
                     share.linkRun?.isActive != true {
@@ -565,7 +566,8 @@ struct MacFoldersView: View {
           )
             .font(.callout)
         }
-      } else if settings.settings.cadence == .manual {
+      } else if settings.settings.cadence == .manual,
+                status.shares.contains(where: { $0.folderId == share.folderId && $0.phase == .ready }) {
         Text("Idle. Run this link when you want to transfer changes.")
           .font(.callout)
           .foregroundStyle(.secondary)

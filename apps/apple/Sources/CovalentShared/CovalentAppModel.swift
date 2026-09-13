@@ -1203,6 +1203,7 @@ public final class CovalentAppModel: ObservableObject {
       let settingsStates = Set(shares.compactMap(\.linkSettings))
       let runs = Set(shares.compactMap(\.linkRun))
       guard !shares.isEmpty,
+            shares.contains(where: { $0.phase == .ready }),
             settingsStates.count == 1,
             let settings = settingsStates.first,
             settings.confirmed,

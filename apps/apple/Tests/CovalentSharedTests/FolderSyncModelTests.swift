@@ -1268,6 +1268,87 @@ private func encodedFolderStatus(
     #expect(sequence.count == 4)
 }
 
+@Test @MainActor func runNowWaitsForACommittedDestinationWithoutBlockingReadyFanout() async throws {
+    let fixture = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let folder = UUID()
+    let readyPeer = UUID()
+    let offeredPeer = UUID()
+    let readyOffer = UUID()
+    let offeredOffer = UUID()
+    let policy = FolderLinkPolicy()
+    let zeroChangeId = try #require(UUID(uuidString: "00000000-0000-0000-0000-000000000000"))
+    let settingsState = FolderLinkSettingsState(
+        revision: 0,
+        settings: FolderLinkSettings(deletionPolicy: policy, paused: false, cadence: .manual),
+        changeId: zeroChangeId,
+        changedBy: readyPeer,
+        confirmed: true,
+        pendingChange: nil,
+        conflictedChange: nil
+    )
+    func share(offer: UUID, peer: UUID, phase: FolderSharePhase) -> FolderShare {
+        FolderShare(
+            offerId: offer, folderId: folder, label: "Photos", peerId: peer,
+            incoming: false, phase: phase, expiresAtUnixMs: nil, expired: false,
+            peerConnection: .connected, linkPolicy: policy, linkSettings: settingsState
+        )
+    }
+    let offered = share(offer: offeredOffer, peer: offeredPeer, phase: .offered)
+    let ready = share(offer: readyOffer, peer: readyPeer, phase: .ready)
+    let offeredStatus = try encodedFolderStatus(
+        peers: [FolderSyncPeer(peerId: offeredPeer, displayName: "Waiting Mac")],
+        shares: [offered]
+    )
+    let readyFanoutStatus = try encodedFolderStatus(
+        peers: [
+            FolderSyncPeer(peerId: readyPeer, displayName: "Ready Mac"),
+            FolderSyncPeer(peerId: offeredPeer, displayName: "Waiting Mac"),
+        ],
+        shares: [ready, offered]
+    )
+    let sequence = RequestSequence()
+    let runBodies = FolderRepairRequestRoots()
+    let recorder = RequestRecorder(removeAfterRequest: false) { request in
+        switch sequence.next() {
+        case 0:
+            #expect(request.url?.path == "/api/v1/sync/status")
+            return TestResponse.response(request, status: 200, json: offeredStatus)
+        case 1:
+            #expect(request.url?.path == "/api/v1/sync/status")
+            return TestResponse.response(request, status: 200, json: readyFanoutStatus)
+        case 2:
+            #expect(request.url?.path == "/api/v1/sync/run")
+            runBodies.append(String(decoding: try #require(folderRepairRequestBody(request)), as: UTF8.self))
+            return TestResponse.response(
+                request, status: 200,
+                json: #"{"offerId":null,"lifecycle":"running","issue":null}"#
+            )
+        case 3:
+            #expect(request.url?.path == "/api/v1/sync/status")
+            return TestResponse.response(request, status: 200, json: readyFanoutStatus)
+        default:
+            Issue.record("Unexpected run readiness request")
+            return TestResponse.response(request, status: 500, json: "{}")
+        }
+    }
+    let persistence = AppleAppPersistence(directoryURL: fixture.appending(path: "state"))
+    let (model, _) = try folderMutationModel(recorder: recorder, persistence: persistence)
+
+    await model.refreshFolders()
+    #expect(!(await model.runFolderLinkNow(folderId: folder)))
+    #expect(sequence.count == 1)
+    #expect(model.pendingFolderLinkRunRequests.isEmpty)
+    #expect(try await persistence.loadPendingFolderLinkRunRequests().isEmpty)
+
+    await model.refreshFolders()
+    #expect(await model.runFolderLinkNow(folderId: folder))
+    #expect(runBodies.values.count == 1)
+    #expect(model.pendingFolderLinkRunRequests.isEmpty)
+    #expect(try await persistence.loadPendingFolderLinkRunRequests().isEmpty)
+    #expect(sequence.count == 4)
+}
+
 @Test @MainActor func authenticatedPendingRunClearsLocalRetryWithoutSendingADuplicate() async throws {
     let fixture = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: fixture) }
