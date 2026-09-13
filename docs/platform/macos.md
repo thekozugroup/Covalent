@@ -153,13 +153,15 @@ on refresh. Keep Covalent open and the Mac awake during the first transfer.
 
 ## 4. Pair a device and create a link
 
-Open **Devices** and choose a discovered device, or enter its reachable hostname
-or IP with port 8787 and choose **Pair Device**. Compare the confirmation code
+Open **Devices**, choose **Find Devices**, then **Pair with This Device** for a
+discovered device. Alternatively, enter its reachable hostname or IP with port
+8787 and choose **Pair Device**. Compare the confirmation code
 on both devices and confirm it on each.
 
 Open **Links**, choose your source folder and paired destination, then review
-timing and deletion behavior. Accept the incoming link and choose its folder on
-the receiver. Use **Run Now** for your first transfer. The Covalent menu bar item
+timing and deletion behavior. On a receiving Mac, **Choose Folder…** selects its
+destination and accepts the incoming link. Use **Run Now** for your first transfer.
+The Covalent menu bar item
 shows each link's status and transfer actions.
 
 Follow [Create your first one-way link](../getting-started-links.md) for additional

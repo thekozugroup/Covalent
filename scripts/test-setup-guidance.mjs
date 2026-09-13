@@ -105,11 +105,8 @@ for (const file of ["docs/platform/unraid.md", "docs/platform/atlas-tailscale.md
   requireText(file, "../../packaging/docker/README.md#enroll-or-remove-the-claimed-ca", "exact CA enrollment link");
 }
 
-const macosGuide = documents.get("docs/platform/macos.md") ?? "";
-const localCheckpoint = macosGuide.indexOf("## 4. Complete the local first recovery checkpoint");
-const optionalAtlas = macosGuide.indexOf("## 5. Optional after the checkpoint: prepare Atlas");
-if (localCheckpoint < 0 || optionalAtlas < 0 || localCheckpoint >= optionalAtlas) {
-  errors.push("docs/platform/macos.md: local recovery checkpoint must precede optional Atlas setup");
+for (const file of ["docs/platform/macos.md", "docs/platform/android.md"]) {
+  requireText(file, "../getting-started-links.md", "direct one-way link setup");
 }
 
 const gettingStarted = documents.get("docs/getting-started.md") ?? "";

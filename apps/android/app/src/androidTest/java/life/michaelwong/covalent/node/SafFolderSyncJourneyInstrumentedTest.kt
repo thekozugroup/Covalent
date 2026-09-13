@@ -220,9 +220,9 @@ class SafFolderSyncJourneyInstrumentedTest {
             val addressButtonTag = "folder-peer-address-${identityB.deviceId}"
             compose.onNodeWithTag("folder-sync-list")
                 .performScrollToNode(hasTestTag(addressButtonTag))
-            clickScreenTag(addressButtonTag)
+            compose.onNodeWithTag(addressButtonTag).performClick()
             compose.onNodeWithTag("folder-peer-address-input").performTextInput(movedPeerAddress)
-            clickScreenTag("folder-peer-address-confirm")
+            compose.onNodeWithTag("folder-peer-address-confirm").performClick()
             await("native address refresh becomes authoritative") {
                 client.folderSyncStatus(connectionA.baseUrl, connectionA.token).peers
                     .singleOrNull { it.peerId == identityB.deviceId }

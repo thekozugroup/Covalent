@@ -195,9 +195,20 @@ private final class FolderGrantBootstrapper: LocalNodeBootstrapping {
     let pending = try #require(model.pendingFolderRepairs.first)
     #expect(pending.offerId == offer)
     #expect(pending.replacementGrant.id == replacement.id)
-    #expect((await model.retryFolderAccessRepair(offerId: offer)))
-    #expect(requestRoots.values.count == 2)
-    #expect(requestRoots.values[0] == requestRoots.values[1])
+    let retried = await model.retryFolderAccessRepair(offerId: offer)
+    let retryDiagnostic = [
+        "title=\(String((model.alert?.title ?? "nil").prefix(160)))",
+        "message=\(String((model.alert?.message ?? "nil").prefix(160)))",
+        "detail=\(String((model.alert?.detail ?? "nil").prefix(160)))",
+        "mutationInFlight=\(model.folderSyncMutationInFlight)",
+        "statusIssue=\(model.folderSyncStatus?.issue ?? "nil")",
+        "pendingRepairs=\(model.pendingFolderRepairs.count)",
+        "requestSequence=\(sequence.count)",
+    ].joined(separator: "; ")
+    try #require(retried, "Folder repair retry failed before completion: \(retryDiagnostic)")
+    let roots = requestRoots.values
+    try #require(roots.count == 2, "Expected two exact repair requests; \(retryDiagnostic)")
+    #expect(roots[0] == roots[1])
     #expect(model.pendingFolderRepairs.isEmpty)
     #expect(model.directoryGrants.first?.id == replacement.id)
 }

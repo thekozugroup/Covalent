@@ -124,13 +124,15 @@ re-enrollment. After that move, every update must keep the same production key.
 
 ## Pair a device and create a link
 
-Choose **Start folder sync on this phone**, allow local-network access, and pair
-your other device. Compare the confirmation code and confirm it on both devices.
+Choose **Set up file transfers**, then **Start folder sync on this phone**.
+Allow local-network access and pair your other device. Compare the confirmation
+code and confirm it on both devices.
 Open **Shared folders** and choose only the folder to share through Android's
 system picker. Review timing and deletion behavior before **Create link**.
-Accept the incoming link and choose its folder on the receiving device.
+On the receiving Android device, choose **Choose an existing folder**, confirm
+**Use this folder** in the picker, then choose **Accept invitation**.
 
-Use **Run Now** for a first transfer, then choose Manual, Scheduled, or Continuous
+Use **Run now** for a first transfer, then choose Manual, Scheduled, or Continuous
 for that link. Android's Wi-Fi and charging conditions can pause transfers;
 background execution follows Android's limits. See
 [Create your first one-way link](../getting-started-links.md) for the shared
