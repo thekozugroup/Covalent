@@ -136,7 +136,14 @@ final class CovalentMacUITests: XCTestCase {
     }
 
     private func assertEmptyState(_ title: String, in app: XCUIApplication) {
-        let emptyState = app.descendants(matching: .any)["mac.emptyState"].firstMatch
+        let emptyState = app.descendants(matching: .any).matching(
+            NSPredicate(
+                format: "identifier == %@ AND (label CONTAINS %@ OR value CONTAINS %@)",
+                "mac.emptyState",
+                title,
+                title
+            )
+        ).firstMatch
         XCTAssertTrue(
             emptyState.waitForExistence(timeout: uiTransitionTimeout),
             "Expected the '\(title)' empty state to be reachable."

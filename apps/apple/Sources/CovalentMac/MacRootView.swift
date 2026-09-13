@@ -16,22 +16,18 @@ struct MacRootView: View {
                         sidebarLabel(for: section)
                     }
                 }
-                Section {
-                    ForEach([AppSection.backups, .settings]) { section in
-                        sidebarLabel(for: section)
-                    }
-                } header: {
-                    Text("Legacy and Advanced")
+                Text("Legacy and Advanced")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(MacLabelColor.secondary)
+                    .accessibilityAddTraits(.isHeader)
+                ForEach([AppSection.backups, .settings]) { section in
+                    sidebarLabel(for: section)
                 }
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel("Legacy and Advanced")
-                Section {
-                    serviceState
-                } header: {
-                    Text("Local Service")
-                }
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel("Local Service")
+                Text("Local Service")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(MacLabelColor.secondary)
+                    .accessibilityAddTraits(.isHeader)
+                serviceState
             }
             .listStyle(.sidebar)
             .accessibilityLabel("Covalent sidebar")
