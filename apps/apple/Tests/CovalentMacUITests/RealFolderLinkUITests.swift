@@ -18,7 +18,7 @@ final class RealFolderLinkUITests: XCTestCase {
         super.record(issue)
     }
 
-    func testPackagedManualFolderLinkTransfersOneWayAndUpdatesMenuBar() async throws {
+    func testNativeManualFolderLinkTransfersOneWayAndUpdatesMenuBar() async throws {
         continueAfterFailure = false
         let environment = ProcessInfo.processInfo.environment
         let sourcePort = try XCTUnwrap(environment["COVALENT_REAL_UI_SOURCE_PORT"])
@@ -123,7 +123,7 @@ final class RealFolderLinkUITests: XCTestCase {
         )
         XCTAssertTrue(
             copiedForward,
-            "Packaged rclone did not copy the source file to the responder."
+            "rclone test fixture did not copy the source file to the responder."
         )
         XCTAssertFalse(
             FileManager.default.fileExists(atPath: sourceRoot + "/destination-only.txt"),

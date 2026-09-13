@@ -237,10 +237,10 @@ if ! run_bounded 600 xcodebuild \
   exit 1
 fi
 
-# Exercise the real packaged engine from an unsandboxed test node. The node
-# itself is the raw debug binary; only the reviewed worker, guardian, and
-# resources come from the built app. This matches mac_host's bundle lookup
-# without launching a sandbox-inherit helper outside its app parent.
+# Exercise the engine from an unsandboxed test node. The node itself is the raw
+# debug binary. The worker, guardian, and resources start as copies from the
+# built app, but the copied executables receive test-only unsandboxed signatures
+# below. This fixture does not validate the production sandbox-inherit chain.
 built_app="$derived_data/Build/Products/Debug/Covalent.app"
 built_macos="$built_app/Contents/MacOS"
 built_engine_resources="$built_app/Contents/Resources/CovalentSyncEngine"
@@ -269,6 +269,90 @@ for contents in "$real_source_contents" "$real_responder_contents"; do
   chmod 755 "$contents/MacOS/covalent-node" \
     "$contents/MacOS/covalent-rclone" \
     "$contents/MacOS/covalent-engine-guardian"
+
+  # Production helpers inherit the app sandbox. This fixture intentionally
+  # runs under a raw unsandboxed node, so replace only the copied helpers'
+  # signatures and record their new signed-byte hashes in the copied manifest.
+  # Omitting --entitlements removes the inherited-sandbox entitlement; do not
+  # preserve signature metadata from the production copies.
+  codesign --force --sign - \
+    --identifier life.michaelwong.covalent.ui-test.engine-guardian \
+    --options runtime --timestamp=none \
+    "$contents/MacOS/covalent-engine-guardian"
+  codesign --force --sign - \
+    --identifier life.michaelwong.covalent.ui-test.rclone \
+    --options runtime --timestamp=none \
+    "$contents/MacOS/covalent-rclone"
+
+  for binary in \
+    "$contents/MacOS/covalent-engine-guardian" \
+    "$contents/MacOS/covalent-rclone"
+  do
+    codesign --verify --strict "$binary"
+    if ! fixture_entitlements=$(codesign -d --entitlements - "$binary" 2>/dev/null); then
+      print -u2 -- "could not inspect test fixture helper entitlements"
+      exit 1
+    fi
+    if [[ -n "$fixture_entitlements" ]]; then
+      print -u2 -- "real macOS folder-link fixture helper retained entitlements"
+      exit 1
+    fi
+  done
+
+  guardian_sha=$(shasum -a 256 "$contents/MacOS/covalent-engine-guardian" | awk '{print $1}')
+  worker_sha=$(shasum -a 256 "$contents/MacOS/covalent-rclone" | awk '{print $1}')
+  python3 - \
+    "$contents/Resources/CovalentSyncEngine/manifest.json" \
+    "$guardian_sha" "$worker_sha" <<'PY'
+import copy
+import json
+import os
+import sys
+
+path, guardian_sha, worker_sha = sys.argv[1:]
+if any(len(value) != 64 or any(character not in "0123456789abcdef" for character in value)
+       for value in (guardian_sha, worker_sha)):
+    raise SystemExit("invalid test-only signed executable digest")
+
+with open(path, "r", encoding="utf-8") as source:
+    original = json.load(source)
+updated = copy.deepcopy(original)
+executables = updated.get("executables")
+if not isinstance(executables, dict):
+    raise SystemExit("copied sync-engine manifest has no executable records")
+for name, digest in (
+    ("covalent-engine-guardian", guardian_sha),
+    ("covalent-rclone", worker_sha),
+):
+    record = executables.get(name)
+    if not isinstance(record, dict) or not isinstance(record.get("signedSha256"), str):
+        raise SystemExit(f"copied sync-engine manifest has no signed hash for {name}")
+    record["signedSha256"] = digest
+
+restored = copy.deepcopy(updated)
+for name in ("covalent-engine-guardian", "covalent-rclone"):
+    previous = original["executables"][name]["signedSha256"]
+    if updated["executables"][name]["signedSha256"] == previous:
+        raise SystemExit("test fixture retained a production helper signature")
+    restored["executables"][name]["signedSha256"] = previous
+if restored != original:
+    raise SystemExit("test-only manifest rewrite changed production provenance")
+
+temporary = f"{path}.{os.getpid()}.tmp"
+descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+try:
+    with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+        json.dump(updated, output, indent=2)
+        output.write("\n")
+        output.flush()
+        os.fsync(output.fileno())
+    os.replace(temporary, path)
+finally:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
+PY
 done
 
 read -r real_source_port real_responder_port < <(python3 - <<'PY'
@@ -504,7 +588,7 @@ for expected_test in \
   'testStatusPassesSystemAccessibilityAudit()' \
   'testLinksPassesSystemAccessibilityAudit()' \
   'testNativeMenuBarQuickActionsAreReachable()' \
-  'testPackagedManualFolderLinkTransfersOneWayAndUpdatesMenuBar()'
+  'testNativeManualFolderLinkTransfersOneWayAndUpdatesMenuBar()'
 do
   if ! jq -e --arg expected_test "$expected_test" '
     [.. | objects | select(.nodeType == "Test Case") | .name] |
