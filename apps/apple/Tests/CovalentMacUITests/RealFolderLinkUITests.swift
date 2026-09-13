@@ -27,6 +27,7 @@ final class RealFolderLinkUITests: XCTestCase {
         )
         let sourceRoot = try XCTUnwrap(environment["COVALENT_REAL_UI_SOURCE_ROOT"])
         let destinationRoot = try XCTUnwrap(environment["COVALENT_REAL_UI_DESTINATION_ROOT"])
+        recordPhase("Covalent phase: setup entered")
         let app = launchManagedApp()
         defer { app.terminate() }
 
@@ -37,7 +38,9 @@ final class RealFolderLinkUITests: XCTestCase {
         XCTAssertTrue(
             waitForDisappearance(of: app.staticTexts["Set up Covalent"], timeout: transferTimeout)
         )
+        recordPhase("Covalent phase: setup completed")
 
+        recordPhase("Covalent phase: pairing entered")
         app.typeKey("2", modifierFlags: .command)
         XCTAssertTrue(app.staticTexts["Your devices"].waitForExistence(timeout: transitionTimeout))
         let devicesScrollView = app.scrollViews["devices.view"]
@@ -92,7 +95,9 @@ final class RealFolderLinkUITests: XCTestCase {
             port: responderPort,
             token: responderToken
         )
+        recordPhase("Covalent phase: pairing completed")
 
+        recordPhase("Covalent phase: manual link entered")
         app.typeKey("1", modifierFlags: .command)
         let linksScrollView = app.scrollViews["links.view"]
         XCTAssertTrue(linksScrollView.waitForExistence(timeout: transitionTimeout))
@@ -155,6 +160,9 @@ final class RealFolderLinkUITests: XCTestCase {
         let idle = app.staticTexts["Idle. Run this link when you want to transfer changes."]
         scrollTo(idle, in: linksScrollView)
         XCTAssertTrue(idle.waitForExistence(timeout: transferTimeout))
+        recordPhase("Covalent phase: manual link completed")
+
+        recordPhase("Covalent phase: first run entered")
         let run = app.buttons["Run Mac UI Link now"]
         scrollTo(run, in: linksScrollView)
         XCTAssertTrue(run.waitForExistence(timeout: transitionTimeout))
@@ -179,7 +187,9 @@ final class RealFolderLinkUITests: XCTestCase {
         let lastRunCompleted = app.staticTexts["Last run completed"]
         scrollTo(lastRunCompleted, in: linksScrollView)
         XCTAssertTrue(lastRunCompleted.waitForExistence(timeout: transferTimeout))
+        recordPhase("Covalent phase: first run completed")
 
+        recordPhase("Covalent phase: relaunch entered")
         let statusItemBeforeRelaunch = app.statusItems["Covalent"]
         XCTAssertTrue(statusItemBeforeRelaunch.waitForExistence(timeout: transitionTimeout))
         statusItemBeforeRelaunch.coordinate(
@@ -202,6 +212,9 @@ final class RealFolderLinkUITests: XCTestCase {
         app.typeKey("1", modifierFlags: .command)
         let relaunchedLinks = app.scrollViews["links.view"]
         XCTAssertTrue(relaunchedLinks.waitForExistence(timeout: transferTimeout))
+        recordPhase("Covalent phase: relaunch completed")
+
+        recordPhase("Covalent phase: second run entered")
         let runAfterRelaunch = app.buttons["Run Mac UI Link now"]
         scrollTo(runAfterRelaunch, in: relaunchedLinks)
         XCTAssertTrue(runAfterRelaunch.waitForExistence(timeout: transitionTimeout))
@@ -231,7 +244,9 @@ final class RealFolderLinkUITests: XCTestCase {
         let completedAfterRelaunch = app.staticTexts["Last run completed"]
         scrollTo(completedAfterRelaunch, in: relaunchedLinks)
         XCTAssertTrue(completedAfterRelaunch.waitForExistence(timeout: transferTimeout))
+        recordPhase("Covalent phase: second run completed")
 
+        recordPhase("Covalent phase: menu and status entered")
         let editSettings = app.buttons["Edit Link Settings…"]
         scrollTo(editSettings, in: relaunchedLinks)
         XCTAssertTrue(editSettings.waitForExistence(timeout: transitionTimeout))
@@ -258,6 +273,11 @@ final class RealFolderLinkUITests: XCTestCase {
         let runAgain = app.menuItems["Run Mac UI Link Now"]
         XCTAssertTrue(runAgain.waitForExistence(timeout: transitionTimeout))
         XCTAssertFalse(runAgain.label.isEmpty)
+        recordPhase("Covalent phase: menu and status completed")
+    }
+
+    private func recordPhase(_ name: String) {
+        XCTContext.runActivity(named: name) { _ in }
     }
 
     private func peerPickerDiagnostic(app: XCUIApplication, picker: XCUIElement) -> String {

@@ -1,5 +1,9 @@
 # Isolated Mac–Atmos recovery drill
 
+> Historical evidence for the superseded encrypted-backup and recovery scope.
+> It does not validate the current one-way rclone product or release candidate.
+> Use [Mac–Atmos one-way release drill](atmos-one-way-drill.md) for current work.
+
 Status: passed as development evidence; repeat on the final release revision.
 Atmos is Ubuntu arm64. The owner later confirmed Atlas is offline and accepted
 Docker validation as its completion path; no physical Atlas install is claimed.

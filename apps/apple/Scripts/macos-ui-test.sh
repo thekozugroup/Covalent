@@ -5,6 +5,7 @@ script_dir=${0:A:h}
 apple_dir=${script_dir:h}
 repo_root=${apple_dir:h:h}
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/covalent-macos-ui.XXXXXX")
+test_root=${test_root:A}
 node_pid=""
 real_responder_pid=""
 app_token_directory=""
@@ -303,6 +304,61 @@ emit_failed_result_details() {
     print -u2 -- "--- xcresult test-results summary ---"
     if ! xcrun xcresulttool get test-results summary --compact --path "$result_bundle" >&2; then
       print -u2 -- "xcresult test-results summary could not be read."
+    fi
+
+    local failed_test_id phase_rows
+    failed_test_id=$(
+      xcrun xcresulttool get test-results summary --compact --path "$result_bundle" 2>/dev/null |
+        jq -er '
+          .testFailures[]?
+          | select(.testIdentifierString == "RealFolderLinkUITests/testNativeManualFolderLinkTransfersOneWayAndUpdatesMenuBar()")
+          | .testIdentifierURL
+        ' 2>/dev/null
+    ) || failed_test_id=""
+    if [[ -n "$failed_test_id" ]]; then
+      phase_rows=$(
+        xcrun xcresulttool get test-results activities --compact \
+          --path "$result_bundle" --test-id "$failed_test_id" 2>/dev/null |
+          jq -c '
+            def safe_scalar:
+              if type == "string" then .[0:64]
+              elif type == "number" or type == "boolean" then .
+              else null
+              end;
+            def allowed_title:
+              . == "Covalent phase: setup entered" or
+              . == "Covalent phase: setup completed" or
+              . == "Covalent phase: pairing entered" or
+              . == "Covalent phase: pairing completed" or
+              . == "Covalent phase: manual link entered" or
+              . == "Covalent phase: manual link completed" or
+              . == "Covalent phase: first run entered" or
+              . == "Covalent phase: first run completed" or
+              . == "Covalent phase: relaunch entered" or
+              . == "Covalent phase: relaunch completed" or
+              . == "Covalent phase: second run entered" or
+              . == "Covalent phase: second run completed" or
+              . == "Covalent phase: menu and status entered" or
+              . == "Covalent phase: menu and status completed";
+            [
+              .. | objects
+              | select((.title? | type) == "string" and (.title | allowed_title))
+              | {
+                  title: .title,
+                  startTime: (.startTime? | safe_scalar),
+                  finishTime: (.finishTime? | safe_scalar),
+                  associatedWithFailure: (.isAssociatedWithFailure? | safe_scalar),
+                  status: ((.result? // .status?) | safe_scalar)
+                }
+            ][0:32]
+          ' 2>/dev/null
+      ) || phase_rows=""
+      if [[ -n "$phase_rows" && "$phase_rows" != "[]" ]]; then
+        print -u2 -- "--- bounded real folder-link phase activities ---"
+        print -u2 -- "$phase_rows"
+      else
+        print -u2 -- "No bounded real folder-link phase activities were available."
+      fi
     fi
 
     local attachment_root="$test_root/failed-xcresult-attachments"

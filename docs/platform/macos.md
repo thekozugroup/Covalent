@@ -37,8 +37,8 @@ the app inside still has the ad-hoc code signature verified below.
 
 ### Current path: build the arm64 app from source
 
-Install Xcode 26, open it once, accept its license, and install `rustup`. Then
-run one command from the repository root:
+Install Xcode 26, open it once, accept its license, and install `rustup`. Start
+from a clean source checkout, then run one command from the repository root:
 
 ```sh
 ./scripts/build-personal-macos-app.sh
@@ -46,8 +46,9 @@ run one command from the repository root:
 
 The builder checks the Mac and pinned toolchain, installs checksum-pinned
 XcodeGen into a private temporary directory, builds the locked source, ad-hoc
-signs the app, verifies both arm64 executables, creates the ZIP and checksum,
-then extracts and verifies the ZIP again. Finished install files go only to the
+signs the app, verifies its bundled arm64 executables, creates the ZIP and checksum,
+then extracts and verifies the ZIP again. It also writes a build receipt recording
+the source revision and package hashes. Finished install files go only to the
 ignored `artifacts/install` directory. XcodeGen also creates or refreshes the
 ignored generated project at `apps/apple/Covalent.xcodeproj`; tracked source is
 not changed. The builder refuses to overwrite an existing artifact and never
@@ -67,9 +68,10 @@ open artifacts/install
 ```
 
 Continue only when the checksum prints `OK`. In Finder, double-click the ZIP,
-then drag `Covalent.app` into Applications. If either output already exists,
-move that exact pair elsewhere or remove it only after deciding it is no longer
-needed; the builder will not replace it. Developer build and test details live
+then drag `Covalent.app` into Applications. Keep the ZIP, its `.sha256` file,
+and its `.build-receipt.json` file together. If an output already exists, move
+that version's three files elsewhere or remove them only after deciding they are
+no longer needed; the builder will not replace them. Developer build and test details live
 in the [Apple client README](../../apps/apple/README.md).
 
 ### After publication: download the verified release build

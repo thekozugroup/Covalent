@@ -1,22 +1,127 @@
 #!/bin/sh
+# Historical filename retained because validate-foundation invokes it directly.
+# The drill no longer has an owner-loss or legacy backup mode.
 set -eu
 
 repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 drill="$repo_root/scripts/test-remote-drill.sh"
-fixture_root=$(mktemp -d "${TMPDIR:-/tmp}/covalent-owner-loss-contract.XXXXXX")
-outside=$(mktemp "${TMPDIR:-/tmp}/covalent-owner-loss-outside.XXXXXX")
+fixture_root=$(mktemp -d "${TMPDIR:-/tmp}/covalent-remote-drill-contract.XXXXXX")
 node_pid='' sentinel_pid='' remote_fixture='' child_shutdown_checks=100
 cleanup() {
   [ -z "$node_pid" ] || { kill -KILL "$node_pid" >/dev/null 2>&1 || true; wait "$node_pid" >/dev/null 2>&1 || true; }
   [ -z "$sentinel_pid" ] || { kill -KILL "$sentinel_pid" >/dev/null 2>&1 || true; wait "$sentinel_pid" >/dev/null 2>&1 || true; }
   [ -z "$remote_fixture" ] || rm -rf "$remote_fixture"
   rm -rf "$fixture_root"
-  rm -f "$outside"
 }
 trap cleanup EXIT INT TERM
 
-dry_run=$($drill --owner-loss)
-printf '%s\n' "$dry_run" | grep -Fq '[--owner-loss] --execute'
+sh -n "$drill"
+dry_run=$($drill)
+printf '%s\n' "$dry_run" | grep -Fq -- '--mac-app /path/to/Covalent.app'
+printf '%s\n' "$dry_run" | grep -Fq -- '--mac-build-receipt /path/to/build-receipt.json'
+printf '%s\n' "$dry_run" | grep -Fq -- '--prior-cleanup-confirmed'
+
+for required in \
+  'verify-apple-silicon-bundle.sh' \
+  'Mac build receipt does not bind the requested source' \
+  'life.michaelwong.covalent.remote-drill.node' \
+  'test-only manifest rewrite changed production provenance' \
+  'node_bin="$runtime_contents/MacOS/covalent-node"' \
+  'remote_listeners=$(ssh ' \
+  'pinned BuildKit image is not pre-existing' \
+  'git -C "$root" archive --format=tar "$commit"' \
+  'docker-source-fingerprint.sh' \
+  '--build-arg "VCS_REF=$commit"' \
+  '--build-arg "COVALENT_SOURCE_FINGERPRINT=$fingerprint"' \
+  '--mount "type=bind,source=$root/sync,target=/sync"' \
+  '--mount "type=bind,source=$root/source,target=/source,readonly"' \
+  '--mount "type=bind,source=$root/boot-source,target=/boot-source,readonly"' \
+  '--publish "$ip:$sync:8789/tcp"' \
+  '--env COVALENT_SYNC_ADVERTISED_ADDRESS="$ip:$sync"' \
+  '"/api/v1/sync/folders"' \
+  '"/api/v1/sync/accept"' \
+  '"/api/v1/sync/run"' \
+  'synthetic quiesced appdata export through /source read-only' \
+  'readable boot fixture through /boot-source read-only'
+do
+  grep -Fq -- "$required" "$drill" || { echo "remote drill is missing current contract: $required" >&2; exit 1; }
+done
+for obsolete in \
+  '--owner-loss' \
+  'target/debug/covalent-node' \
+  '/api/v1/backups' \
+  '/api/v1/restores' \
+  '/api/v1/providers/connect' \
+  'backup_failure_diagnostics' \
+  'start_local_recover'
+do
+  if grep -Fq -- "$obsolete" "$drill"; then
+    echo "remote drill retained obsolete flow: $obsolete" >&2
+    exit 1
+  fi
+done
+receipt_line=$(grep -n '^python3 - "$mac_build_receipt" ' "$drill" | cut -d: -f1)
+first_remote_line=$(grep -n '^probe=$(ssh ' "$drill" | cut -d: -f1)
+test -n "$receipt_line" && test -n "$first_remote_line" && test "$receipt_line" -lt "$first_remote_line"
+grep -Fq 'packaged engine only, not the installable Mac app, Keychain, or security-scoped bookmark lifecycle' "$drill"
+if grep -Eq '(^|[[:space:]])docker([[:space:]].*)?[[:space:]]prune([[:space:]]|$)|(^|[[:space:]])(pkill|killall)([[:space:]]|$)' "$drill"; then
+  echo "remote drill contains a broad cleanup command" >&2
+  exit 1
+fi
+
+DRILL="$drill" OUTPUT="$fixture_root/validate-receipt.py" PYTHONDONTWRITEBYTECODE=1 python3 - <<'PYRECEIPTEXTRACT'
+import os
+from pathlib import Path
+text=Path(os.environ["DRILL"]).read_text()
+anchor='  "$app_binary" "$packaged_node" \\\n'
+start=text.index(anchor)
+start=text.index("<<'PYRECEIPT'\n",start)+len("<<'PYRECEIPT'\n")
+end=text.index("\nPYRECEIPT\n",start)
+body=text[start:end]
+compile(body,os.environ["DRILL"]+":receipt-python","exec")
+Path(os.environ["OUTPUT"]).write_text(body)
+PYRECEIPTEXTRACT
+python3 - "$fixture_root" <<'PYRECEIPTFIXTURE'
+import hashlib,json,pathlib,subprocess,sys
+root=pathlib.Path(sys.argv[1])
+paths={name:root/name for name in ("app","node","worker","guardian","manifest")}
+for name,path in paths.items(): path.write_bytes((name+" fixture\n").encode())
+def descriptor(path):
+    payload=path.read_bytes()
+    return {"bytes":len(payload),"sha256":hashlib.sha256(payload).hexdigest()}
+receipt=root/"receipt.json"
+value={"schemaVersion":1,"sourceCommit":"a"*40,"sourceFingerprint":"b"*64,"releaseVersion":"0.2.0","archive":{"bytes":1,"sha256":"c"*64},"components":{"appExecutable":descriptor(paths["app"]),"covalent-node":descriptor(paths["node"]),"covalent-rclone":descriptor(paths["worker"]),"covalent-engine-guardian":descriptor(paths["guardian"]),"engineManifest":descriptor(paths["manifest"])}}
+receipt.write_text(json.dumps(value))
+args=[sys.executable,str(root/"validate-receipt.py"),str(receipt),"a"*40,"b"*64,"0.2.0",*(str(paths[name]) for name in ("app","node","worker","guardian","manifest"))]
+subprocess.run(args,check=True)
+paths["worker"].write_bytes(b"changed\n")
+if subprocess.run(args,capture_output=True).returncode==0:
+    raise SystemExit("receipt accepted changed packaged bytes")
+PYRECEIPTFIXTURE
+
+DRILL="$drill" OUTPUT="$fixture_root/rewrite-manifest.py" PYTHONDONTWRITEBYTECODE=1 python3 - <<'PYMANIFESTEXTRACT'
+import os
+from pathlib import Path
+text=Path(os.environ["DRILL"]).read_text()
+start=text.index("<<'PYMANIFESTREWRITE'\n")+len("<<'PYMANIFESTREWRITE'\n")
+end=text.index("\nPYMANIFESTREWRITE\n",start)
+body=text[start:end]
+compile(body,os.environ["DRILL"]+":manifest-python","exec")
+Path(os.environ["OUTPUT"]).write_text(body)
+PYMANIFESTEXTRACT
+python3 - "$fixture_root" <<'PYMANIFESTFIXTURE'
+import json,pathlib,subprocess,sys
+root=pathlib.Path(sys.argv[1]); path=root/"engine-manifest.json"
+original={"schema":1,"engine":{"name":"rclone"},"executables":{"covalent-engine-guardian":{"signedSha256":"a"*64,"architecture":"arm64"},"covalent-rclone":{"signedSha256":"b"*64,"architecture":"arm64"}}}
+path.write_text(json.dumps(original))
+subprocess.run([sys.executable,str(root/"rewrite-manifest.py"),str(path),"c"*64,"d"*64],check=True)
+updated=json.loads(path.read_text())
+assert updated["executables"]["covalent-engine-guardian"]["signedSha256"]=="c"*64
+assert updated["executables"]["covalent-rclone"]["signedSha256"]=="d"*64
+updated["executables"]["covalent-engine-guardian"]["signedSha256"]="a"*64
+updated["executables"]["covalent-rclone"]["signedSha256"]="b"*64
+assert updated==original
+PYMANIFESTFIXTURE
 
 identity_function=$(awk '/^child_process_identity\(\)/,/^}/' "$drill")
 uncaptured_running_function=$(awk '/^uncaptured_child_is_running\(\)/,/^}/' "$drill")
@@ -24,14 +129,13 @@ stop_uncaptured_function=$(awk '/^stop_uncaptured_child\(\)/,/^}/' "$drill")
 running_function=$(awk '/^owned_child_is_running\(\)/,/^}/' "$drill")
 stop_owned_function=$(awk '/^stop_owned_child\(\)/,/^}/' "$drill")
 stop_function=$(awk '/^stop_local_node\(\)/,/^}/' "$drill")
-remove_function=$(awk '/^remove_owner_fixture_path\(\)/,/^}/' "$drill")
+cleanup_function=$(awk '/^cleanup\(\)/,/^}/' "$drill")
 eval "$identity_function"
 eval "$uncaptured_running_function"
 eval "$stop_uncaptured_function"
 eval "$running_function"
 eval "$stop_owned_function"
 eval "$stop_function"
-eval "$remove_function"
 
 python3 -c 'import signal,sys,time; signal.signal(signal.SIGTERM,lambda *_:sys.exit(0)); time.sleep(3600)' &
 node_pid=$!
@@ -39,21 +143,6 @@ node_identity=$(child_process_identity "$node_pid")
 sleep 1
 stop_local_node true
 test -z "$node_pid"
-
-python3 -c 'import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(3600)' &
-node_pid=$!
-sleep 1
-child_shutdown_checks=2
-if stop_uncaptured_child "$node_pid" 'uncaptured fixture child' 2> "$fixture_root/uncaptured-shutdown.log"; then
-  echo "uncaptured child cleanup did not preserve failure status" >&2
-  exit 1
-fi
-grep -Fq 'exact newly spawned child was reaped' "$fixture_root/uncaptured-shutdown.log"
-if kill -0 "$node_pid" >/dev/null 2>&1; then
-  echo "uncaptured fixture child survived bounded cleanup" >&2
-  exit 1
-fi
-node_pid=''
 
 python3 -c 'import time; time.sleep(3600)' &
 sentinel_pid=$!
@@ -73,52 +162,35 @@ kill -TERM "$sentinel_pid"
 wait "$sentinel_pid" >/dev/null 2>&1 || true
 sentinel_pid=''
 
-local_root="$fixture_root"
-mkdir "$local_root/source"
-remove_owner_fixture_path source
-test ! -e "$local_root/source"
-ln -s "$outside" "$local_root/state"
-if remove_owner_fixture_path state >/dev/null 2>&1; then
-  echo "owner-loss deletion followed a symlink" >&2
+preserved="$fixture_root/preserved-after-failed-stop"
+mkdir "$preserved"
+(
+  eval "$cleanup_function"
+  stop_tunnel() { return 0; }
+  stop_local_node() { return 1; }
+  remote_cleanup() { return 0; }
+  assert_preexisting_ids_survive() { return 0; }
+  node_pid='' tunnel_pid='' local_root="$preserved"
+  cleanup
+) >/dev/null 2> "$fixture_root/failed-local-cleanup.err" && {
+  echo "failed local shutdown returned a clean result" >&2
   exit 1
-fi
-test -L "$local_root/state"
-test -f "$outside"
-if remove_owner_fixture_path ../outside >/dev/null 2>&1; then
-  echo "owner-loss deletion accepted an unlisted path" >&2
-  exit 1
-fi
+}
+test -d "$preserved"
+grep -Fq 'retaining private fixture for safe diagnosis' "$fixture_root/failed-local-cleanup.err"
 
-stop_line=$(grep -n '^  stop_local_node true$' "$drill" | cut -d: -f1)
-state_line=$(grep -n '^  remove_owner_fixture_path state$' "$drill" | cut -d: -f1)
-recover_line=$(grep -n '^  start_local_recover$' "$drill" | cut -d: -f1)
-phase_two_line=$(grep -n "python3 - <<'PYRECOVERY'" "$drill" | cut -d: -f1)
-test "$stop_line" -lt "$state_line"
-test "$state_line" -lt "$recover_line"
-test "$recover_line" -lt "$phase_two_line"
-if grep -Eq '(^|[^[:alnum:]_])(pkill|killall)([^[:alnum:]_]|$)' "$drill"; then
-  echo "remote drill must stop only its captured child PID" >&2
+port_block=$(awk '/^local_tcp=\$\(netstat /,/^fi$/' "$drill")
+cat > "$fixture_root/netstat" <<'SH'
+#!/bin/sh
+exit 71
+SH
+chmod +x "$fixture_root/netstat"
+if PATH="$fixture_root:$PATH" sh -c "local_api=28085 forward=28089 local_sync=8789 local_peer=28086; $port_block" \
+    > /dev/null 2> "$fixture_root/netstat-failure.err"; then
+  echo "local port inventory failure was accepted" >&2
   exit 1
 fi
-if grep -Eq 'wait "\$(node_pid|tunnel_pid)"' "$drill"; then
-  echo "identity-capture failure still contains an unbounded child wait" >&2
-  exit 1
-fi
-grep -Fq 'nonce=$(openssl rand -hex 16)' "$drill"
-grep -Fq 'life.michaelwong.covalent.remote-drill' "$drill"
-grep -Fq 'builder-owned' "$drill"
-grep -Fq 'container-owned' "$drill"
-grep -Fq 'image-owned' "$drill"
-grep -Fq '! docker buildx inspect "$builder"' "$drill"
-grep -Fq '! docker image inspect "$image"' "$drill"
-grep -Fq '! docker container inspect "$container"' "$drill"
-grep -Fq 'stop_tunnel || cleanup_status=1' "$drill"
-grep -Fq 'stop_local_node false || cleanup_status=1' "$drill"
-grep -Fq 'remote_cleanup || cleanup_status=1' "$drill"
-if grep -Fq 'buildkit_image=' "$drill"; then
-  echo "remote cleanup still attempts to own the shared BuildKit image" >&2
-  exit 1
-fi
+grep -Fq 'could not inspect local TCP ports' "$fixture_root/netstat-failure.err"
 
 DRILL="$drill" OUTPUT="$fixture_root/remote-cleanup.sh" PYTHONDONTWRITEBYTECODE=1 python3 - <<'PYEXTRACT'
 import os
@@ -135,7 +207,15 @@ cat > "$fake_bin/docker" <<'SH'
 #!/bin/sh
 printf '%s\n' "$*" >> "$DRILL_DOCKER_LOG"
 case "$1:$2" in
-  info:|container:inspect|buildx:inspect|image:inspect) exit 0 ;;
+  info:) exit 0 ;;
+  ps:*) printf '%s\n' fixture-container-id; exit 0 ;;
+  buildx:ls) printf '%s\n' "$DRILL_BUILDER"; exit 0 ;;
+  image:ls) printf '%s\n' fixture-image-id; exit 0 ;;
+  container:inspect)
+    [ "${DRILL_FAIL_INSPECT:-false}" != true ] || exit 78
+    exit 0
+    ;;
+  image:inspect) exit 0 ;;
   *) exit 77 ;;
 esac
 SH
@@ -143,13 +223,26 @@ chmod +x "$fake_bin/docker"
 remote_fixture=$(mktemp -d /tmp/covalent-remote-drill.XXXXXX)
 fixture_nonce=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 docker_log="$fixture_root/docker.log"
-if PATH="$fake_bin:$PATH" DRILL_DOCKER_LOG="$docker_log" sh "$fixture_root/remote-cleanup.sh" \
+if PATH="$fake_bin:$PATH" DRILL_DOCKER_LOG="$docker_log" DRILL_BUILDER="covalent-remote-drill-$fixture_nonce" sh "$fixture_root/remote-cleanup.sh" \
     "$remote_fixture" "$fixture_nonce" "covalent-remote-drill-$fixture_nonce" \
     "covalent-remote-drill:$fixture_nonce" "covalent-remote-drill-$fixture_nonce" \
     > "$fixture_root/remote-cleanup.out" 2> "$fixture_root/remote-cleanup.err"; then
   echo "unowned pre-existing Docker resources were accepted as a clean result" >&2
   exit 1
 fi
+
+rm -rf "$remote_fixture"
+remote_fixture=$(mktemp -d /tmp/covalent-remote-drill.XXXXXX)
+if PATH="$fake_bin:$PATH" DRILL_DOCKER_LOG="$docker_log" DRILL_BUILDER="covalent-remote-drill-$fixture_nonce" DRILL_FAIL_INSPECT=true \
+    sh "$fixture_root/remote-cleanup.sh" "$remote_fixture" "$fixture_nonce" \
+    "covalent-remote-drill-$fixture_nonce" "covalent-remote-drill:$fixture_nonce" \
+    "covalent-remote-drill-$fixture_nonce" > "$fixture_root/inspect-failure.out" 2> "$fixture_root/inspect-failure.err"; then
+  echo "Docker inspection failure was accepted as clean absence" >&2
+  exit 1
+fi
+test -d "$remote_fixture"
+grep -Fq 'could not inspect the drill container during cleanup' "$fixture_root/inspect-failure.err"
+grep -Fq 'retaining drill root for ownership diagnosis' "$fixture_root/inspect-failure.err"
 test -d "$remote_fixture"
 grep -Fq 'lacks drill ownership proof and was retained' "$fixture_root/remote-cleanup.err"
 grep -Fq 'retaining drill root for ownership diagnosis' "$fixture_root/remote-cleanup.err"
@@ -158,153 +251,22 @@ if grep -Eq '(^| )(rm|prune)( |$)' "$docker_log"; then
   exit 1
 fi
 
-SCRIPT_ROOT="$repo_root/scripts" FIXTURE_ROOT="$fixture_root" PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
-import base64,contextlib,io,json,os,stat,subprocess,sys,threading,traceback,types
-from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
+DRILL="$drill" OUTPUT="$fixture_root/inner.py" PYTHONDONTWRITEBYTECODE=1 python3 - <<'PYINNER'
+import os
 from pathlib import Path
-sys.path.insert(0,os.environ["SCRIPT_ROOT"])
-from remote_drill_api import BACKUP_TERMINAL_RECEIPT_MAXIMUM_BYTES,DiagnosticUnavailable,DrillClient,NodeError,PROTOCOL_VERSION,ResponseTooLarge,backup_failure_diagnostics,decode_recovery_export,summarize_backup_terminal_receipt,write_private
+text=Path(os.environ["DRILL"]).read_text()
+anchor="PYTHONPATH=$root/scripts PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'\n"
+start=text.index(anchor)+len(anchor)
+end=text.index("\nPY\n",start)
+body=text[start:end]
+compile(body,os.environ["DRILL"]+":inner-python","exec")
+Path(os.environ["OUTPUT"]).write_text(body)
+PYINNER
 
-root=Path(os.environ["FIXTURE_ROOT"])
-token=root/"token"
-token.write_text("A"*64)
-token.chmod(0o600)
-class Handler(BaseHTTPRequestHandler):
- redirect_followed=False
- def do_GET(self):
-  if self.headers.get("Authorization")!="Bearer "+"A"*64:self.send_error(401);return
-  if self.path=="/redirect":
-   self.send_response(302);self.send_header("Location","/redirect-target");self.end_headers();return
-  if self.path=="/redirect-target":
-   Handler.redirect_followed=True
-  if self.path=="/declared":
-   self.send_response(200);self.send_header("Content-Length","20");self.end_headers();return
-  if self.path=="/chunked":payload=b'{"value":"too large"}'
-  elif self.path=="/error":payload=json.dumps({"code":"fixture_error","message":"SECRET-MUST-NOT-PRINT"}).encode()
-  elif self.path=="/unsafe-error":payload=json.dumps({"code":"SECRET-MUST-NOT-PRINT"}).encode()
-  else:payload=b'{"ok":true}'
-  self.send_response(409 if self.path in ("/error","/unsafe-error") else 200)
-  if self.path!="/chunked":self.send_header("Content-Length",str(len(payload)))
-  self.end_headers();self.wfile.write(payload)
- def log_message(self,*args):pass
-server=ThreadingHTTPServer(("127.0.0.1",0),Handler)
-thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
-client=DrillClient({"local":("http://127.0.0.1:"+str(server.server_port),token,None)})
-assert client.call("local","/small",maximum_bytes=16)=={"ok":True}
-for path in ("/declared","/chunked"):
- try:client.call("local",path,maximum_bytes=8)
- except ResponseTooLarge:pass
- else:raise AssertionError(path+" was not bounded")
-try:client.call("local","/error")
-except NodeError as error:
- assert error.code=="fixture_error" and "SECRET-MUST-NOT-PRINT" not in str(error)
-else:raise AssertionError("HTTP error was accepted")
-try:client.call("local","/unsafe-error")
-except NodeError as error:
- assert error.code is None and "SECRET-MUST-NOT-PRINT" not in str(error)
-else:raise AssertionError("unsafe HTTP error code was accepted")
-try:client.call("local","/redirect")
-except NodeError as error:assert "HTTP 302 code=unknown" in str(error)
-else:raise AssertionError("HTTP redirect was accepted")
-assert not Handler.redirect_followed
-server.shutdown();server.server_close();thread.join()
+grep -Fq 'cadence":{"mode":"manual"}' "$fixture_root/inner.py"
+grep -Fq 'expectedGeneration' "$fixture_root/inner.py"
+grep -Fq 'source mount accepted a write' "$fixture_root/inner.py"
+grep -Fq 'destination-only content was not retained' "$fixture_root/inner.py"
+grep -Fq 'read-only append probe changed the appdata source' "$fixture_root/inner.py"
 
-receipt_dir=root/"receipt-fixture"/"state"/"backup-results";receipt_dir.mkdir(parents=True)
-receipt=receipt_dir/"remote-drill-backup.json"
-secret="SECRET-RECEIPT-CANARY"
-receipt.write_text(json.dumps({
- "schemaVersion":1,"jobId":"remote-drill-backup","optionsDigest":secret,"sourceRootDigest":secret,"signature":secret,
- "result":{"manifest":{"sourcePath":secret},"storedSnapshot":{"ciphertext":secret},"progress":{"currentPath":secret},"replication":{
-  "acknowledgements":{secret:[secret,secret]},"recoveryCatalogAcknowledgements":[secret],"providerHealth":{secret:"online"},
-  "failures":[{"providerId":secret,"locator":secret,"reason":"provider_error"},{"providerId":secret,"reason":"recovery_catalog_resource_limit"}]
- }}
-}))
-receipt.chmod(0o600)
-class VerificationClient:
- def call(self,node,path,body,**kwargs):
-  assert node=="local" and path=="/api/v1/backups/verify"
-  assert body=={"backupId":"SECRET-BACKUP-ID","snapshotId":"SECRET-SNAPSHOT-ID","verifyProviders":True}
-  assert kwargs=={"timeout":30}
-  return {"intact":False,"providerAvailability":{secret:"degraded","SECRET-SECOND-PEER":"offline"}}
-diagnostics=backup_failure_diagnostics(VerificationClient(),receipt,{"backupId":"SECRET-BACKUP-ID","snapshotId":"SECRET-SNAPSHOT-ID","entries":3,"bytesRead":7,"chunksStored":2,"chunksDeduplicated":1,"selectedProviders":1,"degradedFailures":2},"remote-drill-backup")
-rendered=json.dumps(diagnostics,sort_keys=True)
-assert secret not in rendered and "SECRET-BACKUP-ID" not in rendered and "SECRET-SNAPSHOT-ID" not in rendered
-assert diagnostics["terminalReceipt"]["acknowledgementProviders"]==1
-assert diagnostics["terminalReceipt"]["acknowledgedObjects"]==2
-assert diagnostics["terminalReceipt"]["catalogAcknowledgements"]==1
-assert diagnostics["terminalReceipt"]["providerHealth"]=={"online":1,"offline":0,"corrupt":0}
-assert diagnostics["terminalReceipt"]["failureCategories"]["provider_error"]==1
-assert diagnostics["terminalReceipt"]["failureCategories"]["recovery_catalog_resource_limit"]==1
-assert diagnostics["providerVerification"]=={"intact":False,"providerAvailability":{"complete":0,"degraded":1,"offline":1,"corrupt":0,"revoked":0}}
-malformed=backup_failure_diagnostics(VerificationClient(),receipt,{"backupId":"SECRET-MALFORMED-ID","snapshotId":"SECRET-MALFORMED-SNAPSHOT","entries":1<<65,"bytesRead":0,"chunksStored":0,"chunksDeduplicated":0,"selectedProviders":1,"degradedFailures":1},"remote-drill-backup")
-assert malformed=={"backupResponse":{"status":"diagnostic_unavailable"}}
-assert "SECRET-MALFORMED" not in json.dumps(malformed,sort_keys=True)
-
-receipt.chmod(0o644)
-try:summarize_backup_terminal_receipt(receipt,"remote-drill-backup")
-except DiagnosticUnavailable:pass
-else:raise AssertionError("world-readable receipt was accepted")
-receipt.chmod(0o600)
-symlink=receipt_dir/"receipt-link.json";symlink.symlink_to(receipt)
-try:summarize_backup_terminal_receipt(symlink,"remote-drill-backup")
-except DiagnosticUnavailable:pass
-else:raise AssertionError("receipt symlink was accepted")
-fifo=receipt_dir/"receipt-fifo"
-os.mkfifo(fifo,0o600)
-fifo_check='''from remote_drill_api import DiagnosticUnavailable,summarize_backup_terminal_receipt
-import sys
-try:summarize_backup_terminal_receipt(sys.argv[1],"remote-drill-backup")
-except DiagnosticUnavailable:raise SystemExit(0)
-raise SystemExit(1)
-'''
-fifo_result=subprocess.run([sys.executable,"-c",fifo_check,str(fifo)],env={**os.environ,"PYTHONPATH":os.environ["SCRIPT_ROOT"]},capture_output=True,timeout=2)
-assert fifo_result.returncode==0 and not fifo_result.stdout and not fifo_result.stderr
-oversized=receipt_dir/"oversized.json";oversized.write_bytes(b"x"*(BACKUP_TERMINAL_RECEIPT_MAXIMUM_BYTES+1));oversized.chmod(0o600)
-try:summarize_backup_terminal_receipt(oversized,"remote-drill-backup")
-except DiagnosticUnavailable:pass
-else:raise AssertionError("oversized receipt was accepted")
-bad=receipt_dir/"bad-category.json";bad.write_text(json.dumps({"schemaVersion":1,"jobId":"remote-drill-backup","result":{"replication":{"acknowledgements":{},"recoveryCatalogAcknowledgements":[],"providerHealth":{},"failures":[{"reason":secret}]}}}));bad.chmod(0o600)
-try:summarize_backup_terminal_receipt(bad,"remote-drill-backup")
-except DiagnosticUnavailable:pass
-else:raise AssertionError("unallowlisted failure category was accepted")
-drill_text=(Path(os.environ["SCRIPT_ROOT"])/"test-remote-drill.sh").read_text()
-failure_start=drill_text.index('if backup["selectedProviders"]!=1 or backup["degradedFailures"]!=0:')
-assert drill_text.index('raise SystemExit("replication failed")',failure_start)>failure_start
-assert drill_text.index('backup_failure_diagnostics(',failure_start)<drill_text.index('raise SystemExit("replication failed")',failure_start)
-failure_end=drill_text.index('\ncheck=call("local","/api/v1/backups/verify"',failure_start)
-failure_branch=drill_text[failure_start:failure_end]
-class RaisingDiagnosticClient:
- def call(self,*args,**kwargs):raise RuntimeError("SECRET-DIAGNOSTIC-ERROR")
-branch_context={
- "Path":Path,"backup":{"backupId":"SECRET-BRANCH-BACKUP","snapshotId":"SECRET-BRANCH-SNAPSHOT","entries":1,"bytesRead":1,"chunksStored":1,"chunksDeduplicated":0,"selectedProviders":1,"degradedFailures":1},
- "request":{"jobId":"remote-drill-backup"},"client":RaisingDiagnosticClient(),"backup_failure_diagnostics":backup_failure_diagnostics,
- "json":json,"os":types.SimpleNamespace(environ={"LOCAL_ROOT":str(root/"missing-branch-receipt")}),
-}
-branch_output=io.StringIO()
-try:
- with contextlib.redirect_stdout(branch_output):exec(failure_branch,branch_context)
-except SystemExit as error:assert str(error)=="replication failed"
-else:raise AssertionError("diagnostic failure masked replication failure")
-assert "SECRET-" not in branch_output.getvalue()
-
-encoded=base64.urlsafe_b64encode(b"private kit").decode().rstrip("=")
-encoded_key=base64.urlsafe_b64encode(b"B"*32).decode().rstrip("=")
-kit,key=decode_recovery_export({"protocolVersion":PROTOCOL_VERSION,"recoveryKit":encoded,"recoveryKey":encoded_key})
-destination=root/"kit"
-write_private(destination,kit)
-assert destination.read_bytes()==b"private kit" and stat.S_IMODE(destination.stat().st_mode)==0o600
-try:write_private(destination,key)
-except FileExistsError:pass
-else:raise AssertionError("private recovery file was overwritten")
-for bad in (dict(protocolVersion=True,recoveryKit=encoded,recoveryKey=encoded_key),dict(protocolVersion=PROTOCOL_VERSION,recoveryKit=encoded,recoveryKey="B"*43)):
- try:decode_recovery_export(bad)
- except RuntimeError:pass
- else:raise AssertionError("non-canonical recovery export was accepted")
-secret_kit="SECRET-BEARER-MUST-NOT-APPEAR-\N{SNOWMAN}"
-try:decode_recovery_export({"protocolVersion":PROTOCOL_VERSION,"recoveryKit":secret_kit,"recoveryKey":encoded_key})
-except RuntimeError:
- assert secret_kit not in traceback.format_exc()
-else:raise AssertionError("non-ASCII recovery kit was accepted")
-PY
-
-echo "Remote owner-loss drill fixtures: ok"
+echo "Remote one-way drill contract fixtures: ok"

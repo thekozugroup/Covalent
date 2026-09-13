@@ -1,5 +1,9 @@
 # Complete owner-loss recovery through Atmos Docker
 
+> Historical evidence for the superseded encrypted-backup and owner-loss scope.
+> Owner-loss recovery is excluded from the current one-way release. Use
+> [Mac–Atmos one-way release drill](atmos-one-way-drill.md) for current work.
+
 Status: passed as development evidence; repeat on the final release artifact.
 Atlas is offline. The owner accepted Docker validation as its completion path;
 this test does not claim an installation on physical Atlas hardware.

@@ -16,13 +16,17 @@ From the repository root on an Apple Silicon Mac:
 ./scripts/build-personal-macos-app.sh
 ```
 
-This is the canonical personal-use build. It installs checksum-pinned XcodeGen
+This is the canonical personal-use build and requires a clean source checkout.
+It installs checksum-pinned XcodeGen
 in a private temporary directory, resolves only locked Swift packages, builds
 and ad-hoc signs the arm64 app and bundled node, runs the repository bundle
 verifier, packages the app, verifies the checksum, extracts the ZIP, and
 verifies the extracted app again. Finished files land in ignored
 `artifacts/install`. Existing outputs are never replaced, and the script never
-installs or replaces an app. Follow the end-user guide to install and open it.
+installs or replaces an app. A `.build-receipt.json` beside the ZIP records the
+source commit, source fingerprint, archive hash, and exact packaged executable
+and engine-manifest hashes. The builder checks the source before and after the
+build. Follow the end-user guide to install and open the app.
 
 ## Developer setup
 
@@ -75,7 +79,8 @@ Use the same guarded builder from the repository root:
 ./scripts/build-personal-macos-app.sh
 ```
 
-This produces a verified ZIP and matching SHA-256 file in `artifacts/install`.
+This produces a verified ZIP, matching SHA-256 file, and build receipt in
+`artifacts/install`. Keep all three files together when moving a build.
 Use the end-user guide's one-time safe Open instructions; never weaken
 Gatekeeper globally.
 

@@ -894,9 +894,25 @@ class SafFolderSyncJourneyInstrumentedTest {
 
     private fun selectSystemPickerFolder(fixture: String, folder: String) {
         check(SAF_PICKER_COMPONENT.matches(fixture) && SAF_PICKER_COMPONENT.matches(folder))
-        await("system folder picker") {
-            instrumentation.uiAutomation.rootInActiveWindow?.packageName?.toString() ==
-                DOCUMENTS_UI_PACKAGE
+        val pickerWaitStarted = System.nanoTime()
+        var lastRootCategory = "unavailable"
+        try {
+            await("system folder picker") {
+                val rootPackage = instrumentation.uiAutomation.rootInActiveWindow?.packageName?.toString()
+                lastRootCategory = pickerPackageCategory(rootPackage)
+                rootPackage == DOCUMENTS_UI_PACKAGE
+            }
+        } catch (failure: AssertionError) {
+            val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - pickerWaitStarted)
+            val currentRootCategory = pickerPackageCategory(runCatching {
+                instrumentation.uiAutomation.rootInActiveWindow?.packageName?.toString()
+            }.getOrNull())
+            throw AssertionError(
+                "${failure.message} elapsedMillis=$elapsedMillis " +
+                    "lastRoot=$lastRootCategory currentRoot=$currentRootCategory " +
+                    pickerWindowDiagnostic(),
+                failure,
+            )
         }
         if (systemPickerHasText("Files in source") || systemPickerHasText("Files in destination")) {
             shell("input keyevent KEYCODE_BACK")
@@ -918,6 +934,23 @@ class SafFolderSyncJourneyInstrumentedTest {
         clickSystemPickerText("USE THIS FOLDER")
         clickSystemPickerText("ALLOW")
     }
+
+    private fun pickerPackageCategory(packageName: String?): String = when (packageName) {
+        null -> "unavailable"
+        DOCUMENTS_UI_PACKAGE -> "DocumentsUI"
+        context.packageName -> "target"
+        instrumentation.context.packageName -> "test-host"
+        else -> "other"
+    }
+
+    private fun pickerWindowDiagnostic(): String = runCatching {
+        val windows = instrumentation.uiAutomation.windows
+        val categories = windows.take(MAX_DIAGNOSTIC_WINDOWS).joinToString(prefix = "[", postfix = "]") {
+            val category = pickerPackageCategory(it.root?.packageName?.toString())
+            "$category(active=${it.isActive},focused=${it.isFocused})"
+        }
+        "accessibilityWindowCount=${windows.size} accessibilityWindows=$categories"
+    }.getOrElse { "accessibilityWindowCount=unavailable accessibilityWindows=[]" }
 
     private fun assertExactPickerTree(grant: SafFolderGrant, fixture: String, folder: String) {
         assertEquals(
@@ -1412,6 +1445,7 @@ class SafFolderSyncJourneyInstrumentedTest {
         const val STABLE_API_MILLIS = 5_000L
         const val DEFAULT_TIMEOUT_MILLIS = 90_000L
         const val MAX_DIAGNOSTIC_NODES = 2
+        const val MAX_DIAGNOSTIC_WINDOWS = 8
         const val TRANSFER_TIMEOUT_MILLIS = 120_000L
         const val NEGATIVE_WINDOW_MILLIS = 7_000L
         const val PROCESS_SCAN_SECONDS = 5L

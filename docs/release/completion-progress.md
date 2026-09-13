@@ -8,11 +8,13 @@ transfer engine and its migration is complete. The corrected Android layout on
 `d4a45ff` passes the complete native transfer journey and normal/large-text app
 review, restoring setup, cadence, and Android acceptance. Fan-out, collection
 isolation, deletion/restoration, and shared settings remain verified. The prior
-`7cf89c1` hosted run remains failed. The `d4a45ff` hosted run passes core and
-packaging checks but fails later Android grant recovery and the Mac cadence
-picker. The complete source-matched local Android pass remains recorded;
-these hosted failures receive no acceptance credit. Mac, Atmos, and final
-release acceptance remain open.
+`7cf89c1` and `d4a45ff` hosted failures remain recorded. Current committed
+source `fd542fb` passes foundation, packaging, security, and version checks;
+its Mac managed journey times out. The first Android attempt fails before app
+tests begin; the requested targeted Android retry passes all 81 baseline tests,
+then times out in the initial system folder picker before link setup. The
+complete source-matched local Android pass remains separate evidence. Mac,
+Atmos, and final release acceptance remain open.
 Earlier Syncthing evidence is retained only as history.
 
 **Previous scope: 75%, 15 of 20 checks**, recorded at checkpoint 46 (c47003113e28b6e934a8ab4823040614fb07fb30). That score belongs to the superseded bidirectional/backup scope. Source and evidence remain in Git history.
@@ -147,10 +149,43 @@ missing or inaccessible picker throws before later steps can run. The original
 10-second timeout, Manual selection, and transfer assertions are unchanged.
 The accessibility lookup cause is not yet established by runtime evidence.
 That run's copied production helpers use test-only signatures, so it does not
-approve production sandbox inheritance or Keychain startup. The next native
+approve production sandbox inheritance or Keychain startup. On `fd542fb`, the
 journey uses the sandboxed app's own first-launch setup and LocalNodeManager,
-then quits and reopens to verify its saved identity and selected-folder grant.
-This conversion is pending runtime validation and receives no completion credit.
+then attempts quit/reopen, saved-identity reuse, and a second transfer through
+the retained folder grant. Swift passes 179 tests and integration passes one;
+UI passes five of six tests. The managed journey exceeds its unchanged
+120-second allowance without retaining a last completed phase. This does not
+establish which startup or transfer step was reached. Fixed, data-free phase
+activities and bounded failure-log extraction are added for the next run, with
+the same timeouts and assertions. The temporary root is also canonicalized so
+exact process cleanup handles `/var` and `/private/var` aliases consistently.
+These changes pass static validation but receive no native acceptance credit.
+The attempt-two aggregate retains this same Mac failure, but its sanitized Mac
+log is byte-identical to attempt one, including timestamps; it does not prove
+that the Mac job reran.
+
+The first `fd542fb` Android attempt compiles successfully but runs zero app tests:
+the emulator reports boot completion while its `settings` and `input` services
+are unavailable. The requested targeted retry on the same source newly executes
+all 81 baseline tests successfully in 74.895 seconds. Its separate SAF journey
+then fails after 93.11 seconds because the initial system folder picker does not
+complete before its existing deadline. Link setup and grant repair are not
+reached, and the retained log does not establish why the picker remains open.
+The aggregate also lists prior Mac and foundation results; their presence does
+not show that those jobs reran. Neither Android attempt changes the 70% score or
+replaces the complete source-matched local Android evidence.
+The next run adds failure-only elapsed time and fixed window categories to
+distinguish picker visibility from the test host remaining active. It records
+no screen text, paths, or URIs, and preserves the existing timeout and actions.
+Offline instrumentation compilation and independent review pass.
+
+The remote drill now uses current one-way folder links and a build receipt for
+exact packaged Mac component bytes. It runs private helper copies as an engine
+harness and tests only owned `/sync`, synthetic appdata `/source`, and readable
+`/boot-source` mounts. Syntax, mock contracts, and independent cleanup review
+pass; no remote run has occurred. This harness does not establish installed Mac
+app, Keychain, bookmark, application-restore, or boot-recovery acceptance. See
+the [current drill runbook](atmos-one-way-drill.md).
 
 A separate bounded rclone fault test confirms that an aggregate failed copy can
 leave completed files at the destination. The wrapper now preserves ownership
