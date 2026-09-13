@@ -375,7 +375,7 @@ internal class SafSyncInventory(
     }
 }
 
-private class ContentResolverMetadataSource(
+internal class ContentResolverMetadataSource(
     private val resolver: ContentResolver,
     private val treeUri: Uri,
     private val cancellationSignal: CancellationSignal,

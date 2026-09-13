@@ -24,8 +24,10 @@ import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
 
@@ -42,9 +44,15 @@ internal class SafWebDavServer(
 ) : Closeable {
     private val resolver = context.applicationContext.contentResolver
     private val running = AtomicBoolean(false)
-    private val clients = Executors.newFixedThreadPool(4) { runnable ->
-        Thread(runnable, "covalent-saf-webdav-client").apply { isDaemon = true }
-    }
+    private val clients = ThreadPoolExecutor(
+        4,
+        4,
+        0L,
+        TimeUnit.MILLISECONDS,
+        ArrayBlockingQueue(4),
+        { runnable -> Thread(runnable, "covalent-saf-webdav-client").apply { isDaemon = true } },
+        ThreadPoolExecutor.AbortPolicy(),
+    )
     private val clientSockets = ConcurrentHashMap.newKeySet<Socket>()
     private var listener: ServerSocket? = null
     private var acceptThread: Thread? = null
@@ -111,6 +119,17 @@ internal class SafWebDavServer(
             return
         }
         runCatching { dispatch(request, input, output) }.getOrElse { error ->
+            if (error is RangeNotSatisfiable) {
+                runCatching {
+                    writeResponse(
+                        output,
+                        416,
+                        "Range Not Satisfiable",
+                        headers = mapOf("Content-Range" to "bytes */${error.size}"),
+                    )
+                }
+                return
+            }
             val response = when (error) {
                 is MissingDocument -> 404 to "Not Found"
                 is Conflict -> 409 to "Conflict"
@@ -143,15 +162,15 @@ internal class SafWebDavServer(
     }
 
     private fun propfind(path: List<String>, request: Request, output: OutputStream) {
-        val tree = TreeSnapshot.observe(resolver, treeUri)
+        val tree = DirectTree(resolver, treeUri)
         val target = tree.require(path)
         val depth = request.headers["depth"] ?: "0"
         require(depth == "0" || depth == "1")
-        val nodes = if (depth == "1" && target.directory) listOf(target) + tree.children(target.id) else listOf(target)
+        val nodes = if (depth == "1" && target.directory) listOf(target) + tree.children(target) else listOf(target)
         val xml = buildString {
             append("<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\">")
             nodes.forEach { node ->
-                append("<D:response><D:href>").append(xmlEscape(encodedPath(tree.path(node.id), node.directory))).append("</D:href>")
+                append("<D:response><D:href>").append(xmlEscape(encodedPath(node.path, node.directory))).append("</D:href>")
                 append("<D:propstat><D:prop><D:displayname>").append(xmlEscape(node.name)).append("</D:displayname>")
                 append("<D:resourcetype>")
                 if (node.directory) append("<D:collection/>")
@@ -169,18 +188,29 @@ internal class SafWebDavServer(
     }
 
     private fun readFile(path: List<String>, request: Request, output: OutputStream, includeBody: Boolean) {
-        val tree = TreeSnapshot.observe(resolver, treeUri)
+        val tree = DirectTree(resolver, treeUri)
         val target = tree.require(path)
         if (target.directory) throw Conflict()
         val size = target.size ?: throw Conflict()
-        require(request.headers["range"] == null) { "Range requests are not supported." }
-        val headers = linkedMapOf("Content-Type" to target.mimeType, "Content-Length" to size.toString())
+        val range = request.headers["range"]?.let { parseRange(it, size) }
+        val start = range?.first ?: 0L
+        val end = range?.last ?: (size - 1L)
+        val responseSize = if (size == 0L) 0L else end - start + 1L
+        val headers = linkedMapOf(
+            "Content-Type" to target.mimeType,
+            "Content-Length" to responseSize.toString(),
+            "Accept-Ranges" to "bytes",
+        )
+        if (range != null) headers["Content-Range"] = "bytes $start-$end/$size"
         if (!includeBody) {
-            writeHead(output, 200, "OK", headers)
+            writeHead(output, if (range == null) 200 else 206, if (range == null) "OK" else "Partial Content", headers)
             return
         }
-        writeHead(output, 200, "OK", headers)
-        resolver.openInputStream(tree.uri(target.id))?.use { source -> source.copyTo(output, BUFFER_BYTES) }
+        writeHead(output, if (range == null) 200 else 206, if (range == null) "OK" else "Partial Content", headers)
+        resolver.openInputStream(tree.uri(target))?.use { source ->
+            skipExactly(source, start)
+            copyExactly(source, output, responseSize)
+        }
             ?: throw SecurityException()
         output.flush()
     }
@@ -190,50 +220,83 @@ internal class SafWebDavServer(
         val length = request.headers["content-length"]?.toLongOrNull()
             ?: throw IllegalArgumentException("A bounded upload length is required.")
         require(length in 0..MAX_FILE_BYTES && request.headers["transfer-encoding"] == null)
-        val tree = TreeSnapshot.observe(resolver, treeUri)
+        val tree = DirectTree(resolver, treeUri)
         val parent = tree.require(path.dropLast(1))
         if (!parent.directory) throw Conflict()
         val existing = tree.find(path)
         if (existing?.directory == true) throw Conflict()
-        val created = existing == null
-        val targetUri = existing?.let { tree.uri(it.id) } ?: DocumentsContract.createDocument(
+        val contentType = request.headers["content-type"]?.takeIf(::validMimeType) ?: "application/octet-stream"
+        val temporaryName = tree.availableTemporaryName(parent, "upload")
+        var temporaryUri = DocumentsContract.createDocument(
             resolver,
-            tree.uri(parent.id),
-            request.headers["content-type"]?.takeIf(::validMimeType) ?: "application/octet-stream",
-            path.last(),
+            tree.uri(parent),
+            contentType,
+            temporaryName,
         ) ?: throw SecurityException()
-        tree.requireContained(targetUri)
+        tree.requireChild(parent, temporaryName, temporaryUri)
         try {
-            resolver.openOutputStream(targetUri, "rwt")?.use { destination -> copyExactly(input, destination, length) }
+            resolver.openOutputStream(temporaryUri, "rwt")?.use { destination -> copyExactly(input, destination, length) }
                 ?: throw SecurityException()
+            if (existing == null) {
+                temporaryUri = DocumentsContract.renameDocument(resolver, temporaryUri, path.last())
+                    ?: throw SecurityException()
+                tree.requireChild(parent, path.last(), temporaryUri)
+            } else {
+                val backupName = tree.availableTemporaryName(parent, "replaced")
+                var backupUri = DocumentsContract.renameDocument(resolver, tree.uri(existing), backupName)
+                    ?: throw SecurityException()
+                tree.requireChild(parent, backupName, backupUri)
+                try {
+                    temporaryUri = DocumentsContract.renameDocument(resolver, temporaryUri, path.last())
+                        ?: throw SecurityException()
+                    tree.requireChild(parent, path.last(), temporaryUri)
+                } catch (error: Throwable) {
+                    runCatching { DocumentsContract.deleteDocument(resolver, temporaryUri) }
+                    runCatching {
+                        backupUri = DocumentsContract.renameDocument(resolver, backupUri, path.last())
+                            ?: throw SecurityException()
+                        tree.requireChild(parent, path.last(), backupUri)
+                    }
+                    throw error
+                }
+                if (!DocumentsContract.deleteDocument(resolver, backupUri)) {
+                    runCatching { DocumentsContract.deleteDocument(resolver, temporaryUri) }
+                    runCatching {
+                        backupUri = DocumentsContract.renameDocument(resolver, backupUri, path.last())
+                            ?: throw SecurityException()
+                        tree.requireChild(parent, path.last(), backupUri)
+                    }
+                    throw SecurityException("The replaced document could not be removed.")
+                }
+            }
         } catch (error: Throwable) {
-            if (created) runCatching { DocumentsContract.deleteDocument(resolver, targetUri) }
+            runCatching { DocumentsContract.deleteDocument(resolver, temporaryUri) }
             throw error
         }
-        writeResponse(output, if (created) 201 else 204, if (created) "Created" else "No Content")
+        writeResponse(output, if (existing == null) 201 else 204, if (existing == null) "Created" else "No Content")
     }
 
     private fun makeCollection(path: List<String>, output: OutputStream) {
         require(path.isNotEmpty())
-        val tree = TreeSnapshot.observe(resolver, treeUri)
+        val tree = DirectTree(resolver, treeUri)
         if (tree.find(path) != null) throw Conflict()
         val parent = tree.require(path.dropLast(1))
         if (!parent.directory) throw Conflict()
         val created = DocumentsContract.createDocument(
             resolver,
-            tree.uri(parent.id),
+            tree.uri(parent),
             DocumentsContract.Document.MIME_TYPE_DIR,
             path.last(),
         ) ?: throw SecurityException()
-        tree.requireContained(created)
+        tree.requireChild(parent, path.last(), created)
         writeResponse(output, 201, "Created")
     }
 
     private fun delete(path: List<String>, output: OutputStream) {
         require(path.isNotEmpty()) { "The grant root cannot be deleted." }
-        val tree = TreeSnapshot.observe(resolver, treeUri)
+        val tree = DirectTree(resolver, treeUri)
         val target = tree.require(path)
-        check(DocumentsContract.deleteDocument(resolver, tree.uri(target.id)))
+        check(DocumentsContract.deleteDocument(resolver, tree.uri(target)))
         writeResponse(output, 204, "No Content")
     }
 
@@ -248,24 +311,24 @@ internal class SafWebDavServer(
         )
         val destinationPath = parsePath(destinationUri.rawPath)
         require(destinationPath.isNotEmpty())
-        val tree = TreeSnapshot.observe(resolver, treeUri)
+        val tree = DirectTree(resolver, treeUri)
         if (tree.find(destinationPath) != null) throw Conflict()
         val source = tree.require(path)
         val sourceParent = tree.require(path.dropLast(1))
         val destinationParent = tree.require(destinationPath.dropLast(1))
-        var moved = if (sourceParent.id == destinationParent.id) tree.uri(source.id) else {
+        var moved = if (sourceParent.id == destinationParent.id) tree.uri(source) else {
             DocumentsContract.moveDocument(
                 resolver,
-                tree.uri(source.id),
-                tree.uri(sourceParent.id),
-                tree.uri(destinationParent.id),
+                tree.uri(source),
+                tree.uri(sourceParent),
+                tree.uri(destinationParent),
             ) ?: throw SecurityException()
         }
         if (source.name != destinationPath.last()) {
             moved = DocumentsContract.renameDocument(resolver, moved, destinationPath.last())
                 ?: throw SecurityException()
         }
-        tree.requireContained(moved)
+        tree.requireChild(destinationParent, destinationPath.last(), moved)
         writeResponse(output, 201, "Created")
     }
 
@@ -297,80 +360,100 @@ internal class SafWebDavServer(
 
     private class MissingDocument : Exception()
     private class Conflict : Exception()
+    private class RangeNotSatisfiable(val size: Long) : Exception()
 
-    private class TreeSnapshot private constructor(
+    private class DirectTree(
         private val resolver: android.content.ContentResolver,
         private val treeUri: Uri,
-        private val rootId: String,
-        private val nodes: List<Node>,
     ) {
+        private val rootId = DocumentsContract.getTreeDocumentId(treeUri)
+        private val source = ContentResolverMetadataSource(resolver, treeUri, CancellationSignal())
+
         data class Node(
             val id: String,
-            val parentId: String?,
             val name: String,
             val directory: Boolean,
             val mimeType: String,
             val size: Long?,
             val modified: Long?,
+            val path: List<String>,
         )
 
         fun find(path: List<String>): Node? {
-            var node = nodes.single { it.id == rootId }
+            var node = root()
             path.forEach { name ->
                 if (!node.directory) return null
-                node = nodes.singleOrNull { it.parentId == node.id && it.name == name } ?: return null
+                node = children(node).singleOrNull { it.name == name } ?: return null
             }
             return node
         }
 
         fun require(path: List<String>): Node = find(path) ?: throw MissingDocument()
-        fun children(id: String): List<Node> = nodes.filter { it.parentId == id }.sortedBy { it.name }
-        fun uri(id: String): Uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
+        fun uri(node: Node): Uri = uri(node.id)
 
-        fun requireContained(uri: Uri) {
-            val root = uri(rootId)
-            require(isWithinGrantedTree(resolver, treeUri, root, uri))
-        }
-
-        fun path(id: String): List<String> {
-            val result = ArrayDeque<String>()
-            var node = nodes.single { it.id == id }
-            while (node.id != rootId) {
-                result.addFirst(node.name)
-                node = nodes.single { it.id == node.parentId }
+        fun children(parent: Node): List<Node> {
+            require(parent.directory)
+            val children = ArrayList<Node>()
+            val ids = hashSetOf<String>()
+            val names = hashSetOf<String>()
+            var nameBytes = 0L
+            source.queryChildren(parent.id) { raw ->
+                require(children.size < MAX_CHILDREN)
+                require(ids.add(raw.documentId) && raw.documentId != parent.id)
+                val name = requirePortableObservedName(raw.displayName)
+                require(names.add(name.lowercase(Locale.ROOT)))
+                nameBytes += name.toByteArray(Charsets.UTF_8).size
+                require(nameBytes <= MAX_CHILD_NAME_BYTES)
+                children += node(raw, parent.path + name)
             }
-            return result.toList()
+            return children.sortedBy { it.name }
         }
 
-        companion object {
-            fun observe(resolver: android.content.ContentResolver, treeUri: Uri): TreeSnapshot {
-                val observation = SafStrictQuery.observeMetadata(resolver, treeUri, CancellationSignal())
-                val root = Node(
-                    observation.rootDocumentId,
-                    null,
-                    "",
-                    true,
-                    DocumentsContract.Document.MIME_TYPE_DIR,
-                    null,
-                    null,
-                )
-                val rootUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, observation.rootDocumentId)
-                val entries = observation.entries.map {
-                    val documentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, it.documentId)
-                    require(isWithinGrantedTree(resolver, treeUri, rootUri, documentUri))
-                    Node(
-                        it.documentId,
-                        it.parentDocumentId,
-                        it.displayName,
-                        it.kind == SafSyncMetadataKind.DIRECTORY,
-                        it.mimeType,
-                        it.sizeBytes,
-                        it.lastModifiedMillis,
-                    )
-                }
-                return TreeSnapshot(resolver, treeUri, observation.rootDocumentId, listOf(root) + entries)
-            }
+        fun requireChild(parent: Node, name: String, expectedUri: Uri): Node {
+            require(isWithinGrantedTree(resolver, treeUri, uri(rootId), expectedUri))
+            val expectedId = DocumentsContract.getDocumentId(expectedUri)
+            return children(parent).singleOrNull { it.id == expectedId && it.name == name }
+                ?: throw SecurityException()
         }
+
+        fun availableTemporaryName(parent: Node, purpose: String): String {
+            val occupied = children(parent).mapTo(hashSetOf()) { it.name }
+            repeat(8) {
+                val candidate = ".covalent-$purpose-${java.util.UUID.randomUUID()}.tmp"
+                if (candidate !in occupied) return candidate
+            }
+            throw Conflict()
+        }
+
+        private fun root(): Node {
+            val raw = source.queryDocument(rootId)
+            require(raw.documentId == rootId)
+            return node(raw, emptyList()).also { require(it.directory) }
+        }
+
+        private fun node(raw: SafRawMetadata, path: List<String>): Node {
+            require(raw.documentId.isNotEmpty() && raw.documentId.toByteArray(Charsets.UTF_8).size <= MAX_DOCUMENT_ID_BYTES)
+            require(raw.mimeType.isNotEmpty() && raw.mimeType.toByteArray(Charsets.UTF_8).size <= MAX_MIME_BYTES)
+            // FLAG_PARTIAL is an inlined API 29 bit. Rejecting it is safe on
+            // API 26-28, where providers cannot legitimately advertise it.
+            require(raw.flags and DOCUMENT_FLAG_PARTIAL == 0)
+            require(raw.flags and DocumentsContract.Document.FLAG_VIRTUAL_DOCUMENT == 0)
+            require(raw.sizeBytes == null || raw.sizeBytes >= 0)
+            require(raw.lastModifiedMillis == null || raw.lastModifiedMillis >= 0)
+            val documentUri = uri(raw.documentId)
+            require(isWithinGrantedTree(resolver, treeUri, uri(rootId), documentUri))
+            return Node(
+                raw.documentId,
+                raw.displayName,
+                raw.mimeType == DocumentsContract.Document.MIME_TYPE_DIR,
+                raw.mimeType,
+                raw.sizeBytes,
+                raw.lastModifiedMillis,
+                path,
+            )
+        }
+
+        private fun uri(id: String): Uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
     }
 
     companion object {
@@ -379,6 +462,11 @@ internal class SafWebDavServer(
         private const val MAX_FILE_BYTES = 256L * 1024 * 1024 * 1024
         private const val SOCKET_TIMEOUT_MILLIS = 60_000
         private const val BUFFER_BYTES = 64 * 1024
+        private const val MAX_CHILDREN = 25_000
+        private const val MAX_CHILD_NAME_BYTES = 4L * 1024L * 1024L
+        private const val MAX_DOCUMENT_ID_BYTES = 4_096
+        private const val MAX_MIME_BYTES = 512
+        private const val DOCUMENT_FLAG_PARTIAL = 1 shl 13
         private val HTTP_DATE = DateTimeFormatter.RFC_1123_DATE_TIME.withLocale(Locale.US).withZone(ZoneOffset.UTC)
 
         private fun isWithinGrantedTree(
@@ -394,9 +482,11 @@ internal class SafWebDavServer(
                     DocumentsContract.getTreeDocumentId(treeUri)
             }.getOrDefault(false)
             if (!structurallyBound) return false
-            // API 26-28 has no ContentResolver descendant query. Every URI on those
-            // releases is constructed from the twice-observed traversal rooted at
-            // this exact grant (or is a provider result under that grant).
+            if (DocumentsContract.getDocumentId(documentUri) == DocumentsContract.getTreeDocumentId(treeUri)) {
+                return true
+            }
+            // API 26-28 has no ContentResolver descendant query. Every non-root URI
+            // is accepted only after it appears in its exact parent's child query.
             return Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
                 DocumentsContract.isChildDocument(resolver, rootUri, documentUri)
         }
@@ -436,11 +526,23 @@ internal class SafWebDavServer(
         }
 
         private fun parsePath(target: String): List<String> {
-            val rawPath = if (target.startsWith("/")) target.substringBefore('?') else URI(target).rawPath
-            require(rawPath.startsWith('/') && !target.contains('?'))
+            val parsed = URI(target)
+            require(parsed.rawQuery == null && parsed.rawFragment == null)
+            val rawPath = parsed.rawPath
+            require(rawPath.startsWith('/'))
             if (rawPath == "/") return emptyList()
-            require(!rawPath.endsWith('/'))
-            return rawPath.removePrefix("/").split('/').map(::decodeComponent)
+            val withoutTrailingSlash = rawPath.dropLastWhile { it == '/' }
+            return withoutTrailingSlash.removePrefix("/").split('/').map(::decodeComponent)
+        }
+
+        private fun requirePortableObservedName(value: String): String {
+            require(
+                value.isNotEmpty() && value != "." && value != ".." &&
+                    value.toByteArray(Charsets.UTF_8).size <= 1_024 &&
+                    Normalizer.isNormalized(value, Normalizer.Form.NFC) &&
+                    value.none { it == '/' || it == '\\' || it == '\u0000' || it.isISOControl() },
+            )
+            return value
         }
 
         private fun decodeComponent(value: String): String {
@@ -504,6 +606,43 @@ internal class SafWebDavServer(
                 output.write(buffer, 0, count)
                 remaining -= count
             }
+        }
+
+        private fun skipExactly(input: InputStream, length: Long) {
+            var remaining = length
+            val buffer = ByteArray(BUFFER_BYTES)
+            while (remaining > 0) {
+                val skipped = input.skip(remaining)
+                if (skipped > 0) {
+                    remaining -= skipped
+                } else {
+                    val count = input.read(buffer, 0, min(buffer.size.toLong(), remaining).toInt())
+                    if (count < 0) throw EOFException()
+                    remaining -= count
+                }
+            }
+        }
+
+        private fun parseRange(value: String, size: Long): LongRange {
+            if (!value.startsWith("bytes=") || ',' in value || size == 0L) {
+                throw RangeNotSatisfiable(size)
+            }
+            val bounds = value.removePrefix("bytes=").split('-', limit = 2)
+            if (bounds.size != 2) throw RangeNotSatisfiable(size)
+            val start: Long
+            val end: Long
+            if (bounds[0].isEmpty()) {
+                val suffix = bounds[1].toLongOrNull() ?: throw RangeNotSatisfiable(size)
+                if (suffix <= 0) throw RangeNotSatisfiable(size)
+                start = (size - suffix).coerceAtLeast(0)
+                end = size - 1
+            } else {
+                start = bounds[0].toLongOrNull() ?: throw RangeNotSatisfiable(size)
+                end = if (bounds[1].isEmpty()) size - 1 else
+                    bounds[1].toLongOrNull() ?: throw RangeNotSatisfiable(size)
+            }
+            if (start !in 0 until size || end !in start until size) throw RangeNotSatisfiable(size)
+            return start..end
         }
 
         private fun writeResponse(

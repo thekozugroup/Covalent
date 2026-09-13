@@ -66,14 +66,20 @@ class SafWebDavServerInstrumentedTest {
         assertEquals(201, request(endpoint, "PUT", "/Folder.txt", content).code)
         assertArrayEquals(content, request(endpoint, "GET", "/Folder.txt").body)
         assertEquals(200, request(endpoint, "HEAD", "/Folder.txt").code)
+        val range = request(endpoint, "GET", "/Folder.txt", headers = mapOf("Range" to "bytes=7-18"))
+        assertEquals(206, range.code)
+        assertArrayEquals(content.copyOfRange(7, 19), range.body)
+        assertEquals(416, request(endpoint, "GET", "/Folder.txt", headers = mapOf("Range" to "bytes=${content.size}-")).code)
 
-        assertEquals(201, request(endpoint, "MKCOL", "/Nested").code)
+        assertEquals(201, request(endpoint, "MKCOL", "/Nested/").code)
+        assertEquals(201, request(endpoint, "MKCOL", "/Nested/Child/").code)
         assertEquals(201, request(endpoint, "MOVE", "/Folder.txt", headers = mapOf(
-            "Destination" to "http://127.0.0.1:${endpoint.port}/Nested/Moved.txt",
+            "Destination" to "http://127.0.0.1:${endpoint.port}/Nested/Child/Moved.txt",
         )).code)
         assertEquals(404, request(endpoint, "GET", "/Folder.txt").code)
-        assertArrayEquals(content, request(endpoint, "GET", "/Nested/Moved.txt").body)
-        assertEquals(204, request(endpoint, "DELETE", "/Nested/Moved.txt").code)
+        assertArrayEquals(content, request(endpoint, "GET", "/Nested/Child/Moved.txt").body)
+        assertEquals(207, request(endpoint, "PROPFIND", "/Nested/Child/", headers = mapOf("Depth" to "1")).code)
+        assertEquals(204, request(endpoint, "DELETE", "/Nested/Child/Moved.txt").code)
 
         assertEquals(400, request(endpoint, "GET", "/%2e%2e/secret").code)
         assertEquals(400, request(endpoint, "GET", "/encoded%2Fslash").code)
@@ -84,7 +90,7 @@ class SafWebDavServerInstrumentedTest {
     }
 
     @Test
-    fun interruptedNewUploadIsRemovedAndGrantSurvivesServerRestart() {
+    fun interruptedUploadsPreserveExistingBytesAndGrantSurvivesServerRestart() {
         var endpoint = start()
         Socket("127.0.0.1", endpoint.port).use { socket ->
             val body = byteArrayOf(1, 2, 3, 4)
@@ -105,12 +111,45 @@ class SafWebDavServerInstrumentedTest {
         }
         assertEquals(404, request(endpoint, "GET", "/partial.bin").code)
 
+        val retained = "original destination bytes\n".encodeToByteArray()
+        assertEquals(201, request(endpoint, "PUT", "/existing.bin", retained).code)
+        Socket("127.0.0.1", endpoint.port).use { socket ->
+            socket.getOutputStream().write(requestHead(
+                endpoint,
+                "PUT",
+                "/existing.bin",
+                mapOf("Content-Length" to "4096", "Content-Type" to "application/octet-stream"),
+            ))
+            socket.getOutputStream().write(byteArrayOf(9, 8, 7))
+            socket.getOutputStream().flush()
+            socket.shutdownOutput()
+        }
+        repeat(50) {
+            if (request(endpoint, "GET", "/existing.bin").body.contentEquals(retained)) return@repeat
+            Thread.sleep(20)
+        }
+        assertArrayEquals(retained, request(endpoint, "GET", "/existing.bin").body)
+        assertFalse(
+            request(endpoint, "PROPFIND", "/", headers = mapOf("Depth" to "1"))
+                .body.decodeToString().contains(".covalent-"),
+        )
+
         val expected = "persisted across adapter restart\n".encodeToByteArray()
         assertEquals(201, request(endpoint, "PUT", "/restart.txt", expected).code)
         server?.close()
         server = null
         endpoint = start()
         assertArrayEquals(expected, request(endpoint, "GET", "/restart.txt").body)
+    }
+
+    @Test
+    fun oneFileReadQueriesOnlyItsImmediateDirectory() {
+        val endpoint = start()
+        assertArrayEquals("hello\nworld\n".encodeToByteArray(), request(endpoint, "GET", "/Gr%C3%BC%C3%9Fe.txt").body)
+        val counts = queryCounts()
+        assertEquals(1, counts.getInt("documentQueries"))
+        assertEquals(1, counts.getInt("childQueries"))
+        assertEquals(1, counts.getInt("childRows"))
     }
 
     @Test
@@ -158,8 +197,9 @@ class SafWebDavServerInstrumentedTest {
         var roundTrip: DocumentFile? = null
         while (System.nanoTime() < deadline && (uploaded == null || roundTrip == null)) {
             val root = DocumentFile.fromTreeUri(context, treeUri)
-            uploaded = root?.findFile("From-rclone.txt")
-            roundTrip = root?.findFile("Roundtrip.txt")
+            val nested = root?.findFile("Nested")
+            uploaded = nested?.findFile("From-rclone.txt")
+            roundTrip = nested?.findFile("Roundtrip.txt")
             if (uploaded == null || roundTrip == null) Thread.sleep(100)
         }
         val uri = requireNotNull(uploaded?.uri) { "The restricted rclone worker did not upload the test file." }
@@ -174,6 +214,15 @@ class SafWebDavServerInstrumentedTest {
         val instance = SafWebDavServer(context, treeUri, USERNAME, PASSWORD)
         server = instance
         return instance.start()
+    }
+
+    private fun queryCounts() = withProviderControl {
+        requireNotNull(context.contentResolver.call(
+            "content://${SafWebDavTestDocumentsProvider.AUTHORITY}".toUri(),
+            SafWebDavTestDocumentsProvider.METHOD_QUERY_COUNTS,
+            null,
+            null,
+        ))
     }
 
     private fun request(

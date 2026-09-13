@@ -25,6 +25,7 @@ public final class SafWebDavTestDocumentsProvider extends DocumentsProvider {
     public static final String AUTHORITY = "life.michaelwong.covalent.test.saf-webdav";
     public static final String ROOT_ID = "root:opaque";
     public static final String METHOD_RESET = "reset";
+    public static final String METHOD_QUERY_COUNTS = "query-counts";
 
     private static final String[] DOCUMENT_PROJECTION = new String[] {
         Document.COLUMN_DOCUMENT_ID,
@@ -43,6 +44,9 @@ public final class SafWebDavTestDocumentsProvider extends DocumentsProvider {
 
     private final Map<String, Node> nodes = new LinkedHashMap<>();
     private File storage;
+    private int documentQueries;
+    private int childQueries;
+    private int childRows;
 
     @Override
     public synchronized boolean onCreate() {
@@ -54,9 +58,19 @@ public final class SafWebDavTestDocumentsProvider extends DocumentsProvider {
     @Override
     public synchronized Bundle call(String method, String argument, Bundle extras) {
         Bundle result = super.call(method, argument, extras);
-        if (result != null || !METHOD_RESET.equals(method)) return result;
-        reset();
-        return Bundle.EMPTY;
+        if (result != null) return result;
+        if (METHOD_RESET.equals(method)) {
+            reset();
+            return Bundle.EMPTY;
+        }
+        if (METHOD_QUERY_COUNTS.equals(method)) {
+            Bundle counts = new Bundle();
+            counts.putInt("documentQueries", documentQueries);
+            counts.putInt("childQueries", childQueries);
+            counts.putInt("childRows", childRows);
+            return counts;
+        }
+        return null;
     }
 
     @Override
@@ -79,6 +93,7 @@ public final class SafWebDavTestDocumentsProvider extends DocumentsProvider {
     @Override
     public synchronized Cursor queryDocument(String documentId, String[] projection)
             throws FileNotFoundException {
+        documentQueries += 1;
         return documents(projection, List.of(requireNode(documentId)));
     }
 
@@ -93,6 +108,8 @@ public final class SafWebDavTestDocumentsProvider extends DocumentsProvider {
         for (Node node : nodes.values()) {
             if (parentDocumentId.equals(node.parentId)) children.add(node);
         }
+        childQueries += 1;
+        childRows += children.size();
         return documents(projection, children);
     }
 
@@ -224,6 +241,9 @@ public final class SafWebDavTestDocumentsProvider extends DocumentsProvider {
         if (storage.exists()) deleteFileTree(storage);
         if (!storage.mkdirs() && !storage.isDirectory()) throw new IllegalStateException("Could not reset fixture");
         nodes.clear();
+        documentQueries = 0;
+        childQueries = 0;
+        childRows = 0;
         nodes.put(ROOT_ID, new Node(ROOT_ID, null, "Fixture root", Document.MIME_TYPE_DIR, storage));
         try {
             String unicodeId = createDocument(ROOT_ID, "text/plain", "Grüße.txt");
