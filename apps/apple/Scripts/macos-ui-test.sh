@@ -8,6 +8,7 @@ test_root=$(mktemp -d "${TMPDIR:-/tmp}/covalent-macos-ui.XXXXXX")
 test_root=${test_root:A}
 node_pid=""
 real_responder_pid=""
+relaunch_writer_pid=""
 app_token_directory=""
 app_token_file=""
 built_app=""
@@ -54,7 +55,7 @@ cleanup() {
   if [[ -n "$app_token_file" && -n "$app_token_directory" && "$app_token_file" == "$app_token_directory/"* ]]; then
     rm -f -- "$app_token_file" || cleanup_failed=1
   fi
-  for pid in "$real_responder_pid" "$node_pid"; do
+  for pid in "$relaunch_writer_pid" "$real_responder_pid" "$node_pid"; do
     if [[ -n "$pid" ]]; then
       kill "$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
@@ -746,9 +747,55 @@ codesign \
   "$runner"
 codesign --verify --deep --strict --verbose=2 "$runner"
 
+# Only the app receives the folder-picker grant. The owning shell prepares
+# the next sample after the first transfer and the managed source has quit.
+python3 - "$real_source_root" "$real_destination_root" \
+  "$managed_state_root/Node/node-ready.json" \
+  >"$real_fixture/relaunch-fixture-writer.log" 2>&1 <<'PY' &
+import json
+import os
+from pathlib import Path
+import sys
+import time
+
+source, destination, ready = map(Path, sys.argv[1:])
+deadline = time.monotonic() + 480
+source_pid = None
+while time.monotonic() < deadline:
+    try:
+        copied = (destination / "forward.txt").read_bytes() == b"packaged-rclone-forward-content"
+    except OSError:
+        copied = False
+    if copied:
+        try:
+            current = json.loads(ready.read_text())
+            candidate = current.get("processId")
+            if current.get("schemaVersion") == 1 and type(candidate) is int and candidate > 1:
+                source_pid = candidate
+        except (OSError, ValueError, AttributeError):
+            pass
+    if copied and source_pid is not None and not ready.exists():
+        try:
+            os.kill(source_pid, 0)
+        except ProcessLookupError:
+            try:
+                with (source / "after-relaunch.txt").open("xb") as output:
+                    output.write(b"packaged-rclone-after-relaunch")
+            except OSError:
+                raise SystemExit("Relaunch fixture: source write failed") from None
+            print("Relaunch fixture: source prepared after managed node stopped", flush=True)
+            break
+        except PermissionError:
+            pass
+    time.sleep(0.1)
+else:
+    raise SystemExit("Relaunch fixture: timed out waiting for transfer and managed node exit")
+PY
+relaunch_writer_pid=$!
+
 # A hang detector, not a quality gate: it decides when to kill a wedged run,
 # not whether the app is fast enough. CI run 32461742319 executed the
-# then-three-test suite in 43s on a real runner; the six-test suite remains
+# then-three-test suite in 43s on a real runner; the seven-test suite retains
 # within the same deliberately generous 480s hang detector. 900s was
 # set when this lane had never passed and nothing had been measured.
 managed_app_may_have_started=1
@@ -769,6 +816,7 @@ if ! run_bounded 480 xcodebuild \
   # of codesign and launch chatter, so the failures themselves — and the audit
   # findings the accessibility test prints — scroll off the end of any tail
   # worth reading. Pull them out by name first.
+  sed -n '1,4p' "$real_fixture/relaunch-fixture-writer.log" >&2
   emit_failed_result_details
   print -u2 -- "--- audit findings and test failures ---"
   grep -n -A3 -E 'COVALENT-AUDIT-FINDING|error: -\[|XCTAssert' "$ui_log" | tail -200 >&2 || true
@@ -778,6 +826,12 @@ if ! run_bounded 480 xcodebuild \
   pgrep -alf 'xcodebuild|CovalentMacUITests|testmanagerd' >&2 || true
   exit 1
 fi
+if ! wait "$relaunch_writer_pid"; then
+  sed -n '1,4p' "$real_fixture/relaunch-fixture-writer.log" >&2
+  exit 1
+fi
+relaunch_writer_pid=""
+sed -n '1,4p' "$real_fixture/relaunch-fixture-writer.log"
 
 # Xcode can return success after leaving only a partial result directory. Do
 # not let a missing or unreadable report turn an aborted UI run into a pass.
@@ -795,12 +849,12 @@ if ! tests=$(xcrun xcresulttool get test-results tests --compact --path "$result
 fi
 if ! jq -e '
   .result == "Passed" and
-  .totalTestCount == 6 and
-  .passedTests == 6 and
+  .totalTestCount == 7 and
+  .passedTests == 7 and
   .failedTests == 0 and
   .skippedTests == 0
 ' <<<"$summary" >/dev/null; then
-  print -u2 -- "macOS UI test result did not prove exactly six passing, unskipped tests."
+  print -u2 -- "macOS UI test result did not prove exactly seven passing, unskipped tests."
   print -u2 -- "$summary"
   exit 1
 fi
@@ -810,6 +864,7 @@ for expected_test in \
   'testStatusPassesSystemAccessibilityAudit()' \
   'testLinksPassesSystemAccessibilityAudit()' \
   'testNativeMenuBarQuickActionsAreReachable()' \
+  'testHostedRunnerCanExposeActualVoiceOverSpeech()' \
   'testNativeManualFolderLinkTransfersOneWayAndUpdatesMenuBar()'
 do
   if ! jq -e --arg expected_test "$expected_test" '
@@ -820,4 +875,5 @@ do
     exit 1
   fi
 done
+emit_failed_result_details
 cat "$ui_log"

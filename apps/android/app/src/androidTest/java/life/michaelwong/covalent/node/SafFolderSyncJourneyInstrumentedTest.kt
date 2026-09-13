@@ -528,9 +528,13 @@ class SafFolderSyncJourneyInstrumentedTest {
                     readSafFile(destinationGrant, "propagate-source.txt") == null
                 }
             } catch (failure: AssertionError) {
-                println(recoveryDiagnostic("source", repairedA, "source-deletion"))
-                println(recoveryDiagnostic("destination", connectionB, "source-deletion"))
-                throw failure
+                throw AssertionError(
+                    "${failure.message}\n" +
+                        recoveryDiagnostic("source", repairedA, "source-deletion") +
+                        "\n" +
+                        recoveryDiagnostic("destination", connectionB, "source-deletion"),
+                    failure,
+                )
             }
 
             clickScreenText(context.getString(R.string.folder_sync_remove))

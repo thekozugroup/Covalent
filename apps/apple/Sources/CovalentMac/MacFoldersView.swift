@@ -862,6 +862,7 @@ private struct MacFolderLinkSettingsEditor: View {
     Form {
       Section("\(editor.label) Settings") {
         Toggle("Pause this link", isOn: $proposed.paused)
+          .accessibilityIdentifier("folderLink.pause")
         FolderCadenceControls(cadence: $proposed.cadence)
         Toggle("Use Wi-Fi only on Android devices", isOn: $proposed.androidConditions.wifiOnly)
         Toggle("Run only while charging on Android devices", isOn: $proposed.androidConditions.chargingOnly)

@@ -233,10 +233,13 @@ final class RealFolderLinkUITests: XCTestCase {
         XCTAssertTrue(quit.isHittable)
         quit.click()
         XCTAssertTrue(app.wait(for: .notRunning, timeout: transitionTimeout))
-        try Data("packaged-rclone-after-relaunch".utf8).write(
-            to: URL(fileURLWithPath: sourceRoot + "/after-relaunch.txt"),
-            options: .atomic
-        )
+        let afterRelaunchBytes = Data("packaged-rclone-after-relaunch".utf8)
+        guard await waitForFile(
+            sourceRoot + "/after-relaunch.txt",
+            bytes: afterRelaunchBytes
+        ) else {
+            throw FixtureError.timeout("external fixture did not prepare the relaunch source file")
+        }
         XCTAssertFalse(
             FileManager.default.fileExists(atPath: destinationRoot + "/after-relaunch.txt")
         )
@@ -248,19 +251,23 @@ final class RealFolderLinkUITests: XCTestCase {
         recordPhase("Covalent phase: relaunch completed")
 
         recordPhase("Covalent phase: second run entered")
-        let runAfterRelaunch = app.buttons["Run Mac UI Link now"]
-        scrollTo(runAfterRelaunch, in: relaunchedLinks)
+        let statusItemAfterRelaunch = app.statusItems["Covalent"]
+        XCTAssertTrue(statusItemAfterRelaunch.waitForExistence(timeout: transitionTimeout))
+        statusItemAfterRelaunch.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
+        ).click()
+        let runAfterRelaunch = statusItemAfterRelaunch.menuItems["Run Mac UI Link Now"]
         XCTAssertTrue(runAfterRelaunch.waitForExistence(timeout: transitionTimeout))
+        XCTAssertTrue(runAfterRelaunch.isEnabled)
         XCTAssertTrue(runAfterRelaunch.isHittable)
         runAfterRelaunch.click()
         let copiedAfterRelaunch = await waitForFile(
             destinationRoot + "/after-relaunch.txt",
-            bytes: Data("packaged-rclone-after-relaunch".utf8)
+            bytes: afterRelaunchBytes
         )
-        XCTAssertTrue(
-            copiedAfterRelaunch,
-            "The relaunched sandboxed app did not reuse its saved folder grant."
-        )
+        guard copiedAfterRelaunch else {
+            throw FixtureError.timeout("the relaunched app did not reuse its saved folder grant")
+        }
         let relaunchedSourcePeerID = try await waitForSoleProviderIdentity(
             port: responderPort,
             token: responderToken
@@ -287,9 +294,22 @@ final class RealFolderLinkUITests: XCTestCase {
         editSettings.click()
         let settingsTitle = app.staticTexts["Mac UI Link Settings"]
         XCTAssertTrue(settingsTitle.waitForExistence(timeout: transitionTimeout))
-        let cancelSettings = app.sheets.buttons["Cancel"]
-        XCTAssertTrue(cancelSettings.isHittable)
-        cancelSettings.click()
+        let pauseLink = app.descendants(matching: .any)["folderLink.pause"]
+        XCTAssertTrue(pauseLink.waitForExistence(timeout: transitionTimeout))
+        XCTAssertTrue(pauseLink.isEnabled)
+        XCTAssertTrue(pauseLink.isHittable)
+        let initialPauseValue = String(describing: pauseLink.value)
+        pauseLink.click()
+        XCTAssertNotEqual(String(describing: pauseLink.value), initialPauseValue)
+        app.typeKey(.space, modifierFlags: [])
+        XCTAssertEqual(String(describing: pauseLink.value), initialPauseValue)
+        app.typeKey(.tab, modifierFlags: [])
+        app.typeKey(.tab, modifierFlags: [.shift])
+        app.typeKey(.space, modifierFlags: [])
+        XCTAssertNotEqual(String(describing: pauseLink.value), initialPauseValue)
+        app.typeKey(.space, modifierFlags: [])
+        XCTAssertEqual(String(describing: pauseLink.value), initialPauseValue)
+        app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(waitForDisappearance(of: settingsTitle, timeout: transitionTimeout))
         try auditMainWindow(in: app, timeout: transitionTimeout)
         continueAfterFailure = false

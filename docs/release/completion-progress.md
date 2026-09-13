@@ -2,29 +2,44 @@
 
 Updated 2026-09-13 after the owner reaffirmed the lightweight one-way scope. The active goal is defined in [Product requirements](../product/requirements.md#active-completion-goal).
 
-**Current scope: 70% verified, 7 of 10 complete acceptance checks.** This counts
+**Current scope: 50% verified, 5 of 10 complete acceptance checks.** This counts
 complete user journeys, not remaining time or reusable code. Rclone is the sole
 transfer engine and its migration is complete. Setup, fan-out, collection
-isolation, deletion/restoration, cadence, shared settings, and Android are
-verified. On head `6499ded` and tested merge `e846d29`, ten foundation,
+isolation, destination-deletion/restoration, cadence, and shared settings are
+verified. Source-deletion propagation and Android acceptance are reopened by
+the latest failed journey. On head `6499ded` and tested merge `e846d29`, ten foundation,
 packaging, security, and version jobs pass. Both Docker architectures pass their
 13-check packaged transfer journeys. The actual personal Android builder produces
 a clean-source candidate whose exact installed APK passes the full SAF journey
 in 394.998 seconds. Its owned emulator, private ADB, worktree, and build files
 are removed; the seven installable candidate files are retained.
 
-Mac's initial-settings validation now accepts revision zero with a nil change ID,
-matching the source contract. A production-client regression fails before the fix
-and passes after it. One hosted journey then proves the first forward transfer;
-the subsequent trimmed-test runs fail at that transfer's original file deadline.
-Source review identifies a reachable race: Mac exposes Run Now before the source
-observes destination acceptance. The controls and model now require an accepted
-destination, and the native test waits for the existing readiness label and an
-enabled button. The focused model regression passes and confirms that pending
-invitations do not block ready destinations. A separate ambiguous Quit selector is scoped to the status-item
-menu. Native validation of these changes and relaunch remain open. Mac native acceptance,
-Atmos package validation, wholly green final-source checks, and release publication
-remain open. No failed aggregate run is presented as passing.
+The later `ec49a3d` hosted Android run passes 195 unit tests and all 82 baseline
+device tests, but its full SAF journey times out at source-deletion propagation.
+Android and Rust inputs are unchanged from the passing `6499ded` run. The cause
+is under review; earlier passes do not make this later run green.
+
+Mac's initial-settings validation accepts revision zero with a nil change ID,
+matching the source contract. Run Now now requires an accepted destination;
+pending invitations do not block other ready destinations. Hosted source
+`ec49a3d` passes 181 Swift tests, the live integration test, and five of six
+native UI tests. The real link journey proves its first forward transfer,
+destination-only preservation, completed status, and native menu Quit. It then
+fails while the UI test writes its next source fixture, before relaunch.
+The owning test harness now prepares that file after the managed source stops,
+preserving the app's file permissions. Its isolated process check passes and
+removes its temporary files. The combined hosted run confirms this fixture fix,
+but its new unselected Return interaction does not prove activation of the
+per-link menu action; second-transfer bytes do not arrive. The settings test also
+fails to locate its Pause checkbox, and VoiceOver does not enable. The test now
+clicks the exact menu item, locates Pause by a stable accessibility identifier,
+and checks for a delayed VoiceOver welcome dialog within the original deadline.
+These corrections, relaunch transfer, and keyboard/VoiceOver acceptance remain
+unverified. Android failure reports now retain the existing public runtime
+diagnostics; its immediate-deletion predicate and deadline are unchanged.
+Mac native acceptance, Atmos package validation, wholly green final-source
+checks, and release publication remain open. No failed aggregate run is
+presented as passing.
 Earlier Syncthing evidence is retained only as history.
 
 **Previous scope: 75%, 15 of 20 checks**, recorded at checkpoint 46 (c47003113e28b6e934a8ab4823040614fb07fb30). That score belongs to the superseded bidirectional/backup scope. Source and evidence remain in Git history.
@@ -33,12 +48,12 @@ Earlier Syncthing evidence is retained only as history.
 | --- | --- | --- |
 | 1 | Native setup pairs devices and creates a source/destination link; files never flow backward. | Verified |
 | 2 | Fan-out destinations work independently; multiple sources contribute safely to one collection. | Verified |
-| 3 | Both source-deletion options work with clear explanations and failed-scan protection. | Verified |
+| 3 | Both source-deletion options work with clear explanations and failed-scan protection. | Open: latest propagation timeout |
 | 4 | Destination deletions stay local across source edits/restarts; explicit restoration works. | Verified |
 | 5 | Manual, scheduled, and continuous transfers respect platform limits; idle batch workers stop. | Verified |
 | 6 | Settings edited on any authorized member converge across the link; pending/stale edits remain visible. | Verified |
 | 7 | Mac setup, links, settings, and per-link menu bar status pass native HIG/keyboard/VoiceOver checks. | Open |
-| 8 | Tomato-inspired Android floating actions, typography, data/status visuals, and top bar; actual pairing, permission, transfer, and background journeys pass. | Verified |
+| 8 | Tomato-inspired Android floating actions, typography, data/status visuals, and top bar; actual pairing, permission, transfer, and background journeys pass. | Open: latest full journey failed |
 | 9 | Installable Mac/Android/Docker candidates pass real laptop–Atmos transfers and server mount handling; use an Unraid plugin only for a demonstrated Docker limitation. | Open |
 | 10 | Relevant fault/security checks pass; idle/transfer performance is measured; temporary fixtures are removed; GitHub releases and installation guidance are published. | Open |
 
