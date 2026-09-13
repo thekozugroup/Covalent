@@ -1,5 +1,10 @@
 # Set up Covalent on Android
 
+Use this page to build and install the personal APK, then follow
+[Create your first one-way link](../getting-started-links.md). Rclone transfers
+use Android's system folder picker. Server enrollment and backup/restore steps
+later in this page describe the legacy backup workflow.
+
 Current personal-use path: build the debug APK from this repository. Gradle
 signs that APK with your local debug key, so Android can install it. Never
 install `app-release-unsigned.apk`; an unsigned release APK is not an
@@ -150,9 +155,11 @@ The hostname in the URL must match the server certificate. Do not replace it
 with a raw IP unless that IP is in the certificate. Do not use cleartext HTTP
 or a trust-all tool.
 
-UDP 8787 is needed only when this phone pairs with another Covalent device or
-uses one as an extra-copy provider. Allow it on the chosen LAN or Tailnet path.
-TCP 8443 remains the HTTPS console/API path.
+UDP 8787 carries Covalent pairing and link control. A Docker source also needs
+TCP 8789 for authenticated rclone transfers; see the
+[Docker network settings](../../packaging/docker/README.md). Allow the needed
+ports on the chosen LAN or Tailnet path. TCP 8443 remains the HTTPS console/API
+path.
 
 ## Connect in Covalent
 

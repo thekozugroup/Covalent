@@ -1,8 +1,8 @@
 # Covalent
 
-Covalent is being simplified into a native, self-hosted wrapper for one-way file links: choose a source, pair destinations, configure the link once, and monitor transfers. macOS, Android, and Docker/Unraid are the supported targets.
+Covalent is a native, self-hosted wrapper around rclone for one-way file links: choose a source, pair destinations, configure the link once, and monitor transfers. macOS, Android, and Docker/Unraid are the supported targets.
 
-**Development scope changed on 2026-09-12.** The current checkout contains a working pairing and transfer foundation plus earlier backup features. The new one-way workflows are not yet complete. Follow the [current product requirements](docs/product/requirements.md) and [verified progress](docs/release/completion-progress.md); the older backup instructions below describe the existing foundation.
+**Development build; the rclone switch is complete.** Real one-way transfers, fan-out, deletion choices, shared settings, and scheduled runs pass. Native app acceptance and final releases remain in progress. Follow the [current product requirements](docs/product/requirements.md) and [verified progress](docs/release/completion-progress.md). Earlier backup features remain as legacy support.
 
 ## Start here
 

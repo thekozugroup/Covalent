@@ -47,17 +47,38 @@ deletion/restart regression passes after the no-op optimization.
 Android startup registers saved folder capabilities before starting transfers
 and isolates unavailable grants. The actual API 37 device passes two manual
 SAF-to-SAF transfers through paired nodes, including service restart and saved
-permission registration. Revoked access exposed a stalled run and missing repair
-action; the targeted terminal-state and per-folder recovery fix is under final
-device verification. Component screenshots establish the link and shared-setting
+permission registration. The self-contained device journey also completes
+selection in the real system folder picker with exact child-folder assertions,
+Unicode transfer, revoked-access interruption, exact-folder reselection, and
+recovery transfer. Real charging and Wi-Fi changes block and resume transfers.
+The complete replacement journey remains under verification, including native
+pairing, timing changes, and the existing same-request retry action.
+Component screenshots establish the link and shared-setting
 controls, not acceptance of the complete Android navigation design.
 
-Hosted Rust/contracts and Android foundation checks pass on `8aa2f0d`. The latest
-Mac UI job stops before tests during a SwiftPM dependency fetch; earlier native
-UI findings have source fixes awaiting execution. Mac source-build provenance
-pins and Docker's continuous-run completion assertion have reviewed corrections.
-Final native app, Linux package execution, Android background conditions,
-performance, and release acceptance remain open.
+Hosted Rust/contracts, Android foundation, the Mac app bundle, and Docker on
+amd64 and arm64 pass on `b1122d7`. The Mac UI job passes four of five tests,
+including both accessibility audits. The remaining legacy empty-state assertion
+has a scoped accessibility and navigation-wait correction in `19ffb1b`, awaiting
+native execution. A real rclone Links/menu bar journey is still required; the
+existing five tests do not establish it. Android's baseline passes 79 of 82 tests.
+The three failures are two outdated setup control-count expectations and an
+orphan transfer prototype that requires an absent external driver. The replacement
+self-contained folder journey remains under verification before those obsolete
+fixtures are removed.
+
+An optimized local measurement passes the exact 101-file transfer and unchanged
+repeat. Two runtimes together use 0.01 seconds of sampled CPU during roughly
+30 seconds of Manual/Scheduled idle, with no transfer workers. The baseline
+unchanged run takes 30.02 seconds to report completion. A small delivery-timer
+change removes redundant waits between successful control records while
+preserving retry delay. In one comparison run, the 64 MiB plus 100 small-file
+transfer completes in 25.34 seconds versus 34.88 seconds; the unchanged repeat
+takes 30.46 seconds, with no improvement. These are single local loopback
+measurements in a shared test process, not whole-app or Android battery figures.
+Both measurement worktrees, build targets, fixtures, and processes were removed.
+Final native app, complete Android device acceptance, remote validation, and release
+acceptance remain open.
 Syncthing runtime modules, build scripts, source patch, and package assets have
 been removed. [ADR 0008](../adr/0008-rclone-one-way-links.md) records the settled choice.
 
@@ -66,3 +87,11 @@ Previous-engine evidence: the full Rust workspace run passed 908 tests (real wor
 Checkpoint 47 hosted CI found Android error-catalog omissions, Docker manifest rejection, and Mac packaging/model-test failures. Corrections now pass Android's full build gate, all 175 Swift tests, Mac engine packaging/signing, and seven host-validation tests on each platform. The fresh Atmos arm64 image passes its dynamic contract and 13-check one-way transfer gate; original server containers, tagged images, networks, and volumes are restored. Android's actual API 37 device journey passes pairing, one-way transfer, pause/resume, address changes, cold restart, visible deletion-setting confirmation, authenticated settings convergence, restoration, deletion propagation, permission loss, recovery, and safe removal. The native deletion explanations and the independently tested failed-scan protection complete row 3. The historical test selector still contains BothWays; its assertions now verify one-way behavior. Scheduling, native HIG/device acceptance, final packages, performance, and publication remain open.
 
 Cleanup: obsolete ignored checkout build caches were removed: 43,667,280,523 logical bytes. Compact evidence and the existing Android size report were retained. Physical free-space change was not measured; active temporary toolchains, signing keys and unintegrated source remain. The completed Android journey's emulator, ADB instance, app, workers, guardians, and private build checkout were removed; its current APK and compact evidence remain.
+
+Rclone cleanup: completed runtime and measurement worktrees and targets were
+removed after checking ownership and active use. The latest completed root Rust
+target alone contained 25,075,875,180 logical bytes. The active replacement Android
+fixture and reusable toolchains remain until their work finishes. These counts
+are logical file sizes; physical free-space change was not measured. Atmos
+cleanup and new remote validation await restored SSH authentication; Atlas has
+not been contacted.

@@ -1,6 +1,6 @@
 # Create your first one-way link
 
-Covalent is being built as a simple wrapper for sending files one way: pair a
+Covalent wraps rclone for sending files one way: pair a
 device, choose a source folder, then add one or more destinations. A source
 never receives destination changes.
 
@@ -11,13 +11,13 @@ historical, and `v0.2.0` has not been published. The development build paths are
 locally built Docker server, the personal-use Mac build, and the personal-use
 Android debug APK.
 
-- For an always-on destination, build Docker from this checkout. The arm64
-  Docker path passed an Atmos transfer test.
+- For an always-on destination, build Docker from this checkout. The current
+  rclone path passes hosted Docker transfer checks on amd64 and arm64.
 - Use the Mac app on Apple Silicon for the current source/package path. Native
   macOS HIG validation is still open.
-- Android's native pairing, permission-loss recovery, one-way transfer, and
-  deletion-settings journey passes on an API 37 emulator. Direct folder sync is available only in the
-  personal debug build and requires Android's all-files permission.
+- Android uses the system folder picker to grant access to each selected
+  folder. It does not require all-files permission. Real API 37 transfers and
+  permission-loss recovery pass; complete native device acceptance remains open.
 
 Install guidance: [macOS](platform/macos.md),
 [Android](platform/android.md), and
@@ -90,10 +90,11 @@ stops transfers and keeps existing files.
 
 Fan-out destinations, separate family collection folders, destination-deletion
 retention and explicit restoration, and shared link settings have verified
-three-node journeys. Manual and scheduled controls are implemented, with native
-device and restart verification still in progress. Android's earlier API 37
-one-way device journey passes; whole-app design and additional platform journeys
-remain open. Do not treat a local build as a release-ready package.
+three-node journeys. Manual transfers, restart, and an actual 15-minute
+scheduled transfer pass. Real Android charging and Wi-Fi conditions also block
+and resume transfers. Complete native app acceptance and laptop–Atmos validation
+remain open. Do not treat a local build as a
+release-ready package.
 
 See [product requirements](product/requirements.md) and the
 [completion ledger](release/completion-progress.md) for current scope and

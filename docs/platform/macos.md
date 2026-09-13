@@ -1,9 +1,13 @@
 # Set up Covalent on macOS
 
 Covalent supports macOS 15 or later on Apple Silicon. The app starts its own
-private Covalent node automatically. When Atlas deployment becomes available,
-pair it as a backup device; do not replace the Mac's local connection with
-Atlas.
+private Covalent node automatically. Use the build and installation steps below,
+then [create a one-way link](../getting-started-links.md). Pair a destination
+with the Mac's local node; keep the app connected to its own node.
+
+The recovery checkpoint and Atlas backup instructions later in this page cover
+the legacy backup workflow. They are not prerequisites for rclone links. Atlas
+is offline, and current native release acceptance remains open.
 
 ## Before you start
 
