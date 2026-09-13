@@ -20,8 +20,8 @@ use super::config::{EngineFolderConfig, EngineFolderRole, EnginePeerConfig};
 use super::installation::{EngineInstallation, EngineWorkerLease};
 use super::rclone::RcloneRuntime;
 use super::{
-    EngineIndexSnapshot, EnginePeerConnection, EnginePeerConnectionState, FolderHealth,
-    FolderLifecycle, OwnedEngineWorker, StopOutcome, VerifiedEngineExecutable,
+    AndroidSafGrantRegistry, EngineIndexSnapshot, EnginePeerConnection, EnginePeerConnectionState,
+    FolderHealth, FolderLifecycle, OwnedEngineWorker, StopOutcome, VerifiedEngineExecutable,
 };
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -71,6 +71,7 @@ pub struct ManagedEngineSession {
     worker_lease: Option<Arc<EngineWorkerLease>>,
     roots: Arc<Vec<FolderRootLease>>,
     settings: EngineSessionSettings,
+    unavailable_folders: BTreeSet<Uuid>,
     jobs: BTreeMap<Uuid, JoinHandle<Result<EngineIndexSnapshot, EngineSessionError>>>,
     completed_peers: BTreeSet<super::config::EngineDeviceId>,
     closed: bool,
@@ -160,13 +161,15 @@ impl ManagedEngineSession {
         installation
             .revalidate()
             .map_err(|_| EngineSessionError::InvalidConfiguration)?;
+        let (runtime_settings, unavailable_folders) =
+            available_runtime_settings(&settings, &engine.android_saf_grants())?;
         let worker_lease = Arc::new(
             installation
                 .claim_worker()
                 .map_err(|_| EngineSessionError::LaunchFailed)?,
         );
         let roots = Arc::new(
-            settings
+            runtime_settings
                 .folders
                 .iter()
                 .filter(|folder| {
@@ -191,7 +194,7 @@ impl ManagedEngineSession {
                         .map_err(|_| EngineSessionError::LaunchFailed)?,
                 ),
                 runtime_parent,
-                &settings,
+                &runtime_settings,
                 Arc::downgrade(&worker_lease),
                 Arc::clone(&installation),
                 Arc::clone(&roots),
@@ -210,6 +213,7 @@ impl ManagedEngineSession {
             worker_lease: Some(worker_lease),
             roots,
             settings,
+            unavailable_folders,
             jobs: BTreeMap::new(),
             completed_peers: BTreeSet::new(),
             closed: false,
@@ -239,11 +243,10 @@ impl ManagedEngineSession {
 
     pub(super) async fn promote_after_initial_scan(&mut self) -> Result<(), EngineSessionError> {
         self.revalidate_roots()?;
-        let has_source = self
-            .settings
-            .folders
-            .iter()
-            .any(|folder| matches!(folder.role(), EngineFolderRole::Source));
+        let has_source = self.settings.folders.iter().any(|folder| {
+            matches!(folder.role(), EngineFolderRole::Source)
+                && !self.unavailable_folders.contains(&folder.id())
+        });
         if !has_source {
             return Ok(());
         }
@@ -320,7 +323,14 @@ impl ManagedEngineSession {
             .iter()
             .map(|folder| FolderHealth {
                 folder: folder.id(),
-                lifecycle: FolderLifecycle::Idle,
+                // An absent runtime-only capability is a per-folder state. It
+                // stays visible without converting a healthy sibling into a
+                // worker-wide reported error.
+                lifecycle: if self.unavailable_folders.contains(&folder.id()) {
+                    FolderLifecycle::Error
+                } else {
+                    FolderLifecycle::Idle
+                },
                 state_changed: now,
                 remaining_files: 0,
                 remaining_bytes: 0,
@@ -365,6 +375,9 @@ impl ManagedEngineSession {
         expected: Option<&EngineIndexSnapshot>,
     ) -> Result<super::run_observation::EngineRunObservation, EngineSessionError> {
         self.revalidate_roots()?;
+        if self.unavailable_folders.contains(&folder) {
+            return Err(EngineSessionError::RuntimeUnavailable);
+        }
         let role = self
             .settings
             .folders
@@ -474,6 +487,35 @@ impl ManagedEngineSession {
     }
 }
 
+fn available_runtime_settings(
+    settings: &EngineSessionSettings,
+    grants: &AndroidSafGrantRegistry,
+) -> Result<(EngineSessionSettings, BTreeSet<Uuid>), EngineSessionError> {
+    let mut runtime = settings.clone();
+    runtime.folders.clear();
+    let mut unavailable = BTreeSet::new();
+    for folder in &settings.folders {
+        match super::android_saf::parse_token(folder.root())
+            .map_err(|_| EngineSessionError::InvalidConfiguration)?
+        {
+            Some(_) => match grants
+                .contains_token(folder.root())
+                .map_err(|_| EngineSessionError::RuntimeUnavailable)?
+            {
+                true => runtime.folders.push(folder.clone()),
+                false => {
+                    unavailable.insert(folder.id());
+                }
+            },
+            None => runtime.folders.push(folder.clone()),
+        }
+    }
+    if runtime.folders.is_empty() {
+        runtime.listener = None;
+    }
+    Ok((runtime, unavailable))
+}
+
 impl Drop for ManagedEngineSession {
     fn drop(&mut self) {
         self.close_lifeline();
@@ -526,4 +568,40 @@ fn revalidate(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_saf_grant_does_not_remove_an_available_folder() {
+        let local = tempfile::tempdir().unwrap();
+        let local_id = Uuid::new_v4();
+        let missing_id = Uuid::new_v4();
+        let settings = EngineSessionSettings {
+            device_name: "test".to_owned(),
+            listener: Some("127.0.0.1:22000".parse().unwrap()),
+            peers: Vec::new(),
+            folders: vec![
+                EngineFolderConfig::new(local_id, "local", local.path().to_path_buf(), Vec::new())
+                    .unwrap(),
+                EngineFolderConfig::new(
+                    missing_id,
+                    "missing",
+                    AndroidSafGrantRegistry::token(missing_id),
+                    Vec::new(),
+                )
+                .unwrap(),
+            ],
+        };
+
+        let (runtime, unavailable) =
+            available_runtime_settings(&settings, &AndroidSafGrantRegistry::default()).unwrap();
+
+        assert_eq!(runtime.folders.len(), 1);
+        assert_eq!(runtime.folders[0].id(), local_id);
+        assert_eq!(runtime.listener, settings.listener);
+        assert_eq!(unavailable, BTreeSet::from([missing_id]));
+    }
 }

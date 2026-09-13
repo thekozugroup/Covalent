@@ -7,6 +7,64 @@ import org.junit.Test
 
 class FolderSyncLifecycleContractTest {
     @Test
+    fun deferredFolderSyncStartsOnlyAfterGrantRegistrationAndCleansFailures() {
+        val successfulEvents = mutableListOf<String>()
+        assertTrue(
+            completeDeferredFolderSyncStart(
+                registerPersisted = {
+                    successfulEvents += "register"
+                    true
+                },
+                retryFolderSync = { successfulEvents += "retry" },
+                cleanup = { successfulEvents += "cleanup" },
+            ),
+        )
+        assertTrue(successfulEvents == listOf("register", "retry"))
+
+        val registrationFailureEvents = mutableListOf<String>()
+        assertFalse(
+            completeDeferredFolderSyncStart(
+                registerPersisted = {
+                    registrationFailureEvents += "register"
+                    false
+                },
+                retryFolderSync = { registrationFailureEvents += "retry" },
+                cleanup = { registrationFailureEvents += "cleanup" },
+            ),
+        )
+        assertTrue(registrationFailureEvents == listOf("register", "cleanup"))
+
+        val registrationExceptionEvents = mutableListOf<String>()
+        assertFalse(
+            completeDeferredFolderSyncStart(
+                registerPersisted = {
+                    registrationExceptionEvents += "register"
+                    error("grant registration failed")
+                },
+                retryFolderSync = { registrationExceptionEvents += "retry" },
+                cleanup = { registrationExceptionEvents += "cleanup" },
+            ),
+        )
+        assertTrue(registrationExceptionEvents == listOf("register", "cleanup"))
+
+        val retryFailureEvents = mutableListOf<String>()
+        assertFalse(
+            completeDeferredFolderSyncStart(
+                registerPersisted = {
+                    retryFailureEvents += "register"
+                    true
+                },
+                retryFolderSync = {
+                    retryFailureEvents += "retry"
+                    error("local retry failed")
+                },
+                cleanup = { retryFailureEvents += "cleanup" },
+            ),
+        )
+        assertTrue(retryFailureEvents == listOf("register", "retry", "cleanup"))
+    }
+
+    @Test
     fun unreadableStoresOrPendingChangesBlockWithoutTreatingLostGrantsAsGlobal() {
         var consulted = false
         assertFalse(

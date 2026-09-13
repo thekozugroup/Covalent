@@ -243,6 +243,7 @@ fn apply_host_runtime_flags(
     configuration.local_provider_enabled = backup_provider_enabled;
     configuration.folder_sync_package_invalid = folder_sync_package_invalid;
     configuration.folder_sync_access_unavailable = folder_sync_access_unavailable;
+    configuration.defer_folder_sync_start = true;
 }
 
 struct StartNodeRequest {
@@ -1231,6 +1232,7 @@ mod tests {
         assert!(!configuration.local_provider_enabled);
         assert!(configuration.folder_sync_package_invalid);
         assert!(configuration.folder_sync_access_unavailable);
+        assert!(configuration.defer_folder_sync_start);
     }
 
     #[test]

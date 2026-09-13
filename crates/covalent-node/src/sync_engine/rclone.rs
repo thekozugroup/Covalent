@@ -235,9 +235,10 @@ impl RcloneRuntime {
             if matches!(folder.role(), EngineFolderRole::LegacyTwoWay) {
                 return Err(EngineSessionError::InvalidConfiguration);
             }
-            let backend = if let Some((grant_id, grant)) =
-                grants.resolve(folder.root()).map_err(map_grant_error)?
-            {
+            let grant_id =
+                super::android_saf::parse_token(folder.root()).map_err(map_grant_error)?;
+            let resolved = grants.resolve(folder.root()).map_err(map_grant_error)?;
+            let backend = if let Some((grant_id, grant)) = resolved {
                 grants.mark_active(grant_id).map_err(map_grant_error)?;
                 active_grants.insert(grant_id);
                 FolderBackend::WebDav {
@@ -246,8 +247,10 @@ impl RcloneRuntime {
                     username: grant.username.to_string(),
                     obscured_password: grant.password.to_string(),
                 }
-            } else {
+            } else if grant_id.is_none() {
                 FolderBackend::Local(folder.root().to_path_buf())
+            } else {
+                return Err(EngineSessionError::RuntimeUnavailable);
             };
             resolved_folders.insert(
                 folder.id(),

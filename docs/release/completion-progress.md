@@ -31,11 +31,13 @@ helper's boundary tests pass. Mac packaging/signing and Android worker
 packaging/provenance/notices pass; these are components, not final app acceptance.
 The simplified web console passes a real browser fixture journey; native Mac
 sources typecheck for macOS 15. The rclone Rust runtime and Android SAF bridge are integrated in the active
-branch. Consolidated foundation checks, 70 web tests, and 179 Swift tests pass;
+branch. The full Rust workspace and strict Clippy pass on commit `607180e`.
+Consolidated foundation checks, 70 web tests, and 179 Swift tests pass;
 two live-service Swift checks remain skipped. Android passes the real system
 folder picker and nested file-access proof. The rclone three-node journey
 advances through deletion and source-edit checks but fails restoration after a
-settings change; cancellation recovery is being corrected. Final native app,
+settings change; cancellation recovery is committed and awaits a fresh journey.
+Android grant isolation is being corrected before the final APK journey. Final native app,
 Linux package execution, performance, and release acceptance remain open.
 Syncthing runtime modules, build scripts, source patch, and package assets have
 been removed. [ADR 0008](../adr/0008-rclone-one-way-links.md) records the settled choice.

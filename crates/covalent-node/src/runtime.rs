@@ -221,6 +221,10 @@ pub struct NodeRuntimeConfig {
     /// The native host could not restore all saved folder capabilities.
     #[cfg(unix)]
     pub folder_sync_access_unavailable: bool,
+    /// Let an embedded host register runtime-only folder capabilities before
+    /// it starts the already-prepared folder service through the local API.
+    #[cfg(unix)]
+    pub defer_folder_sync_start: bool,
 }
 
 impl NodeRuntimeConfig {
@@ -254,6 +258,8 @@ impl NodeRuntimeConfig {
             folder_sync_package_invalid: false,
             #[cfg(unix)]
             folder_sync_access_unavailable: false,
+            #[cfg(unix)]
+            defer_folder_sync_start: false,
         }
     }
 }
@@ -333,6 +339,8 @@ impl NodeRuntime {
             folder_sync_package_invalid,
             #[cfg(unix)]
             folder_sync_access_unavailable,
+            #[cfg(unix)]
+            defer_folder_sync_start,
         } = configuration;
 
         let key_protector =
@@ -512,7 +520,9 @@ impl NodeRuntime {
             );
         }
         #[cfg(unix)]
-        if let crate::sync_engine::FolderSyncRuntimeState::Ready(service) = &state.folder_sync {
+        if !defer_folder_sync_start
+            && let crate::sync_engine::FolderSyncRuntimeState::Ready(service) = &state.folder_sync
+        {
             // Provider state was loaded and normalized from current core trust
             // before the folder journal opened. This is the sole cold-start
             // hook allowed to clear a core-new address transition barrier.

@@ -15,6 +15,7 @@ import java.security.SecureRandom
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import life.michaelwong.covalent.data.CovalentNodeClient
 import life.michaelwong.covalent.data.RecoveryBootstrapMaterial
 import life.michaelwong.covalent.model.NodeConnection
 import life.michaelwong.covalent.sync.FolderSyncGrantStore
@@ -56,6 +57,23 @@ internal fun folderSyncAccessUnavailable(
 ): Boolean = requested && (
     !safGrantStoreReadable || runCatching(hasPendingCapabilityChange).getOrDefault(true)
 )
+
+internal fun completeDeferredFolderSyncStart(
+    registerPersisted: () -> Boolean,
+    retryFolderSync: () -> Unit,
+    cleanup: () -> Unit,
+): Boolean {
+    val completed = try {
+        registerPersisted() && run {
+            retryFolderSync()
+            true
+        }
+    } catch (_: Exception) {
+        false
+    }
+    if (!completed) cleanup()
+    return completed
+}
 
 /**
  * Explicit opt-in local-node owner. It never replaces a configured external node.
@@ -426,10 +444,21 @@ class EmbeddedNodeManager(context: Context) {
                 if (!response.ok || response.apiBaseUrl == null || response.handle == null) {
                     releaseMulticastLock()
                     response
-                } else if (!AndroidSafGrantCoordinator.registerPersisted(applicationContext, response.handle)) {
-                    CovalentNative.stop(response.handle)
+                } else if (folderSyncRequested() && !completeDeferredFolderSyncStart(
+                        registerPersisted = {
+                            AndroidSafGrantCoordinator.registerPersisted(applicationContext, response.handle)
+                        },
+                        retryFolderSync = {
+                            CovalentNodeClient().retryFolderSync(response.apiBaseUrl, localStore.token)
+                        },
+                        cleanup = {
+                            AndroidSafGrantCoordinator.close(response.handle)
+                            CovalentNative.stop(response.handle)
+                        },
+                    )
+                ) {
                     releaseMulticastLock()
-                    unavailable("Android could not open the saved folder choices.")
+                    unavailable("Android could not start the saved folder transfers.")
                 } else if (
                     !localStore.saveBaseUrl(response.apiBaseUrl) ||
                     !preferences.commit {
@@ -511,10 +540,21 @@ class EmbeddedNodeManager(context: Context) {
                 folderSyncAccessUnavailable = folderSyncAccessUnavailable(),
             ).let { response ->
                 if (response.ok && response.apiBaseUrl != null && response.handle != null) {
-                    if (!AndroidSafGrantCoordinator.registerPersisted(applicationContext, response.handle)) {
-                        CovalentNative.stop(response.handle)
+                    if (syncRequested && !completeDeferredFolderSyncStart(
+                            registerPersisted = {
+                                AndroidSafGrantCoordinator.registerPersisted(applicationContext, response.handle)
+                            },
+                            retryFolderSync = {
+                                CovalentNodeClient().retryFolderSync(response.apiBaseUrl, localStore.token)
+                            },
+                            cleanup = {
+                                AndroidSafGrantCoordinator.close(response.handle)
+                                CovalentNative.stop(response.handle)
+                            },
+                        )
+                    ) {
                         releaseMulticastLock()
-                        return@let unavailable("Android could not open the saved folder choices.")
+                        return@let unavailable("Android could not start the saved folder transfers.")
                     }
                     localStore.baseUrl = response.apiBaseUrl
                     if (backupEnabled) {
