@@ -46,6 +46,7 @@ pub enum EngineSessionError {
     StartupMismatch,
     EngineUnavailable,
     TransferFailed,
+    PendingCopyRecoveryRequired,
 }
 
 impl fmt::Display for EngineSessionError {
@@ -59,6 +60,7 @@ impl fmt::Display for EngineSessionError {
             Self::StartupMismatch => "folder sync worker failed startup verification",
             Self::EngineUnavailable => "folder sync worker is unavailable",
             Self::TransferFailed => "folder transfer did not complete",
+            Self::PendingCopyRecoveryRequired => "an interrupted folder copy requires recovery",
         })
     }
 }

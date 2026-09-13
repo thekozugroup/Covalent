@@ -291,6 +291,9 @@ impl Session {
                         EngineSessionError::FolderUnavailable => {
                             RunObservationError::FolderUnavailable
                         }
+                        EngineSessionError::PendingCopyRecoveryRequired => {
+                            RunObservationError::PendingCopyRecoveryRequired
+                        }
                         _ => RunObservationError::Retryable,
                     })
             }
@@ -366,6 +369,7 @@ impl Session {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RunObservationError {
     FolderUnavailable,
+    PendingCopyRecoveryRequired,
     Retryable,
 }
 
@@ -1624,11 +1628,17 @@ async fn advance_run_completion(shared: &ServiceShared, inner: &mut ServiceInner
         let observed = match session.run_observation(folder_id, expected).await {
             Ok(observed) => observed,
             Err(RunObservationError::Retryable) => continue,
-            Err(RunObservationError::FolderUnavailable) => {
+            Err(error @ RunObservationError::FolderUnavailable)
+            | Err(error @ RunObservationError::PendingCopyRecoveryRequired) => {
                 if !run_still_active(inner, folder_id, generation) {
                     continue;
                 }
                 let outcome = match item {
+                    super::LinkRunWorkItem::PrepareSource { .. }
+                        if error == RunObservationError::PendingCopyRecoveryRequired =>
+                    {
+                        continue;
+                    }
                     super::LinkRunWorkItem::PrepareSource { .. } => inner
                         .journal
                         .interrupt_link_run(folder_id, generation, crate::now_unix_ms()),
@@ -1817,6 +1827,7 @@ pub(super) enum TestScanBehavior {
 struct TestBackendState {
     run_observations: BTreeMap<Uuid, VecDeque<super::run_observation::EngineRunObservation>>,
     unavailable_run_folders: BTreeSet<Uuid>,
+    pending_copy_recovery_folders: BTreeSet<Uuid>,
     fail_launches: usize,
     fail_resets: usize,
     fail_promotions: usize,
@@ -1891,6 +1902,14 @@ impl TestBackend {
             .lock()
             .unwrap()
             .unavailable_run_folders
+            .insert(folder);
+    }
+
+    pub(super) fn set_pending_copy_recovery_required(&self, folder: Uuid) {
+        self.state
+            .lock()
+            .unwrap()
+            .pending_copy_recovery_folders
             .insert(folder);
     }
 
@@ -1991,6 +2010,9 @@ impl TestSession {
         let mut state = self.backend.state.lock().unwrap();
         if state.unavailable_run_folders.contains(&folder) {
             return Err(RunObservationError::FolderUnavailable);
+        }
+        if state.pending_copy_recovery_folders.contains(&folder) {
+            return Err(RunObservationError::PendingCopyRecoveryRequired);
         }
         let observations = state
             .run_observations

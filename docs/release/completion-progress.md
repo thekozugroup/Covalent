@@ -8,23 +8,35 @@ Rclone is the sole transfer engine. Pairing, one-way transfers, fan-out,
 collection isolation, destination-deletion/restoration, cadence, and shared
 settings have working validation evidence. The project is not release-complete.
 
-Source `7dacec6` passes the Android device job, Rust/contracts, Android foundation,
+Source `7d3a4e8` passes the Android device job, Rust/contracts, Android foundation,
 Mac packaging, 181 Swift tests, live Mac integration, both Docker architectures,
-dependency checks, CodeQL, and version checks. The aggregate CI run fails because
-the native Mac UI suite exceeds its 480-second limit without a complete result.
-The relaunch fixture completes, but the stalled UI phase and cause remain unknown.
-The focused diagnostic run `1c7ff8c` returns a complete UI result: five of seven
-pass, with no skips, in 322.815 seconds. VoiceOver does not enable, and the
-real-folder journey fails at its initial native folder chooser before transfer.
-The fixed phase diagnostics identify those failures; they do not establish a
-cause for the earlier timeout. Transfer, menu, accessibility, keyboard, and
-seven-test gates retain their existing limits. The temporary checkout is removed.
+dependency checks, CodeQL, and version checks. The Mac UI suite completes with
+five of seven tests passing and no skips. Its folder chooser succeeds and no
+transfer assertion fails. Populated Links fails contrast and picker-action
+audits; three menu assertions incorrectly require the native item's empty label
+property. VoiceOver does not start on the hosted runner. These results do not
+explain the earlier intermittent chooser failure or timeout.
 
-Android's latest full job passes, following an earlier source-deletion timeout on
+The current follow-up uses the existing readable Mac text styles and native
+menus with real selection actions, corrects the menu assertions, and checks
+hosted system-keyboard capability before attempting actual VoiceOver commands.
+It also reports an uncertain copy that cannot safely resume as a failed run,
+with conditional recovery guidance. Ownership, deletion settings, transient
+retries, protocol values, seven-test coverage, and deadlines remain unchanged.
+These changes require verification on their exact source before acceptance.
+
+Android's latest full job passes 195 JVM tests, 82 device baseline tests in
+74.61 seconds, and the complete SAF journey in 401.4 seconds. This is the second
+subsequent full pass following an earlier source-deletion timeout on
 `ec49a3d` with unchanged Android and Rust inputs. This later pass does not explain
 the intermittent failure. Source-deletion stability and Android acceptance remain
 under review; earlier passes are retained as evidence, not a claim that the fault
 is fixed.
+
+The exact-source Android Docker fixture now builds in six seconds, with 56
+cached stages, successful cache export, freshness validation, and the full device
+journey passing. Previous cold builds took 542 and 719 seconds. This measures CI
+build reuse across different runs, not product transfer speed or battery use.
 
 The retained personal Android candidate from `6499ded` passed its complete SAF
 journey in 394.998 seconds. Its seven installable files are retained; its owned
@@ -32,6 +44,8 @@ emulator, private ADB, worktree, and build files have been removed. Final Mac an
 Android candidate acceptance, the laptop–Atmos package drill, final-source checks,
 remaining owned cleanup, and GitHub publication are still required. Atlas remains
 offline; Docker is the accepted Unraid target. Earlier Syncthing evidence is history.
+Another 123 superseded Android output files, totaling 59,521,214 logical bytes,
+have been removed while preserving the tested candidate and durable evidence.
 
 **Previous scope: 75%, 15 of 20 checks**, recorded at checkpoint 46 (c47003113e28b6e934a8ab4823040614fb07fb30). That score belongs to the superseded bidirectional/backup scope. Source and evidence remain in Git history.
 

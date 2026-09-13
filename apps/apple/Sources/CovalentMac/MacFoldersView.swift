@@ -201,14 +201,15 @@ struct MacFoldersView: View {
             .font(.headline)
           Spacer()
           Text(status.displayLabel(for: share))
-            .font(.subheadline)
+            .font(.subheadline.weight(.semibold))
             .foregroundStyle(
               state == .needsAttention || state == .invitationExpired
-                ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary)
+                ? AnyShapeStyle(.red) : AnyShapeStyle(MacLabelColor.secondary)
             )
         }
         LabeledContent("Paired Device", value: peerName(for: share, status: status))
-          .font(.subheadline)
+          .font(.subheadline.weight(.semibold))
+          .secondaryLabelStyle()
         if share.pairingUpgradeRequired {
           Text("Pairing needs an update before this connection can transfer. Files stay on both devices.")
             .font(.callout)
@@ -216,13 +217,14 @@ struct MacFoldersView: View {
         if let policy = share.linkPolicy {
           Label(share.incoming ? "Receives files from the source" : "Sends files to the destination",
                 systemImage: share.incoming ? "arrow.down.circle" : "arrow.up.circle")
-            .font(.subheadline)
+            .font(.subheadline.weight(.semibold))
+            .secondaryLabelStyle()
           Text(policy.sourceDeletionExplanation)
-            .font(.callout)
-            .foregroundStyle(.secondary)
+            .font(.callout.weight(.medium))
+            .secondaryLabelStyle()
           Text(policy.destinationDeletionExplanation)
-            .font(.callout)
-            .foregroundStyle(.secondary)
+            .font(.callout.weight(.medium))
+            .secondaryLabelStyle()
           if isSettingsRow(share, status: status), let settings = share.linkSettings {
             linkSettingsStatus(settings, share: share)
             linkRunStatus(settings, share: share, status: status)
@@ -554,9 +556,10 @@ struct MacFoldersView: View {
 
       if let run = share.linkRun, let phase = run.phase {
         Label(runPhaseLabel(phase), systemImage: runPhaseSymbol(phase))
+          .font(.callout.weight(.medium))
           .foregroundStyle(
             phase == .incomplete || phase == .interrupted
-              ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary)
+              ? AnyShapeStyle(.orange) : AnyShapeStyle(MacLabelColor.secondary)
           )
         ForEach(run.destinations, id: \.peerId) { destination in
           let peer = status.peers.first { $0.peerId == destination.peerId }
@@ -564,7 +567,20 @@ struct MacFoldersView: View {
             peer?.displayName ?? (share.incoming ? "This Mac" : "Destination"),
             value: destinationLabel(destination.result)
           )
-            .font(.callout)
+            .font(.callout.weight(.medium))
+            .secondaryLabelStyle()
+        }
+        if run.destinations.contains(where: { $0.result == .failed }) {
+          Label("A destination did not finish this run", systemImage: "exclamationmark.triangle")
+            .foregroundStyle(.orange)
+          if !settings.settings.deletionPolicy.restoreLocalDeletions {
+            Text("If this failed after an interrupted copy, choose Edit Link Settings, enable Restore files deleted at a destination, and confirm before Run Now. Files you deleted at a destination may download again.")
+              .font(.callout.weight(.medium))
+              .secondaryLabelStyle()
+          }
+          Text("If a deleted source file may still have an unknown copy at a destination, restore the source file or remove only that copy before retrying.")
+            .font(.callout.weight(.medium))
+            .secondaryLabelStyle()
         }
       } else if settings.settings.cadence == .manual,
                 status.shares.contains(where: { $0.folderId == share.folderId && $0.phase == .ready }) {
@@ -641,19 +657,36 @@ struct MacFoldersView: View {
     }
 
     private func shareComposer(status: FolderSyncStatus) -> some View {
-      Section("New One-Way Link") {
+      let selectedPeerName = chosenPeer.flatMap { selected in
+        status.peers.first(where: { $0.peerId == selected })?.displayName
+      } ?? "Choose a Device"
+      let sourceDeletionSelection = linkPolicy.propagateSourceDeletions
+        ? "Delete Destination Copies Too" : "Keep Destination Copies"
+      let destinationDeletionSelection = linkPolicy.restoreLocalDeletions
+        ? "Restore from Source" : "Keep Them Deleted"
+      return Section("New One-Way Link") {
         if status.peers.isEmpty {
           Label("Pair a device before sharing a folder.", systemImage: "laptopcomputer.and.iphone")
             .foregroundStyle(.secondary)
         } else {
-          Picker("Paired Device", selection: $chosenPeer) {
-            Text("Choose a Device").tag(UUID?.none)
-            ForEach(status.peers) { peer in
-              Text(peer.displayName).tag(Optional(peer.peerId))
+          LabeledContent("Paired Device") {
+            Menu {
+              Picker("Paired Device", selection: $chosenPeer) {
+                Text("Choose a Device").tag(UUID?.none)
+                ForEach(status.peers) { peer in
+                  Text(peer.displayName).tag(Optional(peer.peerId))
+                }
+              }
+              .labelsHidden()
+              .pickerStyle(.inline)
+            } label: {
+              Text(selectedPeerName)
             }
+            .accessibilityIdentifier("links.new.peer")
+            .accessibilityLabel("Paired Device")
+            .accessibilityValue(selectedPeerName)
+            .accessibilityHint("Selects the paired device that will receive this folder offer.")
           }
-          .accessibilityIdentifier("links.new.peer")
-          .accessibilityHint("Selects the paired device that will receive this folder offer.")
           .disabled(pendingOffer != nil)
 
           TextField("Folder Name", text: $label, prompt: Text("Shared Documents"))
@@ -664,27 +697,55 @@ struct MacFoldersView: View {
             .disabled(pendingOffer != nil)
 
           Text("This Mac is the source. Changes on the destination never change files on this Mac.")
-            .font(.callout)
-            .foregroundStyle(.secondary)
-          Picker("When Source Files Are Deleted", selection: $linkPolicy.propagateSourceDeletions) {
-            Text("Keep Destination Copies").tag(false)
-            Text("Delete Destination Copies Too").tag(true)
+            .font(.callout.weight(.medium))
+            .secondaryLabelStyle()
+          LabeledContent("When Source Files Are Deleted") {
+            Menu {
+              Picker("When Source Files Are Deleted", selection: $linkPolicy.propagateSourceDeletions) {
+                Text("Keep Destination Copies").tag(false)
+                Text("Delete Destination Copies Too").tag(true)
+              }
+              .labelsHidden()
+              .pickerStyle(.inline)
+            } label: {
+              Text(sourceDeletionSelection)
+            }
+            .accessibilityIdentifier("links.new.sourceDeletion")
+            .accessibilityLabel("When Source Files Are Deleted")
+            .accessibilityValue(sourceDeletionSelection)
           }
+          .font(.body.weight(.medium))
+          .secondaryLabelStyle()
           .disabled(pendingOffer != nil)
           Text(linkPolicy.sourceDeletionExplanation)
-            .font(.callout)
-            .foregroundStyle(.secondary)
-          Picker("When Destination Files Are Deleted", selection: $linkPolicy.restoreLocalDeletions) {
-            Text("Keep Them Deleted").tag(false)
-            Text("Restore from Source").tag(true)
+            .font(.callout.weight(.medium))
+            .secondaryLabelStyle()
+          LabeledContent("When Destination Files Are Deleted") {
+            Menu {
+              Picker("When Destination Files Are Deleted", selection: $linkPolicy.restoreLocalDeletions) {
+                Text("Keep Them Deleted").tag(false)
+                Text("Restore from Source").tag(true)
+              }
+              .labelsHidden()
+              .pickerStyle(.inline)
+            } label: {
+              Text(destinationDeletionSelection)
+            }
+            .accessibilityIdentifier("links.new.destinationDeletion")
+            .accessibilityLabel("When Destination Files Are Deleted")
+            .accessibilityValue(destinationDeletionSelection)
           }
+          .font(.body.weight(.medium))
+          .secondaryLabelStyle()
           .disabled(pendingOffer != nil)
           Text(linkPolicy.destinationDeletionExplanation)
-            .font(.callout)
-            .foregroundStyle(.secondary)
+            .font(.callout.weight(.medium))
+            .secondaryLabelStyle()
           FolderCadenceControls(cadence: $cadence)
             .disabled(pendingOffer != nil)
           Toggle("Use Wi-Fi only on Android devices", isOn: $androidConditions.wifiOnly)
+            .fontWeight(.medium)
+            .secondaryLabelStyle()
             .disabled(pendingOffer != nil)
           Toggle("Run only while charging on Android devices", isOn: $androidConditions.chargingOnly)
             .disabled(pendingOffer != nil)
@@ -940,13 +1001,25 @@ private struct FolderCadenceControls: View {
   @Binding var cadence: FolderLinkCadence
 
   var body: some View {
-    Picker("Transfers", selection: mode) {
-      Text("Manual").tag(FolderLinkCadenceMode.manual)
-      Text("Scheduled").tag(FolderLinkCadenceMode.scheduled)
-      Text("Continuous").tag(FolderLinkCadenceMode.continuous)
+    LabeledContent("Transfers") {
+      Menu {
+        Picker("Transfers", selection: mode) {
+          Text("Manual").tag(FolderLinkCadenceMode.manual)
+          Text("Scheduled").tag(FolderLinkCadenceMode.scheduled)
+          Text("Continuous").tag(FolderLinkCadenceMode.continuous)
+        }
+        .labelsHidden()
+        .pickerStyle(.inline)
+      } label: {
+        Text(modeTitle)
+      }
+      .accessibilityIdentifier("folder-link-cadence")
+      .accessibilityLabel("Transfers")
+      .accessibilityValue(modeTitle)
+      .accessibilityHint("Chooses whether this link runs on request, on a schedule, or continuously.")
     }
-    .accessibilityIdentifier("folder-link-cadence")
-    .accessibilityHint("Chooses whether this link runs on request, on a schedule, or continuously.")
+    .font(.body.weight(.medium))
+    .secondaryLabelStyle()
 
     if case .scheduled = cadence {
       HStack {
@@ -970,6 +1043,14 @@ private struct FolderCadenceControls: View {
       Text("Choose 15 to 525,600 minutes. The source device starts each scheduled run.")
         .font(.callout)
         .foregroundStyle(.secondary)
+    }
+  }
+
+  private var modeTitle: String {
+    switch cadence.mode {
+    case .manual: "Manual"
+    case .scheduled: "Scheduled"
+    case .continuous: "Continuous"
     }
   }
 

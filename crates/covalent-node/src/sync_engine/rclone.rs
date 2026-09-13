@@ -400,11 +400,7 @@ impl RcloneRuntime {
             } => (propagate_source_deletions, restore_local_deletions),
             _ => return Err(EngineSessionError::InvalidConfiguration),
         };
-        if !can_retry_pending(state, &source, &target, restore) {
-            // Restoration permits another download, but cannot establish who
-            // owns a target whose source disappeared during an uncertain copy.
-            return Err(EngineSessionError::RuntimeUnavailable);
-        }
+        check_pending_retry(state, &source, &target, restore)?;
         let (allowed, suppressions) = plan_transfer(state, &source, &target, propagate, restore);
         let pending = PendingTransfer {
             source_index: source_index.clone(),
@@ -905,22 +901,27 @@ fn inventory_index(entries: &[InventoryEntry]) -> EngineIndexSnapshot {
     }
 }
 
-fn can_retry_pending(
+fn check_pending_retry(
     state: &FolderPolicyState,
     source: &BTreeMap<String, InventoryEntry>,
     target: &BTreeMap<String, InventoryEntry>,
     restore: bool,
-) -> bool {
+) -> Result<(), EngineSessionError> {
     let Some(pending) = state.pending.as_ref().filter(|_| !state.copy_completed) else {
-        return true;
+        return Ok(());
     };
-    restore
-        && !pending.allowed.iter().any(|path| {
+    if !restore
+        || pending.allowed.iter().any(|path| {
             pending.source.contains_key(path)
                 && !source.contains_key(path)
                 && target.contains_key(path)
                 && !state.owned.contains(path)
         })
+    {
+        Err(EngineSessionError::PendingCopyRecoveryRequired)
+    } else {
+        Ok(())
+    }
 }
 
 fn plan_transfer(
@@ -1438,12 +1439,10 @@ mod tests {
         target.insert("unrelated.txt".into(), source["copied.txt"].clone());
         let mut after_source_deletion = source.clone();
         after_source_deletion.remove("copied.txt");
-        assert!(can_retry_pending(
-            state,
-            &after_source_deletion,
-            &target,
-            true
-        ));
+        assert_eq!(
+            check_pending_retry(state, &after_source_deletion, &target, true),
+            Ok(())
+        );
         let (allowed, _) = plan_transfer(state, &after_source_deletion, &target, true, true);
         assert!(allowed.contains("copied.txt"));
         assert!(!allowed.contains("unrelated.txt"));
@@ -1452,25 +1451,24 @@ mod tests {
         let (allowed, suppressions) = plan_transfer(state, &source, &target, false, false);
         assert!(!allowed.contains("copied.txt"));
         assert!(suppressions.contains("copied.txt"));
-        assert!(!can_retry_pending(state, &source, &target, false));
+        assert_eq!(
+            check_pending_retry(state, &source, &target, false),
+            Err(EngineSessionError::PendingCopyRecoveryRequired)
+        );
 
         // A WebDAV write can appear before an error without a completed-copy
         // record. Restoration must not discard that unknown file's ownership.
         let mut missing_unconfirmed_source = source.clone();
         missing_unconfirmed_source.remove("unfinished.txt");
-        assert!(!can_retry_pending(
-            state,
-            &missing_unconfirmed_source,
-            &target,
-            true
-        ));
+        assert_eq!(
+            check_pending_retry(state, &missing_unconfirmed_source, &target, true),
+            Err(EngineSessionError::PendingCopyRecoveryRequired)
+        );
         target.remove("unfinished.txt");
-        assert!(can_retry_pending(
-            state,
-            &missing_unconfirmed_source,
-            &target,
-            true
-        ));
+        assert_eq!(
+            check_pending_retry(state, &missing_unconfirmed_source, &target, true),
+            Ok(())
+        );
 
         let before_invalid = fs::read(&path).unwrap();
         for invalid in [

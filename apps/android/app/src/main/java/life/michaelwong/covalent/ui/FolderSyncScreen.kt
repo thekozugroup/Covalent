@@ -1264,6 +1264,18 @@ private fun FolderLinkRunSummary(
             },
         ))
     }
+    if (run?.destinations?.any { it.result == FolderLinkRunResult.FAILED } == true) {
+        if (!settings.settings.deletionPolicy.restoreLocalDeletions) {
+            Text(
+                stringResource(R.string.folder_link_run_failed_interrupted_restore_disabled),
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        Text(
+            stringResource(R.string.folder_link_run_failed_unknown_destination_copy),
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
     saved?.let {
         Text(stringResource(
             if (it.requiresReview) R.string.folder_link_run_saved_review

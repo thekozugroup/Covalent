@@ -479,6 +479,242 @@ async fn unavailable_source_folder_interrupts_only_its_active_run() {
 }
 
 #[tokio::test]
+async fn pending_copy_recovery_fails_only_its_destination_run() {
+    let first = Device::new("Source", 44301);
+    let second = Device::new("Target", 44302);
+    pair(&first, &second);
+    let source_backend = Arc::new(TestBackend::default());
+    let target_backend = Arc::new(TestBackend::default());
+    let source = first.service(first.journal(), Arc::clone(&source_backend));
+    let target = second.service(second.journal(), Arc::clone(&target_backend));
+    let folders = [Uuid::new_v4(), Uuid::new_v4()];
+    let source_roots = [first.root.join("recovery-a"), first.root.join("recovery-b")];
+    let target_roots = [
+        second.root.join("recovery-a"),
+        second.root.join("recovery-b"),
+    ];
+    for root in source_roots.iter().chain(target_roots.iter()) {
+        std::fs::create_dir(root).unwrap();
+    }
+    let settings = FolderLinkSettings {
+        deletion_policy: covalent_protocol::FolderLinkPolicy::default(),
+        paused: false,
+        cadence: LinkCadence::Manual,
+        android_conditions: AndroidLinkConditions::default(),
+    };
+    let mut revisions = BTreeMap::new();
+    for ((folder, source_root), target_root) in folders
+        .into_iter()
+        .zip(source_roots.iter())
+        .zip(target_roots.iter())
+    {
+        let offer = source
+            .offer_with_settings(
+                second.engine.device_id(),
+                folder,
+                "Documents",
+                source_root,
+                2000,
+                settings,
+            )
+            .await
+            .unwrap()
+            .into_value();
+        target.receive_offer(offer.clone(), 2001).await.unwrap();
+        let acceptance = target
+            .accept(offer.offer_id, target_root, 2002)
+            .await
+            .unwrap()
+            .into_value();
+        let commit = source
+            .receive_acceptance(offer.offer_id, acceptance, 2003)
+            .await
+            .unwrap()
+            .into_value();
+        target.receive_commit(offer.offer_id, commit).await.unwrap();
+        let settings_commit = source
+            .outbound_records()
+            .await
+            .unwrap()
+            .into_value()
+            .into_iter()
+            .find_map(|delivery| match delivery.record {
+                FolderShareRecord::SettingsCommit(commit) if commit.folder_id == folder => {
+                    Some(commit)
+                }
+                _ => None,
+            })
+            .unwrap();
+        revisions.insert(folder, settings_commit.revision);
+        target
+            .receive_link_settings_commit(&settings_commit)
+            .await
+            .unwrap();
+    }
+
+    for folder in folders {
+        assert!(matches!(
+            source
+                .request_link_run(folder, Uuid::new_v4(), 0, revisions[&folder])
+                .await
+                .unwrap()
+                .into_value(),
+            LinkRunAdmission::Accepted(_)
+        ));
+    }
+    let health = |folder| FolderHealth {
+        folder,
+        lifecycle: FolderLifecycle::Idle,
+        access_unavailable: false,
+        state_changed: OffsetDateTime::UNIX_EPOCH,
+        remaining_files: 0,
+        remaining_bytes: 0,
+        scan_pull_error_count: 0,
+        reported_error_rows: 0,
+        status_error: false,
+        watch_error: false,
+    };
+    source_backend.set_health_observation(folders.map(health).into());
+    let proofs = folders.map(|folder| EngineIndexSnapshot {
+        index_id: format!("0x{:016X}", folder.as_u128() as u64),
+        sequence: 1,
+    });
+    for (folder, proof) in folders.into_iter().zip(proofs.iter()) {
+        source_backend.set_run_observations(
+            folder,
+            vec![EngineRunObservation {
+                local_index: Some(proof.clone()),
+                completions: BTreeMap::new(),
+                failures: BTreeSet::new(),
+            }],
+        );
+    }
+    source.advance_runs_for_test().await;
+    source.advance_runs_for_test().await;
+    let running = source
+        .outbound_records()
+        .await
+        .unwrap()
+        .into_value()
+        .into_iter()
+        .filter_map(|delivery| match delivery.record {
+            FolderShareRecord::RunCommit(commit)
+                if commit
+                    .state
+                    .as_ref()
+                    .is_some_and(|state| state.phase == LinkRunPhase::Running) =>
+            {
+                Some((commit.folder_id, commit))
+            }
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(running.len(), 2);
+
+    for folder in folders {
+        target
+            .receive_link_run_commit(&running[&folder])
+            .await
+            .unwrap();
+    }
+    target_backend.set_health_observation(folders.map(health).into());
+    target_backend.set_pending_copy_recovery_required(folders[0]);
+    target.advance_runs_for_test().await;
+
+    let first_reports = target
+        .outbound_records()
+        .await
+        .unwrap()
+        .into_value()
+        .into_iter()
+        .filter_map(|delivery| match delivery.record {
+            FolderShareRecord::RunReport(report) => Some((report.folder_id, report)),
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(first_reports.len(), 1);
+    assert_eq!(
+        first_reports[&folders[0]].result,
+        LinkRunDestinationResult::Failed
+    );
+    let waiting = target.status().await.unwrap();
+    assert_eq!(
+        waiting
+            .shares()
+            .iter()
+            .find(|share| share.folder_id == folders[1])
+            .unwrap()
+            .link_run
+            .as_ref()
+            .unwrap()
+            .phase,
+        Some(LinkRunPhase::Running)
+    );
+
+    target_backend.set_run_observations(
+        folders[1],
+        vec![EngineRunObservation {
+            local_index: None,
+            completions: BTreeMap::from([(
+                first.installation.device_id().clone(),
+                proofs[1].clone(),
+            )]),
+            failures: BTreeSet::new(),
+        }],
+    );
+    target.advance_runs_for_test().await;
+
+    let reports = target
+        .outbound_records()
+        .await
+        .unwrap()
+        .into_value()
+        .into_iter()
+        .filter_map(|delivery| match delivery.record {
+            FolderShareRecord::RunReport(report) => Some((report.folder_id, report)),
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        reports[&folders[0]].result,
+        LinkRunDestinationResult::Failed
+    );
+    assert_eq!(
+        reports[&folders[1]].result,
+        LinkRunDestinationResult::Succeeded
+    );
+    let target_status = target.status().await.unwrap();
+    assert!(!matches!(
+        target_status.lifecycle(),
+        FolderSyncLifecycle::NeedsAttention(_)
+    ));
+    assert!(target_status.folder_health().iter().all(|folder| {
+        !folder.access_unavailable && !folder.status_error && folder.reported_error_rows == 0
+    }));
+
+    for folder in folders {
+        source
+            .receive_link_run_report(&reports[&folder])
+            .await
+            .unwrap();
+    }
+    let status = source.status().await.unwrap();
+    let phase = |folder| {
+        status
+            .shares()
+            .iter()
+            .find(|share| share.folder_id == folder)
+            .unwrap()
+            .link_run
+            .as_ref()
+            .unwrap()
+            .phase
+    };
+    assert_eq!(phase(folders[0]), Some(LinkRunPhase::Incomplete));
+    assert_eq!(phase(folders[1]), Some(LinkRunPhase::Succeeded));
+}
+
+#[tokio::test]
 async fn concurrent_expired_offer_renewals_converge_on_one_durable_replacement() {
     let first = Device::new("Mac", 44311);
     let second = Device::new("Server", 44312);
