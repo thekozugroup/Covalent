@@ -1892,6 +1892,45 @@ func realDaemonBackupVerifyAndRestore() async throws {
     #expect(share.linkSettings?.pendingChange?.settings.deletionPolicy.propagateSourceDeletions == true)
 }
 
+@Test func folderStatusRequiresARevisionConsistentCommittedSettingsIdentifier() async throws {
+    let source = UUID()
+    let peer = UUID()
+    let offer = UUID()
+    let folder = UUID()
+    let committed = UUID()
+    let zero = "00000000-0000-0000-0000-000000000000"
+    let cases = [
+        (revision: 0, changeId: zero, incoming: false, confirmed: true, valid: true),
+        (revision: 0, changeId: zero, incoming: true, confirmed: false, valid: true),
+        (revision: 0, changeId: committed.uuidString, incoming: false, confirmed: true, valid: false),
+        (revision: 1, changeId: zero, incoming: false, confirmed: true, valid: false),
+    ]
+
+    for testCase in cases {
+        let author = testCase.incoming ? peer : source
+        let recorder = RequestRecorder { request in
+            TestResponse.response(
+                request,
+                status: 200,
+                json: """
+                {"schemaVersion":1,"availability":"available","lifecycle":"running","issue":null,"healthFreshness":"fresh","connectionFreshness":"fresh","peers":[{"peerId":"\(peer.uuidString)","displayName":"Peer"}],"shares":[{"offerId":"\(offer.uuidString)","folderId":"\(folder.uuidString)","label":"Plans","peerId":"\(peer.uuidString)","incoming":\(testCase.incoming),"phase":"ready","expiresAtUnixMs":null,"expired":false,"peerConnection":"connected","linkPolicy":{"propagateSourceDeletions":false,"restoreLocalDeletions":false},"linkSettings":{"revision":\(testCase.revision),"settings":{"deletionPolicy":{"propagateSourceDeletions":false,"restoreLocalDeletions":false},"paused":false,"cadence":{"mode":"manual"},"androidConditions":{"wifiOnly":false,"chargingOnly":false}},"changeId":"\(testCase.changeId)","changedBy":"\(author.uuidString)","acceptedAtUnixMs":1,"confirmed":\(testCase.confirmed),"pendingChange":null,"conflictedChange":null},"linkRun":null,"remoteRemovalPending":false,"waitingForConditions":false}],"folders":[]}
+                """
+            )
+        }
+        let client = try makeClient(recorder: recorder, token: String(repeating: "z", count: 32))
+        if testCase.valid {
+            let status = try await client.folderSyncStatus()
+            let state = try #require(status.shares.first?.linkSettings)
+            #expect(state.revision == UInt64(testCase.revision))
+            #expect(state.confirmed == testCase.confirmed)
+        } else {
+            await #expect(throws: NodeClientError.invalidResponse) {
+                _ = try await client.folderSyncStatus()
+            }
+        }
+    }
+}
+
 @Test func folderStatusDecodesReceiverRunWhoseLocalDestinationIsNotAPeer() async throws {
     let source = UUID()
     let destination = UUID()
