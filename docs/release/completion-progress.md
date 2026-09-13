@@ -51,21 +51,26 @@ permission registration. The self-contained device journey also completes
 selection in the real system folder picker with exact child-folder assertions,
 Unicode transfer, revoked-access interruption, exact-folder reselection, and
 recovery transfer. Real charging and Wi-Fi changes block and resume transfers.
-The complete replacement journey remains under verification, including native
-pairing, timing changes, and the existing same-request retry action.
-Component screenshots establish the link and shared-setting
-controls, not acceptance of the complete Android navigation design.
+The complete focused replacement journey now passes in 350.05 seconds: native
+pairing and source offer, Manual transfer, persisted access after restart,
+permission recovery, shared deletion settings, Continuous transfer, pause/resume,
+and safe removal. Both Setup accessibility checks pass. This device proof uses
+the `d634321` runtime plus the tested Android UI changes; the integrated source
+still needs its exact-commit hosted run. Peer-address editing remains a distinct
+native coverage gap. Component screenshots do not establish the complete Android
+top bar and floating navigation design.
 
 Hosted Rust/contracts, Android foundation, the Mac app bundle, and Docker on
 amd64 and arm64 pass on `b1122d7`. The Mac UI job passes four of five tests,
 including both accessibility audits. The remaining legacy empty-state assertion
 has a scoped accessibility and navigation-wait correction in `19ffb1b`, awaiting
-native execution. A real rclone Links/menu bar journey is still required; the
-existing five tests do not establish it. Android's baseline passes 79 of 82 tests.
-The three failures are two outdated setup control-count expectations and an
-orphan transfer prototype that requires an absent external driver. The replacement
-self-contained folder journey remains under verification before those obsolete
-fixtures are removed.
+native execution. A sixth native Links/menu bar journey is implemented and
+typechecks. Its isolated nodes use production-built helpers with test-only
+signatures; it does not approve production sandbox inheritance or Keychain
+startup. Android's last hosted baseline passes 79 of 82 tests. The obsolete
+setup expectations, external-driver prototype, and broad-storage journey are
+replaced in `e9fdf8f`. The source-derived test contract now covers all 82 tests
+exactly once: 81 baseline tests and one self-contained SAF journey.
 
 An optimized local measurement passes the exact 101-file transfer and unchanged
 repeat. Two runtimes together use 0.01 seconds of sampled CPU during roughly
@@ -95,3 +100,7 @@ fixture and reusable toolchains remain until their work finishes. These counts
 are logical file sizes; physical free-space change was not measured. Atmos
 cleanup and new remote validation await restored SSH authentication; Atlas has
 not been contacted.
+
+The Android replacement removes 815 net lines, including the old all-files
+browser and host-controlled permission phases. Forty owned device screenshots
+were removed, and the retained test no longer creates those temporary screenshots.
