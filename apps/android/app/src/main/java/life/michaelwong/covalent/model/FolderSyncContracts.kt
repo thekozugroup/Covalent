@@ -131,6 +131,9 @@ fun FolderSyncStatus.summaryFor(share: FolderShare): FolderShareSummary {
     }
     if (share.expired) return FolderShareSummary.INVITATION_EXPIRED
     if (share.phase == FolderSharePhase.PAUSED) return FolderShareSummary.PAUSED
+    if (folders.any { it.folderId == share.folderId && it.accessUnavailable }) {
+        return FolderShareSummary.NEEDS_ATTENTION
+    }
     if (lifecycle == FolderSyncLifecycle.INITIAL_SCANNING) return FolderShareSummary.CHECKING
     if (lifecycle == FolderSyncLifecycle.NEEDS_ATTENTION || issue != null) {
         return FolderShareSummary.NEEDS_ATTENTION

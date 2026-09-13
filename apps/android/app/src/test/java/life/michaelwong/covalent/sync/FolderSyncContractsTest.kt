@@ -80,6 +80,12 @@ class FolderSyncContractsTest {
         assertEquals(FolderShareSummary.READY, status(manual, FolderSyncLifecycle.STOPPED).summaryFor(manual))
         assertEquals(FolderShareSummary.READY, status(scheduled, FolderSyncLifecycle.STOPPED).summaryFor(scheduled))
         assertEquals(FolderShareSummary.OFFLINE, status(continuous, FolderSyncLifecycle.STOPPED).summaryFor(continuous))
+        val inaccessible = status(manual, FolderSyncLifecycle.STOPPED).copy(
+            healthFreshness = FolderHealthFreshness.STALE,
+            folders = listOf(health.copy(state = "error", accessUnavailable = true)),
+        )
+        assertEquals(FolderShareSummary.NEEDS_ATTENTION, inaccessible.summaryFor(manual))
+        assertEquals(FolderShareSummary.READY, inaccessible.summaryFor(manual.copy(folderId = PEER)))
     }
 
     @Test
