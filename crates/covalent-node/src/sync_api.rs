@@ -1022,6 +1022,7 @@ mod lifecycle_tests {
             expired: false,
             peer_connection: "connected",
             remote_removal_pending: false,
+            waiting_for_conditions: false,
         };
         let value = serde_json::to_value(response).expect("share response");
         assert_eq!(value["linkRun"]["generation"], 3);
@@ -1075,6 +1076,7 @@ struct ShareResponse {
     expired: bool,
     peer_connection: &'static str,
     remote_removal_pending: bool,
+    waiting_for_conditions: bool,
 }
 
 #[derive(Serialize)]
@@ -1340,6 +1342,7 @@ fn share_responses(
                 .is_some_and(|expires| now >= expires),
             peer_connection: peer_connection_field(share.phase, connection(share.peer_id)),
             remote_removal_pending: share.remote_removal_pending,
+            waiting_for_conditions: share.waiting_for_conditions,
             phase: match share.phase {
                 SharingPhase::Offered => "offered",
                 SharingPhase::AwaitingCommit => "awaitingCommit",

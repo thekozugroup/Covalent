@@ -2162,6 +2162,10 @@ components:
         remoteRemovalPending:
           type: boolean
           description: This node has stopped sharing locally and retained an authenticated removal notice that the peer has not yet acknowledged. It never claims remote files were deleted.
+        waitingForConditions:
+          type: boolean
+          default: false
+          description: This local Android host is waiting for an observation satisfying the link's Wi-Fi or charging requirements. Missing or stale observations also mean waiting. This is not an offline-peer claim or a report about another device.
     FolderHealthObservation:
       type: object
       additionalProperties: false

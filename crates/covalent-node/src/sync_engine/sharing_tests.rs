@@ -1477,11 +1477,23 @@ fn continuous_android_link_uses_the_same_local_condition_gate() {
     );
     target.set_android_host(true);
     assert_eq!(target.summaries().unwrap()[0].phase, SharingPhase::Ready);
+    assert!(target.summaries().unwrap()[0].waiting_for_conditions);
+    assert!(!source.summaries().unwrap()[0].waiting_for_conditions);
     assert!(target.desired_settings().unwrap().folders.is_empty());
     target.observe_android_conditions(true, false, Instant::now());
     assert_eq!(target.desired_settings().unwrap().folders.len(), 1);
+    assert!(!target.summaries().unwrap()[0].waiting_for_conditions);
     target.observe_android_conditions(false, true, Instant::now());
     assert!(target.desired_settings().unwrap().folders.is_empty());
+    assert!(target.summaries().unwrap()[0].waiting_for_conditions);
+    target.observe_android_conditions(
+        true,
+        true,
+        Instant::now() - std::time::Duration::from_secs(91),
+    );
+    assert!(target.summaries().unwrap()[0].waiting_for_conditions);
+    target.set_android_host(false);
+    assert!(!target.summaries().unwrap()[0].waiting_for_conditions);
 }
 
 #[test]

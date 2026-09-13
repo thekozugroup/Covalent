@@ -118,6 +118,8 @@ pub struct ShareSummary {
     pub link_policy: Option<covalent_protocol::FolderLinkPolicy>,
     pub link_settings: Option<LinkSettingsState>,
     pub link_run: Option<LinkRunSummary>,
+    /// This host is waiting for a fresh observation satisfying shared Android conditions.
+    pub waiting_for_conditions: bool,
     pub phase: SharingPhase,
     /// Only unaccepted invitations expire. A durable acceptance remains valid
     /// for replay after its original delivery window has elapsed.
@@ -845,6 +847,7 @@ impl FolderSharingJournal {
         self.store
             .payload()
             .map_err(|_| SharingError::PersistenceUncertain)?;
+        let observed_at = Instant::now();
         let mut summaries: Vec<_> = self
             .snapshot
             .shares
@@ -876,6 +879,21 @@ impl FolderSharingJournal {
                     share.offer.folder_id,
                     self.engine.device_id(),
                 ),
+                waiting_for_conditions: !share.removed
+                    && !share.paused
+                    && share.commit.is_some()
+                    && self
+                        .snapshot
+                        .link_settings
+                        .get(&share.offer.folder_id)
+                        .is_some_and(|state| {
+                            state.confirmed
+                                && !state.settings.paused
+                                && !self.conditions_allow(
+                                    state.settings.android_conditions,
+                                    observed_at,
+                                )
+                        }),
                 expires_at_unix_ms: (!share.removed && share.acceptance.is_none())
                     .then_some(share.offer.expires_at_unix_ms),
                 phase: if share.removed {
@@ -928,6 +946,7 @@ impl FolderSharingJournal {
                     link_policy: None,
                     link_settings: None,
                     link_run: None,
+                    waiting_for_conditions: false,
                     phase: SharingPhase::Removed,
                     expires_at_unix_ms: None,
                     remote_removal_pending: self.snapshot.pending_remote_removals.iter().any(
