@@ -19,6 +19,8 @@ final class RealFolderLinkUITests: XCTestCase {
     }
 
     func testNativeManualFolderLinkTransfersOneWayAndUpdatesMenuBar() async throws {
+        // Includes setup, two transfers, and relaunch; retain each operation’s existing deadline.
+        executionTimeAllowance = 240
         continueAfterFailure = false
         let environment = ProcessInfo.processInfo.environment
         let responderPort = try XCTUnwrap(environment["COVALENT_REAL_UI_RESPONDER_PORT"])
