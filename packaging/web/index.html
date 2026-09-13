@@ -93,6 +93,16 @@
           </div>
         </section>
 
+        <section class="card" data-link-run-pending hidden>
+          <h3>Saved Run Now request</h3>
+          <p>The result of a previous request is uncertain. Retry the exact request so the source cannot start a duplicate run.</p>
+          <p class="muted" data-link-run-pending-summary></p>
+          <div class="button-row">
+            <button type="button" data-link-run-retry data-folder-mutation>Retry Run Now</button>
+            <button type="button" class="quiet" data-link-run-discard data-folder-mutation>Discard after review</button>
+          </div>
+        </section>
+
         <form class="card" data-folder-offer-form>
           <h3>Create a one-way link</h3>
           <label>Destination device <select name="peerId" data-folder-peer required disabled><option value="">Unlock the console to load confirmed devices</option></select></label>
@@ -103,6 +113,25 @@
             <label>Folder path on this server <input name="selectedRoot" value="/sync" maxlength="1024" required /></label>
           </details>
           <p class="notice">The default <code>/sync</code> path must be a writable folder mounted into the Covalent server.</p>
+          <fieldset>
+            <legend>When should this link run?</legend>
+            <label><input type="radio" name="cadenceMode" value="manual" required /> Manual</label>
+            <p class="muted">Files move only when a link member chooses Run Now.</p>
+            <label><input type="radio" name="cadenceMode" value="scheduled" required /> Scheduled</label>
+            <p class="muted">The source starts one bounded run at each interval.</p>
+            <label><input type="radio" name="cadenceMode" value="continuous" required /> Continuous</label>
+            <p class="muted">Covalent watches for changes and transfers them while the link is available.</p>
+            <label data-folder-schedule-interval hidden>Run every
+              <input name="intervalMinutes" type="number" min="15" max="525600" step="1" value="60" list="folder-schedule-options" disabled required /> minutes
+            </label>
+            <datalist id="folder-schedule-options"><option value="15" label="15 minutes"></option><option value="60" label="1 hour"></option><option value="1440" label="Daily"></option></datalist>
+          </fieldset>
+          <fieldset>
+            <legend>Android device conditions</legend>
+            <label><input type="checkbox" name="wifiOnly" /> Wi-Fi only on Android devices</label>
+            <label><input type="checkbox" name="chargingOnly" /> Charging only on Android devices</label>
+            <p class="muted">These shared choices affect Android devices in this link. They do not change this server or a Mac.</p>
+          </fieldset>
           <fieldset>
             <legend>Deletion options</legend>
             <label><input type="checkbox" name="propagateSourceDeletions" /> Delete destination copies when source files are deleted</label>

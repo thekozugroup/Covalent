@@ -98,3 +98,23 @@ test("normal backup results are decoded before their terminal job receipt is ack
   assert.match(terminal, /response\.status !== 204/);
   assert.match(terminal, /apiResponse\("\/api\/v1\/jobs\/acknowledge"/);
 });
+
+test("link cadence controls use the shared settings and Run Now contracts without exposing counters", async () => {
+  const [html, app, flow] = await Promise.all([
+    source("index.html"), source("app.js"), source("folder-sync-flow.js"),
+  ]);
+  assert.match(html, /name="cadenceMode" value="manual" required/);
+  assert.match(html, /name="cadenceMode" value="scheduled" required/);
+  assert.match(html, /name="cadenceMode" value="continuous" required/);
+  assert.match(html, /name="intervalMinutes" type="number" min="15" max="525600"/);
+  assert.match(html, /Wi-Fi only on Android devices/);
+  assert.match(html, /Charging only on Android devices/);
+  assert.match(app, /folderController\.updateLinkSettings\(share\.folderId, settings\)/);
+  assert.match(app, /folderController\.runNow\(share\.folderId\)/);
+  assert.match(flow, /"\/api\/v1\/sync\/run"/);
+  assert.match(flow, /expectedGeneration: share\.linkRun\.generation/);
+  assert.match(flow, /settingsRevision: share\.linkSettings\.revision/);
+  assert.doesNotMatch(html, /generation|settings revision/i);
+  assert.doesNotMatch(app, /textContent\s*=.*(?:generation|revision)/i);
+  assert.doesNotMatch(app, /\/api\/v1\/sync\/conditions/);
+});

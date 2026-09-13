@@ -9,6 +9,7 @@
   const NIL_UUID = "00000000-0000-0000-0000-000000000000";
   const STORAGE_PREFIX = "covalent.folder-offer.v1.";
   const SETTINGS_STORAGE_PREFIX = "covalent.folder-settings.v1.";
+  const RUN_STORAGE_PREFIX = "covalent.folder-run.v1.";
   const MAX_COLLECTION = 1024;
   const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
   const MAX_STORAGE_BYTES = 4096;
@@ -25,6 +26,8 @@
     "installation", "folderAccess", "journal", "workerLaunch", "workerHealth",
     "workerStop", "peerRevocation", "initialScan",
   ]);
+  const RUN_PHASES = new Set(["preparing", "running", "succeeded", "incomplete", "interrupted", "cancelled"]);
+  const RUN_RESULTS = new Set(["pending", "succeeded", "failed", "timedOut", "interrupted", "cancelled"]);
 
   function guidance(message) {
     const error = new Error("folder sync guidance");
@@ -135,11 +138,47 @@
     });
   }
 
+  function cadence(value) {
+    if (value === undefined) return Object.freeze({ mode: "continuous" });
+    const selected = object(value, "Choose when this link runs.");
+    if (selected.mode === "scheduled") {
+      exactKeys(selected, ["mode", "intervalMinutes"], "Choose a valid scheduled interval.");
+      if (!Number.isSafeInteger(selected.intervalMinutes)
+        || selected.intervalMinutes < 15 || selected.intervalMinutes > 525600) {
+        throw guidance("Choose a scheduled interval from 15 minutes to one year.");
+      }
+      return Object.freeze({ mode: "scheduled", intervalMinutes: selected.intervalMinutes });
+    }
+    if ((selected.mode === "manual" || selected.mode === "continuous")
+      && Object.keys(selected).length === 1) return Object.freeze({ mode: selected.mode });
+    throw guidance("Choose Manual, Scheduled, or Continuous.");
+  }
+
+  function androidConditions(value) {
+    if (value === undefined) return Object.freeze({ wifiOnly: false, chargingOnly: false });
+    const conditions = object(value, "Choose valid Android transfer conditions.");
+    exactKeys(conditions, ["wifiOnly", "chargingOnly"], "Choose valid Android transfer conditions.");
+    if (typeof conditions.wifiOnly !== "boolean" || typeof conditions.chargingOnly !== "boolean") {
+      throw guidance("Choose valid Android transfer conditions.");
+    }
+    return Object.freeze({ wifiOnly: conditions.wifiOnly, chargingOnly: conditions.chargingOnly });
+  }
+
   function folderLinkSettings(value) {
     const settings = object(value, "The node returned invalid link settings.");
-    exactKeys(settings, ["deletionPolicy", "paused"], "The node returned invalid link settings.");
+    const keys = Object.keys(settings);
+    if (!(keys.length === 2 && ["deletionPolicy", "paused"].every((key) => Object.hasOwn(settings, key)))
+      && !(keys.length === 4 && ["deletionPolicy", "paused", "cadence", "androidConditions"]
+        .every((key) => Object.hasOwn(settings, key)))) {
+      throw guidance("The node returned invalid link settings.");
+    }
     if (typeof settings.paused !== "boolean") throw guidance("The node returned invalid link settings.");
-    return Object.freeze({ deletionPolicy: linkPolicy(settings.deletionPolicy), paused: settings.paused });
+    return Object.freeze({
+      deletionPolicy: linkPolicy(settings.deletionPolicy),
+      paused: settings.paused,
+      cadence: cadence(settings.cadence),
+      androidConditions: androidConditions(settings.androidConditions),
+    });
   }
 
   function linkSettingsRequest(value, folderId) {
@@ -199,17 +238,85 @@
 
   function settingsExplanation(settings) {
     const value = folderLinkSettings(settings);
-    return `${policyExplanation(value.deletionPolicy)} ${value.paused ? "The whole link will be paused." : "The whole link will run."}`;
+    const timing = value.cadence.mode === "manual" ? "Transfers run only when requested."
+      : value.cadence.mode === "continuous" ? "Transfers run continuously."
+        : `Transfers run every ${value.cadence.intervalMinutes} minutes.`;
+    const android = value.androidConditions.wifiOnly || value.androidConditions.chargingOnly
+      ? ` Android devices wait for ${[
+        value.androidConditions.wifiOnly ? "Wi-Fi" : null,
+        value.androidConditions.chargingOnly ? "charging" : null,
+      ].filter(Boolean).join(" and ")}.` : "";
+    return `${policyExplanation(value.deletionPolicy)} ${timing}${android} ${value.paused ? "The whole link will be paused." : "The whole link will run."}`;
   }
 
   function offerBody(value) {
     const body = object(value, "This folder offer is invalid.");
-    return Object.freeze({
+    const decoded = {
       peerId: uuid(body.peerId, "Choose a currently paired device."),
       folderId: uuid(body.folderId),
       label: string(body.label, 120, "Enter a folder name up to 120 characters.").trim(),
       selectedRoot: selectedRoot(body.selectedRoot),
       linkPolicy: linkPolicy(body.linkPolicy),
+    };
+    if (Object.hasOwn(body, "cadence") || Object.hasOwn(body, "androidConditions")) {
+      decoded.cadence = cadence(body.cadence);
+      decoded.androidConditions = androidConditions(body.androidConditions);
+    }
+    return Object.freeze(decoded);
+  }
+
+  function linkRun(value) {
+    if (value === null || value === undefined) return null;
+    const run = object(value, "The node returned invalid link run status.");
+    exactKeys(run, ["generation", "stateRevision", "settingsRevision", "phase", "startedAtUnixMs",
+      "deadlineUnixMs", "endedAtUnixMs", "nextDueAtUnixMs", "pendingRequest", "rejectedRequest", "destinations"],
+    "The node returned invalid link run status.");
+    const optionalTime = (time) => {
+      if (time === null) return null;
+      const decoded = unsigned(time, "The node returned an invalid link run time.");
+      if (decoded === 0) throw guidance("The node returned an invalid link run time.");
+      return decoded;
+    };
+    if (!(run.phase === null || RUN_PHASES.has(run.phase))) {
+      throw guidance("The node returned invalid link run status.");
+    }
+    const pendingRequest = run.pendingRequest === null ? null : (() => {
+      const request = object(run.pendingRequest, "The node returned an invalid pending run request.");
+      exactKeys(request, ["requestId", "requesterId"], "The node returned an invalid pending run request.");
+      const requestId = uuid(request.requestId);
+      if (requestId === NIL_UUID) throw guidance("The node returned an invalid pending run request.");
+      return Object.freeze({ requestId, requesterId: uuid(request.requesterId) });
+    })();
+    const rejectedRequest = run.rejectedRequest === null ? null : (() => {
+      const request = object(run.rejectedRequest, "The node returned an invalid rejected run request.");
+      exactKeys(request, ["requesterId", "requestId", "reason"], "The node returned an invalid rejected run request.");
+      if (!["generationChanged", "settingsChanged"].includes(request.reason)) {
+        throw guidance("The node returned an invalid rejected run request.");
+      }
+      const requestId = uuid(request.requestId);
+      if (requestId === NIL_UUID) throw guidance("The node returned an invalid rejected run request.");
+      return Object.freeze({ requesterId: uuid(request.requesterId), requestId, reason: request.reason });
+    })();
+    const destinations = boundedArray(run.destinations, "The node returned too many run destinations.").map((entry) => {
+      const destination = object(entry, "The node returned invalid destination run status.");
+      exactKeys(destination, ["peerId", "result", "endedAtUnixMs"], "The node returned invalid destination run status.");
+      if (!RUN_RESULTS.has(destination.result)) throw guidance("The node returned invalid destination run status.");
+      return Object.freeze({
+        peerId: uuid(destination.peerId), result: destination.result, endedAtUnixMs: optionalTime(destination.endedAtUnixMs),
+      });
+    });
+    return Object.freeze({
+      generation: unsigned(run.generation, "The node returned an invalid link run generation."),
+      stateRevision: unsigned(run.stateRevision, "The node returned an invalid link run state."),
+      settingsRevision: unsigned(run.settingsRevision, "The node returned an invalid link run settings state."),
+      phase: run.phase,
+      startedAtUnixMs: optionalTime(run.startedAtUnixMs),
+      deadlineUnixMs: optionalTime(run.deadlineUnixMs),
+      endedAtUnixMs: optionalTime(run.endedAtUnixMs),
+      nextDueAtUnixMs: optionalTime(run.nextDueAtUnixMs),
+      pendingRequest,
+      rejectedRequest,
+      destinations: Object.freeze(destinations),
     });
   }
 
@@ -255,6 +362,7 @@
       const policy = share.linkPolicy === null ? null : linkPolicy(share.linkPolicy);
       const settings = share.linkSettings === null ? null
         : linkSettingsState(share.linkSettings, uuid(share.folderId), policy);
+      const run = linkRun(share.linkRun);
       if ((policy === null) !== (settings === null)) {
         throw guidance("The node returned inconsistent one-way link settings.");
       }
@@ -266,6 +374,7 @@
         incoming: share.incoming,
         linkPolicy: policy,
         linkSettings: settings,
+        linkRun: run,
         phase: share.phase,
         expiresAtUnixMs: share.expiresAtUnixMs ?? null,
         // The server owns expiry. Browser clock arithmetic must never override it.
@@ -287,7 +396,7 @@
     }
     const links = new Map();
     for (const share of shares.filter((item) => item.linkSettings !== null && item.phase !== "removed")) {
-      const encoded = JSON.stringify([share.label, share.linkPolicy, share.linkSettings]);
+      const encoded = JSON.stringify([share.label, share.linkPolicy, share.linkSettings, share.linkRun]);
       if (links.has(share.folderId) && links.get(share.folderId) !== encoded) {
         throw guidance("The node returned different settings for members of one link.");
       }
@@ -384,6 +493,21 @@
     }
   }
 
+  function idleBatchView(share) {
+    const settings = share.linkSettings;
+    const run = share.linkRun;
+    if (share.phase !== "ready" || !settings?.confirmed || settings.settings.paused
+      || (settings.settings.cadence?.mode ?? "continuous") === "continuous" || run == null
+      || ["preparing", "running"].includes(run.phase)) return null;
+    if (run.pendingRequest !== null) return Object.freeze({ kind: "waiting", text: "Run requested. Waiting for the source." });
+    if (["incomplete", "interrupted", "cancelled"].includes(run.phase)) {
+      return Object.freeze({ kind: "attention", text: "The last run did not finish. Review its destinations below." });
+    }
+    return settings.settings.cadence.mode === "manual"
+      ? Object.freeze({ kind: "ready", text: "Ready for Run Now" })
+      : Object.freeze({ kind: "waiting", text: "Waiting for the next scheduled run" });
+  }
+
   function statusSummary(status) {
     if (status.availability !== "available") {
       if (status.issue === "folderAccess") {
@@ -401,6 +525,10 @@
       return Object.freeze({ kind: "attention", text });
     }
     if (status.lifecycle !== "running") {
+      const links = status.shares.filter((share) => share.phase !== "removed");
+      if (status.lifecycle === "stopped" && links.length > 0 && links.every(idleBatchView)) {
+        return Object.freeze({ kind: "ready", text: "No transfer is running. Each link shows its next action below." });
+      }
       return Object.freeze({ kind: "offline", text: "Folder sync is stopped on this server." });
     }
     if (status.healthFreshness !== "fresh") {
@@ -424,7 +552,7 @@
     if (share.phase === "offered" || share.phase === "awaitingCommit") {
       return Object.freeze({ kind: "waiting", text: share.incoming ? "Waiting for your folder" : "Waiting for other device" });
     }
-    if (status.lifecycle !== "running") return Object.freeze({ kind: "offline", text: "Folder sync offline" });
+    if (status.availability !== "available") return Object.freeze({ kind: "offline", text: "Folder sync offline" });
     const peer = status.peers.find((item) => item.peerId === share.peerId);
     const peerName = peer?.displayName ?? "other device";
     const health = status.folders.find((item) => item.folderId === share.folderId);
@@ -433,6 +561,9 @@
       || health.reportedErrorRows > 0 || health.state === "error")) {
       return Object.freeze({ kind: "attention", text: "Needs attention" });
     }
+    const batchView = idleBatchView(share);
+    if (batchView !== null) return batchView;
+    if (status.lifecycle !== "running") return Object.freeze({ kind: "offline", text: "Folder sync offline" });
     if (status.healthFreshness === "fresh" && health
       && (health.state === "starting" || health.state === "scanning" || health.state === "scan-waiting")) {
       return Object.freeze({ kind: "checking", text: "Checking folder" });
@@ -460,6 +591,10 @@
 
   function settingsStorageKey(deviceId) {
     return `${SETTINGS_STORAGE_PREFIX}${uuid(deviceId, "The server identity is invalid.")}`;
+  }
+
+  function runStorageKey(deviceId) {
+    return `${RUN_STORAGE_PREFIX}${uuid(deviceId, "The server identity is invalid.")}`;
   }
 
   function lazySessionStorage(scope) {
@@ -571,6 +706,61 @@
       if (storage.getItem(key) !== null) throw new Error("storage did not clear value");
     } catch (_) {
       throw guidance("The server retained this link-settings request, but the browser could not clear its retry copy.");
+    }
+  }
+
+  function runBody(value) {
+    const body = object(value, "This run request is invalid.");
+    exactKeys(body, ["folderId", "requestId", "expectedGeneration", "settingsRevision"],
+      "This run request is invalid.");
+    const requestId = uuid(body.requestId, "This run request identifier is invalid.");
+    if (requestId === NIL_UUID) throw guidance("This run request identifier is invalid.");
+    return Object.freeze({
+      folderId: uuid(body.folderId),
+      requestId,
+      expectedGeneration: unsigned(body.expectedGeneration, "This run request is based on invalid status."),
+      settingsRevision: unsigned(body.settingsRevision, "This run request is based on invalid settings."),
+    });
+  }
+
+  function savePendingRun(storage, deviceId, body) {
+    const key = runStorageKey(deviceId);
+    const record = { schemaVersion: 1, deviceId: uuid(deviceId), body: runBody(body) };
+    const encoded = JSON.stringify(record);
+    if (encoded.length > MAX_STORAGE_BYTES) throw guidance("This run request is too large to retain safely.");
+    try {
+      storage.setItem(key, encoded);
+      if (storage.getItem(key) !== encoded) throw new Error("storage did not retain exact value");
+    } catch (_) {
+      throw guidance("This browser could not retain the exact Run Now request, so no request was sent.");
+    }
+    return JSON.parse(encoded).body;
+  }
+
+  function loadPendingRun(storage, deviceId) {
+    let encoded;
+    try { encoded = storage.getItem(runStorageKey(deviceId)); }
+    catch (_) { throw guidance("This browser could not read its pending Run Now request. No request was sent."); }
+    if (encoded === null) return null;
+    if (encoded.length > MAX_STORAGE_BYTES) throw guidance("The saved Run Now request is invalid. No request was sent.");
+    let decoded;
+    try { decoded = JSON.parse(encoded); }
+    catch (_) { throw guidance("The saved Run Now request is invalid. No request was sent."); }
+    const record = object(decoded, "The saved Run Now request is invalid. No request was sent.");
+    exactKeys(record, ["schemaVersion", "deviceId", "body"], "The saved Run Now request is invalid. No request was sent.");
+    if (record.schemaVersion !== 1 || uuid(record.deviceId) !== uuid(deviceId)) {
+      throw guidance("The saved Run Now request belongs to a different server. No request was sent.");
+    }
+    return runBody(record.body);
+  }
+
+  function clearPendingRun(storage, deviceId) {
+    const key = runStorageKey(deviceId);
+    try {
+      storage.removeItem(key);
+      if (storage.getItem(key) !== null) throw new Error("storage did not clear value");
+    } catch (_) {
+      throw guidance("The server accepted this Run Now request, but the browser could not clear its retry copy.");
     }
   }
 
@@ -716,6 +906,8 @@
       return requestLinkSettings(share.folderId, {
         deletionPolicy: share.linkSettings.settings.deletionPolicy,
         paused,
+        cadence: share.linkSettings.settings.cadence,
+        androidConditions: share.linkSettings.settings.androidConditions,
       });
     }
 
@@ -749,7 +941,7 @@
       }
       if (observed === "conflict" || observed === "stale") {
         if (observed === "conflict") clearPendingSettings(options.storage, deviceId);
-        throw guidance("This saved link-settings request used an old revision. Review the current and attempted settings before submitting again.");
+        throw guidance("This saved link-settings request is outdated. Review the current and attempted settings before submitting again.");
       }
       try {
         const mutation = await mutate("/api/v1/sync/settings", retained);
@@ -788,12 +980,78 @@
       });
     }
 
+    function updateLinkSettings(folderId, settings) {
+      const share = link(folderId);
+      return requestLinkSettings(share.folderId, settings);
+    }
+
     function updateDeletionPolicy(folderId, policy) {
       const share = link(folderId);
-      return requestLinkSettings(share.folderId, {
+      return updateLinkSettings(share.folderId, {
+        ...share.linkSettings.settings,
         deletionPolicy: linkPolicy(policy),
-        paused: share.linkSettings.settings.paused,
       });
+    }
+
+    async function sendRunNow(body) {
+      const expectedDeviceId = deviceId;
+      const retained = savePendingRun(options.storage, expectedDeviceId, body);
+      try {
+        const mutation = await mutate(
+          "/api/v1/sync/run",
+          retained,
+          expectedDeviceId,
+          "This Run Now request finished for a previous server. Its exact retry copy was retained.",
+        );
+        clearPendingRun(options.storage, expectedDeviceId);
+        return mutation;
+      } catch (error) {
+        if (["link_run_conflict", "link_run_pending"].includes(error?.code)) {
+          clearPendingRun(options.storage, expectedDeviceId);
+          throw guidance(error.code === "link_run_pending"
+            ? "Another Run Now request is waiting for the source. Refresh link status before trying again."
+            : "The link changed before Run Now started. Refresh link status and try again.");
+        }
+        throw guidance("The Run Now result is uncertain. Retry the exact saved request before starting another run.");
+      }
+    }
+
+    function runNow(folderId) {
+      requireMutationAvailable();
+      const share = link(folderId);
+      const saved = loadPendingRun(options.storage, deviceId);
+      if (saved !== null) {
+        if (saved.folderId !== share.folderId) {
+          throw guidance("Retry or discard the saved Run Now request before starting a different link.");
+        }
+        return sendRunNow(saved);
+      }
+      if (share.linkSettings.settings.paused) throw guidance("Resume this link before starting a run.");
+      if (share.linkRun === null) throw guidance("Refresh this link before starting a run.");
+      if (share.linkRun.pendingRequest !== null) {
+        throw guidance("A Run Now request is already waiting for the source.");
+      }
+      if (["preparing", "running"].includes(share.linkRun.phase)) {
+        throw guidance("This link is already running.");
+      }
+      return sendRunNow({
+        folderId: share.folderId,
+        requestId: randomUuid(),
+        expectedGeneration: share.linkRun.generation,
+        settingsRevision: share.linkSettings.revision,
+      });
+    }
+
+    function retryPendingRun() {
+      requireMutationAvailable();
+      const saved = loadPendingRun(options.storage, deviceId);
+      if (saved === null) throw guidance("There is no saved Run Now request to retry.");
+      return sendRunNow(saved);
+    }
+
+    function discardPendingRun() {
+      requireMutationAvailable();
+      clearPendingRun(options.storage, deviceId);
     }
 
     function retryPendingLinkSettings() {
@@ -917,6 +1175,7 @@
       isMutationLocked: () => mutationLocked,
       loadPending: () => deviceId === null ? null : loadPending(options.storage, deviceId),
       pendingLinkSettings: () => deviceId === null ? null : loadPendingSettings(options.storage, deviceId),
+      pendingRun: () => deviceId === null ? null : loadPendingRun(options.storage, deviceId),
       pause,
       pendingPeerAddressRefresh: () => pendingAddressRefresh,
       refresh,
@@ -925,14 +1184,18 @@
       renew,
       retryPendingOffer,
       retryPendingLinkSettings,
+      retryPendingRun,
       retryPeerAddressRefresh,
       retryService,
       sendOffer,
+      runNow,
       updateDeletionPolicy,
+      updateLinkSettings,
       setAccess,
       setPollingEnabled,
       cancelPeerAddressRefresh,
       discardPendingLinkSettings,
+      discardPendingRun,
     });
   }
 
@@ -943,6 +1206,8 @@
     guidance,
     lazySessionStorage,
     offerBody,
+    cadence,
+    androidConditions,
     policyExplanation,
     settingsExplanation,
     peerAddress,
@@ -952,6 +1217,12 @@
       load: loadPendingSettings,
       save: savePendingSettings,
       storageKey: settingsStorageKey,
+    }),
+    pendingRun: Object.freeze({
+      clear: clearPendingRun,
+      load: loadPendingRun,
+      save: savePendingRun,
+      storageKey: runStorageKey,
     }),
     requireStatus,
     readJson,

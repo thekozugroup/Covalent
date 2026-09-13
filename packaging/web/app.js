@@ -98,6 +98,8 @@
     folder_sync_busy: ["Another folder change is still in progress. Try again shortly.", RECOVERY.retry],
     link_settings_conflict: ["Link settings changed on another device. Refresh and review the current settings before submitting again.", RECOVERY.none],
     link_settings_pending: ["A link-settings change is waiting for the source. Review that request before making another change.", RECOVERY.none],
+    link_run_conflict: ["The link changed before this run started. Refresh link status and try again.", RECOVERY.none],
+    link_run_pending: ["Another run request is waiting for the source. Refresh link status before trying again.", RECOVERY.none],
     folder_sync_needs_attention: [
       "Folder sync needs attention before it can continue. Check the folder status, then try again.",
       RECOVERY.retry,
@@ -628,9 +630,17 @@ function renderFolderError(error) {
   status.dataset.kind = "attention";
 }
 
+const folderMutationDisabledState = new WeakMap();
+
 function setFolderMutationLock(locked) {
   document.querySelectorAll("[data-folder-mutation]").forEach((control) => {
-    control.disabled = locked;
+    if (locked) {
+      folderMutationDisabledState.set(control, control.disabled);
+      control.disabled = true;
+    } else if (folderMutationDisabledState.has(control)) {
+      control.disabled = folderMutationDisabledState.get(control);
+      folderMutationDisabledState.delete(control);
+    }
   });
   $("[data-folder-offer-form]").setAttribute("aria-busy", String(locked));
 }
@@ -656,11 +666,13 @@ async function runFolderMutation(action, success) {
     await action();
     renderPendingFolderOffer();
     renderPendingLinkSettings();
+    renderPendingLinkRun();
     await loadFolders(false);
     say(success);
   } catch (error) {
     renderPendingFolderOffer();
     renderPendingLinkSettings();
+    renderPendingLinkRun();
     fail(error);
   }
 }
@@ -668,6 +680,133 @@ async function runFolderMutation(action, success) {
 function firstLinkMember(status, share) {
   return status.shares.find((item) => item.folderId === share.folderId
     && item.linkSettings !== null && item.phase !== "removed")?.offerId === share.offerId;
+}
+
+function cadenceControls(settings) {
+  const cadenceLabel = document.createElement("label");
+  cadenceLabel.textContent = "Transfer timing ";
+  const cadence = document.createElement("select");
+  cadence.name = "cadenceMode";
+  for (const [value, label] of [["manual", "Manual"], ["scheduled", "Scheduled"], ["continuous", "Continuous"]]) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    cadence.append(option);
+  }
+  cadence.value = settings.cadence.mode;
+  cadenceLabel.append(cadence);
+
+  const intervalLabel = document.createElement("label");
+  intervalLabel.textContent = "Run every ";
+  const interval = document.createElement("input");
+  interval.name = "intervalMinutes";
+  interval.type = "number";
+  interval.min = "15";
+  interval.max = "525600";
+  interval.step = "1";
+  interval.setAttribute("list", "folder-schedule-options");
+  interval.required = true;
+  interval.value = String(settings.cadence.mode === "scheduled" ? settings.cadence.intervalMinutes : 60);
+  intervalLabel.append(interval, " minutes");
+  const syncInterval = () => {
+    intervalLabel.hidden = cadence.value !== "scheduled";
+    interval.disabled = intervalLabel.hidden;
+  };
+  cadence.addEventListener("change", syncInterval);
+  syncInterval();
+  return { cadenceLabel, cadence, intervalLabel, interval };
+}
+
+function cadenceValue(mode, interval) {
+  return mode === "scheduled"
+    ? { mode, intervalMinutes: Number(interval) }
+    : { mode };
+}
+
+function syncOfferScheduleInput() {
+  const form = $("[data-folder-offer-form]");
+  const scheduled = form.elements.cadenceMode.value === "scheduled";
+  const label = $("[data-folder-schedule-interval]");
+  label.hidden = !scheduled;
+  form.elements.intervalMinutes.disabled = !scheduled;
+}
+
+function runResultCopy(result) {
+  return ({
+    pending: "Waiting",
+    succeeded: "Complete",
+    failed: "Failed",
+    timedOut: "Incomplete after 24 hours",
+    interrupted: "Interrupted",
+    cancelled: "Cancelled",
+  })[result];
+}
+
+function runDestinationName(status, peerId) {
+  if (peerId === folderDeviceId) return "This device";
+  return status.peers.find((peer) => peer.peerId === peerId)?.displayName ?? "Another destination";
+}
+
+function renderLinkRun(container, status, share) {
+  const run = share.linkRun;
+  if (run === null || !share.linkSettings.confirmed) return;
+  const section = document.createElement("section");
+  section.className = "link-run";
+  const heading = document.createElement("strong");
+  heading.textContent = "Transfer";
+  const summary = document.createElement("p");
+  summary.setAttribute("role", "status");
+  if (run.pendingRequest !== null) summary.textContent = "Run requested. Waiting for the source to come online and start it.";
+  else if (run.phase === "preparing") summary.textContent = "Preparing this run and checking source files.";
+  else if (run.phase === "running") summary.textContent = "This run is active.";
+  else if (run.phase === "succeeded") summary.textContent = "The last run completed for every destination.";
+  else if (run.phase === "incomplete") summary.textContent = "The last run was incomplete. Review each destination and run it again when ready.";
+  else if (run.phase === "interrupted") summary.textContent = "The last run was interrupted before completion. Run it again when ready.";
+  else if (run.phase === "cancelled") summary.textContent = "The last run was cancelled before completion.";
+  else if (share.linkSettings.settings.cadence.mode === "manual") {
+    summary.textContent = "Ready. No transfer starts until a link member chooses Run Now.";
+  } else if (share.linkSettings.settings.cadence.mode === "continuous") {
+    summary.textContent = "Continuous transfer is ready.";
+  } else summary.textContent = "Scheduled transfer is ready.";
+  section.append(heading, summary);
+
+  if (share.linkSettings.settings.cadence.mode === "scheduled") {
+    const schedule = document.createElement("p");
+    schedule.className = "muted";
+    schedule.textContent = run.nextDueAtUnixMs === null
+      ? "The source owns this schedule. The next run time is not available yet."
+      : `The source owns this schedule. Next run: ${new Date(run.nextDueAtUnixMs).toLocaleString()}.`;
+    section.append(schedule);
+  }
+  if (run.destinations.length > 0) {
+    const destinations = document.createElement("ul");
+    for (const destination of run.destinations) {
+      const item = document.createElement("li");
+      item.textContent = `${runDestinationName(status, destination.peerId)}: ${runResultCopy(destination.result)}`;
+      destinations.append(item);
+    }
+    section.append(destinations);
+  }
+  if (run.rejectedRequest !== null) {
+    const rejected = document.createElement("p");
+    rejected.setAttribute("role", "alert");
+    rejected.textContent = "A Run Now request was not started because the link changed. Refresh and try again.";
+    section.append(rejected);
+  }
+  const active = run.pendingRequest !== null || ["preparing", "running"].includes(run.phase);
+  let saved = null;
+  try { saved = folderController.pendingRun(); }
+  catch (error) { renderFolderError(error); }
+  const button = folderActionButton(saved?.folderId === share.folderId ? "Retry Run Now" : "Run Now", () => {
+    void runFolderMutation(
+      () => saved?.folderId === share.folderId ? folderController.retryPendingRun() : folderController.runNow(share.folderId),
+      "Run request saved. Link status shows progress for every destination.",
+    );
+  });
+  button.disabled = button.disabled || active || share.linkSettings.settings.paused
+    || (saved !== null && saved.folderId !== share.folderId);
+  section.append(button);
+  container.append(section);
 }
 
 function renderLinkSettings(container, status, share) {
@@ -692,7 +831,7 @@ function renderLinkSettings(container, status, share) {
   if (state.conflictedChange !== null) {
     const conflict = document.createElement("p");
     conflict.setAttribute("role", "alert");
-    conflict.textContent = `A request used an old revision and was not applied: ${folderSync.settingsExplanation(state.conflictedChange.settings)} Review the current choices below before submitting again.`;
+    conflict.textContent = `An outdated request was not applied: ${folderSync.settingsExplanation(state.conflictedChange.settings)} Review the current choices below before submitting again.`;
     details.append(conflict);
   }
 
@@ -710,6 +849,22 @@ function renderLinkSettings(container, status, share) {
   localDeletesInput.name = "restoreLocalDeletions";
   localDeletesInput.checked = state.settings.deletionPolicy.restoreLocalDeletions;
   localDeletes.append(localDeletesInput, " Restore files deleted at a destination");
+  const timing = cadenceControls(state.settings);
+  const wifi = document.createElement("label");
+  const wifiInput = document.createElement("input");
+  wifiInput.type = "checkbox";
+  wifiInput.name = "wifiOnly";
+  wifiInput.checked = state.settings.androidConditions.wifiOnly;
+  wifi.append(wifiInput, " Wi-Fi only on Android devices");
+  const charging = document.createElement("label");
+  const chargingInput = document.createElement("input");
+  chargingInput.type = "checkbox";
+  chargingInput.name = "chargingOnly";
+  chargingInput.checked = state.settings.androidConditions.chargingOnly;
+  charging.append(chargingInput, " Charging only on Android devices");
+  const androidHelp = document.createElement("p");
+  androidHelp.className = "muted";
+  androidHelp.textContent = "These shared conditions apply only on Android devices in this link.";
   const submit = document.createElement("button");
   submit.dataset.folderMutation = "";
   submit.disabled = folderController.isMutationLocked() || !state.confirmed || state.pendingChange !== null;
@@ -720,16 +875,23 @@ function renderLinkSettings(container, status, share) {
       propagateSourceDeletions: sourceDeletesInput.checked,
       restoreLocalDeletions: localDeletesInput.checked,
     };
+    const settings = {
+      deletionPolicy: policy,
+      paused: state.settings.paused,
+      cadence: cadenceValue(timing.cadence.value, timing.interval.value),
+      androidConditions: { wifiOnly: wifiInput.checked, chargingOnly: chargingInput.checked },
+    };
     const currentPolicy = state.settings.deletionPolicy;
     const enablesDeletion = policy.propagateSourceDeletions && !currentPolicy.propagateSourceDeletions
       || policy.restoreLocalDeletions && !currentPolicy.restoreLocalDeletions;
     if (enablesDeletion && !globalThis.confirm(`${folderSync.policyExplanation(policy)} Apply these choices to every destination in this link?`)) return;
     void runFolderMutation(
-      () => folderController.updateDeletionPolicy(share.folderId, policy),
+      () => folderController.updateLinkSettings(share.folderId, settings),
       "Link settings request saved. Current link status shows whether the source confirmed it.",
     );
   });
-  form.append(sourceDeletes, localDeletes, submit);
+  form.append(sourceDeletes, localDeletes, timing.cadenceLabel, timing.intervalLabel,
+    wifi, charging, androidHelp, submit);
   details.append(form);
   container.append(details);
 }
@@ -791,6 +953,8 @@ function renderAddDestination(container, status, share) {
       label: share.label,
       selectedRoot: path.value,
       linkPolicy: share.linkPolicy,
+      cadence: share.linkSettings.settings.cadence,
+      androidConditions: share.linkSettings.settings.androidConditions,
     };
     if (!globalThis.confirm(`Confirm that ${path.value} is the same source folder already used by ${share.label}. Add this destination?`)) return;
     void runFolderMutation(
@@ -837,6 +1001,7 @@ function renderFolderActions(container, status, share, view) {
   }
 
   if (share.linkSettings !== null && firstMember) {
+    renderLinkRun(container, status, share);
     renderLinkSettings(container, status, share);
     if (!share.incoming && share.linkSettings.confirmed && ["ready", "paused"].includes(share.phase)) {
       renderAddDestination(container, status, share);
@@ -1110,9 +1275,10 @@ function renderFolderStatus(status) {
     const linkMembers = status.shares.filter((item) => item.folderId === share.folderId && item.phase !== "removed")
       .map((item) => item.peerId);
     const actionState = JSON.stringify([
-      folderDeviceId, share.incoming, share.phase, share.expired, share.linkSettings,
+      folderDeviceId, share.incoming, share.phase, share.expired, share.linkSettings, share.linkRun,
       linkMembers, status.peers.map((item) => [item.peerId, item.displayName]),
       savedSettings?.folderId === share.folderId ? savedSettings : null,
+      folderController.pendingRun()?.folderId === share.folderId,
     ]);
     if (actions.dataset.state !== actionState) {
       actions.replaceChildren();
@@ -1157,8 +1323,18 @@ function renderPendingLinkSettings() {
   if (pending === null) return;
   const share = folderController.current()?.shares.find((item) => item.folderId === pending.folderId);
   const label = share?.label ?? "this link";
-  const currentRevision = share?.linkSettings?.revision;
-  $("[data-link-settings-pending-summary]").textContent = `${label}: saved revision ${pending.expectedRevision}; ${folderSync.settingsExplanation(pending.settings)}${currentRevision === undefined ? "" : ` Current revision: ${currentRevision}.`}`;
+  $("[data-link-settings-pending-summary]").textContent = `${label}: ${folderSync.settingsExplanation(pending.settings)}`;
+}
+
+function renderPendingLinkRun() {
+  const card = $("[data-link-run-pending]");
+  let pending = null;
+  try { pending = folderController.pendingRun(); }
+  catch (error) { renderFolderError(error); }
+  card.hidden = pending === null;
+  if (pending === null) return;
+  const share = folderController.current()?.shares.find((item) => item.folderId === pending.folderId);
+  $("[data-link-run-pending-summary]").textContent = `${share?.label ?? "This link"}: retry the saved request or discard it after checking current link status.`;
 }
 
 async function loadFolders(reportError = false) {
@@ -1167,6 +1343,7 @@ async function loadFolders(reportError = false) {
     if (result.applied) {
       renderPendingFolderOffer();
       renderPendingLinkSettings();
+      renderPendingLinkRun();
     }
   } catch (error) {
     renderFolderError(error);
@@ -1180,6 +1357,7 @@ async function initializeFolderSync() {
   folderController.setAccess({ deviceId: folderDeviceId, unlocked: true });
   renderPendingFolderOffer();
   renderPendingLinkSettings();
+  renderPendingLinkRun();
   syncFolderPolling(false);
   if (folderPollingEligible()) await loadFolders(false);
 }
@@ -1189,6 +1367,7 @@ function clearFolderSyncAccess() {
   folderController.setAccess({ deviceId: null, unlocked: false });
   folderController.setPollingEnabled(false);
   $("[data-link-settings-pending]").hidden = true;
+  $("[data-link-run-pending]").hidden = true;
   $("[data-paired-devices]").replaceChildren();
   const empty = $("[data-paired-devices-empty]");
   empty.hidden = false;
@@ -1607,6 +1786,9 @@ $("[data-folders-refresh]").addEventListener("click", async () => {
 $("[data-folders-retry-service]").addEventListener("click", () => {
   void runFolderMutation(() => folderController.retryService(), "Folder sync retry started.");
 });
+$('[data-folder-offer-form]').addEventListener("change", (event) => {
+  if (event.target.name === "cadenceMode") syncOfferScheduleInput();
+});
 $("[data-folder-offer-form]").addEventListener("submit", (event) => {
   event.preventDefault();
   if (!requireUnlocked()) return;
@@ -1623,6 +1805,11 @@ $("[data-folder-offer-form]").addEventListener("submit", (event) => {
       propagateSourceDeletions: data.get("propagateSourceDeletions") === "on",
       restoreLocalDeletions: data.get("restoreLocalDeletions") === "on",
     },
+    cadence: cadenceValue(data.get("cadenceMode"), data.get("intervalMinutes")),
+    androidConditions: {
+      wifiOnly: data.get("wifiOnly") === "on",
+      chargingOnly: data.get("chargingOnly") === "on",
+    },
   };
   if ((body.linkPolicy.propagateSourceDeletions || body.linkPolicy.restoreLocalDeletions)
     && !globalThis.confirm(`${folderSync.policyExplanation(body.linkPolicy)} Create this link?`)) return;
@@ -1630,6 +1817,7 @@ $("[data-folder-offer-form]").addEventListener("submit", (event) => {
     await folderController.sendOffer(body);
     form.reset();
     form.elements.selectedRoot.value = "/sync";
+    syncOfferScheduleInput();
   }, "Folder offer sent to the confirmed paired device.");
 });
 $("[data-folder-offer-retry]").addEventListener("click", () => {
@@ -1655,6 +1843,20 @@ $('[data-link-settings-discard]').addEventListener("click", () => {
     folderController.discardPendingLinkSettings();
     renderPendingLinkSettings();
     say("Saved link-settings retry discarded. Current server settings were not changed.");
+  } catch (error) { fail(error); }
+});
+$('[data-link-run-retry]').addEventListener("click", () => {
+  void runFolderMutation(
+    () => folderController.retryPendingRun(),
+    "Saved Run Now request reconciled with the server.",
+  );
+});
+$('[data-link-run-discard]').addEventListener("click", () => {
+  if (!globalThis.confirm("Discard this exact retry only after checking current link status. The run request may already have reached the source. Continue?")) return;
+  try {
+    folderController.discardPendingRun();
+    renderPendingLinkRun();
+    say("Saved Run Now retry discarded. No new run request was sent.");
   } catch (error) { fail(error); }
 });
 $("[data-backups-refresh]").addEventListener("click", async () => {

@@ -612,11 +612,31 @@ class FolderSyncJourneyInstrumentedTest {
     private fun assertAnyVisibleScreenText(value: String) {
         val list = compose.onNodeWithTag("folder-sync-list")
         val candidates = compose.onAllNodesWithText(value)
-        compose.waitUntil(timeoutMillis = DEFAULT_TIMEOUT_MILLIS) {
-            runCatching { list.performScrollToNode(hasText(value)) }
-            candidates.fetchSemanticsNodes().indices.any { index ->
-                runCatching { candidates[index].assertIsDisplayed(); true }.getOrDefault(false)
+        var lastFailure: Throwable? = null
+        try {
+            compose.waitUntil(timeoutMillis = DEFAULT_TIMEOUT_MILLIS) {
+                runCatching { list.performScrollToNode(hasText(value)) }
+                    .onFailure { lastFailure = it }
+                candidates.fetchSemanticsNodes().indices.any { index ->
+                    runCatching {
+                        candidates[index].performScrollTo()
+                        candidates[index].assertIsDisplayed()
+                        true
+                    }.onFailure { lastFailure = it }.getOrDefault(false)
+                }
             }
+        } catch (timeout: ComposeTimeoutException) {
+            val nodes = runCatching { candidates.fetchSemanticsNodes() }.getOrDefault(emptyList())
+            val bounds = nodes.take(MAX_DIAGNOSTIC_NODES).joinToString(prefix = "[", postfix = "]") {
+                val rect = it.boundsInRoot
+                "(${rect.left.toInt()},${rect.top.toInt()},${rect.right.toInt()},${rect.bottom.toInt()})"
+            }
+            throw AssertionError(
+                "Matching screen text did not become visible: expected=[$value] " +
+                    "actualNodeCount=${nodes.size} " +
+                    "boundsInRoot=$bounds lastError=${lastFailure?.javaClass?.name ?: "none"}",
+                timeout,
+            )
         }
     }
 

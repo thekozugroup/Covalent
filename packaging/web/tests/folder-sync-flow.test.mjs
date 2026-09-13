@@ -13,16 +13,66 @@ const offerId = "33333333-3333-4333-8333-333333333333";
 const folderId = "44444444-4444-4444-8444-444444444444";
 const linkPolicy = { propagateSourceDeletions: false, restoreLocalDeletions: false };
 const changeId = "55555555-5555-4555-8555-555555555555";
+const runRequestId = "66666666-6666-4666-8666-666666666666";
+const secondOfferId = "77777777-7777-4777-8777-777777777777";
+
+test("idle batch links remain ready while their transfer worker is stopped", () => {
+  for (const cadence of [{ mode: "manual" }, { mode: "scheduled", intervalMinutes: 60 }]) {
+    const item = share({ phase: "ready", linkPolicy, linkRun: linkRun(),
+      linkSettings: linkState({ confirmed: true, settings: linkSettings({ cadence }) }) });
+    const snapshot = status({ lifecycle: "stopped", healthFreshness: "neverObserved",
+      connectionFreshness: "neverObserved", shares: [item] });
+    assert.equal(folders.statusSummary(snapshot).text,
+      "No transfer is running. Each link shows its next action below.");
+    assert.equal(folders.shareView(snapshot, item).text, cadence.mode === "manual"
+      ? "Ready for Run Now" : "Waiting for the next scheduled run");
+    assert.equal(folders.shareView({ ...snapshot, issue: "folderAccess" }, item).kind, "attention");
+    assert.equal(folders.shareView({ ...snapshot, availability: "unavailable" }, item).kind, "offline");
+    const active = { ...item, linkRun: linkRun({ phase: "running" }) };
+    assert.equal(folders.statusSummary({ ...snapshot, shares: [active] }).kind, "offline");
+    const continuous = { ...item, linkSettings: linkState({ confirmed: true }) };
+    assert.equal(folders.statusSummary({ ...snapshot, shares: [item, continuous] }).kind, "offline");
+    const interrupted = { ...item, linkRun: linkRun({ phase: "interrupted" }) };
+    assert.equal(folders.shareView(snapshot, interrupted).kind, "attention");
+  }
+});
+
+function linkSettings(overrides = {}) {
+  return {
+    deletionPolicy: linkPolicy,
+    paused: false,
+    cadence: { mode: "continuous" },
+    androidConditions: { wifiOnly: false, chargingOnly: false },
+    ...overrides,
+  };
+}
 
 function linkState(overrides = {}) {
   return {
     revision: 0,
-    settings: { deletionPolicy: linkPolicy, paused: false },
+    settings: linkSettings(),
     changeId: "00000000-0000-0000-0000-000000000000",
     changedBy: peerId,
     confirmed: false,
     pendingChange: null,
     conflictedChange: null,
+    ...overrides,
+  };
+}
+
+function linkRun(overrides = {}) {
+  return {
+    generation: 0,
+    stateRevision: 0,
+    settingsRevision: 0,
+    phase: null,
+    startedAtUnixMs: null,
+    deadlineUnixMs: null,
+    endedAtUnixMs: null,
+    nextDueAtUnixMs: null,
+    pendingRequest: null,
+    rejectedRequest: null,
+    destinations: [],
     ...overrides,
   };
 }
@@ -797,7 +847,7 @@ test("link settings require complete consistent bounded server state", () => {
 
 test("a lost link-settings reply retries the exact retained revision and change ID", async () => {
   const storage = new MemoryStorage();
-  const desired = { deletionPolicy: { ...linkPolicy, restoreLocalDeletions: true }, paused: false };
+  const desired = linkSettings({ deletionPolicy: { ...linkPolicy, restoreLocalDeletions: true } });
   const current = share({ incoming: false, phase: "ready", linkPolicy,
     linkSettings: linkState({ confirmed: true, changedBy: deviceId }) });
   const posts = [];
@@ -846,7 +896,7 @@ test("unconfirmed or removed links cannot create a settings retry", async () => 
 
 test("current server state resolves a lost settings reply without another mutation", async () => {
   const storage = new MemoryStorage();
-  const desired = { deletionPolicy: { ...linkPolicy, propagateSourceDeletions: true }, paused: false };
+  const desired = linkSettings({ deletionPolicy: { ...linkPolicy, propagateSourceDeletions: true } });
   const retained = { folderId, changeId, expectedRevision: 0, settings: desired };
   folders.pendingSettings.save(storage, deviceId, retained);
   const applied = share({ incoming: false, phase: "ready", linkPolicy: desired.deletionPolicy,
@@ -865,7 +915,7 @@ test("current server state resolves a lost settings reply without another mutati
 
 test("a stale saved settings request never overwrites a newer revision", async () => {
   const storage = new MemoryStorage();
-  const desired = { deletionPolicy: { ...linkPolicy, restoreLocalDeletions: true }, paused: false };
+  const desired = linkSettings({ deletionPolicy: { ...linkPolicy, restoreLocalDeletions: true } });
   const retained = { folderId, changeId, expectedRevision: 0, settings: desired };
   folders.pendingSettings.save(storage, deviceId, retained);
   const current = share({ incoming: false, phase: "ready", linkPolicy,
@@ -878,14 +928,14 @@ test("a stale saved settings request never overwrites a newer revision", async (
   enable(controller);
   await controller.refresh();
   await assert.rejects(controller.retryPendingLinkSettings(),
-    (error) => /old revision/.test(error.covalentGuidance));
+    (error) => /outdated/.test(error.covalentGuidance));
   assert.equal(posts, 0);
   assert.deepEqual(controller.pendingLinkSettings(), retained);
 });
 
 test("destination pending and conflicted requests remain distinct from current settings", async () => {
   const storage = new MemoryStorage();
-  const desired = { deletionPolicy: { ...linkPolicy, restoreLocalDeletions: true }, paused: true };
+  const desired = linkSettings({ deletionPolicy: { ...linkPolicy, restoreLocalDeletions: true }, paused: true });
   const request = {
     folderId, sourceId: peerId, requesterId: deviceId, changeId, expectedRevision: 0, settings: desired,
   };
@@ -913,8 +963,140 @@ test("destination pending and conflicted requests remain distinct from current s
   enable(controller);
   await controller.refresh();
   await assert.rejects(controller.retryPendingLinkSettings(),
-    (error) => /old revision/.test(error.covalentGuidance));
+    (error) => /outdated/.test(error.covalentGuidance));
   assert.equal(posts, 0);
   assert.equal(controller.pendingLinkSettings(), null);
   assert.deepEqual(controller.current().shares[0].linkSettings.conflictedChange.settings, desired);
+});
+
+test("offers and shared settings carry explicit cadence and Android-only conditions", async () => {
+  const scheduled = { mode: "scheduled", intervalMinutes: 60 };
+  const conditions = { wifiOnly: true, chargingOnly: false };
+  const offer = folders.offerBody({
+    peerId, folderId, label: "Photos", selectedRoot: "/sync", linkPolicy,
+    cadence: scheduled, androidConditions: conditions,
+  });
+  assert.deepEqual(offer.cadence, scheduled);
+  assert.deepEqual(offer.androidConditions, conditions);
+  for (const invalid of [
+    { mode: "scheduled", intervalMinutes: 14 },
+    { mode: "scheduled", intervalMinutes: 525601 },
+    { mode: "scheduled", intervalMinutes: 60, extra: true },
+    { mode: "sometimes" },
+  ]) assert.throws(() => folders.cadence(invalid), /folder sync guidance/);
+
+  const desired = linkSettings({ cadence: scheduled, androidConditions: conditions });
+  const members = [
+    share({ incoming: false, phase: "ready", linkPolicy, linkSettings: linkState({
+      confirmed: true, changedBy: deviceId,
+    }), linkRun: linkRun() }),
+    share({ offerId: secondOfferId, peerId: otherDeviceId, incoming: false, phase: "ready", linkPolicy,
+      linkSettings: linkState({ confirmed: true, changedBy: deviceId }), linkRun: linkRun() }),
+  ];
+  const posts = [];
+  const controller = folders.coordinator({
+    storage: new MemoryStorage(),
+    randomUuid: () => changeId,
+    api: async (path, options) => {
+      if (path === "/api/v1/sync/status") return status({ shares: members });
+      posts.push(JSON.parse(options.body));
+      return { schemaVersion: 1, offerId: null, lifecycle: "running", issue: null };
+    },
+  });
+  enable(controller);
+  await controller.refresh();
+  await controller.updateLinkSettings(folderId, desired);
+  assert.deepEqual(posts[0].settings, desired);
+
+  const memberPosts = [];
+  const member = folders.coordinator({
+    storage: new MemoryStorage(),
+    randomUuid: () => changeId,
+    api: async (path, options) => {
+      if (path === "/api/v1/sync/status") return status({ shares: [share({
+        incoming: true, phase: "ready", linkPolicy,
+        linkSettings: linkState({ confirmed: true, changedBy: peerId }), linkRun: linkRun(),
+      })] });
+      memberPosts.push(JSON.parse(options.body));
+      return { schemaVersion: 1, offerId: null, lifecycle: "running", issue: null };
+    },
+  });
+  enable(member);
+  await member.refresh();
+  await member.updateLinkSettings(folderId, desired);
+  assert.deepEqual(memberPosts[0].settings, desired);
+
+  members[1].linkSettings = linkState({
+    confirmed: true, changedBy: deviceId, settings: linkSettings({ cadence: { mode: "manual" } }),
+  });
+  const inconsistent = folders.coordinator({ storage: new MemoryStorage(), api: async () => status({ shares: members }) });
+  enable(inconsistent);
+  await assert.rejects(inconsistent.refresh(), (error) => /different settings/.test(error.covalentGuidance));
+});
+
+test("Run Now retains one UUID and exact status revisions across an uncertain retry", async () => {
+  const storage = new MemoryStorage();
+  const current = share({
+    incoming: false, phase: "ready", linkPolicy,
+    linkSettings: linkState({ revision: 2, changeId, changedBy: deviceId, confirmed: true }),
+    linkRun: linkRun({ generation: 4, stateRevision: 9, settingsRevision: 2 }),
+  });
+  const posts = [];
+  let loseReply = true;
+  const controller = folders.coordinator({
+    storage,
+    randomUuid: () => runRequestId,
+    api: async (path, options) => {
+      if (path === "/api/v1/sync/status") return status({ shares: [current] });
+      posts.push(JSON.parse(options.body));
+      if (loseReply) { loseReply = false; throw new TypeError("connection closed after request"); }
+      return { schemaVersion: 1, offerId: null, lifecycle: "running", issue: null };
+    },
+  });
+  enable(controller);
+  await controller.refresh();
+  await assert.rejects(controller.runNow(folderId), (error) => /uncertain/.test(error.covalentGuidance));
+  const retained = { folderId, requestId: runRequestId, expectedGeneration: 4, settingsRevision: 2 };
+  assert.deepEqual(controller.pendingRun(), retained);
+  await controller.retryPendingRun();
+  assert.deepEqual(posts, [retained, retained]);
+  assert.equal(controller.pendingRun(), null);
+});
+
+test("authoritative Run Now conflicts clear retry state while offline pending status stays visible", async () => {
+  const storage = new MemoryStorage();
+  const pending = share({
+    phase: "ready", linkPolicy,
+    linkSettings: linkState({ confirmed: true }),
+    linkRun: linkRun({
+      pendingRequest: { requestId: runRequestId, requesterId: deviceId },
+      destinations: [{ peerId, result: "pending", endedAtUnixMs: null }],
+    }),
+    peerConnection: "disconnected",
+  });
+  const decoded = folders.requireStatus(status({ shares: [pending] })).shares[0];
+  assert.equal(decoded.linkRun.pendingRequest.requestId, runRequestId);
+  assert.equal(decoded.linkRun.destinations[0].result, "pending");
+
+  folders.pendingRun.save(storage, deviceId, {
+    folderId, requestId: runRequestId, expectedGeneration: 0, settingsRevision: 0,
+  });
+  let errorCode = "link_run_conflict";
+  const controller = folders.coordinator({ storage, api: async (path) => {
+    if (path === "/api/v1/sync/status") return status({ shares: [pending] });
+    const error = new Error("conflict");
+    error.code = errorCode;
+    throw error;
+  } });
+  enable(controller);
+  await controller.refresh();
+  await assert.rejects(controller.retryPendingRun(), (error) => /link changed/.test(error.covalentGuidance));
+  assert.equal(controller.pendingRun(), null);
+
+  folders.pendingRun.save(storage, deviceId, {
+    folderId, requestId: runRequestId, expectedGeneration: 0, settingsRevision: 0,
+  });
+  errorCode = "link_run_pending";
+  await assert.rejects(controller.retryPendingRun(), (error) => /Another Run Now/.test(error.covalentGuidance));
+  assert.equal(controller.pendingRun(), null);
 });
