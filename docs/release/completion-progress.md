@@ -6,14 +6,25 @@ Updated 2026-09-13 after the owner reaffirmed the lightweight one-way scope. The
 complete user journeys, not remaining time or reusable code. Rclone is the sole
 transfer engine and its migration is complete. Setup, fan-out, collection
 isolation, deletion/restoration, cadence, shared settings, and Android are
-verified. On `5b8c60f`, all 10 foundation, packaging, security, and version jobs
-pass. Android passes 82 baseline device tests plus the complete native SAF
-journey in 382.11 seconds, including the corrected saved-permission repair.
-This restores Android acceptance after the `3301162` defect reopened it.
-Mac setup, pairing, folder selection, and offer/accept complete, but the full
-native journey exceeds its two-minute default test allowance after entering
-the initial Manual status stage. Mac, Atmos, and final release acceptance
-remain open.
+verified. On head `6499ded` and tested merge `e846d29`, ten foundation,
+packaging, security, and version jobs pass. Both Docker architectures pass their
+13-check packaged transfer journeys. The actual personal Android builder produces
+a clean-source candidate whose exact installed APK passes the full SAF journey
+in 394.998 seconds. Its owned emulator, private ADB, worktree, and build files
+are removed; the seven installable candidate files are retained.
+
+Mac's initial-settings validation now accepts revision zero with a nil change ID,
+matching the source contract. A production-client regression fails before the fix
+and passes after it. One hosted journey then proves the first forward transfer;
+the subsequent trimmed-test runs fail at that transfer's original file deadline.
+Source review identifies a reachable race: Mac exposes Run Now before the source
+observes destination acceptance. The controls and model now require an accepted
+destination, and the native test waits for the existing readiness label and an
+enabled button. The focused model regression passes and confirms that pending
+invitations do not block ready destinations. A separate ambiguous Quit selector is scoped to the status-item
+menu. Native validation of these changes and relaunch remain open. Mac native acceptance,
+Atmos package validation, wholly green final-source checks, and release publication
+remain open. No failed aggregate run is presented as passing.
 Earlier Syncthing evidence is retained only as history.
 
 **Previous scope: 75%, 15 of 20 checks**, recorded at checkpoint 46 (c47003113e28b6e934a8ab4823040614fb07fb30). That score belongs to the superseded bidirectional/backup scope. Source and evidence remain in Git history.
@@ -78,8 +89,7 @@ large text sizes. The visual build's UI source matches `6260187`; its reused
 native helpers are independently covered by the fresh hosted native build and
 complete device run. The later transfer failure temporarily reopened Android
 acceptance. The corrected `d4a45ff` local journey and normal/2× MainActivity
-review restored check 8 at that checkpoint. The later `3301162` recovery failure
-reopens it, as recorded above.
+review and the later complete `5b8c60f` hosted journey support check 8.
 
 Earlier row 5 evidence combines the complete Manual/Continuous Android journey, the complete
 15-minute source-owned scheduled run, and the recorded real charging/Wi-Fi
@@ -114,7 +124,7 @@ foundation checks pass, and the complete unchanged SAF journey passes in
 matches `d4a45ff`, and its fresh native runtime matches `142a6eb`. Normal
 MainActivity review at standard and 2× text, cold reopening, and the independent
 completion audit also passed. They restored checks 1, 5, and 8 at that
-checkpoint; the later `3301162` failure reopens check 8.
+checkpoint; the complete source-matched `5b8c60f` run later restores check 8.
 The earlier `6260187` device run passes
 all 82 tests. The `8420180` Android run's source-deletion timeout did not
 recur with the original immediate deletion timing and 120-second assertion;
@@ -184,6 +194,16 @@ maximum for this complete journey, retaining the two-minute default for other
 tests and every individual 10/40-second deadline and assertion. Full UI-test
 typechecking passes; this budget correction has no runtime acceptance credit yet.
 
+On `b8c005c`, five of six Mac UI tests pass. In the managed journey, the Idle
+existence assertion fails at line 186, the Run existence assertion fails at line
+193, and Run is not hittable at line 194. No transfer is proven. A phase marker
+ending after 92.291 seconds does not prove that the intervening assertion passed.
+The separate fail-fast diagnostic run is also terminal with exit code 1 and is
+still under diagnosis; its temporary branch and unintegrated test changes receive
+no release credit. Actual keyboard use, spoken VoiceOver navigation, responsive
+windows, the complete managed transfer/relaunch/settings/menu journey, and the
+production sandbox and Keychain lifecycle remain open.
+
 The CI Docker jobs are configured to reuse unchanged build layers through
 separate GitHub cache scopes for each architecture. Source fingerprints,
 runtime tests, vulnerability scans, and artifact checks remain mandatory.
@@ -193,7 +213,11 @@ cache manifests and exports layers successfully but records no cached build
 steps. Full build steps take 807 seconds on amd64 and 707 seconds on arm64;
 exports add 143.9 and 179.7 seconds. This first run is slower overall and does
 not establish a cache speedup. Both images pass all 13 one-way checks,
-packaging, scan, budget, and cleanup gates.
+packaging, scan, budget, and cleanup gates. The later `b8c005c` run records 57
+cached steps per architecture and completes the warm build steps in 5 seconds
+on amd64 and 8 seconds on arm64. Those cache timings measure image-layer reuse,
+not transfer speed: the complete packaged one-way journeys still run separately
+for 361 and 362 seconds.
 
 The first `fd542fb` Android attempt compiles successfully but runs zero app tests:
 the emulator reports boot completion while its `settings` and `input` services
@@ -236,6 +260,29 @@ permission loss and exact-folder repair, restart, settings/deletion behavior,
 pause/resume, and removal. Framework processes remain stable; emulator cleanup
 runs. This fresh result resolves the previously observed recovery failure and
 restores check 8 with the retained normal and large-text MainActivity review.
+
+On `b8c005c`, the same Android inputs pass all 82 baseline tests in 87.058
+seconds. The separate SAF journey fails after 115.729 seconds at paired-device
+selection, before link creation, Run Now, or transfer. Its expected peer label
+has zero nodes; the retained log does not establish a product or harness cause.
+Because the Android app, tests, engine, packaging, and workflow inputs are
+byte-identical to the complete `5b8c60f` run, that earlier direct proof continues
+to support check 8. The failed current run remains a final-source stability issue
+under check 10. The test now uses the existing Espresso keyboard-close API for
+both keyboard dismissals, preserving system-picker navigation and every transfer
+assertion. A fresh production build and the complete unchanged SAF journey pass
+on one isolated API 37 arm64 emulator in 394.504 seconds. Installed JNI, rclone,
+and guardian hashes match the producer outputs; framework processes stay stable
+and no transfer workers remain afterward. This was one test attempt. The owned
+emulator, private ADB server, worktree, build outputs, and fixtures were removed;
+only compact evidence and reusable toolchains remain. This is local evidence,
+not a final-source hosted result.
+
+The personal Android builder now includes the required SBOM, license inventory,
+readable notices, notice manifest, and a source/APK/native/signing build receipt
+beside its APK and checksum. Existing package checks and functional receipt
+fixtures pass. The final clean-source builder run and exact-APK device check
+remain required before publishing those assets.
 
 The remote drill now uses current one-way folder links and a build receipt for
 exact packaged Mac component bytes. It runs private helper copies as an engine
@@ -319,3 +366,8 @@ verifying its clean state, retained commit, and absence of processes or open
 handles. This removes 1,072,369,414 logical bytes of old source/build files,
 including Syncthing outputs. All 13 sibling toolchain/cache paths and current
 packages/proof APKs remain. Physical free-space change was not measured.
+
+The retired shared cadence Apple build directory is also removed after a fresh
+zero-open-handle check. It contained 477,331,341 logical bytes and 3,080 files.
+Ten retained evidence files, the parent directory, sibling paths, and PR records
+were preserved. Physical free-space change was not measured.

@@ -181,10 +181,10 @@ final class RealFolderLinkUITests: XCTestCase {
         recordPhase("Covalent phase: manual offer and accept completed")
 
         recordPhase("Covalent phase: manual idle wait entered")
-        let idle = app.staticTexts["Idle. Run this link when you want to transfer changes."]
-        scrollTo(idle, in: linksScrollView)
-        guard idle.waitForExistence(timeout: transferTimeout) else {
-            throw FixtureError.missing("manual idle status")
+        let ready = app.staticTexts["Ready for Run Now"]
+        scrollTo(ready, in: linksScrollView)
+        guard ready.waitForExistence(timeout: transferTimeout) else {
+            throw FixtureError.missing("manual Run Now readiness")
         }
         recordPhase("Covalent phase: manual idle wait completed")
         recordPhase("Covalent phase: manual link completed")
@@ -195,6 +195,9 @@ final class RealFolderLinkUITests: XCTestCase {
         guard run.waitForExistence(timeout: transitionTimeout) else {
             throw FixtureError.missing("Run Now control")
         }
+        guard await waitForEnabled(run, timeout: transitionTimeout) else {
+            throw FixtureError.missing("enabled Run Now control")
+        }
         guard run.isHittable else {
             throw FixtureError.missing("hittable Run Now control")
         }
@@ -203,10 +206,9 @@ final class RealFolderLinkUITests: XCTestCase {
             destinationRoot + "/forward.txt",
             bytes: Data("packaged-rclone-forward-content".utf8)
         )
-        XCTAssertTrue(
-            copiedForward,
-            "rclone test fixture did not copy the source file to the responder."
-        )
+        guard copiedForward else {
+            throw FixtureError.timeout("rclone test fixture did not copy the source file to the responder")
+        }
         XCTAssertFalse(
             FileManager.default.fileExists(atPath: sourceRoot + "/destination-only.txt"),
             "Destination-only content must never write back to the source."
@@ -231,10 +233,13 @@ final class RealFolderLinkUITests: XCTestCase {
         XCTAssertTrue(quit.isHittable)
         quit.click()
         XCTAssertTrue(app.wait(for: .notRunning, timeout: transitionTimeout))
-        try Data("packaged-rclone-after-relaunch".utf8).write(
-            to: URL(fileURLWithPath: sourceRoot + "/after-relaunch.txt"),
-            options: .atomic
-        )
+        let afterRelaunchBytes = Data("packaged-rclone-after-relaunch".utf8)
+        guard await waitForFile(
+            sourceRoot + "/after-relaunch.txt",
+            bytes: afterRelaunchBytes
+        ) else {
+            throw FixtureError.timeout("external fixture did not prepare the relaunch source file")
+        }
         XCTAssertFalse(
             FileManager.default.fileExists(atPath: destinationRoot + "/after-relaunch.txt")
         )
@@ -246,14 +251,19 @@ final class RealFolderLinkUITests: XCTestCase {
         recordPhase("Covalent phase: relaunch completed")
 
         recordPhase("Covalent phase: second run entered")
-        let runAfterRelaunch = app.buttons["Run Mac UI Link now"]
-        scrollTo(runAfterRelaunch, in: relaunchedLinks)
+        let statusItemAfterRelaunch = app.statusItems["Covalent"]
+        XCTAssertTrue(statusItemAfterRelaunch.waitForExistence(timeout: transitionTimeout))
+        statusItemAfterRelaunch.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
+        ).click()
+        let runAfterRelaunch = statusItemAfterRelaunch.menuItems["Run Mac UI Link Now"]
         XCTAssertTrue(runAfterRelaunch.waitForExistence(timeout: transitionTimeout))
+        XCTAssertTrue(runAfterRelaunch.isEnabled)
         XCTAssertTrue(runAfterRelaunch.isHittable)
-        runAfterRelaunch.click()
+        runAfterRelaunch.typeKey(.return, modifierFlags: [])
         let copiedAfterRelaunch = await waitForFile(
             destinationRoot + "/after-relaunch.txt",
-            bytes: Data("packaged-rclone-after-relaunch".utf8)
+            bytes: afterRelaunchBytes
         )
         XCTAssertTrue(
             copiedAfterRelaunch,
@@ -285,9 +295,22 @@ final class RealFolderLinkUITests: XCTestCase {
         editSettings.click()
         let settingsTitle = app.staticTexts["Mac UI Link Settings"]
         XCTAssertTrue(settingsTitle.waitForExistence(timeout: transitionTimeout))
-        let cancelSettings = app.sheets.buttons["Cancel"]
-        XCTAssertTrue(cancelSettings.isHittable)
-        cancelSettings.click()
+        let pauseLink = app.sheets.checkBoxes["Pause this link"]
+        XCTAssertTrue(pauseLink.waitForExistence(timeout: transitionTimeout))
+        XCTAssertTrue(pauseLink.isEnabled)
+        XCTAssertTrue(pauseLink.isHittable)
+        let initialPauseValue = String(describing: pauseLink.value)
+        pauseLink.click()
+        XCTAssertNotEqual(String(describing: pauseLink.value), initialPauseValue)
+        app.typeKey(.space, modifierFlags: [])
+        XCTAssertEqual(String(describing: pauseLink.value), initialPauseValue)
+        app.typeKey(.tab, modifierFlags: [])
+        app.typeKey(.tab, modifierFlags: [.shift])
+        app.typeKey(.space, modifierFlags: [])
+        XCTAssertNotEqual(String(describing: pauseLink.value), initialPauseValue)
+        app.typeKey(.space, modifierFlags: [])
+        XCTAssertEqual(String(describing: pauseLink.value), initialPauseValue)
+        app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(waitForDisappearance(of: settingsTitle, timeout: transitionTimeout))
         try auditMainWindow(in: app, timeout: transitionTimeout)
         continueAfterFailure = false
@@ -463,6 +486,15 @@ final class RealFolderLinkUITests: XCTestCase {
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
         return false
+    }
+
+    private func waitForEnabled(_ element: XCUIElement, timeout: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if element.isEnabled { return true }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+        return element.isEnabled
     }
 
     private func string(_ object: [String: Any], _ key: String) throws -> String {

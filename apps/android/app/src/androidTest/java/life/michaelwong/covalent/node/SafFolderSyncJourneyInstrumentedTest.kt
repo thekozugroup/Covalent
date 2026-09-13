@@ -32,6 +32,7 @@ import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.documentfile.provider.DocumentFile
 import androidx.test.core.app.ApplicationProvider
+import androidx.test.espresso.Espresso.closeSoftKeyboard
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
 import java.io.IOException
@@ -134,13 +135,13 @@ class SafFolderSyncJourneyInstrumentedTest {
             val identityB = client.transportIdentity(connectionB.baseUrl, connectionB.token)
             assertTrue(identityA.deviceId != identityB.deviceId)
             pairUsingPhoneUi(connectionA, connectionB, advertisedGuestPeerAddress(identityB.peerPort))
-            shell("input keyevent KEYCODE_BACK")
+            closeSoftKeyboard()
 
             val settings = FolderLinkSettings(FolderLinkPolicy(), false, FolderLinkCadence.Manual)
             val labelMatcher = hasSetTextAction() and hasText(context.getString(R.string.folder_sync_label))
             compose.onNodeWithTag("folder-sync-list").performScrollToNode(labelMatcher)
             compose.onNode(labelMatcher).performTextInput(SAF_FOLDER_LABEL)
-            shell("input keyevent KEYCODE_BACK")
+            closeSoftKeyboard()
             clickScreenText("API 37 isolated peer")
             visibleScreenText(context.getString(R.string.folder_link_direction)).assertIsDisplayed()
             visibleScreenText(

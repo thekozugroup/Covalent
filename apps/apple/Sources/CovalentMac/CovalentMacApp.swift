@@ -243,6 +243,9 @@ private struct MacMenuBarMenu: View {
                 }
             } else if settings.confirmed, settings.pendingChange == nil,
                       settings.conflictedChange == nil,
+                      model.folderSyncStatus?.shares.contains(where: {
+                          $0.folderId == share.folderId && $0.phase == .ready
+                      }) == true,
                       settings.settings.permitsRunNow,
                       share.linkRun?.pendingRequest == nil,
                       share.linkRun?.isActive != true {

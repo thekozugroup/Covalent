@@ -85,11 +85,13 @@ before building anything.
    [the Android setup guide](../platform/android.md). Test that exact APK, then
    attach it and its `.sha256` file to the same draft using
    `scripts/publish-release-assets.sh vX.Y.Z FILE...`. Include the Android SBOM,
-   license inventory, and a build receipt recording the source commit, APK
-   SHA-256, debug certificate SHA-256, and device test result. Use the existing
-   authenticated publishing environment required by the helper; do not put
-   tokens in files or logs. Do not substitute an untested rebuild or the
-   unsigned release APK. Android production signing and store publication are
+   license inventory, notices, notice manifest, and build receipt recording the
+   source commit, source fingerprint, APK and native hashes, and debug
+   certificate SHA-256. Include the separate device-test receipt for that exact
+   APK SHA-256. Use the existing authenticated publishing environment required
+   by the helper; do not put tokens in files or logs. Do not substitute an
+   untested rebuild or the unsigned release APK. Android production signing and
+   store publication are
    deferred and do not block this release.
 7. The CLI lane runs on the tag and publishes source-free Linux amd64, Linux
    arm64, and Apple Silicon macOS arm64 archives only after all three pass
