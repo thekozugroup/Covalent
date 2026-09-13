@@ -84,7 +84,7 @@ ssh-keygen -t ed25519 -C "thekozugroup@gmail.com" -f ~/.ssh/covalent_signing
 # 3. Register it with GitHub as a SIGNING key, not an authentication key.
 gh ssh-key add ~/.ssh/covalent_signing.pub --type signing --title "Covalent release signing"
 
-# 4. Tell git to use it for every commit and tag.
+# 4. Tell git to use it for commits and tags in this repository.
 git config --local gpg.format ssh
 git config --local user.signingkey ~/.ssh/covalent_signing.pub
 git config --local commit.gpgsign true

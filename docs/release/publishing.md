@@ -71,11 +71,14 @@ before building anything.
 
 ## Cutting a release
 
-1. `scripts/release-version.sh set X.Y.Z` and `cargo update --workspace`.
-2. Commit and push. Wait for all nine Tier 1 checks to go green on that commit.
+1. `scripts/release-version.sh set X.Y.Z` and `cargo update --workspace`. Write
+   `docs/release/notes/vX.Y.Z.md` before committing.
+2. Commit and push. Wait for every required Tier 1 check to go green on that
+   exact commit, including the release notes.
 3. Confirm the commit has a verified signature — see
    [commit-signing.md](commit-signing.md). This is a hard gate.
-4. Write `docs/release/notes/vX.Y.Z.md`.
+4. Confirm the release notes and version files belong to that verified commit;
+   any further source change needs a new commit and its required checks.
 5. Create an **annotated signed** tag: `git tag -s vX.Y.Z && git push origin vX.Y.Z`.
    That fires the container lane and the unsigned macOS lane.
 6. Build the installable debug-signed Android APK from the tagged source using

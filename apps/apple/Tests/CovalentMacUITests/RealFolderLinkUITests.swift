@@ -21,14 +21,22 @@ final class RealFolderLinkUITests: XCTestCase {
     func testNativeManualFolderLinkTransfersOneWayAndUpdatesMenuBar() async throws {
         continueAfterFailure = false
         let environment = ProcessInfo.processInfo.environment
-        let sourcePort = try XCTUnwrap(environment["COVALENT_REAL_UI_SOURCE_PORT"])
         let responderPort = try XCTUnwrap(environment["COVALENT_REAL_UI_RESPONDER_PORT"])
         let responderToken = try privateToken(
             at: XCTUnwrap(environment["COVALENT_REAL_UI_RESPONDER_TOKEN_FILE"])
         )
         let sourceRoot = try XCTUnwrap(environment["COVALENT_REAL_UI_SOURCE_ROOT"])
         let destinationRoot = try XCTUnwrap(environment["COVALENT_REAL_UI_DESTINATION_ROOT"])
-        let app = try launchApp(port: sourcePort)
+        let app = launchManagedApp()
+        defer { app.terminate() }
+
+        let setup = app.buttons["firstLaunch.setup"]
+        XCTAssertTrue(setup.waitForExistence(timeout: transitionTimeout))
+        XCTAssertTrue(setup.isHittable)
+        setup.click()
+        XCTAssertTrue(
+            waitForDisappearance(of: app.staticTexts["Set up Covalent"], timeout: transferTimeout)
+        )
 
         app.typeKey("2", modifierFlags: .command)
         XCTAssertTrue(app.staticTexts["Your devices"].waitForExistence(timeout: transitionTimeout))
@@ -80,6 +88,10 @@ final class RealFolderLinkUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Device ready for links"].waitForExistence(timeout: transitionTimeout))
         app.buttons["Done"].click()
         XCTAssertTrue(waitForDisappearance(of: app.staticTexts["Pairing Complete"], timeout: transitionTimeout))
+        let sourcePeerID = try await waitForSoleProviderIdentity(
+            port: responderPort,
+            token: responderToken
+        )
 
         app.typeKey("1", modifierFlags: .command)
         let linksScrollView = app.scrollViews["links.view"]
@@ -105,9 +117,15 @@ final class RealFolderLinkUITests: XCTestCase {
         let destinationDeletion = app.staticTexts["Files deleted at a destination stay deleted there, even if the source changes. The source and other destinations stay untouched."]
         scrollTo(destinationDeletion, in: linksScrollView)
         XCTAssertTrue(destinationDeletion.waitForExistence(timeout: transitionTimeout))
-        let cadence = app.popUpButtons["Transfers"]
+        let cadence = linksScrollView.popUpButtons["folder-link-cadence"]
         scrollTo(cadence, in: linksScrollView)
-        XCTAssertTrue(cadence.waitForExistence(timeout: transitionTimeout))
+        guard cadence.waitForExistence(timeout: transitionTimeout) else {
+            throw FixtureError.missing(cadencePickerDiagnostic(app: app))
+        }
+        guard cadence.isHittable else {
+            throw FixtureError.missing("Transfers picker is not hittable; "
+                + cadencePickerDiagnostic(app: app))
+        }
         cadence.click()
         app.menuItems["Manual"].click()
 
@@ -162,8 +180,60 @@ final class RealFolderLinkUITests: XCTestCase {
         scrollTo(lastRunCompleted, in: linksScrollView)
         XCTAssertTrue(lastRunCompleted.waitForExistence(timeout: transferTimeout))
 
+        let statusItemBeforeRelaunch = app.statusItems["Covalent"]
+        XCTAssertTrue(statusItemBeforeRelaunch.waitForExistence(timeout: transitionTimeout))
+        statusItemBeforeRelaunch.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
+        ).click()
+        let quit = app.menuItems["Quit Covalent"]
+        XCTAssertTrue(quit.waitForExistence(timeout: transitionTimeout))
+        XCTAssertTrue(quit.isHittable)
+        quit.click()
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: transitionTimeout))
+        try Data("packaged-rclone-after-relaunch".utf8).write(
+            to: URL(fileURLWithPath: sourceRoot + "/after-relaunch.txt"),
+            options: .atomic
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: destinationRoot + "/after-relaunch.txt")
+        )
+        app.launch()
+        XCTAssertFalse(app.staticTexts["Set up Covalent"].waitForExistence(timeout: 1))
+        app.typeKey("1", modifierFlags: .command)
+        let relaunchedLinks = app.scrollViews["links.view"]
+        XCTAssertTrue(relaunchedLinks.waitForExistence(timeout: transferTimeout))
+        let runAfterRelaunch = app.buttons["Run Mac UI Link now"]
+        scrollTo(runAfterRelaunch, in: relaunchedLinks)
+        XCTAssertTrue(runAfterRelaunch.waitForExistence(timeout: transitionTimeout))
+        XCTAssertTrue(runAfterRelaunch.isHittable)
+        runAfterRelaunch.click()
+        let copiedAfterRelaunch = await waitForFile(
+            destinationRoot + "/after-relaunch.txt",
+            bytes: Data("packaged-rclone-after-relaunch".utf8)
+        )
+        XCTAssertTrue(
+            copiedAfterRelaunch,
+            "The relaunched sandboxed app did not reuse its saved folder grant."
+        )
+        let relaunchedSourcePeerID = try await waitForSoleProviderIdentity(
+            port: responderPort,
+            token: responderToken
+        )
+        XCTAssertEqual(
+            relaunchedSourcePeerID,
+            sourcePeerID,
+            "The relaunched app must reuse the peer identity protected by Keychain."
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: sourceRoot + "/destination-only.txt"),
+            "Relaunching must not allow destination content to write back to the source."
+        )
+        let completedAfterRelaunch = app.staticTexts["Last run completed"]
+        scrollTo(completedAfterRelaunch, in: relaunchedLinks)
+        XCTAssertTrue(completedAfterRelaunch.waitForExistence(timeout: transferTimeout))
+
         let editSettings = app.buttons["Edit Link Settings…"]
-        scrollTo(editSettings, in: linksScrollView)
+        scrollTo(editSettings, in: relaunchedLinks)
         XCTAssertTrue(editSettings.waitForExistence(timeout: transitionTimeout))
         XCTAssertTrue(editSettings.isHittable)
         editSettings.click()
@@ -197,14 +267,21 @@ final class RealFolderLinkUITests: XCTestCase {
             + "menu items: \(menuItems.count); first labels: \(labels)"
     }
 
-    private func launchApp(port: String) throws -> XCUIApplication {
-        let environment = ProcessInfo.processInfo.environment
-        let bundle = Bundle(for: RealFolderLinkUITests.self)
-        let tokenFile = environment["COVALENT_UI_TEST_TOKEN_FILE"]
-            ?? bundle.object(forInfoDictionaryKey: "CovalentUITestTokenFile") as? String
+    private func cadencePickerDiagnostic(app: XCUIApplication) -> String {
+        let popUpButtons = app.popUpButtons
+        let entries = popUpButtons.allElementsBoundByIndex.prefix(8).map {
+            "identifier=\($0.identifier.debugDescription) label=\($0.label.debugDescription)"
+        }
+        return "Transfers picker target: folder-link-cadence; pop-up buttons=\(popUpButtons.count); "
+            + "first entries: \(entries)"
+    }
+
+    private func launchManagedApp() -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchEnvironment["COVALENT_UI_TEST_BASE_URL"] = "http://127.0.0.1:\(port)"
-        app.launchEnvironment["COVALENT_UI_TEST_TOKEN_FILE"] = try XCTUnwrap(tokenFile)
+        app.launchEnvironment.removeValue(forKey: "COVALENT_UI_TEST_BASE_URL")
+        app.launchEnvironment.removeValue(forKey: "COVALENT_UI_TEST_TOKEN_FILE")
+        app.launchEnvironment.removeValue(forKey: "COVALENT_UI_TEST_FIRST_LAUNCH")
+        app.launchEnvironment["COVALENT_ADVERTISED_PEER_ADDRESS"] = "127.0.0.1:8787"
         app.launch()
         return app
     }
@@ -303,6 +380,23 @@ final class RealFolderLinkUITests: XCTestCase {
             try await Task.sleep(nanoseconds: 250_000_000)
         }
         throw FixtureError.timeout("incoming folder offer")
+    }
+
+    private func waitForSoleProviderIdentity(port: String, token: String) async throws -> String {
+        for _ in 0..<40 {
+            if let providers = try await requestJSON(
+                port: port,
+                token: token,
+                path: "/api/v1/providers"
+            ) as? [[String: Any]],
+               providers.count == 1,
+               let peerID = providers.first?["peerId"] as? String,
+               UUID(uuidString: peerID) != nil {
+                return peerID.lowercased()
+            }
+            try await Task.sleep(nanoseconds: 250_000_000)
+        }
+        throw FixtureError.timeout("one paired source identity on the responder")
     }
 
     private func waitForFile(_ path: String, bytes: Data) async -> Bool {

@@ -54,6 +54,7 @@ import java.util.concurrent.TimeUnit
 import life.michaelwong.covalent.BuildConfig
 import life.michaelwong.covalent.R
 import life.michaelwong.covalent.data.CovalentNodeClient
+import life.michaelwong.covalent.data.NodeApiException
 import life.michaelwong.covalent.model.AndroidLinkConditions
 import life.michaelwong.covalent.model.FolderSharePhase
 import life.michaelwong.covalent.model.FolderShare
@@ -67,6 +68,7 @@ import life.michaelwong.covalent.model.FolderSyncAvailability
 import life.michaelwong.covalent.model.NetworkPairingDirection
 import life.michaelwong.covalent.model.NetworkPairingState
 import life.michaelwong.covalent.model.NodeConnection
+import life.michaelwong.covalent.sync.FolderSyncGrantStore
 import life.michaelwong.covalent.sync.SafFolderGrant
 import life.michaelwong.covalent.sync.SafFolderGrantStore
 import life.michaelwong.covalent.sync.SafWebDavServer
@@ -351,11 +353,14 @@ class SafFolderSyncJourneyInstrumentedTest {
             )
             assertEquals(sourceGrant.id, restoredGrant.id)
             clickScreenText(context.getString(R.string.folder_sync_use_selected_again))
-            val repairedA = awaitStableFolderConnection(
-                "active SAF grant repaired for its exact folder",
-                manager,
-                lostGrantConnection.baseUrl,
-            ) { status ->
+            val repairedA = try {
+                awaitStableFolderConnection(
+                    "active SAF grant repaired for its exact folder",
+                    manager,
+                    lostGrantConnection.baseUrl,
+                    sourceGrant,
+                    checkNotNull(offerId),
+                ) { status ->
                     val restoredRecord = SafFolderGrantStore(context).records().singleOrNull {
                         it.id == sourceGrant.id && it.treeUri == sourceGrant.treeUri
                     }
@@ -365,6 +370,22 @@ class SafFolderSyncJourneyInstrumentedTest {
                         status.folders.none {
                             it.folderId == folderId.toString() && it.accessUnavailable
                         }
+                }
+            } catch (failure: AssertionError) {
+                val retryText = context.getString(R.string.folder_sync_retry_saved_repair)
+                val retryCandidates = compose.onAllNodesWithText(retryText)
+                val retryNodes = runCatching { retryCandidates.fetchSemanticsNodes() }.getOrDefault(emptyList())
+                val retryVisible = retryNodes.indices.any { index ->
+                    runCatching {
+                        retryCandidates[index].assertIsDisplayed()
+                        true
+                    }.getOrDefault(false)
+                }
+                throw AssertionError(
+                    "${failure.message} retrySavedRepairNodeCount=${retryNodes.size} " +
+                        "retrySavedRepairVisible=$retryVisible",
+                    failure,
+                )
             }
             val repairedShare = sourceShare(repairedA)
             val repairedGeneration = checkNotNull(repairedShare.linkRun).generation
@@ -729,17 +750,45 @@ class SafFolderSyncJourneyInstrumentedTest {
         label: String,
         manager: EmbeddedNodeManager,
         excludedBaseUrl: String,
+        grant: SafFolderGrant,
+        repairOfferId: String,
         accepts: (life.michaelwong.covalent.model.FolderSyncStatus) -> Boolean,
     ): NodeConnection {
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(DEFAULT_TIMEOUT_MILLIS)
         var candidate: NodeConnection? = null
         var stableSince = 0L
+        var sawChangedBaseUrl = false
+        var lastLifecycle = "none"
+        var lastAvailability = "none"
+        var lastIssue = "none"
+        var lastSharePhase = "none"
+        var lastFolderState = "none"
+        var lastAccessUnavailable = "none"
+        var lastErrorClass = "none"
+        var lastHttpStatus = "none"
         while (System.nanoTime() < deadline) {
             val current = manager.liveConnection()
-            val accepted = current?.takeIf { it.baseUrl != excludedBaseUrl }?.let { connection ->
-                runCatching {
-                    accepts(client.folderSyncStatus(connection.baseUrl, connection.token))
-                }.getOrDefault(false)
+            val changedConnection = current?.takeIf { it.baseUrl != excludedBaseUrl }
+            sawChangedBaseUrl = sawChangedBaseUrl || changedConnection != null
+            val accepted = changedConnection?.let { connection ->
+                try {
+                    val status = client.folderSyncStatus(connection.baseUrl, connection.token)
+                    val share = status.shares.singleOrNull { it.offerId == repairOfferId }
+                    val folder = share?.let { currentShare ->
+                        status.folders.singleOrNull { it.folderId == currentShare.folderId }
+                    }
+                    lastLifecycle = status.lifecycle.toString()
+                    lastAvailability = status.availability.toString()
+                    lastIssue = status.issue?.toString() ?: "none"
+                    lastSharePhase = share?.phase?.toString() ?: "none"
+                    lastFolderState = folder?.state ?: "none"
+                    lastAccessUnavailable = folder?.accessUnavailable?.toString() ?: "none"
+                    accepts(status)
+                } catch (error: Throwable) {
+                    lastErrorClass = error.javaClass.name
+                    lastHttpStatus = (error as? NodeApiException)?.statusCode?.toString() ?: "none"
+                    false
+                }
             } == true
             if (!accepted) {
                 candidate = null
@@ -752,7 +801,22 @@ class SafFolderSyncJourneyInstrumentedTest {
             }
             Thread.sleep(POLL_MILLIS)
         }
-        throw AssertionError("$label did not expose one stable refreshed API before its deadline.")
+        val persistedPermission = runCatching {
+            context.contentResolver.persistedUriPermissions.any { permission ->
+                permission.uri == grant.treeUri && permission.isReadPermission && permission.isWritePermission
+            }
+        }.getOrNull()
+        val pendingRepair = runCatching {
+            FolderSyncGrantStore(context).pendingRepairRoot(repairOfferId) != null
+        }.getOrNull()
+        throw AssertionError(
+            "$label did not expose one stable refreshed API before its deadline. " +
+                "sawChangedBaseUrl=$sawChangedBaseUrl lastLifecycle=$lastLifecycle " +
+                "lastAvailability=$lastAvailability lastIssue=$lastIssue " +
+                "lastSharePhase=$lastSharePhase lastFolderState=$lastFolderState " +
+                "lastAccessUnavailable=$lastAccessUnavailable persistedPermission=$persistedPermission " +
+                "pendingRepair=$pendingRepair lastErrorClass=$lastErrorClass lastHttpStatus=$lastHttpStatus",
+        )
     }
 
     private fun awaitSharedSettings(

@@ -6,10 +6,16 @@ apple_dir=${script_dir:h}
 repo_root=${apple_dir:h:h}
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/covalent-macos-ui.XXXXXX")
 node_pid=""
-real_source_pid=""
 real_responder_pid=""
 app_token_directory=""
 app_token_file=""
+built_app=""
+managed_state_root="$HOME/Library/Containers/life.michaelwong.covalent.macos/Data/Library/Application Support/Covalent"
+managed_keychain_service="life.michaelwong.covalent.node-key-encryption"
+managed_keychain_account="managed-node-kek-hierarchy"
+managed_state_was_absent=""
+managed_keychain_was_absent=""
+managed_app_may_have_started=""
 artifact_root=${COVALENT_TEST_ARTIFACT_DIR:-$test_root}
 mkdir -p "$artifact_root"
 
@@ -39,22 +45,67 @@ PY
 }
 
 cleanup() {
-  # Only remove this run's unique file. Never reset or delete the app
-  # container, which may hold a developer's unrelated sandboxed state.
+  local command_status=$?
+  local cleanup_failed=0
+  trap - EXIT INT TERM
+  # The token file is unique. Managed production state is removed below only
+  # after the preflight proved it absent and its exact helper has stopped.
   if [[ -n "$app_token_file" && -n "$app_token_directory" && "$app_token_file" == "$app_token_directory/"* ]]; then
-    rm -f -- "$app_token_file"
+    rm -f -- "$app_token_file" || cleanup_failed=1
   fi
-  for pid in "$real_responder_pid" "$real_source_pid" "$node_pid"; do
+  for pid in "$real_responder_pid" "$node_pid"; do
     if [[ -n "$pid" ]]; then
       kill "$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
     fi
   done
-  if [[ "$test_root" == *covalent-macos-ui.* && -d "$test_root" ]]; then
-    rm -r "$test_root"
+
+  local managed_cleanup_safe=1
+  if [[ -n "$built_app" ]]; then
+    for expected in \
+      "$built_app/Contents/MacOS/Covalent" \
+      "$built_app/Contents/MacOS/covalent-node" \
+      "$built_app/Contents/MacOS/covalent-engine-guardian" \
+      "$built_app/Contents/MacOS/covalent-rclone"
+    do
+      if ! stop_exact_executable "$expected"; then
+        print -u2 -- "managed UI-test process did not stop: ${expected:t}"
+        managed_cleanup_safe=0
+        cleanup_failed=1
+      fi
+    done
   fi
+  if (( managed_cleanup_safe )) \
+    && [[ "$managed_app_may_have_started" == 1 \
+      && "$managed_state_was_absent" == 1 \
+      && -d "$managed_state_root" \
+      && ! -L "$managed_state_root" ]]; then
+    rm -r -- "$managed_state_root" || cleanup_failed=1
+  fi
+  if (( managed_cleanup_safe )) \
+    && [[ "$managed_keychain_was_absent" == 1 && "$managed_app_may_have_started" == 1 ]]; then
+    local keychain_status=0
+    security delete-generic-password \
+      -s "$managed_keychain_service" -a "$managed_keychain_account" >/dev/null 2>&1 || keychain_status=$?
+    if (( keychain_status != 0 && keychain_status != 44 )); then
+      print -u2 -- "managed UI-test Keychain item could not be removed safely"
+      cleanup_failed=1
+    fi
+  fi
+  if (( managed_cleanup_safe )) \
+    && [[ "$test_root" == *covalent-macos-ui.* && -d "$test_root" ]]; then
+    rm -r "$test_root" || cleanup_failed=1
+  elif (( ! managed_cleanup_safe )); then
+    print -u2 -- "managed UI-test cleanup preserved its owned files because a process remained active"
+  fi
+  if (( cleanup_failed )); then
+    exit 1
+  fi
+  exit "$command_status"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 prepare_private_ui_token_directory() {
   python3 - "$1" <<'PY'
@@ -78,18 +129,102 @@ except OSError:
 PY
 }
 
+pids_for_exact_executable() {
+  python3 - "$1" <<'PY'
+import subprocess
+import sys
+
+expected = sys.argv[1]
+for line in subprocess.run(
+    ["ps", "-axo", "pid=,command="], check=True, text=True, capture_output=True
+).stdout.splitlines():
+    fields = line.strip().split(None, 1)
+    if len(fields) == 2 and (fields[1] == expected or fields[1].startswith(expected + " ")):
+        print(fields[0])
+PY
+}
+
+stop_exact_executable() {
+  local expected=$1
+  local pids pid
+  pids=$(pids_for_exact_executable "$expected" 2>/dev/null) || return 1
+  for pid in ${(f)pids}; do
+    kill "$pid" 2>/dev/null || true
+  done
+  for _ in {1..50}; do
+    pids=$(pids_for_exact_executable "$expected" 2>/dev/null) || return 1
+    [[ -z "$pids" ]] && return 0
+    sleep 0.1
+  done
+  for pid in ${(f)pids}; do
+    kill -KILL "$pid" 2>/dev/null || true
+  done
+  for _ in {1..20}; do
+    pids=$(pids_for_exact_executable "$expected" 2>/dev/null) || return 1
+    [[ -z "$pids" ]] && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
 console_session=$(ioreg -n Root -d1)
 if [[ "$console_session" == *'"CGSSessionScreenIsLocked"=Yes'* ]]; then
   print -u2 -- "macOS UI tests require an unlocked headed login session; the current session is locked."
   exit 75
 fi
 
+if [[ -e "$managed_state_root" || -L "$managed_state_root" ]]; then
+  print -u2 -- "macOS managed-node UI test refuses pre-existing Covalent application state."
+  exit 73
+fi
+managed_state_was_absent=1
+keychain_status=0
+security find-generic-password \
+  -s "$managed_keychain_service" -a "$managed_keychain_account" >/dev/null 2>&1 || keychain_status=$?
+if (( keychain_status == 0 )); then
+  print -u2 -- "macOS managed-node UI test refuses a pre-existing managed-node Keychain item."
+  exit 73
+elif (( keychain_status != 44 )); then
+  print -u2 -- "macOS managed-node UI test could not establish an absent, available Keychain item."
+  exit 73
+fi
+managed_keychain_was_absent=1
+
+# LocalNodeManager has fixed production listeners. Refuse a conflicting host
+# instead of changing its signed endpoint or terminating an unrelated service.
+python3 - <<'PY'
+import socket
+
+checks = (
+    (socket.SOCK_DGRAM, ("0.0.0.0", 8787), "UDP 8787"),
+    (socket.SOCK_STREAM, ("0.0.0.0", 8789), "TCP 8789"),
+)
+sockets = []
+try:
+    for kind, address, label in checks:
+        candidate = socket.socket(socket.AF_INET, kind)
+        try:
+            candidate.bind(address)
+            if kind == socket.SOCK_STREAM:
+                candidate.listen(1)
+        except OSError as error:
+            raise SystemExit(f"macOS managed-node UI test requires unused {label}: {error}")
+        sockets.append(candidate)
+finally:
+    for candidate in sockets:
+        candidate.close()
+PY
+
 port=$(python3 - <<'PY'
 import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
+while True:
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    if s.getsockname()[1] not in (8787, 8789):
+        print(s.getsockname()[1])
+        s.close()
+        break
+    s.close()
 PY
 )
 data_dir="$test_root/node"
@@ -237,10 +372,9 @@ if ! run_bounded 600 xcodebuild \
   exit 1
 fi
 
-# Exercise the engine from an unsandboxed test node. The node itself is the raw
-# debug binary. The worker, guardian, and resources start as copies from the
-# built app, but the copied executables receive test-only unsandboxed signatures
-# below. This fixture does not validate the production sandbox-inherit chain.
+# The source is the built sandboxed app and its production LocalNodeManager.
+# Keep one unsandboxed responder so the test can confirm pairing, accept the
+# destination, and inspect the copied bytes from the other side.
 built_app="$derived_data/Build/Products/Debug/Covalent.app"
 built_macos="$built_app/Contents/MacOS"
 built_engine_resources="$built_app/Contents/Resources/CovalentSyncEngine"
@@ -256,54 +390,54 @@ do
     exit 1
   }
 done
+if ! codesign -d --verbose=4 "$built_app" 2>&1 | grep -Fq 'Signature=adhoc'; then
+  print -u2 -- "managed-node UI cleanup supports only this hosted ad-hoc Debug app"
+  exit 1
+fi
 
 real_fixture="$test_root/real-folder-link"
-real_source_contents="$real_fixture/source/Covalent.app/Contents"
 real_responder_contents="$real_fixture/responder/Covalent.app/Contents"
-for contents in "$real_source_contents" "$real_responder_contents"; do
-  mkdir -p "$contents/MacOS" "$contents/Resources"
-  ditto "$node_binary" "$contents/MacOS/covalent-node"
-  ditto "$built_macos/covalent-rclone" "$contents/MacOS/covalent-rclone"
-  ditto "$built_macos/covalent-engine-guardian" "$contents/MacOS/covalent-engine-guardian"
-  ditto "$built_engine_resources" "$contents/Resources/CovalentSyncEngine"
-  chmod 755 "$contents/MacOS/covalent-node" \
-    "$contents/MacOS/covalent-rclone" \
-    "$contents/MacOS/covalent-engine-guardian"
+mkdir -p "$real_responder_contents/MacOS" "$real_responder_contents/Resources"
+ditto "$node_binary" "$real_responder_contents/MacOS/covalent-node"
+ditto "$built_macos/covalent-rclone" "$real_responder_contents/MacOS/covalent-rclone"
+ditto "$built_macos/covalent-engine-guardian" "$real_responder_contents/MacOS/covalent-engine-guardian"
+ditto "$built_engine_resources" "$real_responder_contents/Resources/CovalentSyncEngine"
+chmod 755 "$real_responder_contents/MacOS/covalent-node" \
+  "$real_responder_contents/MacOS/covalent-rclone" \
+  "$real_responder_contents/MacOS/covalent-engine-guardian"
 
-  # Production helpers inherit the app sandbox. This fixture intentionally
-  # runs under a raw unsandboxed node, so replace only the copied helpers'
-  # signatures and record their new signed-byte hashes in the copied manifest.
-  # Omitting --entitlements removes the inherited-sandbox entitlement; do not
-  # preserve signature metadata from the production copies.
-  codesign --force --sign - \
-    --identifier life.michaelwong.covalent.ui-test.engine-guardian \
-    --options runtime --timestamp=none \
-    "$contents/MacOS/covalent-engine-guardian"
-  codesign --force --sign - \
-    --identifier life.michaelwong.covalent.ui-test.rclone \
-    --options runtime --timestamp=none \
-    "$contents/MacOS/covalent-rclone"
+# Production helpers inherit the app sandbox. The responder intentionally runs
+# under a raw unsandboxed node, so replace only its copied helpers' signatures
+# and record their new signed-byte hashes in the copied manifest.
+codesign --force --sign - \
+  --identifier life.michaelwong.covalent.ui-test.engine-guardian \
+  --options runtime --timestamp=none \
+  "$real_responder_contents/MacOS/covalent-engine-guardian"
+codesign --force --sign - \
+  --identifier life.michaelwong.covalent.ui-test.rclone \
+  --options runtime --timestamp=none \
+  "$real_responder_contents/MacOS/covalent-rclone"
 
-  for binary in \
-    "$contents/MacOS/covalent-engine-guardian" \
-    "$contents/MacOS/covalent-rclone"
-  do
-    codesign --verify --strict "$binary"
-    if ! fixture_entitlements=$(codesign -d --entitlements - "$binary" 2>/dev/null); then
-      print -u2 -- "could not inspect test fixture helper entitlements"
-      exit 1
-    fi
-    if [[ -n "$fixture_entitlements" ]]; then
-      print -u2 -- "real macOS folder-link fixture helper retained entitlements"
-      exit 1
-    fi
-  done
+for binary in \
+  "$real_responder_contents/MacOS/covalent-engine-guardian" \
+  "$real_responder_contents/MacOS/covalent-rclone"
+do
+  codesign --verify --strict "$binary"
+  if ! fixture_entitlements=$(codesign -d --entitlements - "$binary" 2>/dev/null); then
+    print -u2 -- "could not inspect test fixture helper entitlements"
+    exit 1
+  fi
+  if [[ -n "$fixture_entitlements" ]]; then
+    print -u2 -- "real macOS folder-link fixture helper retained entitlements"
+    exit 1
+  fi
+done
 
-  guardian_sha=$(shasum -a 256 "$contents/MacOS/covalent-engine-guardian" | awk '{print $1}')
-  worker_sha=$(shasum -a 256 "$contents/MacOS/covalent-rclone" | awk '{print $1}')
-  python3 - \
-    "$contents/Resources/CovalentSyncEngine/manifest.json" \
-    "$guardian_sha" "$worker_sha" <<'PY'
+guardian_sha=$(shasum -a 256 "$real_responder_contents/MacOS/covalent-engine-guardian" | awk '{print $1}')
+worker_sha=$(shasum -a 256 "$real_responder_contents/MacOS/covalent-rclone" | awk '{print $1}')
+python3 - \
+  "$real_responder_contents/Resources/CovalentSyncEngine/manifest.json" \
+  "$guardian_sha" "$worker_sha" <<'PY'
 import copy
 import json
 import os
@@ -353,46 +487,35 @@ finally:
     except FileNotFoundError:
         pass
 PY
-done
 
-read -r real_source_port real_responder_port < <(python3 - <<'PY'
+real_responder_port=$(python3 - <<'PY'
 import socket
-sockets = []
-ports = []
-for _ in range(2):
+while True:
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
-    sockets.append(sock)
-    ports.append(sock.getsockname()[1])
-print(*ports)
-for sock in sockets:
+    if sock.getsockname()[1] not in (8787, 8789):
+        print(sock.getsockname()[1])
+        sock.close()
+        break
     sock.close()
 PY
 )
-real_source_data="$real_fixture/source-data"
 real_responder_data="$real_fixture/responder-data"
-real_source_runtime="$real_fixture/source-runtime"
 real_responder_runtime="$real_fixture/responder-runtime"
 real_source_root="$real_fixture/source-folder"
 real_destination_root="$real_fixture/destination-folder"
-for runtime_path in "$real_source_runtime" "$real_responder_runtime"; do
-  runtime_path_bytes=$(LC_ALL=C print -rn -- "$runtime_path" | wc -c | tr -d '[:space:]')
-  [[ "$runtime_path" == /* && "$runtime_path_bytes" -le 900 ]] || {
-    print -u2 -- "real macOS folder-link runtime path exceeds the packaged host bound"
-    exit 1
-  }
-done
-mkdir -m 700 "$real_source_data" "$real_responder_data" \
-  "$real_source_runtime" "$real_responder_runtime" \
+runtime_path_bytes=$(LC_ALL=C print -rn -- "$real_responder_runtime" | wc -c | tr -d '[:space:]')
+[[ "$real_responder_runtime" == /* && "$runtime_path_bytes" -le 900 ]] || {
+  print -u2 -- "real macOS folder-link runtime path exceeds the packaged host bound"
+  exit 1
+}
+mkdir -m 700 "$real_responder_data" "$real_responder_runtime" \
   "$real_source_root" "$real_destination_root"
 print -n -- 'packaged-rclone-forward-content' > "$real_source_root/forward.txt"
 print -n -- 'destination-must-not-write-back' > "$real_destination_root/destination-only.txt"
 
-real_source_key="$real_fixture/source-kek"
 real_responder_key="$real_fixture/responder-kek"
 real_responder_token="$real_fixture/responder-token"
-"$node_binary" provision-key --key-file "$real_source_key" --key-version 1 \
-  >"$real_fixture/source-provision-key.log"
 "$node_binary" provision-key --key-file "$real_responder_key" --key-version 1 \
   >"$real_fixture/responder-provision-key.log"
 python3 - "$real_responder_token" <<'PY'
@@ -406,24 +529,9 @@ with os.fdopen(descriptor, "wb") as output:
     output.write(base64.urlsafe_b64encode(secrets.token_bytes(48)).rstrip(b"=") + b"\n")
 PY
 
-# Both peers stay on loopback. Their signed pairing addresses must match the
-# addresses the test dials; automatic LAN advertisement cannot describe this fixture.
-COVALENT_SYNC_RUNTIME_DIR="$real_source_runtime" \
-  "$real_source_contents/MacOS/covalent-node" serve \
-  --listen "127.0.0.1:$real_source_port" \
-  --peer-listen "127.0.0.1:$real_source_port" \
-  --advertised-peer-address "127.0.0.1:$real_source_port" \
-  --data-dir "$real_source_data" \
-  --device-name "Mac UI Source" \
-  --platform-tier tier1 \
-  --key-encryption-key-file "$real_source_key" \
-  --key-encryption-key-version 1 \
-  --api-token-file "$token_file" \
-  >"$real_fixture/source-node.log" 2>&1 &
-real_source_pid=$!
-# The fixed 8789 listener is started only for EngineFolderRole::Source.
-# The responder becomes Destination and runs bounded pull jobs, so it does not
-# bind a second server listener when this one-way link is accepted.
+# The responder stays on loopback. Its signed address must match the address
+# the app dials. The sandboxed app source advertises 127.0.0.1:8787 through its
+# one fixture-specific launch variable.
 COVALENT_SYNC_RUNTIME_DIR="$real_responder_runtime" \
   "$real_responder_contents/MacOS/covalent-node" serve \
   --listen "127.0.0.1:$real_responder_port" \
@@ -438,20 +546,17 @@ COVALENT_SYNC_RUNTIME_DIR="$real_responder_runtime" \
   >"$real_fixture/responder-node.log" 2>&1 &
 real_responder_pid=$!
 
-for health_port in "$real_source_port" "$real_responder_port"; do
-  for _ in {1..150}; do
-    if curl --fail --silent "http://127.0.0.1:$health_port/healthz" >/dev/null; then
-      break
-    fi
-    sleep 0.1
-  done
-  if ! curl --fail --silent "http://127.0.0.1:$health_port/healthz" >/dev/null; then
-    print -u2 -- "real macOS folder-link fixture node did not become ready"
-    sed -n '1,160p' "$real_fixture/source-node.log" >&2
-    sed -n '1,160p' "$real_fixture/responder-node.log" >&2
-    exit 1
+for _ in {1..150}; do
+  if curl --fail --silent "http://127.0.0.1:$real_responder_port/healthz" >/dev/null; then
+    break
   fi
+  sleep 0.1
 done
+if ! curl --fail --silent "http://127.0.0.1:$real_responder_port/healthz" >/dev/null; then
+  print -u2 -- "real macOS folder-link fixture node did not become ready"
+  sed -n '1,160p' "$real_fixture/responder-node.log" >&2
+  exit 1
+fi
 
 # Shell exports are not the UI test host contract. Put these values into the
 # generated xctestrun target's EnvironmentVariables dictionary, then execute
@@ -468,7 +573,7 @@ xctestrun_file=${xctestrun_files[1]}
   exit 1
 }
 python3 - "$xctestrun_file" \
-  "$real_source_port" "$real_responder_port" "$real_responder_token" \
+  "$real_responder_port" "$real_responder_token" \
   "$real_source_root" "$real_destination_root" <<'PY'
 import json
 import os
@@ -480,7 +585,6 @@ import tempfile
 path = sys.argv[1]
 values = dict(zip(
     (
-        "COVALENT_REAL_UI_SOURCE_PORT",
         "COVALENT_REAL_UI_RESPONDER_PORT",
         "COVALENT_REAL_UI_RESPONDER_TOKEN_FILE",
         "COVALENT_REAL_UI_SOURCE_ROOT",
@@ -567,6 +671,7 @@ codesign --verify --deep --strict --verbose=2 "$runner"
 # then-three-test suite in 43s on a real runner; the six-test suite remains
 # within the same deliberately generous 480s hang detector. 900s was
 # set when this lane had never passed and nothing had been measured.
+managed_app_may_have_started=1
 if ! run_bounded 480 xcodebuild \
   -quiet \
   -xctestrun "$xctestrun_file" \

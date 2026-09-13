@@ -2,27 +2,31 @@
 
 Updated 2026-09-13 after the owner reaffirmed the lightweight one-way scope. The active goal is defined in [Product requirements](../product/requirements.md#active-completion-goal).
 
-**Current scope: 40% verified, 4 of 10 complete acceptance checks.** This counts
+**Current scope: 70% verified, 7 of 10 complete acceptance checks.** This counts
 complete user journeys, not remaining time or reusable code. Rclone is the sole
-transfer engine and its migration is complete. Independent fan-out, collection
-isolation, deletion/restoration, and shared settings remain verified. The latest
-Android journey fails before its first Manual run is admitted, reopening native setup, cadence,
-and Android acceptance previously counted at 70%. The earlier passing Android
-journey remains baseline evidence; it does not approve this changed copy path.
+transfer engine and its migration is complete. The corrected Android layout on
+`d4a45ff` passes the complete native transfer journey and normal/large-text app
+review, restoring setup, cadence, and Android acceptance. Fan-out, collection
+isolation, deletion/restoration, and shared settings remain verified. The prior
+`7cf89c1` hosted run remains failed. The `d4a45ff` hosted run passes core and
+packaging checks but fails later Android grant recovery and the Mac cadence
+picker. The complete source-matched local Android pass remains recorded;
+these hosted failures receive no acceptance credit. Mac, Atmos, and final
+release acceptance remain open.
 Earlier Syncthing evidence is retained only as history.
 
 **Previous scope: 75%, 15 of 20 checks**, recorded at checkpoint 46 (c47003113e28b6e934a8ab4823040614fb07fb30). That score belongs to the superseded bidirectional/backup scope. Source and evidence remain in Git history.
 
 | # | Acceptance check | Status |
 | --- | --- | --- |
-| 1 | Native setup pairs devices and creates a source/destination link; files never flow backward. | Open |
+| 1 | Native setup pairs devices and creates a source/destination link; files never flow backward. | Verified |
 | 2 | Fan-out destinations work independently; multiple sources contribute safely to one collection. | Verified |
 | 3 | Both source-deletion options work with clear explanations and failed-scan protection. | Verified |
 | 4 | Destination deletions stay local across source edits/restarts; explicit restoration works. | Verified |
-| 5 | Manual, scheduled, and continuous transfers respect platform limits; idle batch workers stop. | Open |
+| 5 | Manual, scheduled, and continuous transfers respect platform limits; idle batch workers stop. | Verified |
 | 6 | Settings edited on any authorized member converge across the link; pending/stale edits remain visible. | Verified |
 | 7 | Mac setup, links, settings, and per-link menu bar status pass native HIG/keyboard/VoiceOver checks. | Open |
-| 8 | Tomato-inspired Android floating actions, typography, data/status visuals, and top bar; actual pairing, permission, transfer, and background journeys pass. | Open |
+| 8 | Tomato-inspired Android floating actions, typography, data/status visuals, and top bar; actual pairing, permission, transfer, and background journeys pass. | Verified |
 | 9 | Installable Mac/Android/Docker candidates pass real laptop–Atmos transfers and server mount handling; use an Unraid plugin only for a demonstrated Docker limitation. | Open |
 | 10 | Relevant fault/security checks pass; idle/transfer performance is measured; temporary fixtures are removed; GitHub releases and installation guidance are published. | Open |
 
@@ -71,23 +75,27 @@ and 2× text, both navigation actions, content clearance at the end of the list,
 and cold reopening. A weighted status label fixes the narrow Refresh button at
 large text sizes. The visual build's UI source matches `6260187`; its reused
 native helpers are independently covered by the fresh hosted native build and
-complete device run. The visual coverage remains valid, but the later transfer failure reopens Android acceptance check 8.
+complete device run. The later transfer failure temporarily reopened Android
+acceptance. The corrected `d4a45ff` local journey and normal/2× MainActivity
+review now restore check 8.
 
 Earlier row 5 evidence combines the complete Manual/Continuous Android journey, the complete
 15-minute source-owned scheduled run, and the recorded real charging/Wi-Fi
 blocking and resumption phases. The earlier conditions run remains a failed
 run; only its completed phases are credited. Its later Continuous-resume failure
 is independently covered by the final passing journey. The core stale-condition
-check also passes. This does not promise exact Android background timing. The current native
-Manual/Continuous transfer path must pass again before row 5 can close.
+check also passes. This does not promise exact Android background timing. The
+corrected `d4a45ff` local journey passes the current native Manual/Continuous
+path, restoring check 5 with the unchanged schedule and condition evidence.
 
 Earlier row 1 evidence uses the completed `6260187` API 37 SAF journey: native initiating-device pairing,
 system folder selection, native Manual link creation and Run Now, exact forward
 bytes, and a bounded check that a destination-only file stays off the source.
 The responder confirms pairing and accepts the destination through the fixture's
 authenticated API. The tested rclone runtime and Android changes are recorded
-above. That run also passes the added address-edit regression. Row 1 is reopened
-until the changed native transfer path passes on current source.
+above. That run also passes the added address-edit regression. The complete
+`d4a45ff` local journey repeats those native setup and transfer assertions,
+restoring check 1 on the current source.
 
 Integrated source `142a6eb` passes the Rust workspace and strict
 Clippy, all 70 web tests, Android foundation, the Mac app bundle, and packaged
@@ -101,14 +109,25 @@ covers the Run Now button; the original physical tap saves no run request.
 The list now reserves the toolbar's measured height below its viewport. Local
 foundation checks pass, and the complete unchanged SAF journey passes in
 399.70 seconds with ordinary taps. Its test source matches `7cf89c1`, its UI
-matches the corrected working tree, and its fresh native runtime matches
-`142a6eb`. Normal MainActivity layout review and the completion audit remain
-pending, so the acceptance count above has not yet increased.
+matches `d4a45ff`, and its fresh native runtime matches `142a6eb`. Normal
+MainActivity review at standard and 2× text, cold reopening, and the independent
+completion audit also pass. They restore checks 1, 5, and 8.
 The earlier `6260187` device run passes
 all 82 tests. The `8420180` Android run's source-deletion timeout did not
 recur with the original immediate deletion timing and 120-second assertion;
 no production transfer change separates those two runs, so its cause remains
 unestablished.
+
+The `d4a45ff` hosted run passes the Rust workspace (532 passes, four explicitly
+ignored tests), all 70 web tests, Android foundation, both packaged Docker
+one-way journeys (13 checks per architecture), Mac packaging, CodeQL, dependency
+delta, and version checks. Its Android baseline passes 81 of 81 tests. The
+separate full SAF journey reaches active folder-permission repair, then fails
+in 220.80 seconds because the expected stable refreshed API is not observed.
+The log does not retain the final API state, so the cause remains unestablished.
+The unchanged full test's local 399.70-second pass is separate evidence, not a
+replacement for the failed hosted result. Failure-only diagnostics are added without changing timeouts or acceptance
+conditions; Android test compilation passes without rebuilding native helpers.
 
 The Mac UI job on `142a6eb` passes five of six tests, including both accessibility
 audits. The native Links/menu bar journey fails at pairing because
@@ -120,11 +139,18 @@ The UI fixture now sets those two addresses. On `7cf89c1`, pairing succeeds and
 the journey reaches the paired-device picker, where the expected menu entry is
 not found. The code preserves the expected name end to end; the log cannot
 distinguish a runtime name mismatch from a menu accessibility lookup problem.
-A stable picker identifier and bounded failure diagnostics are added for the
-next run, with the original selection assertion and timeout unchanged.
-UI-test Swift typechecking and production-file parsing pass locally.
-Its copied production helpers use test-only signatures, so it does not approve
-production sandbox inheritance or Keychain startup.
+A stable paired-picker identifier and bounded failure diagnostics are included
+in `d4a45ff`. Its hosted Mac run passes that checkpoint, then fails to find the
+Transfers picker by its display label; later source-folder errors follow in the
+same invocation. That shared picker now has its own stable identifier, and a
+missing or inaccessible picker throws before later steps can run. The original
+10-second timeout, Manual selection, and transfer assertions are unchanged.
+The accessibility lookup cause is not yet established by runtime evidence.
+That run's copied production helpers use test-only signatures, so it does not
+approve production sandbox inheritance or Keychain startup. The next native
+journey uses the sandboxed app's own first-launch setup and LocalNodeManager,
+then quits and reopens to verify its saved identity and selected-folder grant.
+This conversion is pending runtime validation and receives no completion credit.
 
 A separate bounded rclone fault test confirms that an aggregate failed copy can
 leave completed files at the destination. The wrapper now preserves ownership
@@ -188,3 +214,9 @@ target; the review reported 3,002,968 KiB through `du`. Final packages and compa
 evidence remain, including exact copies of the retired source diff and untracked
 test. Physical free-space change was not measured. The fresh Mac pairing
 reproduction's nodes and private build target are removed as well.
+
+The completed Android layout diagnosis and acceptance fixture is removed,
+including its emulator, private ADB server, worktree, build target, and owned
+Gradle/Kotlin daemons. The deleted run root contained 3,418,855,288 logical bytes;
+no owned device or worker processes remain. Compact logs and four proof images
+are retained, and all 21 retained evidence files pass their hash checks.

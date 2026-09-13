@@ -943,6 +943,7 @@ private struct FolderCadenceControls: View {
       Text("Scheduled").tag(FolderLinkCadenceMode.scheduled)
       Text("Continuous").tag(FolderLinkCadenceMode.continuous)
     }
+    .accessibilityIdentifier("folder-link-cadence")
     .accessibilityHint("Chooses whether this link runs on request, on a schedule, or continuously.")
 
     if case .scheduled = cadence {
