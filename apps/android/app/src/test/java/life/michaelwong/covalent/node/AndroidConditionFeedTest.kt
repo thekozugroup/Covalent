@@ -1,10 +1,38 @@
 package life.michaelwong.covalent.node
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AndroidConditionFeedTest {
+    @Test
+    fun anyWifiNetworkCountsEvenWhenAnotherTransportCanBeDefault() {
+        val state = AndroidConditionTransportState<String>()
+        val token = state.start(initialWifi = listOf("local-wifi"), initialCharging = false)
+        assertEquals(AndroidConditionSnapshot(true, false), state.snapshot(token))
+        assertEquals(AndroidConditionSnapshot(true, false), state.updateWifi(token, "second-wifi", true))
+        assertEquals(AndroidConditionSnapshot(true, false), state.updateWifi(token, "local-wifi", false))
+        assertEquals(AndroidConditionSnapshot(false, false), state.updateWifi(token, "second-wifi", false))
+    }
+
+    @Test
+    fun stoppedAndPreviousLifecycleCallbacksCannotChangeCurrentState() {
+        val state = AndroidConditionTransportState<String>()
+        val first = state.start(emptyList(), initialCharging = false)
+        state.stop()
+        assertNull(state.updateWifi(first, "late-wifi", true))
+        assertNull(state.updateCharging(first, true))
+
+        val second = state.start(emptyList(), initialCharging = false)
+        assertNull(state.updateWifi(first, "old-wifi", true))
+        assertEquals(AndroidConditionSnapshot(false, true), state.updateCharging(second, true))
+        assertEquals(AndroidConditionSnapshot(true, true), state.updateWifi(second, "lan-wifi", true))
+        assertEquals(AndroidConditionSnapshot(false, true), state.replaceWifi(second, emptyList()))
+        assertNull(state.replaceWifi(first, listOf("stale-wifi")))
+    }
+
     @Test
     fun reportsOnlyWhileActiveAndRequiredWithChangeAndFreshHeartbeat() {
         val state = AndroidConditionHeartbeat()
