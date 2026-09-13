@@ -54,7 +54,46 @@ pub(crate) struct SettingsRequest {
     folder_id: uuid::Uuid,
     change_id: uuid::Uuid,
     expected_revision: u64,
-    settings: crate::sync_engine::FolderLinkSettings,
+    settings: SettingsChanges,
+}
+
+#[cfg(unix)]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SettingsChanges {
+    deletion_policy: covalent_protocol::FolderLinkPolicy,
+    paused: bool,
+    #[serde(default, deserialize_with = "present_setting")]
+    cadence: Option<crate::sync_engine::LinkCadence>,
+    #[serde(default, deserialize_with = "present_setting")]
+    android_conditions: Option<crate::sync_engine::AndroidLinkConditions>,
+}
+
+// Omission supports older clients; explicit null remains an invalid setting.
+#[cfg(unix)]
+fn present_setting<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+#[cfg(unix)]
+impl SettingsChanges {
+    fn preserving(
+        self,
+        current: crate::sync_engine::FolderLinkSettings,
+    ) -> crate::sync_engine::FolderLinkSettings {
+        crate::sync_engine::FolderLinkSettings {
+            deletion_policy: self.deletion_policy,
+            paused: self.paused,
+            cadence: self.cadence.unwrap_or(current.cadence),
+            android_conditions: self
+                .android_conditions
+                .unwrap_or(current.android_conditions),
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -82,16 +121,39 @@ pub(crate) async fn settings(
     ContractJson(request): ContractJson<SettingsRequest>,
 ) -> Result<axum::Json<MutationResponse>, ApiError> {
     authorize(&state, &headers)?;
-    let committed = ready_service(&state)?
+    let service = ready_service(&state)?;
+    let status = service.status().await.map_err(service_error)?;
+    let current = confirmed_settings(&status, request.folder_id).ok_or_else(|| {
+        service_error(crate::sync_engine::FolderSyncServiceError::SettingsConflict)
+    })?;
+    // The existing revision check rejects a concurrent edit after this read.
+    // Stored-state defaults must never reset fields an older client omitted.
+    let committed = service
         .request_link_settings(
             request.folder_id,
             request.change_id,
             request.expected_revision,
-            request.settings,
+            request.settings.preserving(current),
         )
         .await
         .map_err(service_error)?;
     Ok(mutation_response(None, committed.lifecycle()))
+}
+
+#[cfg(unix)]
+fn confirmed_settings(
+    status: &crate::sync_engine::FolderSyncStatus,
+    folder_id: uuid::Uuid,
+) -> Option<crate::sync_engine::FolderLinkSettings> {
+    status
+        .shares()
+        .iter()
+        .filter(|share| {
+            share.folder_id == folder_id && share.phase != crate::sync_engine::SharingPhase::Removed
+        })
+        .find_map(|share| share.link_settings.as_ref())
+        .filter(|settings| settings.confirmed)
+        .map(|settings| settings.settings)
 }
 
 #[cfg(unix)]
@@ -226,7 +288,13 @@ pub(crate) async fn offer(
     authorize(&state, &headers)?;
     #[cfg(unix)]
     {
-        let committed = ready_service(&state)?
+        let service = ready_service(&state)?;
+        let status = service.status().await.map_err(service_error)?;
+        // Adding a destination inherits the link's pause. The journal still
+        // rejects mismatched settings if an edit races this snapshot.
+        let paused =
+            confirmed_settings(&status, request.folder_id).is_some_and(|settings| settings.paused);
+        let committed = service
             .offer_with_settings(
                 request.peer_id,
                 request.folder_id,
@@ -235,7 +303,7 @@ pub(crate) async fn offer(
                 crate::now_unix_ms(),
                 crate::sync_engine::FolderLinkSettings {
                     deletion_policy: request.link_policy,
-                    paused: false,
+                    paused,
                     cadence: request.cadence,
                     android_conditions: request.android_conditions,
                 },
@@ -630,6 +698,59 @@ fn peer_connection_field(
 
 #[cfg(all(test, unix))]
 mod lifecycle_tests {
+    #[test]
+    fn older_settings_edits_preserve_omitted_fields_and_explicit_choices_replace_them() {
+        use crate::sync_engine::{AndroidLinkConditions, FolderLinkSettings, LinkCadence};
+        let current = FolderLinkSettings {
+            deletion_policy: covalent_protocol::FolderLinkPolicy {
+                propagate_source_deletions: true,
+                restore_local_deletions: true,
+            },
+            paused: false,
+            cadence: LinkCadence::Scheduled {
+                interval_minutes: 60,
+            },
+            android_conditions: AndroidLinkConditions {
+                wifi_only: true,
+                charging_only: true,
+            },
+        };
+        let original = serde_json::json!({
+            "deletionPolicy": {"propagateSourceDeletions": false, "restoreLocalDeletions": false},
+            "paused": true
+        });
+        let decode = |value| {
+            serde_json::from_value::<super::SettingsChanges>(value)
+                .unwrap()
+                .preserving(current)
+        };
+        let legacy = decode(original.clone());
+        assert!(legacy.paused);
+        assert!(!legacy.deletion_policy.propagate_source_deletions);
+        assert!(!legacy.deletion_policy.restore_local_deletions);
+        assert_eq!(legacy.cadence, current.cadence);
+        assert_eq!(legacy.android_conditions, current.android_conditions);
+        let mut timing = original.clone();
+        timing["cadence"] = serde_json::json!({"mode": "continuous"});
+        let timing = decode(timing);
+        assert_eq!(timing.cadence, LinkCadence::Continuous);
+        assert_eq!(timing.android_conditions, current.android_conditions);
+        let mut conditions = original.clone();
+        conditions["androidConditions"] =
+            serde_json::json!({"wifiOnly": false, "chargingOnly": false});
+        let conditions = decode(conditions);
+        assert_eq!(conditions.cadence, current.cadence);
+        assert_eq!(
+            conditions.android_conditions,
+            AndroidLinkConditions::default()
+        );
+        for name in ["cadence", "androidConditions"] {
+            let mut invalid = original.clone();
+            invalid[name] = serde_json::Value::Null;
+            assert!(serde_json::from_value::<super::SettingsChanges>(invalid).is_err());
+        }
+    }
+
     #[test]
     fn new_folder_requests_reject_omitted_null_or_incomplete_one_way_policy() {
         let mut value = serde_json::json!({

@@ -1505,12 +1505,11 @@ async fn manual_fanout_runs_finish_empty_and_retained_deletions_across_restart()
     }
     post_ok(&a, "/api/v1/sync/settings", json!({
         "folderId": folder, "changeId": Uuid::new_v4(), "expectedRevision": 0,
-        "settings": {"paused": false, "cadence": {"mode": "manual"},
-            "androidConditions": {"wifiOnly": false, "chargingOnly": false},
+        "settings": {"paused": false,
             "deletionPolicy": {"propagateSourceDeletions": false, "restoreLocalDeletions": true}}
     })).await;
     for (node, count) in [(&source, 2), (&a, 1), (&b, 1)] {
-        wait_ready_at(
+        let status = wait_ready_at(
             node,
             "shared restore setting",
             folder,
@@ -1520,6 +1519,11 @@ async fn manual_fanout_runs_finish_empty_and_retained_deletions_across_restart()
             true,
         )
         .await;
+        assert_eq!(
+            folder_shares(&status, folder)[0]["linkSettings"]["settings"]["cadence"]["mode"],
+            "manual",
+            "An older client's deletion edit must preserve the manual schedule"
+        );
     }
     request_batch(&a, folder, 3, 1).await;
     for node in [&source, &a, &b] {

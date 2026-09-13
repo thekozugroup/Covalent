@@ -1970,6 +1970,97 @@ async fn sustained_status_polling_does_not_probe_or_block_a_second_folder_offer(
 }
 
 #[tokio::test]
+async fn folder_offer_api_preserves_shared_pause_and_rejects_other_setting_mismatches() {
+    use axum::{extract::State, http::HeaderMap};
+    use serde_json::json;
+
+    let first = Device::new("Source", 44511);
+    let second = Device::new("First target", 44512);
+    let third = Device::new("Second target", 44513);
+    pair(&first, &second);
+    pair(&first, &third);
+    let backend = Arc::new(TestBackend::default());
+    let source = Arc::new(first.service(first.journal(), Arc::clone(&backend)));
+    let token = "paused-fanout-test-token-with-32-bytes";
+    let state = crate::AppState::new(
+        Arc::clone(&first.engine),
+        crate::PlatformTier::Tier1,
+        token.into(),
+    )
+    .unwrap()
+    .with_folder_sync(FolderSyncRuntimeState::Ready(Arc::clone(&source)));
+    let mut headers = HeaderMap::new();
+    headers.insert("authorization", format!("Bearer {token}").parse().unwrap());
+    let folder = Uuid::new_v4();
+    let mut request = json!({
+        "peerId": second.engine.device_id(), "folderId": folder,
+        "label": "Photos", "selectedRoot": first.files(),
+        "linkPolicy": {"propagateSourceDeletions": false, "restoreLocalDeletions": false},
+        "cadence": {"mode": "manual"},
+        "androidConditions": {"wifiOnly": false, "chargingOnly": false}
+    });
+    let offer = |request| {
+        crate::sync_api::offer(
+            State(state.clone()),
+            headers.clone(),
+            crate::ContractJson(serde_json::from_value(request).unwrap()),
+        )
+    };
+    let _ = offer(request.clone()).await.unwrap();
+    let initial = source.status().await.unwrap().shares()[0]
+        .link_settings
+        .clone()
+        .unwrap();
+    assert!(!initial.settings.paused);
+    let paused = FolderLinkSettings {
+        paused: true,
+        ..initial.settings
+    };
+    source
+        .request_link_settings(folder, Uuid::new_v4(), initial.revision, paused)
+        .await
+        .unwrap();
+
+    request["peerId"] = json!(third.engine.device_id());
+    let mut mismatched = request.clone();
+    mismatched["cadence"] = json!({"mode": "continuous"});
+    assert_eq!(
+        offer(mismatched)
+            .await
+            .err()
+            .expect("settings mismatch")
+            .code,
+        "link_settings_conflict"
+    );
+    assert_eq!(source.status().await.unwrap().shares().len(), 1);
+    let _ = offer(request.clone()).await.unwrap();
+    let snapshot = source.status().await.unwrap();
+    assert_eq!(snapshot.shares().len(), 2);
+    assert!(snapshot.shares().iter().all(|share| {
+        share
+            .link_settings
+            .as_ref()
+            .is_some_and(|settings| settings.settings == paused)
+    }));
+    assert_eq!(snapshot.lifecycle(), FolderSyncLifecycle::Stopped);
+    assert_eq!(backend.snapshot().launches, 0);
+
+    let new_root = first.root.join("another-source");
+    std::fs::create_dir(&new_root).unwrap();
+    let new_folder = Uuid::new_v4();
+    request["folderId"] = json!(new_folder);
+    request["selectedRoot"] = json!(new_root);
+    let _ = offer(request).await.unwrap();
+    let snapshot = source.status().await.unwrap();
+    let fresh = snapshot
+        .shares()
+        .iter()
+        .find(|share| share.folder_id == new_folder)
+        .unwrap();
+    assert!(!fresh.link_settings.as_ref().unwrap().settings.paused);
+}
+
+#[tokio::test]
 async fn manual_batch_waits_for_fresh_scan_and_current_connected_completion_then_reaps_workers() {
     use super::connection::EnginePeerConnectionState;
     use super::run_observation::EngineRunObservation;

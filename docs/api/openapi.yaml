@@ -83,7 +83,8 @@ paths:
         New links require an explicit deletion policy. Both false keeps destination
         copies after a source deletion and leaves destination deletions in place.
         Reuse the same folderId, source root, label and current policy to add another
-        destination. Legacy signed two-way invitations remain readable but cannot
+        destination; an existing link's shared pause is preserved. Legacy signed
+        two-way invitations remain readable but cannot
         be created by omitting linkPolicy. Omitted cadence and Android constraints
         retain compatibility defaults of continuous, unrestricted operation.
       operationId: offerFolder
@@ -1796,8 +1797,9 @@ components:
               minimum: 15
               maximum: 525600
       description: >-
-        Shared cadence for the link. An omitted cadence value decodes as
-        continuous for stored and request compatibility.
+        Shared cadence for the link. Creating a link or loading older stored
+        state defaults an omitted cadence to continuous. Settings edits preserve
+        the current confirmed cadence when this field is omitted.
     AndroidLinkConditions:
       type: object
       additionalProperties: false
@@ -1808,12 +1810,20 @@ components:
         chargingOnly:
           type: boolean
       description: >-
-        Shared Android constraints. An omitted androidConditions value decodes
-        as false for both fields. Wi-Fi does not require validated internet access.
+        Shared Android constraints. Creating a link or loading older stored state
+        defaults omitted constraints to false for both fields. Settings edits
+        preserve the current confirmed constraints when this field is omitted.
+        Wi-Fi does not require validated internet access.
     FolderLinkSettingsRequest:
       type: object
       additionalProperties: false
       required: [folderId, changeId, expectedRevision, settings]
+      description: >-
+        Whole-link edit guarded by expectedRevision. For older clients, omitted
+        settings.cadence or settings.androidConditions preserve the current
+        confirmed value. Explicit null is invalid. A concurrent settings change
+        is rejected by the existing revision check; omitted fields never reset
+        to the defaults used when creating a link or loading older stored state.
       properties:
         folderId:
           type: string
