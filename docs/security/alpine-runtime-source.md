@@ -1,7 +1,7 @@
 # Alpine runtime source and notices
 
 Covalent's Docker image includes Alpine packages in addition to the separately
-built Rust node, Caddy and Syncthing worker. The image's MIT label describes
+built Rust node, Caddy and rclone worker. The image's MIT label describes
 Covalent; it does not relicense those dependencies.
 
 `packaging/docker/alpine/runtime-source-lock.json` records the exact sixteen

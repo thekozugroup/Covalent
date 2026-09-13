@@ -1,7 +1,8 @@
 # ADR 0007: Maintained engine for automatic folder sync
 
-Status: accepted for implementation, 2026-09-08. The complete Covalent workflow
-is not yet implemented or released.
+Status: superseded by [ADR 0008](0008-rclone-one-way-links.md), 2026-09-13.
+This document preserves the earlier decision and its evidence. Its two-way
+scope, engine selection, and remaining gates do not define the current product.
 
 ## Context and evidence
 

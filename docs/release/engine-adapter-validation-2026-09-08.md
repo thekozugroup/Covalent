@@ -322,7 +322,7 @@ The bounded notice collector and its six regression tests are integrated.
 Its actual Android target reproduction collected 60 modules, 95 candidate
 module texts and 109 total payload files (321,396 bytes); the manifest digest
 is `194ab907dccf3da2bb94e70d942887b14571ebb4763523d851098b3012d579ea`.
-The [target inventory review](../security/syncthing-target-license-inventory.md)
+The [target inventory review](https://github.com/thekozugroup/Covalent/blob/426869d3cd7d00bc726536a578162ec80a855267/docs/security/syncthing-target-license-inventory.md)
 retains the Linux-specific graph, NDK runtime and shipped-notice gaps.
 
 ## Combined image measurements
@@ -393,7 +393,7 @@ installs readable combined texts plus bounded target evidence. The runtime
 checks the combined texts, manifest and retained evidence hashes before launching
 a worker. Missing/tampered text and symlinked evidence-directory regressions
 pass. Exact target generation, final sizes and notice classification remain
-open; details are in [Linux target notices](../security/syncthing-linux-target-notices.md).
+open; details are in [Linux target notices](https://github.com/thekozugroup/Covalent/blob/426869d3cd7d00bc726536a578162ec80a855267/docs/security/syncthing-linux-target-notices.md).
 
 ## Checkpoint 28: current peer status and Android notices
 

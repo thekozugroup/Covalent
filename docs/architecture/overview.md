@@ -4,12 +4,18 @@
 
 Native macOS and Android clients and the Docker web console use the same node API.
 Covalent owns pairing, folder authorization, shared link settings, scheduling,
-status, and the lifecycle of its bundled maintained Syncthing transfer worker.
+status, and the lifecycle of its bundled rclone transfer worker.
 The source commits setting revisions and distributes them to linked destinations.
 Each destination writes ordinary files into its authorized folder; collection
 links use separate child folders. Manual and scheduled links stop their transfer
 worker between runs. Android reports local Wi-Fi and charging conditions to the
 node; those observations expire and are not shared settings.
+
+The rclone integration uses paired, read-only SFTP source access and scoped
+destination copy operations. Android keeps its folder grant on-device and
+streams through an authenticated loopback WebDAV adapter. It does not stage an
+entire folder. See [ADR 0008](../adr/0008-rclone-one-way-links.md) for the engine
+decision and the completion ledger for integration readiness.
 
 The [product requirements](../product/requirements.md) define deletion behavior,
 platform scope, and the completion gates. The older archive APIs described below
