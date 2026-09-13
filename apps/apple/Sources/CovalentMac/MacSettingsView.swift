@@ -35,6 +35,7 @@ struct MacSettingsView: View {
             .frame(maxWidth: compact ? 560 : 760, alignment: .leading)
             .padding(compact ? 24 : 32)
         }
+        .accessibilityIdentifier("settings.view")
         .background(Color(nsColor: .windowBackgroundColor))
         .navigationTitle(compact ? "" : "Settings")
         .onAppear { syncFields() }

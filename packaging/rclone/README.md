@@ -5,8 +5,8 @@ Covalent uses upstream rclone v1.75.1, commit
 This entry point imports only the local, SFTP, and WebDAV backends and the
 commands needed by the wrapper. It does not modify upstream transfer code.
 
-The existing Syncthing integration is being replaced. This directory is not yet
-wired into released packages; the completion ledger records remaining checks.
+This entry point is used by the macOS, Android, and Docker packages. Rclone is
+the sole active transfer engine; the completion ledger records remaining release checks.
 
 Build with the pinned repository Go toolchain, a temporary `GOCACHE` and
 `GOMODCACHE`, and an explicit output outside the checkout:
@@ -14,7 +14,7 @@ Build with the pinned repository Go toolchain, a temporary `GOCACHE` and
 ```sh
 go build -mod=readonly -trimpath -buildvcs=false \
   -ldflags '-s -w -X github.com/rclone/rclone/fs.Version=v1.75.1' \
-  -o /absolute/temporary/path/rclone .
+  -o /absolute/temporary/path/covalent-rclone .
 ```
 
 Use a private configuration file and private cache/temp directories. A network

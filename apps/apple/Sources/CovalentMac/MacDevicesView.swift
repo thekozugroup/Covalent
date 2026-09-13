@@ -20,6 +20,7 @@ struct MacDevicesView: View {
             .frame(maxWidth: 860, alignment: .leading)
             .padding(32)
         }
+        .accessibilityIdentifier("devices.view")
         .background(Color(nsColor: .windowBackgroundColor))
         .navigationTitle("Devices")
         .sheet(isPresented: $showingConnectProvider) {

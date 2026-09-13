@@ -17,7 +17,7 @@ import life.michaelwong.covalent.BuildConfig
 
 internal data class RawFolderEntry(val name: String, val absolutePath: String)
 
-/** Debug/personal-build gate for Syncthing's required ordinary filesystem capability. */
+/** Optional direct filesystem access for debug and personal builds. */
 internal object FolderSyncSpecialAccess {
     fun supported(): Boolean = BuildConfig.DEBUG && Build.VERSION.SDK_INT >= 30
 

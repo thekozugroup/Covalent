@@ -77,8 +77,8 @@ final class CovalentMacUITests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: "sidebar.devices").firstMatch.click()
         XCTAssertTrue(app.staticTexts["Your devices"].waitForExistence(timeout: uiTransitionTimeout))
         let advanced = app.descendants(matching: .any)["devices.advancedRecovery"]
+        scrollTo(advanced, in: app.scrollViews["devices.view"])
         XCTAssertTrue(advanced.waitForExistence(timeout: uiTransitionTimeout))
-        scrollTo(advanced, in: app)
         XCTAssertTrue(advanced.isHittable, "Advanced recovery never became clickable.")
         expandDisclosure(advanced)
         XCTAssertEqual(
@@ -90,7 +90,7 @@ final class CovalentMacUITests: XCTestCase {
         // Revealing the group pushes its contents below the fold, and macOS
         // keeps off-screen scroll content out of the accessibility tree, so
         // bring it into view before asserting.
-        scrollTo(offlinePairing, in: app)
+        scrollTo(offlinePairing, in: app.scrollViews["devices.view"])
         XCTAssertTrue(offlinePairing.waitForExistence(timeout: uiTransitionTimeout))
         XCTAssertTrue(offlinePairing.isHittable)
         offlinePairing.click()
@@ -106,7 +106,7 @@ final class CovalentMacUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Settings transfer"].waitForExistence(timeout: uiTransitionTimeout))
         XCTAssertTrue(app.staticTexts["Private identity keys and folder permissions never leave this device."].exists)
         let notices = app.buttons["settings.openSourceNotices"]
-        scrollTo(notices, in: app)
+        scrollTo(notices, in: app.scrollViews["settings.view"])
         XCTAssertTrue(notices.waitForExistence(timeout: uiTransitionTimeout))
         notices.click()
         XCTAssertTrue(app.staticTexts["Open Source Notices"].waitForExistence(timeout: uiTransitionTimeout))
@@ -436,18 +436,18 @@ final class CovalentMacUITests: XCTestCase {
     ///
     /// macOS keeps off-screen scroll content out of the accessibility tree, so
     /// without this a perfectly good control reads as missing.
-    private func scrollTo(_ element: XCUIElement, in app: XCUIApplication) {
+    private func scrollTo(_ element: XCUIElement, in scrollView: XCUIElement) {
         // Scroll until the control can actually be clicked, not merely until
         // it exists. macOS keeps below-the-fold rows in the accessibility tree,
         // so `exists` goes true while the element is still off screen — and a
         // click at its coordinate then lands on nothing, silently doing
         // nothing at all.
         guard !element.isHittable else { return }
-        let scrollView = app.scrollViews.firstMatch
         guard scrollView.waitForExistence(timeout: uiTransitionTimeout) else { return }
-        for delta in [-60.0, -60.0, -60.0, -60.0, -60.0, 60.0, 60.0, 60.0, 60.0, 60.0]
+        let page = scrollView.frame.height * 0.75
+        for delta in Array(repeating: -page, count: 8) + Array(repeating: page, count: 8)
         where !element.isHittable {
-            scrollView.scroll(byDeltaX: 0, deltaY: CGFloat(delta))
+            scrollView.scroll(byDeltaX: 0, deltaY: delta)
         }
     }
 
