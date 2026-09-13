@@ -168,14 +168,13 @@ final class RealFolderLinkUITests: XCTestCase {
             token: responderToken,
             label: "Mac UI Link"
         )
-        let offerID = try string(offer, "offerId")
         _ = try await requestJSON(
             port: responderPort,
             token: responderToken,
             path: "/api/v1/sync/accept",
             method: "POST",
             body: [
-                "offerId": offerID,
+                "offerId": try string(offer, "offerId"),
                 "selectedRoot": destinationRoot,
             ]
         )
@@ -185,32 +184,6 @@ final class RealFolderLinkUITests: XCTestCase {
         let idle = app.staticTexts["Idle. Run this link when you want to transfer changes."]
         scrollTo(idle, in: linksScrollView)
         guard idle.waitForExistence(timeout: transferTimeout) else {
-            attachFolderLinkState(
-                reason: "manual idle status did not appear",
-                app: app,
-                linksScrollView: linksScrollView
-            )
-            let acceptedShare = await acceptedShareDiagnostic(
-                port: responderPort,
-                token: responderToken,
-                offerID: offerID
-            )
-            app.typeKey("2", modifierFlags: .command)
-            app.typeKey("1", modifierFlags: .command)
-            let refreshedLinks = app.scrollViews["links.view"]
-            let refreshedIdle = app.staticTexts[
-                "Idle. Run this link when you want to transfer changes."
-            ]
-            let idleAfterNativeRefresh = refreshedIdle.waitForExistence(
-                timeout: transitionTimeout
-            )
-            attachFolderLinkState(
-                reason: "after Cmd-2 then Cmd-1 diagnostic refresh",
-                app: app,
-                linksScrollView: refreshedLinks,
-                additionalState: acceptedShare
-                    + "; idleAfterNativeRefresh:\(idleAfterNativeRefresh)"
-            )
             throw FixtureError.missing("manual idle status")
         }
         recordPhase("Covalent phase: manual idle wait completed")
@@ -220,19 +193,9 @@ final class RealFolderLinkUITests: XCTestCase {
         let run = app.buttons["Run Mac UI Link now"]
         scrollTo(run, in: linksScrollView)
         guard run.waitForExistence(timeout: transitionTimeout) else {
-            attachFolderLinkState(
-                reason: "Run Now control did not appear",
-                app: app,
-                linksScrollView: linksScrollView
-            )
             throw FixtureError.missing("Run Now control")
         }
         guard run.isHittable else {
-            attachFolderLinkState(
-                reason: "Run Now control was not hittable",
-                app: app,
-                linksScrollView: linksScrollView
-            )
             throw FixtureError.missing("hittable Run Now control")
         }
         run.click()
@@ -263,7 +226,7 @@ final class RealFolderLinkUITests: XCTestCase {
         statusItemBeforeRelaunch.coordinate(
             withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
         ).click()
-        let quit = app.menuItems["Quit Covalent"]
+        let quit = statusItemBeforeRelaunch.menuItems["Quit Covalent"]
         XCTAssertTrue(quit.waitForExistence(timeout: transitionTimeout))
         XCTAssertTrue(quit.isHittable)
         quit.click()
@@ -362,167 +325,6 @@ final class RealFolderLinkUITests: XCTestCase {
         }
         return "Transfers picker target: folder-link-cadence; pop-up buttons=\(popUpButtons.count); "
             + "first entries: \(entries)"
-    }
-
-    private func attachFolderLinkState(
-        reason: String,
-        app: XCUIApplication,
-        linksScrollView: XCUIElement,
-        additionalState: String? = nil
-    ) {
-        let frontmost = NSWorkspace.shared.frontmostApplication.map {
-            $0.bundleIdentifier == "life.michaelwong.covalent.macos"
-        }
-        let unavailable = app.descendants(matching: .any).matching(
-            NSPredicate(
-                format: "identifier == %@ AND (label CONTAINS %@ OR value CONTAINS %@)",
-                "mac.emptyState",
-                "Folder Sync Is Unavailable",
-                "Folder Sync Is Unavailable"
-            )
-        ).firstMatch
-        let fixedElements: [(String, XCUIElement)] = [
-            ("linkLabel", app.staticTexts["Mac UI Link"]),
-            ("manualIdle", app.staticTexts["Idle. Run this link when you want to transfer changes."]),
-            ("runNow", app.buttons["Run Mac UI Link now"]),
-            ("checkingFolders", app.staticTexts["Checking Folder Sync…"]),
-            ("foldersUnavailable", unavailable),
-            ("retryUnavailable", app.buttons["Try Again"]),
-            ("waitingForSourceSettings", app.staticTexts["Waiting for confirmed source settings"]),
-            ("settingsPending", app.staticTexts["Waiting for the source to apply this settings change"]),
-            ("settingsUnconfirmed", app.staticTexts["Settings change is not confirmed"]),
-            ("retrySettings", app.buttons["Try Sending Settings Again"]),
-            ("emptyLinks", app.staticTexts["Keep a Folder in Sync"]),
-            ("initialScan", app.staticTexts["Checking Folders"]),
-            ("pendingOffer", app.staticTexts["The previous result was uncertain. Retry the same folder offer."]),
-            ("retryOffer", app.buttons["Try Sharing Again"]),
-            ("chooseSource", app.buttons["Choose Source Folder…"]),
-        ]
-        let fixedState = fixedElements.map { name, element in
-            elementDiagnostic(name: name, element: element)
-        }.joined(separator: "; ")
-        let frontmostDescription = frontmost.map { String(describing: $0) } ?? "unknown"
-        var lines = [
-            "UI test failure: folder-link state snapshot",
-            "reason=\(reason)",
-            "appState=\(String(describing: app.state))",
-            "windows=\(app.windows.count) sheets=\(app.sheets.count) alerts=\(app.alerts.count) dialogs=\(app.dialogs.count)",
-            "frontmostIsTarget=\(frontmostDescription)",
-            elementDiagnostic(name: "linksView", element: linksScrollView),
-            finiteFrameDiagnostic(name: "linksFrame", element: linksScrollView),
-            fixedState,
-            "sanitizedLinksAX:",
-            sanitizedAccessibilityStructure(of: linksScrollView),
-        ]
-        if let additionalState {
-            lines.append(additionalState)
-        }
-        let snapshot = lines.joined(separator: "\n")
-        let attachment = XCTAttachment(string: snapshot + "\n")
-        attachment.name = "Real folder-link bounded state"
-        attachment.lifetime = .keepAlways
-        add(attachment)
-    }
-
-    private func elementDiagnostic(name: String, element: XCUIElement) -> String {
-        let exists = element.exists
-        return "\(name)=exists:\(exists),hittable:\(exists && element.isHittable),enabled:\(exists && element.isEnabled)"
-    }
-
-    private func acceptedShareDiagnostic(
-        port: String,
-        token: String,
-        offerID: String
-    ) async -> String {
-        let response = try? await requestJSON(
-            port: port,
-            token: token,
-            path: "/api/v1/sync/status"
-        )
-        let status = response as? [String: Any]
-        let shares = status?["shares"] as? [[String: Any]]
-        let share = shares?.first { $0["offerId"] as? String == offerID }
-        let linkPolicyExists = share?["linkPolicy"] != nil
-            && !(share?["linkPolicy"] is NSNull)
-        let linkSettings = share?["linkSettings"] as? [String: Any]
-        let settings = linkSettings?["settings"] as? [String: Any]
-        let cadence = settings?["cadence"] as? [String: Any]
-        let phase = share?["phase"] as? String
-        let knownPhases = ["offered", "awaitingCommit", "ready", "paused", "removed"]
-        return "acceptedShare="
-            + "statusReadable:\(status != nil),found:\(share != nil),"
-            + "confirmed:\(linkSettings?["confirmed"] as? Bool == true),"
-            + "manualCadence:\(cadence?["mode"] as? String == "manual"),"
-            + "knownPhase:\(phase.map(knownPhases.contains) == true),"
-            + "policy:\(linkPolicyExists)"
-    }
-
-    private func sanitizedAccessibilityStructure(of element: XCUIElement) -> String {
-        let roles = [
-            "Application", "Window", "Sheet", "Dialog", "Group", "ScrollView",
-            "Outline", "OutlineRow", "Cell", "StaticText", "Button", "PopUpButton",
-            "TextField", "Menu", "MenuItem", "Table", "TableRow", "TableColumn",
-        ]
-        let phrases = [
-            ("link", "Mac UI Link"),
-            ("idle", "Idle. Run this link when you want to transfer changes."),
-            ("run", "Run Mac UI Link now"),
-            ("empty", "Keep a Folder in Sync"),
-            ("source", "Choose Source Folder…"),
-            ("unavailable", "Folder Sync Is Unavailable"),
-            ("retry", "Try Again"),
-        ]
-        let frameExpression = try? NSRegularExpression(
-            pattern: #"\{\{(-?[0-9]+(?:\.[0-9]+)?), (-?[0-9]+(?:\.[0-9]+)?)\}, \{(-?[0-9]+(?:\.[0-9]+)?), (-?[0-9]+(?:\.[0-9]+)?)\}\}"#
-        )
-        var sanitized: [String] = []
-        for rawLine in element.debugDescription.split(separator: "\n") {
-            let line = String(rawLine)
-            let structural = line.trimmingCharacters(in: .whitespaces)
-                .drop { $0 == "→" || $0 == "↳" || $0 == " " }
-            guard let role = roles.first(where: {
-                structural == $0 || structural.hasPrefix($0 + ",")
-            }) else { continue }
-            let depth = line.prefix(while: { $0 == " " }).count
-            let seen = phrases.map { name, phrase in
-                "\(name):\(line.contains(phrase))"
-            }.joined(separator: ",")
-            var fields = ["depth:\(depth)", "role:\(role)", "seen:{\(seen)}"]
-            if let frameExpression,
-               let match = frameExpression.firstMatch(
-                   in: line,
-                   range: NSRange(line.startIndex..., in: line)
-               ) {
-                let values = (1...4).compactMap { index -> Double? in
-                    guard let range = Range(match.range(at: index), in: line) else { return nil }
-                    return Double(line[range])
-                }
-                if values.count == 4, values.allSatisfy(\.isFinite) {
-                    fields.append(
-                        "frame:x:\(formatNumber(values[0])),y:\(formatNumber(values[1])),"
-                            + "w:\(formatNumber(values[2])),h:\(formatNumber(values[3]))"
-                    )
-                }
-            }
-            sanitized.append(fields.joined(separator: ","))
-            if sanitized.count == 64 { break }
-        }
-        return sanitized.isEmpty ? "none" : sanitized.joined(separator: "\n")
-    }
-
-    private func finiteFrameDiagnostic(name: String, element: XCUIElement) -> String {
-        guard element.exists else { return "\(name)=unavailable" }
-        return finiteFrame(element.frame).map { "\(name)=\($0)" } ?? "\(name)=unavailable"
-    }
-
-    private func finiteFrame(_ frame: CGRect) -> String? {
-        let values = [frame.origin.x, frame.origin.y, frame.width, frame.height].map(Double.init)
-        guard values.allSatisfy(\.isFinite) else { return nil }
-        return "x:\(formatNumber(values[0])),y:\(formatNumber(values[1])),w:\(formatNumber(values[2])),h:\(formatNumber(values[3]))"
-    }
-
-    private func formatNumber(_ value: Double) -> String {
-        String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), value)
     }
 
     private func launchManagedApp() -> XCUIApplication {
