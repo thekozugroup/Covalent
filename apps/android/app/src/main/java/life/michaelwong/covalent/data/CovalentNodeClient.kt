@@ -31,6 +31,15 @@ import org.json.JSONObject
 import life.michaelwong.covalent.model.DiscoveryCandidate
 import life.michaelwong.covalent.model.FolderHealth
 import life.michaelwong.covalent.model.FolderLinkPolicy
+import life.michaelwong.covalent.model.AndroidLinkConditions
+import life.michaelwong.covalent.model.FolderLinkCadence
+import life.michaelwong.covalent.model.FolderLinkRunDestinationSummary
+import life.michaelwong.covalent.model.FolderLinkRunPhase
+import life.michaelwong.covalent.model.FolderLinkRunRejection
+import life.michaelwong.covalent.model.FolderLinkRunRejectionReason
+import life.michaelwong.covalent.model.FolderLinkRunRequestSummary
+import life.michaelwong.covalent.model.FolderLinkRunResult
+import life.michaelwong.covalent.model.FolderLinkRunSummary
 import life.michaelwong.covalent.model.FolderLinkSettings
 import life.michaelwong.covalent.model.FolderLinkSettingsChange
 import life.michaelwong.covalent.model.FolderLinkSettingsState
@@ -164,7 +173,7 @@ class CovalentNodeClient(
         folderId: UUID,
         label: String,
         selectedRoot: String,
-        linkPolicy: FolderLinkPolicy,
+        settings: FolderLinkSettings,
     ): FolderSyncMutation {
         requireUuid(peerId, "peer")
         require(label.isNotBlank() && label.length <= MAX_FOLDER_LABEL_CHARS && label.none(Char::isISOControl)) {
@@ -183,11 +192,41 @@ class CovalentNodeClient(
                 .put(
                     "linkPolicy",
                     JSONObject()
-                        .put("propagateSourceDeletions", linkPolicy.propagateSourceDeletions)
-                        .put("restoreLocalDeletions", linkPolicy.restoreLocalDeletions),
-                ),
+                        .put("propagateSourceDeletions", settings.deletionPolicy.propagateSourceDeletions)
+                        .put("restoreLocalDeletions", settings.deletionPolicy.restoreLocalDeletions),
+                )
+                .put("cadence", settings.cadence.toJson())
+                .put("androidConditions", settings.androidConditions.toJson()),
         ).toFolderSyncMutation()
     }
+
+    fun runFolderLinkNow(
+        baseUrl: String,
+        token: String,
+        folderId: String,
+        requestId: String,
+        expectedGeneration: Long,
+        settingsRevision: Long,
+    ): FolderSyncMutation {
+        requireUuid(folderId, "folder")
+        requireUuid(requestId, "run request")
+        require(requestId != "00000000-0000-0000-0000-000000000000")
+        require(expectedGeneration >= 0 && settingsRevision >= 0)
+        return post(baseUrl, token, "/api/v1/sync/run", JSONObject()
+            .put("folderId", folderId)
+            .put("requestId", requestId)
+            .put("expectedGeneration", expectedGeneration)
+            .put("settingsRevision", settingsRevision)).toFolderSyncMutation()
+    }
+
+    fun observeFolderLinkAndroidConditions(
+        baseUrl: String,
+        token: String,
+        wifiConnected: Boolean,
+        charging: Boolean,
+    ): FolderSyncMutation = post(baseUrl, token, "/api/v1/sync/conditions", JSONObject()
+        .put("wifiConnected", wifiConnected)
+        .put("charging", charging)).toFolderSyncMutation()
 
     fun updateFolderLinkSettings(
         baseUrl: String,
@@ -1004,7 +1043,7 @@ private fun JSONObject.toFolderSyncStatus(): FolderSyncStatus {
             requireJsonKeys(
                 share,
                 setOf("offerId", "folderId", "label", "peerId", "incoming", "phase", "expiresAtUnixMs", "expired"),
-                setOf("peerConnection", "supersededOfferIds", "remoteRemovalPending", "linkPolicy", "linkSettings"),
+                setOf("peerConnection", "supersededOfferIds", "remoteRemovalPending", "linkPolicy", "linkSettings", "linkRun"),
             )
             FolderShare(
                 offerId = requireUuid(share.getString("offerId"), "folder offer ID"),
@@ -1060,6 +1099,9 @@ private fun JSONObject.toFolderSyncStatus(): FolderSyncStatus {
                 } else null,
                 linkSettings = if (share.has("linkSettings") && !share.isNull("linkSettings")) {
                     share.getJSONObject("linkSettings").toFolderLinkSettingsState()
+                } else null,
+                linkRun = if (share.has("linkRun") && !share.isNull("linkRun")) {
+                    share.getJSONObject("linkRun").toFolderLinkRunSummary()
                 } else null,
             ).also { parsed ->
                 parsed.linkSettings?.let { state ->
@@ -1147,9 +1189,26 @@ private fun FolderLinkSettings.toJson() = JSONObject()
             .put("restoreLocalDeletions", deletionPolicy.restoreLocalDeletions),
     )
     .put("paused", paused)
+    .put("cadence", cadence.toJson())
+    .put("androidConditions", androidConditions.toJson())
+
+private fun FolderLinkCadence.toJson() = JSONObject().apply {
+    when (this@toJson) {
+        FolderLinkCadence.Manual -> put("mode", "manual")
+        FolderLinkCadence.Continuous -> put("mode", "continuous")
+        is FolderLinkCadence.Scheduled -> {
+            put("mode", "scheduled")
+            put("intervalMinutes", intervalMinutes)
+        }
+    }
+}
+
+private fun AndroidLinkConditions.toJson() = JSONObject()
+    .put("wifiOnly", wifiOnly)
+    .put("chargingOnly", chargingOnly)
 
 private fun JSONObject.toFolderLinkSettings(): FolderLinkSettings {
-    requireJsonKeys(this, setOf("deletionPolicy", "paused"))
+    requireJsonKeys(this, setOf("deletionPolicy", "paused"), setOf("cadence", "androidConditions"))
     val policy = getJSONObject("deletionPolicy")
     requireJsonKeys(policy, setOf("propagateSourceDeletions", "restoreLocalDeletions"))
     return FolderLinkSettings(
@@ -1160,8 +1219,98 @@ private fun JSONObject.toFolderLinkSettings(): FolderLinkSettings {
                 ?: error("The node returned an invalid destination deletion policy."),
         ),
         paused = (get("paused") as? Boolean) ?: error("The node returned an invalid link pause setting."),
+        cadence = if (has("cadence")) getJSONObject("cadence").toFolderLinkCadence()
+            else FolderLinkCadence.Continuous,
+        androidConditions = if (has("androidConditions")) {
+            getJSONObject("androidConditions").let { conditions ->
+                requireJsonKeys(conditions, setOf("wifiOnly", "chargingOnly"))
+                AndroidLinkConditions(conditions.getBoolean("wifiOnly"), conditions.getBoolean("chargingOnly"))
+            }
+        } else AndroidLinkConditions(),
     )
 }
+
+private fun JSONObject.toFolderLinkCadence(): FolderLinkCadence = when (getString("mode")) {
+    "manual" -> FolderLinkCadence.Manual.also { requireJsonKeys(this, setOf("mode")) }
+    "continuous" -> FolderLinkCadence.Continuous.also { requireJsonKeys(this, setOf("mode")) }
+    "scheduled" -> FolderLinkCadence.Scheduled(getInt("intervalMinutes")).also {
+        requireJsonKeys(this, setOf("mode", "intervalMinutes"))
+    }
+    else -> error("The node returned an unknown link cadence.")
+}
+
+private fun JSONObject.toFolderLinkRunSummary(): FolderLinkRunSummary {
+    requireJsonKeys(this, setOf(
+        "generation", "stateRevision", "settingsRevision", "phase", "startedAtUnixMs", "deadlineUnixMs",
+        "endedAtUnixMs", "nextDueAtUnixMs", "pendingRequest", "rejectedRequest", "destinations",
+    ))
+    val destinations = getJSONArray("destinations")
+    check(destinations.length() <= MAX_FOLDER_SYNC_PEERS)
+    return FolderLinkRunSummary(
+        generation = getLong("generation").also { check(it >= 0) },
+        stateRevision = getLong("stateRevision").also { check(it >= 0) },
+        settingsRevision = getLong("settingsRevision").also { check(it >= 0) },
+        phase = optionalString("phase")?.let {
+            when (it) {
+                "preparing" -> FolderLinkRunPhase.PREPARING
+                "running" -> FolderLinkRunPhase.RUNNING
+                "succeeded" -> FolderLinkRunPhase.SUCCEEDED
+                "incomplete" -> FolderLinkRunPhase.INCOMPLETE
+                "interrupted" -> FolderLinkRunPhase.INTERRUPTED
+                "cancelled" -> FolderLinkRunPhase.CANCELLED
+                else -> error("The node returned an unknown link run phase.")
+            }
+        },
+        startedAtUnixMs = optionalLong("startedAtUnixMs")?.also { check(it > 0) },
+        deadlineUnixMs = optionalLong("deadlineUnixMs")?.also { check(it > 0) },
+        endedAtUnixMs = optionalLong("endedAtUnixMs")?.also { check(it > 0) },
+        nextDueAtUnixMs = optionalLong("nextDueAtUnixMs")?.also { check(it > 0) },
+        pendingRequest = optionalRunRequest("pendingRequest"),
+        rejectedRequest = if (isNull("rejectedRequest")) null else getJSONObject("rejectedRequest").let { value ->
+            requireJsonKeys(value, setOf("requesterId", "requestId", "reason"))
+            FolderLinkRunRejection(
+                requireUuid(value.getString("requesterId"), "run requester ID"),
+                requireUuid(value.getString("requestId"), "run request ID").also {
+                    check(it != "00000000-0000-0000-0000-000000000000")
+                },
+                when (value.getString("reason")) {
+                    "generationChanged" -> FolderLinkRunRejectionReason.GENERATION_CHANGED
+                    "settingsChanged" -> FolderLinkRunRejectionReason.SETTINGS_CHANGED
+                    else -> error("The node returned an unknown run rejection.")
+                },
+            )
+        },
+        destinations = List(destinations.length()) { index -> destinations.getJSONObject(index).let { value ->
+            requireJsonKeys(value, setOf("peerId", "result", "endedAtUnixMs"))
+            FolderLinkRunDestinationSummary(
+                requireUuid(value.getString("peerId"), "run destination ID"),
+                when (value.getString("result")) {
+                    "pending" -> FolderLinkRunResult.PENDING
+                    "succeeded" -> FolderLinkRunResult.SUCCEEDED
+                    "failed" -> FolderLinkRunResult.FAILED
+                    "timedOut" -> FolderLinkRunResult.TIMED_OUT
+                    "interrupted" -> FolderLinkRunResult.INTERRUPTED
+                    "cancelled" -> FolderLinkRunResult.CANCELLED
+                    else -> error("The node returned an unknown run result.")
+                },
+                value.optionalLong("endedAtUnixMs")?.also { check(it > 0) },
+            )
+        } },
+    ).also { summary ->
+        check(summary.destinations.map { it.peerId }.distinct().size == summary.destinations.size)
+    }
+}
+
+private fun JSONObject.optionalRunRequest(name: String): FolderLinkRunRequestSummary? =
+    if (isNull(name)) null else getJSONObject(name).let { value ->
+        requireJsonKeys(value, setOf("requestId", "requesterId"))
+        FolderLinkRunRequestSummary(
+            requireUuid(value.getString("requestId"), "run request ID").also {
+                check(it != "00000000-0000-0000-0000-000000000000")
+            },
+            requireUuid(value.getString("requesterId"), "run requester ID"),
+        )
+    }
 
 private fun JSONObject.toFolderLinkSettingsChange(): FolderLinkSettingsChange {
     requireJsonKeys(

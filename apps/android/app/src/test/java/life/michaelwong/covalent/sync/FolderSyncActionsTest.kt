@@ -5,6 +5,8 @@ import life.michaelwong.covalent.model.FolderHealthFreshness
 import life.michaelwong.covalent.model.FolderShare
 import life.michaelwong.covalent.model.FolderLinkPolicy
 import life.michaelwong.covalent.model.FolderLinkSettings
+import life.michaelwong.covalent.model.FolderLinkCadence
+import life.michaelwong.covalent.model.AndroidLinkConditions
 import life.michaelwong.covalent.model.FolderSharePhase
 import life.michaelwong.covalent.model.FolderSyncAvailability
 import life.michaelwong.covalent.model.FolderSyncLifecycle
@@ -30,7 +32,7 @@ class FolderSyncActionsTest {
             folder,
             "Photos",
             "/storage/emulated/0/Photos",
-            policy,
+            FolderLinkSettings(policy, paused = false),
         )
 
         assertEquals(listOf("validate-root", "prepare-offer", "node", "api-offer", "finish-offer"), events)
@@ -43,6 +45,10 @@ class FolderSyncActionsTest {
     fun addDestinationReusesTheSavedSourceIdentityAndPolicy() {
         val events = mutableListOf<String>()
         val policy = FolderLinkPolicy(propagateSourceDeletions = false, restoreLocalDeletions = true)
+        val sharedSettings = FolderLinkSettings(
+            policy, paused = true, cadence = FolderLinkCadence.Scheduled(1_440),
+            androidConditions = AndroidLinkConditions(wifiOnly = true, chargingOnly = true),
+        )
         val source = FolderShare(
             OFFER,
             SOURCE_FOLDER,
@@ -53,6 +59,10 @@ class FolderSyncActionsTest {
             null,
             false,
             linkPolicy = policy,
+            linkSettings = life.michaelwong.covalent.model.FolderLinkSettingsState(
+                0, sharedSettings,
+                "00000000-0000-0000-0000-000000000000", SOURCE_PEER, true, null, null,
+            ),
         )
         val journal = RecordingJournal(events).apply {
             saved = listOf(FolderSyncGrant(
@@ -75,6 +85,7 @@ class FolderSyncActionsTest {
         assertEquals("Photos", api.offeredLabel)
         assertEquals("/storage/emulated/0/Photos", api.offeredRoot)
         assertEquals(policy, api.offeredPolicy)
+        assertEquals(sharedSettings, api.offeredSettings)
     }
 
     @Test
@@ -278,6 +289,8 @@ class FolderSyncActionsTest {
             private set
         var offeredPolicy: FolderLinkPolicy? = null
             private set
+        var offeredSettings: FolderLinkSettings? = null
+            private set
         var offeredFolderId: UUID? = null
             private set
         var offeredPeerId: String? = null
@@ -293,14 +306,15 @@ class FolderSyncActionsTest {
             folderId: UUID,
             label: String,
             selectedRoot: String,
-            linkPolicy: FolderLinkPolicy,
+            settings: FolderLinkSettings,
         ): FolderSyncMutation {
             events += "api-offer"
             offeredFolderId = folderId
             offeredPeerId = peerId
             offeredLabel = label
             offeredRoot = selectedRoot
-            offeredPolicy = linkPolicy
+            offeredPolicy = settings.deletionPolicy
+            offeredSettings = settings
             return MUTATION
         }
         override fun accept(connection: NodeConnection, offerId: String, selectedRoot: String): FolderSyncMutation {
@@ -315,6 +329,14 @@ class FolderSyncActionsTest {
             expectedRevision: Long,
             settings: FolderLinkSettings,
         ) = MUTATION
+        override fun run(
+            connection: NodeConnection,
+            folderId: String,
+            requestId: String,
+            expectedGeneration: Long,
+            settingsRevision: Long,
+        ) = MUTATION
+        override fun conditions(connection: NodeConnection, wifiConnected: Boolean, charging: Boolean) = MUTATION
         override fun pause(connection: NodeConnection, offerId: String, paused: Boolean) = MUTATION
         override fun renew(connection: NodeConnection, offerId: String): FolderSyncMutation {
             events += "api-renew"

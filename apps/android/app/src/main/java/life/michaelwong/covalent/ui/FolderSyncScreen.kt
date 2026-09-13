@@ -40,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -56,6 +57,10 @@ import life.michaelwong.covalent.data.CovalentNodeClient
 import life.michaelwong.covalent.data.NodeApiException
 import life.michaelwong.covalent.model.FolderShare
 import life.michaelwong.covalent.model.FolderLinkPolicy
+import life.michaelwong.covalent.model.AndroidLinkConditions
+import life.michaelwong.covalent.model.FolderLinkCadence
+import life.michaelwong.covalent.model.FolderLinkRunPhase
+import life.michaelwong.covalent.model.FolderLinkRunResult
 import life.michaelwong.covalent.model.FolderLinkSettings
 import life.michaelwong.covalent.model.FolderLinkSettingsState
 import life.michaelwong.covalent.model.FolderSharePhase
@@ -71,6 +76,7 @@ import life.michaelwong.covalent.sync.FolderSyncActions
 import life.michaelwong.covalent.sync.FolderSyncGrantStore
 import life.michaelwong.covalent.sync.FolderLinkSettingsChangeStore
 import life.michaelwong.covalent.sync.SavedFolderLinkSettingsChange
+import life.michaelwong.covalent.sync.SavedFolderLinkRunRequest
 import life.michaelwong.covalent.sync.FolderSyncSpecialAccess
 import life.michaelwong.covalent.sync.NodeFolderSyncApi
 import life.michaelwong.covalent.sync.PeerAddressUpdateDraft
@@ -84,6 +90,7 @@ private data class LoadedFolderSyncStatus(
     val pendingRepairOffers: Set<String>,
     val retiredFolderChoice: Boolean,
     val savedSettingsChanges: List<SavedFolderLinkSettingsChange>,
+    val savedRunRequests: List<SavedFolderLinkRunRequest>,
 )
 
 private data class LinkSettingsEditor(
@@ -92,6 +99,10 @@ private data class LinkSettingsEditor(
     val current: FolderLinkSettingsState,
     val propagateSourceDeletions: Boolean,
     val restoreLocalDeletions: Boolean,
+    val cadence: FolderLinkCadence,
+    val scheduledMinutes: String,
+    val wifiOnly: Boolean,
+    val chargingOnly: Boolean,
 )
 
 @Composable
@@ -112,6 +123,9 @@ internal fun FolderSyncScreen(
     val settingsPendingMessage = stringResource(R.string.folder_link_settings_pending_error)
     val settingsConflictMessage = stringResource(R.string.folder_link_settings_conflict_error)
     val settingsUnknownMessage = stringResource(R.string.folder_link_settings_status_unknown)
+    val runPendingMessage = stringResource(R.string.folder_link_run_pending_error)
+    val runConflictMessage = stringResource(R.string.folder_link_run_conflict_error)
+    val runUnknownMessage = stringResource(R.string.folder_link_run_status_unknown)
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val grants = remember(context) { FolderSyncGrantStore(context.applicationContext) }
     val settingsChanges = remember(context) { FolderLinkSettingsChangeStore(context.applicationContext) }
@@ -128,10 +142,15 @@ internal fun FolderSyncScreen(
     var selectedPeer by remember { mutableStateOf<String?>(null) }
     var propagateSourceDeletions by remember { mutableStateOf(false) }
     var restoreLocalDeletions by remember { mutableStateOf(false) }
+    var cadence by remember { mutableStateOf<FolderLinkCadence>(FolderLinkCadence.Continuous) }
+    var scheduledMinutes by remember { mutableStateOf("60") }
+    var wifiOnly by remember { mutableStateOf(false) }
+    var chargingOnly by remember { mutableStateOf(false) }
     var destinationSource by remember { mutableStateOf<FolderShare?>(null) }
     var busy by remember { mutableStateOf(false) }
     var pendingRepairOffers by remember { mutableStateOf<Set<String>>(emptySet()) }
     var savedSettingsChanges by remember { mutableStateOf<List<SavedFolderLinkSettingsChange>>(emptyList()) }
+    var savedRunRequests by remember { mutableStateOf<List<SavedFolderLinkRunRequest>>(emptyList()) }
     var settingsEditor by remember { mutableStateOf<LinkSettingsEditor?>(null) }
     var settingsConfirmation by remember { mutableStateOf<LinkSettingsEditor?>(null) }
     var addressEditor by remember { mutableStateOf<PeerAddressUpdateDraft?>(null) }
@@ -168,6 +187,7 @@ internal fun FolderSyncScreen(
                     .toSet(),
                 retiredChoice,
                 settingsChanges.records(),
+                settingsChanges.runRecords(),
             )
         }
     }
@@ -176,6 +196,7 @@ internal fun FolderSyncScreen(
         status = loaded.status
         pendingRepairOffers = loaded.pendingRepairOffers
         savedSettingsChanges = loaded.savedSettingsChanges
+        savedRunRequests = loaded.savedRunRequests
         if (loaded.retiredFolderChoice) selectedFolder = null
         if (
             addressUpdateNotice == addressSavedRefreshNeededMessage ||
@@ -280,6 +301,59 @@ internal fun FolderSyncScreen(
                 code == "link_settings_conflict" -> settingsConflictMessage
                 submissionError != null -> settingsUnknownMessage
                 loaded.isFailure || saved.isFailure -> settingsUnknownMessage
+                else -> null
+            }
+            busy = false
+        }
+    }
+
+    fun submitRun(
+        folderId: String,
+        expectedGeneration: Long,
+        settingsRevision: Long,
+        retry: SavedFolderLinkRunRequest? = null,
+    ) {
+        if (busy) return
+        busy = true
+        error = null
+        scope.launch {
+            val prepared = runCatching { withContext(Dispatchers.IO) {
+                retry ?: settingsChanges.prepareRun(folderId, expectedGeneration, settingsRevision)
+            } }
+            if (prepared.isFailure) {
+                error = folderSyncErrorText(checkNotNull(prepared.exceptionOrNull()))
+                busy = false
+                return@launch
+            }
+            val request = checkNotNull(prepared.getOrNull())
+            val persisted = runCatching { withContext(Dispatchers.IO) { settingsChanges.runRecords() } }
+            if (persisted.isFailure) {
+                error = folderSyncErrorText(checkNotNull(persisted.exceptionOrNull()))
+                busy = false
+                return@launch
+            }
+            savedRunRequests = checkNotNull(persisted.getOrNull())
+            val submission = runCatching { withContext(Dispatchers.IO) {
+                api.run(connection(), request.folderId, request.requestId,
+                    request.expectedGeneration, request.settingsRevision)
+            } }
+            val failure = submission.exceptionOrNull()
+            val code = (failure as? NodeApiException)?.code
+            val storage = runCatching { withContext(Dispatchers.IO) {
+                if (submission.isSuccess) settingsChanges.finishRun(request.folderId, request.requestId)
+                else if (code == "link_run_pending" || code == "link_run_conflict") {
+                    settingsChanges.markRunForReview(request.folderId, request.requestId)
+                }
+            } }
+            val loaded = runCatching { loadStatus() }
+            loaded.onSuccess(::applyStatus)
+            val saved = runCatching { withContext(Dispatchers.IO) { settingsChanges.runRecords() } }
+            saved.onSuccess { savedRunRequests = it }
+            error = when {
+                storage.isFailure -> folderSyncErrorText(checkNotNull(storage.exceptionOrNull()))
+                code == "link_run_pending" -> runPendingMessage
+                code == "link_run_conflict" -> runConflictMessage
+                failure != null || loaded.isFailure || saved.isFailure -> runUnknownMessage
                 else -> null
             }
             busy = false
@@ -754,8 +828,25 @@ internal fun FolderSyncScreen(
                         )
                     }
                     item {
+                        LinkCadenceControl(
+                            cadence,
+                            scheduledMinutes,
+                            { cadence = it },
+                            { scheduledMinutes = it.filter(Char::isDigit).take(6) },
+                        )
+                    }
+                    item {
+                        AndroidConditionsControl(
+                            wifiOnly,
+                            chargingOnly,
+                            { wifiOnly = it },
+                            { chargingOnly = it },
+                        )
+                    }
+                    item {
                         Button(
-                            enabled = !busy && selectedFolder != null && selectedPeer != null && label.isNotBlank(),
+                            enabled = !busy && selectedFolder != null && selectedPeer != null && label.isNotBlank() &&
+                                (cadence !is FolderLinkCadence.Scheduled || scheduledMinutes.toIntOrNull() in 15..525_600),
                             onClick = {
                                 busy = true
                                 scope.launch {
@@ -766,9 +857,16 @@ internal fun FolderSyncScreen(
                                                 UUID.randomUUID(),
                                                 label.trim(),
                                                 checkNotNull(selectedFolder),
-                                                FolderLinkPolicy(
-                                                    propagateSourceDeletions = propagateSourceDeletions,
-                                                    restoreLocalDeletions = restoreLocalDeletions,
+                                                FolderLinkSettings(
+                                                    deletionPolicy = FolderLinkPolicy(
+                                                        propagateSourceDeletions = propagateSourceDeletions,
+                                                        restoreLocalDeletions = restoreLocalDeletions,
+                                                    ),
+                                                    paused = false,
+                                                    cadence = if (cadence is FolderLinkCadence.Scheduled) {
+                                                        FolderLinkCadence.Scheduled(checkNotNull(scheduledMinutes.toIntOrNull()))
+                                                    } else cadence,
+                                                    androidConditions = AndroidLinkConditions(wifiOnly, chargingOnly),
                                                 ),
                                             )
                                         }
@@ -798,6 +896,7 @@ internal fun FolderSyncScreen(
                     addDestination = { destinationSource = share },
                     showLinkSettings = share.offerId == settingsCardOfferId,
                     savedSettingsChange = savedSettingsChanges.singleOrNull { it.folderId == share.folderId },
+                    savedRunRequest = savedRunRequests.singleOrNull { it.folderId == share.folderId },
                     editSettings = { state, policy ->
                         settingsEditor = LinkSettingsEditor(
                             share.folderId,
@@ -805,6 +904,10 @@ internal fun FolderSyncScreen(
                             state,
                             policy.propagateSourceDeletions,
                             policy.restoreLocalDeletions,
+                            state.settings.cadence,
+                            (state.settings.cadence as? FolderLinkCadence.Scheduled)?.intervalMinutes?.toString() ?: "60",
+                            state.settings.androidConditions.wifiOnly,
+                            state.settings.androidConditions.chargingOnly,
                         )
                     },
                     retrySettings = { change ->
@@ -828,6 +931,10 @@ internal fun FolderSyncScreen(
                                     state,
                                     policy.propagateSourceDeletions,
                                     policy.restoreLocalDeletions,
+                                    state.settings.cadence,
+                                    (state.settings.cadence as? FolderLinkCadence.Scheduled)?.intervalMinutes?.toString() ?: "60",
+                                    state.settings.androidConditions.wifiOnly,
+                                    state.settings.androidConditions.chargingOnly,
                                 )
                             }.onFailure { error = folderSyncErrorText(it) }
                         }
@@ -852,6 +959,31 @@ internal fun FolderSyncScreen(
                             }.onFailure { error = folderSyncErrorText(it) }
                             busy = false
                             refresh()
+                        }
+                    },
+                    runNow = { saved ->
+                        val settings = checkNotNull(share.linkSettings)
+                        submitRun(
+                            share.folderId,
+                            saved?.expectedGeneration ?: (share.linkRun?.generation ?: 0),
+                            saved?.settingsRevision ?: settings.revision,
+                            saved,
+                        )
+                    },
+                    reviewRun = {
+                        scope.launch {
+                            runCatching {
+                                withContext(Dispatchers.IO) { settingsChanges.takeRunForReview(share.folderId) }
+                                withContext(Dispatchers.IO) { settingsChanges.runRecords() }
+                            }.onSuccess {
+                                savedRunRequests = it
+                                submitRun(
+                                    share.folderId,
+                                    share.linkRun?.generation ?: 0,
+                                    checkNotNull(share.linkSettings).revision,
+                                )
+                            }
+                                .onFailure { error = folderSyncErrorText(it) }
                         }
                     },
                 )
@@ -965,10 +1097,13 @@ private fun FolderShareCard(
     addDestination: () -> Unit,
     showLinkSettings: Boolean,
     savedSettingsChange: SavedFolderLinkSettingsChange?,
+    savedRunRequest: SavedFolderLinkRunRequest?,
     editSettings: (FolderLinkSettingsState, FolderLinkPolicy) -> Unit,
     retrySettings: (SavedFolderLinkSettingsChange) -> Unit,
     reviewSettings: (FolderLinkSettingsState, FolderLinkPolicy) -> Unit,
     mutate: (String) -> Unit,
+    runNow: (SavedFolderLinkRunRequest?) -> Unit,
+    reviewRun: () -> Unit,
 ) {
     var showingRemovalConfirmation by remember(share.offerId) { mutableStateOf(false) }
     if (showingRemovalConfirmation) {
@@ -1027,6 +1162,14 @@ private fun FolderShareCard(
                     retry = retrySettings,
                     review = reviewSettings,
                 )
+                FolderLinkRunSummary(
+                    status,
+                    share,
+                    savedRunRequest,
+                    busy,
+                    runNow,
+                    reviewRun,
+                )
             }
             val summary = when (status.summaryFor(share)) {
                 FolderShareSummary.REMOVAL_PENDING -> stringResource(R.string.folder_sync_removal_pending, peerName)
@@ -1041,6 +1184,7 @@ private fun FolderShareCard(
                 FolderShareSummary.WAITING_FOR_PEER -> stringResource(R.string.folder_sync_waiting_for_device, peerName)
                 FolderShareSummary.CONNECTED -> stringResource(R.string.folder_sync_connected_to_device, peerName)
                 FolderShareSummary.CONNECTION_UNKNOWN -> stringResource(R.string.folder_sync_connection_unknown)
+                FolderShareSummary.READY -> stringResource(R.string.folder_link_run_ready)
             }
             Text(summary)
             if (share.phase != FolderSharePhase.REMOVED && share.expired) Text(stringResource(
@@ -1105,6 +1249,82 @@ private fun FolderShareCard(
 }
 
 @Composable
+private fun FolderLinkRunSummary(
+    status: FolderSyncStatus,
+    share: FolderShare,
+    saved: SavedFolderLinkRunRequest?,
+    busy: Boolean,
+    runNow: (SavedFolderLinkRunRequest?) -> Unit,
+    review: () -> Unit,
+) {
+    val settings = share.linkSettings ?: return
+    if (!settings.confirmed) return
+    val run = share.linkRun
+    Text(
+        when (run?.phase) {
+            FolderLinkRunPhase.PREPARING -> stringResource(R.string.folder_link_run_preparing)
+            FolderLinkRunPhase.RUNNING -> stringResource(R.string.folder_link_run_running)
+            FolderLinkRunPhase.SUCCEEDED -> stringResource(R.string.folder_link_run_succeeded)
+            FolderLinkRunPhase.INCOMPLETE -> stringResource(R.string.folder_link_run_incomplete)
+            FolderLinkRunPhase.INTERRUPTED -> stringResource(R.string.folder_link_run_interrupted)
+            FolderLinkRunPhase.CANCELLED -> stringResource(R.string.folder_link_run_cancelled)
+            null -> when (settings.settings.cadence) {
+                FolderLinkCadence.Manual -> stringResource(R.string.folder_link_run_manual_idle)
+                FolderLinkCadence.Continuous -> stringResource(R.string.folder_link_run_continuous)
+                is FolderLinkCadence.Scheduled -> stringResource(R.string.folder_link_run_waiting_schedule)
+            }
+        },
+        fontWeight = FontWeight.SemiBold,
+    )
+    if (share.incoming && settings.settings.cadence is FolderLinkCadence.Scheduled) {
+        Text(stringResource(R.string.folder_link_run_source_owns_schedule))
+    } else if (!share.incoming && run?.nextDueAtUnixMs != null) {
+        Text(stringResource(
+            R.string.folder_link_run_next_due,
+            java.text.DateFormat.getDateTimeInstance().format(java.util.Date(run.nextDueAtUnixMs)),
+        ))
+    }
+    run?.pendingRequest?.let { Text(stringResource(R.string.folder_link_run_pending)) }
+    run?.rejectedRequest?.let { Text(
+        stringResource(R.string.folder_link_run_stale),
+        color = MaterialTheme.colorScheme.error,
+    ) }
+    run?.destinations?.forEach { destination ->
+        Text(stringResource(
+            R.string.folder_link_run_destination,
+            status.peers.firstOrNull { it.peerId == destination.peerId }?.displayName
+                ?: stringResource(if (share.incoming) R.string.folder_link_this_phone else R.string.folder_sync_paired_device),
+            when (destination.result) {
+                FolderLinkRunResult.PENDING -> stringResource(R.string.folder_link_run_result_pending)
+                FolderLinkRunResult.SUCCEEDED -> stringResource(R.string.folder_link_run_result_succeeded)
+                FolderLinkRunResult.FAILED -> stringResource(R.string.folder_link_run_result_failed)
+                FolderLinkRunResult.TIMED_OUT -> stringResource(R.string.folder_link_run_result_timed_out)
+                FolderLinkRunResult.INTERRUPTED -> stringResource(R.string.folder_link_run_result_interrupted)
+                FolderLinkRunResult.CANCELLED -> stringResource(R.string.folder_link_run_result_cancelled)
+            },
+        ))
+    }
+    saved?.let {
+        Text(stringResource(
+            if (it.requiresReview) R.string.folder_link_run_saved_review
+            else R.string.folder_link_run_status_unknown,
+        ))
+    }
+    val active = run?.phase in setOf(FolderLinkRunPhase.PREPARING, FolderLinkRunPhase.RUNNING)
+    if (!settings.settings.paused && share.phase == FolderSharePhase.READY && !active) {
+        OutlinedButton(
+            onClick = { if (saved?.requiresReview == true) review() else runNow(saved) },
+            enabled = !busy && run?.pendingRequest == null,
+            modifier = Modifier.fillMaxWidth().testTag("folder-link-run-${share.folderId}"),
+        ) { Text(stringResource(
+            if (saved?.requiresReview == true) R.string.folder_link_run_new_request
+            else if (saved != null) R.string.folder_link_run_retry_exact
+            else R.string.folder_link_run_now,
+        )) }
+    }
+}
+
+@Composable
 private fun FolderLinkSettingsSummary(
     state: FolderLinkSettingsState?,
     savedChange: SavedFolderLinkSettingsChange?,
@@ -1118,10 +1338,6 @@ private fun FolderLinkSettingsSummary(
         return
     }
     Text(
-        stringResource(R.string.folder_link_settings_revision, state.revision),
-        fontWeight = FontWeight.SemiBold,
-    )
-    Text(
         stringResource(R.string.folder_link_settings_every_destination),
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -1131,7 +1347,7 @@ private fun FolderLinkSettingsSummary(
     }
     state.conflictedChange?.let { conflict ->
         Text(stringResource(R.string.folder_link_settings_conflicted), color = MaterialTheme.colorScheme.error)
-        LinkPolicySummary(conflict.settings.deletionPolicy)
+        LinkSettingsSummary(conflict.settings)
         OutlinedButton(
             onClick = { review(state, conflict.settings.deletionPolicy) },
             enabled = !busy,
@@ -1140,7 +1356,7 @@ private fun FolderLinkSettingsSummary(
     }
     state.pendingChange?.let { pending ->
         Text(stringResource(R.string.folder_link_settings_waiting_for_source))
-        LinkPolicySummary(pending.settings.deletionPolicy)
+        LinkSettingsSummary(pending.settings)
         return
     }
     savedChange?.let { saved ->
@@ -1150,7 +1366,7 @@ private fun FolderLinkSettingsSummary(
                 else R.string.folder_link_settings_status_unknown,
             ),
         )
-        LinkPolicySummary(saved.settings.deletionPolicy)
+        LinkSettingsSummary(saved.settings)
         OutlinedButton(
             onClick = {
                 if (saved.requiresReview) review(state, saved.settings.deletionPolicy)
@@ -1166,6 +1382,7 @@ private fun FolderLinkSettingsSummary(
         return
     }
     if (state.settings.paused) Text(stringResource(R.string.folder_link_settings_paused))
+    LinkSettingsSummary(state.settings, includePolicy = false)
     OutlinedButton(
         onClick = { edit(state, state.settings.deletionPolicy) },
         enabled = !busy,
@@ -1183,6 +1400,26 @@ private fun LinkPolicySummary(policy: FolderLinkPolicy) {
         if (policy.restoreLocalDeletions) R.string.folder_link_destination_deletions_restore
         else R.string.folder_link_destination_deletions_keep,
     ))
+}
+
+@Composable
+private fun LinkSettingsSummary(settings: FolderLinkSettings, includePolicy: Boolean = true) {
+    if (includePolicy) LinkPolicySummary(settings.deletionPolicy)
+    Text(when (val cadence = settings.cadence) {
+        FolderLinkCadence.Manual -> stringResource(R.string.folder_link_cadence_manual)
+        FolderLinkCadence.Continuous -> stringResource(R.string.folder_link_cadence_continuous)
+        is FolderLinkCadence.Scheduled -> pluralStringResource(
+            R.plurals.folder_link_cadence_scheduled_every,
+            cadence.intervalMinutes,
+            cadence.intervalMinutes,
+        )
+    })
+    if (settings.androidConditions.wifiOnly || settings.androidConditions.chargingOnly) {
+        Text(stringResource(R.string.folder_link_android_conditions_summary,
+            if (settings.androidConditions.wifiOnly) stringResource(R.string.folder_link_wifi_only_short) else "",
+            if (settings.androidConditions.chargingOnly) stringResource(R.string.folder_link_charging_only_short) else "",
+        ))
+    }
 }
 
 @Composable
@@ -1204,6 +1441,83 @@ private fun LinkPolicyControl(
                 Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Switch(checked = checked, onCheckedChange = onCheckedChange)
+        }
+    }
+}
+
+@Composable
+private fun LinkCadenceControl(
+    cadence: FolderLinkCadence,
+    scheduledMinutes: String,
+    onCadenceChange: (FolderLinkCadence) -> Unit,
+    onScheduledMinutesChange: (String) -> Unit,
+) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.folder_link_cadence_title), fontWeight = FontWeight.SemiBold)
+            Text(stringResource(R.string.folder_link_cadence_detail), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            listOf(
+                FolderLinkCadence.Manual to R.string.folder_link_cadence_manual,
+                FolderLinkCadence.Continuous to R.string.folder_link_cadence_continuous,
+            ).forEach { (value, text) ->
+                OutlinedButton(
+                    onClick = { onCadenceChange(value) },
+                    enabled = cadence != value,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(text))
+                }
+            }
+            OutlinedButton(
+                onClick = { onCadenceChange(FolderLinkCadence.Scheduled(scheduledMinutes.toIntOrNull()?.coerceIn(15, 525_600) ?: 60)) },
+                enabled = cadence !is FolderLinkCadence.Scheduled,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(stringResource(R.string.folder_link_cadence_scheduled)) }
+            if (cadence is FolderLinkCadence.Scheduled) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(15 to R.string.folder_link_cadence_15_minutes,
+                        60 to R.string.folder_link_cadence_hourly,
+                        1440 to R.string.folder_link_cadence_daily).forEach { (minutes, text) ->
+                        TextButton(onClick = {
+                            onCadenceChange(FolderLinkCadence.Scheduled(minutes))
+                            onScheduledMinutesChange(minutes.toString())
+                        }) { Text(stringResource(text)) }
+                    }
+                }
+                OutlinedTextField(
+                    value = scheduledMinutes,
+                    onValueChange = {
+                        onScheduledMinutesChange(it)
+                    },
+                    label = { Text(stringResource(R.string.folder_link_cadence_interval_minutes)) },
+                    isError = scheduledMinutes.toIntOrNull() !in 15..525_600,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth().testTag("folder-link-scheduled-minutes"),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AndroidConditionsControl(
+    wifiOnly: Boolean,
+    chargingOnly: Boolean,
+    onWifiOnlyChange: (Boolean) -> Unit,
+    onChargingOnlyChange: (Boolean) -> Unit,
+) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.folder_link_android_conditions_title), fontWeight = FontWeight.SemiBold)
+            Text(stringResource(R.string.folder_link_android_conditions_detail), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.folder_link_wifi_only), Modifier.weight(1f))
+                Switch(wifiOnly, onWifiOnlyChange)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.folder_link_charging_only), Modifier.weight(1f))
+                Switch(chargingOnly, onChargingOnlyChange)
+            }
         }
     }
 }
@@ -1239,10 +1553,26 @@ private fun LinkSettingsEditorDialog(
                     stringResource(R.string.folder_link_destination_deletions_detail),
                     "folder-link-settings-destination-deletions",
                 )
+                LinkCadenceControl(
+                    editor.cadence,
+                    editor.scheduledMinutes,
+                    { onChange(editor.copy(cadence = it)) },
+                    { onChange(editor.copy(scheduledMinutes = it)) },
+                )
+                AndroidConditionsControl(
+                    editor.wifiOnly,
+                    editor.chargingOnly,
+                    { onChange(editor.copy(wifiOnly = it)) },
+                    { onChange(editor.copy(chargingOnly = it)) },
+                )
             }
         },
         confirmButton = {
-            Button(onClick = onSave, enabled = !busy) {
+            Button(
+                onClick = onSave,
+                enabled = !busy && (editor.cadence !is FolderLinkCadence.Scheduled ||
+                    editor.scheduledMinutes.toIntOrNull() in 15..525_600),
+            ) {
                 Text(stringResource(R.string.folder_link_settings_save))
             }
         },
@@ -1292,6 +1622,10 @@ private fun LinkSettingsConfirmationDialog(
 private fun LinkSettingsEditor.proposedSettings() = FolderLinkSettings(
     FolderLinkPolicy(propagateSourceDeletions, restoreLocalDeletions),
     paused = current.settings.paused,
+    cadence = if (cadence is FolderLinkCadence.Scheduled) {
+        FolderLinkCadence.Scheduled(checkNotNull(scheduledMinutes.toIntOrNull()))
+    } else cadence,
+    androidConditions = AndroidLinkConditions(wifiOnly, chargingOnly),
 )
 
 private fun folderSyncErrorText(error: Throwable): String = when (error) {

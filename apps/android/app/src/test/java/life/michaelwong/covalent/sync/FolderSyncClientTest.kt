@@ -5,6 +5,9 @@ import life.michaelwong.covalent.data.CovalentNodeClient
 import life.michaelwong.covalent.model.FolderSharePhase
 import life.michaelwong.covalent.model.FolderLinkPolicy
 import life.michaelwong.covalent.model.FolderLinkSettings
+import life.michaelwong.covalent.model.FolderLinkCadence
+import life.michaelwong.covalent.model.AndroidLinkConditions
+import life.michaelwong.covalent.model.FolderLinkRunPhase
 import life.michaelwong.covalent.model.FolderSyncIssue
 import life.michaelwong.covalent.model.FolderSyncLifecycle
 import life.michaelwong.covalent.model.PeerConnectionFreshness
@@ -23,7 +26,7 @@ class FolderSyncClientTest {
     fun authenticatedFolderRoutesUseTheBoundedV1Contract() {
         val server = MockWebServer()
         server.enqueue(MockResponse().setBody(STATUS))
-        repeat(8) { server.enqueue(MockResponse().setBody(MUTATION)) }
+        repeat(10) { server.enqueue(MockResponse().setBody(MUTATION)) }
         server.enqueue(MockResponse().setBody(ADDRESS_MUTATION))
         server.start()
         try {
@@ -42,6 +45,9 @@ class FolderSyncClientTest {
             assertTrue(sharedSettings.confirmed)
             assertEquals(SETTINGS_REQUEST, sharedSettings.pendingChange?.changeId)
             assertEquals(FolderLinkPolicy(true, false), sharedSettings.pendingChange?.settings?.deletionPolicy)
+            assertEquals(FolderLinkCadence.Scheduled(60), sharedSettings.settings.cadence)
+            assertEquals(AndroidLinkConditions(true, false), sharedSettings.settings.androidConditions)
+            assertEquals(FolderLinkRunPhase.RUNNING, status.shares.single().linkRun?.phase)
 
             client.offerFolder(
                 base,
@@ -50,7 +56,10 @@ class FolderSyncClientTest {
                 UUID.fromString(FOLDER),
                 "Photos",
                 "/storage/emulated/0/Photos",
-                FolderLinkPolicy(propagateSourceDeletions = true, restoreLocalDeletions = false),
+                FolderLinkSettings(
+                    FolderLinkPolicy(propagateSourceDeletions = true, restoreLocalDeletions = false),
+                    paused = false,
+                ),
             )
             client.updateFolderLinkSettings(
                 base,
@@ -58,8 +67,15 @@ class FolderSyncClientTest {
                 FOLDER,
                 SETTINGS_REQUEST,
                 2,
-                FolderLinkSettings(FolderLinkPolicy(true, false), paused = true),
+                FolderLinkSettings(
+                    FolderLinkPolicy(true, false),
+                    paused = true,
+                    cadence = FolderLinkCadence.Scheduled(1_440),
+                    androidConditions = AndroidLinkConditions(wifiOnly = true, chargingOnly = true),
+                ),
             )
+            client.runFolderLinkNow(base, "token", FOLDER, SETTINGS_REQUEST, 3, 2)
+            client.observeFolderLinkAndroidConditions(base, "token", wifiConnected = true, charging = false)
             client.acceptFolder(base, "token", OFFER, "/storage/emulated/0/Shared")
             client.pauseFolder(base, "token", OFFER, true)
             client.repairFolder(base, "token", OFFER, "/storage/emulated/0/Repaired")
@@ -77,7 +93,7 @@ class FolderSyncClientTest {
             assertEquals("/api/v1/sync/folders", offer.path)
             val offerBody = JSONObject(offer.body.readUtf8())
             assertEquals(
-                setOf("peerId", "folderId", "label", "selectedRoot", "linkPolicy"),
+                setOf("peerId", "folderId", "label", "selectedRoot", "linkPolicy", "cadence", "androidConditions"),
                 offerBody.keys().asSequence().toSet(),
             )
             val linkPolicy = offerBody.getJSONObject("linkPolicy")
@@ -87,6 +103,7 @@ class FolderSyncClientTest {
             )
             assertTrue(linkPolicy.getBoolean("propagateSourceDeletions"))
             assertFalse(linkPolicy.getBoolean("restoreLocalDeletions"))
+            assertEquals("continuous", offerBody.getJSONObject("cadence").getString("mode"))
             val settings = server.takeRequest()
             assertEquals("/api/v1/sync/settings", settings.path)
             val settingsBody = JSONObject(settings.body.readUtf8())
@@ -98,12 +115,21 @@ class FolderSyncClientTest {
             assertEquals(SETTINGS_REQUEST, settingsBody.getString("changeId"))
             assertEquals(2L, settingsBody.getLong("expectedRevision"))
             val submitted = settingsBody.getJSONObject("settings")
-            assertEquals(setOf("deletionPolicy", "paused"), submitted.keys().asSequence().toSet())
+            assertEquals(setOf("deletionPolicy", "paused", "cadence", "androidConditions"), submitted.keys().asSequence().toSet())
             assertTrue(submitted.getBoolean("paused"))
+            assertEquals(1_440, submitted.getJSONObject("cadence").getInt("intervalMinutes"))
+            assertTrue(submitted.getJSONObject("androidConditions").getBoolean("wifiOnly"))
+            assertTrue(submitted.getJSONObject("androidConditions").getBoolean("chargingOnly"))
             assertEquals(
                 setOf("propagateSourceDeletions", "restoreLocalDeletions"),
                 submitted.getJSONObject("deletionPolicy").keys().asSequence().toSet(),
             )
+            val run = server.takeRequest()
+            assertEquals("/api/v1/sync/run", run.path)
+            assertEquals(SETTINGS_REQUEST, JSONObject(run.body.readUtf8()).getString("requestId"))
+            val conditions = server.takeRequest()
+            assertEquals("/api/v1/sync/conditions", conditions.path)
+            assertTrue(JSONObject(conditions.body.readUtf8()).getBoolean("wifiConnected"))
             assertEquals("/api/v1/sync/accept", server.takeRequest().path)
             assertEquals("/api/v1/sync/pause", server.takeRequest().path)
             val repair = server.takeRequest()
@@ -145,8 +171,8 @@ class FolderSyncClientTest {
         val server = MockWebServer().apply {
             enqueue(MockResponse().setBody(
                 STATUS.replace(
-                    "\"linkPolicy\":$LINK_POLICY,\"linkSettings\":$LINK_SETTINGS",
-                    "\"linkPolicy\":null,\"linkSettings\":null",
+                    "\"linkPolicy\":$LINK_POLICY,\"linkSettings\":$LINK_SETTINGS,\"linkRun\":$LINK_RUN",
+                    "\"linkPolicy\":null,\"linkSettings\":null,\"linkRun\":null",
                 ),
             ))
             start()
@@ -157,6 +183,42 @@ class FolderSyncClientTest {
                 "token",
             )
             assertEquals(null, status.shares.single().linkPolicy)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun omittedCadenceAndAndroidConditionsKeepOldClientsContinuous() {
+        val oldStatus = STATUS
+            .replace(",\"cadence\":{\"mode\":\"scheduled\",\"intervalMinutes\":60},\"androidConditions\":{\"wifiOnly\":true,\"chargingOnly\":false}", "")
+            .replace(",\"cadence\":{\"mode\":\"manual\"},\"androidConditions\":{\"wifiOnly\":false,\"chargingOnly\":true}", "")
+        val server = MockWebServer().apply { enqueue(MockResponse().setBody(oldStatus)); start() }
+        try {
+            val settings = checkNotNull(CovalentNodeClient().folderSyncStatus(
+                server.url("/").toString().removeSuffix("/"), "token",
+            ).shares.single().linkSettings).settings
+            assertEquals(FolderLinkCadence.Continuous, settings.cadence)
+            assertEquals(AndroidLinkConditions(), settings.androidConditions)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun initialRunSummaryDecodesWithoutInventingAnActiveRun() {
+        val initial = """{"generation":0,"stateRevision":0,"settingsRevision":0,"phase":null,"startedAtUnixMs":null,"deadlineUnixMs":null,"endedAtUnixMs":null,"nextDueAtUnixMs":null,"pendingRequest":null,"rejectedRequest":null,"destinations":[]}"""
+        val server = MockWebServer().apply {
+            enqueue(MockResponse().setBody(STATUS.replace(LINK_RUN, initial)))
+            start()
+        }
+        try {
+            val run = checkNotNull(CovalentNodeClient().folderSyncStatus(
+                server.url("/").toString().removeSuffix("/"), "token",
+            ).shares.single().linkRun)
+            assertEquals(0L, run.generation)
+            assertEquals(null, run.phase)
+            assertTrue(run.destinations.isEmpty())
         } finally {
             server.shutdown()
         }
@@ -364,12 +426,13 @@ class FolderSyncClientTest {
         const val SETTINGS_COMMIT = "66666666-6666-4666-8666-666666666666"
         const val SETTINGS_REQUEST = "77777777-7777-4777-8777-777777777777"
         const val LINK_POLICY = """{"propagateSourceDeletions":false,"restoreLocalDeletions":true}"""
-        const val LINK_SETTINGS = """{"revision":2,"settings":{"deletionPolicy":$LINK_POLICY,"paused":false},"changeId":"$SETTINGS_COMMIT","changedBy":"$PEER","confirmed":true,"pendingChange":{"folderId":"$FOLDER","sourceId":"$PEER","requesterId":"$OFFER","changeId":"$SETTINGS_REQUEST","expectedRevision":2,"settings":{"deletionPolicy":{"propagateSourceDeletions":true,"restoreLocalDeletions":false},"paused":false}},"conflictedChange":null}"""
+        const val LINK_SETTINGS = """{"revision":2,"settings":{"deletionPolicy":$LINK_POLICY,"paused":false,"cadence":{"mode":"scheduled","intervalMinutes":60},"androidConditions":{"wifiOnly":true,"chargingOnly":false}},"changeId":"$SETTINGS_COMMIT","changedBy":"$PEER","confirmed":true,"pendingChange":{"folderId":"$FOLDER","sourceId":"$PEER","requesterId":"$OFFER","changeId":"$SETTINGS_REQUEST","expectedRevision":2,"settings":{"deletionPolicy":{"propagateSourceDeletions":true,"restoreLocalDeletions":false},"paused":false,"cadence":{"mode":"manual"},"androidConditions":{"wifiOnly":false,"chargingOnly":true}}},"conflictedChange":null}"""
+        const val LINK_RUN = """{"generation":3,"stateRevision":4,"settingsRevision":2,"phase":"running","startedAtUnixMs":1700000000000,"deadlineUnixMs":1700086400000,"endedAtUnixMs":null,"nextDueAtUnixMs":1700003600000,"pendingRequest":null,"rejectedRequest":null,"destinations":[{"peerId":"$PEER","result":"pending","endedAtUnixMs":null}]}"""
         const val STATUS = """{
           "schemaVersion":1,"availability":"available","lifecycle":"stopped","issue":null,
           "healthFreshness":"neverObserved","connectionFreshness":"fresh",
           "peers":[{"peerId":"$PEER","displayName":"Phone","address":"192.0.2.10:8787"}],
-          "shares":[{"offerId":"$OFFER","folderId":"$FOLDER","label":"Photos","peerId":"$PEER","incoming":true,"phase":"offered","expiresAtUnixMs":4102444800000,"expired":false,"peerConnection":"disconnected","linkPolicy":$LINK_POLICY,"linkSettings":$LINK_SETTINGS}],
+          "shares":[{"offerId":"$OFFER","folderId":"$FOLDER","label":"Photos","peerId":"$PEER","incoming":true,"phase":"offered","expiresAtUnixMs":4102444800000,"expired":false,"peerConnection":"disconnected","linkPolicy":$LINK_POLICY,"linkSettings":$LINK_SETTINGS,"linkRun":$LINK_RUN}],
           "folders":[]
         }"""
         const val MUTATION = """{"schemaVersion":1,"offerId":"$OFFER","lifecycle":"stopped","issue":null}"""

@@ -3,7 +3,6 @@ package life.michaelwong.covalent.sync
 import java.util.UUID
 import life.michaelwong.covalent.data.CovalentNodeClient
 import life.michaelwong.covalent.model.FolderSyncMutation
-import life.michaelwong.covalent.model.FolderLinkPolicy
 import life.michaelwong.covalent.model.FolderLinkSettings
 import life.michaelwong.covalent.model.FolderSyncStatus
 import life.michaelwong.covalent.model.NodeConnection
@@ -16,7 +15,7 @@ internal interface FolderSyncApi {
         folderId: UUID,
         label: String,
         selectedRoot: String,
-        linkPolicy: FolderLinkPolicy,
+        settings: FolderLinkSettings,
     ): FolderSyncMutation
     fun accept(connection: NodeConnection, offerId: String, selectedRoot: String): FolderSyncMutation
     fun settings(
@@ -26,6 +25,14 @@ internal interface FolderSyncApi {
         expectedRevision: Long,
         settings: FolderLinkSettings,
     ): FolderSyncMutation
+    fun run(
+        connection: NodeConnection,
+        folderId: String,
+        requestId: String,
+        expectedGeneration: Long,
+        settingsRevision: Long,
+    ): FolderSyncMutation
+    fun conditions(connection: NodeConnection, wifiConnected: Boolean, charging: Boolean): FolderSyncMutation
     fun pause(connection: NodeConnection, offerId: String, paused: Boolean): FolderSyncMutation
     fun remove(connection: NodeConnection, offerId: String): FolderSyncMutation
     fun renew(connection: NodeConnection, offerId: String): FolderSyncMutation
@@ -44,8 +51,8 @@ internal class NodeFolderSyncApi(private val client: CovalentNodeClient) : Folde
         folderId: UUID,
         label: String,
         selectedRoot: String,
-        linkPolicy: FolderLinkPolicy,
-    ) = client.offerFolder(connection.baseUrl, connection.token, peerId, folderId, label, selectedRoot, linkPolicy)
+        settings: FolderLinkSettings,
+    ) = client.offerFolder(connection.baseUrl, connection.token, peerId, folderId, label, selectedRoot, settings)
 
     override fun accept(connection: NodeConnection, offerId: String, selectedRoot: String) =
         client.acceptFolder(connection.baseUrl, connection.token, offerId, selectedRoot)
@@ -64,6 +71,19 @@ internal class NodeFolderSyncApi(private val client: CovalentNodeClient) : Folde
         expectedRevision,
         settings,
     )
+
+    override fun run(
+        connection: NodeConnection,
+        folderId: String,
+        requestId: String,
+        expectedGeneration: Long,
+        settingsRevision: Long,
+    ) = client.runFolderLinkNow(
+        connection.baseUrl, connection.token, folderId, requestId, expectedGeneration, settingsRevision,
+    )
+
+    override fun conditions(connection: NodeConnection, wifiConnected: Boolean, charging: Boolean) =
+        client.observeFolderLinkAndroidConditions(connection.baseUrl, connection.token, wifiConnected, charging)
 
     override fun pause(connection: NodeConnection, offerId: String, paused: Boolean) =
         client.pauseFolder(connection.baseUrl, connection.token, offerId, paused)

@@ -2,7 +2,7 @@ package life.michaelwong.covalent.sync
 
 import java.util.UUID
 import life.michaelwong.covalent.model.FolderSyncMutation
-import life.michaelwong.covalent.model.FolderLinkPolicy
+import life.michaelwong.covalent.model.FolderLinkSettings
 import life.michaelwong.covalent.model.FolderShare
 import life.michaelwong.covalent.model.NodeConnection
 
@@ -19,12 +19,12 @@ internal class FolderSyncActions(
         folderId: UUID,
         label: String,
         root: String,
-        linkPolicy: FolderLinkPolicy,
+        settings: FolderLinkSettings,
     ): FolderSyncMutation {
         val selectedRoot = validateRoot(root)
         val durableFolderId = grants.prepareOffer(peerId, folderId, selectedRoot, label)
         val connection = ensureNodeReady()
-        return api.offer(connection, peerId, durableFolderId, label, selectedRoot, linkPolicy).also { mutation ->
+        return api.offer(connection, peerId, durableFolderId, label, selectedRoot, settings).also { mutation ->
             grants.finishOffer(durableFolderId, checkNotNull(mutation.offerId) { "The node omitted the folder offer ID." })
         }
     }
@@ -32,7 +32,10 @@ internal class FolderSyncActions(
     fun addDestination(source: FolderShare, peerId: String): FolderSyncMutation {
         check(!source.incoming) { "Only this phone's source folders can add a destination." }
         check(peerId != source.peerId) { "Choose another paired device." }
-        val policy = checkNotNull(source.linkPolicy) { "Legacy two-way folders cannot add one-way destinations." }
+        checkNotNull(source.linkPolicy) { "Legacy two-way folders cannot add one-way destinations." }
+        val settings = checkNotNull(source.linkSettings)?.also {
+            check(it.confirmed) { "Wait for the source's current settings before adding a destination." }
+        }?.settings ?: error("Shared link settings are unavailable.")
         val savedSource = grants.records().singleOrNull {
             it.kind == FolderSyncGrantKind.OFFER && it.offerId == source.offerId && it.folderId == source.folderId
         } ?: throw IllegalStateException("The saved source folder is unavailable.")
@@ -44,7 +47,7 @@ internal class FolderSyncActions(
             folderId = UUID.fromString(source.folderId),
             label = source.label,
             root = savedSource.root,
-            linkPolicy = policy,
+            settings = settings,
         )
     }
 

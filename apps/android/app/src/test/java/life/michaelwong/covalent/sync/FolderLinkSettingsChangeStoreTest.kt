@@ -3,6 +3,9 @@ package life.michaelwong.covalent.sync
 import life.michaelwong.covalent.model.FolderHealthFreshness
 import life.michaelwong.covalent.model.FolderLinkPolicy
 import life.michaelwong.covalent.model.FolderLinkSettings
+import life.michaelwong.covalent.model.FolderLinkCadence
+import life.michaelwong.covalent.model.AndroidLinkConditions
+import life.michaelwong.covalent.model.FolderLinkRunSummary
 import life.michaelwong.covalent.model.FolderLinkSettingsChange
 import life.michaelwong.covalent.model.FolderLinkSettingsState
 import life.michaelwong.covalent.model.FolderShare
@@ -63,6 +66,46 @@ class FolderLinkSettingsChangeStoreTest {
         assertTrue(store.records().isEmpty())
     }
 
+    @Test
+    fun fullSharedSettingsAndExactRunRetrySurviveReopen() {
+        val disk = MemoryPersistence()
+        val settings = FolderLinkSettings(
+            POLICY,
+            paused = true,
+            cadence = FolderLinkCadence.Scheduled(1_440),
+            androidConditions = AndroidLinkConditions(wifiOnly = true, chargingOnly = true),
+        )
+        val store = FolderLinkSettingsChangeStore(disk)
+        assertEquals(settings, store.prepare(FOLDER, 4, settings).settings)
+        val run = store.prepareRun(FOLDER, expectedGeneration = 0, settingsRevision = 4)
+
+        val reopened = FolderLinkSettingsChangeStore(disk)
+        assertEquals(settings, reopened.records().single().settings)
+        assertEquals(run, reopened.prepareRun(FOLDER, 0, 4))
+        assertThrows(IllegalStateException::class.java) { reopened.prepareRun(FOLDER, 1, 4) }
+    }
+
+    @Test
+    fun runRequestClearsOnlyOnExactStatusOrDefiniteCompletion() {
+        val store = FolderLinkSettingsChangeStore(MemoryPersistence())
+        val saved = store.prepareRun(FOLDER, 0, 4)
+        store.reconcile(status(4, run = runSummary(generation = 0)))
+        assertEquals(saved, store.runRecords().single())
+
+        store.reconcile(status(4, run = runSummary(generation = 0, pendingRequestId = saved.requestId)))
+        assertTrue(store.runRecords().isEmpty())
+
+        val retry = store.prepareRun(FOLDER, 0, 4)
+        store.finishRun(FOLDER, retry.requestId)
+        assertTrue(store.runRecords().isEmpty())
+    }
+
+    private fun runSummary(generation: Long, pendingRequestId: String? = null) = FolderLinkRunSummary(
+        generation, 0, 4, null, null, null, null, null,
+        pendingRequestId?.let { life.michaelwong.covalent.model.FolderLinkRunRequestSummary(it, REQUESTER) },
+        null, emptyList(),
+    )
+
     private fun SavedFolderLinkSettingsChange.toWire() = FolderLinkSettingsChange(
         FOLDER,
         SOURCE,
@@ -76,6 +119,7 @@ class FolderLinkSettingsChangeStoreTest {
         revision: Long,
         pendingChange: FolderLinkSettingsChange? = null,
         phase: FolderSharePhase = FolderSharePhase.READY,
+        run: FolderLinkRunSummary? = null,
     ) = FolderSyncStatus(
         FolderSyncAvailability.AVAILABLE,
         FolderSyncLifecycle.RUNNING,
@@ -101,6 +145,7 @@ class FolderLinkSettingsChangeStoreTest {
                 pendingChange,
                 null,
             ),
+            linkRun = run,
         )),
         emptyList(),
     )

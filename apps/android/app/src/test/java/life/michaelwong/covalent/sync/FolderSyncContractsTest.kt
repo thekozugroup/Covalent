@@ -3,6 +3,9 @@ package life.michaelwong.covalent.sync
 import life.michaelwong.covalent.model.FolderHealth
 import life.michaelwong.covalent.model.FolderHealthFreshness
 import life.michaelwong.covalent.model.FolderLinkPolicy
+import life.michaelwong.covalent.model.FolderLinkCadence
+import life.michaelwong.covalent.model.FolderLinkSettings
+import life.michaelwong.covalent.model.FolderLinkSettingsState
 import life.michaelwong.covalent.model.FolderShare
 import life.michaelwong.covalent.model.FolderSharePhase
 import life.michaelwong.covalent.model.FolderShareSummary
@@ -59,6 +62,23 @@ class FolderSyncContractsTest {
 
         val legacy = share.copy(linkPolicy = null)
         assertEquals(FolderShareSummary.SYNCING, idleNeed.copy(shares = listOf(legacy)).summaryFor(legacy))
+    }
+
+    @Test
+    fun healthyManualAndScheduledIdleAreReadyWhileContinuousStillRequiresRuntime() {
+        fun idle(cadence: FolderLinkCadence) = share(PeerConnectionState.UNKNOWN).copy(
+            linkPolicy = FolderLinkPolicy(),
+            linkSettings = FolderLinkSettingsState(
+                0, FolderLinkSettings(FolderLinkPolicy(), false, cadence),
+                "00000000-0000-0000-0000-000000000000", PEER, true, null, null,
+            ),
+        )
+        val manual = idle(FolderLinkCadence.Manual)
+        val scheduled = idle(FolderLinkCadence.Scheduled(60))
+        val continuous = idle(FolderLinkCadence.Continuous)
+        assertEquals(FolderShareSummary.READY, status(manual, FolderSyncLifecycle.STOPPED).summaryFor(manual))
+        assertEquals(FolderShareSummary.READY, status(scheduled, FolderSyncLifecycle.STOPPED).summaryFor(scheduled))
+        assertEquals(FolderShareSummary.OFFLINE, status(continuous, FolderSyncLifecycle.STOPPED).summaryFor(continuous))
     }
 
     private fun share(connection: PeerConnectionState) = FolderShare(

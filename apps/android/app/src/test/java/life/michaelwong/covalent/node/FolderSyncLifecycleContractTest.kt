@@ -155,6 +155,27 @@ class FolderSyncLifecycleContractTest {
         assertFalse(recovery.contains("handle = 0L"))
     }
 
+    @Test
+    fun conditionFeedUsesLanWifiAndMatchesManagedServiceLifetime() {
+        val root = repositoryRoot()
+        val feed = File(root,
+            "apps/android/app/src/main/java/life/michaelwong/covalent/node/AndroidConditionFeed.kt").readText()
+        val service = File(root,
+            "apps/android/app/src/main/java/life/michaelwong/covalent/node/NodeProviderService.kt").readText()
+        assertTrue(feed.contains("TRANSPORT_WIFI"))
+        assertFalse(feed.contains("NET_CAPABILITY_VALIDATED"))
+        assertTrue(feed.contains("ACTION_BATTERY_CHANGED"))
+        assertTrue(feed.contains("registerDefaultNetworkCallback"))
+        assertTrue(feed.contains("unregisterNetworkCallback"))
+        assertTrue(feed.contains("unregisterReceiver"))
+        val started = service.substringAfter("if (response.ok && handle > 0L)")
+            .substringBefore("} else {")
+        assertTrue(started.indexOf("conditionFeed.start()") < started.indexOf("scheduleAccessCheck()"))
+        val stopped = service.substringAfter("private fun stopProvider()")
+            .substringBefore("private fun startNode")
+        assertTrue(stopped.indexOf("conditionFeed.stop()") < stopped.indexOf("manager.serviceStop(handle)"))
+    }
+
     private fun repositoryRoot(): File = File(System.getProperty("user.dir")).let { start ->
         generateSequence(start) { it.parentFile }.first { File(it, "apps/android/app").isDirectory }
     }

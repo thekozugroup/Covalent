@@ -37,6 +37,7 @@ data class FolderShare(
     val remoteRemovalPending: Boolean = false,
     val linkPolicy: FolderLinkPolicy? = null,
     val linkSettings: FolderLinkSettingsState? = null,
+    val linkRun: FolderLinkRunSummary? = null,
 )
 
 data class FolderLinkPolicy(
@@ -47,6 +48,50 @@ data class FolderLinkPolicy(
 data class FolderLinkSettings(
     val deletionPolicy: FolderLinkPolicy,
     val paused: Boolean,
+    val cadence: FolderLinkCadence = FolderLinkCadence.Continuous,
+    val androidConditions: AndroidLinkConditions = AndroidLinkConditions(),
+)
+
+sealed interface FolderLinkCadence {
+    data object Manual : FolderLinkCadence
+    data object Continuous : FolderLinkCadence
+    data class Scheduled(val intervalMinutes: Int) : FolderLinkCadence {
+        init { require(intervalMinutes in 15..525_600) }
+    }
+}
+
+data class AndroidLinkConditions(
+    val wifiOnly: Boolean = false,
+    val chargingOnly: Boolean = false,
+)
+
+enum class FolderLinkRunPhase { PREPARING, RUNNING, SUCCEEDED, INCOMPLETE, INTERRUPTED, CANCELLED }
+enum class FolderLinkRunResult { PENDING, SUCCEEDED, FAILED, TIMED_OUT, INTERRUPTED, CANCELLED }
+enum class FolderLinkRunRejectionReason { GENERATION_CHANGED, SETTINGS_CHANGED }
+
+data class FolderLinkRunRequestSummary(val requestId: String, val requesterId: String)
+data class FolderLinkRunRejection(
+    val requesterId: String,
+    val requestId: String,
+    val reason: FolderLinkRunRejectionReason,
+)
+data class FolderLinkRunDestinationSummary(
+    val peerId: String,
+    val result: FolderLinkRunResult,
+    val endedAtUnixMs: Long?,
+)
+data class FolderLinkRunSummary(
+    val generation: Long,
+    val stateRevision: Long,
+    val settingsRevision: Long,
+    val phase: FolderLinkRunPhase?,
+    val startedAtUnixMs: Long?,
+    val deadlineUnixMs: Long?,
+    val endedAtUnixMs: Long?,
+    val nextDueAtUnixMs: Long?,
+    val pendingRequest: FolderLinkRunRequestSummary?,
+    val rejectedRequest: FolderLinkRunRejection?,
+    val destinations: List<FolderLinkRunDestinationSummary>,
 )
 
 data class FolderLinkSettingsChange(
@@ -72,7 +117,7 @@ enum class FolderSharePhase { OFFERED, AWAITING_COMMIT, READY, PAUSED, REMOVED }
 
 enum class FolderShareSummary {
     INVITATION_EXPIRED, PAUSED, CHECKING, NEEDS_ATTENTION, WAITING_FOR_OTHER_DEVICE,
-    OFFLINE, SYNCING, WAITING_FOR_PEER, CONNECTED, CONNECTION_UNKNOWN, REMOVAL_PENDING, REMOVED,
+    OFFLINE, SYNCING, WAITING_FOR_PEER, CONNECTED, CONNECTION_UNKNOWN, READY, REMOVAL_PENDING, REMOVED,
 }
 
 /** UI summary with expiry, pause, scanning and explicit errors ahead of reachability. */
@@ -89,7 +134,16 @@ fun FolderSyncStatus.summaryFor(share: FolderShare): FolderShareSummary {
     if (share.phase == FolderSharePhase.OFFERED || share.phase == FolderSharePhase.AWAITING_COMMIT) {
         return FolderShareSummary.WAITING_FOR_OTHER_DEVICE
     }
-    if (lifecycle != FolderSyncLifecycle.RUNNING) return FolderShareSummary.OFFLINE
+    if (lifecycle != FolderSyncLifecycle.RUNNING) {
+        val settings = share.linkSettings
+        val phase = share.linkRun?.phase
+        if (availability == FolderSyncAvailability.AVAILABLE &&
+            share.phase == FolderSharePhase.READY && settings?.confirmed == true &&
+            settings.settings.cadence != FolderLinkCadence.Continuous &&
+            phase !in setOf(FolderLinkRunPhase.PREPARING, FolderLinkRunPhase.RUNNING)
+        ) return FolderShareSummary.READY
+        return FolderShareSummary.OFFLINE
+    }
     val health = folders.firstOrNull { it.folderId == share.folderId }
     if (healthFreshness == FolderHealthFreshness.FRESH && health != null) {
         if (health.statusError || health.watchError || health.scanPullErrorCount > 0 ||

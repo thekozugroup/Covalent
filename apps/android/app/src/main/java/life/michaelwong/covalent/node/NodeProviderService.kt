@@ -14,6 +14,8 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import life.michaelwong.covalent.R
+import life.michaelwong.covalent.data.CovalentNodeClient
+import life.michaelwong.covalent.sync.NodeFolderSyncApi
 
 /** Pure serialized stop/restart state; a failed stop can never clear [reaping]. */
 internal class NodeServiceReapState {
@@ -71,6 +73,7 @@ class NodeProviderService : Service() {
     private val manager by lazy(LazyThreadSafetyMode.NONE) { EmbeddedNodeManager(applicationContext) }
     private lateinit var actorThread: HandlerThread
     private lateinit var actor: Handler
+    private lateinit var conditionFeed: AndroidConditionFeed
 
     // Every field below is confined to actorThread. In particular, a stop failure retains `handle`
     // and no queued command can launch a replacement before that exact handle confirms exit.
@@ -108,6 +111,7 @@ class NodeProviderService : Service() {
     private val accessCheck = object : Runnable {
         override fun run() {
             if (handle <= 0L) return
+            conditionFeed.heartbeat()
             if (reapState.reaping) {
                 stopProvider()
             } else if (
@@ -129,6 +133,12 @@ class NodeProviderService : Service() {
         super.onCreate()
         actorThread = HandlerThread("covalent-node-owner").apply { start() }
         actor = Handler(actorThread.looper)
+        conditionFeed = AndroidConditionFeed(
+            applicationContext,
+            actor,
+            NodeFolderSyncApi(CovalentNodeClient()),
+            manager::localConnectionForFolderSync,
+        )
         createChannel()
     }
 
@@ -154,6 +164,7 @@ class NodeProviderService : Service() {
             pendingAfterReap = null
             actor.removeCallbacks(ownershipRetry)
             actor.removeCallbacks(accessCheck)
+            conditionFeed.stop()
             if (!ownsProcess) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 actorThread.quitSafely()
@@ -277,6 +288,7 @@ class NodeProviderService : Service() {
     private fun stopProvider() {
         check(reapState.reaping)
         actor.removeCallbacks(accessCheck)
+        conditionFeed.stop()
         val response = manager.serviceStop(handle)
         if (!response.ok) {
             reapState.stopFailed()
@@ -327,6 +339,7 @@ class NodeProviderService : Service() {
             return
         }
         if (response.ok && handle > 0L) {
+            conditionFeed.start()
             scheduleAccessCheck()
             updateNotification(
                 if (demandAtLaunch.backupEnabled) "Android provider is available"

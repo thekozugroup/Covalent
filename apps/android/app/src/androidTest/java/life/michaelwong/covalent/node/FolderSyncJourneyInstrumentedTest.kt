@@ -315,7 +315,7 @@ class FolderSyncJourneyInstrumentedTest {
             }
             assertEquals(FolderLinkPolicy(false, false), initialSettings.settings.deletionPolicy)
             assertAnyVisibleScreenText(
-                context.getString(R.string.folder_link_settings_revision, initialSettings.revision),
+                context.getString(R.string.folder_link_cadence_continuous),
             )
             clickScreenText(context.getString(R.string.folder_link_settings_edit))
             clickToggle("folder-link-settings-source-deletions")
@@ -329,7 +329,7 @@ class FolderSyncJourneyInstrumentedTest {
             )
             clickDialogText(context.getString(R.string.folder_link_settings_confirm))
             assertAnyVisibleScreenText(
-                context.getString(R.string.folder_link_settings_revision, initialSettings.revision + 1),
+                context.getString(R.string.folder_link_source_deletions_propagate),
             )
             val updatedSettings = try {
                 awaitValue("shared one-way settings applied") {
@@ -356,9 +356,7 @@ class FolderSyncJourneyInstrumentedTest {
                     failure,
                 )
             }
-            visibleScreenText(
-                context.getString(R.string.folder_link_settings_revision, updatedSettings.revision),
-            ).assertIsDisplayed()
+            assertEquals(initialSettings.revision + 1, updatedSettings.revision)
             visibleScreenText(context.getString(R.string.folder_link_source_deletions_propagate)).assertIsDisplayed()
             visibleScreenText(context.getString(R.string.folder_link_destination_deletions_restore)).assertIsDisplayed()
 
