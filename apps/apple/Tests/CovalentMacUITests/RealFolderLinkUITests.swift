@@ -168,19 +168,14 @@ final class RealFolderLinkUITests: XCTestCase {
             token: responderToken,
             label: "Mac UI Link"
         )
-        attachFolderLinkState(
-            reason: "before responder accept",
-            app: app,
-            linksScrollView: linksScrollView,
-            additionalState: incomingOfferDiagnostic(offer)
-        )
+        let offerID = try string(offer, "offerId")
         _ = try await requestJSON(
             port: responderPort,
             token: responderToken,
             path: "/api/v1/sync/accept",
             method: "POST",
             body: [
-                "offerId": try string(offer, "offerId"),
+                "offerId": offerID,
                 "selectedRoot": destinationRoot,
             ]
         )
@@ -188,13 +183,33 @@ final class RealFolderLinkUITests: XCTestCase {
 
         recordPhase("Covalent phase: manual idle wait entered")
         let idle = app.staticTexts["Idle. Run this link when you want to transfer changes."]
-        let idleScrollTrace = scrollToFolderLinkIdle(idle, in: linksScrollView, app: app)
+        scrollTo(idle, in: linksScrollView)
         guard idle.waitForExistence(timeout: transferTimeout) else {
             attachFolderLinkState(
                 reason: "manual idle status did not appear",
                 app: app,
-                linksScrollView: linksScrollView,
-                scrollTrace: idleScrollTrace
+                linksScrollView: linksScrollView
+            )
+            let acceptedShare = await acceptedShareDiagnostic(
+                port: responderPort,
+                token: responderToken,
+                offerID: offerID
+            )
+            app.typeKey("2", modifierFlags: .command)
+            app.typeKey("1", modifierFlags: .command)
+            let refreshedLinks = app.scrollViews["links.view"]
+            let refreshedIdle = app.staticTexts[
+                "Idle. Run this link when you want to transfer changes."
+            ]
+            let idleAfterNativeRefresh = refreshedIdle.waitForExistence(
+                timeout: transitionTimeout
+            )
+            attachFolderLinkState(
+                reason: "after Cmd-2 then Cmd-1 diagnostic refresh",
+                app: app,
+                linksScrollView: refreshedLinks,
+                additionalState: acceptedShare
+                    + "; idleAfterNativeRefresh:\(idleAfterNativeRefresh)"
             )
             throw FixtureError.missing("manual idle status")
         }
@@ -353,18 +368,26 @@ final class RealFolderLinkUITests: XCTestCase {
         reason: String,
         app: XCUIApplication,
         linksScrollView: XCUIElement,
-        scrollTrace: FolderLinkScrollTrace? = nil,
         additionalState: String? = nil
     ) {
         let frontmost = NSWorkspace.shared.frontmostApplication.map {
             $0.bundleIdentifier == "life.michaelwong.covalent.macos"
         }
+        let unavailable = app.descendants(matching: .any).matching(
+            NSPredicate(
+                format: "identifier == %@ AND (label CONTAINS %@ OR value CONTAINS %@)",
+                "mac.emptyState",
+                "Folder Sync Is Unavailable",
+                "Folder Sync Is Unavailable"
+            )
+        ).firstMatch
         let fixedElements: [(String, XCUIElement)] = [
             ("linkLabel", app.staticTexts["Mac UI Link"]),
             ("manualIdle", app.staticTexts["Idle. Run this link when you want to transfer changes."]),
             ("runNow", app.buttons["Run Mac UI Link now"]),
             ("checkingFolders", app.staticTexts["Checking Folder Sync…"]),
-            ("foldersUnavailable", app.staticTexts["Folder Sync Is Unavailable"]),
+            ("foldersUnavailable", unavailable),
+            ("retryUnavailable", app.buttons["Try Again"]),
             ("waitingForSourceSettings", app.staticTexts["Waiting for confirmed source settings"]),
             ("settingsPending", app.staticTexts["Waiting for the source to apply this settings change"]),
             ("settingsUnconfirmed", app.staticTexts["Settings change is not confirmed"]),
@@ -378,11 +401,6 @@ final class RealFolderLinkUITests: XCTestCase {
         let fixedState = fixedElements.map { name, element in
             elementDiagnostic(name: name, element: element)
         }.joined(separator: "; ")
-        let syntheticState = [
-            containsDiagnostic(name: "containsLinkLabel", text: "Mac UI Link", app: app),
-            containsDiagnostic(name: "containsManualIdle", text: "Idle. Run this link", app: app),
-            containsDiagnostic(name: "containsRunNow", text: "Run Mac UI Link now", app: app),
-        ].joined(separator: "; ")
         let frontmostDescription = frontmost.map { String(describing: $0) } ?? "unknown"
         var lines = [
             "UI test failure: folder-link state snapshot",
@@ -392,13 +410,10 @@ final class RealFolderLinkUITests: XCTestCase {
             "frontmostIsTarget=\(frontmostDescription)",
             elementDiagnostic(name: "linksView", element: linksScrollView),
             finiteFrameDiagnostic(name: "linksFrame", element: linksScrollView),
-            scrollBarDiagnostic(in: linksScrollView),
             fixedState,
-            syntheticState,
+            "sanitizedLinksAX:",
+            sanitizedAccessibilityStructure(of: linksScrollView),
         ]
-        if let scrollTrace {
-            lines.append(scrollTrace.diagnostic)
-        }
         if let additionalState {
             lines.append(additionalState)
         }
@@ -414,55 +429,90 @@ final class RealFolderLinkUITests: XCTestCase {
         return "\(name)=exists:\(exists),hittable:\(exists && element.isHittable),enabled:\(exists && element.isEnabled)"
     }
 
-    private func incomingOfferDiagnostic(_ offer: [String: Any]) -> String {
-        let linkPolicyExists = offer["linkPolicy"] != nil && !(offer["linkPolicy"] is NSNull)
-        let linkSettings = offer["linkSettings"] as? [String: Any]
+    private func acceptedShareDiagnostic(
+        port: String,
+        token: String,
+        offerID: String
+    ) async -> String {
+        let response = try? await requestJSON(
+            port: port,
+            token: token,
+            path: "/api/v1/sync/status"
+        )
+        let status = response as? [String: Any]
+        let shares = status?["shares"] as? [[String: Any]]
+        let share = shares?.first { $0["offerId"] as? String == offerID }
+        let linkPolicyExists = share?["linkPolicy"] != nil
+            && !(share?["linkPolicy"] is NSNull)
+        let linkSettings = share?["linkSettings"] as? [String: Any]
         let settings = linkSettings?["settings"] as? [String: Any]
         let cadence = settings?["cadence"] as? [String: Any]
-        let phase = offer["phase"] as? String
+        let phase = share?["phase"] as? String
         let knownPhases = ["offered", "awaitingCommit", "ready", "paused", "removed"]
-        return "incomingOffer="
-            + "linkPolicyExists:\(linkPolicyExists),"
-            + "linkSettingsExists:\(linkSettings != nil),"
+        return "acceptedShare="
+            + "statusReadable:\(status != nil),found:\(share != nil),"
+            + "confirmed:\(linkSettings?["confirmed"] as? Bool == true),"
             + "manualCadence:\(cadence?["mode"] as? String == "manual"),"
-            + "settingsConfirmed:\(linkSettings?["confirmed"] as? Bool == true),"
-            + "knownPhase:\(phase.map(knownPhases.contains) == true)"
+            + "knownPhase:\(phase.map(knownPhases.contains) == true),"
+            + "policy:\(linkPolicyExists)"
     }
 
-    private func containsDiagnostic(name: String, text: String, app: XCUIApplication) -> String {
-        let matches = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label CONTAINS %@", text))
-            .allElementsBoundByIndex
-        let types = matches.prefix(8).map { String(describing: $0.elementType) }
-        return "\(name)=count:\(matches.count),types:\(types)"
+    private func sanitizedAccessibilityStructure(of element: XCUIElement) -> String {
+        let roles = [
+            "Application", "Window", "Sheet", "Dialog", "Group", "ScrollView",
+            "Outline", "OutlineRow", "Cell", "StaticText", "Button", "PopUpButton",
+            "TextField", "Menu", "MenuItem", "Table", "TableRow", "TableColumn",
+        ]
+        let phrases = [
+            ("link", "Mac UI Link"),
+            ("idle", "Idle. Run this link when you want to transfer changes."),
+            ("run", "Run Mac UI Link now"),
+            ("empty", "Keep a Folder in Sync"),
+            ("source", "Choose Source Folder…"),
+            ("unavailable", "Folder Sync Is Unavailable"),
+            ("retry", "Try Again"),
+        ]
+        let frameExpression = try? NSRegularExpression(
+            pattern: #"\{\{(-?[0-9]+(?:\.[0-9]+)?), (-?[0-9]+(?:\.[0-9]+)?)\}, \{(-?[0-9]+(?:\.[0-9]+)?), (-?[0-9]+(?:\.[0-9]+)?)\}\}"#
+        )
+        var sanitized: [String] = []
+        for rawLine in element.debugDescription.split(separator: "\n") {
+            let line = String(rawLine)
+            let structural = line.trimmingCharacters(in: .whitespaces)
+                .drop { $0 == "→" || $0 == "↳" || $0 == " " }
+            guard let role = roles.first(where: {
+                structural == $0 || structural.hasPrefix($0 + ",")
+            }) else { continue }
+            let depth = line.prefix(while: { $0 == " " }).count
+            let seen = phrases.map { name, phrase in
+                "\(name):\(line.contains(phrase))"
+            }.joined(separator: ",")
+            var fields = ["depth:\(depth)", "role:\(role)", "seen:{\(seen)}"]
+            if let frameExpression,
+               let match = frameExpression.firstMatch(
+                   in: line,
+                   range: NSRange(line.startIndex..., in: line)
+               ) {
+                let values = (1...4).compactMap { index -> Double? in
+                    guard let range = Range(match.range(at: index), in: line) else { return nil }
+                    return Double(line[range])
+                }
+                if values.count == 4, values.allSatisfy(\.isFinite) {
+                    fields.append(
+                        "frame:x:\(formatNumber(values[0])),y:\(formatNumber(values[1])),"
+                            + "w:\(formatNumber(values[2])),h:\(formatNumber(values[3]))"
+                    )
+                }
+            }
+            sanitized.append(fields.joined(separator: ","))
+            if sanitized.count == 64 { break }
+        }
+        return sanitized.isEmpty ? "none" : sanitized.joined(separator: "\n")
     }
 
     private func finiteFrameDiagnostic(name: String, element: XCUIElement) -> String {
         guard element.exists else { return "\(name)=unavailable" }
         return finiteFrame(element.frame).map { "\(name)=\($0)" } ?? "\(name)=unavailable"
-    }
-
-    private func scrollBarDiagnostic(in scrollView: XCUIElement) -> String {
-        let scrollBars = scrollView.scrollBars.allElementsBoundByIndex
-        let entries = scrollBars.prefix(2).enumerated().map { index, scrollBar in
-            let value = finiteNumber(scrollBar.value).map(formatNumber) ?? "unavailable"
-            let frame = finiteFrame(scrollBar.frame) ?? "unavailable"
-            return "\(index):value:\(value),frame:\(frame)"
-        }
-        return "scrollBars=count:\(scrollBars.count),entries:\(entries)"
-    }
-
-    private func finiteNumber(_ value: Any?) -> Double? {
-        let number: Double?
-        if let value = value as? NSNumber {
-            number = value.doubleValue
-        } else if let value = value as? String {
-            number = Double(value.trimmingCharacters(in: .whitespacesAndNewlines))
-        } else {
-            number = nil
-        }
-        guard let number, number.isFinite else { return nil }
-        return number
     }
 
     private func finiteFrame(_ frame: CGRect) -> String? {
@@ -638,58 +688,6 @@ final class RealFolderLinkUITests: XCTestCase {
                 + "placeholder=\((field.placeholderValue ?? "").debugDescription) "
                 + "frame=(\(frame.origin.x),\(frame.origin.y),\(frame.width),\(frame.height))"
         }.joined(separator: "; ")
-    }
-
-    private struct FolderLinkScrollTrace {
-        var pages = 0
-        var linkLabelFirstPage: Int?
-        var manualIdleFirstPage: Int?
-        var emptyLinksFirstPage: Int?
-
-        @MainActor
-        mutating func observe(page: Int, app: XCUIApplication) {
-            if linkLabelFirstPage == nil, app.staticTexts["Mac UI Link"].exists {
-                linkLabelFirstPage = page
-            }
-            if manualIdleFirstPage == nil,
-               app.staticTexts["Idle. Run this link when you want to transfer changes."].exists {
-                manualIdleFirstPage = page
-            }
-            if emptyLinksFirstPage == nil, app.staticTexts["Keep a Folder in Sync"].exists {
-                emptyLinksFirstPage = page
-            }
-        }
-
-        var diagnostic: String {
-            let firstPages = [
-                "linkLabel:\(page(linkLabelFirstPage))",
-                "manualIdle:\(page(manualIdleFirstPage))",
-                "emptyLinks:\(page(emptyLinksFirstPage))",
-            ].joined(separator: ",")
-            return "idleScroll=pages:\(pages),firstSeenPage:{\(firstPages)}"
-        }
-
-        private func page(_ value: Int?) -> String {
-            value.map(String.init) ?? "never"
-        }
-    }
-
-    private func scrollToFolderLinkIdle(
-        _ element: XCUIElement,
-        in scrollView: XCUIElement,
-        app: XCUIApplication
-    ) -> FolderLinkScrollTrace {
-        var trace = FolderLinkScrollTrace()
-        trace.observe(page: 0, app: app)
-        guard !element.isHittable else { return trace }
-        let page = scrollView.frame.height * 0.75
-        for delta in Array(repeating: -page, count: 8) + Array(repeating: page, count: 8)
-        where !element.isHittable {
-            scrollView.scroll(byDeltaX: 0, deltaY: delta)
-            trace.pages += 1
-            trace.observe(page: trace.pages, app: app)
-        }
-        return trace
     }
 
     private func scrollTo(_ element: XCUIElement, in scrollView: XCUIElement) {
