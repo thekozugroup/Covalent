@@ -2,7 +2,7 @@
 
 Updated 2026-09-13 after the owner reaffirmed the lightweight one-way scope. The active goal is defined in [Product requirements](../product/requirements.md#active-completion-goal).
 
-**Current scope: 40% verified, 4 of 10 complete acceptance checks.** This counts complete user journeys, not remaining time or reusable code. The active branch uses rclone as the sole transfer engine. Independent fan-out, collection isolation, deletion/restoration, and shared-setting behavior pass real three-node rclone journeys. The remaining six checks are open. Earlier Syncthing evidence is retained as history and does not approve the replacement.
+**Current scope: 50% verified, 5 of 10 complete acceptance checks.** This counts complete user journeys, not remaining time or reusable code. The active branch uses rclone as the sole transfer engine. Independent fan-out, collection isolation, deletion/restoration, shared settings, and transfer cadence pass real rclone journeys. The remaining five checks are open. Earlier Syncthing evidence is retained as history and does not approve the replacement.
 
 **Previous scope: 75%, 15 of 20 checks**, recorded at checkpoint 46 (c47003113e28b6e934a8ab4823040614fb07fb30). That score belongs to the superseded bidirectional/backup scope. Source and evidence remain in Git history.
 
@@ -12,7 +12,7 @@ Updated 2026-09-13 after the owner reaffirmed the lightweight one-way scope. The
 | 2 | Fan-out destinations work independently; multiple sources contribute safely to one collection. | Verified |
 | 3 | Both source-deletion options work with clear explanations and failed-scan protection. | Verified |
 | 4 | Destination deletions stay local across source edits/restarts; explicit restoration works. | Verified |
-| 5 | Manual, scheduled, and continuous transfers respect platform limits; idle batch workers stop. | Open |
+| 5 | Manual, scheduled, and continuous transfers respect platform limits; idle batch workers stop. | Verified |
 | 6 | Settings edited on any authorized member converge across the link; pending/stale edits remain visible. | Verified |
 | 7 | Mac setup, links, settings, and per-link menu bar status pass native HIG/keyboard/VoiceOver checks. | Open |
 | 8 | Tomato-inspired Android floating actions, typography, data/status visuals, and top bar; actual pairing, permission, transfer, and background journeys pass. | Open |
@@ -56,21 +56,35 @@ pairing and source offer, Manual transfer, persisted access after restart,
 permission recovery, shared deletion settings, Continuous transfer, pause/resume,
 and safe removal. Both Setup accessibility checks pass. This device proof uses
 the `d634321` runtime plus the tested Android UI changes; the integrated source
-still needs its exact-commit hosted run. Peer-address editing remains a distinct
-native coverage gap. Component screenshots do not establish the complete Android
+still needs its exact-commit hosted run. The current test adds native peer-address
+editing, a transfer to the moved peer, and persistence across cold restart;
+that added coverage awaits device execution. Component screenshots do not establish the complete Android
 top bar and floating navigation design.
 
-Hosted Rust/contracts, Android foundation, the Mac app bundle, and Docker on
-amd64 and arm64 pass on `b1122d7`. The Mac UI job passes four of five tests,
-including both accessibility audits. The remaining legacy empty-state assertion
-has a scoped accessibility and navigation-wait correction in `19ffb1b`, awaiting
-native execution. A sixth native Links/menu bar journey is implemented and
-typechecks. Its isolated nodes use production-built helpers with test-only
-signatures; it does not approve production sandbox inheritance or Keychain
-startup. Android's last hosted baseline passes 79 of 82 tests. The obsolete
-setup expectations, external-driver prototype, and broad-storage journey are
-replaced in `e9fdf8f`. The source-derived test contract now covers all 82 tests
-exactly once: 81 baseline tests and one self-contained SAF journey.
+Row 5 combines the complete Manual/Continuous Android journey, the complete
+15-minute source-owned scheduled run, and the recorded real charging/Wi-Fi
+blocking and resumption phases. The earlier conditions run remains a failed
+run; only its completed phases are credited. Its later Continuous-resume failure
+is independently covered by the final passing journey. The core stale-condition
+check also passes. This does not promise exact Android background timing.
+
+Hosted Rust/contracts, the Mac app bundle, and Docker on amd64 and arm64 pass
+on `15c87c1`. Its native jobs stop before UI execution: Android lint finds two
+unused labels left by the deleted browser; the Mac launcher handles only one
+xctestrun format. The current batch removes both labels and supports Xcode's
+version 1 and version 2 test files, with executable plist fixtures passing.
+These fixes still need their hosted run.
+
+The earlier Mac UI job passes four of five tests, including both accessibility
+audits. The remaining legacy empty-state assertion has a scoped accessibility
+and navigation-wait correction in `19ffb1b`, awaiting native execution. A sixth
+native Links/menu bar journey is implemented and typechecks. Its isolated nodes
+use production-built helpers with test-only signatures; it does not approve
+production sandbox inheritance or Keychain startup. Android's earlier hosted
+baseline passes 79 of 82 tests. The obsolete setup expectations, external-driver
+prototype, and broad-storage journey are replaced in `e9fdf8f`. The source-derived
+test contract covers all 82 tests exactly once: 81 baseline tests and one
+self-contained SAF journey.
 
 An optimized local measurement passes the exact 101-file transfer and unchanged
 repeat. Two runtimes together use 0.01 seconds of sampled CPU during roughly
@@ -87,16 +101,16 @@ acceptance remain open.
 Syncthing runtime modules, build scripts, source patch, and package assets have
 been removed. [ADR 0008](../adr/0008-rclone-one-way-links.md) records the settled choice.
 
-Previous-engine evidence: the full Rust workspace run passed 908 tests (real worker tests run separately). The current Android build, lint, and 175 JVM tests pass. All 24 Mac production Swift sources compiled and linked, and eight focused Swift tests passed. The web console passed 128 tests. The integrated three-node runtime passes one-way fan-out with an offline destination, retained deletions, source deletion propagation, restoration after restart, and shared/offline/conflicting settings. A separate three-node collection journey passes distinct child-folder ownership, identical filename isolation, overlapping-root rejection, independent settings, and scoped deletion. Missing source mounts and failed source scans preserve destination files while the healthy contributor keeps transferring; restoring the source resumes transfers. The full foundation check and strict integration-test Clippy pass.
-
-Checkpoint 47 hosted CI found Android error-catalog omissions, Docker manifest rejection, and Mac packaging/model-test failures. Corrections now pass Android's full build gate, all 175 Swift tests, Mac engine packaging/signing, and seven host-validation tests on each platform. The fresh Atmos arm64 image passes its dynamic contract and 13-check one-way transfer gate; original server containers, tagged images, networks, and volumes are restored. Android's actual API 37 device journey passes pairing, one-way transfer, pause/resume, address changes, cold restart, visible deletion-setting confirmation, authenticated settings convergence, restoration, deletion propagation, permission loss, recovery, and safe removal. The native deletion explanations and the independently tested failed-scan protection complete row 3. The historical test selector still contains BothWays; its assertions now verify one-way behavior. Scheduling, native HIG/device acceptance, final packages, performance, and publication remain open.
+Previous-engine proof remains in the checkpoint 46–48 history and retained
+validation receipts. It does not approve the rclone runtime or current native
+release candidates.
 
 Cleanup: obsolete ignored checkout build caches were removed: 43,667,280,523 logical bytes. Compact evidence and the existing Android size report were retained. Physical free-space change was not measured; active temporary toolchains, signing keys and unintegrated source remain. The completed Android journey's emulator, ADB instance, app, workers, guardians, and private build checkout were removed; its current APK and compact evidence remain.
 
 Rclone cleanup: completed runtime and measurement worktrees and targets were
 removed after checking ownership and active use. The latest completed root Rust
-target alone contained 25,075,875,180 logical bytes. The active replacement Android
-fixture and reusable toolchains remain until their work finishes. These counts
+target alone contained 25,075,875,180 logical bytes. Reusable toolchains and compact proof packages remain for required native
+validation. These counts
 are logical file sizes; physical free-space change was not measured. Atmos
 cleanup and new remote validation await restored SSH authentication; Atlas has
 not been contacted.
@@ -104,3 +118,6 @@ not been contacted.
 The Android replacement removes 815 net lines, including the old all-files
 browser and host-controlled permission phases. Forty owned device screenshots
 were removed, and the retained test no longer creates those temporary screenshots.
+The completed replacement emulator, private ADB server, checkout, and build cache
+are also removed. The deleted tree reported 11.62 GB through `du`; this is not a
+measurement of freed physical space. Proof APKs and reusable toolchains remain.

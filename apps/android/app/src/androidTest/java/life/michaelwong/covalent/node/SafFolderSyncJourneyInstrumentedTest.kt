@@ -36,10 +36,13 @@ import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
+import java.net.DatagramSocket
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.Inet6Address
+import java.net.InetSocketAddress
 import java.net.NetworkInterface
+import java.net.ServerSocket
 import java.nio.charset.StandardCharsets
 import java.nio.file.DirectoryStream
 import java.nio.file.Files
@@ -123,7 +126,7 @@ class SafFolderSyncJourneyInstrumentedTest {
             writeSafFile(sourceGrant, SAF_UNICODE_NAME, SAF_UNICODE_CONTENT)
             val connectionA = awaitValue("service API after persisted grants") { manager.liveConnection() }
 
-            val connectionB = startSecondNode(packageValue, runId = runId)
+            var connectionB = startSecondNode(packageValue, runId = runId)
             registerSecondNodeGrant(connectionB, destinationGrant)
             val identityA = client.transportIdentity(connectionA.baseUrl, connectionA.token)
             val identityB = client.transportIdentity(connectionB.baseUrl, connectionB.token)
@@ -186,11 +189,78 @@ class SafFolderSyncJourneyInstrumentedTest {
             clickScreenText(context.getString(R.string.folder_link_settings_edit))
             clickDialogText(context.getString(R.string.action_cancel))
 
+            val oldWorkerPort = checkNotNull(secondFolderSyncListenerPort)
+            val movedPeerPort = reserveEphemeralPeerPort(identityB.peerPort)
+            val movedWorkerPort = reserveEphemeralWorkerPort(oldWorkerPort)
+            assertTrue(CovalentNative.stop(secondHandle).ok)
+            secondHandle = 0
+            secondSafServers.forEach { it.close() }
+            secondSafServers.clear()
+            awaitExactHelperCounts(0, 0)
+            await("old second-node listeners released") {
+                canBindPeerPort(identityB.peerPort) && canBindWorkerPort(oldWorkerPort)
+            }
+            connectionB = startSecondNode(
+                packageValue,
+                peerListenerPort = movedPeerPort,
+                folderSyncListenerPort = movedWorkerPort,
+                runId = runId,
+            )
+            registerSecondNodeGrant(connectionB, destinationGrant)
+            val movedIdentity = client.transportIdentity(connectionB.baseUrl, connectionB.token)
+            assertEquals(identityB.deviceId, movedIdentity.deviceId)
+            assertEquals(identityB.certificateFingerprint, movedIdentity.certificateFingerprint)
+            assertEquals(identityB.certificateDer, movedIdentity.certificateDer)
+            assertEquals(movedPeerPort, movedIdentity.peerPort)
+            assertTrue(identityB.peerPort != movedIdentity.peerPort)
+            assertEquals(movedWorkerPort, secondFolderSyncListenerPort)
+            assertTrue(oldWorkerPort != movedWorkerPort)
+
+            val movedPeerAddress = advertisedGuestPeerAddress(movedPeerPort)
+            val addressButtonTag = "folder-peer-address-${identityB.deviceId}"
+            compose.onNodeWithTag("folder-sync-list")
+                .performScrollToNode(hasTestTag(addressButtonTag))
+            clickScreenTag(addressButtonTag)
+            compose.onNodeWithTag("folder-peer-address-input").performTextInput(movedPeerAddress)
+            clickScreenTag("folder-peer-address-confirm")
+            await("native address refresh becomes authoritative") {
+                client.folderSyncStatus(connectionA.baseUrl, connectionA.token).peers
+                    .singleOrNull { it.peerId == identityB.deviceId }
+                    ?.address == movedPeerAddress
+            }
+            writeSafFile(sourceGrant, "after-address.txt", SAF_ADDRESS_CONTENT)
+            val addressShare = sourceShare(connectionA)
+            client.runFolderLinkNow(
+                connectionA.baseUrl,
+                connectionA.token,
+                folderId.toString(),
+                UUID.randomUUID().toString(),
+                expectedGeneration = checkNotNull(addressShare.linkRun).generation,
+                settingsRevision = checkNotNull(addressShare.linkSettings).revision,
+            )
+            awaitSafFile(
+                "Manual Run Now after native address refresh",
+                destinationGrant,
+                "after-address.txt",
+                SAF_ADDRESS_CONTENT,
+            )
+            val addressRun = awaitValue("address-refreshed SAF run completion") {
+                sourceShare(connectionA).linkRun?.takeIf {
+                    it.generation == firstRun.generation + 1 && it.phase == FolderLinkRunPhase.SUCCEEDED
+                }
+            }
+            awaitExactHelperCounts(0, 0)
+
             val firstApi = connectionA.baseUrl
             manager.refreshFolderSyncAccess()
             val restartedA = awaitValue("service API after SAF restart registration") {
                 manager.liveConnection()?.takeIf { it.baseUrl != firstApi }
             }
+            assertEquals(
+                movedPeerAddress,
+                client.folderSyncStatus(restartedA.baseUrl, restartedA.token).peers
+                    .single { it.peerId == identityB.deviceId }.address,
+            )
             writeSafFile(sourceGrant, "restart.txt", SAF_RESTART_CONTENT)
             val restartedShare = sourceShare(restartedA)
             client.runFolderLinkNow(
@@ -209,7 +279,7 @@ class SafFolderSyncJourneyInstrumentedTest {
             )
             awaitValue("restarted SAF run completion") {
                 sourceShare(restartedA).linkRun?.takeIf {
-                    it.generation == firstRun.generation + 1 && it.phase == FolderLinkRunPhase.SUCCEEDED
+                    it.generation == addressRun.generation + 1 && it.phase == FolderLinkRunPhase.SUCCEEDED
                 }
             }
             awaitExactHelperCounts(0, 0)
@@ -887,6 +957,38 @@ class SafFolderSyncJourneyInstrumentedTest {
         return NodeConnection(checkNotNull(response.apiBaseUrl), token)
     }
 
+    private fun reserveEphemeralPeerPort(excludedPort: Int): Int {
+        repeat(16) {
+            val candidate = DatagramSocket(0).use { it.localPort }
+            if (candidate != excludedPort) return candidate
+        }
+        error("A distinct test-owned peer port could not be reserved.")
+    }
+
+    private fun reserveEphemeralWorkerPort(excludedPort: Int): Int {
+        repeat(16) {
+            val candidate = FolderSyncInstrumentationBridge.reserveEphemeralListenerPort()
+            if (candidate != excludedPort) return candidate
+        }
+        error("A distinct test-owned worker port could not be reserved.")
+    }
+
+    private fun canBindPeerPort(port: Int): Boolean = runCatching {
+        DatagramSocket(null).use { socket ->
+            socket.reuseAddress = false
+            socket.bind(InetSocketAddress(InetAddress.getByAddress(byteArrayOf(0, 0, 0, 0)), port))
+        }
+        true
+    }.getOrDefault(false)
+
+    private fun canBindWorkerPort(port: Int): Boolean = runCatching {
+        ServerSocket().use { socket ->
+            socket.reuseAddress = true
+            socket.bind(InetSocketAddress(InetAddress.getByAddress(byteArrayOf(0, 0, 0, 0)), port))
+        }
+        true
+    }.getOrDefault(false)
+
     private fun forgetSecondNodeSecrets() {
         secondKeyEncryptionKey?.fill(0)
         secondKeyEncryptionKey = null
@@ -1200,6 +1302,7 @@ class SafFolderSyncJourneyInstrumentedTest {
         val RUN_ID = Regex("[0-9a-f]{32}")
         val SAF_PICKER_COMPONENT = Regex("[A-Za-z0-9-]{1,96}")
         val SAF_MANUAL_CONTENT = "api37-saf-manual-run\n".toByteArray(StandardCharsets.UTF_8)
+        val SAF_ADDRESS_CONTENT = "api37-saf-after-address-refresh\n".toByteArray(StandardCharsets.UTF_8)
         val SAF_RESTART_CONTENT = "api37-saf-after-restart\n".toByteArray(StandardCharsets.UTF_8)
         val SAF_RECOVERY_CONTENT = "api37-saf-after-grant-repair\n".toByteArray(StandardCharsets.UTF_8)
         val SAF_CONTINUOUS_CONTENT = "api37-saf-continuous\n".toByteArray(StandardCharsets.UTF_8)

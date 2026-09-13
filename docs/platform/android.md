@@ -2,8 +2,8 @@
 
 Use this page to build and install the personal APK, then follow
 [Create your first one-way link](../getting-started-links.md). Rclone transfers
-use Android's system folder picker. Server enrollment and backup/restore steps
-later in this page describe the legacy backup workflow.
+use Android's system folder picker. Folder links pair devices directly; legacy
+server enrollment is optional.
 
 Current personal-use path: build the debug APK from this repository. Gradle
 signs that APK with your local debug key, so Android can install it. Never
@@ -25,7 +25,7 @@ You need:
 - `rustup` with the repository's pinned Rust toolchain;
 - `cargo-ndk` 4.1.2;
 - an Android device with USB debugging enabled; and
-- a claimed Docker or Unraid server, such as Atlas.
+- another device running the current Covalent build.
 
 ## Build the installable personal APK
 
@@ -122,6 +122,30 @@ A future production-signed APK also cannot update this debug-signed install.
 Moving to that permanent signer will require one deliberate uninstall and
 re-enrollment. After that move, every update must keep the same production key.
 
+## Pair a device and create a link
+
+Choose **Start folder sync on this phone**, allow local-network access, and pair
+your other device. Compare the confirmation code and confirm it on both devices.
+Open **Shared folders** and choose only the folder to share through Android's
+system picker. Review timing and deletion behavior before **Create link**.
+Accept the incoming link and choose its folder on the receiving device.
+
+Use **Run Now** for a first transfer, then choose Manual, Scheduled, or Continuous
+for that link. Android's Wi-Fi and charging conditions can pause transfers;
+background execution follows Android's limits. See
+[Create your first one-way link](../getting-started-links.md) for the shared
+settings, one-to-many transfers, and deletion choices.
+
+Keep both devices on a reachable LAN or Tailnet. UDP 8787 carries pairing and
+link control. A Docker source also needs TCP 8789 for authenticated file
+transfers. See [Docker network settings](../../packaging/docker/README.md).
+
+<details>
+<summary>Optional legacy encrypted backup setup</summary>
+
+These steps apply only to the older backup and restore workflow. They are not
+needed to pair devices or use rclone folder links.
+
 ## Claim the backup server
 
 Claim each new server once from a trusted Mac or Linux computer using the
@@ -207,6 +231,8 @@ For a stronger source-loss drill, move the expendable source file elsewhere
 after verification, restore it into another empty folder, compare it, then put
 the source back. Do not test with irreplaceable data.
 
+</details>
+
 ## Troubleshooting
 
 - **`sdkmanager` missing:** install Android SDK Command-line Tools in Android
@@ -216,12 +242,13 @@ the source back. Do not test with irreplaceable data.
   targets are installed.
 - **`adb` shows unauthorized:** unlock the phone, accept its debugging prompt,
   then run `adb devices` again.
-- **Server cannot be verified:** use the exact claimed HTTPS hostname, correct
-  `root.crt`, and exact `local-api-token`. Never bypass TLS.
+- **Legacy server cannot be verified:** use the exact claimed HTTPS hostname,
+  correct `root.crt`, and exact `local-api-token`. Never bypass TLS.
 - **LAN works on a computer but not Android:** grant local-network access and
   confirm Wi-Fi client isolation is off.
-- **Tailnet fails:** confirm the phone is online in the intended Tailnet and its
-  policy allows TCP 8443. Add UDP 8787 only for device pairing/replicas.
+- **Tailnet fails:** confirm both devices are online in the intended Tailnet and
+  its policy permits the pairing and transfer ports above. TCP 8443 is needed
+  separately for the legacy HTTPS server connection.
 - **Folder access was revoked:** choose the folder again. Reinstalling the app
   always removes its saved folder grants.
 

@@ -61,7 +61,6 @@
     <string name="folder_sync_no_folder">No folder selected</string>
     <string name="folder_sync_selected_folder">Selected Android folder</string>
     <string name="folder_sync_saf_access_explanation">Covalent opens only folders you choose with Android’s folder picker. You can revoke each folder in Android settings.</string>
-    <string name="folder_sync_storage_roots">Storage</string>
     <string name="folder_sync_use_folder">Use this folder</string>
     <string name="folder_sync_label">Folder name shown to the other device</string>
     <string name="folder_sync_pair_first">Pair another device with this phone before sharing a folder.</string>
@@ -573,7 +572,6 @@
     <string name="folder_sync_waiting_for_device">Waiting for %1$s</string>
     <string name="folder_sync_connected_to_device">Connected to %1$s</string>
     <string name="folder_sync_connection_unknown">Connection status unknown</string>
-    <string name="folder_sync_restore_access_detail">Android no longer allows Covalent to open this folder. Choose it again with Android’s folder picker. You can stop sharing now; your files will stay on this phone.</string>
     <string name="folder_sync_choose_again_detail">Choose the folder again to restore this share. Covalent keeps the previous folder choice until this phone confirms the replacement.</string>
     <string name="folder_sync_use_selected_again">Use selected folder</string>
     <string name="folder_sync_retry_saved_repair">Retry saved folder repair</string>

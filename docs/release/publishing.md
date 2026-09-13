@@ -10,8 +10,9 @@ GitHub Release for the tag.
 | macOS, unsigned | `apple-unsigned-release.yml` | `push` tag `v*` | none |
 | Trusted CLI | `cli-release.yml` | `push` tag `v*` | GitHub OIDC keyless signing |
 
-The installable debug-signed Android APK is built and retained through the
-personal-use setup path. Android production signing is deferred. The Apple
+The installable debug-signed Android APK is built through the personal-use setup
+path, tested, and attached to the same draft release with its checksum and build
+evidence. Android production signing is deferred. The Apple
 Developer ID/notarization workflow is outside this release scope and must not
 be run.
 
@@ -34,8 +35,8 @@ published v0.1.0 index, which predates the version annotation.
 The release is created as a **draft**, and no lane ever publishes it. Assembly is
 incremental, but visibility is not: no lane knows whether it is the last to
 finish, so a lane that published on its own way out would expose a
-half-assembled page. Publishing is a deliberate human step once every expected
-asset is present — see step 8 below.
+half-assembled page. The authorized publisher reviews the complete draft before
+publishing it — see steps 9 and 10 below.
 
 Release notes come from `docs/release/notes/<tag>.md` when that file exists.
 
@@ -77,9 +78,16 @@ before building anything.
 4. Write `docs/release/notes/vX.Y.Z.md`.
 5. Create an **annotated signed** tag: `git tag -s vX.Y.Z && git push origin vX.Y.Z`.
    That fires the container lane and the unsigned macOS lane.
-6. Build and retain the installable debug-signed Android APK for personal use
-   using [the Android setup guide](../platform/android.md). Android production
-   signing and store publication are deferred and do not block this release.
+6. Build the installable debug-signed Android APK from the tagged source using
+   [the Android setup guide](../platform/android.md). Test that exact APK, then
+   attach it and its `.sha256` file to the same draft using
+   `scripts/publish-release-assets.sh vX.Y.Z FILE...`. Include the Android SBOM,
+   license inventory, and a build receipt recording the source commit, APK
+   SHA-256, debug certificate SHA-256, and device test result. Use the existing
+   authenticated publishing environment required by the helper; do not put
+   tokens in files or logs. Do not substitute an untested rebuild or the
+   unsigned release APK. Android production signing and store publication are
+   deferred and do not block this release.
 7. The CLI lane runs on the tag and publishes source-free Linux amd64, Linux
    arm64, and Apple Silicon macOS arm64 archives only after all three pass
    binary architecture/size, license inventory, SPDX SBOM, Sigstore signature,

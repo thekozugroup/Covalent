@@ -450,8 +450,9 @@ for health_port in "$real_source_port" "$real_responder_port"; do
 done
 
 # Shell exports are not the UI test host contract. Put these values into the
-# generated format-v2 xctestrun EnvironmentVariables dictionary documented by
-# xcodebuild.xctestrun(5), then execute that exact test run file below.
+# generated xctestrun target's EnvironmentVariables dictionary, then execute
+# that exact test run file below. Xcode emits either the documented format-v2
+# configuration array or the earlier format-v1 top-level target dictionary.
 xctestrun_files=("$derived_data"/Build/Products/*.xctestrun(N))
 (( ${#xctestrun_files} == 1 )) || {
   print -u2 -- "expected exactly one generated macOS xctestrun file"
@@ -465,6 +466,7 @@ xctestrun_file=${xctestrun_files[1]}
 python3 - "$xctestrun_file" \
   "$real_source_port" "$real_responder_port" "$real_responder_token" \
   "$real_source_root" "$real_destination_root" <<'PY'
+import json
 import os
 import plistlib
 import stat
@@ -485,13 +487,44 @@ values = dict(zip(
 ))
 with open(path, "rb") as source:
     document = plistlib.load(source)
-targets = [
-    target
-    for configuration in document.get("TestConfigurations", [])
-    for target in configuration.get("TestTargets", [])
-    if target.get("BlueprintName") == "CovalentMacUITests"
-]
+if not isinstance(document, dict):
+    raise SystemExit("generated xctestrun root is malformed")
+
+metadata = document.get("__xctestrun_metadata__")
+if metadata is None:
+    format_version = 1
+elif isinstance(metadata, dict):
+    format_version = metadata.get("FormatVersion")
+else:
+    raise SystemExit("generated xctestrun has unsupported metadata")
+if format_version == 1:
+    target = document.get("CovalentMacUITests")
+    targets = [target] if isinstance(target, dict) else []
+elif format_version == 2:
+    targets = [
+        target
+        for configuration in document.get("TestConfigurations", [])
+        if isinstance(configuration, dict) and configuration.get("IsEnabled", True)
+        for target in configuration.get("TestTargets", [])
+        if isinstance(target, dict) and target.get("BlueprintName") == "CovalentMacUITests"
+    ]
+else:
+    raise SystemExit("generated xctestrun has unsupported metadata")
 if len(targets) != 1:
+    # Keep failure diagnostics structural: never print environment dictionaries,
+    # command arguments, tokens, or full filesystem paths.
+    diagnostic = {
+        "formatVersion": format_version,
+        "topLevelKeys": sorted(str(key)[:80] for key in document)[:16],
+        "format2Blueprints": [
+            str(target.get("BlueprintName"))[:80]
+            for configuration in document.get("TestConfigurations", [])[:16]
+            if isinstance(configuration, dict)
+            for target in configuration.get("TestTargets", [])[:16]
+            if isinstance(target, dict)
+        ],
+    }
+    print("xctestrun target structure: " + json.dumps(diagnostic, sort_keys=True), file=sys.stderr)
     raise SystemExit("generated xctestrun does not contain exactly one CovalentMacUITests target")
 environment = targets[0].setdefault("EnvironmentVariables", {})
 if not isinstance(environment, dict):
