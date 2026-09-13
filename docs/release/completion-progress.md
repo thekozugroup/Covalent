@@ -2,7 +2,7 @@
 
 Updated 2026-09-13 after the owner reaffirmed the lightweight one-way scope. The active goal is defined in [Product requirements](../product/requirements.md#active-completion-goal).
 
-**Current scope: 40% verified, 4 of 10 complete acceptance checks.** This counts complete user journeys, not remaining time or reusable code. Native apps, pairing, permissions, worker supervision, Docker packages, and successful transfers form a working baseline. Independent fan-out, collection isolation, deletion/restoration, and shared-setting behavior now pass real three-node journeys. The remaining six checks are open. These proofs use the current Syncthing baseline. Rclone is now the preferred replacement, subject to deletion, native folder-access, and paired-permission checks; existing engine evidence does not approve that replacement.
+**Current scope: 40% verified, 4 of 10 complete acceptance checks.** This counts complete user journeys, not remaining time or reusable code. Native apps, pairing, permissions, worker supervision, Docker packages, and successful transfers form a working baseline. Independent fan-out, collection isolation, deletion/restoration, and shared-setting behavior now pass real three-node journeys. The remaining six checks are open. These proofs use the current Syncthing baseline. The owner has selected rclone as the required replacement. Migration and remaining verification continue; existing Syncthing evidence does not approve the rclone implementation.
 
 **Previous scope: 75%, 15 of 20 checks**, recorded at checkpoint 46 (c47003113e28b6e934a8ab4823040614fb07fb30). That score belongs to the superseded bidirectional/backup scope. Source and evidence remain in Git history.
 
