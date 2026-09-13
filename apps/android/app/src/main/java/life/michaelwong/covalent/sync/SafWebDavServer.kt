@@ -482,6 +482,8 @@ internal class SafWebDavServer(
                     DocumentsContract.getTreeDocumentId(treeUri)
             }.getOrDefault(false)
             if (!structurallyBound) return false
+            // The granted root is contained by definition; providers need not
+            // report a document as its own descendant.
             if (DocumentsContract.getDocumentId(documentUri) == DocumentsContract.getTreeDocumentId(treeUri)) {
                 return true
             }

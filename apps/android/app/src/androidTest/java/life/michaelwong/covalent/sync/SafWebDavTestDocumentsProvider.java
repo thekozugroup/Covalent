@@ -166,6 +166,7 @@ public final class SafWebDavTestDocumentsProvider extends DocumentsProvider {
 
     @Override
     public synchronized boolean isChildDocument(String parentDocumentId, String documentId) {
+        if (parentDocumentId.equals(documentId)) return false;
         Node current = nodes.get(documentId);
         while (current != null && current.parentId != null) {
             if (parentDocumentId.equals(current.parentId)) return true;
