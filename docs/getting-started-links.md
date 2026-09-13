@@ -28,10 +28,12 @@ Install guidance: [macOS](platform/macos.md),
 1. Pair the devices and check that their confirmation codes match.
 2. On the source device, open **Links**. Android calls the page **Shared folders**
    and its creation action **Create link**. Choose the source folder and a paired
-   destination. Review the deletion choices below before confirming the link.
+   destination. Choose when to transfer and review the deletion choices below
+   before confirming the link.
 3. On the receiving device, review the incoming link, choose its destination
-   folder, and accept. Current builds begin continuous transfers after both
-   devices confirm the link and the source confirms its settings.
+   folder, and accept. Transfers follow the shared timing choice after both
+   devices confirm the link and the source confirms its settings. Manual links
+   wait for **Run Now**.
 4. On the source, use **Add destination** for each additional paired device.
    Accept and choose a folder on each receiver. An offline destination does not
    stop the others.
@@ -44,6 +46,30 @@ Install guidance: [macOS](platform/macos.md),
 Use **Edit shared settings** to change the source and every destination for a
 link. Authorized members can propose a change; it stays pending until the source
 confirms it. Separate links have independent settings.
+
+## Choose when to transfer
+
+| Timing | What happens |
+| --- | --- |
+| **Manual** | Use **Run Now** on any linked device to request one transfer from the source to all destinations. The transfer worker stops when finished. |
+| **Scheduled** | The source starts transfers at the chosen interval, from 15 minutes to one year. You can also use **Run Now**. The source displays the next due time. |
+| **Continuous** | The transfer worker stays available and watches for source changes while the link is enabled. |
+
+Timing, pause, and Android conditions belong to the whole link. Change them on
+any authorized member; the source confirms and distributes the change. An
+offline source leaves requests pending. Review a conflicting request before
+trying a new change. If a request's response is lost, **Try Again** reuses that
+request instead of starting another transfer.
+
+Android's **Wi-Fi only** and **While charging** choices apply to Android devices
+in the link. Local Wi-Fi can work without Internet access. Each Android device
+must report its current conditions; missing or stale observations pause its
+transfers. The Android service and operating system must permit background work,
+so a schedule is not a promise of exact wall-clock delivery.
+
+A successful destination can finish while another is offline. An unfinished run
+becomes incomplete after 24 hours. Restarting the source interrupts its active
+run; review the status and use **Run Now** again. Existing files stay in place.
 
 ## Choose deletion behavior
 
@@ -64,9 +90,10 @@ stops transfers and keeps existing files.
 
 Fan-out destinations, separate family collection folders, destination-deletion
 retention and explicit restoration, and shared link settings have verified
-three-node journeys. Manual and scheduled transfer choices are still being
-implemented. Android's API 37 device journey passes; whole-app design and
-additional platform journeys remain open. Do not treat a local build as a release-ready package.
+three-node journeys. Manual and scheduled controls are implemented, with native
+device and restart verification still in progress. Android's earlier API 37
+one-way device journey passes; whole-app design and additional platform journeys
+remain open. Do not treat a local build as a release-ready package.
 
 See [product requirements](product/requirements.md) and the
 [completion ledger](release/completion-progress.md) for current scope and
