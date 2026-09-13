@@ -1,4 +1,5 @@
 import AppKit
+import Foundation
 import XCTest
 
 /// Hosted capability probe only. This does not replace populated-link keyboard,
@@ -215,6 +216,7 @@ final class HostedVoiceOverCapabilityProbe: XCTestCase {
     }
 
     private func attachAuditResult(_ fixedResult: String) {
+        FileHandle.standardError.write(Data((fixedResult + "\n").utf8))
         let attachment = XCTAttachment(string: fixedResult + "\n")
         attachment.name = "Hosted VoiceOver capability"
         attachment.lifetime = .keepAlways

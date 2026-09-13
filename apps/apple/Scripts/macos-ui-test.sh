@@ -434,6 +434,15 @@ emit_failed_result_details() {
   fi
   return 0
 }
+
+emit_bounded_ui_progress() {
+  local file=$1
+  [[ -f "$file" && ! -L "$file" ]] || return 0
+  print -u2 -- "--- bounded UI test progress ---"
+  LC_ALL=C grep -E \
+    '^(Test (Suite|Case) |Covalent phase: |Accessibility audit: VoiceOver )' \
+    "$file" | tail -160 >&2 || true
+}
 if ! run_bounded 600 xcodebuild \
   -quiet \
   -project Covalent.xcodeproj \
@@ -800,7 +809,6 @@ relaunch_writer_pid=$!
 # set when this lane had never passed and nothing had been measured.
 managed_app_may_have_started=1
 if ! run_bounded 480 xcodebuild \
-  -quiet \
   -xctestrun "$xctestrun_file" \
   -destination 'platform=macOS,arch=arm64' \
   -destination-timeout 30 \
@@ -817,6 +825,7 @@ if ! run_bounded 480 xcodebuild \
   # findings the accessibility test prints — scroll off the end of any tail
   # worth reading. Pull them out by name first.
   sed -n '1,4p' "$real_fixture/relaunch-fixture-writer.log" >&2
+  emit_bounded_ui_progress "$ui_log"
   emit_failed_result_details
   print -u2 -- "--- audit findings and test failures ---"
   grep -n -A3 -E 'COVALENT-AUDIT-FINDING|error: -\[|XCTAssert' "$ui_log" | tail -200 >&2 || true
@@ -875,5 +884,5 @@ do
     exit 1
   fi
 done
+emit_bounded_ui_progress "$ui_log"
 emit_failed_result_details
-cat "$ui_log"

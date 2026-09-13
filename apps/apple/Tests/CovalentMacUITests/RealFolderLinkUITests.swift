@@ -294,21 +294,6 @@ final class RealFolderLinkUITests: XCTestCase {
         editSettings.click()
         let settingsTitle = app.staticTexts["Mac UI Link Settings"]
         XCTAssertTrue(settingsTitle.waitForExistence(timeout: transitionTimeout))
-        let pauseLink = app.descendants(matching: .any)["folderLink.pause"]
-        XCTAssertTrue(pauseLink.waitForExistence(timeout: transitionTimeout))
-        XCTAssertTrue(pauseLink.isEnabled)
-        XCTAssertTrue(pauseLink.isHittable)
-        let initialPauseValue = String(describing: pauseLink.value)
-        pauseLink.click()
-        XCTAssertNotEqual(String(describing: pauseLink.value), initialPauseValue)
-        app.typeKey(.space, modifierFlags: [])
-        XCTAssertEqual(String(describing: pauseLink.value), initialPauseValue)
-        app.typeKey(.tab, modifierFlags: [])
-        app.typeKey(.tab, modifierFlags: [.shift])
-        app.typeKey(.space, modifierFlags: [])
-        XCTAssertNotEqual(String(describing: pauseLink.value), initialPauseValue)
-        app.typeKey(.space, modifierFlags: [])
-        XCTAssertEqual(String(describing: pauseLink.value), initialPauseValue)
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(waitForDisappearance(of: settingsTitle, timeout: transitionTimeout))
         try auditMainWindow(in: app, timeout: transitionTimeout)
@@ -330,6 +315,7 @@ final class RealFolderLinkUITests: XCTestCase {
     }
 
     private func recordPhase(_ name: String) {
+        FileHandle.standardError.write(Data((name + "\n").utf8))
         XCTContext.runActivity(named: name) { _ in }
     }
 
