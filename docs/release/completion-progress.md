@@ -22,14 +22,18 @@ Updated 2026-09-13 after the owner reaffirmed the lightweight one-way scope. The
 [Current requirements](../product/requirements.md). Atlas remains offline; Docker is the accepted Unraid target. Queued builds, source inspection, and unverified agent claims cannot complete a check.
 
 Rclone migration: the restricted upstream v1.75.1 worker builds for macOS arm64,
-Android arm64, and Linux amd64/arm64. The macOS worker is 20.0 MB and Android is
-21.6 MB. Eighteen prototype policy/transport checks and ten packaged read-only
-SFTP checks pass, including denied source writes, host-key verification, scoped
-access, and removal followed by receiver restart. The authorization helper's
-boundary tests pass. These results do not yet prove the integrated app runtime.
+Android arm64/x86_64, and Linux amd64/arm64. The macOS worker is 20.0 MB; Android
+workers are 21.6 MB and 23.2 MB. Eighteen prototype policy/transport checks and
+twelve packaged read-only SFTP/content checks pass, including denied source
+writes, host-key verification, scoped access, receiver restart after removal,
+and detection of same-size, same-mtime content corruption. The authorization
+helper's boundary tests pass. Mac packaging/signing and Android worker
+packaging/provenance/notices pass; these are components, not final app acceptance.
 The simplified web console passes a real browser fixture journey; native Mac
-sources typecheck for macOS 15. The Rust runtime, Android integration, packaging,
-full device journeys, and final release remain in progress.
+sources typecheck for macOS 15. The Rust runtime, Android app integration,
+full device journeys, and final release remain in progress. Syncthing build
+scripts, source patch, and package assets have been removed from the integration
+checkout. [ADR 0008](../adr/0008-rclone-one-way-links.md) records the settled choice.
 
 Implementation evidence: the full Rust workspace run passed 908 tests (real worker tests run separately). The current Android build, lint, and 175 JVM tests pass. All 24 Mac production Swift sources compiled and linked, and eight focused Swift tests passed. The web console passed 128 tests. The integrated three-node runtime passes one-way fan-out with an offline destination, retained deletions, source deletion propagation, restoration after restart, and shared/offline/conflicting settings. A separate three-node collection journey passes distinct child-folder ownership, identical filename isolation, overlapping-root rejection, independent settings, and scoped deletion. Missing source mounts and failed source scans preserve destination files while the healthy contributor keeps transferring; restoring the source resumes transfers. The full foundation check and strict integration-test Clippy pass.
 
