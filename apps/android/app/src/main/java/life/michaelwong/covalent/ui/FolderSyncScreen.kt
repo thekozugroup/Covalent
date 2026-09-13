@@ -580,11 +580,11 @@ internal fun FolderSyncScreen(
 
     val listState = rememberLazyListState()
 
-    Box(modifier.fillMaxSize()) {
+    Column(modifier.fillMaxSize()) {
         LazyColumn(
-            Modifier.fillMaxSize().testTag("folder-sync-list"),
+            Modifier.weight(1f).fillMaxWidth().testTag("folder-sync-list"),
             state = listState,
-            contentPadding = PaddingValues(20.dp, 14.dp, 20.dp, 112.dp),
+            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
         item {
@@ -933,7 +933,7 @@ internal fun FolderSyncScreen(
         }
         }
         if (hostRequested) {
-            Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp)) {
+            Box(Modifier.align(Alignment.CenterHorizontally).padding(bottom = 12.dp)) {
                 PrimaryActionToolbar(
                     enabled = true,
                     compact = LocalDensity.current.fontScale >= 1.3f,

@@ -84,11 +84,15 @@ final class RealFolderLinkUITests: XCTestCase {
         app.typeKey("1", modifierFlags: .command)
         let linksScrollView = app.scrollViews["links.view"]
         XCTAssertTrue(linksScrollView.waitForExistence(timeout: transitionTimeout))
-        let peerPicker = linksScrollView.popUpButtons["Paired Device"]
+        let peerPicker = linksScrollView.popUpButtons["links.new.peer"]
         scrollTo(peerPicker, in: linksScrollView)
         XCTAssertTrue(peerPicker.waitForExistence(timeout: transitionTimeout))
+        XCTAssertTrue(peerPicker.isHittable)
         peerPicker.click()
-        XCTAssertTrue(app.menuItems["Responder UI Peer"].waitForExistence(timeout: transitionTimeout))
+        XCTAssertTrue(
+            app.menuItems["Responder UI Peer"].waitForExistence(timeout: transitionTimeout),
+            peerPickerDiagnostic(app: app, picker: peerPicker)
+        )
         app.menuItems["Responder UI Peer"].click()
         let name = linksScrollView.textFields["links.new.name"]
         scrollTo(name, in: linksScrollView)
@@ -184,6 +188,13 @@ final class RealFolderLinkUITests: XCTestCase {
         let runAgain = app.menuItems["Run Mac UI Link Now"]
         XCTAssertTrue(runAgain.waitForExistence(timeout: transitionTimeout))
         XCTAssertFalse(runAgain.label.isEmpty)
+    }
+
+    private func peerPickerDiagnostic(app: XCUIApplication, picker: XCUIElement) -> String {
+        let menuItems = app.menuItems
+        let labels = menuItems.allElementsBoundByIndex.prefix(12).map(\.label)
+        return "Paired Device value: \(String(describing: picker.value)); "
+            + "menu items: \(menuItems.count); first labels: \(labels)"
     }
 
     private func launchApp(port: String) throws -> XCUIApplication {

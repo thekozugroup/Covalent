@@ -6,7 +6,7 @@ Updated 2026-09-13 after the owner reaffirmed the lightweight one-way scope. The
 complete user journeys, not remaining time or reusable code. Rclone is the sole
 transfer engine and its migration is complete. Independent fan-out, collection
 isolation, deletion/restoration, and shared settings remain verified. The latest
-Android run fails its first Manual transfer, reopening native setup, cadence,
+Android journey fails before its first Manual run is admitted, reopening native setup, cadence,
 and Android acceptance previously counted at 70%. The earlier passing Android
 journey remains baseline evidence; it does not approve this changed copy path.
 Earlier Syncthing evidence is retained only as history.
@@ -89,25 +89,40 @@ authenticated API. The tested rclone runtime and Android changes are recorded
 above. That run also passes the added address-edit regression. Row 1 is reopened
 until the changed native transfer path passes on current source.
 
-The latest integrated source `142a6eb` passes the Rust workspace and strict
+Integrated source `142a6eb` passes the Rust workspace and strict
 Clippy, all 70 web tests, Android foundation, the Mac app bundle, and packaged
 Docker journeys on amd64 and arm64. CodeQL and release-version checks pass.
 Its Android device baseline passes 81 tests, but the full SAF journey times
 out at its first Manual destination-byte wait. The failure occurs before the
-first completed generation or deletion checks. No node/run status was emitted
-there, so the cause remains unknown. The earlier `6260187` device run passes
+first completed generation or deletion checks. A fresh local build with the same
+native runtime reproduces the failure with both nodes idle at generation zero.
+A device screenshot and measured bounds show that the floating Pair/Links toolbar
+covers the Run Now button; the original physical tap saves no run request.
+The list now reserves the toolbar's measured height below its viewport. Local
+foundation checks pass, and the complete unchanged SAF journey passes in
+399.70 seconds with ordinary taps. Its test source matches `7cf89c1`, its UI
+matches the corrected working tree, and its fresh native runtime matches
+`142a6eb`. Normal MainActivity layout review and the completion audit remain
+pending, so the acceptance count above has not yet increased.
+The earlier `6260187` device run passes
 all 82 tests. The `8420180` Android run's source-deletion timeout did not
 recur with the original immediate deletion timing and 120-second assertion;
 no production transfer change separates those two runs, so its cause remains
 unestablished.
 
-The latest Mac UI job passes five of six tests, including both accessibility
-audits. The native Links/menu bar journey reaches Pair Device but fails because
+The Mac UI job on `142a6eb` passes five of six tests, including both accessibility
+audits. The native Links/menu bar journey fails at pairing because
 its isolated nodes bind localhost while automatically advertising a LAN address.
 Pairing correctly requires the signed address to match the dialed address.
 A fresh headless node reproduction fails with automatic addressing and pairs
 successfully when both nodes explicitly advertise their localhost endpoints.
-The UI fixture now sets those two addresses; the native rerun remains pending.
+The UI fixture now sets those two addresses. On `7cf89c1`, pairing succeeds and
+the journey reaches the paired-device picker, where the expected menu entry is
+not found. The code preserves the expected name end to end; the log cannot
+distinguish a runtime name mismatch from a menu accessibility lookup problem.
+A stable picker identifier and bounded failure diagnostics are added for the
+next run, with the original selection assertion and timeout unchanged.
+UI-test Swift typechecking and production-file parsing pass locally.
 Its copied production helpers use test-only signatures, so it does not approve
 production sandbox inheritance or Keychain startup.
 
@@ -117,9 +132,10 @@ from exact completed-copy records while retaining unresolved pending state;
 explicit restoration cannot discard an unconfirmed file whose source vanished.
 Six policy tests and four process-supervision tests pass locally, with temporary
 build targets removed. The later `142a6eb` Rust and packaged Docker checks pass;
-its complete Android device verification fails at the first Manual transfer.
-The next run will include bounded source/destination state in that failure
-message without changing the deadline, retries, or transfer assertions.
+its complete Android device verification fails before the first Manual run.
+The later local diagnostics establish that the earlier failure admitted no run
+and never reached the copy worker. The corrected local UI then completes the
+whole SAF journey on that same native runtime.
 
 An optimized local measurement passes the exact 101-file transfer and unchanged
 repeat. Two runtimes together use 0.01 seconds of sampled CPU during roughly

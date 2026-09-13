@@ -650,6 +650,7 @@ struct MacFoldersView: View {
               Text(peer.displayName).tag(Optional(peer.peerId))
             }
           }
+          .accessibilityIdentifier("links.new.peer")
           .accessibilityHint("Selects the paired device that will receive this folder offer.")
           .disabled(pendingOffer != nil)
 
