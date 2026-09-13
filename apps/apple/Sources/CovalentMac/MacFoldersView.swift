@@ -57,6 +57,7 @@ struct MacFoldersView: View {
         }
       }
       .formStyle(.grouped)
+      .accessibilityIdentifier("links.view")
       .navigationTitle("Links")
       .task { await refreshWhileVisible() }
       .sheet(item: $settingsEditor) { editor in
@@ -654,6 +655,8 @@ struct MacFoldersView: View {
 
           TextField("Folder Name", text: $label, prompt: Text("Shared Documents"))
             .focused($focusedField, equals: .label)
+            .accessibilityIdentifier("links.new.name")
+            .accessibilityLabel("Folder Name")
             .accessibilityHint("Names the folder for the paired device.")
             .disabled(pendingOffer != nil)
 

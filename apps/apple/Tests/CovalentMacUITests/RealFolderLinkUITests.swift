@@ -32,11 +32,18 @@ final class RealFolderLinkUITests: XCTestCase {
 
         app.typeKey("2", modifierFlags: .command)
         XCTAssertTrue(app.staticTexts["Your devices"].waitForExistence(timeout: transitionTimeout))
-        let address = app.textFields["Tailscale hostname or IP"]
-        XCTAssertTrue(address.waitForExistence(timeout: transitionTimeout))
+        let devicesScrollView = app.scrollViews["devices.view"]
+        XCTAssertTrue(devicesScrollView.waitForExistence(timeout: transitionTimeout))
+        let address = devicesScrollView.textFields["devices.address"]
+        scrollTo(address, in: devicesScrollView)
+        XCTAssertTrue(
+            address.waitForExistence(timeout: transitionTimeout),
+            textFieldDiagnostics(in: devicesScrollView)
+        )
         address.click()
         address.typeText("127.0.0.1:\(responderPort)")
-        let pair = app.scrollViews["devices.view"].buttons["Pair Device"]
+        let pair = devicesScrollView.buttons["Pair Device"]
+        scrollTo(pair, in: devicesScrollView)
         XCTAssertTrue(pair.isHittable)
         pair.click()
 
@@ -64,16 +71,17 @@ final class RealFolderLinkUITests: XCTestCase {
         XCTAssertTrue(waitForDisappearance(of: app.staticTexts["Pairing Complete"], timeout: transitionTimeout))
 
         app.typeKey("1", modifierFlags: .command)
-        let linksScrollView = try XCTUnwrap(
-            app.scrollViews.allElementsBoundByIndex.max { $0.frame.width < $1.frame.width }
-        )
-        let peerPicker = app.popUpButtons["Paired Device"]
+        let linksScrollView = app.scrollViews["links.view"]
+        XCTAssertTrue(linksScrollView.waitForExistence(timeout: transitionTimeout))
+        let peerPicker = linksScrollView.popUpButtons["Paired Device"]
         scrollTo(peerPicker, in: linksScrollView)
         XCTAssertTrue(peerPicker.waitForExistence(timeout: transitionTimeout))
         peerPicker.click()
         XCTAssertTrue(app.menuItems["Responder UI Peer"].waitForExistence(timeout: transitionTimeout))
         app.menuItems["Responder UI Peer"].click()
-        let name = app.textFields["Folder Name"]
+        let name = linksScrollView.textFields["links.new.name"]
+        scrollTo(name, in: linksScrollView)
+        XCTAssertTrue(name.waitForExistence(timeout: transitionTimeout))
         name.click()
         name.typeText("Mac UI Link")
         let sourceDeletion = app.staticTexts["Deleting a source file leaves destination copies untouched."]
@@ -112,8 +120,10 @@ final class RealFolderLinkUITests: XCTestCase {
         )
 
         let idle = app.staticTexts["Idle. Run this link when you want to transfer changes."]
+        scrollTo(idle, in: linksScrollView)
         XCTAssertTrue(idle.waitForExistence(timeout: transferTimeout))
         let run = app.buttons["Run Mac UI Link now"]
+        scrollTo(run, in: linksScrollView)
         XCTAssertTrue(run.waitForExistence(timeout: transitionTimeout))
         XCTAssertTrue(run.isHittable)
         run.click()
@@ -133,7 +143,9 @@ final class RealFolderLinkUITests: XCTestCase {
             try Data(contentsOf: URL(fileURLWithPath: destinationRoot + "/destination-only.txt")),
             Data("destination-must-not-write-back".utf8)
         )
-        XCTAssertTrue(app.staticTexts["Last run completed"].waitForExistence(timeout: transferTimeout))
+        let lastRunCompleted = app.staticTexts["Last run completed"]
+        scrollTo(lastRunCompleted, in: linksScrollView)
+        XCTAssertTrue(lastRunCompleted.waitForExistence(timeout: transferTimeout))
 
         let editSettings = app.buttons["Edit Link Settings…"]
         scrollTo(editSettings, in: linksScrollView)
@@ -294,6 +306,18 @@ final class RealFolderLinkUITests: XCTestCase {
             object: element
         )
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    private func textFieldDiagnostics(in scrollView: XCUIElement) -> String {
+        let fields = scrollView.textFields.allElementsBoundByIndex.prefix(4)
+        guard !fields.isEmpty else { return "Devices text fields: none" }
+        return "Devices text fields: " + fields.map { field in
+            let frame = field.frame
+            return "identifier=\(field.identifier.debugDescription) "
+                + "label=\(field.label.debugDescription) "
+                + "placeholder=\((field.placeholderValue ?? "").debugDescription) "
+                + "frame=(\(frame.origin.x),\(frame.origin.y),\(frame.width),\(frame.height))"
+        }.joined(separator: "; ")
     }
 
     private func scrollTo(_ element: XCUIElement, in scrollView: XCUIElement) {

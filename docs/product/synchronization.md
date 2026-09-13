@@ -30,10 +30,11 @@ destination. An offline source leaves the request visibly pending. Competing
 edits require review; a stale request never silently overwrites a newer choice.
 New destinations wait for the source's current settings before transferring.
 
-Manual, scheduled and continuous operation with Android Wi-Fi/charging
-conditions are required but remain under development. Do not infer those
-features from a pause button. Batch workers must stop between runs, and status
-must distinguish waiting, active transfer, paused, and errors.
+Manual, scheduled and continuous operation use the link's shared settings.
+Android also applies Wi-Fi and charging conditions within its background
+execution limits. Batch workers stop between runs; status distinguishes waiting,
+active transfer, paused, and errors. These runtime journeys pass the checks
+recorded in the acceptance ledger; final native app and release checks remain.
 
 ## Collections and access
 
@@ -41,7 +42,8 @@ Independent links can contribute to one collection using a distinct child
 folder for each source. Two sources must not manage the same files: separate
 folders prevent collisions and keep one contributor's deletion policy from
 removing another contributor's files. The source never receives the collection's
-other contents. Automatic collection setup remains an open acceptance item.
+other contents. Create a separate link for each contributor and choose its
+distinct child folder when accepting it on the destination.
 
 Folder access is checked before transfer and after worker restarts. Lost
 permissions and incomplete scans must not be treated as source deletions.

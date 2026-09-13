@@ -6,6 +6,7 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
@@ -38,6 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.pluralStringResource
@@ -72,6 +75,7 @@ import life.michaelwong.covalent.model.FolderSyncIssue
 import life.michaelwong.covalent.model.FolderShareSummary
 import life.michaelwong.covalent.model.summaryFor
 import life.michaelwong.covalent.model.NodeConnection
+import life.michaelwong.covalent.model.PrimaryAction
 import life.michaelwong.covalent.node.EmbeddedNodeManager
 import life.michaelwong.covalent.sync.FolderSyncActions
 import life.michaelwong.covalent.sync.FolderSyncGrantStore
@@ -574,11 +578,15 @@ internal fun FolderSyncScreen(
         )
     }
 
-    LazyColumn(
-        modifier.fillMaxSize().testTag("folder-sync-list"),
-        contentPadding = PaddingValues(20.dp, 14.dp, 20.dp, 80.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
+    val listState = rememberLazyListState()
+
+    Box(modifier.fillMaxSize()) {
+        LazyColumn(
+            Modifier.fillMaxSize().testTag("folder-sync-list"),
+            state = listState,
+            contentPadding = PaddingValues(20.dp, 14.dp, 20.dp, 112.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
         item {
             Text(
                 stringResource(R.string.folder_sync_title),
@@ -587,9 +595,15 @@ internal fun FolderSyncScreen(
             )
             Spacer(Modifier.height(6.dp))
             Text(stringResource(R.string.folder_sync_subtitle))
+            error?.let { message ->
+                Spacer(Modifier.height(14.dp))
+                Text(message, color = MaterialTheme.colorScheme.error)
+            }
+            addressUpdateNotice?.let { message ->
+                Spacer(Modifier.height(14.dp))
+                Text(message)
+            }
         }
-        error?.let { message -> item { Text(message, color = MaterialTheme.colorScheme.error) } }
-        addressUpdateNotice?.let { message -> item { Text(message) } }
         if (!hostRequested) {
             item {
                 Card(Modifier.fillMaxWidth()) {
@@ -616,7 +630,11 @@ internal fun FolderSyncScreen(
             return@LazyColumn
         }
         item {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Text(
                     status?.let {
                         when {
@@ -631,9 +649,10 @@ internal fun FolderSyncScreen(
                             else -> stringResource(R.string.folder_sync_ready_to_share)
                         }
                     } ?: stringResource(R.string.folder_sync_starting),
+                    modifier = Modifier.weight(1f),
                 )
                 OutlinedButton(onClick = ::refresh, enabled = !busy) {
-                    Text(stringResource(R.string.action_refresh_backups))
+                    Text(stringResource(R.string.action_refresh))
                 }
             }
         }
@@ -907,6 +926,26 @@ internal fun FolderSyncScreen(
                                 )
                             }
                                 .onFailure { error = folderSyncErrorText(it) }
+                        }
+                    },
+                )
+            }
+        }
+        }
+        if (hostRequested) {
+            Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp)) {
+                PrimaryActionToolbar(
+                    enabled = true,
+                    compact = LocalDensity.current.fontScale >= 1.3f,
+                    onAction = { action ->
+                        scope.launch {
+                            // Notices stay in the header, so status, pairing, and chooser remain items 1 through 3.
+                            listState.animateScrollToItem(
+                                when (action) {
+                                    PrimaryAction.PAIR -> 2
+                                    PrimaryAction.LINKS -> 3
+                                },
+                            )
                         }
                     },
                 )

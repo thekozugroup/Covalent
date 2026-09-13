@@ -79,10 +79,12 @@ struct MacDevicesView: View {
                 Spacer()
             }
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                TextField("Tailscale hostname or IP", text: $tailscaleAddress, prompt: Text("nas.tailnet-name.ts.net:8787"))
+                TextField("Device address", text: $tailscaleAddress, prompt: Text("192.168.1.50:8787"))
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { startTailscalePairing() }
-                    .accessibilityHint("Enter the address shown by the other device in Tailscale")
+                    .accessibilityIdentifier("devices.address")
+                    .accessibilityLabel("Device address")
+                    .accessibilityHint("Enter the address shown by the other device")
                 Button("Pair Device") { startTailscalePairing() }
                     .disabled(
                         tailscaleAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
@@ -91,19 +93,19 @@ struct MacDevicesView: View {
             }
             Text(
                 model.status?.lanDiscovery == false
-                    ? "Automatic LAN discovery is off. Enter a one-time Tailscale MagicDNS hostname or IP; both devices still confirm the same code."
-                    : "LAN devices appear automatically. Tailscale does not provide local device enumeration, so enter the other device's MagicDNS hostname or IP once."
+                    ? "Automatic LAN discovery is off. Enter a LAN IP address or Tailscale address; both devices still confirm the same code."
+                    : "LAN devices appear automatically. You can also enter the other device's LAN IP or Tailscale address."
             )
             .font(.caption)
             .secondaryLabelStyle()
             if model.startingPairingAddress != nil {
-                ProgressView("Contacting Tailscale device…")
+                ProgressView("Contacting device…")
                     .controlSize(.small)
             }
             if model.status?.lanDiscovery == false && model.discoveryCandidates.isEmpty {
                 MacCallout(
                     title: "LAN discovery is off",
-                    message: "Enter a Tailscale address above, or enable LAN discovery in Settings for automatic nearby-device hints.",
+                    message: "Enter a LAN IP or Tailscale address above, or enable LAN discovery in Settings for automatic nearby-device hints.",
                     systemImage: "network.slash",
                     tint: .secondary
                 ) {
@@ -113,7 +115,7 @@ struct MacDevicesView: View {
                 MacEmptyState(
                     systemImage: "dot.radiowaves.left.and.right",
                     title: "No candidates found",
-                    message: "No LAN devices replied. You can enter a Tailscale address above; "
+                    message: "No LAN devices replied. You can enter a LAN IP or Tailscale address above; "
                         + "discovery never grants trust automatically."
                 )
                 .frame(maxWidth: .infinity, minHeight: 180)

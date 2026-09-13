@@ -475,9 +475,25 @@ class SafFolderSyncJourneyInstrumentedTest {
                 "propagate-source.txt",
                 SAF_PROPAGATE_CONTENT,
             )
+            val seedVisibleAtUnixMs = System.currentTimeMillis()
             assertTrue(deleteSafFile(sourceGrant, "propagate-source.txt"))
-            await("source deletion propagated by shared settings", TRANSFER_TIMEOUT_MILLIS) {
-                readSafFile(destinationGrant, "propagate-source.txt") == null
+            assertTrue(readSafFile(sourceGrant, "propagate-source.txt") == null)
+            val runAfterDeletion = sourceShare(repairedA).linkRun
+            println(
+                "COVALENT_SOURCE_DELETION_STAGE stage=source-deleted " +
+                    "seedVisibleAtUnixMs=$seedVisibleAtUnixMs " +
+                    "sourceAbsentAtUnixMs=${System.currentTimeMillis()} " +
+                    "observedAfterDeletionGeneration=${runAfterDeletion?.generation} " +
+                    "observedAfterDeletionPhase=${runAfterDeletion?.phase}",
+            )
+            try {
+                await("source deletion propagated by shared settings", TRANSFER_TIMEOUT_MILLIS) {
+                    readSafFile(destinationGrant, "propagate-source.txt") == null
+                }
+            } catch (failure: AssertionError) {
+                println(recoveryDiagnostic("source", repairedA, "source-deletion"))
+                println(recoveryDiagnostic("destination", connectionB, "source-deletion"))
+                throw failure
             }
 
             clickScreenText(context.getString(R.string.folder_sync_remove))

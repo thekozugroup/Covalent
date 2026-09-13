@@ -2,13 +2,13 @@
 
 Updated 2026-09-13 after the owner reaffirmed the lightweight one-way scope. The active goal is defined in [Product requirements](../product/requirements.md#active-completion-goal).
 
-**Current scope: 50% verified, 5 of 10 complete acceptance checks.** This counts complete user journeys, not remaining time or reusable code. The active branch uses rclone as the sole transfer engine. Independent fan-out, collection isolation, deletion/restoration, shared settings, and transfer cadence pass real rclone journeys. The remaining five checks are open. Earlier Syncthing evidence is retained as history and does not approve the replacement.
+**Current scope: 60% verified, 6 of 10 complete acceptance checks.** This counts complete user journeys, not remaining time or reusable code. The active branch uses rclone as the sole transfer engine. Native Android setup, independent fan-out, collection isolation, deletion/restoration, shared settings, and transfer cadence pass real rclone journeys. The remaining four checks are open. Earlier Syncthing evidence is retained as history and does not approve the replacement.
 
 **Previous scope: 75%, 15 of 20 checks**, recorded at checkpoint 46 (c47003113e28b6e934a8ab4823040614fb07fb30). That score belongs to the superseded bidirectional/backup scope. Source and evidence remain in Git history.
 
 | # | Acceptance check | Status |
 | --- | --- | --- |
-| 1 | Native setup pairs devices and creates a source/destination link; files never flow backward. | Open |
+| 1 | Native setup pairs devices and creates a source/destination link; files never flow backward. | Verified |
 | 2 | Fan-out destinations work independently; multiple sources contribute safely to one collection. | Verified |
 | 3 | Both source-deletion options work with clear explanations and failed-scan protection. | Verified |
 | 4 | Destination deletions stay local across source edits/restarts; explicit restoration works. | Verified |
@@ -58,8 +58,12 @@ and safe removal. Both Setup accessibility checks pass. This device proof uses
 the `d634321` runtime plus the tested Android UI changes; the integrated source
 still needs its exact-commit hosted run. The current test adds native peer-address
 editing, a transfer to the moved peer, and persistence across cold restart;
-that added coverage awaits device execution. Component screenshots do not establish the complete Android
-top bar and floating navigation design.
+that added coverage awaits device execution. The ordinary MainActivity file-transfer
+screen now reuses the floating Pair/Links toolbar. Device review passes normal
+and 2× text, both navigation actions, content clearance at the end of the list,
+and cold reopening. A weighted status label fixes the narrow Refresh button at
+large text sizes. This visual build reuses previously verified native helpers;
+it does not replace the current-source device transfer run.
 
 Row 5 combines the complete Manual/Continuous Android journey, the complete
 15-minute source-owned scheduled run, and the recorded real charging/Wi-Fi
@@ -68,17 +72,30 @@ run; only its completed phases are credited. Its later Continuous-resume failure
 is independently covered by the final passing journey. The core stale-condition
 check also passes. This does not promise exact Android background timing.
 
-Hosted Rust/contracts, the Mac app bundle, and Docker on amd64 and arm64 pass
-on `15c87c1`. Its native jobs stop before UI execution: Android lint finds two
-unused labels left by the deleted browser; the Mac launcher handles only one
-xctestrun format. The current batch removes both labels and supports Xcode's
-version 1 and version 2 test files, with executable plist fixtures passing.
-These fixes still need their hosted run.
+Row 1 uses the completed API 37 SAF journey: native initiating-device pairing,
+system folder selection, native Manual link creation and Run Now, exact forward
+bytes, and a bounded check that a destination-only file stays off the source.
+The responder confirms pairing and accepts the destination through the fixture's
+authenticated API. The tested rclone runtime and reviewed Android changes are
+recorded above; this is not an exact-current-commit claim. The added address-edit
+journey remains a regression check rather than a new condition for row 1.
 
-The earlier Mac UI job passes four of five tests, including both accessibility
-audits. The remaining legacy empty-state assertion has a scoped accessibility
-and navigation-wait correction in `19ffb1b`, awaiting native execution. A sixth
-native Links/menu bar journey is implemented and typechecks. Its isolated nodes
+Hosted Rust/contracts, Android foundation, the Mac app bundle, and Docker on
+amd64 and arm64 pass for PR source `8420180`. CodeQL and release-version checks
+also pass. Android passes all 81 baseline device tests; the final SAF journey
+passes address changes, transfer, recovery, settings, and pause/resume, then
+times out propagating a source deletion immediately after its copy appears.
+The cause is unresolved. The next run retains that timing and the 120-second
+assertion, adding only stage timestamps and public state diagnostics on failure.
+The earlier unused-resource and xctestrun-format
+failures are resolved; the Mac launcher reaches all six native UI tests.
+
+The Mac UI job passes five of six tests, including both accessibility audits
+and the corrected legacy empty state. The sixth native Links/menu bar journey
+stops at an unmatched pairing address field. The current fix gives that field
+an explicit Device address accessibility label and identifier, supports bounded
+scrolling in the test, and describes both LAN and Tailscale addresses. The
+production and test sources typecheck; native verification remains. Its isolated nodes
 use production-built helpers with test-only signatures; it does not approve
 production sandbox inheritance or Keychain startup. Android's earlier hosted
 baseline passes 79 of 82 tests. The obsolete setup expectations, external-driver
@@ -115,9 +132,15 @@ are logical file sizes; physical free-space change was not measured. Atmos
 cleanup and new remote validation await restored SSH authentication; Atlas has
 not been contacted.
 
-The Android replacement removes 815 net lines, including the old all-files
+The initial Android test replacement removed 815 net lines, including the old all-files
 browser and host-controlled permission phases. Forty owned device screenshots
 were removed, and the retained test no longer creates those temporary screenshots.
 The completed replacement emulator, private ADB server, checkout, and build cache
 are also removed. The deleted tree reported 11.62 GB through `du`; this is not a
 measurement of freed physical space. Proof APKs and reusable toolchains remain.
+
+The completed floating-toolbar review's emulator, private ADB instance, and
+private build cache are removed. Its exact proof APKs and screenshots remain.
+The obsolete Syncthing adapter's ignored Cargo target is also removed after
+process, handle, and reference checks; it reported 30,461,364 KiB through `du`.
+That checkout's uncommitted source and compact evidence are preserved.

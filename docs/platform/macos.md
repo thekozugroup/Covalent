@@ -155,7 +155,7 @@ on refresh. Keep Covalent open and the Mac awake during the first transfer.
 
 Open **Devices**, choose **Find Devices**, then **Pair with This Device** for a
 discovered device. Alternatively, enter its reachable hostname or IP with port
-8787 and choose **Pair Device**. Compare the confirmation code
+8787 in **Device address** and choose **Pair Device**. Compare the confirmation code
 on both devices and confirm it on each.
 
 Open **Links**, choose your source folder and paired destination, then review
