@@ -1314,7 +1314,7 @@ async fn collection_links_isolate_sources_and_preserve_files_when_a_source_canno
     fs::rename(a_root.join("a-only.jpg"), &missing_photo)
         .expect("withhold indexed photo during failed scan");
     fs::create_dir(&unreadable).expect("create owned unreadable child");
-    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0))
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000))
         .expect("deny source child access");
     assert!(
         fs::read_dir(&unreadable).is_err(),
@@ -1575,4 +1575,161 @@ async fn manual_fanout_runs_finish_empty_and_retained_deletions_across_restart()
     a.stop()
         .await
         .expect("stop destination after restart proof");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires explicit maintained folder-sync worker and freshly compiled guardian paths"]
+async fn scheduled_link_waits_for_source_due_time_transfers_and_stops_workers() {
+    fn now_unix_ms() -> u64 {
+        u64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock after Unix epoch")
+                .as_millis(),
+        )
+        .expect("current Unix time fits u64")
+    }
+
+    let binaries = test_binaries();
+    let root = tempfile::Builder::new()
+        .prefix("covalent-scheduled-link-")
+        .tempdir()
+        .expect("isolated scheduled link test root");
+    let source_spec = NodeSpec::new(root.path(), "scheduled-source", 0xB1);
+    let destination_spec = NodeSpec::new(root.path(), "scheduled-destination", 0xB2);
+    let source_root = root.path().join("source-files");
+    let destination_root = root.path().join("destination-files");
+    private_directory(&source_root);
+    private_directory(&destination_root);
+
+    let source = start_node(&source_spec, &binaries).await;
+    let destination = start_node(&destination_spec, &binaries).await;
+    let peer_id = pair(&source, &destination, "Scheduled destination").await;
+    let folder = Uuid::new_v4();
+    offer_and_accept_at_cadence(
+        &source,
+        &destination,
+        &peer_id,
+        folder,
+        &source_root,
+        &destination_root,
+        json!({"mode": "manual"}),
+    )
+    .await;
+    for node in [&source, &destination] {
+        let ready = wait_ready_at(
+            node,
+            "manual scheduled-test link",
+            folder,
+            1,
+            0,
+            false,
+            false,
+        )
+        .await;
+        assert_eq!(ready["lifecycle"], "stopped");
+    }
+
+    let scheduled_file = destination_root.join("scheduled.txt");
+    write(
+        &source_root,
+        "scheduled.txt",
+        b"transferred only when the source schedule is due\n",
+    );
+    assert_absent(
+        &scheduled_file,
+        "manual link transferred before its schedule was edited",
+    );
+
+    post_ok(
+        &destination,
+        "/api/v1/sync/settings",
+        json!({
+            "folderId": folder,
+            "changeId": Uuid::new_v4(),
+            "expectedRevision": 0,
+            "settings": {
+                "deletionPolicy": {
+                    "propagateSourceDeletions": false,
+                    "restoreLocalDeletions": false,
+                },
+                "paused": false,
+                "cadence": {"mode": "scheduled", "intervalMinutes": 15},
+                "androidConditions": {"wifiOnly": false, "chargingOnly": false},
+            },
+        }),
+    )
+    .await;
+
+    let source_scheduled = wait_for_status(
+        &source,
+        "source accepted the destination schedule",
+        |value| {
+            let shares = folder_shares(value, folder);
+            shares.len() == 1
+                && shares[0]["linkSettings"]["revision"] == 1
+                && shares[0]["linkSettings"]["confirmed"] == true
+                && shares[0]["linkSettings"]["settings"]["cadence"]
+                    == json!({"mode": "scheduled", "intervalMinutes": 15})
+                && shares[0]["linkRun"]["nextDueAtUnixMs"].is_u64()
+                && value["lifecycle"] == "stopped"
+        },
+    )
+    .await;
+    let due_at = folder_shares(&source_scheduled, folder)[0]["linkRun"]["nextDueAtUnixMs"]
+        .as_u64()
+        .expect("source owns the scheduled due time");
+    let observed_at = now_unix_ms();
+    assert!(
+        due_at > observed_at + 13 * 60_000 && due_at <= observed_at + 15 * 60_000,
+        "source due time does not reflect the production 15-minute interval: now={observed_at}, due={due_at}"
+    );
+    let destination_scheduled = wait_for_status(
+        &destination,
+        "destination received the source-confirmed schedule",
+        |value| {
+            let shares = folder_shares(value, folder);
+            shares.len() == 1
+                && shares[0]["linkSettings"]["revision"] == 1
+                && shares[0]["linkSettings"]["confirmed"] == true
+                && shares[0]["linkSettings"]["pendingChange"].is_null()
+                && shares[0]["linkSettings"]["settings"]["cadence"]
+                    == json!({"mode": "scheduled", "intervalMinutes": 15})
+                && value["lifecycle"] == "stopped"
+        },
+    )
+    .await;
+    assert!(
+        folder_shares(&destination_scheduled, folder)[0]["linkRun"]["nextDueAtUnixMs"].is_null(),
+        "destination must not publish its own schedule clock"
+    );
+
+    while now_unix_ms() < due_at {
+        assert_absent(
+            &scheduled_file,
+            "scheduled link transferred before the source due time",
+        );
+        let remaining = due_at.saturating_sub(now_unix_ms());
+        tokio::time::sleep(Duration::from_millis(remaining.min(1_000))).await;
+    }
+
+    wait_file(
+        &scheduled_file,
+        b"transferred only when the source schedule is due\n",
+        "automatic scheduled transfer",
+    )
+    .await;
+    for node in [&source, &destination] {
+        let completed = wait_batch(node, folder, 1, "succeeded").await;
+        assert_eq!(
+            completed["lifecycle"], "stopped",
+            "scheduled transfer workers must stop after the batch"
+        );
+    }
+
+    source.stop().await.expect("stop scheduled source");
+    destination
+        .stop()
+        .await
+        .expect("stop scheduled destination");
 }

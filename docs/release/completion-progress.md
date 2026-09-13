@@ -2,7 +2,7 @@
 
 Updated 2026-09-13 after the owner reaffirmed the lightweight one-way scope. The active goal is defined in [Product requirements](../product/requirements.md#active-completion-goal).
 
-**Current scope: 40% verified, 4 of 10 complete acceptance checks.** This counts complete user journeys, not remaining time or reusable code. Native apps, pairing, permissions, worker supervision, Docker packages, and successful transfers form a working baseline. Independent fan-out, collection isolation, deletion/restoration, and shared-setting behavior now pass real three-node journeys. The remaining six checks are open. These four acceptance proofs use the previous Syncthing baseline. The owner has selected rclone as the required replacement. The active branch now uses rclone; remaining verification continues, and earlier Syncthing evidence does not approve the rclone implementation.
+**Current scope: 40% verified, 4 of 10 complete acceptance checks.** This counts complete user journeys, not remaining time or reusable code. The active branch uses rclone as the sole transfer engine. Independent fan-out, collection isolation, deletion/restoration, and shared-setting behavior pass real three-node rclone journeys. The remaining six checks are open. Earlier Syncthing evidence is retained as history and does not approve the replacement.
 
 **Previous scope: 75%, 15 of 20 checks**, recorded at checkpoint 46 (c47003113e28b6e934a8ab4823040614fb07fb30). That score belongs to the superseded bidirectional/backup scope. Source and evidence remain in Git history.
 
@@ -34,10 +34,15 @@ sources typecheck for macOS 15. The rclone Rust runtime and Android SAF bridge a
 branch. The full Rust workspace and strict Clippy pass on commit `607180e`.
 Consolidated foundation checks, 70 web tests, and 179 Swift tests pass;
 two live-service Swift checks remain skipped. Android passes the real system
-folder picker and nested file-access proof. The rclone three-node journey
-advances through deletion and source-edit checks but fails restoration after a
-settings change; cancellation recovery is committed and awaits a fresh journey.
-Android grant isolation is being corrected before the final APK journey. Final native app,
+folder picker and nested file-access proof. The rclone three-node fan-out journey
+passes source edits, retained destination deletions, restoration after settings
+changes and restart, and shared/offline/conflicting settings. The manual journey
+passes empty runs, retained deletions, and restart. The collection journey passes
+independent contributors, missing mounts, unreadable source scans, deletion
+protection, and recovery. Android startup now registers saved folder capabilities
+before starting transfers and isolates unavailable grants. Its fresh APK passes
+package integrity and provenance checks; the full device journey is running.
+The hosted Mac app bundle passes. Final native app,
 Linux package execution, performance, and release acceptance remain open.
 Syncthing runtime modules, build scripts, source patch, and package assets have
 been removed. [ADR 0008](../adr/0008-rclone-one-way-links.md) records the settled choice.

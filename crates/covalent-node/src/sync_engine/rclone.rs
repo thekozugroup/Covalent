@@ -387,8 +387,8 @@ impl RcloneRuntime {
             .list_backend(&folder.backend, false)
             .await?
             .into_iter()
-            .map(|entry| entry.path)
-            .collect::<BTreeSet<_>>();
+            .map(|entry| (entry.path.clone(), entry))
+            .collect::<BTreeMap<_, _>>();
         let (policy_path, policy_staged) = policy_paths(&self.policy_directory, folder_id);
         let mut policy = load_policy(&policy_path, &policy_staged)?;
         let state = policy.folders.entry(folder_id).or_default();
@@ -406,43 +406,7 @@ impl RcloneRuntime {
             // Explicit restoration also authorizes retrying uncertain downloads.
             return Err(EngineSessionError::RuntimeUnavailable);
         }
-        let mut suppressions = if restore {
-            BTreeSet::new()
-        } else {
-            state.suppressions.clone()
-        };
-        if !restore {
-            for path in &state.owned {
-                if source.contains_key(path) && !target.contains(path) {
-                    suppressions.insert(path.clone());
-                } else if target.contains(path) {
-                    suppressions.remove(path);
-                }
-            }
-        }
-        let mut allowed = source
-            .iter()
-            .filter(|(path, entry)| state.delivered.get(*path) != Some(*entry))
-            .map(|(path, _)| path.clone())
-            .collect::<BTreeSet<_>>();
-        if restore {
-            allowed.extend(
-                source
-                    .keys()
-                    .filter(|path| !target.contains(*path))
-                    .cloned(),
-            );
-        }
-        if propagate {
-            allowed.extend(
-                state
-                    .owned
-                    .iter()
-                    .filter(|path| !source.contains_key(*path))
-                    .cloned(),
-            );
-        }
-        allowed.retain(|path| !suppressions.contains(path));
+        let (allowed, suppressions) = plan_transfer(state, &source, &target, propagate, restore);
         let pending = PendingTransfer {
             source_index: source_index.clone(),
             source: source.clone(),
@@ -450,6 +414,12 @@ impl RcloneRuntime {
             suppressions,
             propagate_source_deletions: propagate,
         };
+        if pending.allowed.is_empty() {
+            verify_transfer(&pending, &target)?;
+            complete_transfer_state(state, source, pending.suppressions, propagate);
+            save_policy(&policy_path, &policy_staged, &policy)?;
+            return Ok(source_index);
+        }
         state.pending = Some(pending.clone());
         state.copy_completed = false;
         save_policy(&policy_path, &policy_staged, &policy)?;
@@ -506,16 +476,7 @@ impl RcloneRuntime {
         {
             return Err(EngineSessionError::EngineUnavailable);
         }
-        state.suppressions = pending.suppressions;
-        if propagate {
-            state.delivered = source;
-            state.owned = state.delivered.keys().cloned().collect();
-        } else {
-            state.owned.extend(source.keys().cloned());
-            state.delivered.extend(source);
-        }
-        state.pending = None;
-        state.copy_completed = false;
+        complete_transfer_state(state, source, pending.suppressions, propagate);
         save_policy(&policy_path, &policy_staged, &next)?;
         Ok(source_index)
     }
@@ -932,6 +893,71 @@ fn inventory_index(entries: &[InventoryEntry]) -> EngineIndexSnapshot {
     }
 }
 
+fn plan_transfer(
+    state: &FolderPolicyState,
+    source: &BTreeMap<String, InventoryEntry>,
+    target: &BTreeMap<String, InventoryEntry>,
+    propagate: bool,
+    restore: bool,
+) -> (BTreeSet<String>, BTreeSet<String>) {
+    let mut suppressions = if restore {
+        BTreeSet::new()
+    } else {
+        state.suppressions.clone()
+    };
+    if !restore {
+        for path in &state.owned {
+            if source.contains_key(path) && !target.contains_key(path) {
+                suppressions.insert(path.clone());
+            } else if target.contains_key(path) {
+                suppressions.remove(path);
+            }
+        }
+    }
+    let mut allowed = source
+        .iter()
+        .filter(|(path, entry)| state.delivered.get(*path) != Some(*entry))
+        .map(|(path, _)| path.clone())
+        .collect::<BTreeSet<_>>();
+    if restore {
+        allowed.extend(
+            source
+                .keys()
+                .filter(|path| !target.contains_key(*path))
+                .cloned(),
+        );
+    }
+    if propagate {
+        allowed.extend(
+            state
+                .owned
+                .iter()
+                .filter(|path| !source.contains_key(*path))
+                .cloned(),
+        );
+    }
+    allowed.retain(|path| !suppressions.contains(path));
+    (allowed, suppressions)
+}
+
+fn complete_transfer_state(
+    state: &mut FolderPolicyState,
+    source: BTreeMap<String, InventoryEntry>,
+    suppressions: BTreeSet<String>,
+    propagate: bool,
+) {
+    state.suppressions = suppressions;
+    if propagate {
+        state.delivered = source;
+        state.owned = state.delivered.keys().cloned().collect();
+    } else {
+        state.owned.extend(source.keys().cloned());
+        state.delivered.extend(source);
+    }
+    state.pending = None;
+    state.copy_completed = false;
+}
+
 fn pending_paths_are_unchanged(
     pending: &PendingTransfer,
     current: &BTreeMap<String, InventoryEntry>,
@@ -1128,6 +1154,94 @@ mod tests {
         assert!(
             verify_transfer(&pending, &BTreeMap::from([(source.path.clone(), source)])).is_ok()
         );
+    }
+
+    #[test]
+    fn empty_run_persists_target_deletion_suppression_without_transfer() {
+        let directory = tempfile::tempdir().unwrap();
+        let folder = Uuid::new_v4();
+        let (path, staged) = policy_paths(directory.path(), folder);
+        let source = InventoryEntry {
+            path: "deleted-at-target.txt".into(),
+            size: 4,
+            modified_unix_seconds: 1,
+            sha256: Some("11".repeat(32)),
+        };
+        let source_entries = BTreeMap::from([(source.path.clone(), source.clone())]);
+        let mut policy = PolicyState {
+            version: 1,
+            folders: BTreeMap::from([(
+                folder,
+                FolderPolicyState {
+                    owned: BTreeSet::from([source.path.clone()]),
+                    delivered: source_entries.clone(),
+                    ..FolderPolicyState::default()
+                },
+            )]),
+        };
+
+        let state = policy.folders.get_mut(&folder).unwrap();
+        let (allowed, suppressions) =
+            plan_transfer(state, &source_entries, &BTreeMap::new(), false, false);
+        assert!(allowed.is_empty());
+        assert_eq!(suppressions, BTreeSet::from([source.path.clone()]));
+        let pending = PendingTransfer {
+            source_index: inventory_index(std::slice::from_ref(&source)),
+            source: source_entries.clone(),
+            allowed,
+            suppressions,
+            propagate_source_deletions: false,
+        };
+        assert!(verify_transfer(&pending, &BTreeMap::new()).is_ok());
+
+        complete_transfer_state(state, source_entries, pending.suppressions, false);
+        save_policy(&path, &staged, &policy).unwrap();
+
+        let persisted = load_policy(&path, &staged).unwrap();
+        let state = &persisted.folders[&folder];
+        assert_eq!(state.suppressions, BTreeSet::from([source.path.clone()]));
+        assert_eq!(state.owned, BTreeSet::from([source.path.clone()]));
+        assert_eq!(state.delivered.get(&source.path), Some(&source));
+        assert!(state.pending.is_none());
+        assert!(!state.copy_completed);
+    }
+
+    #[test]
+    fn empty_run_rejects_existing_target_with_wrong_size() {
+        let source = InventoryEntry {
+            path: "wrong-size.txt".into(),
+            size: 4,
+            modified_unix_seconds: 1,
+            sha256: Some("11".repeat(32)),
+        };
+        let source_entries = BTreeMap::from([(source.path.clone(), source.clone())]);
+        let state = FolderPolicyState {
+            owned: BTreeSet::from([source.path.clone()]),
+            delivered: source_entries.clone(),
+            ..FolderPolicyState::default()
+        };
+        let target = InventoryEntry {
+            size: 5,
+            sha256: None,
+            ..source.clone()
+        };
+        let target_entries = BTreeMap::from([(target.path.clone(), target)]);
+        let (allowed, suppressions) =
+            plan_transfer(&state, &source_entries, &target_entries, false, false);
+        assert!(allowed.is_empty());
+        assert!(suppressions.is_empty());
+        let pending = PendingTransfer {
+            source_index: inventory_index(std::slice::from_ref(&source)),
+            source: source_entries,
+            allowed,
+            suppressions,
+            propagate_source_deletions: false,
+        };
+
+        assert!(matches!(
+            verify_transfer(&pending, &target_entries),
+            Err(EngineSessionError::EngineUnavailable)
+        ));
     }
 
     #[test]
