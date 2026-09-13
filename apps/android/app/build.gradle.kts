@@ -15,9 +15,6 @@ val releaseKeystorePath = releaseSecret("COVALENT_ANDROID_KEYSTORE_PATH")
 val releaseStorePassword = releaseSecret("COVALENT_ANDROID_STORE_PASSWORD")
 val releaseKeyAlias = releaseSecret("COVALENT_ANDROID_KEY_ALIAS")
 val releaseKeyPassword = releaseSecret("COVALENT_ANDROID_KEY_PASSWORD")
-val syncthingSourcePath = providers.gradleProperty("syncthingSourceDir")
-    .orElse(providers.environmentVariable("SYNCTHING_SOURCE_DIR"))
-val syncthingSourceDir = syncthingSourcePath.orNull?.let(::file)
 val syncEngineGeneratedRoot = layout.buildDirectory.dir("generated/syncEngine")
 val releaseSigningReady = listOf(
     releaseKeystorePath,
@@ -77,7 +74,7 @@ android {
         buildConfigField(
             "boolean",
             "COVALENT_SYNC_ENGINE_PACKAGED",
-            (syncthingSourceDir != null).toString(),
+            "false",
         )
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -104,6 +101,7 @@ android {
 
     buildTypes {
         release {
+            buildConfigField("boolean", "COVALENT_SYNC_ENGINE_PACKAGED", "true")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -134,7 +132,7 @@ android {
             // The JNI linker already uses --strip-all. Keep AGP from changing the
             // final-link bytes recorded by the native provenance collector.
             keepDebugSymbols += "**/libcovalent_android_jni.so"
-            keepDebugSymbols += "**/libsyncthing.so"
+            keepDebugSymbols += "**/libcovalentrclone.so"
             keepDebugSymbols += "**/libengineguardian.so"
         }
     }
@@ -195,6 +193,13 @@ val covalentRepoRoot: File =
                 "expected an ancestor containing Cargo.lock, crates/covalent-android-jni, " +
                 "and scripts/build-android-jni.sh."
         )
+val rcloneSourceDir = covalentRepoRoot.resolve("packaging/rclone")
+
+android.buildTypes.getByName("debug").buildConfigField(
+    "boolean",
+    "COVALENT_SYNC_ENGINE_PACKAGED",
+    (providers.gradleProperty("covalentBuildSyncEngine").orNull == "true").toString(),
+)
 
 val buildAndroidJni = tasks.register<Exec>("buildAndroidJni") {
     group = "build"
@@ -228,43 +233,32 @@ val buildAndroidJni = tasks.register<Exec>("buildAndroidJni") {
 
 val buildAndroidSyncEngine = tasks.register<Exec>("buildAndroidSyncEngine") {
     group = "build"
-    description = "Builds the exact Syncthing v2.1.3 worker and reviewed guardian for Android."
+    description = "Builds the restricted rclone v1.75.1 worker and reviewed guardian for Android."
     workingDir = covalentRepoRoot
     doFirst {
+        check(rcloneSourceDir.isDirectory) {
+            "The committed packaging/rclone module is missing."
+        }
         val generatedRoot = syncEngineGeneratedRoot.get().asFile
         project.delete(generatedRoot)
         check(generatedRoot.parentFile.mkdirs() || generatedRoot.parentFile.isDirectory)
     }
-    val checkedSource = syncthingSourceDir
-    if (checkedSource == null) {
-        commandLine("false")
-        doFirst {
-            throw GradleException(
-                "Set -PsyncthingSourceDir=/absolute/path or SYNCTHING_SOURCE_DIR to the " +
-                    "exact official Syncthing v2.1.3 checkout.",
-            )
-        }
-    } else {
-        commandLine(
-            covalentRepoRoot.resolve("scripts/build-android-sync-engine.sh"),
-            checkedSource.canonicalPath,
-            syncEngineGeneratedRoot.get().asFile.canonicalPath,
-        )
-        inputs.files(
-            fileTree(checkedSource) {
-                exclude(".git/**", "**/gui.files.go")
-            },
-            covalentRepoRoot.resolve("scripts/build-android-sync-engine.sh"),
-            covalentRepoRoot.resolve("scripts/android-native-budgets.sh"),
-            covalentRepoRoot.resolve("scripts/collect-go-target-license-inventory.py"),
-            covalentRepoRoot.resolve("scripts/collect-sync-engine-notices.py"),
-            covalentRepoRoot.resolve("scripts/collect-android-native-link-provenance.py"),
-            covalentRepoRoot.resolve("scripts/android-go-link-wrapper.sh"),
-            covalentRepoRoot.resolve("packaging/sync-engine/engine-guardian.c"),
-            covalentRepoRoot.resolve("docs/licenses/sync-engine/OFL-1.1.txt"),
-            covalentRepoRoot.resolve("LICENSE"),
-        )
-    }
+    commandLine(
+        covalentRepoRoot.resolve("scripts/build-android-sync-engine.sh"),
+        rcloneSourceDir.canonicalPath,
+        syncEngineGeneratedRoot.get().asFile.canonicalPath,
+    )
+    inputs.files(
+        rcloneSourceDir,
+        covalentRepoRoot.resolve("scripts/build-android-sync-engine.sh"),
+        covalentRepoRoot.resolve("scripts/android-native-budgets.sh"),
+        covalentRepoRoot.resolve("scripts/collect-go-target-license-inventory.py"),
+        covalentRepoRoot.resolve("scripts/collect-sync-engine-notices.py"),
+        covalentRepoRoot.resolve("scripts/collect-android-native-link-provenance.py"),
+        covalentRepoRoot.resolve("scripts/android-go-link-wrapper.sh"),
+        covalentRepoRoot.resolve("packaging/sync-engine/engine-guardian.c"),
+        covalentRepoRoot.resolve("LICENSE"),
+    )
     outputs.dir(syncEngineGeneratedRoot)
     // Every requested packaging run must recheck source, toolchain, ELF policy and hashes.
     outputs.upToDateWhen { false }

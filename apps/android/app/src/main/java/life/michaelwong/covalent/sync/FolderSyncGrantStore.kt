@@ -1,8 +1,6 @@
 package life.michaelwong.covalent.sync
 
 import android.content.Context
-import java.nio.file.Paths
-import java.text.Normalizer
 import java.util.UUID
 import life.michaelwong.covalent.model.FolderSharePhase
 import life.michaelwong.covalent.model.FolderShare
@@ -363,12 +361,7 @@ internal class FolderSyncGrantStore(
 }
 
 private fun validateStoredRoot(value: String): String {
-    check(
-        value.length in 1..4_096 && value.startsWith('/') && value.none(Char::isISOControl) &&
-            Normalizer.isNormalized(value, Normalizer.Form.NFC) && Paths.get(value).normalize().toString() == value,
-    ) {
-        "The folder choice is invalid."
-    }
+    SafFolderGrant.idFromSelectedRoot(value)
     return value
 }
 

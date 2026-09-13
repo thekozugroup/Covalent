@@ -104,6 +104,21 @@ class CovalentAppTest {
     }
 
     @Test
+    fun freshSetupKeepsLegacyCredentialsBehindAnExplicitChoice() {
+        val store = isolatedStore("simple_first_launch")
+        val state = CovalentViewModel(SavedStateHandle()).apply { initialize(store) }
+        compose.setContent { CovalentTheme { CovalentApp(store, state) } }
+
+        compose.onNodeWithTag("setup.folderSync").assertIsDisplayed()
+        compose.onNodeWithText("Server access token").assertDoesNotExist()
+        compose.onNodeWithTag("setup.legacy").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Server access token").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("setup.legacy").performScrollTo().performClick()
+        compose.onNodeWithText("Server access token").assertDoesNotExist()
+        compose.onNodeWithTag("setup.folderSync").assertIsDisplayed()
+    }
+
+    @Test
     fun networkPairingCardUsesFolderCopyOnlyWhenExplicit() {
         val folderMode = mutableStateOf(false)
         val pairing = NetworkPairing(

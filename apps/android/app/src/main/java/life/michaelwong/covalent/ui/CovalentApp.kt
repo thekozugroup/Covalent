@@ -83,6 +83,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -1561,6 +1562,12 @@ private fun Setup(
     val addressFocus = remember { FocusRequester() }
     val tokenFocus = remember { FocusRequester() }
     val canSubmit = !state.busy
+    var legacyExpanded by rememberSaveable {
+        mutableStateOf(state.setupAddress.isNotBlank() || state.setupToken.isNotBlank())
+    }
+    LaunchedEffect(state.setupAddress, state.setupToken) {
+        if (state.setupAddress.isNotBlank() || state.setupToken.isNotBlank()) legacyExpanded = true
+    }
     FormPage(
         modifier,
         stringResource(R.string.setup_title),
@@ -1570,187 +1577,197 @@ private fun Setup(
             Text(stringResource(R.string.folder_sync_setup_action))
         }
         Text(stringResource(R.string.folder_sync_setup_detail))
-        SectionTitle(stringResource(R.string.setup_backup_section))
-        OnboardingChoice(
-            icon = Icons.Rounded.Search,
-            title = stringResource(R.string.setup_nearby_title),
-            detail = stringResource(R.string.setup_nearby_detail),
-        )
-        OnboardingChoice(
-            icon = Icons.Rounded.Security,
-            title = stringResource(R.string.setup_handoff_title),
-            detail = stringResource(R.string.setup_handoff_detail),
-        )
-        OutlinedTextField(
-            state.setupName,
-            {
-                state.setupName = it
-                state.setupNameError = ""
-            },
-            label = { Text(stringResource(R.string.field_device_name)) },
-            isError = state.setupNameError.isNotEmpty(),
-            supportingText = state.setupNameError.takeIf(String::isNotEmpty)?.let { error -> ({ Text(error) }) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth().focusRequester(nameFocus),
-        )
-        OutlinedTextField(
-            state.setupAddress,
-            {
-                state.setupAddress = it
-                state.setupAddressError = ""
-            },
-            label = { Text(stringResource(R.string.field_node_address)) },
-            placeholder = { Text(stringResource(R.string.node_address_example)) },
-            isError = state.setupAddressError.isNotEmpty(),
-            supportingText = state.setupAddressError.takeIf(String::isNotEmpty)?.let { error -> ({ Text(error) }) },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(
-                capitalization = KeyboardCapitalization.None,
-                autoCorrectEnabled = false,
-                keyboardType = KeyboardType.Uri,
-                imeAction = ImeAction.Next,
-            ),
-            modifier = Modifier.fillMaxWidth().focusRequester(addressFocus),
-        )
-        OutlinedTextField(
-            state.setupToken,
-            {
-                state.setupToken = it
-                state.setupTokenError = ""
-            },
-            label = { Text(stringResource(R.string.field_node_token)) },
-            visualTransformation = PasswordVisualTransformation(),
-            isError = state.setupTokenError.isNotEmpty(),
-            supportingText = state.setupTokenError.takeIf(String::isNotEmpty)?.let { error -> ({ Text(error) }) },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(
-                capitalization = KeyboardCapitalization.None,
-                autoCorrectEnabled = false,
-                keyboardType = KeyboardType.Password,
-                imeAction = ImeAction.Done,
-            ),
-            keyboardActions = KeyboardActions(onDone = { if (canSubmit) connect() }),
-            modifier = Modifier.fillMaxWidth().focusRequester(tokenFocus),
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        TextButton(
+            onClick = { legacyExpanded = !legacyExpanded },
+            modifier = Modifier.testTag("setup.legacy"),
         ) {
-            Text(
-                stringResource(R.string.token_file_detail),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f),
+            Text(stringResource(
+                if (legacyExpanded) R.string.setup_hide_legacy else R.string.setup_show_legacy,
+            ))
+        }
+        if (legacyExpanded) {
+            SectionTitle(stringResource(R.string.setup_backup_section))
+            OnboardingChoice(
+                icon = Icons.Rounded.Search,
+                title = stringResource(R.string.setup_nearby_title),
+                detail = stringResource(R.string.setup_nearby_detail),
             )
-            OutlinedButton(onClick = pickTokenFile) {
-                Text(stringResource(R.string.action_choose_token_file))
-            }
-        }
-        Text(
-            stringResource(R.string.setup_transport_policy),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        SectionTitle(stringResource(R.string.tls_enrollment_title))
-        Text(
-            stringResource(R.string.tls_enrollment_detail),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        OutlinedButton(onClick = pickCaCertificate) {
-            Icon(Icons.Rounded.Security, contentDescription = null)
-            Text(stringResource(R.string.action_choose_ca_certificate), Modifier.padding(start = 8.dp))
-        }
-        if (state.setupCaCertificateDer.isNotBlank()) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            OnboardingChoice(
+                icon = Icons.Rounded.Security,
+                title = stringResource(R.string.setup_handoff_title),
+                detail = stringResource(R.string.setup_handoff_detail),
+            )
+            OutlinedTextField(
+                state.setupName,
+                {
+                    state.setupName = it
+                    state.setupNameError = ""
+                },
+                label = { Text(stringResource(R.string.field_device_name)) },
+                isError = state.setupNameError.isNotEmpty(),
+                supportingText = state.setupNameError.takeIf(String::isNotEmpty)?.let { error -> ({ Text(error) }) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().focusRequester(nameFocus),
+            )
+            OutlinedTextField(
+                state.setupAddress,
+                {
+                    state.setupAddress = it
+                    state.setupAddressError = ""
+                },
+                label = { Text(stringResource(R.string.field_node_address)) },
+                placeholder = { Text(stringResource(R.string.node_address_example)) },
+                isError = state.setupAddressError.isNotEmpty(),
+                supportingText = state.setupAddressError.takeIf(String::isNotEmpty)?.let { error -> ({ Text(error) }) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
+                    keyboardType = KeyboardType.Uri,
+                    imeAction = ImeAction.Next,
+                ),
+                modifier = Modifier.fillMaxWidth().focusRequester(addressFocus),
+            )
+            OutlinedTextField(
+                state.setupToken,
+                {
+                    state.setupToken = it
+                    state.setupTokenError = ""
+                },
+                label = { Text(stringResource(R.string.field_node_token)) },
+                visualTransformation = PasswordVisualTransformation(),
+                isError = state.setupTokenError.isNotEmpty(),
+                supportingText = state.setupTokenError.takeIf(String::isNotEmpty)?.let { error -> ({ Text(error) }) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
+                    keyboardType = KeyboardType.Password,
+                    imeAction = ImeAction.Done,
+                ),
+                keyboardActions = KeyboardActions(onDone = { if (canSubmit) connect() }),
+                modifier = Modifier.fillMaxWidth().focusRequester(tokenFocus),
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
                 Text(
-                    if (state.setupCaCertificateLabel == "saved") {
-                        stringResource(R.string.ca_certificate_enrolled)
-                    } else {
-                        state.setupCaCertificateLabel
-                    },
+                    stringResource(R.string.token_file_detail),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f),
                 )
-                TextButton(onClick = {
-                    state.setupCaCertificateDer = ""
-                    state.setupCaCertificateLabel = ""
-                }) { Text(stringResource(R.string.action_clear)) }
-            }
-        }
-        Text(
-            stringResource(R.string.tls_enrollment_or_pin),
-            style = MaterialTheme.typography.labelLarge,
-        )
-        OutlinedTextField(
-            state.setupCertificatePin,
-            {
-                state.setupCertificatePin = it
-                state.setupCertificatePinError = ""
-                if (it.isNotBlank()) {
-                    state.setupCaCertificateDer = ""
-                    state.setupCaCertificateLabel = ""
+                OutlinedButton(onClick = pickTokenFile) {
+                    Text(stringResource(R.string.action_choose_token_file))
                 }
-            },
-            label = { Text(stringResource(R.string.field_certificate_pin)) },
-            placeholder = { Text(stringResource(R.string.certificate_pin_example)) },
-            supportingText = if (state.setupCertificatePinError.isNotBlank()) {
-                { Text(state.setupCertificatePinError) }
-            } else {
-                { Text(stringResource(R.string.certificate_pin_detail)) }
-            },
-            isError = state.setupCertificatePinError.isNotBlank(),
-            keyboardOptions = pairingInvitationKeyboardOptions,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Text(
-            stringResource(R.string.caddy_ca_guidance),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        if (requiresLocalNetworkPermission(state.setupAddress, Build.VERSION.SDK_INT)) {
-            Text(
-                stringResource(R.string.setup_lan_permission_rationale),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary,
-            )
-        }
-        if (state.setupConnectionError.isNotBlank()) {
-            InlineError(state.setupConnectionError)
-        }
-        FilledTonalButton(enabled = canSubmit, onClick = {
-            when {
-                state.setupName.isBlank() -> nameFocus.requestFocus()
-                validateNodeAddress(state.setupAddress) != AddressIssue.NONE -> addressFocus.requestFocus()
-                state.setupToken.isBlank() -> tokenFocus.requestFocus()
             }
-            connect()
-        }) {
-            if (state.busy) CircularProgressIndicator(Modifier.padding(end = 8.dp))
-            Text(stringResource(if (state.busy) R.string.action_checking else R.string.action_connect))
-        }
-        HorizontalDivider()
-        SectionTitle(stringResource(R.string.recovery_bootstrap_title))
-        Text(
-            stringResource(R.string.recovery_bootstrap_detail),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        OutlinedButton(
-            enabled = canSubmit,
-            onClick = recoverPhone,
-            modifier = Modifier.testTag("setup.recovery.start"),
-        ) {
-            Icon(Icons.Rounded.Security, contentDescription = null)
-            Text(stringResource(R.string.action_choose_recovery_files), Modifier.padding(start = 8.dp))
-        }
-        if (recoveredPhoneReady) {
-            FilledTonalButton(
+            Text(
+                stringResource(R.string.setup_transport_policy),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            SectionTitle(stringResource(R.string.tls_enrollment_title))
+            Text(
+                stringResource(R.string.tls_enrollment_detail),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedButton(onClick = pickCaCertificate) {
+                Icon(Icons.Rounded.Security, contentDescription = null)
+                Text(stringResource(R.string.action_choose_ca_certificate), Modifier.padding(start = 8.dp))
+            }
+            if (state.setupCaCertificateDer.isNotBlank()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (state.setupCaCertificateLabel == "saved") {
+                            stringResource(R.string.ca_certificate_enrolled)
+                        } else {
+                            state.setupCaCertificateLabel
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = {
+                        state.setupCaCertificateDer = ""
+                        state.setupCaCertificateLabel = ""
+                    }) { Text(stringResource(R.string.action_clear)) }
+                }
+            }
+            Text(
+                stringResource(R.string.tls_enrollment_or_pin),
+                style = MaterialTheme.typography.labelLarge,
+            )
+            OutlinedTextField(
+                state.setupCertificatePin,
+                {
+                    state.setupCertificatePin = it
+                    state.setupCertificatePinError = ""
+                    if (it.isNotBlank()) {
+                        state.setupCaCertificateDer = ""
+                        state.setupCaCertificateLabel = ""
+                    }
+                },
+                label = { Text(stringResource(R.string.field_certificate_pin)) },
+                placeholder = { Text(stringResource(R.string.certificate_pin_example)) },
+                supportingText = if (state.setupCertificatePinError.isNotBlank()) {
+                    { Text(state.setupCertificatePinError) }
+                } else {
+                    { Text(stringResource(R.string.certificate_pin_detail)) }
+                },
+                isError = state.setupCertificatePinError.isNotBlank(),
+                keyboardOptions = pairingInvitationKeyboardOptions,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                stringResource(R.string.caddy_ca_guidance),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (requiresLocalNetworkPermission(state.setupAddress, Build.VERSION.SDK_INT)) {
+                Text(
+                    stringResource(R.string.setup_lan_permission_rationale),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            if (state.setupConnectionError.isNotBlank()) {
+                InlineError(state.setupConnectionError)
+            }
+            FilledTonalButton(enabled = canSubmit, onClick = {
+                when {
+                    state.setupName.isBlank() -> nameFocus.requestFocus()
+                    validateNodeAddress(state.setupAddress) != AddressIssue.NONE -> addressFocus.requestFocus()
+                    state.setupToken.isBlank() -> tokenFocus.requestFocus()
+                }
+                connect()
+            }) {
+                if (state.busy) CircularProgressIndicator(Modifier.padding(end = 8.dp))
+                Text(stringResource(if (state.busy) R.string.action_checking else R.string.action_connect))
+            }
+            HorizontalDivider()
+            SectionTitle(stringResource(R.string.recovery_bootstrap_title))
+            Text(
+                stringResource(R.string.recovery_bootstrap_detail),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedButton(
                 enabled = canSubmit,
-                onClick = useRecoveredPhone,
-                modifier = Modifier.testTag("setup.recovery.use_phone"),
+                onClick = recoverPhone,
+                modifier = Modifier.testTag("setup.recovery.start"),
             ) {
-                Text(stringResource(R.string.action_use_recovered_phone))
+                Icon(Icons.Rounded.Security, contentDescription = null)
+                Text(stringResource(R.string.action_choose_recovery_files), Modifier.padding(start = 8.dp))
+            }
+            if (recoveredPhoneReady) {
+                FilledTonalButton(
+                    enabled = canSubmit,
+                    onClick = useRecoveredPhone,
+                    modifier = Modifier.testTag("setup.recovery.use_phone"),
+                ) {
+                    Text(stringResource(R.string.action_use_recovered_phone))
+                }
             }
         }
     }

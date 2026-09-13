@@ -265,9 +265,9 @@ class FolderSyncGrantStoreTest {
         const val FOLDER = "11111111-1111-4111-8111-111111111111"
         const val PEER = "22222222-2222-4222-8222-222222222222"
         const val OTHER_PEER = "55555555-5555-4555-8555-555555555555"
-        const val OLD_ROOT = "/storage/emulated/0/Photos"
-        const val NEW_ROOT = "/storage/emulated/0/Repaired"
-        const val OTHER_ROOT = "/storage/emulated/0/Other"
+        const val OLD_ROOT = "covalent-saf:11111111-1111-4111-8111-111111111111"
+        const val NEW_ROOT = "covalent-saf:33333333-3333-4333-8333-333333333333"
+        const val OTHER_ROOT = "covalent-saf:44444444-4444-4444-8444-444444444444"
         const val V1_ACCEPTANCE = """[{"schemaVersion":1,"key":"offer:$OFFER","kind":"acceptance","offerId":"$OFFER","folderId":null,"peerId":null,"root":"$OLD_ROOT","label":null}]"""
     }
 }

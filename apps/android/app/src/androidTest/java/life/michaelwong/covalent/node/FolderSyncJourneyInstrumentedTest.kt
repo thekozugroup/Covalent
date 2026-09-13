@@ -4,6 +4,9 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.BatteryManager
 import android.os.Process
 import android.os.ParcelFileDescriptor
 import android.os.storage.StorageManager
@@ -53,9 +56,16 @@ import java.util.concurrent.TimeUnit
 import life.michaelwong.covalent.BuildConfig
 import life.michaelwong.covalent.R
 import life.michaelwong.covalent.data.CovalentNodeClient
+import life.michaelwong.covalent.model.AndroidLinkConditions
 import life.michaelwong.covalent.model.FolderSharePhase
+import life.michaelwong.covalent.model.FolderShare
 import life.michaelwong.covalent.model.FolderHealthFreshness
+import life.michaelwong.covalent.model.FolderLinkCadence
 import life.michaelwong.covalent.model.FolderLinkPolicy
+import life.michaelwong.covalent.model.FolderLinkRunPhase
+import life.michaelwong.covalent.model.FolderLinkRunResult
+import life.michaelwong.covalent.model.FolderLinkSettings
+import life.michaelwong.covalent.model.FolderLinkSettingsState
 import life.michaelwong.covalent.model.FolderSyncAvailability
 import life.michaelwong.covalent.model.FolderSyncIssue
 import life.michaelwong.covalent.model.FolderSyncLifecycle
@@ -122,6 +132,263 @@ class FolderSyncJourneyInstrumentedTest {
             PHASE_RESTORED -> runRestoredPhase(manager, runId)
             else -> fail("The host runner selected an unknown Android folder journey phase.")
         }
+    }
+
+    @Test
+    @Suppress("DEPRECATION")
+    fun nativeManualCadenceAndAndroidConditionsControlOneWayTransfers() {
+        assertTrue("This destructive fixture runs only on an emulator", shell("getprop ro.kernel.qemu") == "1")
+        assertTrue(BuildConfig.DEBUG)
+        assertTrue(BuildConfig.COVALENT_SYNC_ENGINE_PACKAGED)
+        assertTrue(CovalentNative.isAvailable)
+        val runId = requireRunId(
+            InstrumentationRegistry.getArguments().getString(JOURNEY_RUN_ID_ARGUMENT),
+        )
+        val manager = EmbeddedNodeManager(context)
+        assertEquals(
+            PackageManager.PERMISSION_GRANTED,
+            context.checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK),
+        )
+        await("host-granted all-files access") { FolderSyncSpecialAccess.granted() }
+        cleanupStaleFixture(manager)
+        shell("svc wifi enable")
+        shell("dumpsys battery reset")
+        try {
+            val packageValue = FolderSyncInstrumentationBridge.isolatedPackage(context)
+            installedEngine = packageValue.engine
+            val roots = createExternalFixture(runId)
+            val rootA = RawFolderAccess(context).select(roots.first.path)
+            val rootB = RawFolderAccess(context).select(roots.second.path)
+            assertTrue(manager.enableFolderSyncHost())
+            val connectionA = awaitValue("service node API") { manager.liveConnection() }
+            val identityA = client.transportIdentity(connectionA.baseUrl, connectionA.token)
+            val connectionB = startSecondNode(packageValue)
+            val identityB = client.transportIdentity(connectionB.baseUrl, connectionB.token)
+            assertTrue(identityA.deviceId != identityB.deviceId)
+
+            val manualBytes = "api37-manual-run\n".toByteArray(StandardCharsets.UTF_8)
+            val manualSource = File(rootA, "manual.txt")
+            val manualDestination = File(rootB, "manual.txt")
+            writeNew(manualSource, manualBytes)
+            compose.setContent { CovalentTheme { if (showScreen.value) FolderSyncScreen(manager) } }
+            pairUsingPhoneUi(connectionA, connectionB, advertisedGuestPeerAddress(identityB.peerPort))
+            clickScreenText(context.getString(R.string.folder_sync_storage_roots))
+            val volume = RawFolderAccess(context).roots().first()
+            clickScreenText(volume.name.ifBlank { volume.absolutePath })
+            clickScreenText(checkNotNull(fixtureRoot).name)
+            clickScreenText(roots.first.name)
+            clickScreenText(context.getString(R.string.folder_sync_use_folder))
+            val labelMatcher = hasSetTextAction() and hasText(context.getString(R.string.folder_sync_label))
+            compose.onNodeWithTag("folder-sync-list").performScrollToNode(labelMatcher)
+            compose.onNode(labelMatcher).performTextInput(CADENCE_FOLDER_LABEL)
+            shell("input keyevent KEYCODE_BACK")
+            clickScreenText("API 37 isolated peer")
+            clickScreenText(context.getString(R.string.folder_link_cadence_manual))
+            clickScreenText(context.getString(R.string.folder_sync_offer))
+
+            offerId = awaitValue("manual folder offer recorded") {
+                client.folderSyncStatus(connectionA.baseUrl, connectionA.token).shares
+                    .singleOrNull { !it.incoming && it.peerId == identityB.deviceId && it.label == CADENCE_FOLDER_LABEL }
+                    ?.offerId
+            }
+            await("incoming manual folder offer") {
+                client.folderSyncStatus(connectionB.baseUrl, connectionB.token).shares.any {
+                    it.offerId == offerId && it.incoming && it.phase == FolderSharePhase.OFFERED
+                }
+            }
+            client.acceptFolder(connectionB.baseUrl, connectionB.token, checkNotNull(offerId), rootB)
+            val initialSettings = awaitSharedSettings(
+                connectionA,
+                connectionB,
+                FolderLinkSettings(FolderLinkPolicy(), false, FolderLinkCadence.Manual),
+            )
+            assertFileAbsentFor(
+                manualDestination,
+                "A Manual link copied before Run Now",
+                NEGATIVE_WINDOW_MILLIS,
+            )
+            assertHelperCountsUnchangedFor(HelperCounts(0, 0), NEGATIVE_WINDOW_MILLIS)
+            assertAnyVisibleScreenText(context.getString(R.string.folder_link_run_manual_idle))
+            clickScreenTag("folder-link-run-${sourceShare(connectionA).folderId}")
+            awaitFile("Manual Run Now transfer", manualDestination, manualBytes, listOf(connectionA, connectionB))
+            val firstRun = awaitValue("Manual run completion") {
+                sourceShare(connectionA).linkRun?.takeIf {
+                    it.phase == FolderLinkRunPhase.SUCCEEDED &&
+                        it.destinations.singleOrNull()?.result == FolderLinkRunResult.SUCCEEDED
+                }
+            }
+            assertEquals(1L, firstRun.generation)
+            awaitExactHelperCounts(0, 0)
+            assertAnyVisibleScreenText(context.getString(R.string.folder_link_run_succeeded))
+
+            clickScreenText(context.getString(R.string.folder_link_settings_edit))
+            clickDialogText(context.getString(R.string.folder_link_cadence_scheduled))
+            clickDialogText(context.getString(R.string.folder_link_cadence_15_minutes))
+            assertDialogText(context.getString(R.string.folder_link_wifi_only))
+            assertDialogText(context.getString(R.string.folder_link_charging_only))
+            clickDialogToggle(2)
+            clickDialogToggle(3)
+            clickDialogText(context.getString(R.string.folder_link_settings_save))
+            val scheduledSettings = FolderLinkSettings(
+                FolderLinkPolicy(),
+                false,
+                FolderLinkCadence.Scheduled(15),
+                AndroidLinkConditions(wifiOnly = true, chargingOnly = true),
+            )
+            val scheduledState = awaitSharedSettings(
+                connectionA,
+                connectionB,
+                scheduledSettings,
+                initialSettings.revision + 1,
+            )
+            val nextDue = awaitValue("source-owned next scheduled time") {
+                sourceShare(connectionA).linkRun?.nextDueAtUnixMs
+            }
+            assertAnyVisibleScreenText(context.getString(
+                R.string.folder_link_run_next_due,
+                java.text.DateFormat.getDateTimeInstance().format(java.util.Date(nextDue)),
+            ))
+
+            client.observeFolderLinkAndroidConditions(
+                connectionB.baseUrl,
+                connectionB.token,
+                wifiConnected = true,
+                charging = true,
+            )
+            await("emulator Wi-Fi transport") { hasWifiTransport() }
+            val connectivity = context.getSystemService(ConnectivityManager::class.java)
+            val wifiNetworks = connectivity.allNetworks.filter { network ->
+                connectivity.getNetworkCapabilities(network)
+                    ?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+            }
+            println(
+                "COVALENT_ANDROID_CONDITIONS wifiNetworks=${wifiNetworks.size} " +
+                    "wifiIsDefault=${connectivity.activeNetwork in wifiNetworks}",
+            )
+            shell("dumpsys battery unplug")
+            shell("dumpsys battery set ac 0")
+            shell("dumpsys battery set usb 0")
+            shell("dumpsys battery set wireless 0")
+            shell("dumpsys battery set status 3")
+            await("emulator not charging") { !isCharging() }
+            await("source reports waiting for shared transfer conditions") {
+                sourceShare(connectionA).waitingForConditions
+            }
+            val chargingBytes = "api37-waits-for-charging\n".toByteArray(StandardCharsets.UTF_8)
+            val chargingSource = File(rootA, "charging.txt")
+            val chargingDestination = File(rootB, "charging.txt")
+            writeNew(chargingSource, chargingBytes)
+            clickScreenTag("folder-link-run-${sourceShare(connectionA).folderId}")
+            assertFileAbsentFor(
+                chargingDestination,
+                "A charging-gated run transferred while the emulator was unplugged",
+                NEGATIVE_WINDOW_MILLIS,
+            )
+            shell("dumpsys battery set ac 1")
+            shell("dumpsys battery set status 2")
+            await("emulator charging") { isCharging() }
+            await("source clears shared transfer-condition wait") {
+                !sourceShare(connectionA).waitingForConditions
+            }
+            awaitFile(
+                "charging condition resumed transfer",
+                chargingDestination,
+                chargingBytes,
+                listOf(connectionA, connectionB),
+            )
+            awaitValue("charging-gated run completion") {
+                sourceShare(connectionA).linkRun?.takeIf {
+                    it.generation == firstRun.generation + 1 && it.phase == FolderLinkRunPhase.SUCCEEDED
+                }
+            }
+            awaitExactHelperCounts(0, 0)
+
+            shell("svc wifi disable")
+            await("emulator Wi-Fi loss") { !hasWifiTransport() }
+            await("source reports waiting after Wi-Fi loss") {
+                sourceShare(connectionA).waitingForConditions
+            }
+            client.observeFolderLinkAndroidConditions(
+                connectionB.baseUrl,
+                connectionB.token,
+                wifiConnected = true,
+                charging = true,
+            )
+            val wifiBytes = "api37-waits-for-wifi\n".toByteArray(StandardCharsets.UTF_8)
+            val wifiSource = File(rootA, "wifi.txt")
+            val wifiDestination = File(rootB, "wifi.txt")
+            writeNew(wifiSource, wifiBytes)
+            clickScreenTag("folder-link-run-${sourceShare(connectionA).folderId}")
+            assertFileAbsentFor(
+                wifiDestination,
+                "A Wi-Fi-gated run transferred without a Wi-Fi transport",
+                NEGATIVE_WINDOW_MILLIS,
+            )
+            shell("svc wifi enable")
+            await("emulator Wi-Fi restored", TRANSFER_TIMEOUT_MILLIS) { hasWifiTransport() }
+            await("source clears shared transfer-condition wait after Wi-Fi restoration") {
+                !sourceShare(connectionA).waitingForConditions
+            }
+            client.observeFolderLinkAndroidConditions(
+                connectionB.baseUrl,
+                connectionB.token,
+                wifiConnected = true,
+                charging = true,
+            )
+            awaitFile(
+                "Wi-Fi condition resumed transfer",
+                wifiDestination,
+                wifiBytes,
+                listOf(connectionA, connectionB),
+            )
+            awaitValue("Wi-Fi-gated run completion") {
+                sourceShare(connectionA).linkRun?.takeIf {
+                    it.generation == firstRun.generation + 2 && it.phase == FolderLinkRunPhase.SUCCEEDED
+                }
+            }
+            awaitExactHelperCounts(0, 0)
+
+            clickScreenText(context.getString(R.string.folder_link_settings_edit))
+            clickDialogText(context.getString(R.string.folder_link_cadence_continuous))
+            clickDialogText(context.getString(R.string.folder_link_settings_save))
+            val continuousSettings = scheduledSettings.copy(cadence = FolderLinkCadence.Continuous)
+            client.observeFolderLinkAndroidConditions(
+                connectionB.baseUrl,
+                connectionB.token,
+                wifiConnected = true,
+                charging = true,
+            )
+            val continuousState = awaitSharedSettings(
+                connectionA,
+                connectionB,
+                continuousSettings,
+                scheduledState.revision + 1,
+            )
+            awaitExactHelperCounts(2, 2)
+            clickScreenText(context.getString(R.string.folder_link_pause))
+            awaitSharedSettings(
+                connectionA,
+                connectionB,
+                continuousSettings.copy(paused = true),
+                continuousState.revision + 1,
+            )
+            awaitExactHelperCounts(0, 0)
+            clickScreenText(context.getString(R.string.folder_link_resume))
+            awaitSharedSettings(
+                connectionA,
+                connectionB,
+                continuousSettings,
+                continuousState.revision + 2,
+            )
+            awaitExactHelperCounts(2, 2)
+        } finally {
+            runCatching { shell("svc wifi enable") }
+            runCatching { shell("dumpsys battery reset") }
+            instrumentation.runOnMainSync { showScreen.value = false }
+            cleanup(manager, runId)
+        }
+        assertFalse(fixtureDirectory(runId).exists())
+        assertFalse(secondDataDirectory(runId).exists())
     }
 
     private fun runSetupPhase(manager: EmbeddedNodeManager, runId: String) {
@@ -641,7 +908,11 @@ class FolderSyncJourneyInstrumentedTest {
     private fun clickScreenTag(value: String) {
         val target = compose.onNodeWithTag(value)
         compose.waitUntil(timeoutMillis = DEFAULT_TIMEOUT_MILLIS) {
-            runCatching { target.assertIsDisplayed().assertIsEnabled(); true }.getOrDefault(false)
+            runCatching {
+                target.performScrollTo()
+                target.assertIsDisplayed().assertIsEnabled()
+                true
+            }.getOrDefault(false)
         }
         target.performClick()
     }
@@ -656,6 +927,54 @@ class FolderSyncJourneyInstrumentedTest {
         }
         target.performClick()
     }
+
+    private fun clickDialogToggle(index: Int) {
+        val target = compose.onAllNodes(
+            isToggleable() and hasAnyAncestor(isDialog()),
+            useUnmergedTree = true,
+        )[index]
+        compose.waitUntil(timeoutMillis = DEFAULT_TIMEOUT_MILLIS) {
+            runCatching { target.assertIsDisplayed().assertIsEnabled(); true }.getOrDefault(false)
+        }
+        target.performClick()
+    }
+
+    private fun sourceShare(connection: NodeConnection): FolderShare =
+        client.folderSyncStatus(connection.baseUrl, connection.token).shares.single {
+            !it.incoming && it.offerId == offerId
+        }
+
+    private fun awaitSharedSettings(
+        source: NodeConnection,
+        destination: NodeConnection,
+        expected: FolderLinkSettings,
+        expectedRevision: Long? = null,
+    ): FolderLinkSettingsState = awaitValue("shared link settings") {
+        val sourceState = sourceShare(source).linkSettings
+        val destinationState = client.folderSyncStatus(destination.baseUrl, destination.token).shares
+            .singleOrNull { it.incoming && it.offerId == offerId }
+            ?.linkSettings
+        sourceState?.takeIf {
+            it.confirmed && it.pendingChange == null && it.conflictedChange == null &&
+                it.settings == expected &&
+                (expectedRevision == null || it.revision == expectedRevision) &&
+                destinationState?.revision == it.revision && destinationState.confirmed &&
+                destinationState.pendingChange == null && destinationState.conflictedChange == null &&
+                destinationState.settings == expected
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun hasWifiTransport(): Boolean {
+        val connectivity = context.getSystemService(ConnectivityManager::class.java)
+        return connectivity.allNetworks.any { network ->
+            connectivity.getNetworkCapabilities(network)
+                ?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+        }
+    }
+
+    private fun isCharging(): Boolean =
+        context.getSystemService(BatteryManager::class.java).isCharging
 
     private fun startSecondNode(
         packageValue: PackagedSyncEnginePackage.Verified,
@@ -1314,6 +1633,7 @@ class FolderSyncJourneyInstrumentedTest {
 
     private companion object {
         const val FOLDER_LABEL = "API 37 folder journey"
+        const val CADENCE_FOLDER_LABEL = "API 37 cadence journey"
         const val JOURNEY_PHASE_ARGUMENT = "covalentFolderJourneyPhase"
         const val JOURNEY_RUN_ID_ARGUMENT = "covalentFolderJourneyRunId"
         const val JOURNEY_PRIOR_PID_ARGUMENT = "covalentFolderJourneyPriorPid"

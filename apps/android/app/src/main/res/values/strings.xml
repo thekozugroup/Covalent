@@ -51,18 +51,16 @@
     <string name="action_verify">Verify</string>
     <string name="folder_sync_title">Shared folders</string>
     <string name="folder_sync_subtitle">Keep one folder in sync with a paired device. You choose the folder and device explicitly.</string>
-    <string name="folder_sync_personal_build_only">Direct folder sync is available only in the personal debug build. The production app does not request broad file access.</string>
-    <string name="folder_sync_access_title">Allow access for shared folders</string>
-    <string name="folder_sync_access_explanation">Folder sync needs ordinary file paths, which Android’s folder picker does not provide. Android’s “all files” setting is broad: it lets this personal build read and change shared storage. Covalent does not request it at startup or use it for backups. Continue only if you want direct folder sync on this phone.</string>
-    <string name="folder_sync_open_special_access">Open Android special access</string>
+    <string name="folder_sync_access_title">Enable shared folders</string>
     <string name="folder_sync_enable">Start folder sync on this phone</string>
     <string name="folder_sync_host_unavailable">Android could not durably enable folder sync.</string>
-    <string name="folder_sync_access_declined">All-files access is off. Folder sync stayed stopped; backup and recovery are unchanged.</string>
     <string name="folder_sync_local_network_declined">Local network access is off. Folder sync stayed stopped; backup and recovery are unchanged.</string>
     <string name="folder_sync_starting">Starting the private folder service…</string>
     <string name="folder_sync_checking_folders">Checking selected folders before connecting…</string>
     <string name="folder_sync_choose_folder">Choose an existing folder</string>
     <string name="folder_sync_no_folder">No folder selected</string>
+    <string name="folder_sync_selected_folder">Selected Android folder</string>
+    <string name="folder_sync_saf_access_explanation">Covalent opens only folders you choose with Android’s folder picker. You can revoke each folder in Android settings.</string>
     <string name="folder_sync_storage_roots">Storage</string>
     <string name="folder_sync_use_folder">Use this folder</string>
     <string name="folder_sync_label">Folder name shown to the other device</string>
@@ -193,7 +191,7 @@
     <string name="error_resume_transfer">Android could not resume a pending transfer.</string>
 
     <string name="setup_title">Welcome to Covalent</string>
-    <string name="setup_subtitle">Keep folders in sync between your devices, or connect a server for backups.</string>
+    <string name="setup_subtitle">Send files from this phone to your other devices, or receive files here.</string>
     <string name="setup_nearby_title">Server on your network</string>
     <string name="setup_nearby_detail">Enter the secure web address your Covalent server shows. Android asks for local network access before the first check.</string>
     <string name="setup_handoff_title">Trusted claim output</string>
@@ -575,7 +573,7 @@
     <string name="folder_sync_waiting_for_device">Waiting for %1$s</string>
     <string name="folder_sync_connected_to_device">Connected to %1$s</string>
     <string name="folder_sync_connection_unknown">Connection status unknown</string>
-    <string name="folder_sync_restore_access_detail">Android no longer allows Covalent to open this folder. Restore all-files access to see your folder choices. You can stop sharing now; your files will stay on this phone.</string>
+    <string name="folder_sync_restore_access_detail">Android no longer allows Covalent to open this folder. Choose it again with Android’s folder picker. You can stop sharing now; your files will stay on this phone.</string>
     <string name="folder_sync_choose_again_detail">Choose the folder again to restore this share. Covalent keeps the previous folder choice until this phone confirms the replacement.</string>
     <string name="folder_sync_use_selected_again">Use selected folder</string>
     <string name="folder_sync_retry_saved_repair">Retry saved folder repair</string>
@@ -584,9 +582,11 @@
     <string name="open_source_notices_error">Covalent could not verify the notices included in this app.</string>
     <string name="action_view_open_source_notices">View notices</string>
     <string name="action_close">Close</string>
-    <string name="folder_sync_setup_action">Sync folders with this phone</string>
-    <string name="folder_sync_setup_detail">Choose folders and pair your devices. No backup server is required.</string>
-    <string name="setup_backup_section">Connect your backup server</string>
+    <string name="folder_sync_setup_action">Set up file transfers</string>
+    <string name="folder_sync_setup_detail">Pair a device, choose a source and destination, then choose when to transfer. Files flow only from source to destination.</string>
+    <string name="setup_backup_section">Legacy backup server</string>
+    <string name="setup_show_legacy">Legacy backups and recovery</string>
+    <string name="setup_hide_legacy">Hide legacy backup setup</string>
     <string name="folder_sync_pair_title">Connect another device</string>
     <string name="folder_sync_pair_detail">Pair this phone with your Mac, server, or another phone. Compare the code on both devices before confirming.</string>
     <string name="folder_sync_pair_compare">Compare this code on both physical devices. Continue only if every group matches. Pairing copies nothing now; choose a folder separately after pairing.</string>
@@ -610,6 +610,7 @@
     <string name="folder_sync_pair_installation">This device is paired, but folder sync could not start on this phone. Check the installation, then retry folder sync.</string>
     <string name="folder_sync_pair_needs_attention">This device is paired, but folder sync needs attention on this phone. Check the status above, then try again.</string>
     <string name="folder_sync_pair_failure">Could not connect this phone. Check that the other device is open and its address is correct, then try again.</string>
+    <string name="folder_sync_pairing_upgrade">Pairing needs an update before this connection can transfer. Files stay on both devices.</string>
     <string name="folder_sync_pair_waiting">Starting this phone…</string>
     <string name="folder_sync_discovery_empty">No nearby devices found. Enter the other device’s address to connect.</string>
     <string name="folder_link_cadence_title">When files transfer</string>
@@ -661,4 +662,6 @@
     <string name="folder_link_run_result_interrupted">interrupted</string>
     <string name="folder_link_run_result_cancelled">cancelled</string>
     <string name="folder_link_run_ready">Ready</string>
+    <string name="folder_link_waiting_conditions">Waiting for transfer conditions</string>
+    <string name="folder_link_waiting_conditions_detail">This link uses shared Android Wi-Fi or charging requirements. Change them in shared settings on any linked device.</string>
 </resources>

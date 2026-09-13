@@ -993,10 +993,9 @@ private fun requireUuid(value: String, label: String): String {
 }
 
 private fun requireSelectedRoot(value: String) {
-    require(
-        value.length in 1..MAX_SELECTED_ROOT_CHARS && value.startsWith('/') &&
-            value.none(Char::isISOControl),
-    ) { "The selected folder path is invalid." }
+    require(value.startsWith("covalent-saf:") && value.length <= MAX_SELECTED_ROOT_CHARS)
+    val id = runCatching { UUID.fromString(value.removePrefix("covalent-saf:")) }.getOrNull()
+    require(id != null && value == "covalent-saf:$id") { "The selected folder is invalid." }
 }
 
 private fun JSONObject.toFolderSyncMutation(): FolderSyncMutation {
@@ -1043,7 +1042,10 @@ private fun JSONObject.toFolderSyncStatus(): FolderSyncStatus {
             requireJsonKeys(
                 share,
                 setOf("offerId", "folderId", "label", "peerId", "incoming", "phase", "expiresAtUnixMs", "expired"),
-                setOf("peerConnection", "supersededOfferIds", "remoteRemovalPending", "linkPolicy", "linkSettings", "linkRun"),
+                setOf(
+                    "peerConnection", "supersededOfferIds", "remoteRemovalPending",
+                    "waitingForConditions", "pairingUpgradeRequired", "linkPolicy", "linkSettings", "linkRun",
+                ),
             )
             FolderShare(
                 offerId = requireUuid(share.getString("offerId"), "folder offer ID"),
@@ -1082,6 +1084,14 @@ private fun JSONObject.toFolderSyncStatus(): FolderSyncStatus {
                 remoteRemovalPending = if (share.has("remoteRemovalPending")) {
                     (share.get("remoteRemovalPending") as? Boolean)
                         ?: error("The node returned an invalid removal status.")
+                } else false,
+                waitingForConditions = if (share.has("waitingForConditions")) {
+                    (share.get("waitingForConditions") as? Boolean)
+                        ?: error("The node returned an invalid transfer-condition status.")
+                } else false,
+                pairingUpgradeRequired = if (share.has("pairingUpgradeRequired")) {
+                    (share.get("pairingUpgradeRequired") as? Boolean)
+                        ?: error("The node returned an invalid pairing upgrade status.")
                 } else false,
                 linkPolicy = if (share.has("linkPolicy") && !share.isNull("linkPolicy")) {
                     share.getJSONObject("linkPolicy").let { policy ->
@@ -1124,6 +1134,11 @@ private fun JSONObject.toFolderSyncStatus(): FolderSyncStatus {
     val retainedOfferIds = shares.map(FolderShare::offerId).toMutableSet()
     shares.forEach { share ->
         check(!share.remoteRemovalPending || share.phase == FolderSharePhase.REMOVED)
+        check(!share.waitingForConditions ||
+            share.phase == FolderSharePhase.READY && share.linkSettings?.confirmed == true
+        ) {
+            "The node returned transfer-condition status for an inactive share."
+        }
         share.supersededOfferIds.forEach { check(retainedOfferIds.add(it)) }
     }
     check(shares.all { share ->
@@ -1333,6 +1348,7 @@ private fun JSONObject.toFolderLinkSettingsState(): FolderLinkSettingsState {
     requireJsonKeys(
         this,
         setOf("revision", "settings", "changeId", "changedBy", "confirmed", "pendingChange", "conflictedChange"),
+        setOf("acceptedAtUnixMs"),
     )
     return FolderLinkSettingsState(
         revision = getLong("revision").also { check(it >= 0) },
@@ -1345,6 +1361,10 @@ private fun JSONObject.toFolderLinkSettingsState(): FolderLinkSettingsState {
         else getJSONObject("pendingChange").toFolderLinkSettingsChange(),
         conflictedChange = if (isNull("conflictedChange")) null
         else getJSONObject("conflictedChange").toFolderLinkSettingsChange(),
+        acceptedAtUnixMs = if (has("acceptedAtUnixMs")) {
+            ((get("acceptedAtUnixMs") as? Number)?.toLong()
+                ?: error("The node returned an invalid settings acceptance time.")).also { check(it >= 0) }
+        } else 0,
     ).also { state ->
         check((state.revision == 0L) == (state.changeId == "00000000-0000-0000-0000-000000000000")) {
             "The node returned an invalid settings revision."

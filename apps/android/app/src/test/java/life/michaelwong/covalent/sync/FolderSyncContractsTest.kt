@@ -2,6 +2,7 @@ package life.michaelwong.covalent.sync
 
 import life.michaelwong.covalent.model.FolderHealth
 import life.michaelwong.covalent.model.FolderHealthFreshness
+import life.michaelwong.covalent.model.AndroidLinkConditions
 import life.michaelwong.covalent.model.FolderLinkPolicy
 import life.michaelwong.covalent.model.FolderLinkCadence
 import life.michaelwong.covalent.model.FolderLinkSettings
@@ -79,6 +80,33 @@ class FolderSyncContractsTest {
         assertEquals(FolderShareSummary.READY, status(manual, FolderSyncLifecycle.STOPPED).summaryFor(manual))
         assertEquals(FolderShareSummary.READY, status(scheduled, FolderSyncLifecycle.STOPPED).summaryFor(scheduled))
         assertEquals(FolderShareSummary.OFFLINE, status(continuous, FolderSyncLifecycle.STOPPED).summaryFor(continuous))
+    }
+
+    @Test
+    fun sharedAndroidConditionsExplainAnIntentionalStopWithoutHidingErrorsOrPause() {
+        val waiting = share(PeerConnectionState.DISCONNECTED).copy(
+            waitingForConditions = true,
+            linkPolicy = FolderLinkPolicy(),
+            linkSettings = FolderLinkSettingsState(
+                1, FolderLinkSettings(
+                    FolderLinkPolicy(),
+                    false,
+                    FolderLinkCadence.Continuous,
+                    AndroidLinkConditions(wifiOnly = true),
+                ),
+                "00000000-0000-0000-0000-000000000000", PEER, true, null, null,
+            ),
+        )
+        assertEquals(
+            FolderShareSummary.WAITING_FOR_CONDITIONS,
+            status(waiting, FolderSyncLifecycle.STOPPED).summaryFor(waiting),
+        )
+        assertEquals(
+            FolderShareSummary.NEEDS_ATTENTION,
+            status(waiting, FolderSyncLifecycle.NEEDS_ATTENTION).summaryFor(waiting),
+        )
+        val paused = waiting.copy(phase = FolderSharePhase.PAUSED)
+        assertEquals(FolderShareSummary.PAUSED, status(paused, FolderSyncLifecycle.STOPPED).summaryFor(paused))
     }
 
     private fun share(connection: PeerConnectionState) = FolderShare(

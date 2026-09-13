@@ -56,20 +56,20 @@ class FolderSyncLifecycleContractTest {
     }
 
     @Test
-    fun broadStoragePermissionIsDebugOnlyAndNeverRequestedAtStartup() {
+    fun folderSyncUsesSafWithoutBroadStoragePermission() {
         val root = File(System.getProperty("user.dir")).let { start ->
             generateSequence(start) { it.parentFile }.first { File(it, "apps/android/app").isDirectory }
         }
         val mainManifest = File(root, "apps/android/app/src/main/AndroidManifest.xml").readText()
         val debugManifest = File(root, "apps/android/app/src/debug/AndroidManifest.xml").readText()
         val application = File(root, "apps/android/app/src/main/java/life/michaelwong/covalent/CovalentApplication.kt").readText()
-        val rawAccess = File(root, "apps/android/app/src/main/java/life/michaelwong/covalent/sync/RawFolderAccess.kt").readText()
         assertFalse(mainManifest.contains("MANAGE_EXTERNAL_STORAGE"))
-        assertTrue(debugManifest.contains("MANAGE_EXTERNAL_STORAGE"))
+        assertFalse(debugManifest.contains("MANAGE_EXTERNAL_STORAGE"))
         assertFalse(application.contains("ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION"))
-        assertTrue(rawAccess.contains("BuildConfig.DEBUG"))
-        assertTrue(rawAccess.contains("O_NOFOLLOW"))
-        assertFalse(rawAccess.contains("DocumentsContract"))
+        val screen = File(root,
+            "apps/android/app/src/main/java/life/michaelwong/covalent/ui/FolderSyncScreen.kt").readText()
+        assertTrue(screen.contains("rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree())"))
+        assertFalse(screen.contains("RawFolderAccess"))
     }
 
     @Test
@@ -96,6 +96,10 @@ class FolderSyncLifecycleContractTest {
         val restart = service.substringAfter("private fun beginRestartForAccessChange()")
             .substringBefore("private fun startAfterReap")
         assertTrue(restart.indexOf("reapState.requestStop") < restart.indexOf("stopProvider()"))
+        val command = service.substringAfter("ACTION_REFRESH_ACCESS ->")
+            .substringBefore("else ->")
+        assertTrue(command.contains("if (handle > 0L) beginRestartForAccessChange()"))
+        assertTrue(command.contains("else startNode(command.startId)"))
     }
 
     @Test

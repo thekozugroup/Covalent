@@ -25,13 +25,13 @@ class FolderSyncGrantStoreTest {
             FolderSyncGrantStore(context).prepareOffer(
                 "22222222-2222-4222-8222-222222222222",
                 folder,
-                "/storage/emulated/0/Photos",
+                "covalent-saf:11111111-1111-4111-8111-111111111111",
                 "Photos",
             )
             val reopened = FolderSyncGrantStore(context).records().single()
             assertEquals(folder.toString(), reopened.folderId)
             assertNull(reopened.offerId)
-            assertEquals("/storage/emulated/0/Photos", reopened.root)
+            assertEquals("covalent-saf:11111111-1111-4111-8111-111111111111", reopened.root)
             assertFalse(reopened.toString().contains("Photos"))
 
             val offerId = "55555555-5555-4555-8555-555555555555"
@@ -43,7 +43,7 @@ class FolderSyncGrantStoreTest {
 
             FolderSyncGrantStore(context).prepareAcceptance(
                 "33333333-3333-4333-8333-333333333333",
-                "/storage/emulated/0/Shared",
+                "covalent-saf:22222222-2222-4222-8222-222222222222",
             )
             val reloaded = FolderSyncGrantStore(context).records()
             assertEquals(2, reloaded.size)
@@ -84,7 +84,7 @@ class FolderSyncGrantStoreTest {
                     results.add(FolderSyncGrantStore(context).prepareOffer(
                         "22222222-2222-4222-8222-222222222222",
                         proposal,
-                        "/storage/emulated/0/Photos",
+                        "covalent-saf:11111111-1111-4111-8111-111111111111",
                         "Photos",
                     ))
                 }

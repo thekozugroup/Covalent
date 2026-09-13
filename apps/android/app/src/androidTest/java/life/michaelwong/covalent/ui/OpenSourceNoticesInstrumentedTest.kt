@@ -12,9 +12,9 @@ class OpenSourceNoticesInstrumentedTest {
         val text = OpenSourceNotices.load(
             InstrumentationRegistry.getInstrumentation().targetContext,
         )
-        assertTrue(text.contains("github.com/syncthing/syncthing@"))
+        assertTrue(text.contains("Covalent rclone engine notices"))
+        assertTrue(text.contains("github.com/rclone/rclone@v1.75.1 / COPYING"))
         assertTrue(text.contains("Go go1.26.7 / LICENSE"))
         assertTrue(text.contains("Covalent engine guardian / MIT license"))
-        assertTrue(text.contains("Embedded Fork Awesome assets / OFL-1.1"))
     }
 }

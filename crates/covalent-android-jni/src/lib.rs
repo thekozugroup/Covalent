@@ -16,7 +16,10 @@ use covalent_core::{ProviderQuotaPolicy, RecoveryUnlockKey, StaticKeyProtector};
 use covalent_node::runtime::{
     LocalApiTokenSource, NodeRuntime, NodeRuntimeConfig, RecoveryBootstrap,
 };
-use covalent_node::sync_engine::{FolderSyncRuntimeConfig, VerifiedEngineExecutable};
+use covalent_node::sync_engine::{
+    AndroidSafGrantError, AndroidSafGrantRegistry, FolderSyncRuntimeConfig,
+    VerifiedEngineExecutable,
+};
 use covalent_protocol::PlatformTier;
 use jni::EnvUnowned;
 use jni::objects::{JByteArray, JClass, JString};
@@ -32,6 +35,12 @@ const MIN_PROVIDER_BYTES: u64 = 256 * 1_024 * 1_024;
 const MAX_PROVIDER_BYTES: u64 = 8 * 1_024 * 1_024 * 1_024 * 1_024;
 const MAX_RECOVERY_KIT_BYTES: usize = 16 * 1_024 * 1_024;
 const FOLDER_SYNC_PORT: u16 = 8_789;
+const FOLDER_GRANT_OK: jint = 0;
+const FOLDER_GRANT_INVALID_ID: jint = 1;
+const FOLDER_GRANT_INVALID_PORT: jint = 2;
+const FOLDER_GRANT_INVALID_CREDENTIAL: jint = 3;
+const FOLDER_GRANT_BUSY: jint = 4;
+const FOLDER_GRANT_RUNTIME_UNAVAILABLE: jint = 5;
 // Android Keystore protection levels, mirroring
 // `life.michaelwong.covalent.node.KeyProtectionLevel`.  Kotlin owns the probe
 // because only the platform can answer it: it generates the AES-GCM protector
@@ -88,6 +97,7 @@ fn identity_protection_accepted(level: i32) -> bool {
 struct NativeRegistry {
     runtime: Arc<tokio::runtime::Runtime>,
     nodes: BTreeMap<u64, Arc<NodeRuntime>>,
+    android_saf_grants: BTreeMap<u64, AndroidSafGrantRegistry>,
     reserved_handles: BTreeSet<u64>,
     next_handle: u64,
 }
@@ -104,6 +114,7 @@ impl NativeRegistry {
         Ok(Self {
             runtime: Arc::new(runtime),
             nodes: BTreeMap::new(),
+            android_saf_grants: BTreeMap::new(),
             reserved_handles: BTreeSet::new(),
             next_handle: 1,
         })
@@ -320,6 +331,10 @@ fn start_node(request: StartNodeRequest) -> NativeResponse<'static> {
         configuration.key_protector = Some(Arc::new(protector));
         configuration.recovery = recovery;
         configuration.folder_sync = folder_sync;
+        let android_saf_grants = configuration
+            .folder_sync
+            .as_ref()
+            .map(|folder_sync| folder_sync.worker.android_saf_grants());
         // Capture the persisted provider toggle in this launch snapshot. Folder sync and
         // owner/client backup stay available while remote chunk admission is disabled.
         apply_host_runtime_flags(
@@ -354,6 +369,11 @@ fn start_node(request: StartNodeRequest) -> NativeResponse<'static> {
             return Err("runtime_unavailable");
         }
         registry.nodes.insert(handle, Arc::new(node));
+        if let Some(android_saf_grants) = android_saf_grants {
+            registry
+                .android_saf_grants
+                .insert(handle, android_saf_grants);
+        }
         Ok(response)
     })();
     match result {
@@ -421,6 +441,7 @@ fn stop_node(handle: u64) -> NativeResponse<'static> {
             .is_some_and(|incumbent| Arc::ptr_eq(incumbent, &node))
         {
             registry.nodes.remove(&handle);
+            registry.android_saf_grants.remove(&handle);
         }
         Ok(NativeResponse::stopped())
     })();
@@ -468,6 +489,82 @@ fn node_state(handle: u64) -> NativeResponse<'static> {
             "runtime_unavailable",
             "Storing backups on this phone is unavailable right now.",
         ),
+    }
+}
+
+fn folder_grant_error_code(error: AndroidSafGrantError) -> jint {
+    match error {
+        AndroidSafGrantError::InvalidGrantId => FOLDER_GRANT_INVALID_ID,
+        AndroidSafGrantError::InvalidPort => FOLDER_GRANT_INVALID_PORT,
+        AndroidSafGrantError::InvalidCredential => FOLDER_GRANT_INVALID_CREDENTIAL,
+        AndroidSafGrantError::Busy => FOLDER_GRANT_BUSY,
+        AndroidSafGrantError::Unavailable => FOLDER_GRANT_RUNTIME_UNAVAILABLE,
+    }
+}
+
+fn android_saf_registry(handle: jlong) -> Result<AndroidSafGrantRegistry, jint> {
+    let handle = u64::try_from(handle)
+        .ok()
+        .filter(|handle| *handle != 0)
+        .ok_or(FOLDER_GRANT_RUNTIME_UNAVAILABLE)?;
+    let registry = registry().map_err(|_| FOLDER_GRANT_RUNTIME_UNAVAILABLE)?;
+    registry
+        .lock()
+        .map_err(|_| FOLDER_GRANT_RUNTIME_UNAVAILABLE)?
+        .android_saf_grants
+        .get(&handle)
+        .cloned()
+        .ok_or(FOLDER_GRANT_RUNTIME_UNAVAILABLE)
+}
+
+fn parse_grant_id(value: &str) -> Result<uuid::Uuid, jint> {
+    let grant_id = uuid::Uuid::parse_str(value).map_err(|_| FOLDER_GRANT_INVALID_ID)?;
+    if grant_id.is_nil() || value != grant_id.to_string() {
+        return Err(FOLDER_GRANT_INVALID_ID);
+    }
+    Ok(grant_id)
+}
+
+fn register_folder_grant(
+    handle: jlong,
+    grant_id: String,
+    port: jint,
+    username: Zeroizing<String>,
+    password: Zeroizing<String>,
+) -> jint {
+    let Ok(grant_id) = parse_grant_id(&grant_id) else {
+        return FOLDER_GRANT_INVALID_ID;
+    };
+    let Ok(port) = u16::try_from(port) else {
+        return FOLDER_GRANT_INVALID_PORT;
+    };
+    if port == 0 {
+        return FOLDER_GRANT_INVALID_PORT;
+    }
+    let Ok(registry) = android_saf_registry(handle) else {
+        return FOLDER_GRANT_RUNTIME_UNAVAILABLE;
+    };
+    match registry.register(
+        grant_id,
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port),
+        username,
+        password,
+    ) {
+        Ok(()) => FOLDER_GRANT_OK,
+        Err(error) => folder_grant_error_code(error),
+    }
+}
+
+fn unregister_folder_grant(handle: jlong, grant_id: String) -> jint {
+    let Ok(grant_id) = parse_grant_id(&grant_id) else {
+        return FOLDER_GRANT_INVALID_ID;
+    };
+    let Ok(registry) = android_saf_registry(handle) else {
+        return FOLDER_GRANT_RUNTIME_UNAVAILABLE;
+    };
+    match registry.unregister(grant_id) {
+        Ok(()) => FOLDER_GRANT_OK,
+        Err(error) => folder_grant_error_code(error),
     }
 }
 
@@ -785,6 +882,52 @@ extern "system" fn native_state<'local>(
     })
 }
 
+extern "system" fn native_register_folder_grant<'local>(
+    mut unowned: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    grant_id: JString<'local>,
+    port: jint,
+    username: JString<'local>,
+    password: JString<'local>,
+) -> jint {
+    match unowned
+        .with_env(|environment| -> jni::errors::Result<jint> {
+            Ok(register_folder_grant(
+                handle,
+                grant_id.try_to_string(environment)?,
+                port,
+                Zeroizing::new(username.try_to_string(environment)?),
+                Zeroizing::new(password.try_to_string(environment)?),
+            ))
+        })
+        .into_outcome()
+    {
+        jni::Outcome::Ok(result) => result,
+        jni::Outcome::Err(_) | jni::Outcome::Panic(_) => FOLDER_GRANT_RUNTIME_UNAVAILABLE,
+    }
+}
+
+extern "system" fn native_unregister_folder_grant<'local>(
+    mut unowned: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    grant_id: JString<'local>,
+) -> jint {
+    match unowned
+        .with_env(|environment| -> jni::errors::Result<jint> {
+            Ok(unregister_folder_grant(
+                handle,
+                grant_id.try_to_string(environment)?,
+            ))
+        })
+        .into_outcome()
+    {
+        jni::Outcome::Ok(result) => result,
+        jni::Outcome::Err(_) | jni::Outcome::Panic(_) => FOLDER_GRANT_RUNTIME_UNAVAILABLE,
+    }
+}
+
 /// Registers the fixed Kotlin ABI.  A failed registration leaves the library unusable.
 ///
 /// # Safety
@@ -813,6 +956,13 @@ pub unsafe extern "system" fn JNI_OnLoad(
             let native_stop_signature = JNIString::from("(J)Ljava/lang/String;");
             let native_state_name = JNIString::from("nativeState");
             let native_state_signature = JNIString::from("(J)Ljava/lang/String;");
+            let native_register_folder_grant_name = JNIString::from("nativeRegisterFolderGrant");
+            let native_register_folder_grant_signature = JNIString::from(
+                "(JLjava/lang/String;ILjava/lang/String;Ljava/lang/String;)I",
+            );
+            let native_unregister_folder_grant_name = JNIString::from("nativeUnregisterFolderGrant");
+            let native_unregister_folder_grant_signature =
+                JNIString::from("(JLjava/lang/String;)I");
             let methods = [
                 // SAFETY: signature exactly matches the static Kotlin start declaration.
                 unsafe {
@@ -846,6 +996,22 @@ pub unsafe extern "system" fn JNI_OnLoad(
                         native_state as *mut c_void,
                     )
                 },
+                // SAFETY: signature exactly matches the static Kotlin grant declaration.
+                unsafe {
+                    NativeMethod::from_raw_parts(
+                        &native_register_folder_grant_name,
+                        &native_register_folder_grant_signature,
+                        native_register_folder_grant as *mut c_void,
+                    )
+                },
+                // SAFETY: signature exactly matches the static Kotlin grant declaration.
+                unsafe {
+                    NativeMethod::from_raw_parts(
+                        &native_unregister_folder_grant_name,
+                        &native_unregister_folder_grant_signature,
+                        native_unregister_folder_grant as *mut c_void,
+                    )
+                },
             ];
             // SAFETY: class is the Kotlin object class and all descriptors above are exact.
             unsafe { environment.register_native_methods(class, &methods) }
@@ -862,13 +1028,16 @@ mod tests {
     use zeroize::Zeroizing;
 
     use super::{
-        FOLDER_SYNC_PORT, IdentityProtection, MAX_RECOVERY_KIT_BYTES, NativeRegistry,
-        PROTECTION_SOFTWARE, PROTECTION_STRONGBOX, PROTECTION_TRUSTED_ENVIRONMENT,
-        PROTECTION_UNAVAILABLE, apply_host_runtime_flags, identity_protection_accepted,
-        loopback_zero, packaged_folder_sync, peer_listener, provider_quota, recovery_bootstrap,
+        FOLDER_GRANT_BUSY, FOLDER_GRANT_INVALID_CREDENTIAL, FOLDER_GRANT_INVALID_ID,
+        FOLDER_GRANT_INVALID_PORT, FOLDER_GRANT_RUNTIME_UNAVAILABLE, FOLDER_SYNC_PORT,
+        IdentityProtection, MAX_RECOVERY_KIT_BYTES, NativeRegistry, PROTECTION_SOFTWARE,
+        PROTECTION_STRONGBOX, PROTECTION_TRUSTED_ENVIRONMENT, PROTECTION_UNAVAILABLE,
+        apply_host_runtime_flags, identity_protection_accepted, loopback_zero,
+        packaged_folder_sync, peer_listener, provider_quota, recovery_bootstrap,
         valid_listener_port, wildcard_peer,
     };
     use covalent_node::runtime::NodeRuntimeConfig;
+    use covalent_node::sync_engine::AndroidSafGrantError;
     use std::path::PathBuf;
 
     #[test]
@@ -1070,5 +1239,55 @@ mod tests {
         let first = registry.allocate_handle().expect("first handle");
         let second = registry.allocate_handle().expect("second handle");
         assert!(first > 0 && second > first);
+    }
+
+    #[test]
+    fn folder_grant_result_codes_match_the_fixed_kotlin_contract() {
+        assert_eq!(
+            super::folder_grant_error_code(AndroidSafGrantError::InvalidGrantId),
+            FOLDER_GRANT_INVALID_ID
+        );
+        assert_eq!(
+            super::folder_grant_error_code(AndroidSafGrantError::InvalidPort),
+            FOLDER_GRANT_INVALID_PORT
+        );
+        assert_eq!(
+            super::folder_grant_error_code(AndroidSafGrantError::InvalidCredential),
+            FOLDER_GRANT_INVALID_CREDENTIAL
+        );
+        assert_eq!(
+            super::folder_grant_error_code(AndroidSafGrantError::Busy),
+            FOLDER_GRANT_BUSY
+        );
+        assert_eq!(
+            super::folder_grant_error_code(AndroidSafGrantError::Unavailable),
+            FOLDER_GRANT_RUNTIME_UNAVAILABLE
+        );
+    }
+
+    #[test]
+    fn folder_grant_ids_and_ports_fail_closed_before_registry_access() {
+        let valid = "be3423b6-956c-4bf0-b447-029359dbc6c2";
+        assert!(super::parse_grant_id(valid).is_ok());
+        for invalid in [
+            "",
+            "BE3423B6-956C-4BF0-B447-029359DBC6C2",
+            "00000000-0000-0000-0000-000000000000",
+            "be3423b6956c4bf0b447029359dbc6c2",
+        ] {
+            assert_eq!(super::parse_grant_id(invalid), Err(FOLDER_GRANT_INVALID_ID));
+        }
+        for port in [-1, 0, i32::from(u16::MAX) + 1] {
+            assert_eq!(
+                super::register_folder_grant(
+                    1,
+                    valid.to_owned(),
+                    port,
+                    Zeroizing::new("valid-username-123".to_owned()),
+                    Zeroizing::new("valid-password-1234567890".to_owned()),
+                ),
+                FOLDER_GRANT_INVALID_PORT
+            );
+        }
     }
 }

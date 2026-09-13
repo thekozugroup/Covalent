@@ -41,9 +41,9 @@ internal data class PackagedHelperHash(
  * before launching them.
  */
 internal object PackagedSyncEngine {
-    private const val WORKER = "libsyncthing.so"
+    private const val WORKER = "libcovalentrclone.so"
     private const val GUARDIAN = "libengineguardian.so"
-    private const val WORKER_MANIFEST = "syncthing-sha256.txt"
+    private const val WORKER_MANIFEST = "rclone-sha256.txt"
     private const val GUARDIAN_MANIFEST = "engine-guardian-sha256.txt"
     private const val MAX_MANIFEST_BYTES = 1024
     private const val MAX_HELPER_BYTES = 64L * 1024L * 1024L

@@ -35,6 +35,8 @@ data class FolderShare(
     val peerConnection: PeerConnectionState = PeerConnectionState.UNKNOWN,
     val supersededOfferIds: List<String> = emptyList(),
     val remoteRemovalPending: Boolean = false,
+    val waitingForConditions: Boolean = false,
+    val pairingUpgradeRequired: Boolean = false,
     val linkPolicy: FolderLinkPolicy? = null,
     val linkSettings: FolderLinkSettingsState? = null,
     val linkRun: FolderLinkRunSummary? = null,
@@ -111,13 +113,15 @@ data class FolderLinkSettingsState(
     val confirmed: Boolean,
     val pendingChange: FolderLinkSettingsChange?,
     val conflictedChange: FolderLinkSettingsChange?,
+    val acceptedAtUnixMs: Long = 0,
 )
 
 enum class FolderSharePhase { OFFERED, AWAITING_COMMIT, READY, PAUSED, REMOVED }
 
 enum class FolderShareSummary {
     INVITATION_EXPIRED, PAUSED, CHECKING, NEEDS_ATTENTION, WAITING_FOR_OTHER_DEVICE,
-    OFFLINE, SYNCING, WAITING_FOR_PEER, CONNECTED, CONNECTION_UNKNOWN, READY, REMOVAL_PENDING, REMOVED,
+    WAITING_FOR_CONDITIONS, OFFLINE, SYNCING, WAITING_FOR_PEER, CONNECTED, CONNECTION_UNKNOWN, READY,
+    REMOVAL_PENDING, REMOVED,
 }
 
 /** UI summary with expiry, pause, scanning and explicit errors ahead of reachability. */
@@ -134,6 +138,7 @@ fun FolderSyncStatus.summaryFor(share: FolderShare): FolderShareSummary {
     if (share.phase == FolderSharePhase.OFFERED || share.phase == FolderSharePhase.AWAITING_COMMIT) {
         return FolderShareSummary.WAITING_FOR_OTHER_DEVICE
     }
+    if (share.waitingForConditions) return FolderShareSummary.WAITING_FOR_CONDITIONS
     if (lifecycle != FolderSyncLifecycle.RUNNING) {
         val settings = share.linkSettings
         val phase = share.linkRun?.phase

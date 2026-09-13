@@ -60,6 +60,8 @@ class NodeErrorCodeCopyTest {
             "folder_sync_needs_attention",
             "link_settings_pending",
             "link_settings_conflict",
+            "link_run_pending",
+            "link_run_conflict",
             "invalid_peer_address",
             "peer_address_changed",
             "peer_address_unreachable",

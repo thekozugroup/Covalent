@@ -64,6 +64,18 @@ internal object CovalentNative {
     @JvmStatic
     private external fun nativeState(handle: Long): String
 
+    @JvmStatic
+    private external fun nativeRegisterFolderGrant(
+        handle: Long,
+        grantId: String,
+        port: Int,
+        username: String,
+        password: String,
+    ): Int
+
+    @JvmStatic
+    private external fun nativeUnregisterFolderGrant(handle: Long, grantId: String): Int
+
     /**
      * Starts the process-local node.
      *
@@ -184,6 +196,26 @@ internal object CovalentNative {
         if (!libraryLoaded) NativeNodeResponse.unavailable()
         else parse(runCatching { nativeState(handle) }.getOrElse { NativeNodeResponse.unavailable().toJson() })
 
+    fun registerFolderGrant(
+        handle: Long,
+        grantId: String,
+        port: Int,
+        username: String,
+        password: String,
+    ): NativeFolderGrantResult {
+        if (!libraryLoaded || handle <= 0) return NativeFolderGrantResult.RUNTIME_UNAVAILABLE
+        return runCatching {
+            NativeFolderGrantResult.fromWire(nativeRegisterFolderGrant(handle, grantId, port, username, password))
+        }.getOrDefault(NativeFolderGrantResult.RUNTIME_UNAVAILABLE)
+    }
+
+    fun unregisterFolderGrant(handle: Long, grantId: String): NativeFolderGrantResult {
+        if (!libraryLoaded || handle <= 0) return NativeFolderGrantResult.RUNTIME_UNAVAILABLE
+        return runCatching {
+            NativeFolderGrantResult.fromWire(nativeUnregisterFolderGrant(handle, grantId))
+        }.getOrDefault(NativeFolderGrantResult.RUNTIME_UNAVAILABLE)
+    }
+
     private fun parse(value: String): NativeNodeResponse = runCatching {
         JSONObject(value).let { objectValue ->
             NativeNodeResponse(
@@ -200,6 +232,19 @@ internal object CovalentNative {
 
     private const val FOLDER_SYNC_LISTENER_PORT = 8_789
     private const val PEER_LISTENER_PORT = 8_787
+}
+
+internal enum class NativeFolderGrantResult {
+    OK,
+    INVALID_GRANT_ID,
+    INVALID_PORT,
+    INVALID_CREDENTIAL,
+    BUSY,
+    RUNTIME_UNAVAILABLE;
+
+    companion object {
+        fun fromWire(value: Int): NativeFolderGrantResult = entries.getOrNull(value) ?: RUNTIME_UNAVAILABLE
+    }
 }
 
 private fun PackagedSyncEnginePackage.verifiedOrNull(): VerifiedPackagedSyncEngine? =

@@ -18,7 +18,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import life.michaelwong.covalent.data.RecoveryBootstrapMaterial
 import life.michaelwong.covalent.model.NodeConnection
 import life.michaelwong.covalent.sync.FolderSyncGrantStore
-import life.michaelwong.covalent.sync.FolderSyncSpecialAccess
+import life.michaelwong.covalent.sync.SafFolderGrantStore
 
 /** Visible provider state for a future explicit Android-device storage toggle. */
 data class EmbeddedProviderState(
@@ -51,10 +51,10 @@ internal fun nodeServiceConfigurationChanged(
 /** Fail closed when Android cannot prove that the durable capability journal is clear. */
 internal fun folderSyncAccessUnavailable(
     requested: Boolean,
-    specialAccessGranted: Boolean,
+    allSafGrantsAccessible: Boolean,
     hasPendingCapabilityChange: () -> Boolean,
 ): Boolean = requested && (
-    !specialAccessGranted || runCatching(hasPendingCapabilityChange).getOrDefault(true)
+    !allSafGrantsAccessible || runCatching(hasPendingCapabilityChange).getOrDefault(true)
 )
 
 /**
@@ -262,18 +262,14 @@ class EmbeddedNodeManager(context: Context) {
 
     /** Records the explicit personal/debug folder-sync opt-in and starts the private node. */
     fun enableFolderSyncHost(): Boolean {
-        if (
-            !preferences.readable || !FolderSyncSpecialAccess.supported() ||
-            !FolderSyncSpecialAccess.granted()
-        ) return false
+        if (!preferences.readable) return false
         if (!preferences.commit { putBoolean(KEY_FOLDER_SYNC_REQUESTED, true) }) return false
         startService()
         return true
     }
 
     fun folderSyncRequested(): Boolean =
-        preferences.readable && FolderSyncSpecialAccess.supported() &&
-            preferences.getBoolean(KEY_FOLDER_SYNC_REQUESTED, false)
+        preferences.readable && preferences.getBoolean(KEY_FOLDER_SYNC_REQUESTED, false)
 
     internal fun serviceNeeded(): Boolean =
         preferences.readable && nodeServiceDemand().needsService
@@ -285,7 +281,9 @@ class EmbeddedNodeManager(context: Context) {
 
     internal fun folderSyncAccessUnavailable(): Boolean = folderSyncAccessUnavailable(
         requested = folderSyncRequested(),
-        specialAccessGranted = FolderSyncSpecialAccess.granted(),
+        allSafGrantsAccessible = runCatching {
+            SafFolderGrantStore(applicationContext).allRecordsAccessible()
+        }.getOrDefault(false),
         hasPendingCapabilityChange = {
             FolderSyncGrantStore(applicationContext).hasPendingCapabilityChange()
         },
@@ -427,6 +425,10 @@ class EmbeddedNodeManager(context: Context) {
                 if (!response.ok || response.apiBaseUrl == null || response.handle == null) {
                     releaseMulticastLock()
                     response
+                } else if (!AndroidSafGrantCoordinator.registerPersisted(applicationContext, response.handle)) {
+                    CovalentNative.stop(response.handle)
+                    releaseMulticastLock()
+                    unavailable("Android could not open the saved folder choices.")
                 } else if (
                     !localStore.saveBaseUrl(response.apiBaseUrl) ||
                     !preferences.commit {
@@ -438,6 +440,7 @@ class EmbeddedNodeManager(context: Context) {
                         putString(KEY_STATUS, response.message)
                     }
                 ) {
+                    AndroidSafGrantCoordinator.close(response.handle)
                     CovalentNative.stop(response.handle)
                     releaseMulticastLock()
                     unavailable("The identity was recovered, but Android could not save its provider settings. Try recovery again with the same files.")
@@ -505,8 +508,13 @@ class EmbeddedNodeManager(context: Context) {
                 syncEngine = syncEngine,
                 backupProviderEnabled = backupEnabled,
                 folderSyncAccessUnavailable = folderSyncAccessUnavailable(),
-            ).also { response ->
-                if (response.ok && response.apiBaseUrl != null) {
+            ).let { response ->
+                if (response.ok && response.apiBaseUrl != null && response.handle != null) {
+                    if (!AndroidSafGrantCoordinator.registerPersisted(applicationContext, response.handle)) {
+                        CovalentNative.stop(response.handle)
+                        releaseMulticastLock()
+                        return@let unavailable("Android could not open the saved folder choices.")
+                    }
                     localStore.baseUrl = response.apiBaseUrl
                     if (backupEnabled) {
                         preferences.edit { putString(KEY_ACTIVE_MODE, NodeMode.LOCAL.wireValue) }
@@ -514,6 +522,7 @@ class EmbeddedNodeManager(context: Context) {
                 } else {
                     releaseMulticastLock()
                 }
+                response
             }
         } finally {
             token.fill(0)
@@ -523,6 +532,7 @@ class EmbeddedNodeManager(context: Context) {
 
     internal fun serviceStop(handle: Long): NativeNodeResponse {
         releaseMulticastLock()
+        if (handle > 0L) AndroidSafGrantCoordinator.close(handle)
         return if (handle > 0L) CovalentNative.stop(handle) else NativeNodeResponse(
             ok = true,
             code = "ok",

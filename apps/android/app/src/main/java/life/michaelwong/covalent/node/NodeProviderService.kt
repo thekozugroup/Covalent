@@ -221,7 +221,9 @@ class NodeProviderService : Service() {
                 stopProvider()
             }
             ACTION_RECOVER -> recover(command.startId)
-            ACTION_REFRESH_ACCESS -> startOrRefresh(command.startId, "Checking folder access")
+            ACTION_REFRESH_ACCESS -> {
+                if (handle > 0L) beginRestartForAccessChange() else startNode(command.startId)
+            }
             else -> startOrRefresh(command.startId, "Covalent's on-phone node is running")
         }
     }
