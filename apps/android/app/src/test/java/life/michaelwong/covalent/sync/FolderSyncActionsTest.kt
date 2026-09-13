@@ -1,6 +1,9 @@
 package life.michaelwong.covalent.sync
 
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import life.michaelwong.covalent.model.FolderHealthFreshness
 import life.michaelwong.covalent.model.FolderShare
 import life.michaelwong.covalent.model.FolderLinkPolicy
@@ -13,8 +16,11 @@ import life.michaelwong.covalent.model.FolderSyncLifecycle
 import life.michaelwong.covalent.model.FolderSyncMutation
 import life.michaelwong.covalent.model.FolderSyncStatus
 import life.michaelwong.covalent.model.NodeConnection
+import life.michaelwong.covalent.node.completeDeferredFolderSyncStart
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class FolderSyncActionsTest {
@@ -144,6 +150,113 @@ class FolderSyncActionsTest {
     }
 
     @Test
+    fun startupReplaysInterruptedRepairUsingTheRegisteredRootAndFreshRuntime() {
+        val events = mutableListOf<String>()
+        val disk = MemoryPersistence()
+        val grants = FolderSyncGrantStore(disk)
+        grants.prepareAcceptance(OFFER, OLD_ROOT)
+        val closingApi = RecordingApi(events, failRepair = true)
+        assertThrows(IllegalStateException::class.java) {
+            actions(events, grants, closingApi).repair(OFFER, NEW_ROOT)
+        }
+        assertEquals(OLD_ROOT, FolderSyncGrantStore(disk).records().single().root)
+        assertEquals(NEW_ROOT, FolderSyncGrantStore(disk).pendingRepairRoot(OFFER))
+
+        val freshConnection = NodeConnection("http://127.0.0.1:8788", "fresh-token")
+        val freshApi = RecordingApi(events)
+        var registered = false
+        val startup = FolderSyncActions(
+            FolderSyncGrantStore(disk), freshApi, { freshConnection },
+            validateRoot = {
+                check(registered)
+                assertEquals(NEW_ROOT, it)
+                it
+            },
+            onRepairAcknowledged = {},
+        )
+        assertTrue(completeDeferredFolderSyncStart(
+            accessUnavailableAtLaunch = false,
+            registerPersisted = { registered = true; true },
+            replayPendingRepairs = startup::replayPendingRepairs,
+            retryFolderSync = {
+                val reopened = FolderSyncGrantStore(disk)
+                assertFalse(reopened.hasPendingCapabilityChange())
+                assertEquals(NEW_ROOT, reopened.records().single().root)
+                events += "retry"
+            },
+            cleanup = { error("fresh runtime must remain available") },
+        ))
+        assertEquals(listOf(Triple(freshConnection, OFFER, NEW_ROOT)), freshApi.repairs)
+        assertEquals("retry", events.last())
+        assertTrue(startup.replayPendingRepairs())
+        assertEquals(1, freshApi.repairs.size)
+    }
+
+    @Test
+    fun replayRetainsTheExactPendingChoiceUntilGrantAndAcknowledgementAreValidAndDurable() {
+        for (failure in listOf("missing-grant", "wrong-offer", "network", "save")) {
+            val events = mutableListOf<String>()
+            val disk = MemoryPersistence()
+            val grants = FolderSyncGrantStore(disk)
+            grants.prepareAcceptance(OFFER, OLD_ROOT)
+            grants.prepareRepair(OFFER, NEW_ROOT)
+            val api = RecordingApi(
+                events,
+                failRepair = failure == "network",
+                responseOffer = if (failure == "wrong-offer") OTHER_OFFER else OFFER,
+            )
+            disk.failWrites = failure == "save"
+            val startup = FolderSyncActions(
+                grants, api, { CONNECTION },
+                validateRoot = { check(failure != "missing-grant"); it },
+                onRepairAcknowledged = {},
+            )
+            assertFalse(startup.replayPendingRepairs())
+            val reopened = FolderSyncGrantStore(disk)
+            assertTrue(reopened.hasPendingCapabilityChange())
+            assertEquals(OLD_ROOT, reopened.records().single().root)
+            assertEquals(NEW_ROOT, reopened.pendingRepairRoot(OFFER))
+            if (failure == "missing-grant") assertTrue(api.repairs.isEmpty())
+        }
+    }
+
+    @Test
+    fun startupDoesNotReplayAnInteractiveRepairWhoseAcknowledgementIsInFlight() {
+        val events = mutableListOf<String>()
+        val disk = MemoryPersistence()
+        val grants = FolderSyncGrantStore(disk)
+        grants.prepareAcceptance(OFFER, OLD_ROOT)
+        val requestEntered = CountDownLatch(1)
+        val acknowledge = CountDownLatch(1)
+        val replayStarted = CountDownLatch(1)
+        val interactiveApi = RecordingApi(events, beforeRepairReply = {
+            requestEntered.countDown()
+            check(acknowledge.await(5, TimeUnit.SECONDS))
+        })
+        val startupApi = RecordingApi(mutableListOf())
+        val executor = Executors.newFixedThreadPool(2)
+        try {
+            val interactive = executor.submit<FolderSyncMutation> {
+                actions(events, grants, interactiveApi).repair(OFFER, NEW_ROOT)
+            }
+            assertTrue(requestEntered.await(5, TimeUnit.SECONDS))
+            val startup = executor.submit<Boolean> {
+                replayStarted.countDown()
+                actions(mutableListOf(), FolderSyncGrantStore(disk), startupApi).replayPendingRepairs()
+            }
+            assertTrue(replayStarted.await(5, TimeUnit.SECONDS))
+            acknowledge.countDown()
+            assertEquals(OFFER, interactive.get(5, TimeUnit.SECONDS).offerId)
+            assertTrue(startup.get(5, TimeUnit.SECONDS))
+            assertTrue(startupApi.repairs.isEmpty())
+            assertFalse(FolderSyncGrantStore(disk).hasPendingCapabilityChange())
+        } finally {
+            acknowledge.countDown()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
     fun removalTombstonePrecedesNodeAndIsClearedOnlyAfterExactAcknowledgement() {
         val events = mutableListOf<String>()
         val journal = RecordingJournal(events)
@@ -211,7 +324,7 @@ class FolderSyncActionsTest {
 
     private fun actions(
         events: MutableList<String>,
-        journal: RecordingJournal,
+        journal: FolderSyncGrantJournal,
         api: RecordingApi,
         normalizeRoot: (String) -> String = { it },
     ) = FolderSyncActions(
@@ -227,6 +340,18 @@ class FolderSyncActionsTest {
         },
         onRepairAcknowledged = { events += "restart" },
     )
+
+    private class MemoryPersistence : FolderSyncGrantPersistence {
+        override val readable = true
+        var failWrites = false
+        private var value: String? = null
+        override fun read() = value
+        override fun write(value: String): Boolean {
+            if (failWrites) return false
+            this.value = value
+            return true
+        }
+    }
 
     private class RecordingJournal(
         private val events: MutableList<String>,
@@ -284,7 +409,9 @@ class FolderSyncActionsTest {
         private val responseOffer: String = OFFER,
         private val responseStatus: FolderSyncStatus = STATUS,
         private val addressResponseOffer: String? = null,
+        private val beforeRepairReply: () -> Unit = {},
     ) : FolderSyncApi {
+        val repairs = mutableListOf<Triple<NodeConnection, String, String>>()
         var offeredRoot: String? = null
             private set
         var offeredPolicy: FolderLinkPolicy? = null
@@ -348,7 +475,9 @@ class FolderSyncActionsTest {
         }
         override fun repair(connection: NodeConnection, offerId: String, selectedRoot: String): FolderSyncMutation {
             events += "api-repair"
+            repairs += Triple(connection, offerId, selectedRoot)
             if (failRepair) error("network failure")
+            beforeRepairReply()
             return mutation(responseOffer)
         }
         override fun retry(connection: NodeConnection) = MUTATION
@@ -366,6 +495,8 @@ class FolderSyncActionsTest {
         val CONNECTION = NodeConnection("http://127.0.0.1:8787", "token")
         const val OFFER = "33333333-3333-4333-8333-333333333333"
         const val OTHER_OFFER = "44444444-4444-4444-8444-444444444444"
+        const val OLD_ROOT = "covalent-saf:11111111-1111-4111-8111-111111111111"
+        const val NEW_ROOT = "covalent-saf:44444444-4444-4444-8444-444444444444"
         const val SOURCE_FOLDER = "11111111-1111-4111-8111-111111111111"
         const val SOURCE_PEER = "22222222-2222-4222-8222-222222222222"
         fun mutation(offerId: String?) = FolderSyncMutation(

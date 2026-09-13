@@ -1028,7 +1028,7 @@ private fun FolderChooser(
 }
 
 @Composable
-private fun FolderShareCard(
+internal fun FolderShareCard(
     status: FolderSyncStatus,
     share: FolderShare,
     peerName: String,
@@ -1112,8 +1112,15 @@ private fun FolderShareCard(
                     reviewRun,
                 )
             }
+            val folderAccessUnavailable = status.issue == FolderSyncIssue.FOLDER_ACCESS ||
+                status.folders.singleOrNull { it.folderId == share.folderId }?.accessUnavailable == true
             val shareSummary = status.summaryFor(share)
-            val summary = when (shareSummary) {
+            val summary = if (
+                hasPendingRepair && share.phase != FolderSharePhase.REMOVED &&
+                shareSummary == FolderShareSummary.READY
+            ) {
+                stringResource(R.string.folder_sync_connection_attention)
+            } else when (shareSummary) {
                 FolderShareSummary.REMOVAL_PENDING -> stringResource(R.string.folder_sync_removal_pending, peerName)
                 FolderShareSummary.REMOVED -> stringResource(R.string.folder_sync_removed)
                 FolderShareSummary.INVITATION_EXPIRED -> stringResource(R.string.folder_sync_invitation_expired)
@@ -1145,11 +1152,12 @@ private fun FolderShareCard(
             if (share.phase != FolderSharePhase.REMOVED && share.expired) Text(stringResource(
                 if (share.incoming) R.string.folder_sync_renew_incoming_detail else R.string.folder_sync_renew_detail,
             ), color = MaterialTheme.colorScheme.onSurfaceVariant)
-            val folderAccessUnavailable = status.issue == FolderSyncIssue.FOLDER_ACCESS ||
-                status.folders.singleOrNull { it.folderId == share.folderId }?.accessUnavailable == true
-            if (folderAccessUnavailable && share.phase != FolderSharePhase.REMOVED) {
+            if ((folderAccessUnavailable || hasPendingRepair) && share.phase != FolderSharePhase.REMOVED) {
                 Text(
-                    stringResource(R.string.folder_sync_choose_again_detail),
+                    stringResource(
+                        if (hasPendingRepair) R.string.folder_sync_saved_repair_detail
+                        else R.string.folder_sync_choose_again_detail,
+                    ),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Button(

@@ -740,7 +740,21 @@ jobs:
           fingerprint=$(./scripts/docker-source-fingerprint.sh . | sha256sum | awk '{print $1}')
           [[ "${fingerprint}" =~ ^[0-9a-f]{64}$ ]]
           echo "fingerprint=${fingerprint}" >> "${GITHUB_OUTPUT}"
-      - run: docker buildx build --platform linux/amd64 --load --build-arg VCS_REF=${{ github.sha }} --build-arg COVALENT_SOURCE_FINGERPRINT=${{ steps.docker-source.outputs.fingerprint }} -f packaging/docker/Dockerfile -t covalent:ci .
+      - name: Build the exact amd64 image with reusable layers
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+        with:
+          context: .
+          file: packaging/docker/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: covalent:ci
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            COVALENT_SOURCE_FINGERPRINT=${{ steps.docker-source.outputs.fingerprint }}
+          cache-from: type=gha,version=2,scope=covalent-ci-amd64
+          cache-to: type=gha,version=2,scope=covalent-ci-amd64,mode=max,ignore-error=true,timeout=2m
       - run: ./scripts/check-container-contract.sh covalent:ci "${GITHUB_SHA}" development "${{ steps.docker-source.outputs.fingerprint }}"
       - name: Retain the exact amd64 engine distribution evidence
         id: container-evidence
@@ -810,7 +824,21 @@ jobs:
           fingerprint=$(./scripts/docker-source-fingerprint.sh . | sha256sum | awk '{print $1}')
           [[ "${fingerprint}" =~ ^[0-9a-f]{64}$ ]]
           echo "fingerprint=${fingerprint}" >> "${GITHUB_OUTPUT}"
-      - run: docker buildx build --platform linux/arm64 --load --build-arg VCS_REF=${{ github.sha }} --build-arg COVALENT_SOURCE_FINGERPRINT=${{ steps.docker-source.outputs.fingerprint }} -f packaging/docker/Dockerfile -t covalent:ci-arm64 .
+      - name: Build the exact arm64 image with reusable layers
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+        with:
+          context: .
+          file: packaging/docker/Dockerfile
+          platforms: linux/arm64
+          load: true
+          tags: covalent:ci-arm64
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            COVALENT_SOURCE_FINGERPRINT=${{ steps.docker-source.outputs.fingerprint }}
+          cache-from: type=gha,version=2,scope=covalent-ci-arm64
+          cache-to: type=gha,version=2,scope=covalent-ci-arm64,mode=max,ignore-error=true,timeout=2m
       - run: ./scripts/check-container-contract.sh covalent:ci-arm64 "${GITHUB_SHA}" development "${{ steps.docker-source.outputs.fingerprint }}"
       - name: Retain the exact arm64 engine distribution evidence
         id: container-evidence

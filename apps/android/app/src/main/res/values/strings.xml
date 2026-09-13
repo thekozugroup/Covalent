@@ -575,6 +575,7 @@
     <string name="folder_sync_connection_unknown">Connection status unknown</string>
     <string name="folder_sync_choose_again_detail">Choose the folder again to restore this share. Covalent keeps the previous folder choice until this phone confirms the replacement.</string>
     <string name="folder_sync_use_selected_again">Use selected folder</string>
+    <string name="folder_sync_saved_repair_detail">Covalent saved your folder choice. Retry the repair to finish restoring this share.</string>
     <string name="folder_sync_retry_saved_repair">Retry saved folder repair</string>
     <string name="open_source_notices_title">Open Source Notices</string>
     <string name="open_source_notices_detail">Licenses and notices for the open source software included with Covalent.</string>

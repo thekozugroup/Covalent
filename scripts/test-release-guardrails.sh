@@ -233,7 +233,7 @@ grep -Fq 'COVALENT_SOURCE_FINGERPRINT=${{ needs.validate.outputs.source_fingerpr
 grep -Fq 'test "${amd64_fingerprint}" = "${arm64_fingerprint}"' "$container_workflow"
 grep -Fq '.annotations["io.covalent.source.fingerprint"] == $fingerprint' "$container_workflow"
 grep -Fq 'source-fingerprint: ${{ needs.validate.outputs.source_fingerprint }}' "$container_workflow"
-test "$(grep -Fc -- '--build-arg COVALENT_SOURCE_FINGERPRINT=${{ steps.docker-source.outputs.fingerprint }}' .github/workflows/ci.yml)" -eq 2
+test "$(grep -Fc -- 'COVALENT_SOURCE_FINGERPRINT=${{ steps.docker-source.outputs.fingerprint }}' .github/workflows/ci.yml)" -eq 2
 test "$(grep -Fc -- 'development "${{ steps.docker-source.outputs.fingerprint }}"' .github/workflows/ci.yml)" -eq 2
 grep -Fq 'node scripts/container-latest-version.mjs' "$container_workflow"
 grep -Fq 'latest digest does not match immutable version provenance ${provenance_ref}' "$container_workflow"

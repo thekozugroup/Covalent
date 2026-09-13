@@ -98,6 +98,7 @@ final class RealFolderLinkUITests: XCTestCase {
         recordPhase("Covalent phase: pairing completed")
 
         recordPhase("Covalent phase: manual link entered")
+        recordPhase("Covalent phase: manual peer selection entered")
         app.typeKey("1", modifierFlags: .command)
         let linksScrollView = app.scrollViews["links.view"]
         XCTAssertTrue(linksScrollView.waitForExistence(timeout: transitionTimeout))
@@ -111,17 +112,29 @@ final class RealFolderLinkUITests: XCTestCase {
             peerPickerDiagnostic(app: app, picker: peerPicker)
         )
         app.menuItems["Responder UI Peer"].click()
+        recordPhase("Covalent phase: manual peer selection completed")
+
+        recordPhase("Covalent phase: manual label entered")
         let name = linksScrollView.textFields["links.new.name"]
         scrollTo(name, in: linksScrollView)
         XCTAssertTrue(name.waitForExistence(timeout: transitionTimeout))
         name.click()
         name.typeText("Mac UI Link")
+        recordPhase("Covalent phase: manual label completed")
+
+        recordPhase("Covalent phase: manual source guidance entered")
         let sourceDeletion = app.staticTexts["Deleting a source file leaves destination copies untouched."]
         scrollTo(sourceDeletion, in: linksScrollView)
         XCTAssertTrue(sourceDeletion.waitForExistence(timeout: transitionTimeout))
+        recordPhase("Covalent phase: manual source guidance completed")
+
+        recordPhase("Covalent phase: manual destination guidance entered")
         let destinationDeletion = app.staticTexts["Files deleted at a destination stay deleted there, even if the source changes. The source and other destinations stay untouched."]
         scrollTo(destinationDeletion, in: linksScrollView)
         XCTAssertTrue(destinationDeletion.waitForExistence(timeout: transitionTimeout))
+        recordPhase("Covalent phase: manual destination guidance completed")
+
+        recordPhase("Covalent phase: manual cadence selection entered")
         let cadence = linksScrollView.popUpButtons["folder-link-cadence"]
         scrollTo(cadence, in: linksScrollView)
         guard cadence.waitForExistence(timeout: transitionTimeout) else {
@@ -133,14 +146,21 @@ final class RealFolderLinkUITests: XCTestCase {
         }
         cadence.click()
         app.menuItems["Manual"].click()
+        recordPhase("Covalent phase: manual cadence selection completed")
 
+        recordPhase("Covalent phase: manual folder picker entered")
         let chooseSource = app.buttons["Choose Source Folder…"]
+        recordPhase("Covalent phase: manual folder picker scroll entered")
         scrollTo(chooseSource, in: linksScrollView)
         XCTAssertTrue(chooseSource.waitForExistence(timeout: transitionTimeout))
         XCTAssertTrue(chooseSource.isHittable)
+        recordPhase("Covalent phase: manual folder picker scroll completed")
+        recordPhase("Covalent phase: manual folder picker opening entered")
         chooseSource.click()
         try chooseFolder(at: sourceRoot, in: app)
+        recordPhase("Covalent phase: manual folder picker completed")
 
+        recordPhase("Covalent phase: manual offer and accept entered")
         let offer = try await waitForIncomingOffer(
             port: responderPort,
             token: responderToken,
@@ -156,10 +176,13 @@ final class RealFolderLinkUITests: XCTestCase {
                 "selectedRoot": destinationRoot,
             ]
         )
+        recordPhase("Covalent phase: manual offer and accept completed")
 
+        recordPhase("Covalent phase: manual idle wait entered")
         let idle = app.staticTexts["Idle. Run this link when you want to transfer changes."]
         scrollTo(idle, in: linksScrollView)
         XCTAssertTrue(idle.waitForExistence(timeout: transferTimeout))
+        recordPhase("Covalent phase: manual idle wait completed")
         recordPhase("Covalent phase: manual link completed")
 
         recordPhase("Covalent phase: first run entered")
@@ -309,6 +332,8 @@ final class RealFolderLinkUITests: XCTestCase {
     private func chooseFolder(at path: String, in app: XCUIApplication) throws {
         let panel = app.dialogs["open-panel"]
         XCTAssertTrue(panel.waitForExistence(timeout: transitionTimeout))
+        recordPhase("Covalent phase: manual folder picker opening completed")
+        recordPhase("Covalent phase: manual folder picker location entered")
         panel.typeKey("g", modifierFlags: [.command, .shift])
         let comboBox = app.sheets.comboBoxes.firstMatch
         let textField = app.sheets.textFields.firstMatch
@@ -322,11 +347,14 @@ final class RealFolderLinkUITests: XCTestCase {
         location.typeText(path)
         location.typeKey(.return, modifierFlags: [])
         XCTAssertTrue(waitForDisappearance(of: location, timeout: transitionTimeout))
+        recordPhase("Covalent phase: manual folder picker location completed")
+        recordPhase("Covalent phase: manual folder picker confirmation entered")
         let choose = panel.buttons["Choose"]
         XCTAssertTrue(choose.waitForExistence(timeout: transitionTimeout))
         XCTAssertTrue(choose.isHittable)
         choose.click()
         XCTAssertTrue(waitForDisappearance(of: panel, timeout: transitionTimeout))
+        recordPhase("Covalent phase: manual folder picker confirmation completed")
     }
 
     private func privateToken(at path: String) throws -> String {

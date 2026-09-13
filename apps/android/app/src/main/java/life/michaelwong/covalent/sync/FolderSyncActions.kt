@@ -79,20 +79,35 @@ internal class FolderSyncActions(
         return mutation
     }
 
-    fun repair(offerId: String, root: String): FolderSyncMutation {
+    fun repair(offerId: String, root: String): FolderSyncMutation = synchronized(REPAIR_LOCK) {
         val selectedRoot = validateRoot(root)
         grants.prepareRepair(offerId, selectedRoot)
-        return api.repair(ensureNodeReady(), offerId, selectedRoot).also { mutation ->
+        api.repair(ensureNodeReady(), offerId, selectedRoot).also { mutation ->
             requireMutationOffer(mutation, offerId)
             grants.finishRepair(offerId, selectedRoot)
             onRepairAcknowledged()
         }
     }
 
-    fun retryRepair(offerId: String): FolderSyncMutation = repair(
-        offerId,
-        checkNotNull(grants.pendingRepairRoot(offerId)) { "There is no saved folder repair to retry." },
-    )
+    fun retryRepair(offerId: String): FolderSyncMutation = synchronized(REPAIR_LOCK) {
+        repair(
+            offerId,
+            checkNotNull(grants.pendingRepairRoot(offerId)) { "There is no saved folder repair to retry." },
+        )
+    }
+
+    /** Replays exact saved choices after grant registration, before deferred transfers start. */
+    fun replayPendingRepairs(): Boolean = synchronized(REPAIR_LOCK) {
+        grants.records().forEach { grant ->
+            val root = grant.pendingRoot
+            val offerId = grant.offerId
+            if (root != null && offerId != null && !grant.pendingRemoval) {
+                // A failed or uncertain acknowledgement leaves the saved choice available to retry.
+                runCatching { repair(offerId, root) }
+            }
+        }
+        grants.records().none { it.pendingRoot != null || it.pendingRemoval }
+    }
 
     fun remove(offerId: String): FolderSyncMutation {
         grants.prepareRemoval(offerId)
@@ -111,5 +126,10 @@ internal class FolderSyncActions(
 
     private fun requireMutationOffer(mutation: FolderSyncMutation, expected: String) {
         check(mutation.offerId == expected) { "The node acknowledged a different folder share." }
+    }
+
+    private companion object {
+        // Startup replay must not resubmit a repair whose interactive acknowledgement is in flight.
+        val REPAIR_LOCK = Any()
     }
 }

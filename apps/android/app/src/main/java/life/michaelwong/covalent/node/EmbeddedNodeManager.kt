@@ -19,6 +19,8 @@ import life.michaelwong.covalent.data.CovalentNodeClient
 import life.michaelwong.covalent.data.RecoveryBootstrapMaterial
 import life.michaelwong.covalent.model.NodeConnection
 import life.michaelwong.covalent.sync.FolderSyncGrantStore
+import life.michaelwong.covalent.sync.FolderSyncActions
+import life.michaelwong.covalent.sync.NodeFolderSyncApi
 import life.michaelwong.covalent.sync.SafFolderGrantStore
 
 /** Visible provider state for a future explicit Android-device storage toggle. */
@@ -59,13 +61,17 @@ internal fun folderSyncAccessUnavailable(
 )
 
 internal fun completeDeferredFolderSyncStart(
+    accessUnavailableAtLaunch: Boolean,
     registerPersisted: () -> Boolean,
+    replayPendingRepairs: () -> Boolean,
     retryFolderSync: () -> Unit,
     cleanup: () -> Unit,
 ): Boolean {
     val completed = try {
         registerPersisted() && run {
-            retryFolderSync()
+            val repaired = replayPendingRepairs()
+            // Recovery-only native runtimes need the service restart before transfers can start.
+            if (repaired && !accessUnavailableAtLaunch) retryFolderSync()
             true
         }
     } catch (_: Exception) {
@@ -425,6 +431,7 @@ class EmbeddedNodeManager(context: Context) {
         return try {
             val lanEnabled = acquireLanDiscoveryPermission(request.lanDiscoveryRequested)
             val syncEngine = PackagedSyncEngine.load(applicationContext)
+            val accessUnavailable = folderSyncAccessUnavailable()
             CovalentNative.recoverStart(
                 dataDirectory = privateNodeDirectory().path,
                 deviceName = "${Build.MODEL.take(64)} Android",
@@ -439,14 +446,18 @@ class EmbeddedNodeManager(context: Context) {
                 recoveryKey = request.material.key,
                 syncEngine = syncEngine,
                 backupProviderEnabled = true,
-                folderSyncAccessUnavailable = folderSyncAccessUnavailable(),
+                folderSyncAccessUnavailable = accessUnavailable,
             ).let { response ->
                 if (!response.ok || response.apiBaseUrl == null || response.handle == null) {
                     releaseMulticastLock()
                     response
                 } else if (folderSyncRequested() && !completeDeferredFolderSyncStart(
+                        accessUnavailableAtLaunch = accessUnavailable,
                         registerPersisted = {
                             AndroidSafGrantCoordinator.registerPersisted(applicationContext, response.handle)
+                        },
+                        replayPendingRepairs = {
+                            replayPendingFolderSyncRepairs(response.apiBaseUrl)
                         },
                         retryFolderSync = {
                             CovalentNodeClient().retryFolderSync(response.apiBaseUrl, localStore.token)
@@ -525,6 +536,7 @@ class EmbeddedNodeManager(context: Context) {
                 backupEnabled && preferences.getBoolean(KEY_LAN_REQUESTED, false),
             )
             val syncEngine = PackagedSyncEngine.load(applicationContext)
+            val accessUnavailable = folderSyncAccessUnavailable()
             CovalentNative.start(
                 dataDirectory = privateNodeDirectory().path,
                 deviceName = "${Build.MODEL.take(64)} Android",
@@ -537,12 +549,16 @@ class EmbeddedNodeManager(context: Context) {
                 keyProtectionLevel = protection,
                 syncEngine = syncEngine,
                 backupProviderEnabled = backupEnabled,
-                folderSyncAccessUnavailable = folderSyncAccessUnavailable(),
+                folderSyncAccessUnavailable = accessUnavailable,
             ).let { response ->
                 if (response.ok && response.apiBaseUrl != null && response.handle != null) {
                     if (syncRequested && !completeDeferredFolderSyncStart(
+                            accessUnavailableAtLaunch = accessUnavailable,
                             registerPersisted = {
                                 AndroidSafGrantCoordinator.registerPersisted(applicationContext, response.handle)
+                            },
+                            replayPendingRepairs = {
+                                replayPendingFolderSyncRepairs(response.apiBaseUrl)
                             },
                             retryFolderSync = {
                                 CovalentNodeClient().retryFolderSync(response.apiBaseUrl, localStore.token)
@@ -570,6 +586,15 @@ class EmbeddedNodeManager(context: Context) {
             keyEncryptionKey.close()
         }
     }
+
+    private fun replayPendingFolderSyncRepairs(baseUrl: String): Boolean = FolderSyncActions(
+        grants = FolderSyncGrantStore(applicationContext),
+        api = NodeFolderSyncApi(CovalentNodeClient()),
+        ensureNodeReady = { NodeConnection(baseUrl, localStore.token) },
+        validateRoot = SafFolderGrantStore(applicationContext)::requireSelectedRoot,
+        // The service's existing access check restarts once all pending changes are acknowledged.
+        onRepairAcknowledged = {},
+    ).replayPendingRepairs()
 
     internal fun serviceStop(handle: Long): NativeNodeResponse {
         releaseMulticastLock()

@@ -2,19 +2,19 @@
 
 Updated 2026-09-13 after the owner reaffirmed the lightweight one-way scope. The active goal is defined in [Product requirements](../product/requirements.md#active-completion-goal).
 
-**Current scope: 70% verified, 7 of 10 complete acceptance checks.** This counts
+**Current scope: 60% verified, 6 of 10 complete acceptance checks.** This counts
 complete user journeys, not remaining time or reusable code. Rclone is the sole
-transfer engine and its migration is complete. The corrected Android layout on
-`d4a45ff` passes the complete native transfer journey and normal/large-text app
-review, restoring setup, cadence, and Android acceptance. Fan-out, collection
-isolation, deletion/restoration, and shared settings remain verified. The prior
-`7cf89c1` and `d4a45ff` hosted failures remain recorded. Current committed
-source `fd542fb` passes foundation, packaging, security, and version checks;
-its Mac managed journey times out. The first Android attempt fails before app
-tests begin; the requested targeted Android retry passes all 81 baseline tests,
-then times out in the initial system folder picker before link setup. The
-complete source-matched local Android pass remains separate evidence. Mac,
-Atmos, and final release acceptance remain open.
+transfer engine and its migration is complete. Setup, fan-out, collection
+isolation, deletion/restoration, cadence, and shared settings remain verified.
+The latest completed CI on `3301162` passes all 10 foundation, packaging,
+security, and version jobs. Mac setup and pairing complete, but link creation
+times out. Android passes 81 baseline tests and its initial picker, but later
+folder-access repair remains pending with a stopped service and no visible
+retry control. This observed recovery defect reopens Android acceptance and
+reduces the score from 70%. The earlier complete local Android journey and
+normal/large-text review remain valid historical executions; they do not
+override this newly identified failure. Mac, Android recovery, Atmos, and
+final release acceptance remain open.
 Earlier Syncthing evidence is retained only as history.
 
 **Previous scope: 75%, 15 of 20 checks**, recorded at checkpoint 46 (c47003113e28b6e934a8ab4823040614fb07fb30). That score belongs to the superseded bidirectional/backup scope. Source and evidence remain in Git history.
@@ -28,7 +28,7 @@ Earlier Syncthing evidence is retained only as history.
 | 5 | Manual, scheduled, and continuous transfers respect platform limits; idle batch workers stop. | Verified |
 | 6 | Settings edited on any authorized member converge across the link; pending/stale edits remain visible. | Verified |
 | 7 | Mac setup, links, settings, and per-link menu bar status pass native HIG/keyboard/VoiceOver checks. | Open |
-| 8 | Tomato-inspired Android floating actions, typography, data/status visuals, and top bar; actual pairing, permission, transfer, and background journeys pass. | Verified |
+| 8 | Tomato-inspired Android floating actions, typography, data/status visuals, and top bar; actual pairing, permission, transfer, and background journeys pass. | Open: saved permission repair can stall and hide its retry action |
 | 9 | Installable Mac/Android/Docker candidates pass real laptop–Atmos transfers and server mount handling; use an Unraid plugin only for a demonstrated Docker limitation. | Open |
 | 10 | Relevant fault/security checks pass; idle/transfer performance is measured; temporary fixtures are removed; GitHub releases and installation guidance are published. | Open |
 
@@ -79,7 +79,8 @@ large text sizes. The visual build's UI source matches `6260187`; its reused
 native helpers are independently covered by the fresh hosted native build and
 complete device run. The later transfer failure temporarily reopened Android
 acceptance. The corrected `d4a45ff` local journey and normal/2× MainActivity
-review now restore check 8.
+review restored check 8 at that checkpoint. The later `3301162` recovery failure
+reopens it, as recorded above.
 
 Earlier row 5 evidence combines the complete Manual/Continuous Android journey, the complete
 15-minute source-owned scheduled run, and the recorded real charging/Wi-Fi
@@ -113,7 +114,8 @@ foundation checks pass, and the complete unchanged SAF journey passes in
 399.70 seconds with ordinary taps. Its test source matches `7cf89c1`, its UI
 matches `d4a45ff`, and its fresh native runtime matches `142a6eb`. Normal
 MainActivity review at standard and 2× text, cold reopening, and the independent
-completion audit also pass. They restore checks 1, 5, and 8.
+completion audit also passed. They restored checks 1, 5, and 8 at that
+checkpoint; the later `3301162` failure reopens check 8.
 The earlier `6260187` device run passes
 all 82 tests. The `8420180` Android run's source-deletion timeout did not
 recur with the original immediate deletion timing and 120-second assertion;
@@ -164,6 +166,22 @@ The attempt-two aggregate retains this same Mac failure, but its sanitized Mac
 log is byte-identical to attempt one, including timestamps; it does not prove
 that the Mac job reran.
 
+On `3301162`, the Mac package and shared Rust jobs pass. The UI job remains
+five of six, but its new phase markers prove that the app's managed setup and
+native pairing complete. It enters manual-link creation about 22 seconds
+after the first setup marker, then exceeds the same 120-second allowance
+before that phase completes. The blocking operation within link creation is
+still unknown; this is progress in diagnosis, not full native acceptance.
+The next run records fixed boundaries for each manual-link control and folder
+picker step while preserving the existing actions and timeouts.
+
+The CI Docker jobs are configured to reuse unchanged build layers through
+separate GitHub cache scopes for each architecture. Source fingerprints,
+runtime tests, vulnerability scans, and artifact checks remain mandatory.
+Cache export is optional and bounded, and extra build-record uploads are
+disabled. Guardrail checks and workflow parsing pass; no hosted cache reuse
+or speed improvement has been measured yet.
+
 The first `fd542fb` Android attempt compiles successfully but runs zero app tests:
 the emulator reports boot completion while its `settings` and `input` services
 are unavailable. The requested targeted retry on the same source newly executes
@@ -172,12 +190,29 @@ then fails after 93.11 seconds because the initial system folder picker does not
 complete before its existing deadline. Link setup and grant repair are not
 reached, and the retained log does not establish why the picker remains open.
 The aggregate also lists prior Mac and foundation results; their presence does
-not show that those jobs reran. Neither Android attempt changes the 70% score or
-replaces the complete source-matched local Android evidence.
+not show that those jobs reran. Neither Android attempt changed the then-current 70% score or
+replaced the complete source-matched local Android evidence.
 The next run adds failure-only elapsed time and fixed window categories to
 distinguish picker visibility from the test host remaining active. It records
 no screen text, paths, or URIs, and preserves the existing timeout and actions.
 Offline instrumentation compilation and independent review pass.
+
+The `3301162` Android run passes all 81 baseline tests in 77.641 seconds, then
+fails the full SAF journey after 227.707 seconds during exact-folder grant
+repair. Permission is persisted and the API address has changed, but the
+service reports `STOPPED`, the share remains `READY`, no folder diagnostic is
+present, and the saved repair is still pending. The retry action has zero UI
+nodes. Source inspection confirms that the card hides the repair section when
+the runtime has no folder-access error, even when a repair is saved. The
+asynchronous access refresh can also stop/restart the service between saving
+the repair and submitting it. The correction replays the exact saved repair
+after SAF registration against the fresh API, preserves pending state until a
+matching durable acknowledgement, and shows Retry even without folder health.
+A recovered node keeps its repair API alive until the service restarts into
+transfer mode; it does not call transfer startup on a recovery-only runtime.
+All 36 focused JVM tests and Android instrumentation compilation pass. The
+rendered regression and unchanged full SAF journey still require device
+execution; these source changes do not close Android acceptance.
 
 The remote drill now uses current one-way folder links and a build receipt for
 exact packaged Mac component bytes. It runs private helper copies as an engine

@@ -331,6 +331,30 @@ emit_failed_result_details() {
               . == "Covalent phase: pairing entered" or
               . == "Covalent phase: pairing completed" or
               . == "Covalent phase: manual link entered" or
+              . == "Covalent phase: manual peer selection entered" or
+              . == "Covalent phase: manual peer selection completed" or
+              . == "Covalent phase: manual label entered" or
+              . == "Covalent phase: manual label completed" or
+              . == "Covalent phase: manual source guidance entered" or
+              . == "Covalent phase: manual source guidance completed" or
+              . == "Covalent phase: manual destination guidance entered" or
+              . == "Covalent phase: manual destination guidance completed" or
+              . == "Covalent phase: manual cadence selection entered" or
+              . == "Covalent phase: manual cadence selection completed" or
+              . == "Covalent phase: manual folder picker entered" or
+              . == "Covalent phase: manual folder picker scroll entered" or
+              . == "Covalent phase: manual folder picker scroll completed" or
+              . == "Covalent phase: manual folder picker opening entered" or
+              . == "Covalent phase: manual folder picker opening completed" or
+              . == "Covalent phase: manual folder picker location entered" or
+              . == "Covalent phase: manual folder picker location completed" or
+              . == "Covalent phase: manual folder picker confirmation entered" or
+              . == "Covalent phase: manual folder picker confirmation completed" or
+              . == "Covalent phase: manual folder picker completed" or
+              . == "Covalent phase: manual offer and accept entered" or
+              . == "Covalent phase: manual offer and accept completed" or
+              . == "Covalent phase: manual idle wait entered" or
+              . == "Covalent phase: manual idle wait completed" or
               . == "Covalent phase: manual link completed" or
               . == "Covalent phase: first run entered" or
               . == "Covalent phase: first run completed" or
@@ -350,7 +374,7 @@ emit_failed_result_details() {
                   associatedWithFailure: (.isAssociatedWithFailure? | safe_scalar),
                   status: ((.result? // .status?) | safe_scalar)
                 }
-            ][0:32]
+            ][0:48]
           ' 2>/dev/null
       ) || phase_rows=""
       if [[ -n "$phase_rows" && "$phase_rows" != "[]" ]]; then

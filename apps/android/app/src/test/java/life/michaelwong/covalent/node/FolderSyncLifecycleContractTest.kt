@@ -11,22 +11,32 @@ class FolderSyncLifecycleContractTest {
         val successfulEvents = mutableListOf<String>()
         assertTrue(
             completeDeferredFolderSyncStart(
+                accessUnavailableAtLaunch = false,
                 registerPersisted = {
                     successfulEvents += "register"
+                    true
+                },
+                replayPendingRepairs = {
+                    successfulEvents += "repair"
                     true
                 },
                 retryFolderSync = { successfulEvents += "retry" },
                 cleanup = { successfulEvents += "cleanup" },
             ),
         )
-        assertTrue(successfulEvents == listOf("register", "retry"))
+        assertTrue(successfulEvents == listOf("register", "repair", "retry"))
 
         val registrationFailureEvents = mutableListOf<String>()
         assertFalse(
             completeDeferredFolderSyncStart(
+                accessUnavailableAtLaunch = false,
                 registerPersisted = {
                     registrationFailureEvents += "register"
                     false
+                },
+                replayPendingRepairs = {
+                    registrationFailureEvents += "repair"
+                    true
                 },
                 retryFolderSync = { registrationFailureEvents += "retry" },
                 cleanup = { registrationFailureEvents += "cleanup" },
@@ -37,9 +47,14 @@ class FolderSyncLifecycleContractTest {
         val registrationExceptionEvents = mutableListOf<String>()
         assertFalse(
             completeDeferredFolderSyncStart(
+                accessUnavailableAtLaunch = false,
                 registerPersisted = {
                     registrationExceptionEvents += "register"
                     error("grant registration failed")
+                },
+                replayPendingRepairs = {
+                    registrationExceptionEvents += "repair"
+                    true
                 },
                 retryFolderSync = { registrationExceptionEvents += "retry" },
                 cleanup = { registrationExceptionEvents += "cleanup" },
@@ -50,8 +65,13 @@ class FolderSyncLifecycleContractTest {
         val retryFailureEvents = mutableListOf<String>()
         assertFalse(
             completeDeferredFolderSyncStart(
+                accessUnavailableAtLaunch = false,
                 registerPersisted = {
                     retryFailureEvents += "register"
+                    true
+                },
+                replayPendingRepairs = {
+                    retryFailureEvents += "repair"
                     true
                 },
                 retryFolderSync = {
@@ -61,7 +81,51 @@ class FolderSyncLifecycleContractTest {
                 cleanup = { retryFailureEvents += "cleanup" },
             ),
         )
-        assertTrue(retryFailureEvents == listOf("register", "retry", "cleanup"))
+        assertTrue(retryFailureEvents == listOf("register", "repair", "retry", "cleanup"))
+    }
+
+    @Test
+    fun repairedRecoveryRuntimeSurvivesUntilTheServiceRestartsWithAccess() {
+        val events = mutableListOf<String>()
+        var accessUnavailable = true
+        val demand = NodeServiceDemand(backupEnabled = false, folderSyncRequested = true)
+        assertTrue(completeDeferredFolderSyncStart(
+            accessUnavailableAtLaunch = accessUnavailable,
+            registerPersisted = { events += "register"; true },
+            replayPendingRepairs = { accessUnavailable = false; events += "repair"; true },
+            retryFolderSync = { error("recovery-only runtime rejects transfer startup") },
+            cleanup = { error("recovery API must survive for the service restart") },
+        ))
+        assertTrue(events == listOf("register", "repair"))
+        assertTrue(nodeServiceConfigurationChanged(true, demand, accessUnavailable, demand))
+        assertFalse(nodeServiceConfigurationChanged(accessUnavailable, demand, accessUnavailable, demand))
+    }
+
+    @Test
+    fun unresolvedRepairKeepsTheApiAvailableWithoutStartingTransfers() {
+        val events = mutableListOf<String>()
+        assertTrue(
+            completeDeferredFolderSyncStart(
+                accessUnavailableAtLaunch = false,
+                registerPersisted = { events += "register"; true },
+                replayPendingRepairs = { events += "repair-pending"; false },
+                retryFolderSync = { events += "retry" },
+                cleanup = { events += "cleanup" },
+            ),
+        )
+        assertTrue(events == listOf("register", "repair-pending"))
+
+        events.clear()
+        assertFalse(
+            completeDeferredFolderSyncStart(
+                accessUnavailableAtLaunch = false,
+                registerPersisted = { events += "register"; true },
+                replayPendingRepairs = { error("unreadable grant journal") },
+                retryFolderSync = { events += "retry" },
+                cleanup = { events += "cleanup" },
+            ),
+        )
+        assertTrue(events == listOf("register", "cleanup"))
     }
 
     @Test
