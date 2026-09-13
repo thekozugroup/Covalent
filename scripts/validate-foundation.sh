@@ -54,7 +54,6 @@ docs/platform/android.md
 crates/covalent-core/Cargo.toml
 crates/covalent-protocol/Cargo.toml
 crates/covalent-node/Cargo.toml
-crates/covalent-ffi/Cargo.toml
 crates/covalent-cli/Cargo.toml
 apps/apple/Project.yml
 apps/android/app/build.gradle.kts

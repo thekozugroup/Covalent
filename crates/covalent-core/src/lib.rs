@@ -17,7 +17,7 @@ mod recovery;
 mod replication;
 mod restore;
 mod storage;
-/// Folder-sync protocol and private-state foundations; no network sync runtime is shipped.
+/// Private-state storage used by the maintained folder-sync runtime.
 pub mod sync;
 
 use std::fs;

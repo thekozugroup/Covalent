@@ -1,7 +1,7 @@
 //! Descriptor-anchored capabilities for private synchronization state.
 //!
 //! These types are limited to application-owned local state. They never accept
-//! a user [`super::path::SyncPath`], expose an unanchored child path, or make an
+//! a user-supplied relative path, expose an unanchored child path, or make an
 //! advisory lock a security boundary. Cooperative sync writers must retain one
 //! [`PrivateStateLock`] before creating or mutating files.
 

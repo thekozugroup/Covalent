@@ -11,7 +11,6 @@ repository.workspace = true
 [dependencies]
 base64.workspace = true
 blake3.workspace = true
-caseless.workspace = true
 chacha20poly1305.workspace = true
 covalent-protocol = { version = "0.2.0", path = "../covalent-protocol" }
 ed25519-dalek.workspace = true
@@ -26,7 +25,6 @@ serde_json.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
-unicode-normalization.workspace = true
 uuid.workspace = true
 walkdir.workspace = true
 zeroize.workspace = true
