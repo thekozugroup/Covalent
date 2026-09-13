@@ -16,13 +16,19 @@ an Unraid plugin only for a demonstrated Docker limitation involving the require
 use case. Explain and test appdata consistency and explicitly mounted boot-file
 limits before making backup or recovery claims.
 
-Reuse and bundle mature open-source transfer tools wherever they satisfy the
-required behavior. Rclone, rsync, and the existing maintained Syncthing integration
-are available approaches to assess; they are not three backends to implement.
+Use rclone as the preferred bundled transfer engine. The owner explicitly prefers
+its batch model over Syncthing, provided it supports the required deletion rules,
+Android folder access, and paired-device permissions. Validate those points in an
+isolated prototype, then replace the existing Syncthing integration if they pass.
+Do not expand the Syncthing implementation while this decision is pending.
+
 Covalent owns the intuitive pairing, permissions, shared link settings, scheduling,
-and monitoring wrapper. Do not reimplement file-transfer algorithms or build a
-second sync engine. Keep any unavoidable upstream changes small, documented,
-licensed correctly, and covered by the required behavior checks.
+and monitoring wrapper. Reuse upstream copy/sync operations rather than implement
+file-transfer algorithms. Add only the state required to preserve destination
+deletions and synchronize link settings. Keep one engine, not interchangeable
+backends. Remove obsolete Syncthing assets, adapters, and tests after the rclone
+replacement passes the same required behavior checks. Preserve existing user
+files, identities, and access to legacy data throughout the change.
 
 Prefer existing code, the selected maintained transfer engine, and native platform APIs.
 Remove superseded backup and bidirectional flows from the primary interface while

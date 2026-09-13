@@ -1902,6 +1902,11 @@ components:
           description: The zero UUID names initial revision zero; subsequent revisions have a nonzero change ID.
         changedBy:
           $ref: "#/components/schemas/DeviceId"
+        acceptedAtUnixMs:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Source-issued acceptance time. Historical continuous settings may omit this field or use zero.
         confirmed:
           type: boolean
           description: A new destination waits for current source-confirmed settings before transferring, even after accepting an invitation.
