@@ -75,6 +75,9 @@ pub enum FolderControlOperation {
     SendRemoval(crate::sync_engine::FolderRemovalNotice),
     RequestLinkSettings(crate::sync_engine::LinkSettingsRequest),
     CommitLinkSettings(crate::sync_engine::LinkSettingsCommit),
+    RequestLinkRun(crate::sync_engine::LinkRunRequest),
+    CommitLinkRun(crate::sync_engine::LinkRunCommit),
+    ReportLinkRun(crate::sync_engine::LinkRunReport),
     ProbeAddress {
         requester_id: DeviceId,
         target_id: DeviceId,
@@ -91,7 +94,11 @@ impl FolderControlOperation {
             Self::SendCommit { commit, .. } => {
                 commit.schema_version >= covalent_protocol::FOLDER_LINK_SCHEMA_VERSION
             }
-            Self::RequestLinkSettings(_) | Self::CommitLinkSettings(_) => true,
+            Self::RequestLinkSettings(_)
+            | Self::CommitLinkSettings(_)
+            | Self::RequestLinkRun(_)
+            | Self::CommitLinkRun(_)
+            | Self::ReportLinkRun(_) => true,
             Self::SendRemoval(_) | Self::ProbeAddress { .. } => false,
         };
         if one_way {
@@ -109,6 +116,9 @@ impl FolderControlOperation {
             Self::SendRemoval(notice) => notice.requester_id,
             Self::RequestLinkSettings(request) => request.requester_id,
             Self::CommitLinkSettings(commit) => commit.source_id,
+            Self::RequestLinkRun(request) => request.requester_id,
+            Self::CommitLinkRun(commit) => commit.source_id,
+            Self::ReportLinkRun(report) => report.reporter_id,
             Self::ProbeAddress { requester_id, .. } => *requester_id,
         }
     }
@@ -122,6 +132,9 @@ impl FolderControlOperation {
             Self::SendRemoval(notice) => Some(notice.target_id),
             Self::RequestLinkSettings(request) => Some(request.source_id),
             Self::CommitLinkSettings(commit) => Some(commit.target_id),
+            Self::RequestLinkRun(request) => Some(request.source_id),
+            Self::CommitLinkRun(commit) => Some(commit.target_id),
+            Self::ReportLinkRun(report) => Some(report.source_id),
             Self::ProbeAddress { target_id, .. } => Some(*target_id),
         }
     }
@@ -152,6 +165,7 @@ pub enum FolderControlPayload {
     NeedsAttention,
     AddressProof(SyncEngineBinding),
     LinkSettings(crate::sync_engine::LinkSettingsCommit),
+    LinkRun(crate::sync_engine::LinkRunCommit),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -741,6 +755,27 @@ async fn apply_remote(
         }
         FolderControlOperation::CommitLinkSettings(commit) => {
             match service.receive_link_settings_commit(&commit).await {
+                Ok(_) => FolderControlPayload::Ack,
+                Err(crate::sync_engine::FolderSyncServiceError::Busy) => FolderControlPayload::Busy,
+                Err(_) => FolderControlPayload::NeedsAttention,
+            }
+        }
+        FolderControlOperation::RequestLinkRun(request) => {
+            match service.receive_link_run_request(&request).await {
+                Ok(value) => FolderControlPayload::LinkRun(value.into_value()),
+                Err(crate::sync_engine::FolderSyncServiceError::Busy) => FolderControlPayload::Busy,
+                Err(_) => FolderControlPayload::NeedsAttention,
+            }
+        }
+        FolderControlOperation::CommitLinkRun(commit) => {
+            match service.receive_link_run_commit(&commit).await {
+                Ok(_) => FolderControlPayload::Ack,
+                Err(crate::sync_engine::FolderSyncServiceError::Busy) => FolderControlPayload::Busy,
+                Err(_) => FolderControlPayload::NeedsAttention,
+            }
+        }
+        FolderControlOperation::ReportLinkRun(report) => {
+            match service.receive_link_run_report(&report).await {
                 Ok(_) => FolderControlPayload::Ack,
                 Err(crate::sync_engine::FolderSyncServiceError::Busy) => FolderControlPayload::Busy,
                 Err(_) => FolderControlPayload::NeedsAttention,

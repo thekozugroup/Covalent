@@ -386,11 +386,11 @@ async fn wait_ready_at(
     revision: u64,
     propagate: bool,
     restore: bool,
-) {
+) -> Value {
     wait_for_status(node, description, |value| {
         shares_ready_at(value, folder_id, count, revision, propagate, restore)
     })
-    .await;
+    .await
 }
 
 async fn offer_and_accept(
@@ -401,6 +401,27 @@ async fn offer_and_accept(
     source_root: &Path,
     destination_root: &Path,
 ) {
+    offer_and_accept_at_cadence(
+        source,
+        destination,
+        peer_id,
+        folder_id,
+        source_root,
+        destination_root,
+        json!({"mode": "continuous"}),
+    )
+    .await;
+}
+
+async fn offer_and_accept_at_cadence(
+    source: &NodeRuntime,
+    destination: &NodeRuntime,
+    peer_id: &str,
+    folder_id: Uuid,
+    source_root: &Path,
+    destination_root: &Path,
+    cadence: Value,
+) {
     let offered = post_ok(
         source,
         "/api/v1/sync/folders",
@@ -408,6 +429,7 @@ async fn offer_and_accept(
             "peerId": peer_id,
             "folderId": folder_id,
             "label": "Three-node one-way link",
+            "cadence": cadence,
             "selectedRoot": source_root,
             "linkPolicy": {
                 "propagateSourceDeletions": false,
@@ -1076,7 +1098,469 @@ async fn three_node_one_way_links_enforce_deletions_restore_and_shared_settings(
         "the losing request overwrote the revision 5 winner"
     );
 
+    destination_b
+        .stop()
+        .await
+        .expect("stop destination B before independent fanout");
+    write(
+        &source_root,
+        "offline-destination.txt",
+        b"online destination continues\n",
+    );
+    wait_file(
+        &destination_a_root.join("offline-destination.txt"),
+        b"online destination continues\n",
+        "online destination while another destination is offline",
+    )
+    .await;
+    assert_absent(
+        &destination_b_root.join("offline-destination.txt"),
+        "stopped destination unexpectedly transferred",
+    );
     source.stop().await.expect("stop source");
     destination_a.stop().await.expect("stop destination A");
-    destination_b.stop().await.expect("stop destination B");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires explicit maintained folder-sync worker and freshly compiled guardian paths"]
+async fn collection_links_isolate_sources_and_preserve_files_when_a_source_cannot_scan() {
+    let binaries = test_binaries();
+    let root = TempDir::new().expect("isolated collection test root");
+    let mut a_spec = NodeSpec::new(root.path(), "family-a", 0xa1);
+    let b_spec = NodeSpec::new(root.path(), "family-b", 0xa2);
+    let pool_spec = NodeSpec::new(root.path(), "collection", 0xa3);
+    let a_root = root.path().join("a-photos");
+    let b_root = root.path().join("b-photos");
+    let collection = root.path().join("family-photos");
+    let a_target = collection.join("Family A");
+    let b_target = collection.join("Family B");
+    for path in [&a_root, &b_root, &collection, &a_target, &b_target] {
+        private_directory(path);
+    }
+    let mut a = start_node(&a_spec, &binaries).await;
+    a_spec.peer_address = a.ready_info().peer_address();
+    let b = start_node(&b_spec, &binaries).await;
+    let pool = start_node(&pool_spec, &binaries).await;
+    let a_peer = pair(&a, &pool, "Family collection A").await;
+    let b_peer = pair(&b, &pool, "Family collection B").await;
+    let a_folder = Uuid::new_v4();
+    let b_folder = Uuid::new_v4();
+    offer_and_accept(&a, &pool, &a_peer, a_folder, &a_root, &a_target).await;
+    let offered = post_ok(
+        &b,
+        "/api/v1/sync/folders",
+        json!({
+            "peerId": b_peer,
+            "folderId": b_folder,
+            "label": "Family B photos",
+            "selectedRoot": b_root,
+            "linkPolicy": {
+                "propagateSourceDeletions": false,
+                "restoreLocalDeletions": false,
+            },
+        }),
+    )
+    .await;
+    let offer_id = string_field(&offered, "offerId");
+    wait_for_status(&pool, "second collection offer", |value| {
+        folder_shares(value, b_folder)
+            .iter()
+            .any(|share| share.get("offerId").and_then(Value::as_str) == Some(offer_id))
+    })
+    .await;
+    // Two links cannot share a root or claim the parent of another link.
+    for rejected_root in [&a_target, &collection] {
+        let response = call(
+            &pool,
+            "POST",
+            "/api/v1/sync/accept",
+            Some(&json!({"offerId": offer_id, "selectedRoot": rejected_root})),
+        )
+        .await;
+        assert_eq!(
+            response.status, 409,
+            "overlapping collection root accepted: {}",
+            response.body
+        );
+    }
+    post_ok(
+        &pool,
+        "/api/v1/sync/accept",
+        json!({"offerId": offer_id, "selectedRoot": b_target}),
+    )
+    .await;
+    wait_ready_at(&pool, "family A link ready", a_folder, 1, 0, false, false).await;
+    wait_ready_at(&pool, "family B link ready", b_folder, 1, 0, false, false).await;
+    write(&a_root, "IMG_0001.jpg", b"family A photo\n");
+    write(&a_root, "a-only.jpg", b"only family A\n");
+    write(&b_root, "IMG_0001.jpg", b"family B photo\n");
+    write(&b_root, "b-only.jpg", b"only family B\n");
+    for (path, bytes) in [
+        (
+            a_target.join("IMG_0001.jpg"),
+            b"family A photo\n".as_slice(),
+        ),
+        (a_target.join("a-only.jpg"), b"only family A\n".as_slice()),
+        (
+            b_target.join("IMG_0001.jpg"),
+            b"family B photo\n".as_slice(),
+        ),
+        (b_target.join("b-only.jpg"), b"only family B\n".as_slice()),
+    ] {
+        wait_file(&path, bytes, "isolated collection transfer").await;
+    }
+    for path in [
+        a_root.join("b-only.jpg"),
+        b_root.join("a-only.jpg"),
+        a_target.join("b-only.jpg"),
+        b_target.join("a-only.jpg"),
+    ] {
+        assert_absent(&path, "another link's photo crossed collection boundaries");
+    }
+
+    update_settings(&a, a_folder, 0, Uuid::new_v4(), true, false).await;
+    wait_ready_at(
+        &a,
+        "family A propagation enabled",
+        a_folder,
+        1,
+        1,
+        true,
+        false,
+    )
+    .await;
+    wait_ready_at(
+        &pool,
+        "collection confirms family A propagation",
+        a_folder,
+        1,
+        1,
+        true,
+        false,
+    )
+    .await;
+    assert!(
+        shares_ready_at(&status(&b).await, b_folder, 1, 0, false, false),
+        "family A settings changed family B"
+    );
+
+    a.stop()
+        .await
+        .expect("stop family A before missing-mount simulation");
+    drop(a);
+    let saved_root = root.path().join("a-original-mount");
+    fs::rename(&a_root, &saved_root).expect("detach selected source root");
+    private_directory(&a_root);
+    a = start_node(&a_spec, &binaries).await;
+    wait_for_status(&a, "empty replacement root rejected", |value| {
+        value.get("lifecycle").and_then(Value::as_str) == Some("needsAttention")
+            && value.get("issue").and_then(Value::as_str) == Some("journal")
+    })
+    .await;
+    write(&b_root, "online.jpg", b"family B continues\n");
+    wait_file(
+        &b_target.join("online.jpg"),
+        b"family B continues\n",
+        "healthy collection link while another source is unavailable",
+    )
+    .await;
+    assert_eq!(
+        fs::read(a_target.join("IMG_0001.jpg")).unwrap(),
+        b"family A photo\n",
+        "empty replacement source deleted destination files"
+    );
+
+    a.stop().await.expect("stop unavailable source");
+    drop(a);
+    fs::remove_dir(&a_root).expect("remove owned empty mount replacement");
+    fs::rename(&saved_root, &a_root).expect("reattach original selected source");
+    a = start_node(&a_spec, &binaries).await;
+    write(&a_root, "recovered.jpg", b"mount recovered\n");
+    wait_file(
+        &a_target.join("recovered.jpg"),
+        b"mount recovered\n",
+        "source resumes after its original mount returns",
+    )
+    .await;
+    fs::remove_file(a_root.join("IMG_0001.jpg")).expect("delete only family A photo");
+    write(
+        &a_root,
+        "delete-barrier.jpg",
+        b"family A deletion observed\n",
+    );
+    wait_file(
+        &a_target.join("delete-barrier.jpg"),
+        b"family A deletion observed\n",
+        "collection deletion barrier",
+    )
+    .await;
+    wait_absent(
+        &a_target.join("IMG_0001.jpg"),
+        "family A deletion propagation",
+    )
+    .await;
+    assert_eq!(
+        fs::read(b_target.join("IMG_0001.jpg")).unwrap(),
+        b"family B photo\n",
+        "one link deleted another source's identically named photo"
+    );
+
+    // A missing folder marker must fail the mandatory scan before the source
+    // can publish apparent deletions. Keep all removed data inside this fixture.
+    a.stop().await.expect("stop source before scan failure");
+    drop(a);
+    let missing_marker = root.path().join("saved-source-marker");
+    let missing_photo = root.path().join("saved-source-photo.jpg");
+    fs::rename(a_root.join(".stfolder"), &missing_marker).expect("remove source marker");
+    fs::rename(a_root.join("a-only.jpg"), &missing_photo)
+        .expect("withhold indexed photo during failed scan");
+    a = start_node(&a_spec, &binaries).await;
+    wait_for_status(&a, "failed source scan remains blocked", |value| {
+        value.get("lifecycle").and_then(Value::as_str) == Some("needsAttention")
+            && value.get("issue").and_then(Value::as_str) == Some("initialScan")
+    })
+    .await;
+    write(
+        &b_root,
+        "scan-failure-barrier.jpg",
+        b"family B still works\n",
+    );
+    wait_file(
+        &b_target.join("scan-failure-barrier.jpg"),
+        b"family B still works\n",
+        "healthy link during other source scan failure",
+    )
+    .await;
+    assert_eq!(
+        fs::read(a_target.join("a-only.jpg")).unwrap(),
+        b"only family A\n",
+        "failed source scan propagated a deletion"
+    );
+    a.stop().await.expect("stop source after scan failure");
+    drop(a);
+    fs::rename(&missing_marker, a_root.join(".stfolder")).expect("restore source marker");
+    fs::rename(&missing_photo, a_root.join("a-only.jpg")).expect("restore indexed photo");
+    a = start_node(&a_spec, &binaries).await;
+    write(&a_root, "scan-recovered.jpg", b"scan recovered\n");
+    wait_file(
+        &a_target.join("scan-recovered.jpg"),
+        b"scan recovered\n",
+        "source recovers after successful scan",
+    )
+    .await;
+    assert_absent(
+        &b_root.join("scan-recovered.jpg"),
+        "collection downloaded family A data to family B",
+    );
+    a.stop().await.expect("stop family A");
+    b.stop().await.expect("stop family B");
+    pool.stop().await.expect("stop collection");
+}
+
+async fn request_batch(node: &NodeRuntime, folder: Uuid, generation: u64, revision: u64) -> Value {
+    let request = json!({"folderId": folder, "requestId": Uuid::new_v4(),
+        "expectedGeneration": generation, "settingsRevision": revision});
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        let response = call(node, "POST", "/api/v1/sync/run", Some(&request)).await;
+        if response.status == 200 {
+            return request;
+        }
+        assert!(
+            response.status == 503
+                && response.json()["code"] == "folder_sync_busy"
+                && Instant::now() < deadline,
+            "run request failed: {}",
+            response.body
+        );
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+async fn wait_batch(node: &NodeRuntime, folder: Uuid, generation: u64, phase: &str) -> Value {
+    wait_for_status(node, "batch phase", |value| {
+        let shares = folder_shares(value, folder);
+        !shares.is_empty()
+            && shares.iter().all(|share| {
+                share["linkRun"]["generation"] == generation && share["linkRun"]["phase"] == phase
+            })
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires explicit maintained folder-sync worker and freshly compiled guardian paths"]
+async fn manual_fanout_runs_finish_empty_and_retained_deletions_across_restart() {
+    let binaries = test_binaries();
+    let root = TempDir::new().expect("isolated manual fanout test root");
+    let mut source_spec = NodeSpec::new(root.path(), "batch-source", 0xA1);
+    let mut a_spec = NodeSpec::new(root.path(), "batch-a", 0xA2);
+    let b_spec = NodeSpec::new(root.path(), "batch-b", 0xA3);
+    let source_root = root.path().join("source-files");
+    let a_root = root.path().join("a-files");
+    let b_root = root.path().join("b-files");
+    for path in [&source_root, &a_root, &b_root] {
+        private_directory(path);
+    }
+    let mut source = start_node(&source_spec, &binaries).await;
+    source_spec.peer_address = source.ready_info().peer_address();
+    let mut a = start_node(&a_spec, &binaries).await;
+    a_spec.peer_address = a.ready_info().peer_address();
+    let b = start_node(&b_spec, &binaries).await;
+    let a_id = pair(&source, &a, "Batch A").await;
+    let b_id = pair(&source, &b, "Batch B").await;
+    let folder = Uuid::new_v4();
+    for (destination, id, path) in [(&a, &a_id, &a_root), (&b, &b_id, &b_root)] {
+        offer_and_accept_at_cadence(
+            &source,
+            destination,
+            id,
+            folder,
+            &source_root,
+            path,
+            json!({"mode": "manual"}),
+        )
+        .await;
+    }
+    for (node, count) in [(&source, 2), (&a, 1), (&b, 1)] {
+        let current =
+            wait_ready_at(node, "manual link ready", folder, count, 0, false, false).await;
+        assert_eq!(
+            current["lifecycle"], "stopped",
+            "manual link must not start a worker"
+        );
+        assert!(
+            folder_shares(&current, folder)
+                .iter()
+                .all(|share| share["linkSettings"]["settings"]["cadence"]["mode"] == "manual")
+        );
+    }
+    // Empty directories still need a positive initial scan and receiver pull proof.
+    let first_request = request_batch(&a, folder, 0, 0).await;
+    for node in [&source, &a, &b] {
+        let done = wait_batch(node, folder, 1, "succeeded").await;
+        assert_eq!(done["lifecycle"], "stopped");
+    }
+    let retried = call(&a, "POST", "/api/v1/sync/run", Some(&first_request)).await;
+    assert_eq!(
+        retried.status, 200,
+        "exact completed request replay: {}",
+        retried.body
+    );
+    assert_eq!(
+        folder_shares(&status(&source).await, folder)[0]["linkRun"]["generation"],
+        1
+    );
+
+    write(&source_root, "photo.txt", b"first version\n");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_absent(
+        &a_root.join("photo.txt"),
+        "manual link copied without Run Now",
+    );
+    assert_absent(
+        &b_root.join("photo.txt"),
+        "manual fanout copied without Run Now",
+    );
+    request_batch(&source, folder, 1, 0).await;
+    for node in [&source, &a, &b] {
+        wait_batch(node, folder, 2, "succeeded").await;
+    }
+    assert_eq!(
+        fs::read(a_root.join("photo.txt")).unwrap(),
+        b"first version\n"
+    );
+    assert_eq!(
+        fs::read(b_root.join("photo.txt")).unwrap(),
+        b"first version\n"
+    );
+
+    // A destination deletion remains absent after source edits. Raw Need may stay nonzero.
+    fs::remove_file(a_root.join("photo.txt")).unwrap();
+    write(&source_root, "photo.txt", b"changed source version\n");
+    write(&source_root, "another.txt", b"new file still transfers\n");
+    request_batch(&b, folder, 2, 0).await;
+    for node in [&source, &a, &b] {
+        wait_batch(node, folder, 3, "succeeded").await;
+    }
+    assert_absent(
+        &a_root.join("photo.txt"),
+        "deleted destination file was recreated",
+    );
+    assert_eq!(
+        fs::read(a_root.join("another.txt")).unwrap(),
+        b"new file still transfers\n"
+    );
+    assert_eq!(
+        fs::read(b_root.join("photo.txt")).unwrap(),
+        b"changed source version\n"
+    );
+    source.stop().await.expect("stop completed source");
+    a.stop().await.expect("stop completed destination");
+    source = start_node(&source_spec, &binaries).await;
+    a = start_node(&a_spec, &binaries).await;
+    for node in [&source, &a] {
+        let retained = wait_batch(node, folder, 3, "succeeded").await;
+        assert_eq!(retained["lifecycle"], "stopped");
+    }
+    post_ok(&a, "/api/v1/sync/settings", json!({
+        "folderId": folder, "changeId": Uuid::new_v4(), "expectedRevision": 0,
+        "settings": {"paused": false, "cadence": {"mode": "manual"},
+            "androidConditions": {"wifiOnly": false, "chargingOnly": false},
+            "deletionPolicy": {"propagateSourceDeletions": false, "restoreLocalDeletions": true}}
+    })).await;
+    for (node, count) in [(&source, 2), (&a, 1), (&b, 1)] {
+        wait_ready_at(
+            node,
+            "shared restore setting",
+            folder,
+            count,
+            1,
+            false,
+            true,
+        )
+        .await;
+    }
+    request_batch(&a, folder, 3, 1).await;
+    for node in [&source, &a, &b] {
+        wait_batch(node, folder, 4, "succeeded").await;
+    }
+    assert_eq!(
+        fs::read(a_root.join("photo.txt")).unwrap(),
+        b"changed source version\n"
+    );
+
+    // One offline destination cannot keep the successful destination's worker awake.
+    b.stop().await.expect("stop isolated offline destination");
+    write(&source_root, "offline.txt", b"online target continues\n");
+    request_batch(&source, folder, 4, 1).await;
+    wait_for_status(
+        &a,
+        "online destination completed its local batch",
+        |value| {
+            folder_shares(value, folder)
+                .iter()
+                .any(|share| share["linkRun"]["generation"] == 5)
+                && value["lifecycle"] == "stopped"
+                && a_root.join("offline.txt").exists()
+        },
+    )
+    .await;
+    assert_eq!(
+        fs::read(a_root.join("offline.txt")).unwrap(),
+        b"online target continues\n"
+    );
+    assert_absent(&b_root.join("offline.txt"), "offline destination changed");
+    source.stop().await.expect("stop unfinished source batch");
+    source = start_node(&source_spec, &binaries).await;
+    let interrupted = wait_batch(&source, folder, 5, "interrupted").await;
+    assert_eq!(interrupted["lifecycle"], "stopped");
+    wait_batch(&a, folder, 5, "interrupted").await;
+    source
+        .stop()
+        .await
+        .expect("stop source after restart proof");
+    a.stop()
+        .await
+        .expect("stop destination after restart proof");
 }

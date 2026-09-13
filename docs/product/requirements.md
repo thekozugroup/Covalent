@@ -8,6 +8,8 @@ Covalent makes one-way file transfers easy to pair, configure, and monitor. A li
 
 Supported products: native macOS, native Android, and Docker for Unraid and other Docker hosts. Atlas is offline; Docker and isolated Atmos tests are the accepted server targets.
 
+These are the Tier 1 release targets. iOS and Windows are not supported; the retained iOS CI lane is informational.
+
 This contract supersedes the distributed encrypted-backup and bidirectional-sync release scope. Preserve existing user files and identities; never silently migrate their behavior. The previous source and evidence remain in Git history at checkpoint 46, commit c47003113e28b6e934a8ab4823040614fb07fb30.
 
 ## Links

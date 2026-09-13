@@ -6,9 +6,13 @@ Covalent is being simplified into a native, self-hosted wrapper for one-way file
 
 ## Start here
 
-**[Back up your first folder](docs/getting-started.md)** is the single setup
-guide. It takes you from prerequisites through a small backup, Verify, and a
-restore test. Start there instead of reading the release or architecture docs.
+**[Create your first one-way link](docs/getting-started-links.md)** is the
+primary setup guide. Pair devices, choose a source folder, review deletion
+settings, then authorize one or more destinations. It describes the current
+development state and what is verified.
+
+The previous [backup setup guide](docs/getting-started.md) is a legacy
+reference for the superseded backup workflow.
 
 Current personal-use paths do not require an Apple Developer ID or Android
 production signing:
@@ -63,9 +67,10 @@ ID/notarization is excluded. See
 [the v0.2.0 candidate notes](docs/release/notes/v0.2.0.md) before planning an
 upgrade.
 
-Setup belongs in [the getting-started guide](docs/getting-started.md). Per-release
-provenance lives in [docs/release/notes](docs/release/notes), and maintainer-only
-publishing detail lives in [docs/release/publishing.md](docs/release/publishing.md).
+Primary setup belongs in [the one-way link guide](docs/getting-started-links.md).
+The [backup setup guide](docs/getting-started.md) remains a legacy reference.
+Per-release provenance lives in [docs/release/notes](docs/release/notes), and
+maintainer-only publishing detail lives in [docs/release/publishing.md](docs/release/publishing.md).
 
 ## Repository map
 

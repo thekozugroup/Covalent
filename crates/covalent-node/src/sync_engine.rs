@@ -22,6 +22,7 @@ mod linux_host;
 #[cfg(target_os = "macos")]
 mod mac_host;
 mod recovery;
+mod run_observation;
 mod service;
 #[cfg(test)]
 mod service_tests;
@@ -53,14 +54,19 @@ pub use recovery::{
     MAX_RECOVERY_FILE_BYTES, RecoverAsCopyRequest, RecoveryError, RecoveryReceipt, SelectedVersion,
     SimpleVersionerConfig, VersionMetadata, recover_selected_version_as_copy,
 };
+pub use run_observation::EngineIndexSnapshot;
 pub use service::{
     CommittedMutation, FolderHealthFreshness, FolderSyncIssue, FolderSyncLifecycle,
     FolderSyncService, FolderSyncServiceError, FolderSyncStatus, PeerConnectionFreshness,
     PeerConnectionState,
 };
 pub use sharing::{
-    FolderLinkSettings, FolderRemovalNotice, FolderShareDelivery, FolderShareRecord,
-    FolderSharingJournal, LinkSettingsCommit, LinkSettingsRequest, LinkSettingsState, ShareSummary,
-    SharingError, SharingPhase,
+    AndroidLinkConditions, FolderLinkSettings, FolderRemovalNotice, FolderShareDelivery,
+    FolderShareRecord, FolderSharingJournal, LINK_RUN_DEADLINE_MS, LinkCadence, LinkRunAdmission,
+    LinkRunCommit, LinkRunDestinationResult, LinkRunDestinationState, LinkRunDestinationSummary,
+    LinkRunPhase, LinkRunRejection, LinkRunRejectionReason, LinkRunReport, LinkRunRequest,
+    LinkRunRequestSummary, LinkRunState, LinkRunSummary, LinkRunWorkItem, LinkSettingsCommit,
+    LinkSettingsRequest, LinkSettingsState, MAX_SCHEDULE_INTERVAL_MINUTES,
+    MIN_SCHEDULE_INTERVAL_MINUTES, ShareSummary, SharingError, SharingPhase,
 };
 pub use state::{EngineStateError, EngineStateStore};

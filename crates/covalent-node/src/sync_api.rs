@@ -14,6 +14,10 @@ pub(crate) struct OfferRequest {
     label: String,
     selected_root: std::path::PathBuf,
     link_policy: covalent_protocol::FolderLinkPolicy,
+    #[serde(default)]
+    cadence: crate::sync_engine::LinkCadence,
+    #[serde(default)]
+    android_conditions: crate::sync_engine::AndroidLinkConditions,
 }
 
 #[derive(Deserialize)]
@@ -54,6 +58,24 @@ pub(crate) struct SettingsRequest {
 }
 
 #[cfg(unix)]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct RunRequest {
+    folder_id: uuid::Uuid,
+    request_id: uuid::Uuid,
+    expected_generation: u64,
+    settings_revision: u64,
+}
+
+#[cfg(unix)]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ConditionsRequest {
+    wifi_connected: bool,
+    charging: bool,
+}
+
+#[cfg(unix)]
 pub(crate) async fn settings(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -72,8 +94,71 @@ pub(crate) async fn settings(
     Ok(mutation_response(None, committed.lifecycle()))
 }
 
+#[cfg(unix)]
+fn ensure_run_admitted(admission: &crate::sync_engine::LinkRunAdmission) -> Result<(), ApiError> {
+    if matches!(admission, crate::sync_engine::LinkRunAdmission::Rejected(_)) {
+        Err(service_error(
+            crate::sync_engine::FolderSyncServiceError::RunConflict,
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(not(unix))]
 pub(crate) async fn settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<axum::Json<MutationResponse>, ApiError> {
+    authorize(&state, &headers)?;
+    Err(unavailable_error())
+}
+
+#[cfg(unix)]
+pub(crate) async fn run(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ContractJson(request): ContractJson<RunRequest>,
+) -> Result<axum::Json<MutationResponse>, ApiError> {
+    authorize(&state, &headers)?;
+    let committed = ready_service(&state)?
+        .request_link_run(
+            request.folder_id,
+            request.request_id,
+            request.expected_generation,
+            request.settings_revision,
+        )
+        .await
+        .map_err(service_error)?;
+    ensure_run_admitted(committed.value())?;
+    Ok(mutation_response(None, committed.lifecycle()))
+}
+
+#[cfg(not(unix))]
+pub(crate) async fn run(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<axum::Json<MutationResponse>, ApiError> {
+    authorize(&state, &headers)?;
+    Err(unavailable_error())
+}
+
+#[cfg(unix)]
+pub(crate) async fn conditions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ContractJson(request): ContractJson<ConditionsRequest>,
+) -> Result<axum::Json<MutationResponse>, ApiError> {
+    authorize(&state, &headers)?;
+    let lifecycle = ready_service(&state)?
+        .observe_android_conditions(request.wifi_connected, request.charging)
+        .await
+        .map_err(service_error)?;
+    Ok(mutation_response(None, lifecycle))
+}
+
+#[cfg(not(unix))]
+pub(crate) async fn conditions(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<axum::Json<MutationResponse>, ApiError> {
@@ -142,13 +227,18 @@ pub(crate) async fn offer(
     #[cfg(unix)]
     {
         let committed = ready_service(&state)?
-            .offer_with_policy(
+            .offer_with_settings(
                 request.peer_id,
                 request.folder_id,
                 &request.label,
                 &request.selected_root,
                 crate::now_unix_ms(),
-                Some(request.link_policy),
+                crate::sync_engine::FolderLinkSettings {
+                    deletion_policy: request.link_policy,
+                    paused: false,
+                    cadence: request.cadence,
+                    android_conditions: request.android_conditions,
+                },
             )
             .await
             .map_err(service_error)?;
@@ -556,7 +646,76 @@ mod lifecycle_tests {
         }
         value["linkPolicy"] =
             serde_json::json!({"propagateSourceDeletions": false, "restoreLocalDeletions": false});
-        assert!(serde_json::from_value::<super::OfferRequest>(value).is_ok());
+        let request = serde_json::from_value::<super::OfferRequest>(value).expect("offer");
+        assert_eq!(request.cadence, crate::sync_engine::LinkCadence::Continuous);
+        assert_eq!(
+            request.android_conditions,
+            crate::sync_engine::AndroidLinkConditions::default()
+        );
+    }
+
+    #[test]
+    fn folder_offer_accepts_bounded_schedule_and_android_conditions() {
+        let request = serde_json::from_value::<super::OfferRequest>(serde_json::json!({
+            "peerId": uuid::Uuid::new_v4(),
+            "folderId": uuid::Uuid::new_v4(),
+            "label": "Photos",
+            "selectedRoot": "/selected",
+            "linkPolicy": {
+                "propagateSourceDeletions": false,
+                "restoreLocalDeletions": false
+            },
+            "cadence": {"mode": "scheduled", "intervalMinutes": 15},
+            "androidConditions": {"wifiOnly": true, "chargingOnly": true}
+        }))
+        .expect("offer");
+        assert_eq!(
+            request.cadence,
+            crate::sync_engine::LinkCadence::Scheduled {
+                interval_minutes: 15
+            }
+        );
+        assert!(request.cadence.is_valid());
+        assert!(request.android_conditions.wifi_only);
+        assert!(request.android_conditions.charging_only);
+    }
+
+    #[test]
+    fn run_and_condition_requests_are_strict() {
+        let folder_id = uuid::Uuid::new_v4();
+        let request_id = uuid::Uuid::new_v4();
+        assert!(
+            serde_json::from_value::<super::RunRequest>(serde_json::json!({
+                "folderId": folder_id,
+                "requestId": request_id,
+                "expectedGeneration": 4,
+                "settingsRevision": 7
+            }))
+            .is_ok()
+        );
+        assert!(
+            serde_json::from_value::<super::RunRequest>(serde_json::json!({
+                "folderId": folder_id,
+                "requestId": request_id,
+                "expectedGeneration": 4,
+                "settingsRevision": 7,
+                "unexpected": true
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<super::ConditionsRequest>(serde_json::json!({
+                "wifiConnected": true,
+                "charging": false
+            }))
+            .is_ok()
+        );
+        assert!(
+            serde_json::from_value::<super::ConditionsRequest>(serde_json::json!({
+                "wifiConnected": true
+            }))
+            .is_err()
+        );
     }
 
     use std::collections::BTreeSet;
@@ -564,7 +723,10 @@ mod lifecycle_tests {
     use covalent_core::{DeviceIdentity, NodeConfig};
     use covalent_protocol::{PeerGrant, TransportBinding};
 
-    use super::{lifecycle_fields, peer_connection_field, peer_responses};
+    use super::{
+        ShareResponse, ensure_run_admitted, lifecycle_fields, peer_connection_field,
+        peer_responses, service_error,
+    };
     use crate::sync_engine::{
         FolderSyncIssue, FolderSyncLifecycle, PeerConnectionState, SharingPhase,
     };
@@ -669,6 +831,86 @@ mod lifecycle_tests {
         config.trusted_peer_transports.remove(&current.device_id);
         assert!(peer_responses(&config).is_empty());
     }
+
+    #[test]
+    fn run_conflicts_have_stable_specific_error_codes() {
+        for (error, code) in [
+            (
+                crate::sync_engine::FolderSyncServiceError::RunConflict,
+                "link_run_conflict",
+            ),
+            (
+                crate::sync_engine::FolderSyncServiceError::RunPending,
+                "link_run_pending",
+            ),
+        ] {
+            let error = service_error(error);
+            assert_eq!(error.status, axum::http::StatusCode::CONFLICT);
+            assert_eq!(error.code, code);
+            assert!(!error.retryable);
+        }
+    }
+
+    #[test]
+    fn durable_source_rejection_returns_a_run_conflict() {
+        let admission =
+            crate::sync_engine::LinkRunAdmission::Rejected(crate::sync_engine::LinkRunRejection {
+                requester_id: DeviceIdentity::generate().public_identity().device_id,
+                request_id: uuid::Uuid::new_v4(),
+                reason: crate::sync_engine::LinkRunRejectionReason::GenerationChanged,
+            });
+        let error = ensure_run_admitted(&admission).expect_err("rejected run");
+        assert_eq!(error.code, "link_run_conflict");
+    }
+
+    #[test]
+    fn share_status_exposes_only_the_redacted_run_summary() {
+        use crate::sync_engine::{
+            LinkRunDestinationResult, LinkRunDestinationSummary, LinkRunPhase, LinkRunSummary,
+        };
+
+        let peer_id = DeviceIdentity::generate().public_identity().device_id;
+        let response = ShareResponse {
+            offer_id: uuid::Uuid::new_v4(),
+            superseded_offer_ids: Vec::new(),
+            folder_id: uuid::Uuid::new_v4(),
+            label: "Photos".to_owned(),
+            peer_id,
+            incoming: false,
+            link_policy: None,
+            link_settings: None,
+            link_run: Some(LinkRunSummary {
+                generation: 3,
+                state_revision: 5,
+                settings_revision: 7,
+                phase: Some(LinkRunPhase::Running),
+                started_at_unix_ms: Some(10),
+                deadline_unix_ms: Some(20),
+                ended_at_unix_ms: None,
+                next_due_at_unix_ms: None,
+                pending_request: None,
+                rejected_request: None,
+                destinations: vec![LinkRunDestinationSummary {
+                    peer_id,
+                    result: LinkRunDestinationResult::Pending,
+                    ended_at_unix_ms: None,
+                }],
+            }),
+            phase: "ready",
+            expires_at_unix_ms: None,
+            expired: false,
+            peer_connection: "connected",
+            remote_removal_pending: false,
+        };
+        let value = serde_json::to_value(response).expect("share response");
+        assert_eq!(value["linkRun"]["generation"], 3);
+        assert_eq!(
+            value["linkRun"]["destinations"][0]["peerId"],
+            peer_id.to_string()
+        );
+        assert!(value["linkRun"].get("sourceIndex").is_none());
+        assert!(value["linkRun"].get("requestedBy").is_none());
+    }
 }
 
 #[derive(Serialize)]
@@ -705,6 +947,8 @@ struct ShareResponse {
     link_policy: Option<covalent_protocol::FolderLinkPolicy>,
     #[cfg(unix)]
     link_settings: Option<crate::sync_engine::LinkSettingsState>,
+    #[cfg(unix)]
+    link_run: Option<crate::sync_engine::LinkRunSummary>,
     phase: &'static str,
     expires_at_unix_ms: Option<u64>,
     expired: bool,
@@ -879,6 +1123,27 @@ pub(crate) fn service_error(error: crate::sync_engine::FolderSyncServiceError) -
             upload_offset: None,
         };
     }
+    if matches!(
+        error,
+        FolderSyncServiceError::RunConflict | FolderSyncServiceError::RunPending
+    ) {
+        let pending = error == FolderSyncServiceError::RunPending;
+        return ApiError {
+            status: StatusCode::CONFLICT,
+            code: if pending {
+                "link_run_pending"
+            } else {
+                "link_run_conflict"
+            },
+            message: if pending {
+                "A link run request is waiting for the source. Check link status before starting another run."
+            } else {
+                "The link run changed. Check link status and try again with the current generation and settings revision."
+            },
+            retryable: false,
+            upload_offset: None,
+        };
+    }
     let retryable = matches!(
         error,
         FolderSyncServiceError::Busy | FolderSyncServiceError::WorkerStillStopping
@@ -947,6 +1212,7 @@ fn share_responses(
             incoming: share.incoming,
             link_policy: share.link_policy,
             link_settings: share.link_settings.clone(),
+            link_run: share.link_run.clone(),
             expires_at_unix_ms: share.expires_at_unix_ms,
             expired: share
                 .expires_at_unix_ms

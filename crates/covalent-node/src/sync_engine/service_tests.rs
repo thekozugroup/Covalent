@@ -1968,3 +1968,396 @@ async fn sustained_status_polling_does_not_probe_or_block_a_second_folder_offer(
     assert_eq!(first_backend.snapshot().launches, 1);
     assert_eq!(second_backend.snapshot().launches, 1);
 }
+
+#[tokio::test]
+async fn manual_batch_waits_for_fresh_scan_and_current_connected_completion_then_reaps_workers() {
+    use super::connection::EnginePeerConnectionState;
+    use super::run_observation::EngineRunObservation;
+    use std::collections::BTreeMap;
+
+    let first = Device::new("Source", 44501);
+    let second = Device::new("Target", 44502);
+    pair(&first, &second);
+    let source_backend = Arc::new(TestBackend::default());
+    let target_backend = Arc::new(TestBackend::default());
+    let source = first.service(first.journal(), Arc::clone(&source_backend));
+    let target = second.service(second.journal(), Arc::clone(&target_backend));
+    let folder = Uuid::new_v4();
+    let offer = source
+        .offer_with_settings(
+            second.engine.device_id(),
+            folder,
+            "Photos",
+            &first.files(),
+            2000,
+            FolderLinkSettings {
+                deletion_policy: covalent_protocol::FolderLinkPolicy::default(),
+                paused: false,
+                cadence: LinkCadence::Manual,
+                android_conditions: AndroidLinkConditions::default(),
+            },
+        )
+        .await
+        .unwrap()
+        .into_value();
+    target.receive_offer(offer.clone(), 2001).await.unwrap();
+    let acceptance = target
+        .accept(offer.offer_id, &second.files(), 2002)
+        .await
+        .unwrap()
+        .into_value();
+    let commit = source
+        .receive_acceptance(offer.offer_id, acceptance, 2003)
+        .await
+        .unwrap()
+        .into_value();
+    target.receive_commit(offer.offer_id, commit).await.unwrap();
+    let settings = source
+        .outbound_records()
+        .await
+        .unwrap()
+        .into_value()
+        .into_iter()
+        .find_map(|delivery| match delivery.record {
+            FolderShareRecord::SettingsCommit(commit) => Some(commit),
+            _ => None,
+        })
+        .unwrap();
+    target
+        .receive_link_settings_commit(&settings)
+        .await
+        .unwrap();
+    for service in [&source, &target] {
+        service.start().await.unwrap();
+        service.advance_runs_for_test().await;
+        assert_eq!(
+            service.status().await.unwrap().lifecycle(),
+            FolderSyncLifecycle::Stopped
+        );
+    }
+    assert_eq!(source_backend.snapshot().launches, 0);
+    assert_eq!(target_backend.snapshot().launches, 0);
+
+    let scan = Arc::new(Notify::new());
+    source_backend.push_scan(TestScanBehavior::Wait(Arc::clone(&scan)));
+    let request_id = Uuid::new_v4();
+    let LinkRunAdmission::Pending(request) = target
+        .request_link_run(folder, request_id, 0, settings.revision)
+        .await
+        .unwrap()
+        .into_value()
+    else {
+        panic!("destination must request source admission")
+    };
+    let preparing = source
+        .receive_link_run_request(&request)
+        .await
+        .unwrap()
+        .into_value();
+    assert_eq!(
+        preparing.state.as_ref().unwrap().phase,
+        LinkRunPhase::Preparing
+    );
+    target.receive_link_run_commit(&preparing).await.unwrap();
+    assert_eq!(target_backend.snapshot().launches, 0);
+    assert_eq!(source_backend.snapshot().scan_calls, 1);
+    let proof = EngineIndexSnapshot {
+        index_id: "0x0123456789ABCDEF".into(),
+        sequence: 7,
+    };
+    let health = FolderHealth {
+        folder,
+        lifecycle: FolderLifecycle::Idle,
+        state_changed: OffsetDateTime::UNIX_EPOCH,
+        remaining_files: 3,
+        remaining_bytes: 90,
+        scan_pull_error_count: 0,
+        reported_error_rows: 0,
+        status_error: false,
+        watch_error: false,
+    };
+    source_backend.set_health_observation(vec![health.clone()]);
+    source_backend.set_run_observations(
+        folder,
+        vec![EngineRunObservation {
+            local_index: Some(proof.clone()),
+            completions: BTreeMap::new(),
+        }],
+    );
+    source.advance_runs_for_test().await;
+    assert_eq!(
+        source.status().await.unwrap().shares()[0]
+            .link_run
+            .as_ref()
+            .unwrap()
+            .phase,
+        Some(LinkRunPhase::Preparing)
+    );
+    scan.notify_one();
+    tokio::task::yield_now().await;
+    // Different healthy samples can straddle an index update. They cannot start a batch.
+    source_backend.set_run_observations(
+        folder,
+        vec![
+            EngineRunObservation {
+                local_index: Some(proof.clone()),
+                completions: BTreeMap::new(),
+            },
+            EngineRunObservation {
+                local_index: Some(EngineIndexSnapshot {
+                    sequence: 8,
+                    ..proof.clone()
+                }),
+                completions: BTreeMap::new(),
+            },
+        ],
+    );
+    source.observe_health_for_test().await;
+    source.advance_runs_for_test().await;
+    assert_eq!(
+        source.status().await.unwrap().shares()[0]
+            .link_run
+            .as_ref()
+            .unwrap()
+            .phase,
+        Some(LinkRunPhase::Preparing)
+    );
+    source_backend.set_run_observations(
+        folder,
+        vec![EngineRunObservation {
+            local_index: Some(proof.clone()),
+            completions: BTreeMap::new(),
+        }],
+    );
+    source.advance_runs_for_test().await;
+    let running = source
+        .outbound_records()
+        .await
+        .unwrap()
+        .into_value()
+        .into_iter()
+        .find_map(|delivery| match delivery.record {
+            FolderShareRecord::RunCommit(commit) => Some(commit),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(running.state.as_ref().unwrap().phase, LinkRunPhase::Running);
+    assert_eq!(
+        source
+            .receive_link_run_request(&request)
+            .await
+            .unwrap()
+            .into_value()
+            .state,
+        running.state
+    );
+    assert_eq!(source_backend.snapshot().launches, 1);
+
+    target.receive_link_run_commit(&running).await.unwrap();
+    target_backend.set_health_observation(vec![health]);
+    target_backend.set_connection_states(vec![EnginePeerConnectionState::Connected]);
+    target_backend.set_run_observations(folder, vec![EngineRunObservation::default()]);
+    target.advance_runs_for_test().await;
+    assert_eq!(target_backend.snapshot().active, 1);
+    let mut wrong_index = proof.clone();
+    wrong_index.index_id = "0x1123456789ABCDEF".into();
+    target_backend.set_run_observations(
+        folder,
+        vec![EngineRunObservation {
+            local_index: None,
+            completions: BTreeMap::from([(first.installation.device_id().clone(), wrong_index)]),
+        }],
+    );
+    target.advance_runs_for_test().await;
+    assert_eq!(target_backend.snapshot().active, 1);
+    target_backend.set_run_observations(
+        folder,
+        vec![EngineRunObservation {
+            local_index: None,
+            completions: BTreeMap::from([(first.installation.device_id().clone(), proof.clone())]),
+        }],
+    );
+    target_backend.set_connection_states(vec![EnginePeerConnectionState::Disconnected]);
+    target.advance_runs_for_test().await;
+    assert_eq!(target_backend.snapshot().active, 1);
+    target_backend.set_connection_states(vec![EnginePeerConnectionState::Connected]);
+    target.advance_runs_for_test().await;
+    assert_eq!(
+        target_backend.snapshot().active,
+        0,
+        "durable completion stops target before report ACK"
+    );
+    let report = target
+        .outbound_records()
+        .await
+        .unwrap()
+        .into_value()
+        .into_iter()
+        .find_map(|delivery| match delivery.record {
+            FolderShareRecord::RunReport(report) => Some(report),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(report.result, LinkRunDestinationResult::Succeeded);
+    assert_eq!(report.source_index, proof);
+    source.receive_link_run_report(&report).await.unwrap();
+    assert_eq!(source_backend.snapshot().active, 0);
+    let done = source
+        .outbound_records()
+        .await
+        .unwrap()
+        .into_value()
+        .into_iter()
+        .find_map(|delivery| match delivery.record {
+            FolderShareRecord::RunCommit(commit) => Some(commit),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(done.state.as_ref().unwrap().phase, LinkRunPhase::Succeeded);
+    target.receive_link_run_commit(&done).await.unwrap();
+    assert!(
+        !target
+            .outbound_records()
+            .await
+            .unwrap()
+            .into_value()
+            .iter()
+            .any(|delivery| matches!(delivery.record, FolderShareRecord::RunReport(_)))
+    );
+    for service in [&source, &target] {
+        service.stop().await.unwrap();
+        service.advance_runs_for_test().await;
+    }
+    assert_eq!(source_backend.snapshot().launches, 1);
+    assert_eq!(target_backend.snapshot().launches, 1);
+    assert_eq!(source_backend.snapshot().maximum_active, 1);
+    assert_eq!(target_backend.snapshot().maximum_active, 1);
+    assert!(first.files().exists() && second.files().exists());
+}
+
+#[tokio::test]
+async fn android_continuous_conditions_stop_pending_scans_and_never_override_explicit_stop() {
+    let first = Device::new("Source", 44511);
+    let second = Device::new("Android target", 44512);
+    pair(&first, &second);
+    let source_backend = Arc::new(TestBackend::default());
+    let target_backend = Arc::new(TestBackend::default());
+    let source = first.service(first.journal(), source_backend);
+    let mut target_journal = second.journal();
+    target_journal.set_android_host(true);
+    let target = second.service(target_journal, Arc::clone(&target_backend));
+    let folder = Uuid::new_v4();
+    let offer = source
+        .offer_with_settings(
+            second.engine.device_id(),
+            folder,
+            "Photos",
+            &first.files(),
+            3000,
+            FolderLinkSettings {
+                deletion_policy: covalent_protocol::FolderLinkPolicy::default(),
+                paused: false,
+                cadence: LinkCadence::Continuous,
+                android_conditions: AndroidLinkConditions {
+                    wifi_only: true,
+                    charging_only: false,
+                },
+            },
+        )
+        .await
+        .unwrap()
+        .into_value();
+    target.receive_offer(offer.clone(), 3001).await.unwrap();
+    let acceptance = target
+        .accept(offer.offer_id, &second.files(), 3002)
+        .await
+        .unwrap()
+        .into_value();
+    let commit = source
+        .receive_acceptance(offer.offer_id, acceptance, 3003)
+        .await
+        .unwrap()
+        .into_value();
+    target.receive_commit(offer.offer_id, commit).await.unwrap();
+    let settings = source
+        .outbound_records()
+        .await
+        .unwrap()
+        .into_value()
+        .into_iter()
+        .find_map(|delivery| match delivery.record {
+            FolderShareRecord::SettingsCommit(commit) => Some(commit),
+            _ => None,
+        })
+        .unwrap();
+    target
+        .receive_link_settings_commit(&settings)
+        .await
+        .unwrap();
+    assert_eq!(
+        target.status().await.unwrap().lifecycle(),
+        FolderSyncLifecycle::Stopped
+    );
+    assert_eq!(target_backend.snapshot().launches, 0);
+
+    target_backend.push_scan(TestScanBehavior::Complete);
+    target
+        .observe_android_conditions(true, false)
+        .await
+        .unwrap();
+    target.advance_runs_for_test().await;
+    assert_eq!(
+        target.status().await.unwrap().lifecycle(),
+        FolderSyncLifecycle::Running
+    );
+    assert_eq!(target_backend.snapshot().promotions, 1);
+    target
+        .observe_android_conditions(false, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        target.status().await.unwrap().lifecycle(),
+        FolderSyncLifecycle::Stopped
+    );
+    assert_eq!(target_backend.snapshot().active, 0);
+
+    let scan = Arc::new(Notify::new());
+    target_backend.push_scan(TestScanBehavior::Wait(scan));
+    assert_eq!(
+        target
+            .observe_android_conditions(true, false)
+            .await
+            .unwrap(),
+        FolderSyncLifecycle::InitialScanning
+    );
+    assert_eq!(target_backend.snapshot().active, 1);
+    target.expire_android_conditions_for_test().await;
+    target.advance_runs_for_test().await;
+    let expired = target_backend.snapshot();
+    assert_eq!(
+        target.status().await.unwrap().lifecycle(),
+        FolderSyncLifecycle::Stopped
+    );
+    assert_eq!(expired.active, 0);
+    assert_eq!(
+        expired.promotions, 1,
+        "expired scan must not promote a peer"
+    );
+
+    target.stop().await.unwrap();
+    target
+        .observe_android_conditions(true, false)
+        .await
+        .unwrap();
+    target.advance_runs_for_test().await;
+    let stopped = target_backend.snapshot();
+    assert_eq!(
+        target.status().await.unwrap().lifecycle(),
+        FolderSyncLifecycle::Stopped
+    );
+    assert_eq!(
+        stopped.launches, 2,
+        "conditions must not override explicit stop"
+    );
+    source.stop().await.unwrap();
+}

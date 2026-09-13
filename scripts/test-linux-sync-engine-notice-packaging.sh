@@ -3,7 +3,7 @@ set -euo pipefail
 
 repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 build_script="$repo_root/scripts/build-linux-sync-engine.sh"
-grep -Fq 'SOURCE_PATCH_SHA256=e58e7d133a388576a54cacc6a5a5094e6607c483c0daabac552de1a1854d92ac' "$build_script"
+grep -Fq 'SOURCE_PATCH_SHA256=bdbab1565d0adce1fc2dc77cfe3a0581a83333b93910a0ac43e3081ba0b678ca' "$build_script"
 grep -Fq 'git -C "$source_dir" apply --check "$source_patch"' "$build_script"
 grep -Fq 'covalent-patches/keep-local-deletions.patch' "$build_script"
 grep -Fq 'test ! -e "$source_dir/.git" && test ! -L "$source_dir/.git"' "$build_script"

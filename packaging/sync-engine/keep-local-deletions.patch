@@ -71,11 +71,609 @@ index 58c244e..2a5f212 100644
  }
  
  // RequiresRestartOnly returns a copy with only the attributes that require
+diff --git a/lib/model/covalent_completion_test.go b/lib/model/covalent_completion_test.go
+new file mode 100644
+index 0000000..9211683
+--- /dev/null
++++ b/lib/model/covalent_completion_test.go
+@@ -0,0 +1,473 @@
++// Copyright (C) 2026 The Covalent Authors.
++//
++// This Source Code Form is subject to the terms of the Mozilla Public
++// License, v. 2.0. If a copy of the MPL was not distributed with this file,
++// You can obtain one at https://mozilla.org/MPL/2.0/.
++
++package model
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"testing"
++
++	"github.com/syncthing/syncthing/lib/events"
++	"github.com/syncthing/syncthing/lib/protocol"
++)
++
++const covalentTestRemoteIndexID = protocol.IndexID(0x1234567890ABCDEF)
++
++func TestCovalentCompletionNeedsStableRemoteIndex(t *testing.T) {
++	handler := new(indexHandler)
++	stable := map[protocol.DeviceID]covalentCompletionPair{
++		device1: {indexID: covalentTestRemoteIndexID, sequence: 7, connectionID: "primary", indexHandler: handler},
++	}
++	if !covalentCompletionPairsEqual(stable, stable) {
++		t.Fatal("equal completion pairs were rejected")
++	}
++	changedIndex := map[protocol.DeviceID]covalentCompletionPair{
++		device1: {indexID: covalentTestRemoteIndexID + 1, sequence: 7, connectionID: "primary", indexHandler: handler},
++	}
++	if covalentCompletionPairsEqual(stable, changedIndex) {
++		t.Fatal("changed remote index ID was accepted")
++	}
++	changedSequence := map[protocol.DeviceID]covalentCompletionPair{
++		device1: {indexID: covalentTestRemoteIndexID, sequence: 8, connectionID: "primary", indexHandler: handler},
++	}
++	if covalentCompletionPairsEqual(stable, changedSequence) {
++		t.Fatal("changed remote sequence was accepted")
++	}
++	changedConnection := map[protocol.DeviceID]covalentCompletionPair{
++		device1: {indexID: covalentTestRemoteIndexID, sequence: 7, connectionID: "replacement", indexHandler: handler},
++	}
++	if covalentCompletionPairsEqual(stable, changedConnection) {
++		t.Fatal("changed remote index connection was accepted")
++	}
++	changedHandler := map[protocol.DeviceID]covalentCompletionPair{
++		device1: {indexID: covalentTestRemoteIndexID, sequence: 7, connectionID: "primary", indexHandler: new(indexHandler)},
++	}
++	if covalentCompletionPairsEqual(stable, changedHandler) {
++		t.Fatal("changed remote index handler was accepted")
++	}
++}
++
++func TestCovalentCompletionTracksPolicyAwarePullAndStatus(t *testing.T) {
++	m, f, wcfgCancel := setupROFolderWithOptions(t, true, false, false)
++	defer wcfgCancel()
++	defer cleanupModel(m)
++	ffs := f.Filesystem()
++	must(t, ffs.MkdirAll(".stfolder", 0o755))
++	conn := addFakeConn(m, device1, f.ID)
++	must(t, m.sdb.SetIndexID(f.ID, device1, covalentTestRemoteIndexID))
++
++	must(t, f.doInSync(func(ctx context.Context) error {
++		conn.addFile("kept", 0o644, protocol.FileInfoTypeFile, []byte("source"))
++		conn.sendIndexUpdate()
++		need, err := m.NeedSize(f.ID, protocol.LocalDeviceID)
++		if err != nil {
++			return err
++		}
++		if need.Files == 0 {
++			return errors.New("pending source file did not produce positive need")
++		}
++		if got := f.covalentCompletion(); len(got) != 0 {
++			return fmt.Errorf("pending file reported completion: %+v", got)
++		}
++		complete, err := f.pull(ctx)
++		if err != nil || !complete {
++			return fmt.Errorf("initial pull failed: complete=%v err=%v", complete, err)
++		}
++		return nil
++	}))
++
++	completion := f.covalentCompletion()[device1]
++	if completion.indexID != covalentTestRemoteIndexID || completion.sequence == 0 {
++		t.Fatalf("initial completion pair is wrong: %+v", completion)
++	}
++
++	must(t, ffs.Remove("kept"))
++	must(t, f.doInSync(func(ctx context.Context) error {
++		if err := f.scanSubdirs(ctx, []string{"kept"}); err != nil {
++			return err
++		}
++		if got := f.covalentCompletion(); len(got) != 0 {
++			return fmt.Errorf("partial scan retained completion: %+v", got)
++		}
++		conn.updateFile("kept", 0o644, protocol.FileInfoTypeFile, []byte("source two"))
++		conn.sendIndexUpdate()
++		need, err := m.NeedSize(f.ID, protocol.LocalDeviceID)
++		if err != nil {
++			return err
++		}
++		if need.Files == 0 {
++			return errors.New("new source version over a kept deletion did not produce positive need")
++		}
++		complete, err := f.pull(ctx)
++		if err != nil || !complete {
++			return fmt.Errorf("policy-aware pull failed: complete=%v err=%v", complete, err)
++		}
++		need, err = m.NeedSize(f.ID, protocol.LocalDeviceID)
++		if err != nil {
++			return err
++		}
++		if need.Files == 0 {
++			return errors.New("policy-aware completion unexpectedly cleared raw need")
++		}
++		if got := f.covalentCompletion()[device1]; got.indexID != covalentTestRemoteIndexID || got.sequence <= completion.sequence {
++			return fmt.Errorf("policy-aware completion pair is wrong: %+v", got)
++		}
++
++		f.setCovalentCompletion(f.covalentCompletionEpoch(), map[protocol.DeviceID]covalentCompletionPair{device1: completion})
++		if err := f.scanSubdirs(ctx, nil); err != nil {
++			return err
++		}
++		if got := f.covalentCompletion(); len(got) != 0 {
++			return fmt.Errorf("full scan retained completion: %+v", got)
++		}
++		return nil
++	}))
++
++	// A newly constructed runner has no completion state even though its
++	// database retains the source index pair.
++	fresh := newReceiveOnlyFolder(m.model, f.ignores, f.FolderConfiguration, nil, events.NoopLogger, f.ioLimiter).(*receiveOnlyFolder)
++	if got := fresh.covalentCompletion(); len(got) != 0 {
++		t.Fatalf("new runner inherited completion: %+v", got)
++	}
++
++	// A changed source index ID invalidates any previously recorded pair.
++	f.setCovalentCompletion(f.covalentCompletionEpoch(), map[protocol.DeviceID]covalentCompletionPair{device1: completion})
++	must(t, m.sdb.SetIndexID(f.ID, device1, covalentTestRemoteIndexID+1))
++	if got := f.covalentCompletion(); len(got) != 0 {
++		t.Fatalf("old index completion remained visible: %+v", got)
++	}
++}
++
++func TestCovalentCompletionRunsThroughFolderPullAfterRestartWithNoNeed(t *testing.T) {
++	m, f, wcfgCancel := setupROFolderWithOptions(t, false, false, false)
++	defer wcfgCancel()
++	defer cleanupModel(m)
++	must(t, f.Filesystem().MkdirAll(".stfolder", 0o755))
++	addFakeConn(m, device1, f.ID)
++	must(t, m.sdb.SetIndexID(f.ID, device1, covalentTestRemoteIndexID))
++
++	fresh := newReceiveOnlyFolder(m.model, f.ignores, f.FolderConfiguration, nil, events.NoopLogger, f.ioLimiter).(*receiveOnlyFolder)
++	ctx := context.Background()
++	must(t, fresh.scanSubdirs(ctx, nil))
++	close(fresh.initialScanFinished)
++	need := mustV(fresh.db.CountNeed(fresh.folderID, protocol.LocalDeviceID))
++	if need.TotalItems() != 0 {
++		t.Fatalf("fresh unchanged folder has need: %+v", need)
++	}
++	complete, err := fresh.folder.pull(ctx)
++	if err != nil || !complete {
++		t.Fatalf("folder pull failed: complete=%v err=%v", complete, err)
++	}
++	if got := fresh.covalentCompletion()[device1]; got.indexID != covalentTestRemoteIndexID || got.sequence != 0 {
++		t.Fatalf("folder pull completion pair is wrong: %+v", got)
++	}
++}
++
++func TestCovalentCompletionRejectsDeferredScanAndPullError(t *testing.T) {
++	t.Run("offline cached index", func(t *testing.T) {
++		m, f, wcfgCancel := setupROFolderWithOptions(t, true, false, false)
++		defer wcfgCancel()
++		defer cleanupModel(m)
++		ffs := f.Filesystem()
++		must(t, ffs.MkdirAll(".stfolder", 0o755))
++		conn := addFakeConn(m, device1, f.ID)
++		must(t, m.sdb.SetIndexID(f.ID, device1, covalentTestRemoteIndexID))
++
++		must(t, f.doInSync(func(ctx context.Context) error {
++			conn.addFile("cached", 0o644, protocol.FileInfoTypeFile, []byte("source"))
++			conn.sendIndexUpdate()
++			if complete, err := f.pull(ctx); err != nil || !complete {
++				return fmt.Errorf("initial pull failed: complete=%v err=%v", complete, err)
++			}
++			return nil
++		}))
++		conn.Close(errors.New("test disconnect"))
++		if got := f.covalentCompletion(); len(got) != 0 {
++			t.Fatalf("closed source retained completion: %+v", got)
++		}
++		must(t, f.doInSync(func(ctx context.Context) error {
++			if complete, err := f.pull(ctx); err != nil || !complete {
++				return fmt.Errorf("offline zero-change pull failed: complete=%v err=%v", complete, err)
++			}
++			if got := f.covalentCompletion(); len(got) != 0 {
++				return fmt.Errorf("offline cached index reported completion: %+v", got)
++			}
++			return nil
++		}))
++	})
++
++	t.Run("primary promotion", func(t *testing.T) {
++		m, f, wcfgCancel := setupROFolderWithOptions(t, true, false, false)
++		defer wcfgCancel()
++		defer cleanupModel(m)
++		must(t, f.Filesystem().MkdirAll(".stfolder", 0o755))
++		conn1 := addFakeConn(m, device1, f.ID)
++		must(t, m.sdb.SetIndexID(f.ID, device1, covalentTestRemoteIndexID))
++		must(t, f.doInSync(func(ctx context.Context) error {
++			complete, err := f.pull(ctx)
++			if err != nil || !complete {
++				return fmt.Errorf("initial pull failed: complete=%v err=%v", complete, err)
++			}
++			return nil
++		}))
++		if got := f.covalentCompletion()[device1]; got.connectionID != conn1.ConnectionID() {
++			t.Fatalf("initial completion connection = %q, want %q", got.connectionID, conn1.ConnectionID())
++		}
++
++		conn2 := newFakeConnection(device1, m)
++		conn2.folder = f.ID
++		m.AddConnection(conn2, protocol.Hello{})
++		conn1.Close(errors.New("test primary replacement"))
++		if got := f.covalentCompletion(); len(got) != 0 {
++			t.Fatalf("primary close retained completion: %+v", got)
++		}
++		m.promoteConnections()
++		if got := f.covalentCompletion(); len(got) != 0 {
++			t.Fatalf("promotion before index handshake restored completion: %+v", got)
++		}
++		must(t, m.ClusterConfig(conn2, &protocol.ClusterConfig{Folders: []protocol.Folder{{
++			ID:      f.ID,
++			Devices: []protocol.Device{{ID: myID}, {ID: device1}},
++		}}}))
++		if got := f.covalentCompletion(); len(got) != 0 {
++			t.Fatalf("new index handshake restored old completion: %+v", got)
++		}
++		must(t, f.doInSync(func(ctx context.Context) error {
++			complete, err := f.pull(ctx)
++			if err != nil || !complete {
++				return fmt.Errorf("replacement pull failed: complete=%v err=%v", complete, err)
++			}
++			return nil
++		}))
++		if got := f.covalentCompletion()[device1]; got.connectionID != conn2.ConnectionID() {
++			t.Fatalf("replacement completion connection = %q, want %q", got.connectionID, conn2.ConnectionID())
++		}
++	})
++
++	t.Run("same connection index handler replacement", func(t *testing.T) {
++		m, f, wcfgCancel := setupROFolderWithOptions(t, true, false, false)
++		defer wcfgCancel()
++		defer cleanupModel(m)
++		must(t, f.Filesystem().MkdirAll(".stfolder", 0o755))
++		conn := addFakeConn(m, device1, f.ID)
++		must(t, m.sdb.SetIndexID(f.ID, device1, covalentTestRemoteIndexID))
++		must(t, f.doInSync(func(ctx context.Context) error {
++			complete, err := f.pull(ctx)
++			if err != nil || !complete {
++				return fmt.Errorf("initial pull failed: complete=%v err=%v", complete, err)
++			}
++			return nil
++		}))
++		original := f.covalentCompletion()[device1]
++		if original.indexHandler == nil {
++			t.Fatal("initial completion omitted index handler identity")
++		}
++
++		must(t, f.doInSync(func(ctx context.Context) error {
++			if err := m.ClusterConfig(conn, &protocol.ClusterConfig{Folders: []protocol.Folder{{
++				ID:      f.ID,
++				Devices: []protocol.Device{{ID: myID}, {ID: device1}},
++			}}}); err != nil {
++				return err
++			}
++			if got := f.covalentCompletion(); len(got) != 0 {
++				return fmt.Errorf("replaced index handler retained completion: %+v", got)
++			}
++			complete, err := f.pull(ctx)
++			if err != nil || !complete {
++				return fmt.Errorf("replacement pull failed: complete=%v err=%v", complete, err)
++			}
++			if got := f.covalentCompletion()[device1]; got.indexHandler == nil || got.indexHandler == original.indexHandler {
++				return fmt.Errorf("replacement pull did not bind the new index handler: %+v", got)
++			}
++			return nil
++		}))
++	})
++
++	t.Run("folder health failure", func(t *testing.T) {
++		m, f, wcfgCancel := setupROFolderWithOptions(t, true, false, false)
++		defer wcfgCancel()
++		defer cleanupModel(m)
++		ffs := f.Filesystem()
++		must(t, ffs.MkdirAll(".stfolder", 0o755))
++		addFakeConn(m, device1, f.ID)
++		must(t, m.sdb.SetIndexID(f.ID, device1, covalentTestRemoteIndexID))
++		must(t, f.doInSync(func(ctx context.Context) error {
++			complete, err := f.pull(ctx)
++			if err != nil || !complete {
++				return fmt.Errorf("initial pull failed: complete=%v err=%v", complete, err)
++			}
++			return nil
++		}))
++		if got := f.covalentCompletion(); len(got) != 1 {
++			t.Fatalf("initial completion is missing: %+v", got)
++		}
++		must(t, ffs.Remove(".stfolder"))
++		if got := f.covalentCompletion(); len(got) != 0 {
++			t.Fatalf("unhealthy folder retained completion: %+v", got)
++		}
++		must(t, ffs.MkdirAll(".stfolder", 0o755))
++		if got := f.covalentCompletion(); len(got) != 0 {
++			t.Fatalf("recovered folder restored unchecked completion: %+v", got)
++		}
++	})
++
++	t.Run("paused source", func(t *testing.T) {
++		m, f, wcfgCancel := setupROFolderWithOptions(t, true, false, false)
++		defer wcfgCancel()
++		defer cleanupModel(m)
++		must(t, f.Filesystem().MkdirAll(".stfolder", 0o755))
++		addFakeConn(m, device1, f.ID)
++		must(t, m.sdb.SetIndexID(f.ID, device1, covalentTestRemoteIndexID))
++		must(t, f.doInSync(func(ctx context.Context) error {
++			complete, err := f.pull(ctx)
++			if err != nil || !complete {
++				return fmt.Errorf("initial pull failed: complete=%v err=%v", complete, err)
++			}
++			return nil
++		}))
++		if got := f.covalentCompletion(); len(got) != 1 {
++			t.Fatalf("initial completion is missing: %+v", got)
++		}
++		pauseDevice(t, m.cfg, device1, true)
++		if got := f.covalentCompletion(); len(got) != 0 {
++			t.Fatalf("paused source retained completion: %+v", got)
++		}
++		pauseDevice(t, m.cfg, device1, false)
++		if got := f.covalentCompletion(); len(got) != 0 {
++			t.Fatalf("resumed source restored unchecked completion: %+v", got)
++		}
++	})
++
++	t.Run("queued scan", func(t *testing.T) {
++		m, f, wcfgCancel := setupROFolderWithOptions(t, true, false, false)
++		defer wcfgCancel()
++		defer cleanupModel(m)
++		must(t, f.Filesystem().MkdirAll(".stfolder", 0o755))
++		addFakeConn(m, device1, f.ID)
++		must(t, m.sdb.SetIndexID(f.ID, device1, covalentTestRemoteIndexID))
++		must(t, f.doInSync(func(ctx context.Context) error {
++			complete, err := f.pull(ctx)
++			if err != nil || !complete {
++				return fmt.Errorf("initial pull failed: complete=%v err=%v", complete, err)
++			}
++			if got := f.covalentCompletion(); len(got) != 1 {
++				return fmt.Errorf("initial completion is missing: %+v", got)
++			}
++			recorded := f.covalentCompletion()
++			epoch := f.covalentCompletionEpoch()
++			f.ScheduleScan()
++			if f.setCovalentCompletion(epoch, recorded) {
++				return errors.New("scan invalidation accepted a stale completion install")
++			}
++			if got := f.covalentCompletion(); len(got) != 0 {
++				return fmt.Errorf("scheduled scan retained completion: %+v", got)
++			}
++			return nil
++		}))
++	})
++
++	t.Run("deferred scan", func(t *testing.T) {
++		m, f, wcfgCancel := setupROFolderWithOptions(t, true, false, false)
++		defer wcfgCancel()
++		defer cleanupModel(m)
++		ffs := f.Filesystem()
++		must(t, ffs.MkdirAll(".stfolder", 0o755))
++		conn := addFakeConn(m, device1, f.ID)
++		must(t, m.sdb.SetIndexID(f.ID, device1, covalentTestRemoteIndexID))
++
++		must(t, f.doInSync(func(ctx context.Context) error {
++			conn.addFile("deferred", 0o644, protocol.FileInfoTypeFile, []byte("one"))
++			conn.sendIndexUpdate()
++			if complete, err := f.pull(ctx); err != nil || !complete {
++				return fmt.Errorf("initial pull failed: complete=%v err=%v", complete, err)
++			}
++			if err := ffs.Remove("deferred"); err != nil {
++				return err
++			}
++			conn.updateFile("deferred", 0o644, protocol.FileInfoTypeFile, []byte("two"))
++			conn.sendIndexUpdate()
++			if complete, err := f.pull(ctx); err != nil || !complete {
++				return fmt.Errorf("deferred pull failed: complete=%v err=%v", complete, err)
++			}
++			if !f.covalentDeferredScan.Load() {
++				return errors.New("missing indexed path did not mark a deferred scan")
++			}
++			if got := f.covalentCompletion(); len(got) != 0 {
++				return fmt.Errorf("deferred scan reported completion: %+v", got)
++			}
++			return nil
++		}))
++	})
++
++	t.Run("pull error", func(t *testing.T) {
++		m, f, wcfgCancel := setupROFolderWithOptions(t, true, false, false)
++		defer wcfgCancel()
++		defer cleanupModel(m)
++		ffs := f.Filesystem()
++		must(t, ffs.MkdirAll(".stfolder", 0o755))
++		conn := addFakeConn(m, device1, f.ID)
++		must(t, m.sdb.SetIndexID(f.ID, device1, covalentTestRemoteIndexID))
++
++		must(t, f.doInSync(func(ctx context.Context) error {
++			conn.addFile("broken", 0o644, protocol.FileInfoTypeFile, []byte("source"))
++			conn.sendIndexUpdate()
++			conn.RequestCalls(func(context.Context, *protocol.Request) ([]byte, error) {
++				return nil, errors.New("test request failure")
++			})
++			complete, err := f.pull(ctx)
++			if err != nil {
++				return err
++			}
++			if complete {
++				return errors.New("pull error reported ordinary completion")
++			}
++			if got := f.covalentCompletion(); len(got) != 0 {
++				return fmt.Errorf("pull error reported Covalent completion: %+v", got)
++			}
++			return nil
++		}))
++	})
++}
++
++func TestCovalentCompletionAppearsInFolderSummary(t *testing.T) {
++	m, f, wcfgCancel := setupROFolderWithOptions(t, true, false, false)
++	defer wcfgCancel()
++	defer cleanupModel(m)
++	must(t, f.Filesystem().MkdirAll(".stfolder", 0o755))
++	addFakeConn(m, device1, f.ID)
++	must(t, m.sdb.SetIndexID(f.ID, device1, covalentTestRemoteIndexID))
++	var summary *FolderSummary
++	var want CovalentCompletion
++	must(t, f.doInSync(func(ctx context.Context) error {
++		complete, err := f.pull(ctx)
++		if err != nil || !complete {
++			return fmt.Errorf("completion pull failed: complete=%v err=%v", complete, err)
++		}
++		completion := f.covalentCompletion()[device1]
++		want = CovalentCompletion{IndexID: completion.indexID.String(), Sequence: completion.sequence}
++		summary, err = NewFolderSummaryService(m.cfg, m.model, myID, events.NoopLogger).Summary(f.ID)
++		return err
++	}))
++	if summary.CovalentLocalIndexID == "" {
++		t.Fatal("folder summary omitted local index ID")
++	}
++	if got := summary.CovalentCompletion[device1]; got != want {
++		t.Fatalf("folder summary completion = %+v, want %+v", got, want)
++	}
++	encoded := mustV(json.Marshal(summary))
++	var object map[string]json.RawMessage
++	must(t, json.Unmarshal(encoded, &object))
++	if _, ok := object["covalentLocalIndexID"]; !ok {
++		t.Fatal("folder status JSON omitted covalentLocalIndexID")
++	}
++	if _, ok := object["covalentCompletion"]; !ok {
++		t.Fatal("folder status JSON omitted covalentCompletion")
++	}
++}
 diff --git a/lib/model/folder.go b/lib/model/folder.go
-index 9f9f572..7950b56 100644
+index 9f9f572..0d4f0cc 100644
 --- a/lib/model/folder.go
 +++ b/lib/model/folder.go
-@@ -421,19 +421,21 @@ func (f *folder) pull(ctx context.Context) (success bool, err error) {
+@@ -90,6 +90,10 @@ type folder struct {
+ 	versioner versioner.Versioner
+ 
+ 	warnedKqueue bool
++
++	covalentCompletionMut sync.RWMutex
++	covalentCompletions   map[protocol.DeviceID]covalentCompletionPair
++	covalentEpoch         uint64
+ }
+ 
+ type syncRequest struct {
+@@ -298,6 +302,7 @@ func (f *folder) DelayScan(next time.Duration) {
+ }
+ 
+ func (f *folder) ScheduleScan() {
++	f.clearCovalentCompletion()
+ 	// 1-buffered chan
+ 	select {
+ 	case f.scanScheduled <- struct{}{}:
+@@ -312,6 +317,7 @@ func (f *folder) ignoresUpdated() {
+ }
+ 
+ func (f *folder) SchedulePull() {
++	f.clearCovalentCompletion()
+ 	select {
+ 	case f.pullScheduled <- struct{}{}:
+ 	default:
+@@ -327,12 +333,79 @@ func (*folder) Jobs(_, _ int) ([]string, []string, int) {
+ }
+ 
+ func (f *folder) Scan(subdirs []string) error {
++	f.clearCovalentCompletion()
+ 	<-f.initialScanFinished
+ 	return f.doInSync(func(ctx context.Context) error {
+ 		return f.scanSubdirs(ctx, subdirs)
+ 	})
+ }
+ 
++func (f *folder) clearCovalentCompletion() {
++	if f.Type != config.FolderTypeReceiveOnly {
++		return
++	}
++	f.covalentCompletionMut.Lock()
++	f.covalentEpoch++
++	f.covalentCompletions = nil
++	f.covalentCompletionMut.Unlock()
++}
++
++func (f *folder) covalentCompletionEpoch() uint64 {
++	f.covalentCompletionMut.RLock()
++	epoch := f.covalentEpoch
++	f.covalentCompletionMut.RUnlock()
++	return epoch
++}
++
++func (f *folder) setCovalentCompletion(epoch uint64, completions map[protocol.DeviceID]covalentCompletionPair) bool {
++	f.covalentCompletionMut.Lock()
++	defer f.covalentCompletionMut.Unlock()
++	if f.covalentEpoch != epoch {
++		return false
++	}
++	f.covalentCompletions = completions
++	return true
++}
++
++func (f *folder) covalentCompletion() map[protocol.DeviceID]covalentCompletionPair {
++	if f.Type != config.FolderTypeReceiveOnly {
++		return nil
++	}
++	if f.Paused || f.getHealthErrorWithoutIgnores() != nil {
++		f.clearCovalentCompletion()
++		return nil
++	}
++	f.covalentCompletionMut.RLock()
++	recorded := make(map[protocol.DeviceID]covalentCompletionPair, len(f.covalentCompletions))
++	for device, completion := range f.covalentCompletions {
++		recorded[device] = completion
++	}
++	f.covalentCompletionMut.RUnlock()
++
++	completions := make(map[protocol.DeviceID]covalentCompletionPair, len(recorded))
++	stale := make([]protocol.DeviceID, 0, len(recorded))
++	for device, completion := range recorded {
++		connectionID, indexHandler, active := f.model.covalentPeerIndexState(f.folderID, device)
++		indexID, err := f.db.GetIndexID(f.folderID, device)
++		if active && connectionID == completion.connectionID && indexHandler == completion.indexHandler &&
++			err == nil && indexID == completion.indexID {
++			completions[device] = completion
++		} else {
++			stale = append(stale, device)
++		}
++	}
++	if len(stale) != 0 {
++		f.covalentCompletionMut.Lock()
++		for _, device := range stale {
++			if f.covalentCompletions[device] == recorded[device] {
++				delete(f.covalentCompletions, device)
++			}
++		}
++		f.covalentCompletionMut.Unlock()
++	}
++	return completions
++}
++
+ // doInSync allows to run functions synchronously in folder.serve from exported,
+ // asynchronously called methods.
+ func (f *folder) doInSync(fn func(context.Context) error) error {
+@@ -405,7 +478,6 @@ func (f *folder) pull(ctx context.Context) (success bool, err error) {
+ 		// Once the initial scan finished, a pull will be scheduled
+ 		return true, nil
+ 	}
+-
+ 	defer func() {
+ 		if success {
+ 			// We're good, reset the pause interval.
+@@ -418,22 +490,27 @@ func (f *folder) pull(ctx context.Context) (success bool, err error) {
+ 	// that up-to-date folders are also periodically health-checked.
+ 	err = f.getHealthErrorWithoutIgnores()
+ 	if err != nil {
++		f.clearCovalentCompletion()
  		f.sl.DebugContext(ctx, "Skipping pull due to folder error", slogutil.Error(err))
  		return false, err
  	}
@@ -83,10 +681,11 @@ index 9f9f572..7950b56 100644
  	// If there is nothing to do, don't even enter sync-waiting state.
  	needCount, err := f.db.CountNeed(f.folderID, protocol.LocalDeviceID)
  	if err != nil {
++		f.clearCovalentCompletion()
  		return false, err
  	}
 -	if needCount.TotalItems() == 0 {
-+	if needCount.TotalItems() == 0 && !(f.Type == config.FolderTypeReceiveOnly && f.RestoreLocalDeletions) {
++	if needCount.TotalItems() == 0 && f.Type != config.FolderTypeReceiveOnly {
  		// Clears pull failures on items that were needed before, but aren't anymore.
  		f.errorsMut.Lock()
  		f.pullErrors = nil
@@ -94,12 +693,29 @@ index 9f9f572..7950b56 100644
  		return true, nil
  	}
 +	if f.Type == config.FolderTypeReceiveOnly && f.allRemoteDevicesPaused() {
++		f.clearCovalentCompletion()
 +		return true, nil
 +	}
  
  	// Send only folder doesn't do any io, it only checks for out-of-sync
  	// items that differ in metadata and updates those.
-@@ -476,6 +478,21 @@ func (f *folder) pull(ctx context.Context) (success bool, err error) {
+@@ -441,6 +518,7 @@ func (f *folder) pull(ctx context.Context) (success bool, err error) {
+ 		f.setState(FolderSyncWaiting)
+ 
+ 		if err := f.ioLimiter.TakeWithContext(ctx, 1); err != nil {
++			f.clearCovalentCompletion()
+ 			return true, err
+ 		}
+ 		defer f.ioLimiter.Give(1)
+@@ -457,6 +535,7 @@ func (f *folder) pull(ctx context.Context) (success bool, err error) {
+ 	}()
+ 	err = f.getHealthErrorAndLoadIgnores()
+ 	if err != nil {
++		f.clearCovalentCompletion()
+ 		f.sl.DebugContext(ctx, "Skipping pull due to folder error", slogutil.Error(err))
+ 		return false, err
+ 	}
+@@ -476,8 +555,24 @@ func (f *folder) pull(ctx context.Context) (success bool, err error) {
  	return false, err
  }
  
@@ -120,6 +736,21 @@ index 9f9f572..7950b56 100644
 +
  func (f *folder) scanSubdirs(ctx context.Context, subDirs []string) error {
  	f.sl.DebugContext(ctx, "Scanning")
++	f.clearCovalentCompletion()
+ 
+ 	oldHash := f.ignores.Hash()
+ 
+diff --git a/lib/model/folder_recvonly.go b/lib/model/folder_recvonly.go
+index 6dd8335..cf0e29e 100644
+--- a/lib/model/folder_recvonly.go
++++ b/lib/model/folder_recvonly.go
+@@ -72,6 +72,7 @@ func (f *receiveOnlyFolder) Revert() {
+ 
+ func (f *receiveOnlyFolder) revert(ctx context.Context) error {
+ 	f.sl.InfoContext(ctx, "Reverting folder")
++	f.clearCovalentCompletion()
+ 
+ 	f.setState(FolderScanning)
  
 diff --git a/lib/model/folder_recvonly_test.go b/lib/model/folder_recvonly_test.go
 index 6e3be24..0675c3f 100644
@@ -569,29 +1200,135 @@ index 6e3be24..0675c3f 100644
  	replace(t, w, cfg)
  
 diff --git a/lib/model/folder_sendrecv.go b/lib/model/folder_sendrecv.go
-index 316cb8b..26c4ee0 100644
+index 316cb8b..ab332c5 100644
 --- a/lib/model/folder_sendrecv.go
 +++ b/lib/model/folder_sendrecv.go
-@@ -169,6 +169,9 @@ func newSendReceiveFolder(model *model, ignores *ignore.Matcher, cfg config.Fold
+@@ -20,6 +20,7 @@ import (
+ 	"strconv"
+ 	"strings"
+ 	"sync"
++	"sync/atomic"
+ 	"time"
+ 
+ 	"github.com/syncthing/syncthing/internal/itererr"
+@@ -131,7 +132,8 @@ type sendReceiveFolder struct {
+ 	blockPullReorderer blockPullReorderer
+ 	writeLimiter       *semaphore.Semaphore
+ 
+-	tempPullErrors map[string]string // pull errors that might be just transient
++	tempPullErrors       map[string]string // pull errors that might be just transient
++	covalentDeferredScan atomic.Bool
+ }
+ 
+ func newSendReceiveFolder(model *model, ignores *ignore.Matcher, cfg config.FolderConfiguration, ver versioner.Versioner, evLogger events.Logger, ioLimiter *semaphore.Semaphore) service {
+@@ -169,6 +171,17 @@ func newSendReceiveFolder(model *model, ignores *ignore.Matcher, cfg config.Fold
  // the device in sync with the global state.
  func (f *sendReceiveFolder) pull(ctx context.Context) (bool, error) {
  	f.sl.DebugContext(ctx, "Pulling")
++	if f.Type == config.FolderTypeReceiveOnly {
++		f.clearCovalentCompletion()
++	}
++	f.covalentDeferredScan.Store(false)
 +	if err := f.restoreLocalDeletions(); err != nil {
 +		return false, err
++	}
++	var completionEpoch uint64
++	if f.Type == config.FolderTypeReceiveOnly {
++		completionEpoch = f.covalentCompletionEpoch()
 +	}
  
  	scanChan := make(chan string)
  	go f.pullScannerRoutine(ctx, scanChan)
-@@ -240,6 +243,41 @@ func (f *sendReceiveFolder) pull(ctx context.Context) (bool, error) {
+@@ -188,6 +201,8 @@ func (f *sendReceiveFolder) pull(ctx context.Context) (bool, error) {
+ 	f.errorsMut.Unlock()
+ 
+ 	var err error
++	var completionBefore, completionAfter map[protocol.DeviceID]covalentCompletionPair
++	completionStable := false
+ 	for tries := range maxPullerIterations {
+ 		select {
+ 		case <-ctx.Done():
+@@ -199,10 +214,18 @@ func (f *sendReceiveFolder) pull(ctx context.Context) (bool, error) {
+ 		// it to FolderSyncing during the last iteration.
+ 		f.setState(FolderSyncPreparing)
+ 
++		var beforeOK, afterOK bool
++		if f.Type == config.FolderTypeReceiveOnly {
++			completionBefore, beforeOK = f.covalentRemoteIndexState()
++		}
+ 		changed, err = f.pullerIteration(ctx, scanChan)
+ 		if err != nil {
+ 			return false, err
+ 		}
++		if f.Type == config.FolderTypeReceiveOnly {
++			completionAfter, afterOK = f.covalentRemoteIndexState()
++			completionStable = beforeOK && afterOK && covalentCompletionPairsEqual(completionBefore, completionAfter)
++		}
+ 
+ 		f.sl.DebugContext(ctx, "Pull iteration completed", "changed", changed, "try", tries+1)
+ 
+@@ -226,6 +249,11 @@ func (f *sendReceiveFolder) pull(ctx context.Context) (bool, error) {
+ 		}
+ 		f.tempPullErrors = nil
+ 	}
++
++	if f.Type == config.FolderTypeReceiveOnly && changed == 0 && pullErrNum == 0 &&
++		!f.covalentDeferredScan.Load() && completionStable {
++		f.setCovalentCompletion(completionEpoch, completionAfter)
++	}
+ 	f.errorsMut.Unlock()
+ 
+ 	if pullErrNum > 0 {
+@@ -240,6 +268,81 @@ func (f *sendReceiveFolder) pull(ctx context.Context) (bool, error) {
  	return changed == 0 && pullErrNum == 0, nil
  }
  
++func (f *sendReceiveFolder) covalentRemoteIndexState() (map[protocol.DeviceID]covalentCompletionPair, bool) {
++	completions := make(map[protocol.DeviceID]covalentCompletionPair)
++	for _, device := range f.DeviceIDs() {
++		if device == f.model.id {
++			continue
++		}
++		connectionID, indexHandler, active := f.model.covalentPeerIndexState(f.folderID, device)
++		if !active {
++			continue
++		}
++		indexID, err := f.db.GetIndexID(f.folderID, device)
++		if err != nil {
++			return nil, false
++		}
++		sequence, err := f.db.GetDeviceSequence(f.folderID, device)
++		if err != nil {
++			return nil, false
++		}
++		if indexID != 0 {
++			completions[device] = covalentCompletionPair{
++				indexID: indexID, sequence: sequence, connectionID: connectionID, indexHandler: indexHandler,
++			}
++		}
++	}
++	return completions, true
++}
++
++func covalentCompletionPairsEqual(left, right map[protocol.DeviceID]covalentCompletionPair) bool {
++	if len(left) != len(right) {
++		return false
++	}
++	for device, completion := range left {
++		if right[device] != completion {
++			return false
++		}
++	}
++	return true
++}
++
 +// restoreLocalDeletions makes only intentional receive-only deletions older
 +// than a live global item. Other receive-only changes remain untouched.
 +func (f *sendReceiveFolder) restoreLocalDeletions() error {
 +	if f.Type != config.FolderTypeReceiveOnly || !f.RestoreLocalDeletions {
 +		return nil
 +	}
++	f.clearCovalentCompletion()
 +
 +	batch := NewFileInfoBatch(func(files []protocol.FileInfo) error {
 +		f.updateLocalsFromScanning(files)
@@ -624,7 +1361,7 @@ index 316cb8b..26c4ee0 100644
  // pullerIteration runs a single puller iteration for the given folder and
  // returns the number items that should have been synced (even those that
  // might have failed). One puller iteration handles all files currently
-@@ -333,6 +371,15 @@ loop:
+@@ -333,6 +436,15 @@ loop:
  		default:
  		}
  
@@ -640,7 +1377,7 @@ index 316cb8b..26c4ee0 100644
  		if f.IgnoreDelete && file.IsDeleted() {
  			f.sl.DebugContext(ctx, "Ignoring file deletion per config", slogutil.FilePath(file.FileName()))
  			continue
-@@ -514,6 +561,42 @@ nextFile:
+@@ -514,6 +626,42 @@ nextFile:
  	return fileDeletions, dirDeletions, nil
  }
  
@@ -672,7 +1409,7 @@ index 316cb8b..26c4ee0 100644
 +			if !fs.IsNotExist(err) {
 +				return false, err
 +			}
-+			scanChan <- name
++			f.queueCovalentScan(scanChan, name)
 +			return true, nil
 +		}
 +	}
@@ -683,7 +1420,43 @@ index 316cb8b..26c4ee0 100644
  func popCandidate(buckets map[string][]protocol.FileInfo, key string) (protocol.FileInfo, bool) {
  	cands := buckets[key]
  	if len(cands) == 0 {
-@@ -1081,7 +1164,7 @@ func (f *sendReceiveFolder) renameFile(cur, source, target protocol.FileInfo, db
+@@ -713,7 +861,7 @@ func (f *sendReceiveFolder) checkParent(file string, scanChan chan<- string) boo
+ 		return false
+ 	}
+ 	if f.Type != config.FolderTypeReceiveEncrypted {
+-		scanChan <- parent
++		f.queueCovalentScan(scanChan, parent)
+ 	}
+ 	return true
+ }
+@@ -1022,7 +1170,7 @@ func (f *sendReceiveFolder) renameFile(cur, source, target protocol.FileInfo, db
+ 			if !ok || curTarget.IsDeleted() {
+ 				break
+ 			}
+-			scanChan <- target.Name
++			f.queueCovalentScan(scanChan, target.Name)
+ 			err = errModified
+ 		default:
+ 			// We can't check whether the file changed as compared to the db,
+@@ -1031,7 +1179,7 @@ func (f *sendReceiveFolder) renameFile(cur, source, target protocol.FileInfo, db
+ 		}
+ 	case !ok:
+ 		// Target appeared from nowhere
+-		scanChan <- target.Name
++		f.queueCovalentScan(scanChan, target.Name)
+ 		err = errModified
+ 	default:
+ 		var fi protocol.FileInfo
+@@ -1045,7 +1193,7 @@ func (f *sendReceiveFolder) renameFile(cur, source, target protocol.FileInfo, db
+ 				IgnoreXattrs:    !f.SyncXattrs,
+ 			}) {
+ 				// Target changed
+-				scanChan <- target.Name
++				f.queueCovalentScan(scanChan, target.Name)
+ 				err = errModified
+ 			}
+ 		}
+@@ -1081,7 +1229,7 @@ func (f *sendReceiveFolder) renameFile(cur, source, target protocol.FileInfo, db
  	// of the source and the creation of the target temp file. Fix-up the metadata,
  	// update the local index of the target file and rename from temp to real name.
  
@@ -692,7 +1465,7 @@ index 316cb8b..26c4ee0 100644
  		return err
  	}
  
-@@ -1662,17 +1745,31 @@ loop:
+@@ -1662,17 +1810,31 @@ loop:
  	out <- state.sharedPullerState
  }
  
@@ -727,7 +1500,7 @@ index 316cb8b..26c4ee0 100644
  	}
  
  	if stat, err := f.mtimefs.Lstat(file.Name); err == nil {
-@@ -1680,7 +1777,7 @@ func (f *sendReceiveFolder) performFinish(file, curFile protocol.FileInfo, hasCu
+@@ -1680,7 +1842,7 @@ func (f *sendReceiveFolder) performFinish(file, curFile protocol.FileInfo, hasCu
  		// handle that.
  
  		if err := f.scanIfItemChanged(file.Name, stat, curFile, hasCurFile, false, scanChan); err != nil {
@@ -736,7 +1509,7 @@ index 316cb8b..26c4ee0 100644
  		}
  
  		if !curFile.IsDirectory() && !curFile.IsSymlink() && file.InConflictWith(curFile) {
-@@ -1696,16 +1793,22 @@ func (f *sendReceiveFolder) performFinish(file, curFile protocol.FileInfo, hasCu
+@@ -1696,16 +1858,22 @@ func (f *sendReceiveFolder) performFinish(file, curFile protocol.FileInfo, hasCu
  			err = f.deleteItemOnDisk(curFile, scanChan)
  		}
  		if err != nil {
@@ -750,7 +1523,7 @@ index 316cb8b..26c4ee0 100644
 +		hasCurFile && !curFile.IsDeleted() {
 +		// The indexed path disappeared after the queue-time check. Defer its
 +		// install so the post-pull scanner can record the local deletion.
-+		scanChan <- file.Name
++		f.queueCovalentScan(scanChan, file.Name)
 +		return discardTemporary()
  	}
  
@@ -762,7 +1535,7 @@ index 316cb8b..26c4ee0 100644
  	}
  
  	// Set the correct timestamp on the new file
-@@ -1713,7 +1816,7 @@ func (f *sendReceiveFolder) performFinish(file, curFile protocol.FileInfo, hasCu
+@@ -1713,7 +1881,7 @@ func (f *sendReceiveFolder) performFinish(file, curFile protocol.FileInfo, hasCu
  
  	// Record the updated file in the index
  	dbUpdateChan <- dbUpdateJob{file, dbUpdateHandleFile}
@@ -771,7 +1544,7 @@ index 316cb8b..26c4ee0 100644
  }
  
  func (f *sendReceiveFolder) finisherRoutine(ctx context.Context, in <-chan *sharedPullerState, dbUpdateChan chan<- dbUpdateJob, scanChan chan<- string) {
-@@ -1723,12 +1826,15 @@ func (f *sendReceiveFolder) finisherRoutine(ctx context.Context, in <-chan *shar
+@@ -1723,12 +1891,15 @@ func (f *sendReceiveFolder) finisherRoutine(ctx context.Context, in <-chan *shar
  
  			f.queue.Done(state.file.Name)
  
@@ -788,6 +1561,84 @@ index 316cb8b..26c4ee0 100644
  			} else {
  				slog.InfoContext(ctx, "Synced file", f.LogAttr(), state.file.LogAttr(), slog.Group("blocks", slog.Int("local", state.reused+state.copyTotal), slog.Int("download", state.pullTotal)))
  
+@@ -1877,6 +2048,14 @@ func (f *sendReceiveFolder) pullScannerRoutine(ctx context.Context, scanChan <-c
+ 	}
+ }
+ 
++func (f *sendReceiveFolder) queueCovalentScan(scanChan chan<- string, path string) {
++	if f.Type == config.FolderTypeReceiveOnly {
++		f.clearCovalentCompletion()
++		f.covalentDeferredScan.Store(true)
++	}
++	scanChan <- path
++}
++
+ func (f *sendReceiveFolder) moveForConflict(name, lastModBy string, scanChan chan<- string) error {
+ 	if isConflict(name) {
+ 		f.sl.Info("Conflict on existing conflict copy; not copying again", slogutil.FilePath(name))
+@@ -1917,7 +2096,7 @@ func (f *sendReceiveFolder) moveForConflict(name, lastModBy string, scanChan cha
+ 		}
+ 	}
+ 	if err == nil {
+-		scanChan <- newName
++		f.queueCovalentScan(scanChan, newName)
+ 	}
+ 	return err
+ }
+@@ -2036,7 +2215,7 @@ func (f *sendReceiveFolder) deleteDirOnDiskHandleChildren(dir string, scanChan c
+ 			// Something appeared in the dir that we either are not
+ 			// aware of at all or that we think should be deleted
+ 			// -> schedule scan.
+-			scanChan <- path
++			f.queueCovalentScan(scanChan, path)
+ 			hasToBeScanned = true
+ 			return nil
+ 		case ok && f.Type == config.FolderTypeReceiveOnly && cf.IsReceiveOnlyChanged():
+@@ -2046,7 +2225,7 @@ func (f *sendReceiveFolder) deleteDirOnDiskHandleChildren(dir string, scanChan c
+ 		diskFile, err := scanner.CreateFileInfo(info, path, f.mtimefs, f.SyncOwnership, f.SyncXattrs, f.XattrFilter)
+ 		if err != nil {
+ 			// Lets just assume the file has changed.
+-			scanChan <- path
++			f.queueCovalentScan(scanChan, path)
+ 			hasToBeScanned = true
+ 			return nil //nolint:nilerr
+ 		}
+@@ -2060,7 +2239,7 @@ func (f *sendReceiveFolder) deleteDirOnDiskHandleChildren(dir string, scanChan c
+ 		}) {
+ 			// File on disk changed compared to what we have in db
+ 			// -> schedule scan.
+-			scanChan <- path
++			f.queueCovalentScan(scanChan, path)
+ 			hasToBeScanned = true
+ 			return nil
+ 		}
+@@ -2092,7 +2271,7 @@ func (f *sendReceiveFolder) deleteDirOnDiskHandleChildren(dir string, scanChan c
+ 	if hasReceiveOnlyChanged {
+ 		// Pretend we deleted the directory. It will be resurrected as a
+ 		// receive-only changed item on scan.
+-		scanChan <- dir
++		f.queueCovalentScan(scanChan, dir)
+ 		return nil
+ 	}
+ 	if hasKnown {
+@@ -2108,7 +2287,7 @@ func (f *sendReceiveFolder) deleteDirOnDiskHandleChildren(dir string, scanChan c
+ func (f *sendReceiveFolder) scanIfItemChanged(name string, stat fs.FileInfo, item protocol.FileInfo, hasItem bool, fromDelete bool, scanChan chan<- string) (err error) {
+ 	defer func() {
+ 		if errors.Is(err, errModified) {
+-			scanChan <- name
++			f.queueCovalentScan(scanChan, name)
+ 		}
+ 	}()
+ 
+@@ -2155,7 +2334,7 @@ func (f *sendReceiveFolder) checkToBeDeleted(file, cur protocol.FileInfo, hasCur
+ 	}
+ 	if deleted {
+ 		if hasCur && !cur.Deleted && !cur.IsUnsupported() {
+-			scanChan <- file.Name
++			f.queueCovalentScan(scanChan, file.Name)
+ 			return errModified
+ 		}
+ 		f.sl.Debug("Not deleting item we don't have, but updating database", slogutil.FilePath(file.Name))
 diff --git a/lib/model/folder_sendrecv_test.go b/lib/model/folder_sendrecv_test.go
 index 1daba2c..2025078 100644
 --- a/lib/model/folder_sendrecv_test.go
@@ -801,3 +1652,130 @@ index 1daba2c..2025078 100644
  
  	select {
  	case <-dbUpdateChan: // boring case sensitive filesystem
+diff --git a/lib/model/folder_summary.go b/lib/model/folder_summary.go
+index 40772ae..0a7f878 100644
+--- a/lib/model/folder_summary.go
++++ b/lib/model/folder_summary.go
+@@ -110,16 +110,30 @@ type FolderSummary struct {
+ 	StateChanged time.Time `json:"stateChanged"`
+ 	Error        string    `json:"error"`
+ 
+-	Version        int64                       `json:"version"` // deprecated
+-	Sequence       int64                       `json:"sequence"`
+-	RemoteSequence map[protocol.DeviceID]int64 `json:"remoteSequence"`
++	Version              int64                                    `json:"version"` // deprecated
++	Sequence             int64                                    `json:"sequence"`
++	RemoteSequence       map[protocol.DeviceID]int64              `json:"remoteSequence"`
++	CovalentLocalIndexID string                                   `json:"covalentLocalIndexID"`
++	CovalentCompletion   map[protocol.DeviceID]CovalentCompletion `json:"covalentCompletion"`
+ 
+ 	IgnorePatterns bool   `json:"ignorePatterns"`
+ 	WatchError     string `json:"watchError"`
+ }
+ 
++type CovalentCompletion struct {
++	IndexID  string `json:"indexID"`
++	Sequence int64  `json:"sequence"`
++}
++
++type covalentCompletionProvider interface {
++	covalentCompletionStatus(folder string) (protocol.IndexID, map[protocol.DeviceID]covalentCompletionPair)
++}
++
++var _ covalentCompletionProvider = (*model)(nil)
++
+ func (c *folderSummaryService) Summary(folder string) (*FolderSummary, error) {
+ 	res := new(FolderSummary)
++	res.CovalentCompletion = make(map[protocol.DeviceID]CovalentCompletion)
+ 
+ 	var local, global, need, ro db.Counts
+ 	var ourSeq int64
+@@ -184,6 +198,18 @@ func (c *folderSummaryService) Summary(folder string) (*FolderSummary, error) {
+ 	res.Version = ourSeq // legacy
+ 	res.Sequence = ourSeq
+ 	res.RemoteSequence = remoteSeq
++	if provider, ok := c.model.(covalentCompletionProvider); ok {
++		localIndexID, completions := provider.covalentCompletionStatus(folder)
++		if localIndexID != 0 {
++			res.CovalentLocalIndexID = localIndexID.String()
++		}
++		for device, completion := range completions {
++			res.CovalentCompletion[device] = CovalentCompletion{
++				IndexID:  completion.indexID.String(),
++				Sequence: completion.sequence,
++			}
++		}
++	}
+ 
+ 	ignorePatterns, _, _ := c.model.CurrentIgnores(folder)
+ 	res.IgnorePatterns = false
+diff --git a/lib/model/model.go b/lib/model/model.go
+index 3b35a4a..7fb911a 100644
+--- a/lib/model/model.go
++++ b/lib/model/model.go
+@@ -64,10 +64,18 @@ type service interface {
+ 	WatchError() error
+ 	ScheduleForceRescan(path string)
+ 	GetStatistics() (stats.FolderStatistics, error)
++	covalentCompletion() map[protocol.DeviceID]covalentCompletionPair
+ 
+ 	getState() (folderState, time.Time, error)
+ }
+ 
++type covalentCompletionPair struct {
++	indexID      protocol.IndexID
++	sequence     int64
++	connectionID string
++	indexHandler *indexHandler
++}
++
+ type Availability struct {
+ 	ID            protocol.DeviceID `json:"id"`
+ 	FromTemporary bool              `json:"fromTemporary"`
+@@ -2664,6 +2672,46 @@ func (m *model) State(folder string) (string, time.Time, error) {
+ 	return state.String(), changed, err
+ }
+ 
++func (m *model) covalentCompletionStatus(folder string) (protocol.IndexID, map[protocol.DeviceID]covalentCompletionPair) {
++	localIndexID, err := m.sdb.GetIndexID(folder, protocol.LocalDeviceID)
++	if err != nil {
++		return 0, nil
++	}
++	m.mut.RLock()
++	runner, ok := m.folderRunners.Get(folder)
++	m.mut.RUnlock()
++	if !ok {
++		return localIndexID, nil
++	}
++	return localIndexID, runner.covalentCompletion()
++}
++
++func (m *model) covalentPeerIndexState(folder string, device protocol.DeviceID) (string, *indexHandler, bool) {
++	deviceCfg, ok := m.cfg.Device(device)
++	if !ok || deviceCfg.Paused {
++		return "", nil, false
++	}
++	m.mut.RLock()
++	defer m.mut.RUnlock()
++	registry, ok := m.indexHandlers.Get(device)
++	if !ok {
++		return "", nil, false
++	}
++	connectionID := registry.conn.ConnectionID()
++	connIDs := m.deviceConnIDs[device]
++	if len(connIDs) == 0 || connIDs[0] != connectionID || m.connections[connectionID] == nil ||
++		m.remoteFolderStates[device][folder] != remoteFolderValid {
++		return "", nil, false
++	}
++	registry.mut.Lock()
++	defer registry.mut.Unlock()
++	handler, ok := registry.indexHandlers.Get(folder)
++	if !ok {
++		return "", nil, false
++	}
++	return connectionID, handler, true
++}
++
+ func (m *model) FolderErrors(folder string) ([]FileError, error) {
+ 	m.mut.RLock()
+ 	err := m.checkFolderRunningRLocked(folder)

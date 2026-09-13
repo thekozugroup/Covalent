@@ -373,6 +373,14 @@ public enum NodeAPIErrorCopy {
             "Folder sync needs attention before it can continue. Check the folder status, then try again.",
             .retry
         ),
+        "link_settings_pending": (
+            "A link settings change is waiting for the source device. Check the link status before changing it again.",
+            .none
+        ),
+        "link_settings_conflict": (
+            "Link settings changed on another device. Review the current settings before trying again.",
+            .none
+        ),
         "invalid_peer_address": (
             "Enter the device address as a numeric IP address and port, such as 192.168.1.20:8787, then try again.",
             .none

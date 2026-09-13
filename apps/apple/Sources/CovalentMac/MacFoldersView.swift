@@ -166,17 +166,18 @@ struct MacFoldersView: View {
       offersRetry: Bool
     ) -> some View {
       Section {
-        ContentUnavailableView(
-          title,
+        MacEmptyState(
           systemImage: "exclamationmark.triangle",
-          description: Text(message)
-        )
-        if offersRetry {
-          Button("Try Again") {
-            Task { await model.refreshFolders() }
+          title: title,
+          message: message
+        ) {
+          if offersRetry {
+            Button("Try Again") {
+              Task { await model.refreshFolders() }
+            }
+            .disabled(model.folderSyncLoading)
+            .accessibilityHint("Checks the local folder service again.")
           }
-          .disabled(model.folderSyncLoading)
-          .accessibilityHint("Checks the local folder service again.")
         }
       }
     }

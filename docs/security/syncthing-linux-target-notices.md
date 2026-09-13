@@ -13,9 +13,10 @@ Each architecture is built in its own pinned
 Syncthing v2.1.3 from commit
 `946e2b83a1f6c6ae119427c09e0a5802940b82ff` with `GOOS=linux`, the image's
 exact `GOARCH`, `CGO_ENABLED=0`, `GOFLAGS=-mod=readonly`, and the upstream
-`noupgrade` build tag. The builder verifies and applies Covalent's
+`noupgrade` build tag. The builder verifies and applies Covalent's receive-only
+deletion policy and ephemeral completion watermark patch, retained as
 `keep-local-deletions.patch`, SHA-256
-`e58e7d133a388576a54cacc6a5a5094e6607c483c0daabac552de1a1854d92ac`,
+`bdbab1565d0adce1fc2dc77cfe3a0581a83333b93910a0ac43e3081ba0b678ca`,
 only to the private source export. It then runs this exact target query:
 
 ```text

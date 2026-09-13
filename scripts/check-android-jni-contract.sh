@@ -122,7 +122,7 @@ test "$(shasum -a 256 "$sync_guardian" | awk '{print $1}')" = \
 grep -Fq 'expected_commit=946e2b83a1f6c6ae119427c09e0a5802940b82ff' "$sync_builder"
 grep -Fq "expected_go='go version go1.26.7 '" "$sync_builder"
 grep -Fq 'expected_ndk=27.1.12297006' "$sync_builder"
-grep -Fq 'source_patch_sha=e58e7d133a388576a54cacc6a5a5094e6607c483c0daabac552de1a1854d92ac' "$sync_builder"
+grep -Fq 'source_patch_sha=bdbab1565d0adce1fc2dc77cfe3a0581a83333b93910a0ac43e3081ba0b678ca' "$sync_builder"
 grep -Fq 'git -C "$source_dir" archive --format=tar "$expected_commit"' "$sync_builder"
 grep -Fq 'git -C "$build_source" apply --check "$source_patch"' "$sync_builder"
 grep -Fq -- '--source-patch "Covalent keep-local-deletions patch"' "$sync_builder"

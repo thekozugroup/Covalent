@@ -6,11 +6,52 @@
 
 use super::*;
 
+pub const MIN_SCHEDULE_INTERVAL_MINUTES: u32 = 15;
+pub const MAX_SCHEDULE_INTERVAL_MINUTES: u32 = 525_600;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "mode",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum LinkCadence {
+    Manual,
+    #[default]
+    Continuous,
+    Scheduled {
+        interval_minutes: u32,
+    },
+}
+
+impl LinkCadence {
+    pub fn is_valid(self) -> bool {
+        match self {
+            Self::Manual | Self::Continuous => true,
+            Self::Scheduled { interval_minutes } => (MIN_SCHEDULE_INTERVAL_MINUTES
+                ..=MAX_SCHEDULE_INTERVAL_MINUTES)
+                .contains(&interval_minutes),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AndroidLinkConditions {
+    pub wifi_only: bool,
+    pub charging_only: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FolderLinkSettings {
     pub deletion_policy: covalent_protocol::FolderLinkPolicy,
     pub paused: bool,
+    #[serde(default)]
+    pub cadence: LinkCadence,
+    #[serde(default)]
+    pub android_conditions: AndroidLinkConditions,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -35,6 +76,8 @@ pub struct LinkSettingsCommit {
     pub settings: FolderLinkSettings,
     pub change_id: Uuid,
     pub changed_by: DeviceId,
+    #[serde(default)]
+    pub accepted_at_unix_ms: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -44,6 +87,9 @@ pub struct LinkSettingsState {
     pub settings: FolderLinkSettings,
     pub change_id: Uuid,
     pub changed_by: DeviceId,
+    /// Source-issued acceptance time. Historical continuous settings may be zero.
+    #[serde(default)]
+    pub accepted_at_unix_ms: u64,
     /// A new destination waits for the source's current revision before any
     /// transfer. Its invitation may precede a later settings change.
     pub confirmed: bool,
@@ -66,6 +112,7 @@ impl LinkSettingsState {
             settings: self.settings,
             change_id: self.change_id,
             changed_by: self.changed_by,
+            accepted_at_unix_ms: self.accepted_at_unix_ms,
         }
     }
 }
@@ -78,6 +125,28 @@ impl FolderSharingJournal {
         expected_revision: u64,
         settings: FolderLinkSettings,
     ) -> Result<(), SharingError> {
+        let accepted_at = self
+            .snapshot
+            .link_settings
+            .get(&folder_id)
+            .map_or(0, |state| state.accepted_at_unix_ms);
+        self.request_link_settings_at(
+            folder_id,
+            change_id,
+            expected_revision,
+            settings,
+            accepted_at,
+        )
+    }
+
+    pub fn request_link_settings_at(
+        &mut self,
+        folder_id: Uuid,
+        change_id: Uuid,
+        expected_revision: u64,
+        settings: FolderLinkSettings,
+        now_unix_ms: u64,
+    ) -> Result<(), SharingError> {
         self.reconcile_trust()?;
         let source_id = self.link_source(folder_id)?;
         let state = self
@@ -85,7 +154,7 @@ impl FolderSharingJournal {
             .link_settings
             .get(&folder_id)
             .ok_or(SharingError::InvalidState)?;
-        if change_id.is_nil() || !state.confirmed {
+        if change_id.is_nil() || !state.confirmed || !settings.is_valid() {
             return Err(SharingError::InvalidRecord);
         }
         let request = LinkSettingsRequest {
@@ -117,7 +186,7 @@ impl FolderSharingJournal {
             };
         }
         if source_id == self.engine.device_id() {
-            self.commit_link_request(&request)?;
+            self.commit_link_request(&request, now_unix_ms)?;
         } else {
             if !self.snapshot.shares.iter().any(|s| {
                 !s.removed
@@ -144,10 +213,24 @@ impl FolderSharingJournal {
         &mut self,
         request: &LinkSettingsRequest,
     ) -> Result<LinkSettingsCommit, SharingError> {
+        let accepted_at = self
+            .snapshot
+            .link_settings
+            .get(&request.folder_id)
+            .map_or(0, |state| state.accepted_at_unix_ms);
+        self.receive_link_settings_request_at(request, accepted_at)
+    }
+
+    pub fn receive_link_settings_request_at(
+        &mut self,
+        request: &LinkSettingsRequest,
+        now_unix_ms: u64,
+    ) -> Result<LinkSettingsCommit, SharingError> {
         self.reconcile_trust()?;
         if request.source_id != self.engine.device_id()
             || request.change_id.is_nil()
             || self.link_source(request.folder_id)? != self.engine.device_id()
+            || !request.settings.is_valid()
         {
             return Err(SharingError::InvalidRecord);
         }
@@ -174,7 +257,7 @@ impl FolderSharingJournal {
                 return Err(SharingError::InvalidRecord);
             }
         } else if current.revision == request.expected_revision {
-            self.commit_link_request(request)?;
+            self.commit_link_request(request, now_unix_ms)?;
         }
         // An old request receives the current revision, without overwriting it.
         // The requesting device retains its attempted values as a conflict.
@@ -190,13 +273,20 @@ impl FolderSharingJournal {
             ))
     }
 
-    fn commit_link_request(&mut self, request: &LinkSettingsRequest) -> Result<(), SharingError> {
+    fn commit_link_request(
+        &mut self,
+        request: &LinkSettingsRequest,
+        now_unix_ms: u64,
+    ) -> Result<(), SharingError> {
+        if now_unix_ms == 0 {
+            return Err(SharingError::InvalidRecord);
+        }
         let mut next = self.snapshot.clone();
         let state = next
             .link_settings
             .get_mut(&request.folder_id)
             .ok_or(SharingError::InvalidState)?;
-        if state.revision != request.expected_revision {
+        if state.revision != request.expected_revision || now_unix_ms < state.accepted_at_unix_ms {
             return Err(SharingError::SettingsConflict);
         }
         state.revision = state
@@ -206,8 +296,10 @@ impl FolderSharingJournal {
         state.settings = request.settings;
         state.change_id = request.change_id;
         state.changed_by = request.requester_id;
+        state.accepted_at_unix_ms = now_unix_ms;
         state.pending_change = None;
         state.conflicted_change = None;
+        link_runs::cancel_for_settings_change(&mut next, request.folder_id, now_unix_ms)?;
         self.persist(next)
     }
 
@@ -221,6 +313,8 @@ impl FolderSharingJournal {
             || commit.source_id == self.engine.device_id()
             || self.link_source(commit.folder_id)? != commit.source_id
             || (commit.revision == 0) != commit.change_id.is_nil()
+            || !commit.settings.is_valid()
+            || commit.accepted_at_unix_ms == 0
         {
             return Err(SharingError::InvalidRecord);
         }
@@ -242,10 +336,20 @@ impl FolderSharingJournal {
             // A delayed authenticated older commit cannot roll settings back.
             return Ok(());
         }
-        if commit.revision == current.revision
+        if commit.revision > current.revision
+            && commit.accepted_at_unix_ms < current.accepted_at_unix_ms
+        {
+            return Err(SharingError::InvalidRecord);
+        }
+        if commit.revision == 0 && commit.changed_by != commit.source_id {
+            return Err(SharingError::InvalidRecord);
+        }
+        if current.confirmed
+            && commit.revision == current.revision
             && (commit.settings != current.settings
                 || commit.change_id != current.change_id
-                || commit.changed_by != current.changed_by)
+                || commit.changed_by != current.changed_by
+                || commit.accepted_at_unix_ms != current.accepted_at_unix_ms)
         {
             return Err(SharingError::InvalidRecord);
         }
@@ -258,6 +362,7 @@ impl FolderSharingJournal {
         state.settings = commit.settings;
         state.change_id = commit.change_id;
         state.changed_by = commit.changed_by;
+        state.accepted_at_unix_ms = commit.accepted_at_unix_ms;
         state.confirmed = true;
         if let Some(pending) = &state.pending_change {
             if pending.change_id == commit.change_id && pending.requester_id == commit.changed_by {
@@ -275,10 +380,15 @@ impl FolderSharingJournal {
         if state == current {
             return Ok(());
         }
+        link_runs::cancel_for_settings_change(
+            &mut next,
+            commit.folder_id,
+            commit.accepted_at_unix_ms,
+        )?;
         self.persist(next)
     }
 
-    fn link_source(&self, folder_id: Uuid) -> Result<DeviceId, SharingError> {
+    pub(super) fn link_source(&self, folder_id: Uuid) -> Result<DeviceId, SharingError> {
         self.snapshot
             .shares
             .iter()
@@ -288,12 +398,34 @@ impl FolderSharingJournal {
     }
 
     pub(super) fn link_allows_transfer(&self, share: &Share) -> bool {
+        self.link_allows_transfer_at(share, link_runs::current_unix_ms(), Instant::now())
+    }
+
+    pub(super) fn link_allows_transfer_at(
+        &self,
+        share: &Share,
+        now_unix_ms: u64,
+        observed_at: Instant,
+    ) -> bool {
         share.offer.link_policy.is_none()
             || self
                 .snapshot
                 .link_settings
                 .get(&share.offer.folder_id)
-                .is_some_and(|state| state.confirmed && !state.settings.paused)
+                .is_some_and(|state| {
+                    state.confirmed
+                        && !state.settings.paused
+                        && match state.settings.cadence {
+                            LinkCadence::Continuous => self
+                                .conditions_allow(state.settings.android_conditions, observed_at),
+                            LinkCadence::Manual | LinkCadence::Scheduled { .. } => self
+                                .local_batch_allows_transfer_at(
+                                    share.offer.folder_id,
+                                    now_unix_ms,
+                                    observed_at,
+                                ),
+                        }
+                })
     }
 
     pub(super) fn append_link_deliveries(&self, result: &mut Vec<FolderShareDelivery>) {
@@ -344,9 +476,12 @@ pub(super) fn reconcile_link_states(snapshot: &mut Snapshot) {
                     settings: FolderLinkSettings {
                         deletion_policy: policy,
                         paused: false,
+                        cadence: LinkCadence::Continuous,
+                        android_conditions: AndroidLinkConditions::default(),
                     },
                     change_id: Uuid::nil(),
                     changed_by: share.offer.source_device_id,
+                    accepted_at_unix_ms: share.offer.issued_at_unix_ms,
                     confirmed: owner == share.offer.source_device_id,
                     pending_change: None,
                     conflicted_change: None,
@@ -366,6 +501,9 @@ pub(super) fn validate_link_states(snapshot: &Snapshot) -> Result<(), SharingErr
             .offer
             .source_device_id;
         if (state.revision == 0) != state.change_id.is_nil()
+            || !state.settings.is_valid()
+            || (matches!(state.settings.cadence, LinkCadence::Scheduled { .. })
+                && state.accepted_at_unix_ms == 0)
             || (source == owner && (!state.confirmed || state.pending_change.is_some()))
             || (state.revision == 0 && state.changed_by != source)
             || (!state.confirmed && state.revision != 0)
@@ -397,4 +535,10 @@ pub(super) fn validate_link_states(snapshot: &Snapshot) -> Result<(), SharingErr
         }
     }
     Ok(())
+}
+
+impl FolderLinkSettings {
+    pub fn is_valid(self) -> bool {
+        self.cadence.is_valid()
+    }
 }

@@ -148,13 +148,41 @@ async fn deliver(
         service.receive_link_settings_commit(&commit).await.ok()?;
         return Some(pending.key);
     }
+    if let FolderShareRecord::RunRequest(request) = &pending.delivery.record {
+        let source_id = pending.delivery.peer_transport.peer_id;
+        let target_id = engine.device_id();
+        let response = send_folder_control(
+            engine,
+            pending.delivery.peer_transport,
+            FolderControlOperation::RequestLinkRun(request.clone()),
+        )
+        .await
+        .ok()?;
+        let FolderControlPayload::LinkRun(commit) = response else {
+            return None;
+        };
+        if commit.source_id != source_id
+            || commit.target_id != target_id
+            || commit.folder_id != request.folder_id
+        {
+            return None;
+        }
+        service.receive_link_run_commit(&commit).await.ok()?;
+        return Some(pending.key);
+    }
     let (operation, acceptance_id, removal_ack) = match pending.delivery.record {
         FolderShareRecord::SettingsCommit(commit) => (
             FolderControlOperation::CommitLinkSettings(commit),
             None,
             None,
         ),
-        FolderShareRecord::SettingsRequest(_) => return None,
+        FolderShareRecord::SettingsRequest(_) | FolderShareRecord::RunRequest(_) => return None,
+        FolderShareRecord::RunCommit(commit) => {
+            (FolderControlOperation::CommitLinkRun(commit), None, None)
+        }
+        FolderShareRecord::RunReport(report) => {
+            (FolderControlOperation::ReportLinkRun(report), None, None)
+        }
         FolderShareRecord::Offer(offer) => (FolderControlOperation::SendOffer(offer), None, None),
         FolderShareRecord::Acceptance {
             offer_id,

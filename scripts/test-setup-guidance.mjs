@@ -7,6 +7,7 @@ import process from "node:process";
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const setupFiles = [
   "README.md",
+  "docs/getting-started-links.md",
   "docs/getting-started.md",
   "docs/troubleshooting.md",
   "docs/platform/macos.md",
@@ -81,7 +82,7 @@ function requireText(file, needle, purpose) {
   if (!text.includes(needle)) errors.push(`${file}: missing ${purpose}: ${needle}`);
 }
 
-requireText("README.md", "[Back up your first folder](docs/getting-started.md)", "primary setup link");
+requireText("README.md", "[Create your first one-way link](docs/getting-started-links.md)", "primary setup link");
 requireText("docs/getting-started.md", "Apple Developer ID/notarization is not part", "macOS personal-use scope");
 requireText("docs/getting-started.md", "Android production signing is deferred", "Android personal-use scope");
 requireText("docs/getting-started.md", "Unraid template and Atlas deployment remain blocked", "honest unavailable-server scope");
@@ -131,6 +132,7 @@ for (const heading of orderedHeadings) {
 
 const activeSetup = [
   "README.md",
+  "docs/getting-started-links.md",
   "docs/getting-started.md",
   "docs/troubleshooting.md",
   "docs/platform/macos.md",

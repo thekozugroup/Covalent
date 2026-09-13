@@ -149,6 +149,8 @@ fn link_settings_are_bound_to_the_source_member_revision_and_explicit_protocol()
     let settings = crate::sync_engine::FolderLinkSettings {
         deletion_policy: covalent_protocol::FolderLinkPolicy::default(),
         paused: false,
+        cadence: crate::sync_engine::LinkCadence::Continuous,
+        android_conditions: crate::sync_engine::AndroidLinkConditions::default(),
     };
     let operations = [
         FolderControlOperation::RequestLinkSettings(crate::sync_engine::LinkSettingsRequest {
@@ -167,6 +169,7 @@ fn link_settings_are_bound_to_the_source_member_revision_and_explicit_protocol()
             settings,
             change_id: uuid::Uuid::new_v4(),
             changed_by: target.engine.device_id(),
+            accepted_at_unix_ms: 1,
         }),
     ];
     assert_eq!(
@@ -577,9 +580,13 @@ async fn pinned_legacy_and_link_clients_use_their_exact_loopback_protocol() {
                             settings: crate::sync_engine::FolderLinkSettings {
                                 deletion_policy: covalent_protocol::FolderLinkPolicy::default(),
                                 paused: false,
+                                cadence: crate::sync_engine::LinkCadence::Continuous,
+                                android_conditions:
+                                    crate::sync_engine::AndroidLinkConditions::default(),
                             },
                             change_id: uuid::Uuid::nil(),
                             changed_by: source.engine.device_id(),
+                            accepted_at_unix_ms: 1,
                         },
                     )
                 },
@@ -760,9 +767,12 @@ fn signed_operations_cannot_cross_legacy_and_link_protocols() {
         settings: crate::sync_engine::FolderLinkSettings {
             deletion_policy: covalent_protocol::FolderLinkPolicy::default(),
             paused: false,
+            cadence: crate::sync_engine::LinkCadence::Continuous,
+            android_conditions: crate::sync_engine::AndroidLinkConditions::default(),
         },
         change_id: uuid::Uuid::nil(),
         changed_by: source.engine.device_id(),
+        accepted_at_unix_ms: 1,
     });
     for (operation, wrong_alpn) in [
         (operation(source.engine.device_id()), LINK_CONTROL_ALPN),
@@ -799,5 +809,113 @@ fn signed_operations_cannot_cross_legacy_and_link_protocols() {
             request.issued_at_unix_ms,
         )
         .unwrap();
+    }
+}
+
+#[test]
+fn run_control_binds_requester_target_generation_and_one_way_protocol() {
+    use crate::sync_engine::{
+        EngineIndexSnapshot, LinkRunCommit, LinkRunDestinationResult, LinkRunReport, LinkRunRequest,
+    };
+    let sender = test_engine();
+    let receiver = test_engine();
+    let outsider = test_engine();
+    let fingerprint = "c".repeat(64);
+    let folder = uuid::Uuid::new_v4();
+    let operations = [
+        FolderControlOperation::RequestLinkRun(LinkRunRequest {
+            folder_id: folder,
+            source_id: receiver.engine.device_id(),
+            requester_id: sender.engine.device_id(),
+            request_id: uuid::Uuid::new_v4(),
+            expected_generation: 7,
+            settings_revision: 3,
+        }),
+        FolderControlOperation::CommitLinkRun(LinkRunCommit {
+            folder_id: folder,
+            source_id: sender.engine.device_id(),
+            target_id: receiver.engine.device_id(),
+            state: None,
+            acknowledged_request_id: Some(uuid::Uuid::new_v4()),
+            rejected_request: None,
+        }),
+        FolderControlOperation::ReportLinkRun(LinkRunReport {
+            folder_id: folder,
+            source_id: receiver.engine.device_id(),
+            reporter_id: sender.engine.device_id(),
+            generation: 8,
+            settings_revision: 3,
+            source_index: EngineIndexSnapshot {
+                index_id: "0x0123456789ABCDEF".into(),
+                sequence: 9,
+            },
+            result: LinkRunDestinationResult::Succeeded,
+            ended_at_unix_ms: 1000,
+        }),
+    ];
+    for operation in operations {
+        assert_eq!(operation.alpn(), LINK_CONTROL_ALPN);
+        assert_eq!(
+            sign_request(
+                &sender.engine,
+                outsider.engine.device_id(),
+                &fingerprint,
+                operation.clone()
+            ),
+            Err(FolderControlError::Rejected)
+        );
+        let request = sign_request(
+            &sender.engine,
+            receiver.engine.device_id(),
+            &fingerprint,
+            operation,
+        )
+        .unwrap();
+        let verify = |request: &FolderControlRequest, alpn| {
+            verify_request(
+                request,
+                alpn,
+                receiver.engine.device_id(),
+                &fingerprint,
+                &sender.engine.public_identity(),
+                &mut FolderControlReplay::default(),
+                request.issued_at_unix_ms,
+            )
+        };
+        verify(&request, LINK_CONTROL_ALPN).unwrap();
+        assert_eq!(
+            verify(&request, FOLDER_CONTROL_ALPN),
+            Err(FolderControlError::Rejected)
+        );
+        let mut altered = request.clone();
+        match &mut altered.operation {
+            FolderControlOperation::RequestLinkRun(run) => run.expected_generation += 1,
+            FolderControlOperation::CommitLinkRun(run) => run.acknowledged_request_id = None,
+            FolderControlOperation::ReportLinkRun(run) => run.source_index.sequence += 1,
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            verify(&altered, LINK_CONTROL_ALPN),
+            Err(FolderControlError::Rejected)
+        );
+        let mut impersonated = request;
+        match &mut impersonated.operation {
+            FolderControlOperation::RequestLinkRun(run) => {
+                run.requester_id = outsider.engine.device_id()
+            }
+            FolderControlOperation::CommitLinkRun(run) => {
+                run.source_id = outsider.engine.device_id()
+            }
+            FolderControlOperation::ReportLinkRun(run) => {
+                run.reporter_id = outsider.engine.device_id()
+            }
+            _ => unreachable!(),
+        }
+        impersonated.operation_digest = digest(&impersonated.operation).unwrap();
+        resign(&sender.engine, &mut impersonated);
+        assert_eq!(
+            verify(&impersonated, LINK_CONTROL_ALPN),
+            Err(FolderControlError::Rejected)
+        );
     }
 }

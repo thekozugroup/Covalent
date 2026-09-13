@@ -156,15 +156,56 @@ build_log="$artifact_root/build-for-testing.log"
 ui_log="$artifact_root/ui-test.log"
 result_bundle="$artifact_root/MacUITests.xcresult"
 
-# A failed xcodebuild still usually writes a readable result bundle. Its
-# compact summary identifies failed or skipped tests, whereas the end of
-# ui-test.log is often only codesign and testmanagerd chatter. This helper is
-# diagnostic-only and always succeeds, so it cannot mask xcodebuild's failure.
-emit_failed_result_summary() {
+# A failed run usually retains its summary and audit attachments. Print the
+# small text attachments so the plain job log identifies each failed element.
+# This helper is diagnostic-only and cannot mask xcodebuild's failure.
+emit_failed_result_details() {
   if [[ -r "$result_bundle/Info.plist" ]]; then
     print -u2 -- "--- xcresult test-results summary ---"
     if ! xcrun xcresulttool get test-results summary --compact --path "$result_bundle" >&2; then
       print -u2 -- "xcresult test-results summary could not be read."
+    fi
+
+    local attachment_root="$test_root/failed-xcresult-attachments"
+    if ! xcrun xcresulttool export attachments \
+      --path "$result_bundle" \
+      --output-path "$attachment_root" >/dev/null 2>&1; then
+      print -u2 -- "xcresult attachments could not be exported."
+      return 0
+    fi
+    local manifest="$attachment_root/manifest.json"
+    if [[ ! -f "$manifest" || -L "$manifest" ]]; then
+      print -u2 -- "xcresult attachment manifest is unavailable."
+      return 0
+    fi
+
+    local count=0
+    local name file bytes
+    while IFS= read -r name; do
+      [[ -n "$name" && "$name" != */* && "$name" != *..* ]] || continue
+      file="$attachment_root/$name"
+      [[ -f "$file" && ! -L "$file" ]] || continue
+      bytes=$(stat -f '%z' "$file" 2>/dev/null || print 0)
+      (( bytes > 0 && bytes <= 65536 )) || continue
+      LC_ALL=C grep -q '^Accessibility audit:' "$file" || continue
+      if (( count == 0 )); then
+        print -u2 -- "--- accessibility audit elements from xcresult ---"
+      fi
+      sed -n '1,80p' "$file" >&2
+      (( count += 1 ))
+      (( count < 64 )) || break
+    done < <(
+      jq -r '
+        .[]?.attachments[]?
+        | select(
+            .suggestedHumanReadableName == "Accessibility audit element"
+            or .suggestedHumanReadableName == "Accessibility audit element.txt"
+          )
+        | .exportedFileName
+      ' "$manifest" 2>/dev/null
+    )
+    if (( count == 0 )); then
+      print -u2 -- "No text accessibility audit attachments were exported."
     fi
   fi
   return 0
@@ -230,7 +271,7 @@ if ! run_bounded 480 xcodebuild \
   # of codesign and launch chatter, so the failures themselves — and the audit
   # findings the accessibility test prints — scroll off the end of any tail
   # worth reading. Pull them out by name first.
-  emit_failed_result_summary
+  emit_failed_result_details
   print -u2 -- "--- audit findings and test failures ---"
   grep -n -A3 -E 'COVALENT-AUDIT-FINDING|error: -\[|XCTAssert' "$ui_log" | tail -200 >&2 || true
   print -u2 -- "--- last 240 lines ---"

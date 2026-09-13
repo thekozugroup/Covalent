@@ -87,6 +87,8 @@ internal fun nodeErrorCodeMessageRes(code: String): Int? = when (code) {
     "folder_sync_unavailable" -> R.string.node_error_folder_sync_unavailable
     "folder_sync_busy" -> R.string.node_error_folder_sync_busy
     "folder_sync_needs_attention" -> R.string.node_error_folder_sync_needs_attention
+    "link_settings_pending" -> R.string.folder_link_settings_pending_error
+    "link_settings_conflict" -> R.string.folder_link_settings_conflict_error
     "invalid_peer_address" -> R.string.node_error_invalid_peer_address
     "peer_address_changed" -> R.string.node_error_peer_address_changed
     "peer_address_unreachable" -> R.string.node_error_peer_address_unreachable

@@ -39,7 +39,7 @@ RUN apk add --no-cache \
       --ofl-license /tmp/OFL-1.1.txt \
       --source-patch "Covalent keep-local-deletions patch" \
         keep-local-deletions.patch /tmp/keep-local-deletions.patch \
-        e58e7d133a388576a54cacc6a5a5094e6607c483c0daabac552de1a1854d92ac \
+        bdbab1565d0adce1fc2dc77cfe3a0581a83333b93910a0ac43e3081ba0b678ca \
       --output /engine-notices \
     && install -m 0444 /engine-evidence/target-license-inventory.json \
       /engine-worker/target-license-inventory.json
@@ -309,7 +309,7 @@ LABEL org.opencontainers.image.title="Covalent" \
       io.covalent.sync-engine.version="v2.1.3" \
       io.covalent.sync-engine.commit="946e2b83a1f6c6ae119427c09e0a5802940b82ff" \
       io.covalent.sync-engine.source-sha256="dbcc9498602286a843f29a7104833bd1422082999aa51ff92eef493172d47959" \
-      io.covalent.sync-engine.patch-sha256="e58e7d133a388576a54cacc6a5a5094e6607c483c0daabac552de1a1854d92ac" \
+      io.covalent.sync-engine.patch-sha256="bdbab1565d0adce1fc2dc77cfe3a0581a83333b93910a0ac43e3081ba0b678ca" \
       io.covalent.runtime.openssl.version="3.5.8-r0"
 
 LABEL io.covalent.runtime.busybox.version="1.37.0-r1000" \

@@ -120,7 +120,7 @@ if data["engine"] != {
     "upstreamArchiveSha256": "dbcc9498602286a843f29a7104833bd1422082999aa51ff92eef493172d47959",
     "sourceExportSha256": "eb60efd57d1662af75ffb2f7b89abab7200362c654838486138a34bee00fed29",
     "goVersion": "go1.26.7",
-    "unsignedExecutableSha256": "4df1dea892fac3c9d1c0e822827c9a4c57711dcddaaf56a61edaab41d5337bbb",
+    "unsignedExecutableSha256": "9545a14bcc3116123233a7b5b1c62700f74fea1160ae95e3f9138dec54e62014",
 }:
     raise SystemExit("sync-engine manifest identity is invalid")
 if data["guardian"] != {
@@ -128,13 +128,13 @@ if data["guardian"] != {
 }:
     raise SystemExit("sync-engine guardian provenance is invalid")
 expected_notices = {
-    "PROVENANCE.txt": "94f3b2bd71120d3dc6f3bdc400a0b538ca8e6be04e740144e140bda4439decc9",
+    "PROVENANCE.txt": "d41289725ed1e7c76eda0cc6a3f44c5f7bebd07d578fe6c546bc04911e46ac5e",
     "Syncthing-AUTHORS.txt": "5a0044d13ddf6f013bdd5c2bc419bf45d6123c356567510237e82f304d113d48",
     "Syncthing-LICENSE.txt": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
-    "source-build.json": "4e603f44b00ed564be92568c6615b7399f29c0a7ad8d1acb49ae094a9ede0cac",
-    "notices-index.txt": "34355beb1e337124c8b22f9f2744da16f1911e4e99fffa31060dea0ea2ebd310",
-    "notices/manifest.json": "422afb7c2a27e2882e3791dbf8c059e2c96ee529d9ec5773e8cc369f375caa11",
-    "notices/THIRD-PARTY-NOTICES.txt": "87e9c362fac963404229addf563d77dfccb23747a8e06a96c5b77d13b675c2fb",
+    "source-build.json": "1b4a74cb976130a4bea7d4f059b3bdd282c09ed44507b1671e0256385ed35164",
+    "notices-index.txt": "545bed4faff39aebfe587e80cc439c15d407e3a8de721e319d9832129ac7304f",
+    "notices/manifest.json": "85dca7cc49ffe72b75e5dc0ba49191384cf724816972e4514e2f075fed5f8b31",
+    "notices/THIRD-PARTY-NOTICES.txt": "1428276dd703546c78b86c210b61b74c7ebe64fe5ee2def57fe4c8f2d4673d52",
 }
 if data["notices"] != expected_notices:
     raise SystemExit("sync-engine notice inventory is invalid")

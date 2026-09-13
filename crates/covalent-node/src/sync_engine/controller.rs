@@ -732,6 +732,43 @@ impl ManagedEngineSession {
         )
     }
 
+    /// Read positive completion only for a folder and members owned by this
+    /// session. The service separately requires its current initial scan and
+    /// health to have succeeded; a status response cannot replace that gate.
+    pub(super) async fn run_observation(
+        &mut self,
+        folder_id: uuid::Uuid,
+    ) -> Result<super::run_observation::EngineRunObservation, EngineSessionError> {
+        let folder = self
+            .configuration
+            .folders()
+            .iter()
+            .find(|folder| folder.id() == folder_id)
+            .ok_or(EngineSessionError::InvalidConfiguration)?;
+        if let Err(error) = self.revalidate_roots() {
+            self.worker.close_lifeline();
+            return Err(error);
+        }
+        let value = self
+            .client
+            .json(EngineEndpoint::FolderStatus(folder_id))
+            .await
+            .map_err(|_| EngineSessionError::EngineUnavailable)?;
+        let result = super::run_observation::EngineRunObservation::parse(value)?;
+        if result
+            .completions
+            .keys()
+            .any(|id| !folder.members().contains(id))
+        {
+            return Err(EngineSessionError::StartupMismatch);
+        }
+        if let Err(error) = self.revalidate_roots() {
+            self.worker.close_lifeline();
+            return Err(error);
+        }
+        Ok(result)
+    }
+
     /// Request stop through the owner lifeline and await bounded reaping.
     pub async fn stop(&mut self) -> Result<StopOutcome, super::EngineSupervisorError> {
         self.worker.stop().await

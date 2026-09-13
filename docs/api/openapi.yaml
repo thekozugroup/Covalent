@@ -84,7 +84,8 @@ paths:
         copies after a source deletion and leaves destination deletions in place.
         Reuse the same folderId, source root, label and current policy to add another
         destination. Legacy signed two-way invitations remain readable but cannot
-        be created by omitting linkPolicy.
+        be created by omitting linkPolicy. Omitted cadence and Android constraints
+        retain compatibility defaults of continuous, unrestricted operation.
       operationId: offerFolder
       requestBody:
         required: true
@@ -205,6 +206,63 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+        "503":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/sync/run:
+    post:
+      summary: Start one bounded run for a shared link
+      operationId: runFolderLinkNow
+      description: >-
+        Any current link member can request a run against the generation and
+        settings revision displayed by status. The source admits one run for all
+        destinations. Retain the exact requestId, expectedGeneration and
+        settingsRevision for an uncertain retry. A successful response means the
+        request was admitted or queued, or that a run is already active. Follow
+        linkRun in status for progress and the final per-destination result.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FolderLinkRunRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/FolderSyncMutation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: >-
+            link_run_pending means another request awaits the source.
+            link_run_conflict means the displayed generation or settings
+            revision changed. Read status before creating a new request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "503":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/sync/conditions:
+    post:
+      summary: Report current Android run conditions
+      operationId: observeFolderLinkAndroidConditions
+      description: >-
+        Records a local ephemeral Wi-Fi and charging observation for Android
+        scheduling. The node uses its own monotonic observation time; callers do
+        not supply a clock. Wi-Fi can satisfy a link constraint without validated
+        internet access. This endpoint does not change shared settings.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AndroidConditionObservation"
+      responses:
+        "200":
+          $ref: "#/components/responses/FolderSyncMutation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "503":
           $ref: "#/components/responses/Conflict"
   /api/v1/sync/remove:
@@ -1684,6 +1742,10 @@ components:
           description: Absolute folder selected by the local user; native hosts retain its OS access grant.
         linkPolicy:
           $ref: "#/components/schemas/FolderLinkPolicy"
+        cadence:
+          $ref: "#/components/schemas/FolderLinkCadence"
+        androidConditions:
+          $ref: "#/components/schemas/AndroidLinkConditions"
     FolderLinkPolicy:
       type: object
       additionalProperties: false
@@ -1705,6 +1767,49 @@ components:
         paused:
           type: boolean
           description: Shared pause for the entire link, including all destinations.
+        cadence:
+          $ref: "#/components/schemas/FolderLinkCadence"
+        androidConditions:
+          $ref: "#/components/schemas/AndroidLinkConditions"
+    FolderLinkCadence:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [mode]
+          properties:
+            mode:
+              const: manual
+        - type: object
+          additionalProperties: false
+          required: [mode]
+          properties:
+            mode:
+              const: continuous
+        - type: object
+          additionalProperties: false
+          required: [mode, intervalMinutes]
+          properties:
+            mode:
+              const: scheduled
+            intervalMinutes:
+              type: integer
+              minimum: 15
+              maximum: 525600
+      description: >-
+        Shared cadence for the link. An omitted cadence value decodes as
+        continuous for stored and request compatibility.
+    AndroidLinkConditions:
+      type: object
+      additionalProperties: false
+      required: [wifiOnly, chargingOnly]
+      properties:
+        wifiOnly:
+          type: boolean
+        chargingOnly:
+          type: boolean
+      description: >-
+        Shared Android constraints. An omitted androidConditions value decodes
+        as false for both fields. Wi-Fi does not require validated internet access.
     FolderLinkSettingsRequest:
       type: object
       additionalProperties: false
@@ -1722,6 +1827,35 @@ components:
           minimum: 0
         settings:
           $ref: "#/components/schemas/FolderLinkSettings"
+    FolderLinkRunRequest:
+      type: object
+      additionalProperties: false
+      required: [folderId, requestId, expectedGeneration, settingsRevision]
+      properties:
+        folderId:
+          type: string
+          format: uuid
+        requestId:
+          type: string
+          format: uuid
+          description: Nonzero UUID retained unchanged when retrying this exact run request.
+        expectedGeneration:
+          type: integer
+          minimum: 0
+        settingsRevision:
+          type: integer
+          minimum: 0
+    AndroidConditionObservation:
+      type: object
+      additionalProperties: false
+      required: [wifiConnected, charging]
+      properties:
+        wifiConnected:
+          type: boolean
+          description: Current local Wi-Fi transport availability; internet validation is not required.
+        charging:
+          type: boolean
+          description: Current local charging state.
     FolderLinkPendingChange:
       type: object
       additionalProperties: false
@@ -1769,6 +1903,88 @@ components:
           oneOf:
             - $ref: "#/components/schemas/FolderLinkPendingChange"
             - type: "null"
+    FolderLinkRunSummary:
+      type: object
+      additionalProperties: false
+      required: [generation, stateRevision, settingsRevision, phase, startedAtUnixMs, deadlineUnixMs, endedAtUnixMs, nextDueAtUnixMs, pendingRequest, rejectedRequest, destinations]
+      properties:
+        generation:
+          type: integer
+          minimum: 0
+        stateRevision:
+          type: integer
+          minimum: 0
+        settingsRevision:
+          type: integer
+          minimum: 0
+        phase:
+          type: [string, "null"]
+          enum: [null, preparing, running, succeeded, incomplete, interrupted, cancelled]
+        startedAtUnixMs:
+          type: [integer, "null"]
+          minimum: 1
+        deadlineUnixMs:
+          type: [integer, "null"]
+          minimum: 1
+          description: A run becomes visibly incomplete when this bounded 24-hour deadline expires.
+        endedAtUnixMs:
+          type: [integer, "null"]
+          minimum: 1
+        nextDueAtUnixMs:
+          type: [integer, "null"]
+          minimum: 1
+        pendingRequest:
+          oneOf:
+            - $ref: "#/components/schemas/FolderLinkRunRequestSummary"
+            - type: "null"
+        rejectedRequest:
+          oneOf:
+            - $ref: "#/components/schemas/FolderLinkRunRejection"
+            - type: "null"
+        destinations:
+          type: array
+          maxItems: 4096
+          items:
+            $ref: "#/components/schemas/FolderLinkRunDestinationSummary"
+      description: >-
+        Redacted shared run state. Local paths, engine IDs and source index
+        watermarks are excluded.
+    FolderLinkRunRequestSummary:
+      type: object
+      additionalProperties: false
+      required: [requestId, requesterId]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        requesterId:
+          $ref: "#/components/schemas/DeviceId"
+    FolderLinkRunRejection:
+      type: object
+      additionalProperties: false
+      required: [requesterId, requestId, reason]
+      properties:
+        requesterId:
+          $ref: "#/components/schemas/DeviceId"
+        requestId:
+          type: string
+          format: uuid
+        reason:
+          type: string
+          enum: [generationChanged, settingsChanged]
+    FolderLinkRunDestinationSummary:
+      type: object
+      additionalProperties: false
+      required: [peerId, result, endedAtUnixMs]
+      properties:
+        peerId:
+          $ref: "#/components/schemas/DeviceId"
+        result:
+          type: string
+          enum: [pending, succeeded, failed, timedOut, interrupted, cancelled]
+        endedAtUnixMs:
+          type: [integer, "null"]
+          minimum: 1
     FolderAcceptRequest:
       type: object
       additionalProperties: false
@@ -1914,6 +2130,10 @@ components:
         linkSettings:
           oneOf:
             - $ref: "#/components/schemas/FolderLinkSettingsState"
+            - type: "null"
+        linkRun:
+          oneOf:
+            - $ref: "#/components/schemas/FolderLinkRunSummary"
             - type: "null"
         phase:
           type: string

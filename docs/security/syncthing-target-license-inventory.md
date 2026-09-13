@@ -8,8 +8,9 @@ distribution decisions.
 
 - Syncthing `v2.1.3`, commit
   [`946e2b83a1f6c6ae119427c09e0a5802940b82ff`](https://github.com/syncthing/syncthing/tree/946e2b83a1f6c6ae119427c09e0a5802940b82ff).
-- Covalent `keep-local-deletions.patch`, SHA-256
-  `e58e7d133a388576a54cacc6a5a5094e6607c483c0daabac552de1a1854d92ac`,
+- Covalent `keep-local-deletions.patch`, which adds receive-only deletion
+  policy fields and an ephemeral policy-aware completion watermark, SHA-256
+  `bdbab1565d0adce1fc2dc77cfe3a0581a83333b93910a0ac43e3081ba0b678ca`,
   applied only to private build exports.
 - Successful proof run `34241597202`, commit `5c157f37`, supply-chain artifact
   `10062298950`, artifact SHA-256

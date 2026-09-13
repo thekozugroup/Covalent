@@ -1,11 +1,12 @@
 use super::*;
-use crate::sync_engine::FolderSyncAccessRecovery;
+use crate::sync_engine::{EngineIndexSnapshot, FolderSyncAccessRecovery};
 use crate::transport::TlsIdentity;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use covalent_core::{EngineOptions, StaticKeyProtector};
 use covalent_protocol::{PeerRole, TransportBinding};
 use std::os::unix::fs::PermissionsExt as _;
+use std::time::{Duration, Instant};
 
 struct Device {
     _temporary: tempfile::TempDir,
@@ -287,6 +288,8 @@ fn link_settings_commit_once_fan_out_survive_offline_conflicts_and_require_membe
             restore_local_deletions: true,
         },
         paused: true,
+        cadence: LinkCadence::Continuous,
+        android_conditions: AndroidLinkConditions::default(),
     };
     let change = Uuid::new_v4();
     phone
@@ -956,6 +959,570 @@ fn stale_journal_cannot_return_a_signature_for_unpersisted_selection() {
     assert_eq!(
         b.reopen().summaries().unwrap()[0].phase,
         SharingPhase::Removed
+    );
+}
+
+fn establish_batch_link(
+    source_device: &Device,
+    target_device: &Device,
+    source: &mut FolderSharingJournal,
+    target: &mut FolderSharingJournal,
+    folder_id: Uuid,
+    settings: FolderLinkSettings,
+) -> Uuid {
+    let offer = source
+        .offer_with_settings(
+            target_device.engine.device_id(),
+            folder_id,
+            "Batch",
+            &source_device.files(),
+            20_000,
+            settings,
+        )
+        .unwrap();
+    target.receive_offer(offer.clone(), 20_001).unwrap();
+    let acceptance = target
+        .accept(offer.offer_id, &target_device.files(), 20_002)
+        .unwrap();
+    let commit = source
+        .receive_acceptance(offer.offer_id, acceptance, 20_003)
+        .unwrap();
+    target.receive_commit(offer.offer_id, commit).unwrap();
+    deliver_link_settings(source, target);
+    offer.offer_id
+}
+
+fn batch_settings(cadence: LinkCadence) -> FolderLinkSettings {
+    FolderLinkSettings {
+        deletion_policy: covalent_protocol::FolderLinkPolicy::default(),
+        paused: false,
+        cadence,
+        android_conditions: AndroidLinkConditions::default(),
+    }
+}
+
+#[test]
+fn scheduled_cadence_uses_the_public_camel_case_shape() {
+    let cadence = LinkCadence::Scheduled {
+        interval_minutes: 30,
+    };
+    let encoded = serde_json::to_value(cadence).unwrap();
+    assert_eq!(
+        encoded,
+        serde_json::json!({"mode": "scheduled", "intervalMinutes": 30})
+    );
+    assert_eq!(
+        serde_json::from_value::<LinkCadence>(encoded).unwrap(),
+        cadence
+    );
+}
+
+fn index_snapshot(sequence: u64) -> EngineIndexSnapshot {
+    EngineIndexSnapshot {
+        index_id: "0x0123456789ABCDEF".into(),
+        sequence,
+    }
+}
+
+#[test]
+fn manual_run_is_durable_idempotent_and_stops_target_after_local_report() {
+    let a = Device::new("Source", 43301);
+    let b = Device::new("Target", 43302);
+    pair(&a, &b);
+    let mut source = a.journal();
+    let mut target = b.journal();
+    let folder = Uuid::new_v4();
+    establish_batch_link(
+        &a,
+        &b,
+        &mut source,
+        &mut target,
+        folder,
+        batch_settings(LinkCadence::Manual),
+    );
+    assert_eq!(target.summaries().unwrap()[0].phase, SharingPhase::Ready);
+    assert!(source.desired_settings().unwrap().folders.is_empty());
+    assert!(target.desired_settings().unwrap().folders.is_empty());
+
+    let request_id = Uuid::new_v4();
+    assert!(matches!(
+        target
+            .request_link_run(folder, request_id, 0, 0, 21_000)
+            .unwrap(),
+        LinkRunAdmission::Pending(_)
+    ));
+    let pending = target.summaries().unwrap()[0].link_run.clone().unwrap();
+    assert_eq!(pending.phase, None);
+    assert!(pending.pending_request.is_some());
+    let request = target
+        .outbound_records()
+        .unwrap()
+        .into_iter()
+        .find_map(|delivery| match delivery.record {
+            FolderShareRecord::RunRequest(request) => Some(request),
+            _ => None,
+        })
+        .unwrap();
+    let initial = source.receive_link_run_request(&request, 21_001).unwrap();
+    assert_eq!(initial.state.as_ref().unwrap().generation, 1);
+    assert_eq!(
+        source.receive_link_run_request(&request, 21_002).unwrap(),
+        initial
+    );
+
+    source
+        .start_link_run(folder, 1, index_snapshot(8), 21_003)
+        .unwrap();
+    let running = source
+        .outbound_records()
+        .unwrap()
+        .into_iter()
+        .find_map(|delivery| match delivery.record {
+            FolderShareRecord::RunCommit(commit) => Some(commit),
+            _ => None,
+        })
+        .unwrap();
+    target.receive_link_run_commit(&running).unwrap();
+    drop(target);
+    let mut target = b.reopen();
+    assert!(matches!(
+        target
+            .request_link_run(folder, request_id, 0, 0, 21_004)
+            .unwrap(),
+        LinkRunAdmission::AlreadyRunning(state) if state.generation == 1
+    ));
+    assert_eq!(
+        source
+            .active_batch_generations(21_004, Instant::now())
+            .unwrap()[&folder],
+        1
+    );
+    assert_eq!(
+        target
+            .active_batch_generations(21_004, Instant::now())
+            .unwrap()[&folder],
+        1
+    );
+    let second_request_id = Uuid::new_v4();
+    target
+        .request_link_run(folder, second_request_id, 1, 0, 21_004)
+        .unwrap();
+    let second_request = target
+        .outbound_records()
+        .unwrap()
+        .into_iter()
+        .find_map(|delivery| match delivery.record {
+            FolderShareRecord::RunRequest(request) if request.request_id == second_request_id => {
+                Some(request)
+            }
+            _ => None,
+        })
+        .unwrap();
+    let already_running = source
+        .receive_link_run_request(&second_request, 21_004)
+        .unwrap();
+    assert_eq!(
+        already_running.acknowledged_request_id,
+        Some(second_request_id)
+    );
+    target.receive_link_run_commit(&already_running).unwrap();
+    assert!(
+        target.summaries().unwrap()[0]
+            .link_run
+            .as_ref()
+            .unwrap()
+            .pending_request
+            .is_none()
+    );
+
+    let report = target
+        .complete_link_run(
+            folder,
+            1,
+            index_snapshot(8),
+            LinkRunDestinationResult::Succeeded,
+            21_005,
+        )
+        .unwrap();
+    assert!(
+        target
+            .active_batch_generations(21_006, Instant::now())
+            .unwrap()
+            .is_empty()
+    );
+    let finished = source.receive_link_run_report(&report, 21_006).unwrap();
+    assert_eq!(finished.phase, LinkRunPhase::Succeeded);
+    assert_eq!(
+        source.receive_link_run_report(&report, 21_007).unwrap(),
+        finished
+    );
+    let final_commit = source.receive_link_run_request(&request, 21_008).unwrap();
+    assert_eq!(
+        final_commit.state.as_ref().unwrap().phase,
+        LinkRunPhase::Succeeded
+    );
+    target.receive_link_run_commit(&final_commit).unwrap();
+    assert!(matches!(
+        target
+            .request_link_run(folder, request_id, 0, 0, 21_009)
+            .unwrap(),
+        LinkRunAdmission::AlreadyRunning(state) if state.phase == LinkRunPhase::Succeeded
+    ));
+    drop(source);
+    drop(target);
+    assert_eq!(
+        a.reopen().summaries().unwrap()[0]
+            .link_run
+            .as_ref()
+            .unwrap()
+            .phase,
+        Some(LinkRunPhase::Succeeded)
+    );
+    assert_eq!(
+        b.reopen().summaries().unwrap()[0]
+            .link_run
+            .as_ref()
+            .unwrap()
+            .phase,
+        Some(LinkRunPhase::Succeeded)
+    );
+}
+
+#[test]
+fn source_rejects_stale_first_request_without_inventing_a_run() {
+    let a = Device::new("Source", 43311);
+    let b = Device::new("Target", 43312);
+    pair(&a, &b);
+    let mut source = a.journal();
+    let mut target = b.journal();
+    let folder = Uuid::new_v4();
+    establish_batch_link(
+        &a,
+        &b,
+        &mut source,
+        &mut target,
+        folder,
+        batch_settings(LinkCadence::Manual),
+    );
+    source
+        .request_link_settings_at(
+            folder,
+            Uuid::new_v4(),
+            0,
+            FolderLinkSettings {
+                android_conditions: AndroidLinkConditions {
+                    wifi_only: true,
+                    charging_only: false,
+                },
+                ..batch_settings(LinkCadence::Manual)
+            },
+            21_900,
+        )
+        .unwrap();
+    target
+        .request_link_run(folder, Uuid::new_v4(), 0, 0, 22_000)
+        .unwrap();
+    let request = target
+        .outbound_records()
+        .unwrap()
+        .into_iter()
+        .find_map(|delivery| match delivery.record {
+            FolderShareRecord::RunRequest(request) => Some(request),
+            _ => None,
+        })
+        .unwrap();
+    let reply = source.receive_link_run_request(&request, 22_000).unwrap();
+    assert!(reply.state.is_none());
+    assert_eq!(
+        reply.rejected_request.as_ref().unwrap().reason,
+        LinkRunRejectionReason::SettingsChanged
+    );
+    target.receive_link_run_commit(&reply).unwrap();
+    let summary = target.summaries().unwrap()[0].link_run.clone().unwrap();
+    assert_eq!(summary.generation, 0);
+    assert_eq!(summary.phase, None);
+    assert_eq!(summary.rejected_request, reply.rejected_request);
+}
+
+#[test]
+fn scheduled_admission_uses_acceptance_then_last_end_and_source_restart_interrupts() {
+    let a = Device::new("Source", 43321);
+    let b = Device::new("Target", 43322);
+    pair(&a, &b);
+    let mut source = a.journal();
+    let mut target = b.journal();
+    let folder = Uuid::new_v4();
+    establish_batch_link(
+        &a,
+        &b,
+        &mut source,
+        &mut target,
+        folder,
+        batch_settings(LinkCadence::Scheduled {
+            interval_minutes: 15,
+        }),
+    );
+    let initial = source.summaries().unwrap()[0].link_run.clone().unwrap();
+    assert_eq!(initial.generation, 0);
+    assert_eq!(initial.phase, None);
+    assert_eq!(initial.next_due_at_unix_ms, Some(920_000));
+    assert!(source.admit_due_link_runs(919_999).unwrap().is_empty());
+    assert_eq!(source.admit_due_link_runs(920_000).unwrap().len(), 1);
+    assert!(source.admit_due_link_runs(920_001).unwrap().is_empty());
+    source
+        .start_link_run(folder, 1, index_snapshot(2), 920_002)
+        .unwrap();
+    drop(source);
+    let mut reopened = a.reopen();
+    assert!(reopened.interrupt_unfinished_link_runs(920_003).unwrap());
+    let summary = reopened.summaries().unwrap()[0].link_run.clone().unwrap();
+    assert_eq!(summary.generation, 1);
+    assert_eq!(summary.phase, Some(LinkRunPhase::Interrupted));
+    assert_eq!(summary.next_due_at_unix_ms, Some(1_820_003));
+}
+
+#[test]
+fn settings_change_cancels_only_current_batch_work() {
+    let a = Device::new("Source", 43331);
+    let b = Device::new("Target", 43332);
+    pair(&a, &b);
+    let mut source = a.journal();
+    let mut target = b.journal();
+    let folder = Uuid::new_v4();
+    establish_batch_link(
+        &a,
+        &b,
+        &mut source,
+        &mut target,
+        folder,
+        batch_settings(LinkCadence::Manual),
+    );
+    assert!(matches!(
+        source
+            .request_link_run(folder, Uuid::new_v4(), 0, 0, 23_000)
+            .unwrap(),
+        LinkRunAdmission::Accepted(_)
+    ));
+    source
+        .request_link_settings_at(
+            folder,
+            Uuid::new_v4(),
+            0,
+            FolderLinkSettings {
+                paused: true,
+                ..batch_settings(LinkCadence::Manual)
+            },
+            23_001,
+        )
+        .unwrap();
+    let summary = source.summaries().unwrap()[0].link_run.clone().unwrap();
+    assert_eq!(summary.generation, 1);
+    assert_eq!(summary.phase, Some(LinkRunPhase::Cancelled));
+    assert!(
+        source
+            .active_batch_generations(23_002, Instant::now())
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn removed_destination_does_not_hold_a_fanout_run_open() {
+    let a = Device::new("Source", 43341);
+    let b = Device::new("First target", 43342);
+    let c = Device::new("Second target", 43343);
+    pair(&a, &b);
+    pair(&a, &c);
+    let mut source = a.journal();
+    let mut first = b.journal();
+    let mut second = c.journal();
+    let folder = Uuid::new_v4();
+    let first_offer = establish_batch_link(
+        &a,
+        &b,
+        &mut source,
+        &mut first,
+        folder,
+        batch_settings(LinkCadence::Manual),
+    );
+    establish_batch_link(
+        &a,
+        &c,
+        &mut source,
+        &mut second,
+        folder,
+        batch_settings(LinkCadence::Manual),
+    );
+    let state = match source
+        .request_link_run(folder, Uuid::new_v4(), 0, 0, 24_000)
+        .unwrap()
+    {
+        LinkRunAdmission::Accepted(state) => state,
+        other => panic!("unexpected admission: {other:?}"),
+    };
+    assert_eq!(state.destinations.len(), 2);
+    source.remove(first_offer).unwrap();
+    let summary = source
+        .summaries()
+        .unwrap()
+        .into_iter()
+        .find(|item| item.peer_id == c.engine.device_id())
+        .unwrap()
+        .link_run
+        .unwrap();
+    assert_eq!(summary.phase, Some(LinkRunPhase::Preparing));
+    assert_eq!(
+        summary
+            .destinations
+            .iter()
+            .find(|item| item.peer_id == b.engine.device_id())
+            .unwrap()
+            .result,
+        LinkRunDestinationResult::Cancelled
+    );
+}
+
+#[test]
+fn android_batch_membership_requires_a_fresh_local_condition_observation() {
+    let a = Device::new("Source", 43351);
+    let b = Device::new("Android target", 43352);
+    pair(&a, &b);
+    let mut source = a.journal();
+    let mut target = b.journal();
+    let folder = Uuid::new_v4();
+    establish_batch_link(
+        &a,
+        &b,
+        &mut source,
+        &mut target,
+        folder,
+        FolderLinkSettings {
+            android_conditions: AndroidLinkConditions {
+                wifi_only: true,
+                charging_only: true,
+            },
+            ..batch_settings(LinkCadence::Manual)
+        },
+    );
+    let request_id = Uuid::new_v4();
+    let state = match source
+        .request_link_run(folder, request_id, 0, 0, 25_000)
+        .unwrap()
+    {
+        LinkRunAdmission::Accepted(state) => state,
+        other => panic!("unexpected admission: {other:?}"),
+    };
+    source
+        .start_link_run(folder, state.generation, index_snapshot(4), 25_001)
+        .unwrap();
+    let commit = source
+        .outbound_records()
+        .unwrap()
+        .into_iter()
+        .find_map(|delivery| match delivery.record {
+            FolderShareRecord::RunCommit(commit) => Some(commit),
+            _ => None,
+        })
+        .unwrap();
+    target.receive_link_run_commit(&commit).unwrap();
+    target.set_android_host(true);
+    let observed_at = Instant::now();
+    let (desired, runs) = target
+        .desired_settings_and_runs(25_002, observed_at)
+        .unwrap();
+    assert!(desired.folders.is_empty());
+    assert!(runs.is_empty());
+    target.observe_android_conditions(true, false, observed_at);
+    assert!(
+        target
+            .active_batch_generations(25_002, observed_at)
+            .unwrap()
+            .is_empty()
+    );
+    target.observe_android_conditions(true, true, observed_at);
+    let (desired, runs) = target
+        .desired_settings_and_runs(25_002, observed_at)
+        .unwrap();
+    assert_eq!(desired.folders.len(), 1);
+    assert_eq!(runs[&folder], 1);
+    let (desired, runs) = target
+        .desired_settings_and_runs(25_002, observed_at + Duration::from_secs(91))
+        .unwrap();
+    assert!(desired.folders.is_empty());
+    assert!(runs.is_empty());
+}
+
+#[test]
+fn continuous_android_link_uses_the_same_local_condition_gate() {
+    let a = Device::new("Source", 43356);
+    let b = Device::new("Android target", 43357);
+    pair(&a, &b);
+    let mut source = a.journal();
+    let mut target = b.journal();
+    let folder = Uuid::new_v4();
+    establish_batch_link(
+        &a,
+        &b,
+        &mut source,
+        &mut target,
+        folder,
+        FolderLinkSettings {
+            cadence: LinkCadence::Continuous,
+            android_conditions: AndroidLinkConditions {
+                wifi_only: true,
+                charging_only: false,
+            },
+            ..batch_settings(LinkCadence::Continuous)
+        },
+    );
+    target.set_android_host(true);
+    assert_eq!(target.summaries().unwrap()[0].phase, SharingPhase::Ready);
+    assert!(target.desired_settings().unwrap().folders.is_empty());
+    target.observe_android_conditions(true, false, Instant::now());
+    assert_eq!(target.desired_settings().unwrap().folders.len(), 1);
+    target.observe_android_conditions(false, true, Instant::now());
+    assert!(target.desired_settings().unwrap().folders.is_empty());
+}
+
+#[test]
+fn deadline_finishes_offline_destinations_without_claiming_success() {
+    let a = Device::new("Source", 43361);
+    let b = Device::new("Offline target", 43362);
+    pair(&a, &b);
+    let mut source = a.journal();
+    let mut target = b.journal();
+    let folder = Uuid::new_v4();
+    establish_batch_link(
+        &a,
+        &b,
+        &mut source,
+        &mut target,
+        folder,
+        batch_settings(LinkCadence::Manual),
+    );
+    let started_at = 26_000;
+    source
+        .request_link_run(folder, Uuid::new_v4(), 0, 0, started_at)
+        .unwrap();
+    assert!(
+        !source
+            .expire_link_runs(started_at + LINK_RUN_DEADLINE_MS - 1)
+            .unwrap()
+    );
+    assert!(
+        source
+            .expire_link_runs(started_at + LINK_RUN_DEADLINE_MS + 50)
+            .unwrap()
+    );
+    let summary = source.summaries().unwrap()[0].link_run.clone().unwrap();
+    assert_eq!(summary.phase, Some(LinkRunPhase::Incomplete));
+    assert_eq!(
+        summary.ended_at_unix_ms,
+        Some(started_at + LINK_RUN_DEADLINE_MS)
+    );
+    assert_eq!(
+        summary.destinations[0].result,
+        LinkRunDestinationResult::TimedOut
     );
 }
 
