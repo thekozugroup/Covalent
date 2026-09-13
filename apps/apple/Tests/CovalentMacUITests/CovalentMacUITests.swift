@@ -109,12 +109,17 @@ final class CovalentMacUITests: XCTestCase {
         scrollTo(notices, in: app.scrollViews["settings.view"])
         XCTAssertTrue(notices.waitForExistence(timeout: uiTransitionTimeout))
         notices.click()
-        XCTAssertTrue(app.staticTexts["Open Source Notices"].waitForExistence(timeout: uiTransitionTimeout))
+        let noticesTitle = app.staticTexts["Open Source Notices"]
+        XCTAssertTrue(noticesTitle.waitForExistence(timeout: uiTransitionTimeout))
         let noticeText = app.descendants(matching: .any)["settings.openSourceNotices.text"]
         XCTAssertTrue(noticeText.waitForExistence(timeout: uiTransitionTimeout))
         app.buttons["Done"].click()
+        XCTAssertTrue(waitForDisappearance(of: noticesTitle, timeout: uiTransitionTimeout))
 
-        app.descendants(matching: .any).matching(identifier: "sidebar.backups").firstMatch.click()
+        let backups = app.descendants(matching: .any).matching(identifier: "sidebar.backups").firstMatch
+        XCTAssertTrue(backups.waitForExistence(timeout: uiTransitionTimeout))
+        XCTAssertTrue(backups.isHittable)
+        backups.click()
         assertEmptyState("No Legacy Backups Found", in: app)
         XCTAssertFalse(app.buttons["New Backup"].exists)
     }
@@ -144,9 +149,23 @@ final class CovalentMacUITests: XCTestCase {
                 title
             )
         ).firstMatch
+        let reachedExpectedState = emptyState.waitForExistence(timeout: uiTransitionTimeout)
+        let candidateDetails: String
+        if reachedExpectedState {
+            candidateDetails = ""
+        } else {
+            let candidates = app.descendants(matching: .any)
+                .matching(identifier: "mac.emptyState")
+                .allElementsBoundByIndex
+                .prefix(4)
+                .map { String($0.debugDescription.prefix(768)) }
+            candidateDetails = candidates.isEmpty
+                ? " No mac.emptyState candidates were present."
+                : " mac.emptyState candidates: \(candidates.joined(separator: " | "))"
+        }
         XCTAssertTrue(
-            emptyState.waitForExistence(timeout: uiTransitionTimeout),
-            "Expected the '\(title)' empty state to be reachable."
+            reachedExpectedState,
+            "Expected the '\(title)' empty state to be reachable.\(candidateDetails)"
         )
         let text = accessibilityText(of: emptyState)
         XCTAssertTrue(

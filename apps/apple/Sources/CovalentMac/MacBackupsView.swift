@@ -34,6 +34,7 @@ struct MacLegacyBackupsView: View {
                 }
             }
         }
+        .accessibilityElement(children: .contain)
         .navigationTitle("Legacy Backups")
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
