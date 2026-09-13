@@ -17,7 +17,7 @@ PACKAGE_APK = re.compile(
     r"life\.michaelwong\.covalent-[A-Za-z0-9_=-]{1,128}/base\.apk)"
 )
 HELPERS = {
-    "librclone.so": "rclone-sha256.txt",
+    "libcovalentrclone.so": "rclone-sha256.txt",
     "libengineguardian.so": "engine-guardian-sha256.txt",
 }
 

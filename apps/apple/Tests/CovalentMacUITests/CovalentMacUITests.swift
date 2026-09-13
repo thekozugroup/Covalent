@@ -131,19 +131,27 @@ final class CovalentMacUITests: XCTestCase {
     private func assertEmptyState(_ title: String, in app: XCUIApplication) {
         let emptyState = app.descendants(matching: .any)["mac.emptyState"].firstMatch
         XCTAssertTrue(emptyState.waitForExistence(timeout: uiTransitionTimeout))
+        let text = accessibilityText(of: emptyState)
         XCTAssertTrue(
-            emptyState.label.contains(title),
-            "Expected empty-state label to contain '\(title)', got '\(emptyState.label)'."
+            text.contains(title),
+            "Expected empty-state accessibility text to contain '\(title)', got '\(text)'."
         )
     }
 
     private func assertStatusDevice(_ name: String, in app: XCUIApplication) {
         let device = app.descendants(matching: .any)["status.device"]
         XCTAssertTrue(device.waitForExistence(timeout: uiTransitionTimeout))
+        let text = accessibilityText(of: device)
         XCTAssertTrue(
-            device.label.contains(name),
-            "Expected status device label to contain '\(name)', got '\(device.label)'."
+            text.contains(name),
+            "Expected status device accessibility text to contain '\(name)', got '\(text)'."
         )
+    }
+
+    private func accessibilityText(of element: XCUIElement) -> String {
+        [element.label, element.value as? String ?? ""]
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
     }
 
     private func auditMainWindow(in app: XCUIApplication) throws {

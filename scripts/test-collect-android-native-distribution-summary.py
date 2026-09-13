@@ -396,7 +396,7 @@ class NativeDistributionSummaryTests(unittest.TestCase):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             with zipfile.ZipFile(self.fixture.release, "a") as archive:
-                archive.writestr("lib/arm64-v8a/librclone.so", b"duplicate")
+                archive.writestr("lib/arm64-v8a/libcovalentrclone.so", b"duplicate")
         with self.assertRaisesRegex(summary.SummaryError, "duplicate entries"):
             self.fixture.collect()
 

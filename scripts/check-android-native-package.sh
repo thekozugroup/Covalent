@@ -231,7 +231,7 @@ with zipfile.ZipFile(package) as archive:
         archive, "rclone-sha256.txt", worker_min, worker_max)
     guardians = parse_manifest(
         archive, "engine-guardian-sha256.txt", guardian_min, guardian_max)
-    verify_helpers(archive, "librclone.so", workers)
+    verify_helpers(archive, "libcovalentrclone.so", workers)
     verify_helpers(archive, "libengineguardian.so", guardians)
     verify_notices(archive)
 PY

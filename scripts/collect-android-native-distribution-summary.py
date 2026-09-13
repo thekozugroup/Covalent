@@ -27,7 +27,7 @@ COMPONENTS = ("guardian", "jni", "rclone")
 LIBRARIES = {
     "guardian": "libengineguardian.so",
     "jni": "libcovalent_android_jni.so",
-    "rclone": "librclone.so",
+    "rclone": "libcovalentrclone.so",
 }
 GRAPHICS_PATH_COORDINATE = ("androidx.graphics", "graphics-path", "1.0.1")
 GRAPHICS_PATH_LIBRARY = "libandroidx.graphics.path.so"

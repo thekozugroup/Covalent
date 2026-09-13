@@ -301,19 +301,20 @@ if ! tests=$(xcrun xcresulttool get test-results tests --compact --path "$result
 fi
 if ! jq -e '
   .result == "Passed" and
-  .totalTestCount == 4 and
-  .passedTests == 4 and
+  .totalTestCount == 5 and
+  .passedTests == 5 and
   .failedTests == 0 and
   .skippedTests == 0
 ' <<<"$summary" >/dev/null; then
-  print -u2 -- "macOS UI test result did not prove exactly four passing, unskipped tests."
+  print -u2 -- "macOS UI test result did not prove exactly five passing, unskipped tests."
   print -u2 -- "$summary"
   exit 1
 fi
 for expected_test in \
   'testFirstLaunchChoiceCanSetUpAndRecoveryCancelLeavesChoiceVisible()' \
   'testTierOneNavigationAndPrimaryWorkflowsAreReachable()' \
-  'testOverviewPassesSystemAccessibilityAudit()' \
+  'testStatusPassesSystemAccessibilityAudit()' \
+  'testLinksPassesSystemAccessibilityAudit()' \
   'testNativeMenuBarQuickActionsAreReachable()'
 do
   if ! jq -e --arg expected_test "$expected_test" '
