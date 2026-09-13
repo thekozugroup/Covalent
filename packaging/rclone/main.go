@@ -10,6 +10,7 @@ import (
 	_ "github.com/rclone/rclone/backend/sftp"
 	_ "github.com/rclone/rclone/backend/webdav"
 	"github.com/rclone/rclone/cmd"
+	_ "github.com/rclone/rclone/cmd/check"
 	_ "github.com/rclone/rclone/cmd/copy"
 	_ "github.com/rclone/rclone/cmd/copyto"
 	_ "github.com/rclone/rclone/cmd/lsjson"
