@@ -10,34 +10,25 @@ struct MacRootView: View {
 
     var body: some View {
         NavigationSplitView {
-            VStack(spacing: 0) {
-                List(selection: $selectedSection) {
-                    Section {
-                        ForEach([AppSection.devices, .folders, .settings]) { section in
-                            sidebarLabel(for: section)
-                        }
-                    }
-                    Section("Tools") {
-                        ForEach([AppSection.overview, .backups]) { section in
-                            sidebarLabel(for: section)
-                        }
+            List(selection: $selectedSection) {
+                Section {
+                    ForEach([AppSection.folders, .devices, .overview]) { section in
+                        sidebarLabel(for: section)
                     }
                 }
-                .listStyle(.sidebar)
-                // The list vends its own accessibility element (an outline), so
-                // a bare label lands on it. That is separate from the column
-                // container named below: the audit tree shows the outline as a
-                // grandchild of the column group, and both need a description.
-                .accessibilityLabel("Covalent sidebar")
-
-                serviceState
+                Section("Legacy and Advanced") {
+                    ForEach([AppSection.backups, .settings]) { section in
+                        sidebarLabel(for: section)
+                    }
+                }
+                Section("Local Service") {
+                    serviceState
+                }
             }
+            .listStyle(.sidebar)
+            .accessibilityLabel("Covalent sidebar")
             .navigationTitle("Covalent")
             .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 260)
-            // Outermost point in the column the app can reach. The audit
-            // reports an unnamed group at {{8, 39}, {220, 676}} that holds the
-            // list and the service row, so name a container at that level and
-            // keep both children individually reachable.
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Sections and service status")
         } detail: {
@@ -50,17 +41,27 @@ struct MacRootView: View {
                 }
             }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.activeTask)
-            // The matching unnamed group on the detail side is at
-            // {{0, 31}, {1024, 692}} with the content scroll view as its only
-            // child. A bare label is tried here rather than an explicit
-            // container: the sidebar's `List` took `.accessibilityLabel` on its
-            // own, so a container that SwiftUI has already collapsed may take
-            // one too, and this reads better than nesting another group inside
-            // one that is already a single-child wrapper.
             .accessibilityLabel(macLabel(for: model.selectedSection))
         }
         .toolbar {
             ToolbarItemGroup {
+                Button {
+                    model.selectedSection = .folders
+                    Task { await model.refreshFolders() }
+                } label: {
+                    Label("Create Link", systemImage: "folder.badge.plus")
+                }
+                .disabled(!model.isAuthorized)
+                .accessibilityIdentifier("toolbar.createLink")
+
+                Button {
+                    model.selectedSection = .devices
+                    Task { await model.refreshDiscovery() }
+                } label: {
+                    Label("Pair Device", systemImage: "laptopcomputer.and.iphone")
+                }
+                .disabled(!model.isAuthorized)
+
                 Button {
                     Task { await model.refresh() }
                 } label: {
@@ -68,16 +69,6 @@ struct MacRootView: View {
                 }
                 .help("Refresh local service status")
 
-                Menu {
-                    Button("New Backup…") { model.requestNewBackup() }
-                        .disabled(!model.isAuthorized || model.activeTask != nil)
-                        .accessibilityIdentifier("toolbar.newBackup")
-                    Button("Restore Latest Backup…") { model.requestRestoreLatest() }
-                        .disabled(!model.isAuthorized || model.snapshots.isEmpty || model.activeTask != nil)
-                } label: {
-                    Label("Backup Tools", systemImage: "externaldrive")
-                }
-                .help("Backup and restore tools")
             }
         }
         .onAppear {
@@ -104,7 +95,7 @@ struct MacRootView: View {
             case .connection:
                 MacConnectionView(model: model)
             case .newBackup:
-                MacNewBackupView(model: model)
+                MacLegacyBackupsView(model: model)
             case .pairDevice:
                 MacPairingView(model: model)
             case .networkPairing:
@@ -211,9 +202,11 @@ struct MacRootView: View {
 
     private func macLabel(for section: AppSection) -> String {
         switch section {
-        case .devices: "Pair"
+        case .overview: "Status"
+        case .backups: "Legacy Backups"
         case .folders: "Links"
-        default: section.label
+        case .devices: "Devices"
+        case .settings: "Advanced Settings"
         }
     }
 
@@ -233,7 +226,7 @@ struct MacRootView: View {
         case .overview:
             MacOverviewView(model: model)
         case .backups:
-            MacBackupsView(model: model)
+            MacLegacyBackupsView(model: model)
         case .folders:
             MacFoldersView(model: model)
         case .devices:
@@ -244,153 +237,29 @@ struct MacRootView: View {
     }
 
     private var serviceState: some View {
-        HStack(spacing: 9) {
-            // Deliberately not the phase tint itself. That tint is chosen to
-            // sit at 12% behind the row; drawn solid at 8pt on its own wash,
-            // system green measures about 1.7:1 — and because this row is one
-            // combined accessibility element, the audit grades that dot along
-            // with the text. Same meaning, dark enough to be graded: see
-            // `serviceGlyphColor`, which now measures 12.5:1 on the wash.
-            Circle()
-                .fill(serviceGlyphColor)
-                .frame(width: 8, height: 8)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 1) {
-                // A step up in size, on measurement rather than taste: the
-                // sidebar's vibrant text path renders this row at a
-                // coverage-weighted 3.75:1 even in `.primary`, against 8.5:1
-                // for the same weight on an ordinary background. Bigger glyphs
-                // are the only lever left that does not mean leaving the
-                // sidebar.
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(model.serviceStatusLabel)
-                    .font(.headline)
-                    .foregroundStyle(.primary)
                 if let status = model.status {
-                    // The sidebar draws its text vibrantly, and that blend is
-                    // stroke-coverage dependent: on the 1x CI display a regular
-                    // 10pt caption never renders darker than #7F7F7F, i.e. 4.0:1
-                    // against the sidebar, which fails the system contrast audit
-                    // even though the colour is `.primary`. The semibold status
-                    // line directly above renders #272727 (15:1) in the same
-                    // vibrancy context, so match its weight here.
-                    //
-                    // Weight alone was not enough — but the reason turned out
-                    // not to be the text at all. Measured from the audit's own
-                    // element screenshot in CI run 32465148487, both lines here
-                    // render #1A1A1A on #F1FCF4: 16.5:1. What failed was the
-                    // status dot beside them, inside the same combined element.
-                    // The backdrop is opaque now so the measurement no longer
-                    // depends on the runner, and the weight stays: it is what
-                    // proved the vibrancy theory, and dropping it would re-open
-                    // the 4.0:1 case if the backdrop ever goes translucent.
                     Text(status.deviceName)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
             }
-            Spacer(minLength: 0)
+        } icon: {
+            Image(systemName: serviceSymbol)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        // One flat, non-semantic colour rather than an opaque base plus a 12%
-        // tint. `windowBackgroundColor` is a semantic system colour, and
-        // semantic colours are what AppKit's vibrancy blends against the
-        // material behind them — fills as much as glyphs — so the two-layer
-        // version was still a four-step vertical gradient where a flat fill
-        // would be one value. A colour the app mixes itself does not
-        // participate, and paints what it declares.
-        .background(serviceWashColor, in: RoundedRectangle(cornerRadius: 10))
-        // An inset footer rather than a slab welded to the window's corner,
-        // which is how the system's own sidebars finish. It is also what
-        // stopped the audit reporting this row: macOS draws the Dock over the
-        // bottom 14pt of a window this tall, and the audit grades each
-        // element's rectangle from the screen, so a row that ran to the
-        // window's edge was graded partly on the Dock's chrome — mid-grey on
-        // near-white, 2.6:1. The row's own contents were never the problem;
-        // its two text runs measure 13.8:1 on this wash and the status dot
-        // 12.6:1. Ten points of inset lifts the whole rectangle clear.
-        .padding(.horizontal, 8)
-        .padding(.bottom, 16)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Service \(model.serviceStatusLabel)")
+        .accessibilityLabel("Local service, \(model.serviceStatusLabel)")
     }
 
-    /// The wash behind the service row: the phase tint at 12% over the window
-    /// background, mixed here rather than composited by AppKit so that it is a
-    /// single flat value. See the comment at `.background` above.
-    ///
-    /// The light halves are the tint over white, which is what
-    /// `windowBackgroundColor` renders as on this appearance — measured from
-    /// the audit's app screenshot, where the ready wash is (231,248,235) and
-    /// 12% system green over white is (229,249,232).
-    private var serviceWashColor: Color {
+    private var serviceSymbol: String {
         switch model.phase {
-        case .starting:
-            MacLabelColor.dynamic(
-                named: "CovalentServiceWashStarting",
-                light: NSColor(red: 1.0, green: 0.950, blue: 0.880, alpha: 1),
-                dark: NSColor(red: 0.293, green: 0.247, blue: 0.177, alpha: 1)
-            )
-        case .ready:
-            MacLabelColor.dynamic(
-                named: "CovalentServiceWashReady",
-                light: NSColor(red: 0.899, green: 0.976, blue: 0.910, alpha: 1),
-                dark: NSColor(red: 0.195, green: 0.271, blue: 0.214, alpha: 1)
-            )
-        case .needsAuthorization:
-            MacLabelColor.dynamic(
-                named: "CovalentServiceWashAuthorization",
-                light: NSColor(red: 0.880, green: 0.937, blue: 1.0, alpha: 1),
-                dark: NSColor(red: 0.177, green: 0.235, blue: 0.293, alpha: 1)
-            )
-        case .offline:
-            MacLabelColor.dynamic(
-                named: "CovalentServiceWashOffline",
-                light: NSColor(red: 1.0, green: 0.908, blue: 0.903, alpha: 1),
-                dark: NSColor(red: 0.293, green: 0.205, blue: 0.200, alpha: 1)
-            )
-        }
-    }
-
-    /// The solid status dot, dark enough to be graded against its own wash.
-    ///
-    /// The previous values were aimed at the 4.5:1 floor and landed just past
-    /// it: measured against the wash actually behind them — 12% of the phase
-    /// tint over `windowBackgroundColor` — starting was 5.68:1, ready 5.73:1
-    /// and offline 5.70:1. All three cleared 4.5 and the audit reported the row
-    /// anyway, and the safeguard glyph that failed alongside them sat at 5.22:1
-    /// on its own backdrop. Three dots and a glyph inside one narrow band, with
-    /// every passing run on the screen at 10.7:1 or better, is not a coincidence
-    /// about font size; see `MacLabelColor.accentGlyph`.
-    ///
-    /// So these are aimed at the passing population instead of at the floor.
-    /// Against their own washes: starting 10.7:1, ready 10.8:1, offline 10.6:1,
-    /// and `accentGlyph` 10.1:1 on the blue one. Deeper colour is the cost, and
-    /// it is small here — the dot is 8pt, its hue restates the word beside it
-    /// and the 12% wash behind the whole row, and neither of those changes.
-    private var serviceGlyphColor: Color {
-        switch model.phase {
-        case .starting:
-            MacLabelColor.dynamic(
-                named: "CovalentStatusStarting",
-                light: NSColor(red: 0.282, green: 0.141, blue: 0.0, alpha: 1),
-                dark: NSColor(red: 1.0, green: 0.839, blue: 0.620, alpha: 1)
-            )
-        case .ready:
-            MacLabelColor.dynamic(
-                named: "CovalentStatusReady",
-                light: NSColor(red: 0.031, green: 0.204, blue: 0.090, alpha: 1),
-                dark: NSColor(red: 0.627, green: 0.941, blue: 0.725, alpha: 1)
-            )
-        case .needsAuthorization:
-            MacLabelColor.accentGlyph
-        case .offline:
-            MacLabelColor.dynamic(
-                named: "CovalentStatusOffline",
-                light: NSColor(red: 0.337, green: 0.039, blue: 0.027, alpha: 1),
-                dark: NSColor(red: 1.0, green: 0.788, blue: 0.769, alpha: 1)
-            )
+        case .starting: "arrow.triangle.2.circlepath"
+        case .ready: "checkmark.circle"
+        case .needsAuthorization: "questionmark.circle"
+        case .offline: "exclamationmark.triangle"
         }
     }
 }

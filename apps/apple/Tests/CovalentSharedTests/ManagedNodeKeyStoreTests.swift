@@ -489,7 +489,7 @@
       .deletingLastPathComponent()
       .deletingLastPathComponent()
     for script in [
-      "Scripts/integration-test.sh", "Scripts/macos-ui-test.sh", "Scripts/ios-ui-test.sh",
+      "Scripts/integration-test.sh", "Scripts/macos-ui-test.sh",
     ] {
       let source = try String(contentsOf: appleRoot.appending(path: script), encoding: .utf8)
       #expect(!source.contains("local-api-token"), "\(script) must not read a daemon token file")
@@ -504,7 +504,7 @@
       .deletingLastPathComponent()
       .deletingLastPathComponent()
       .deletingLastPathComponent()
-    for script in ["Scripts/macos-ui-test.sh", "Scripts/ios-ui-test.sh"] {
+    for script in ["Scripts/macos-ui-test.sh"] {
       let source = try String(contentsOf: appleRoot.appending(path: script), encoding: .utf8)
       #expect(
         source.contains("COVALENT_UI_TEST_TOKEN_FILE"), "\(script) must pass only a token-file path"
@@ -525,10 +525,10 @@
     let project = try String(contentsOf: appleRoot.appending(path: "Project.yml"), encoding: .utf8)
     let tokenFileSetting = "CovalentUITestTokenFile: $(COVALENT_UI_TEST_TOKEN_FILE)"
     #expect(
-      project.components(separatedBy: tokenFileSetting).count == 3,
-      "Both UI-test targets must receive only the private token-file path")
+      project.components(separatedBy: tokenFileSetting).count == 2,
+      "The Mac UI-test target must receive only the private token-file path")
     #expect(!project.contains("CovalentUITestToken: $(COVALENT_UI_TEST_TOKEN)"))
-    for plist in ["Config/CovalentMacUITests-Info.plist", "Config/CovalentIOSUITests-Info.plist"] {
+    for plist in ["Config/CovalentMacUITests-Info.plist"] {
       #expect(project.contains("path: \(plist)"), "Project.yml must generate \(plist)")
     }
 

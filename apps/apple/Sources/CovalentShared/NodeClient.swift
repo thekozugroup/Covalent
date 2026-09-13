@@ -1447,11 +1447,7 @@ public actor NodeClient {
         try Self.prepareTransferDirectory(transferDirectory)
         let data = try encoder.encode(upload)
         let recordURL = archiveUploadRecordURL(jobId: upload.jobId)
-        #if os(iOS)
-        let writeOptions: Data.WritingOptions = [.atomic, .completeFileProtection]
-        #else
         let writeOptions: Data.WritingOptions = [.atomic]
-        #endif
         try data.write(to: recordURL, options: writeOptions)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: recordURL.path)
         try Self.syncRegularFile(recordURL)

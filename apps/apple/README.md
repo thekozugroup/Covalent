@@ -4,9 +4,9 @@ End users should follow the
 [macOS install and onboarding guide](../../docs/platform/macos.md). This file is
 for source development and exact-current validation.
 
-`CovalentMac` is the Tier 1 native SwiftUI client for macOS 15 or later on
-Apple Silicon. `CovalentIOS` is an unsupported informational target. Both use
-the version 1 node API and real service behavior; neither has a production mock.
+`CovalentMac` is the native SwiftUI client for macOS 15 or later on Apple
+Silicon. It uses the version 1 node API and real service behavior; it has no
+production mock.
 
 ## Personal app from source
 
@@ -96,27 +96,6 @@ signed restore preview, and restore execution. The macOS UI harness also uses a
 real temporary node. It re-seals the assembled Xcode 26 UI runner, applies
 bounded process-group timeouts, and exits 75 when the headed login session is
 locked. Set `COVALENT_TEST_ARTIFACT_DIR` to retain diagnostics.
-
-The iOS target remains useful for shared-code checks only:
-
-```sh
-(
-  cd apps/apple
-  xcodebuild \
-    -project Covalent.xcodeproj \
-    -scheme CovalentIOS \
-    -configuration Debug \
-    -destination 'generic/platform=iOS Simulator' \
-    CODE_SIGNING_ALLOWED=NO \
-    build
-  COVALENT_IOS_DESTINATION='platform=iOS Simulator,id=SIMULATOR_UDID' \
-    ./Scripts/ios-ui-test.sh
-)
-```
-
-The scripts resolve one exact simulator ID. UI-test settings contain only a
-relative token-file name; the mode-0600 token is copied into that target app's
-private container and only that per-run file is removed.
 
 Generate reviewed Swift and Rust dependency inventories from repository root:
 

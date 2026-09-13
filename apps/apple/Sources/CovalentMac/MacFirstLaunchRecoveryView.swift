@@ -13,9 +13,9 @@ struct MacFirstLaunchRecoveryView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Label("Set up this Mac", systemImage: "externaldrive.badge.plus")
+            Label("Set up Covalent", systemImage: "folder.badge.plus")
                 .font(.title2.weight(.semibold))
-            Text("Set up this Mac, or recover your backups if you’re replacing a lost device.")
+            Text("Run the local Covalent service on this Mac. One-way links send source folders to paired devices, where the files remain ordinary files.")
                 .secondaryLabelStyle()
 
             VStack(alignment: .leading, spacing: 10) {
@@ -30,7 +30,7 @@ struct MacFirstLaunchRecoveryView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(starting)
                 .accessibilityIdentifier("firstLaunch.setup")
-                Text("Start using Covalent on this Mac.")
+                Text("Start the local service, then pair a device and create a link.")
                     .font(.caption)
                     .secondaryLabelStyle()
             }
@@ -38,9 +38,9 @@ struct MacFirstLaunchRecoveryView: View {
             Divider()
 
             VStack(alignment: .leading, spacing: 10) {
-                Text("Recover this Mac")
+                Text("Recover Legacy Backups")
                     .font(.headline)
-                Text("Choose the two recovery files you saved earlier. Covalent will use them to find your backups on your other devices.")
+                Text("Choose the two recovery files you saved earlier to find legacy backups on your other devices.")
                     .font(.caption)
                     .secondaryLabelStyle()
                 HStack {
@@ -80,7 +80,7 @@ struct MacFirstLaunchRecoveryView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Covalent will open your recovery files and check your backup devices. Keep those devices online while recovery runs.")
+            Text("Covalent will open your recovery files and check legacy backup devices. Keep those devices online while recovery runs.")
         }
     }
 

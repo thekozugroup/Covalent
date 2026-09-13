@@ -38,11 +38,12 @@ struct CovalentMacApp: App {
         .defaultSize(width: 1_080, height: 720)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("New Backup…") {
-                    model.requestNewBackup()
+                Button("Create Link") {
+                    model.selectedSection = .folders
+                    Task { await model.refreshFolders() }
                 }
                 .keyboardShortcut("n")
-                .disabled(!model.isAuthorized || model.activeTask != nil)
+                .disabled(!model.isAuthorized)
 
                 Button("Pair Device…") {
                     model.selectedSection = .devices
@@ -53,15 +54,15 @@ struct CovalentMacApp: App {
             }
             CommandGroup(after: .sidebar) {
                 Divider()
-                Button("Pair") { model.selectedSection = .devices }
-                    .keyboardShortcut("1")
                 Button("Links") { model.selectedSection = .folders }
+                    .keyboardShortcut("1")
+                Button("Devices") { model.selectedSection = .devices }
                     .keyboardShortcut("2")
-                Button("Settings") { model.selectedSection = .settings }
+                Button("Status") { model.selectedSection = .overview }
                     .keyboardShortcut("3")
                 Divider()
-                Button("Overview") { model.selectedSection = .overview }
-                Button("Backups") { model.selectedSection = .backups }
+                Button("Legacy Backups") { model.selectedSection = .backups }
+                Button("Advanced Settings") { model.selectedSection = .settings }
             }
             CommandMenu("Service") {
                 Button("Refresh") {
@@ -111,10 +112,10 @@ struct CovalentMacApp: App {
 
     private var menuBarSymbol: String {
         switch model.phase {
-        case .starting: "arrow.trianglehead.2.clockwise.rotate.90"
-        case .ready: "externaldrive.badge.checkmark"
-        case .needsAuthorization: "externaldrive.badge.questionmark"
-        case .offline: "externaldrive.badge.xmark"
+        case .starting: "arrow.triangle.2.circlepath"
+        case .ready: "checkmark.circle"
+        case .needsAuthorization: "questionmark.circle"
+        case .offline: "exclamationmark.triangle"
         }
     }
 }
@@ -142,39 +143,35 @@ private struct MacMenuBarMenu: View {
 
     var body: some View {
       Group {
-        Button("Open Covalent") {
+        Button("Open Links", systemImage: "link") {
+            model.selectedSection = .folders
             showMainWindow()
         }
 
         Divider()
 
-        Text(statusSummary)
-        folderMenus
-        if let task = model.activeTask {
-            Text("\(task.kind.label): \(task.title)")
-            if task.jobId != nil {
-                Button(task.state == .paused ? "Resume Active Job" : "Pause Active Job") {
-                    Task { await model.controlActiveTask(task.state == .paused ? .resume : .pause) }
-                }
-                Button("Cancel Active Job…", role: .destructive) {
-                    Task { await model.controlActiveTask(.cancel) }
-                }
-            }
-        }
+        Label(statusSummary, systemImage: serviceSymbol)
+        linkRows
 
         Divider()
 
-        Button("New Backup…") {
-            model.requestNewBackup()
+        Button("Create Link", systemImage: "folder.badge.plus") {
+            model.selectedSection = .folders
             showMainWindow()
         }
-        .disabled(!model.isAuthorized || model.activeTask != nil)
+        .disabled(!model.isAuthorized)
 
-        Button("Restore Latest Backup…") {
-            model.requestRestoreLatest()
+        Button("Pair Device", systemImage: "laptopcomputer.and.iphone") {
+            model.selectedSection = .devices
+            Task { await model.refreshDiscovery() }
             showMainWindow()
         }
-        .disabled(!model.isAuthorized || model.snapshots.isEmpty || model.activeTask != nil)
+        .disabled(!model.isAuthorized)
+
+        Button("Legacy Backups", systemImage: "externaldrive") {
+            model.selectedSection = .backups
+            showMainWindow()
+        }
 
         Button("Refresh Status") {
             Task { await model.refresh() }
@@ -183,7 +180,7 @@ private struct MacMenuBarMenu: View {
         Divider()
 
         SettingsLink {
-            Text("Settings…")
+            Text("Advanced Settings…")
         }
 
         Button("Quit Covalent") {
@@ -204,110 +201,57 @@ private struct MacMenuBarMenu: View {
     }
 
     @ViewBuilder
-    private var folderMenus: some View {
+    private var linkRows: some View {
         if let error = model.folderSyncError {
             Label(error, systemImage: "exclamationmark.triangle")
         } else if let status = model.folderSyncStatus {
-            let shares = status.shares.filter { $0.phase != .removed }
-            ForEach(shares) { share in
-                Menu {
-                    let peer = status.peers.first { $0.peerId == share.peerId }
-                    Text(peer?.displayName ?? "Paired Device")
-                    Text(status.displayLabel(for: share))
-                    if isLinkSummaryRow(share, status: status), let settings = share.linkSettings {
-                        Text(menuCadenceLabel(settings.settings.cadence, incoming: share.incoming))
-                        if let run = share.linkRun {
-                            Text(menuRunLabel(run))
-                            ForEach(run.destinations, id: \.peerId) { destination in
-                                let destinationPeer = status.peers.first { $0.peerId == destination.peerId }
-                                let destinationName = destinationPeer?.displayName
-                                    ?? (share.incoming ? "This Mac" : "Destination")
-                                Text("\(destinationName): \(menuDestinationLabel(destination.result))")
-                            }
-                        }
-                    }
-                    Button("Show in Covalent") {
-                        model.selectedSection = .folders
-                        showMainWindow()
-                    }
-                    Divider()
-                    let state = status.displayState(for: share)
-                    if isLinkSummaryRow(share, status: status), let settings = share.linkSettings {
-                        if let saved = model.pendingFolderLinkRunRequests.first(where: {
-                            $0.folderId == share.folderId
-                        }) {
-                            if saved.requiresReview {
-                                Button("Review Run Status") {
-                                    model.selectedSection = .folders
-                                    showMainWindow()
-                                }
-                            } else {
-                                Button("Try Run Request Again") {
-                                    Task { _ = await model.retryFolderLinkRun(folderId: share.folderId) }
-                                }
-                                .disabled(!model.isAuthorized || model.folderSyncMutationInFlight)
-                            }
-                        } else if settings.confirmed, settings.pendingChange == nil,
-                                  settings.conflictedChange == nil,
-                                  settings.settings.permitsRunNow,
-                                  share.linkRun?.pendingRequest == nil,
-                                  share.linkRun?.isActive != true {
-                            Button("Run Now", systemImage: "play.fill") {
-                                Task { _ = await model.runFolderLinkNow(folderId: share.folderId) }
-                            }
-                            .disabled(!model.isAuthorized || model.folderSyncMutationInFlight)
-                        }
-                    }
-                    if state == .needsAttention {
-                        Button("Try Again") {
-                            Task { await model.retryFolderSync() }
-                        }
-                        .disabled(!model.isAuthorized || model.folderSyncMutationInFlight)
-                    }
-                    if share.expired && !share.incoming
-                        && (share.phase == .offered || share.phase == .paused) {
-                        Button("Send New Invitation") {
-                            Task { _ = await model.renewFolderInvitation(share.offerId) }
-                        }
-                        .disabled(!model.isAuthorized || model.folderSyncMutationInFlight)
-                    } else if !(share.incoming && share.phase == .offered) {
-                        Button(share.phase == .paused ? "Resume" : "Pause") {
-                            Task {
-                                await model.setFolderPaused(
-                                    share.offerId,
-                                    paused: share.phase != .paused
-                                )
-                            }
-                        }
-                        .disabled(
-                            state == .invitationExpired
-                                || !model.isAuthorized
-                                || model.folderSyncMutationInFlight
-                        )
-                    }
-                    Button("Remove…", role: .destructive) {
-                        confirmRemoval(of: share)
-                    }
-                    .disabled(!model.isAuthorized || model.folderSyncMutationInFlight)
-                } label: {
-                    Label(
-                        "\(share.label) — \(status.displayLabel(for: share))",
-                        systemImage: menuFolderSymbol(share)
-                    )
-                }
+            let shares = status.shares.filter { isLinkSummaryRow($0, status: status) }
+            if shares.isEmpty {
+                Text("No links")
             }
+            ForEach(shares) { share in
+                Label(
+                    "\(share.label) — \(status.displayLabel(for: share))",
+                    systemImage: menuFolderSymbol(share)
+                )
+                if let run = share.linkRun, run.phase != nil || run.pendingRequest != nil {
+                    Text(menuRunLabel(run))
+                }
+                runAction(for: share)
+            }
+        } else {
+            Text("Checking links…")
         }
     }
 
-    private func confirmRemoval(of share: FolderShare) {
-        let alert = NSAlert()
-        alert.messageText = "Remove \(share.label)?"
-        alert.informativeText = "Transfers stop on this Mac now and on the other device when it reconnects. Files stay on both devices."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Remove and Keep Files").hasDestructiveAction = true
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        Task { await model.removeFolder(share.offerId) }
+    @ViewBuilder
+    private func runAction(for share: FolderShare) -> some View {
+        if let settings = share.linkSettings {
+            if let saved = model.pendingFolderLinkRunRequests.first(where: {
+                $0.folderId == share.folderId
+            }) {
+                if saved.requiresReview {
+                    Button("Review \(share.label) Run") {
+                        model.selectedSection = .folders
+                        showMainWindow()
+                    }
+                } else {
+                    Button("Try \(share.label) Run Again", systemImage: "arrow.clockwise") {
+                        Task { _ = await model.retryFolderLinkRun(folderId: share.folderId) }
+                    }
+                    .disabled(!model.isAuthorized || model.folderSyncMutationInFlight)
+                }
+            } else if settings.confirmed, settings.pendingChange == nil,
+                      settings.conflictedChange == nil,
+                      settings.settings.permitsRunNow,
+                      share.linkRun?.pendingRequest == nil,
+                      share.linkRun?.isActive != true {
+                Button("Run \(share.label) Now", systemImage: "play.fill") {
+                    Task { _ = await model.runFolderLinkNow(folderId: share.folderId) }
+                }
+                .disabled(!model.isAuthorized || model.folderSyncMutationInFlight)
+            }
+        }
     }
 
     private func isLinkSummaryRow(_ share: FolderShare, status: FolderSyncStatus) -> Bool {
@@ -325,15 +269,6 @@ private struct MacMenuBarMenu: View {
         }
     }
 
-    private func menuCadenceLabel(_ cadence: FolderLinkCadence, incoming: Bool) -> String {
-        switch cadence {
-        case .manual: return "Manual"
-        case .continuous: return "Continuous"
-        case let .scheduled(minutes):
-            return incoming ? "Scheduled by source" : "Scheduled every \(minutes) minutes"
-        }
-    }
-
     private func menuRunLabel(_ run: FolderLinkRunSummary) -> String {
         if run.pendingRequest != nil { return "Run request waiting for source" }
         switch run.phase {
@@ -347,14 +282,12 @@ private struct MacMenuBarMenu: View {
         }
     }
 
-    private func menuDestinationLabel(_ result: FolderLinkRunDestinationResult) -> String {
-        switch result {
-        case .pending: return "waiting"
-        case .succeeded: return "completed"
-        case .failed: return "failed"
-        case .timedOut: return "incomplete"
-        case .interrupted: return "interrupted"
-        case .cancelled: return "cancelled"
+    private var serviceSymbol: String {
+        switch model.phase {
+        case .starting: "arrow.triangle.2.circlepath"
+        case .ready: "checkmark.circle"
+        case .needsAuthorization: "questionmark.circle"
+        case .offline: "exclamationmark.triangle"
         }
     }
 

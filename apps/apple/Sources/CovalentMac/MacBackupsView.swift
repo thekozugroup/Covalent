@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-struct MacBackupsView: View {
+struct MacLegacyBackupsView: View {
     @ObservedObject var model: CovalentAppModel
     @State private var selectedSnapshotId: UUID?
     @State private var restoreSnapshot: SnapshotRecord?
@@ -10,14 +10,10 @@ struct MacBackupsView: View {
         Group {
             if model.snapshots.isEmpty {
                 MacEmptyState(
-                    systemImage: "externaldrive.badge.plus",
-                    title: "No backups yet",
-                    message: "A backup appears here once your backup server finishes encrypting and saving it."
-                ) {
-                    Button("New Backup") { model.requestNewBackup() }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(!model.isAuthorized)
-                }
+                    systemImage: "externaldrive",
+                    title: "No Legacy Backups Found",
+                    message: "Backups created by the legacy service appear here when they are available."
+                )
             } else {
                 HSplitView {
                     snapshotList
@@ -38,8 +34,9 @@ struct MacBackupsView: View {
                 }
             }
         }
-        .navigationTitle("Backups")
+        .navigationTitle("Legacy Backups")
         .background(Color(nsColor: .windowBackgroundColor))
+        .accessibilityIdentifier("legacyBackups.view")
         .onAppear {
             if selectedSnapshotId == nil {
                 selectedSnapshotId = model.snapshots.first?.id
@@ -245,13 +242,6 @@ private struct MacSnapshotDetail: View {
                     .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
                 }
             }
-            Button("Change Extra Copies for Next Backup…") {
-                model.requestNewBackup(existingBackupId: snapshot.backupId)
-            }
-            .disabled(model.activeTask != nil)
-            Text("Adding or removing a device changes only the next backup. Existing backups keep their original encrypted copies.")
-                .font(.caption)
-                .secondaryLabelStyle()
         }
     }
 

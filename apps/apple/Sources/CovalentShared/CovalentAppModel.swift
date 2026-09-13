@@ -2795,7 +2795,7 @@ public final class CovalentAppModel: ObservableObject {
     ///
     /// Returns `nil` when there is nothing to run — including
     /// ``RecoveryHint/checkNetworkSettings``, because opening system Settings
-    /// is platform-specific and belongs to the iOS and macOS alert surfaces.
+    /// is platform-specific and belongs to the macOS alert surface.
     public func takeAlertRecovery() -> (@MainActor () async -> Void)? {
         guard let alert else { return nil }
         let recovery = alert.recovery

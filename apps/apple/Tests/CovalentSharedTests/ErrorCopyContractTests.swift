@@ -264,6 +264,8 @@ import Testing
             "folder_sync_unavailable",
             "folder_sync_busy",
             "folder_sync_needs_attention",
+            "link_run_pending",
+            "link_run_conflict",
             "link_settings_pending",
             "link_settings_conflict",
             "invalid_peer_address",

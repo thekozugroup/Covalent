@@ -3,7 +3,7 @@ import Testing
 
 @testable import CovalentShared
 
-/// The system accessibility audit that gates `Scripts/ios-ui-test.sh` checks
+/// The system accessibility audit that gates the Mac UI checks
 /// clipping, contrast and labels. It does **not** check whether text scales,
 /// so a hardcoded `.font(.system(size: 42))` sails straight through a green
 /// audit while silently ignoring the reader's text-size setting.

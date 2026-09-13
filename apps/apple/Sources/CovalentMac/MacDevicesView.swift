@@ -165,14 +165,14 @@ struct MacDevicesView: View {
     private var providers: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Saved connections")
+                Text("Paired devices")
                     .font(.title2.weight(.semibold))
             }
             if savedDeviceRows.isEmpty {
                 MacEmptyState(
                     systemImage: "server.rack",
-                    title: "No saved connections",
-                    message: "Pair another device, then choose which folders to share or back up."
+                    title: "No paired devices",
+                    message: "Pair another device, then create a one-way folder link."
                 )
                 .frame(maxWidth: .infinity, minHeight: 180)
                 .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
@@ -276,7 +276,7 @@ struct MacDevicesView: View {
             // in is a glyph a few points wide.
             DisclosureGroup(isExpanded: $isAdvancedRecoveryExpanded) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Recovery only: exchange signed setup files by hand when direct pairing over the network cannot be used, or when reconnecting an older backup server.")
+                    Text("Legacy recovery only: exchange signed setup files by hand when network pairing cannot be used, or when reconnecting an older backup server.")
                         .font(.caption)
                         .secondaryLabelStyle()
                     Button("Offline Pairing with Signed Files…") { model.requestManualPairing() }
@@ -344,7 +344,7 @@ struct MacProviderConnectionView: View {
                         .frame(height: 220)
                         .overlay { RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.25)) }
                 }
-                Text("Your backup server checks the other device's identity, name, address, certificate, and certificate fingerprint against what both devices signed during pairing. Every one must match exactly.")
+                Text("A legacy backup connection checks the other device's identity, name, address, certificate, and certificate fingerprint against what both devices signed during pairing. Every one must match exactly.")
                     .font(.caption)
                     .secondaryLabelStyle()
             }
@@ -694,12 +694,12 @@ struct MacPairingView: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 480)
             if peer.roles.contains(.storageProvider), let transport = confirmation.peerTransport {
-                Text("Add this signed device now, then choose it only for backups that should keep an extra copy.")
+                Text("Add this signed device only if you still use Legacy Backups.")
                     .font(.subheadline)
                     .secondaryLabelStyle()
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 520)
-                Button("Use as Backup Device") {
+                Button("Use for Legacy Backups") {
                     isAddingBackupDevice = true
                     Task {
                         if await model.connectProvider(using: transport) { dismiss() }
@@ -713,7 +713,7 @@ struct MacPairingView: View {
             } else {
                 Text(peer.roles.contains(.storageProvider)
                     ? "This older pairing did not include signed connection details. Use Advanced recovery in Devices."
-                    : "Storage access was not granted, so this device cannot keep an extra copy.")
+                    : "Storage access was not granted, so this device cannot hold a legacy backup copy.")
                     .font(.subheadline)
                     .secondaryLabelStyle()
                     .multilineTextAlignment(.center)
@@ -765,7 +765,7 @@ struct MacNetworkPairingView: View {
             Text(title)
                 .font(.title.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
-            Text("Pairing lets either device store encrypted backup copies for the other. Nothing is copied now—you choose \(current.peerName) separately when creating a backup.")
+            Text("Pairing lets you create one-way folder links with \(current.peerName). Nothing is copied until you create a link.")
                 .multilineTextAlignment(.center)
                 .secondaryLabelStyle()
                 .frame(maxWidth: 440)
@@ -802,7 +802,7 @@ struct MacNetworkPairingView: View {
                 ProgressView("Confirmed here. Waiting for \(current.peerName)…")
             case .complete:
                 if model.isProviderReady(for: current) {
-                    Label("Backup device ready", systemImage: "checkmark.circle.fill")
+                    Label("Device ready for links", systemImage: "checkmark.circle.fill")
                         .font(.headline)
                         .foregroundStyle(.green)
                     Button("Done") { finish() }
