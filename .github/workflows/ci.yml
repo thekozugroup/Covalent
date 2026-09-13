@@ -272,6 +272,31 @@ jobs:
       # nothing, which is indistinguishable from the step not running at all.
       - name: Enable and prove KVM acceleration
         run: ./scripts/require-kvm-acceleration.sh
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Compute the exact Docker source fingerprint
+        id: android-docker-source
+        run: |
+          set -euo pipefail
+          COVALENT_SOURCE_FINGERPRINT=$(./scripts/docker-source-fingerprint.sh . | sha256sum | awk '{print $1}')
+          [[ "${COVALENT_SOURCE_FINGERPRINT}" =~ ^[0-9a-f]{64}$ ]]
+          echo "fingerprint=${COVALENT_SOURCE_FINGERPRINT}" >> "${GITHUB_OUTPUT}"
+      - name: Build the exact device fixture with reusable layers
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+        with:
+          context: .
+          file: packaging/docker/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: covalent:android-api37-e2e
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            COVALENT_SOURCE_FINGERPRINT=${{ steps.android-docker-source.outputs.fingerprint }}
+          cache-from: |
+            type=gha,version=2,scope=covalent-ci-android-device
+            type=gha,version=2,scope=covalent-ci-amd64
+          cache-to: type=gha,version=2,scope=covalent-ci-android-device,mode=max,ignore-error=true,timeout=2m
       # api-level 37.0 is intentional and verified: sdkmanager installs
       # system-images;android-37.0;google_apis;x86_64 on the hosted runner today.
       # The emulator boots under KVM; do not downgrade this pin.
@@ -343,68 +368,17 @@ jobs:
           disable-animations: true
           disable-linux-hw-accel: false
           emulator-boot-timeout: 900
-          # Two things happen before launch, and the second one is why this job
-          # was red.
-          #
-          # Start the adb server before the emulator so it can register itself
-          # instead of logging "Unable to connect to adb daemon on port: 5037" and
-          # leaving the action to discover the device by port scan.
-          #
-          # Then do the gate's cold build work while no guest is running.
-          # scripts/android-api37-device-test.sh runs check-android.sh and then
-          # builds packaging/docker/Dockerfile, and both are full cold Rust
-          # release compiles. Reached through this action's `script:` payload they
-          # ran with the API 37 guest already booted, so a 4-vCPU runner sat at
-          # full load for 20-23 minutes while the guest was descheduled, and the
-          # guest did not survive it:
-          #
-          #   * Run 32481440600, before the Direct Boot fix, reached
-          #     instrumentation with user 0 STILL LOCKED twenty minutes after
-          #     sys.boot_completed - the app died with "SharedPreferences in
-          #     credential encrypted storage are not available until after user
-          #     (id 0) is unlocked". A healthy API 37 guest reports
-          #     sys.user.0.ce_available=true in the same second it reports
-          #     sys.boot_completed=1; measured cold on this AVD, both flip at 17s.
-          #   * Runs 32488425852 and 32491119888 reported
-          #     "INSTRUMENTATION_ABORTED: System has crashed." with ZERO tests
-          #     recorded. That is the string `am instrument`'s death recipient on
-          #     the system_server binder prints when system_server dies under it,
-          #     so no test had run and none could have caused it.
-          #
-          # These two lines are not a cache warm-up. They are the gate's build
-          # half, run in full, here, where no guest exists to starve. The device
-          # script is then told so with COVALENT_ANDROID_PREBUILT=true below and
-          # skips the *rebuild* only - it still runs check-android.sh, in
-          # --verify-prebuilt mode, which proves every artifact these two lines
-          # were supposed to produce is present and newer than every source it is
-          # built from, re-reads the unit test and lint reports to confirm they
-          # were a clean pass, applies the same freshness proof to the image
-          # tagged here, and runs the instrumentation-result contract battery
-          # unchanged. Nothing the gate proves changes; the work moves off the
-          # window where the guest is fragile instead of being done twice.
-          #
-          # Warming a cache was the previous attempt at this and it was not
-          # enough. With every cache warm the device script's own re-run of these
-          # two still cost 68 seconds of full-load 4-vCPU time, and run
-          # 32499985083 died inside it: `adb install` hit a null
-          # PackageManagerInternal in StorageManagerService 68 seconds after an
-          # identical install had succeeded. The load has to be absent, not fast.
-          #
-          # Every line below is one whole command. This action does not run these
-          # payloads as a script: it splits them on newlines and runs each line in
-          # its own `sh -c`, so continuations, multi-line `while`/`if`, and shell
-          # variables carried between lines all break. The docker build here used
-          # backslash continuations and had been failing since it was added -
-          # `sh -c "docker build \"` passes a literal backslash as the context and
-          # dies with `unable to prepare context: path "\" not found`, which this
-          # action reports and then continues past. So the warm BuildKit layer this
-          # comment describes was never actually warmed, and the gate script's own
-          # cold docker build ran with the guest already up - the exact starvation
-          # the reordering exists to prevent. One line, no continuations.
+          # Build and load the Docker fixture above before this action starts. Run
+          # the full Android build here before the guest boots so compilation
+          # cannot starve the emulator. COVALENT_ANDROID_PREBUILT skips duplicate
+          # builds but still verifies source and image freshness, test and lint
+          # reports, native evidence and the expected instrumentation results.
+          # Start adb before the emulator so the device can register immediately.
+          # This action runs each payload line in a separate `sh -c`, so keep every
+          # command complete on one line without cross-line shell state.
           pre-emulator-launch-script: |
             "$ANDROID_HOME/platform-tools/adb" start-server
             ./scripts/check-android.sh
-            docker build --file packaging/docker/Dockerfile --build-arg VCS_REF=$(git rev-parse HEAD) --build-arg COVALENT_SOURCE_FINGERPRINT=$(./scripts/docker-source-fingerprint.sh . | shasum -a 256 | awk '{print $1}') --tag covalent:android-api37-e2e .
           # This lane dies of one graphics-transport fault reached by several
           # different callers. The caller that made the guest unbootable is removed
           # in scripts/disable-android-guest-launcher.sh, and that part is fixed.

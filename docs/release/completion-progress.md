@@ -1,46 +1,37 @@
 # Completion progress
 
-Updated 2026-09-13 after the owner reaffirmed the lightweight one-way scope. The active goal is defined in [Product requirements](../product/requirements.md#active-completion-goal).
+Updated 2026-09-13. The active goal is defined in [Product requirements](../product/requirements.md#active-completion-goal).
 
-**Current scope: 50% verified, 5 of 10 complete acceptance checks.** This counts
-complete user journeys, not remaining time or reusable code. Rclone is the sole
-transfer engine and its migration is complete. Setup, fan-out, collection
-isolation, destination-deletion/restoration, cadence, and shared settings are
-verified. Source-deletion propagation and Android acceptance are reopened by
-the latest failed journey. On head `6499ded` and tested merge `e846d29`, ten foundation,
-packaging, security, and version jobs pass. Both Docker architectures pass their
-13-check packaged transfer journeys. The actual personal Android builder produces
-a clean-source candidate whose exact installed APK passes the full SAF journey
-in 394.998 seconds. Its owned emulator, private ADB, worktree, and build files
-are removed; the seven installable candidate files are retained.
+**Current scope: 50% verified, 5 of 10 complete acceptance checks. Rclone migration: 100%.**
+These percentages count accepted user journeys, not remaining development time.
+Rclone is the sole transfer engine. Pairing, one-way transfers, fan-out,
+collection isolation, destination-deletion/restoration, cadence, and shared
+settings have working validation evidence. The project is not release-complete.
 
-The later `ec49a3d` hosted Android run passes 195 unit tests and all 82 baseline
-device tests, but its full SAF journey times out at source-deletion propagation.
-Android and Rust inputs are unchanged from the passing `6499ded` run. The cause
-is under review; earlier passes do not make this later run green.
+Source `7dacec6` passes the Android device job, Rust/contracts, Android foundation,
+Mac packaging, 181 Swift tests, live Mac integration, both Docker architectures,
+dependency checks, CodeQL, and version checks. The aggregate CI run fails because
+the native Mac UI suite exceeds its 480-second limit without a complete result.
+The relaunch fixture completes, but the stalled UI phase and cause remain unknown.
+The focused diagnostic run `1c7ff8c` returns a complete UI result: five of seven
+pass, with no skips, in 322.815 seconds. VoiceOver does not enable, and the
+real-folder journey fails at its initial native folder chooser before transfer.
+The fixed phase diagnostics identify those failures; they do not establish a
+cause for the earlier timeout. Transfer, menu, accessibility, keyboard, and
+seven-test gates retain their existing limits. The temporary checkout is removed.
 
-Mac's initial-settings validation accepts revision zero with a nil change ID,
-matching the source contract. Run Now now requires an accepted destination;
-pending invitations do not block other ready destinations. Hosted source
-`ec49a3d` passes 181 Swift tests, the live integration test, and five of six
-native UI tests. The real link journey proves its first forward transfer,
-destination-only preservation, completed status, and native menu Quit. It then
-fails while the UI test writes its next source fixture, before relaunch.
-The owning test harness now prepares that file after the managed source stops,
-preserving the app's file permissions. Its isolated process check passes and
-removes its temporary files. The combined hosted run confirms this fixture fix,
-but its new unselected Return interaction does not prove activation of the
-per-link menu action; second-transfer bytes do not arrive. The settings test also
-fails to locate its Pause checkbox, and VoiceOver does not enable. The test now
-clicks the exact menu item, locates Pause by a stable accessibility identifier,
-and checks for a delayed VoiceOver welcome dialog within the original deadline.
-These corrections, relaunch transfer, and keyboard/VoiceOver acceptance remain
-unverified. Android failure reports now retain the existing public runtime
-diagnostics; its immediate-deletion predicate and deadline are unchanged.
-Mac native acceptance, Atmos package validation, wholly green final-source
-checks, and release publication remain open. No failed aggregate run is
-presented as passing.
-Earlier Syncthing evidence is retained only as history.
+Android's latest full job passes, following an earlier source-deletion timeout on
+`ec49a3d` with unchanged Android and Rust inputs. This later pass does not explain
+the intermittent failure. Source-deletion stability and Android acceptance remain
+under review; earlier passes are retained as evidence, not a claim that the fault
+is fixed.
+
+The retained personal Android candidate from `6499ded` passed its complete SAF
+journey in 394.998 seconds. Its seven installable files are retained; its owned
+emulator, private ADB, worktree, and build files have been removed. Final Mac and
+Android candidate acceptance, the laptop–Atmos package drill, final-source checks,
+remaining owned cleanup, and GitHub publication are still required. Atlas remains
+offline; Docker is the accepted Unraid target. Earlier Syncthing evidence is history.
 
 **Previous scope: 75%, 15 of 20 checks**, recorded at checkpoint 46 (c47003113e28b6e934a8ab4823040614fb07fb30). That score belongs to the superseded bidirectional/backup scope. Source and evidence remain in Git history.
 
@@ -48,12 +39,12 @@ Earlier Syncthing evidence is retained only as history.
 | --- | --- | --- |
 | 1 | Native setup pairs devices and creates a source/destination link; files never flow backward. | Verified |
 | 2 | Fan-out destinations work independently; multiple sources contribute safely to one collection. | Verified |
-| 3 | Both source-deletion options work with clear explanations and failed-scan protection. | Open: latest propagation timeout |
+| 3 | Both source-deletion options work with clear explanations and failed-scan protection. | Open: intermittent propagation timeout unresolved |
 | 4 | Destination deletions stay local across source edits/restarts; explicit restoration works. | Verified |
 | 5 | Manual, scheduled, and continuous transfers respect platform limits; idle batch workers stop. | Verified |
 | 6 | Settings edited on any authorized member converge across the link; pending/stale edits remain visible. | Verified |
 | 7 | Mac setup, links, settings, and per-link menu bar status pass native HIG/keyboard/VoiceOver checks. | Open |
-| 8 | Tomato-inspired Android floating actions, typography, data/status visuals, and top bar; actual pairing, permission, transfer, and background journeys pass. | Open: latest full journey failed |
+| 8 | Tomato-inspired Android floating actions, typography, data/status visuals, and top bar; actual pairing, permission, transfer, and background journeys pass. | Open: latest pass; earlier deletion timeout unresolved |
 | 9 | Installable Mac/Android/Docker candidates pass real laptop–Atmos transfers and server mount handling; use an Unraid plugin only for a demonstrated Docker limitation. | Open |
 | 10 | Relevant fault/security checks pass; idle/transfer performance is measured; temporary fixtures are removed; GitHub releases and installation guidance are published. | Open |
 

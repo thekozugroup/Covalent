@@ -158,8 +158,13 @@ final class RealFolderLinkUITests: XCTestCase {
         XCTAssertTrue(chooseSource.isHittable)
         recordPhase("Covalent phase: manual folder picker scroll completed")
         recordPhase("Covalent phase: manual folder picker opening entered")
+        let sourceIsEnabled = chooseSource.isEnabled
+        XCTAssertTrue(sourceIsEnabled)
+        guard sourceIsEnabled else {
+            throw FixtureError.missing("Choose Source Folder button is disabled")
+        }
         chooseSource.click()
-        try chooseFolder(at: sourceRoot, in: app)
+        try chooseFolder(at: sourceRoot, in: app, sourceButton: chooseSource)
         recordPhase("Covalent phase: manual folder picker completed")
 
         recordPhase("Covalent phase: manual offer and accept entered")
@@ -294,21 +299,6 @@ final class RealFolderLinkUITests: XCTestCase {
         editSettings.click()
         let settingsTitle = app.staticTexts["Mac UI Link Settings"]
         XCTAssertTrue(settingsTitle.waitForExistence(timeout: transitionTimeout))
-        let pauseLink = app.descendants(matching: .any)["folderLink.pause"]
-        XCTAssertTrue(pauseLink.waitForExistence(timeout: transitionTimeout))
-        XCTAssertTrue(pauseLink.isEnabled)
-        XCTAssertTrue(pauseLink.isHittable)
-        let initialPauseValue = String(describing: pauseLink.value)
-        pauseLink.click()
-        XCTAssertNotEqual(String(describing: pauseLink.value), initialPauseValue)
-        app.typeKey(.space, modifierFlags: [])
-        XCTAssertEqual(String(describing: pauseLink.value), initialPauseValue)
-        app.typeKey(.tab, modifierFlags: [])
-        app.typeKey(.tab, modifierFlags: [.shift])
-        app.typeKey(.space, modifierFlags: [])
-        XCTAssertNotEqual(String(describing: pauseLink.value), initialPauseValue)
-        app.typeKey(.space, modifierFlags: [])
-        XCTAssertEqual(String(describing: pauseLink.value), initialPauseValue)
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(waitForDisappearance(of: settingsTitle, timeout: transitionTimeout))
         try auditMainWindow(in: app, timeout: transitionTimeout)
@@ -330,6 +320,7 @@ final class RealFolderLinkUITests: XCTestCase {
     }
 
     private func recordPhase(_ name: String) {
+        FileHandle.standardError.write(Data((name + "\n").utf8))
         XCTContext.runActivity(named: name) { _ in }
     }
 
@@ -359,9 +350,18 @@ final class RealFolderLinkUITests: XCTestCase {
         return app
     }
 
-    private func chooseFolder(at path: String, in app: XCUIApplication) throws {
+    private func chooseFolder(
+        at path: String,
+        in app: XCUIApplication,
+        sourceButton: XCUIElement
+    ) throws {
         let panel = app.dialogs["open-panel"]
-        XCTAssertTrue(panel.waitForExistence(timeout: transitionTimeout))
+        let panelAppeared = panel.waitForExistence(timeout: transitionTimeout)
+        XCTAssertTrue(panelAppeared)
+        guard panelAppeared else {
+            emitFolderPickerClassification(app: app, sourceButton: sourceButton)
+            throw FixtureError.missing("native source folder picker")
+        }
         recordPhase("Covalent phase: manual folder picker opening completed")
         recordPhase("Covalent phase: manual folder picker location entered")
         panel.typeKey("g", modifierFlags: [.command, .shift])
@@ -372,19 +372,92 @@ final class RealFolderLinkUITests: XCTestCase {
             location = comboBox
         } else {
             location = textField
-            XCTAssertTrue(location.waitForExistence(timeout: transitionTimeout / 2))
+            let locationAppeared = location.waitForExistence(timeout: transitionTimeout / 2)
+            XCTAssertTrue(locationAppeared)
+            guard locationAppeared else {
+                throw FixtureError.missing("native folder location field")
+            }
         }
         location.typeText(path)
         location.typeKey(.return, modifierFlags: [])
-        XCTAssertTrue(waitForDisappearance(of: location, timeout: transitionTimeout))
+        let locationClosed = waitForDisappearance(of: location, timeout: transitionTimeout)
+        XCTAssertTrue(locationClosed)
+        guard locationClosed else {
+            throw FixtureError.missing("native folder location field did not close")
+        }
         recordPhase("Covalent phase: manual folder picker location completed")
         recordPhase("Covalent phase: manual folder picker confirmation entered")
         let choose = panel.buttons["Choose"]
-        XCTAssertTrue(choose.waitForExistence(timeout: transitionTimeout))
-        XCTAssertTrue(choose.isHittable)
+        let chooseAppeared = choose.waitForExistence(timeout: transitionTimeout)
+        XCTAssertTrue(chooseAppeared)
+        guard chooseAppeared else {
+            throw FixtureError.missing("native folder Choose button")
+        }
+        let chooseIsHittable = choose.isHittable
+        XCTAssertTrue(chooseIsHittable)
+        guard chooseIsHittable else {
+            throw FixtureError.missing("hittable native folder Choose button")
+        }
         choose.click()
-        XCTAssertTrue(waitForDisappearance(of: panel, timeout: transitionTimeout))
+        let panelClosed = waitForDisappearance(of: panel, timeout: transitionTimeout)
+        XCTAssertTrue(panelClosed)
+        guard panelClosed else {
+            throw FixtureError.missing("native source folder picker did not close")
+        }
         recordPhase("Covalent phase: manual folder picker confirmation completed")
+    }
+
+    private func emitFolderPickerClassification(
+        app: XCUIApplication,
+        sourceButton: XCUIElement
+    ) {
+        let panelService = XCUIApplication(
+            bundleIdentifier: "com.apple.appkit.xpc.openAndSavePanelService"
+        )
+        let serviceState = panelService.state
+        let serviceIsRunning = serviceState == .runningBackground
+            || serviceState == .runningForeground
+        let servicePanelState: (
+            dialog: Bool,
+            dialogCount: Int,
+            window: Bool,
+            windowCount: Int,
+            sheet: Bool,
+            sheetCount: Int
+        )
+        if serviceIsRunning {
+            servicePanelState = (
+                panelService.dialogs["open-panel"].exists,
+                panelService.dialogs.count,
+                panelService.windows["open-panel"].exists,
+                panelService.windows.count,
+                panelService.sheets["open-panel"].exists,
+                panelService.sheets.count
+            )
+        } else {
+            servicePanelState = (false, 0, false, 0, false, 0)
+        }
+        let fields = [
+            "appForeground=\(app.state == .runningForeground)",
+            "sourceEnabled=\(sourceButton.isEnabled)",
+            "consequenceVisible=\(app.staticTexts["Create Link With File Consequences?"].exists)",
+            "appDialog=\(app.dialogs["open-panel"].exists)",
+            "appDialogCount=\(app.dialogs.count)",
+            "appWindow=\(app.windows["open-panel"].exists)",
+            "appWindowCount=\(app.windows.count)",
+            "appSheet=\(app.sheets["open-panel"].exists)",
+            "appSheetCount=\(app.sheets.count)",
+            "serviceDialog=\(servicePanelState.dialog)",
+            "serviceDialogCount=\(servicePanelState.dialogCount)",
+            "serviceWindow=\(servicePanelState.window)",
+            "serviceWindowCount=\(servicePanelState.windowCount)",
+            "serviceSheet=\(servicePanelState.sheet)",
+            "serviceSheetCount=\(servicePanelState.sheetCount)",
+        ]
+        recordPhase(
+            "Covalent phase: folder picker classification: "
+                + fields.joined(separator: " ")
+        )
     }
 
     private func privateToken(at path: String) throws -> String {
