@@ -177,8 +177,32 @@ public actor NodeClient {
         }
       }
       for folderId in Set(status.shares.map(\.folderId)) {
-        let states = Set(status.shares.filter { $0.folderId == folderId }.compactMap(\.linkSettings))
-        guard states.count <= 1 else { throw NodeClientError.invalidResponse }
+        let shares = status.shares.filter { $0.folderId == folderId }
+        let states = Set(shares.compactMap(\.linkSettings))
+        let runs = Set(shares.compactMap(\.linkRun))
+        guard states.count <= 1,
+              runs.count <= 1,
+              shares.allSatisfy({
+                $0.linkSettings == nil || $0.linkPolicy == $0.linkSettings?.settings.deletionPolicy
+              })
+        else { throw NodeClientError.invalidResponse }
+      }
+      for run in status.shares.compactMap(\.linkRun) {
+        guard run.destinations.count <= 4_096,
+              Set(run.destinations.map(\.peerId)).count == run.destinations.count,
+              run.destinations.allSatisfy({ $0.peerId != zero }),
+              [run.startedAtUnixMs, run.deadlineUnixMs, run.endedAtUnixMs, run.nextDueAtUnixMs]
+                .compactMap({ $0 }).allSatisfy({ $0 > 0 }),
+              run.destinations.compactMap(\.endedAtUnixMs).allSatisfy({ $0 > 0 })
+        else { throw NodeClientError.invalidResponse }
+        if let pending = run.pendingRequest {
+          guard pending.requestId != zero, pending.requesterId != zero
+          else { throw NodeClientError.invalidResponse }
+        }
+        if let rejected = run.rejectedRequest {
+          guard rejected.requestId != zero, rejected.requesterId != zero
+          else { throw NodeClientError.invalidResponse }
+        }
       }
       _ = try status.invitationReplacements()
       return status
@@ -208,6 +232,10 @@ public actor NodeClient {
       _ request: FolderLinkSettingsRequest
     ) async throws -> FolderSyncMutation {
       try await send(path: "api/v1/sync/settings", method: "POST", body: request)
+    }
+
+    public func runFolderLink(_ request: FolderLinkRunRequest) async throws -> FolderSyncMutation {
+      try await send(path: "api/v1/sync/run", method: "POST", body: request)
     }
 
     public func removeFolder(_ request: FolderReferenceRequest) async throws -> FolderSyncMutation {

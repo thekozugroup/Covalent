@@ -1886,8 +1886,68 @@ func realDaemonBackupVerifyAndRestore() async throws {
     let share = try #require(status.shares.first)
     #expect(share.linkPolicy == FolderLinkPolicy())
     #expect(share.linkSettings?.settings.deletionPolicy == FolderLinkPolicy())
+    #expect(share.linkSettings?.settings.cadence == .continuous)
+    #expect(share.linkSettings?.settings.androidConditions == AndroidLinkConditions())
     #expect(share.linkSettings?.pendingChange?.changeId == pending)
     #expect(share.linkSettings?.pendingChange?.settings.deletionPolicy.propagateSourceDeletions == true)
+}
+
+@Test func folderStatusDecodesReceiverRunWhoseLocalDestinationIsNotAPeer() async throws {
+    let source = UUID()
+    let destination = UUID()
+    let offer = UUID()
+    let folder = UUID()
+    let change = UUID()
+    let recorder = RequestRecorder { request in
+        TestResponse.response(
+            request,
+            status: 200,
+            json: """
+            {"availability":"available","lifecycle":"running","issue":null,"healthFreshness":"fresh","connectionFreshness":"fresh","peers":[{"peerId":"\(source.uuidString)","displayName":"Source Mac"}],"shares":[{"offerId":"\(offer.uuidString)","folderId":"\(folder.uuidString)","label":"Photos","peerId":"\(source.uuidString)","incoming":true,"phase":"ready","expiresAtUnixMs":null,"expired":false,"peerConnection":"connected","linkPolicy":{"propagateSourceDeletions":false,"restoreLocalDeletions":false},"linkSettings":{"revision":4,"settings":{"deletionPolicy":{"propagateSourceDeletions":false,"restoreLocalDeletions":false},"paused":false,"cadence":{"mode":"scheduled","intervalMinutes":60},"androidConditions":{"wifiOnly":true,"chargingOnly":true}},"changeId":"\(change.uuidString)","changedBy":"\(source.uuidString)","confirmed":true,"pendingChange":null,"conflictedChange":null},"linkRun":{"generation":2,"stateRevision":5,"settingsRevision":4,"phase":"incomplete","startedAtUnixMs":1000,"deadlineUnixMs":2000,"endedAtUnixMs":2000,"nextDueAtUnixMs":3000,"pendingRequest":null,"rejectedRequest":null,"destinations":[{"peerId":"\(destination.uuidString)","result":"timedOut","endedAtUnixMs":2000}]}}],"folders":[]}
+            """
+        )
+    }
+    let status = try await makeClient(
+        recorder: recorder, token: String(repeating: "c", count: 32)
+    ).folderSyncStatus()
+    let share = try #require(status.shares.first)
+    #expect(share.linkSettings?.settings.cadence == .scheduled(intervalMinutes: 60))
+    #expect(share.linkSettings?.settings.androidConditions == AndroidLinkConditions(
+        wifiOnly: true, chargingOnly: true
+    ))
+    #expect(share.linkRun?.phase == .incomplete)
+    #expect(share.linkRun?.generation == 2)
+    #expect(share.linkRun?.destinations.first?.result == .timedOut)
+    #expect(share.linkRun?.destinations.first?.peerId == destination)
+    #expect(!status.peers.contains(where: { $0.peerId == destination }))
+    #expect(share.linkRun?.nextDueAtUnixMs == 3000)
+}
+
+@Test func folderCadenceRejectsOutOfBoundsIntervalsAndDefaultsWhenAbsent() throws {
+    let legacy = #"{"deletionPolicy":{"propagateSourceDeletions":false,"restoreLocalDeletions":false},"paused":false}"#
+    let settings = try JSONDecoder().decode(FolderLinkSettings.self, from: Data(legacy.utf8))
+    #expect(settings.cadence == .continuous)
+    #expect(settings.androidConditions == AndroidLinkConditions())
+    #expect(!settings.permitsRunNow)
+    #expect(FolderLinkSettings(
+        deletionPolicy: FolderLinkPolicy(), paused: false, cadence: .manual
+    ).permitsRunNow)
+    #expect(FolderLinkSettings(
+        deletionPolicy: FolderLinkPolicy(), paused: false,
+        cadence: .scheduled(intervalMinutes: 15)
+    ).permitsRunNow)
+    #expect(!FolderLinkSettings(
+        deletionPolicy: FolderLinkPolicy(), paused: true, cadence: .manual
+    ).permitsRunNow)
+
+    for minutes in [14, 525_601] {
+        let invalid = """
+        {"deletionPolicy":{"propagateSourceDeletions":false,"restoreLocalDeletions":false},"paused":false,"cadence":{"mode":"scheduled","intervalMinutes":\(minutes)}}
+        """
+        #expect(throws: (any Error).self) {
+            try JSONDecoder().decode(FolderLinkSettings.self, from: Data(invalid.utf8))
+        }
+    }
 }
 
 @Test func peerAddressRefreshUsesExactAuthenticatedContract() async throws {
@@ -2019,6 +2079,10 @@ func realDaemonBackupVerifyAndRestore() async throws {
             #expect(UUID(uuidString: try #require(object["folderId"] as? String)) == folder)
             #expect(object["label"] as? String == "Plans")
             #expect(object["selectedRoot"] as? String == "/chosen/by/user")
+            #expect((object["cadence"] as? [String: String])?["mode"] == "continuous")
+            #expect(object["androidConditions"] as? [String: Bool] == [
+                "wifiOnly": false, "chargingOnly": false,
+            ])
         case 1:
             #expect(request.url?.path == "/api/v1/sync/accept")
         case 2:
@@ -2046,6 +2110,19 @@ func realDaemonBackupVerifyAndRestore() async throws {
             #expect(Set(object.keys) == ["folderId", "changeId", "expectedRevision", "settings"])
             #expect(UUID(uuidString: try #require(object["folderId"] as? String)) == folder)
             #expect((object["expectedRevision"] as? NSNumber)?.uint64Value == 4)
+            let settings = try #require(object["settings"] as? [String: Any])
+            let cadence = try #require(settings["cadence"] as? [String: Any])
+            #expect(cadence["mode"] as? String == "scheduled")
+            #expect((cadence["intervalMinutes"] as? NSNumber)?.uint32Value == 60)
+            #expect((settings["androidConditions"] as? [String: Bool])?["wifiOnly"] == true)
+        case 8:
+            #expect(request.url?.path == "/api/v1/sync/run")
+            let payload = try #require(requestBody(request))
+            let object = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+            #expect(Set(object.keys) == ["folderId", "requestId", "expectedGeneration", "settingsRevision"])
+            #expect(UUID(uuidString: try #require(object["folderId"] as? String)) == folder)
+            #expect((object["expectedGeneration"] as? NSNumber)?.uint64Value == 7)
+            #expect((object["settingsRevision"] as? NSNumber)?.uint64Value == 4)
         default:
             Issue.record("Unexpected folder mutation request")
         }
@@ -2065,7 +2142,14 @@ func realDaemonBackupVerifyAndRestore() async throws {
     _ = try await client.renewFolder(FolderReferenceRequest(offerId: offer))
     _ = try await client.updateFolderLinkSettings(FolderLinkSettingsRequest(
         folderId: folder, changeId: UUID(), expectedRevision: 4,
-        settings: FolderLinkSettings(deletionPolicy: FolderLinkPolicy(), paused: true)
+        settings: FolderLinkSettings(
+            deletionPolicy: FolderLinkPolicy(), paused: true,
+            cadence: .scheduled(intervalMinutes: 60),
+            androidConditions: AndroidLinkConditions(wifiOnly: true)
+        )
+    ))
+    _ = try await client.runFolderLink(FolderLinkRunRequest(
+        folderId: folder, requestId: UUID(), expectedGeneration: 7, settingsRevision: 4
     ))
 }
 
@@ -2154,6 +2238,61 @@ func realDaemonBackupVerifyAndRestore() async throws {
     )
     #expect(waiting.displayState(for: disconnected) == .waitingForConnection)
     #expect(waiting.displayLabel(for: disconnected) == "Waiting for Kitchen Mac")
+
+    let settingsId = UUID()
+    let manualSettings = FolderLinkSettingsState(
+        revision: 1,
+        settings: FolderLinkSettings(deletionPolicy: FolderLinkPolicy(), paused: false, cadence: .manual),
+        changeId: settingsId, changedBy: peer, confirmed: true,
+        pendingChange: nil, conflictedChange: nil
+    )
+    let idleRun = FolderLinkRunSummary(
+        generation: 0, stateRevision: 0, settingsRevision: 1, phase: nil,
+        startedAtUnixMs: nil, deadlineUnixMs: nil, endedAtUnixMs: nil,
+        nextDueAtUnixMs: nil, pendingRequest: nil, rejectedRequest: nil, destinations: []
+    )
+    let manual = FolderShare(
+        offerId: UUID(), folderId: UUID(), label: "Plans", peerId: peer,
+        incoming: false, phase: .ready, expiresAtUnixMs: nil, expired: false,
+        linkPolicy: FolderLinkPolicy(), linkSettings: manualSettings, linkRun: idleRun
+    )
+    let stopped = FolderSyncStatus(
+        availability: "available", lifecycle: "stopped", issue: nil,
+        healthFreshness: "stale", connectionFreshness: "stale",
+        peers: [], shares: [manual], folders: []
+    )
+    #expect(stopped.displayState(for: manual) == .folderReady)
+    #expect(stopped.displayLabel(for: manual) == "Ready for Run Now")
+
+    let scheduled = FolderShare(
+        offerId: manual.offerId, folderId: manual.folderId, label: manual.label, peerId: peer,
+        incoming: false, phase: .ready, expiresAtUnixMs: nil, expired: false,
+        linkPolicy: FolderLinkPolicy(),
+        linkSettings: FolderLinkSettingsState(
+            revision: 1,
+            settings: FolderLinkSettings(
+                deletionPolicy: FolderLinkPolicy(), paused: false,
+                cadence: .scheduled(intervalMinutes: 60)
+            ),
+            changeId: settingsId, changedBy: peer, confirmed: true,
+            pendingChange: nil, conflictedChange: nil
+        ),
+        linkRun: idleRun
+    )
+    let scheduledStopped = FolderSyncStatus(
+        availability: "available", lifecycle: "stopped", issue: nil,
+        healthFreshness: "stale", connectionFreshness: "stale",
+        peers: [], shares: [scheduled], folders: []
+    )
+    #expect(scheduledStopped.displayState(for: scheduled) == .folderReady)
+    #expect(scheduledStopped.displayLabel(for: scheduled) == "Waiting for schedule")
+
+    let missingRoot = FolderSyncStatus(
+        availability: "available", lifecycle: "needsAttention", issue: "folderAccess",
+        healthFreshness: "stale", connectionFreshness: "stale",
+        peers: [], shares: [manual], folders: []
+    )
+    #expect(missingRoot.displayState(for: manual) == .needsAttention)
 }
 
 @Test func folderInitialScanUsesCheckingStateUntilSafetyGateCompletes() {

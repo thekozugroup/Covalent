@@ -974,13 +974,110 @@ public struct FolderLinkPolicy: Codable, Hashable, Sendable {
     }
 }
 
+public enum FolderLinkCadenceMode: String, Codable, CaseIterable, Sendable {
+    case manual
+    case scheduled
+    case continuous
+}
+
+public enum FolderLinkCadence: Hashable, Sendable {
+    public static let minimumIntervalMinutes: UInt32 = 15
+    public static let maximumIntervalMinutes: UInt32 = 525_600
+
+    case manual
+    case scheduled(intervalMinutes: UInt32)
+    case continuous
+
+    public var mode: FolderLinkCadenceMode {
+        switch self {
+        case .manual: .manual
+        case .scheduled: .scheduled
+        case .continuous: .continuous
+        }
+    }
+
+    public var intervalMinutes: UInt32? {
+        guard case let .scheduled(intervalMinutes) = self else { return nil }
+        return intervalMinutes
+    }
+}
+
+extension FolderLinkCadence: Codable {
+    private enum CodingKeys: String, CodingKey { case mode, intervalMinutes }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        switch try values.decode(FolderLinkCadenceMode.self, forKey: .mode) {
+        case .manual:
+            guard !values.contains(.intervalMinutes) else { throw NodeClientError.invalidResponse }
+            self = .manual
+        case .continuous:
+            guard !values.contains(.intervalMinutes) else { throw NodeClientError.invalidResponse }
+            self = .continuous
+        case .scheduled:
+            let minutes = try values.decode(UInt32.self, forKey: .intervalMinutes)
+            guard Self.minimumIntervalMinutes...Self.maximumIntervalMinutes ~= minutes
+            else { throw NodeClientError.invalidResponse }
+            self = .scheduled(intervalMinutes: minutes)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(mode, forKey: .mode)
+        if case let .scheduled(intervalMinutes) = self {
+            guard Self.minimumIntervalMinutes...Self.maximumIntervalMinutes ~= intervalMinutes
+            else { throw NodeClientError.invalidResponse }
+            try values.encode(intervalMinutes, forKey: .intervalMinutes)
+        }
+    }
+}
+
+public struct AndroidLinkConditions: Codable, Hashable, Sendable {
+    public var wifiOnly: Bool
+    public var chargingOnly: Bool
+
+    public init(wifiOnly: Bool = false, chargingOnly: Bool = false) {
+        self.wifiOnly = wifiOnly
+        self.chargingOnly = chargingOnly
+    }
+}
+
 public struct FolderLinkSettings: Codable, Hashable, Sendable {
     public var deletionPolicy: FolderLinkPolicy
     public var paused: Bool
+    public var cadence: FolderLinkCadence
+    public var androidConditions: AndroidLinkConditions
 
-    public init(deletionPolicy: FolderLinkPolicy, paused: Bool) {
+    public init(
+      deletionPolicy: FolderLinkPolicy,
+      paused: Bool,
+      cadence: FolderLinkCadence = .continuous,
+      androidConditions: AndroidLinkConditions = AndroidLinkConditions()
+    ) {
         self.deletionPolicy = deletionPolicy
         self.paused = paused
+        self.cadence = cadence
+        self.androidConditions = androidConditions
+    }
+
+    public var permitsRunNow: Bool {
+      !paused && cadence != .continuous
+    }
+
+    private enum CodingKeys: String, CodingKey {
+      case deletionPolicy, paused, cadence, androidConditions
+    }
+
+    public init(from decoder: Decoder) throws {
+      let values = try decoder.container(keyedBy: CodingKeys.self)
+      deletionPolicy = try values.decode(FolderLinkPolicy.self, forKey: .deletionPolicy)
+      paused = try values.decode(Bool.self, forKey: .paused)
+      cadence = try values.decodeIfPresent(FolderLinkCadence.self, forKey: .cadence) ?? .continuous
+      androidConditions = try values.decodeIfPresent(
+        AndroidLinkConditions.self,
+        forKey: .androidConditions
+      ) ?? AndroidLinkConditions()
     }
 }
 
@@ -1037,6 +1134,94 @@ public struct PendingFolderLinkSettingsChange: Codable, Equatable, Sendable {
     }
 }
 
+public struct PendingFolderLinkRunRequest: Codable, Equatable, Sendable {
+    public let folderId: UUID
+    public let requestId: UUID
+    public let expectedGeneration: UInt64
+    public let settingsRevision: UInt64
+    public let requiresReview: Bool
+
+    public init(
+      folderId: UUID,
+      requestId: UUID = UUID(),
+      expectedGeneration: UInt64,
+      settingsRevision: UInt64,
+      requiresReview: Bool = false
+    ) {
+      self.folderId = folderId
+      self.requestId = requestId
+      self.expectedGeneration = expectedGeneration
+      self.settingsRevision = settingsRevision
+      self.requiresReview = requiresReview
+    }
+
+    public func markedForReview() -> Self {
+      Self(
+        folderId: folderId,
+        requestId: requestId,
+        expectedGeneration: expectedGeneration,
+        settingsRevision: settingsRevision,
+        requiresReview: true
+      )
+    }
+}
+
+public enum FolderLinkRunPhase: String, Codable, Hashable, Sendable {
+    case preparing
+    case running
+    case succeeded
+    case incomplete
+    case interrupted
+    case cancelled
+}
+
+public enum FolderLinkRunDestinationResult: String, Codable, Hashable, Sendable {
+    case pending
+    case succeeded
+    case failed
+    case timedOut
+    case interrupted
+    case cancelled
+}
+
+public struct FolderLinkRunDestinationSummary: Codable, Hashable, Sendable {
+    public let peerId: UUID
+    public let result: FolderLinkRunDestinationResult
+    public let endedAtUnixMs: UInt64?
+}
+
+public struct FolderLinkRunRequestSummary: Codable, Hashable, Sendable {
+    public let requestId: UUID
+    public let requesterId: UUID
+}
+
+public enum FolderLinkRunRejectionReason: String, Codable, Hashable, Sendable {
+    case generationChanged
+    case settingsChanged
+}
+
+public struct FolderLinkRunRejection: Codable, Hashable, Sendable {
+    public let requesterId: UUID
+    public let requestId: UUID
+    public let reason: FolderLinkRunRejectionReason
+}
+
+public struct FolderLinkRunSummary: Codable, Hashable, Sendable {
+    public let generation: UInt64
+    public let stateRevision: UInt64
+    public let settingsRevision: UInt64
+    public let phase: FolderLinkRunPhase?
+    public let startedAtUnixMs: UInt64?
+    public let deadlineUnixMs: UInt64?
+    public let endedAtUnixMs: UInt64?
+    public let nextDueAtUnixMs: UInt64?
+    public let pendingRequest: FolderLinkRunRequestSummary?
+    public let rejectedRequest: FolderLinkRunRejection?
+    public let destinations: [FolderLinkRunDestinationSummary]
+
+    public var isActive: Bool { phase == .preparing || phase == .running }
+}
+
 public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
     public let offerId: UUID
     public let folderId: UUID
@@ -1045,6 +1230,7 @@ public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
     public let incoming: Bool
     public let linkPolicy: FolderLinkPolicy?
     public let linkSettings: FolderLinkSettingsState?
+    public let linkRun: FolderLinkRunSummary?
     public let phase: FolderSharePhase
     /// Present only for an unaccepted invitation. The node supplies this from
     /// its own clock; the client never tries to decide expiry locally.
@@ -1071,7 +1257,8 @@ public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
       supersededOfferIds: [UUID] = [],
       remoteRemovalPending: Bool = false,
       linkPolicy: FolderLinkPolicy? = nil,
-      linkSettings: FolderLinkSettingsState? = nil
+      linkSettings: FolderLinkSettingsState? = nil,
+      linkRun: FolderLinkRunSummary? = nil
     ) {
       self.offerId = offerId
       self.folderId = folderId
@@ -1080,6 +1267,7 @@ public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
       self.incoming = incoming
       self.linkPolicy = linkPolicy
       self.linkSettings = linkSettings
+      self.linkRun = linkRun
       self.phase = phase
       self.expiresAtUnixMs = expiresAtUnixMs
       self.expired = expired
@@ -1090,7 +1278,7 @@ public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
       case offerId, folderId, label, peerId, incoming, phase, expiresAtUnixMs, expired
-      case peerConnection, supersededOfferIds, remoteRemovalPending, linkPolicy, linkSettings
+      case peerConnection, supersededOfferIds, remoteRemovalPending, linkPolicy, linkSettings, linkRun
     }
 
     public init(from decoder: Decoder) throws {
@@ -1102,6 +1290,7 @@ public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
       incoming = try values.decode(Bool.self, forKey: .incoming)
       linkPolicy = try values.decodeIfPresent(FolderLinkPolicy.self, forKey: .linkPolicy)
       linkSettings = try values.decodeIfPresent(FolderLinkSettingsState.self, forKey: .linkSettings)
+      linkRun = try values.decodeIfPresent(FolderLinkRunSummary.self, forKey: .linkRun)
       phase = try values.decode(FolderSharePhase.self, forKey: .phase)
       expiresAtUnixMs = try values.decodeIfPresent(UInt64.self, forKey: .expiresAtUnixMs)
       expired = try values.decode(Bool.self, forKey: .expired)
@@ -1345,6 +1534,9 @@ extension FolderSyncStatus {
           return .syncing
         }
       }
+      if isExpectedBatchIdle(share) {
+        return .folderReady
+      }
       guard connectionFreshness == "fresh" else { return .waitingForConnection }
       switch share.peerConnection {
       case .connected: return .folderReady
@@ -1355,6 +1547,21 @@ extension FolderSyncStatus {
 
     public func displayLabel(for share: FolderShare) -> String {
       let state = displayState(for: share)
+      if state == .folderReady, isExpectedBatchIdle(share),
+         let settings = share.linkSettings?.settings {
+        switch share.linkRun?.phase {
+        case .succeeded: return "Last run completed"
+        case .incomplete: return "Run incomplete"
+        case .interrupted: return "Run interrupted"
+        case .cancelled: return "Last run cancelled"
+        default:
+          switch settings.cadence {
+          case .manual: return "Ready for Run Now"
+          case .scheduled: return "Waiting for schedule"
+          case .continuous: break
+          }
+        }
+      }
       let peer = peers.first(where: { $0.peerId == share.peerId })?.displayName ?? "other device"
       switch state {
       case .waitingForConnection where connectionFreshness == "fresh"
@@ -1365,6 +1572,19 @@ extension FolderSyncStatus {
         return "Connected to \(peer)"
       default: return state.label
       }
+    }
+
+    private func isExpectedBatchIdle(_ share: FolderShare) -> Bool {
+      guard share.phase == .ready,
+            let settings = share.linkSettings,
+            settings.confirmed,
+            !settings.settings.paused,
+            settings.pendingChange == nil,
+            settings.conflictedChange == nil,
+            share.linkRun?.pendingRequest == nil,
+            share.linkRun?.isActive != true
+      else { return false }
+      return settings.settings.cadence != .continuous
     }
 }
 
@@ -1437,13 +1657,43 @@ public struct FolderOfferRequest: Codable, Equatable, Sendable {
     /// is never rendered by the client outside the user's own picker context.
     public let selectedRoot: String
     public let linkPolicy: FolderLinkPolicy
+    public let cadence: FolderLinkCadence
+    public let androidConditions: AndroidLinkConditions
 
-    public init(peerId: UUID, folderId: UUID, label: String, selectedRoot: String, linkPolicy: FolderLinkPolicy = FolderLinkPolicy()) {
+    public init(
+      peerId: UUID,
+      folderId: UUID,
+      label: String,
+      selectedRoot: String,
+      linkPolicy: FolderLinkPolicy = FolderLinkPolicy(),
+      cadence: FolderLinkCadence = .continuous,
+      androidConditions: AndroidLinkConditions = AndroidLinkConditions()
+    ) {
       self.peerId = peerId
       self.folderId = folderId
       self.label = label
       self.selectedRoot = selectedRoot
       self.linkPolicy = linkPolicy
+      self.cadence = cadence
+      self.androidConditions = androidConditions
+    }
+
+    private enum CodingKeys: String, CodingKey {
+      case peerId, folderId, label, selectedRoot, linkPolicy, cadence, androidConditions
+    }
+
+    public init(from decoder: Decoder) throws {
+      let values = try decoder.container(keyedBy: CodingKeys.self)
+      peerId = try values.decode(UUID.self, forKey: .peerId)
+      folderId = try values.decode(UUID.self, forKey: .folderId)
+      label = try values.decode(String.self, forKey: .label)
+      selectedRoot = try values.decode(String.self, forKey: .selectedRoot)
+      linkPolicy = try values.decode(FolderLinkPolicy.self, forKey: .linkPolicy)
+      cadence = try values.decodeIfPresent(FolderLinkCadence.self, forKey: .cadence) ?? .continuous
+      androidConditions = try values.decodeIfPresent(
+        AndroidLinkConditions.self,
+        forKey: .androidConditions
+      ) ?? AndroidLinkConditions()
     }
 }
 
@@ -1493,6 +1743,25 @@ public struct FolderLinkSettingsRequest: Codable, Equatable, Sendable {
       self.changeId = changeId
       self.expectedRevision = expectedRevision
       self.settings = settings
+    }
+}
+
+public struct FolderLinkRunRequest: Codable, Equatable, Sendable {
+    public let folderId: UUID
+    public let requestId: UUID
+    public let expectedGeneration: UInt64
+    public let settingsRevision: UInt64
+
+    public init(
+      folderId: UUID,
+      requestId: UUID,
+      expectedGeneration: UInt64,
+      settingsRevision: UInt64
+    ) {
+      self.folderId = folderId
+      self.requestId = requestId
+      self.expectedGeneration = expectedGeneration
+      self.settingsRevision = settingsRevision
     }
 }
 

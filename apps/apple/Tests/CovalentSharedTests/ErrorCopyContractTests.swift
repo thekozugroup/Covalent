@@ -215,6 +215,20 @@ import Testing
                 "Folder sync needs attention before it can continue. Check the folder status, then try again.",
                 .retry
             ),
+            (
+                409,
+                "link_run_pending",
+                false,
+                "Another run request is waiting for the source device. Check the link status before trying again.",
+                .none
+            ),
+            (
+                409,
+                "link_run_conflict",
+                false,
+                "The link changed before this run could start. Review its current status before trying again.",
+                .none
+            ),
         ]
         for (status, code, retryable, summary, recovery) in cases {
             let failure = NodeAPIErrorCopy.describe(

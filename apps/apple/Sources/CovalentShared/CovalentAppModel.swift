@@ -225,6 +225,7 @@ public final class CovalentAppModel: ObservableObject {
     @Published public private(set) var directoryGrants: [SelectedDirectoryGrant] = []
     @Published public private(set) var pendingFolderRepairs: [PendingFolderAccessRepair] = []
     @Published public private(set) var pendingFolderLinkSettingsChanges: [PendingFolderLinkSettingsChange] = []
+    @Published public private(set) var pendingFolderLinkRunRequests: [PendingFolderLinkRunRequest] = []
     @Published public private(set) var snapshots: [SnapshotRecord] = []
     @Published public private(set) var activeTask: ActiveTask?
     @Published public var restoreSetupRequest: RestoreSetupRequest?
@@ -462,10 +463,12 @@ public final class CovalentAppModel: ObservableObject {
             async let grants = persistence.loadDirectoryGrants()
             async let pendingRepairs = persistence.loadPendingFolderRepairs()
             async let pendingLinkSettings = persistence.loadPendingFolderLinkSettingsChanges()
+            async let pendingLinkRuns = persistence.loadPendingFolderLinkRunRequests()
             async let history = persistence.loadSnapshots()
             directoryGrants = try await grants
             pendingFolderRepairs = try await pendingRepairs
             pendingFolderLinkSettingsChanges = try await pendingLinkSettings
+            pendingFolderLinkRunRequests = try await pendingLinkRuns
             snapshots = try await history.sorted { $0.createdAt > $1.createdAt }
         } catch {
             report(error, title: "Saved access could not be loaded")
@@ -643,6 +646,7 @@ public final class CovalentAppModel: ObservableObject {
           continue
         }
         try await reconcilePendingFolderLinkSettingsChanges(with: snapshot)
+        try await reconcilePendingFolderLinkRunRequests(with: snapshot)
         return snapshot
       }
       throw NodeClientError.invalidResponse
@@ -654,7 +658,9 @@ public final class CovalentAppModel: ObservableObject {
       folderId: UUID,
       label: String,
       grant: SelectedDirectoryGrant,
-      linkPolicy: FolderLinkPolicy = FolderLinkPolicy()
+      linkPolicy: FolderLinkPolicy = FolderLinkPolicy(),
+      cadence: FolderLinkCadence = .continuous,
+      androidConditions: AndroidLinkConditions = AndroidLinkConditions()
     ) async -> Bool {
       guard beginFolderMutation() else { return false }
       defer { folderSyncMutationInFlight = false }
@@ -667,6 +673,8 @@ public final class CovalentAppModel: ObservableObject {
             label: label,
             grant: grant,
             linkPolicy: linkPolicy,
+            cadence: cadence,
+            androidConditions: androidConditions,
             permitsSharedRoot: false
           )
         )
@@ -679,7 +687,9 @@ public final class CovalentAppModel: ObservableObject {
             folderId: folderId,
             label: label,
             grant: grant,
-            linkPolicy: linkPolicy
+            linkPolicy: linkPolicy,
+            cadence: cadence,
+            androidConditions: androidConditions
           )
         }
         return false
@@ -728,6 +738,8 @@ public final class CovalentAppModel: ObservableObject {
       let label: String
       let grant: SelectedDirectoryGrant
       let linkPolicy: FolderLinkPolicy
+      let cadence: FolderLinkCadence
+      let androidConditions: AndroidLinkConditions
       let permitsSharedRoot: Bool
     }
 
@@ -751,6 +763,7 @@ public final class CovalentAppModel: ObservableObject {
       guard settingsStates.count == 1,
             let settingsState = settingsStates.first,
             shares.allSatisfy({ $0.linkSettings == settingsState }),
+            settingsState.settings.deletionPolicy == linkPolicy,
             settingsState.confirmed,
             settingsState.pendingChange == nil,
             settingsState.conflictedChange == nil
@@ -773,6 +786,8 @@ public final class CovalentAppModel: ObservableObject {
         label: source.label,
         grant: reused,
         linkPolicy: linkPolicy,
+        cadence: settingsState.settings.cadence,
+        androidConditions: settingsState.settings.androidConditions,
         permitsSharedRoot: true
       )
     }
@@ -790,7 +805,9 @@ public final class CovalentAppModel: ObservableObject {
         folderId: draft.folderId,
         label: draft.label,
         selectedRoot: try await root.withCoordinatedRead { $0.path },
-        linkPolicy: draft.linkPolicy
+        linkPolicy: draft.linkPolicy,
+        cadence: draft.cadence,
+        androidConditions: draft.androidConditions
       )
       let mutation = try await root.withCoordinatedRead { url in
         guard url.path == request.selectedRoot else { throw NodeClientError.invalidResponse }
@@ -951,10 +968,12 @@ public final class CovalentAppModel: ObservableObject {
         _ = await updateFolderLinkSettings(
           folderId: share.folderId,
           expectedRevision: state.revision,
-          settings: FolderLinkSettings(
-            deletionPolicy: state.settings.deletionPolicy,
-            paused: paused
-          )
+           settings: FolderLinkSettings(
+             deletionPolicy: state.settings.deletionPolicy,
+             paused: paused,
+             cadence: state.settings.cadence,
+             androidConditions: state.settings.androidConditions
+           )
         )
         return
       }
@@ -1131,6 +1150,173 @@ public final class CovalentAppModel: ObservableObject {
       if updated != pendingFolderLinkSettingsChanges {
         try await persistence.savePendingFolderLinkSettingsChanges(updated)
         pendingFolderLinkSettingsChanges = updated
+      }
+    }
+
+    @discardableResult
+    public func runFolderLinkNow(folderId: UUID) async -> Bool {
+      guard beginFolderMutation() else { return false }
+      defer { folderSyncMutationInFlight = false }
+      do {
+        let request = try await prepareFolderLinkRunRequest(folderId: folderId)
+        return await submitFolderLinkRunRequest(request)
+      } catch {
+        report(error, title: "Link couldn't run")
+        return false
+      }
+    }
+
+    @discardableResult
+    public func retryFolderLinkRun(folderId: UUID) async -> Bool {
+      guard beginFolderMutation() else { return false }
+      defer { folderSyncMutationInFlight = false }
+      guard let request = pendingFolderLinkRunRequests.first(where: {
+        $0.folderId == folderId && !$0.requiresReview
+      }) else {
+        report(NodeClientError.invalidResponse, title: "Review the link before running it")
+        return false
+      }
+      return await submitFolderLinkRunRequest(request)
+    }
+
+    public func reviewPendingFolderLinkRunRequest(folderId: UUID) async {
+      let retained = pendingFolderLinkRunRequests.filter { $0.folderId != folderId }
+      guard retained != pendingFolderLinkRunRequests else { return }
+      do {
+        try await persistence.savePendingFolderLinkRunRequests(retained)
+        pendingFolderLinkRunRequests = retained
+      } catch {
+        report(error, title: "Run request couldn't be reviewed")
+      }
+    }
+
+    private func prepareFolderLinkRunRequest(
+      folderId: UUID
+    ) async throws -> PendingFolderLinkRunRequest {
+      if let existing = pendingFolderLinkRunRequests.first(where: { $0.folderId == folderId }) {
+        guard !existing.requiresReview else { throw NodeClientError.invalidResponse }
+        return existing
+      }
+      let shares = folderSyncStatus?.shares.filter {
+        $0.folderId == folderId && $0.phase != .removed && $0.linkPolicy != nil
+      } ?? []
+      let settingsStates = Set(shares.compactMap(\.linkSettings))
+      let runs = Set(shares.compactMap(\.linkRun))
+      guard !shares.isEmpty,
+            settingsStates.count == 1,
+            let settings = settingsStates.first,
+            settings.confirmed,
+            settings.pendingChange == nil,
+            settings.conflictedChange == nil,
+            settings.settings.permitsRunNow,
+            runs.count <= 1,
+            runs.first?.pendingRequest == nil,
+            runs.first?.isActive != true
+      else { throw NodeClientError.invalidResponse }
+      let request = PendingFolderLinkRunRequest(
+        folderId: folderId,
+        expectedGeneration: runs.first?.generation ?? 0,
+        settingsRevision: settings.revision
+      )
+      guard pendingFolderLinkRunRequests.count < 128 else {
+        throw SelectedDirectoryError.tooManyFolderSyncGrants
+      }
+      let updated = pendingFolderLinkRunRequests + [request]
+      try await persistence.savePendingFolderLinkRunRequests(updated)
+      pendingFolderLinkRunRequests = updated
+      return request
+    }
+
+    private func submitFolderLinkRunRequest(
+      _ request: PendingFolderLinkRunRequest
+    ) async -> Bool {
+      do {
+        _ = try await client.runFolderLink(
+          FolderLinkRunRequest(
+            folderId: request.folderId,
+            requestId: request.requestId,
+            expectedGeneration: request.expectedGeneration,
+            settingsRevision: request.settingsRevision
+          )
+        )
+        let retained = pendingFolderLinkRunRequests.filter {
+          $0.folderId != request.folderId || $0.requestId != request.requestId
+        }
+        try await persistence.savePendingFolderLinkRunRequests(retained)
+        pendingFolderLinkRunRequests = retained
+        await refreshFoldersDuringMutation()
+        return true
+      } catch let error as NodeClientError {
+        if case let .api(_, code, _, _) = error,
+           code == "link_run_pending" || code == "link_run_conflict" {
+          await markFolderLinkRunRequestForReview(request)
+          await refreshFoldersDuringMutation()
+          report(error, title: "Review the link before running it")
+          return false
+        }
+        report(error, title: "Link couldn't run") { [weak self] in
+          _ = await self?.retryFolderLinkRun(folderId: request.folderId)
+        }
+        return false
+      } catch {
+        report(error, title: "Link couldn't run") { [weak self] in
+          _ = await self?.retryFolderLinkRun(folderId: request.folderId)
+        }
+        return false
+      }
+    }
+
+    private func markFolderLinkRunRequestForReview(
+      _ request: PendingFolderLinkRunRequest
+    ) async {
+      guard let index = pendingFolderLinkRunRequests.firstIndex(where: {
+        $0.folderId == request.folderId && $0.requestId == request.requestId
+      }) else { return }
+      var updated = pendingFolderLinkRunRequests
+      updated[index] = updated[index].markedForReview()
+      do {
+        try await persistence.savePendingFolderLinkRunRequests(updated)
+        pendingFolderLinkRunRequests = updated
+      } catch {
+        report(error, title: "Run request couldn't be saved")
+      }
+    }
+
+    private func reconcilePendingFolderLinkRunRequests(
+      with status: FolderSyncStatus
+    ) async throws {
+      let activeFolders = Set(status.shares.filter {
+        $0.phase != .removed && $0.linkPolicy != nil
+      }.map(\.folderId))
+      var updated: [PendingFolderLinkRunRequest] = []
+      for saved in pendingFolderLinkRunRequests where activeFolders.contains(saved.folderId) {
+        let shares = status.shares.filter { $0.folderId == saved.folderId }
+        let settingsStates = Set(shares.compactMap(\.linkSettings))
+        let runs = Set(shares.compactMap(\.linkRun))
+        guard settingsStates.count <= 1, runs.count <= 1 else {
+          throw NodeClientError.invalidResponse
+        }
+        guard let settings = settingsStates.first else {
+          updated.append(saved)
+          continue
+        }
+        let run = runs.first
+        if saved.requiresReview {
+          updated.append(saved)
+        } else if run?.pendingRequest?.requestId == saved.requestId {
+          continue
+        } else if run?.rejectedRequest?.requestId == saved.requestId {
+          updated.append(saved.markedForReview())
+        } else if settings.revision != saved.settingsRevision
+          || (run?.generation).map({ $0 != saved.expectedGeneration }) == true {
+          updated.append(saved.markedForReview())
+        } else {
+          updated.append(saved)
+        }
+      }
+      if updated != pendingFolderLinkRunRequests {
+        try await persistence.savePendingFolderLinkRunRequests(updated)
+        pendingFolderLinkRunRequests = updated
       }
     }
 

@@ -7,6 +7,8 @@ struct MacFoldersView: View {
     @State private var chosenPeer: UUID?
     @State private var label = ""
     @State private var linkPolicy = FolderLinkPolicy()
+    @State private var cadence = FolderLinkCadence.continuous
+    @State private var androidConditions = AndroidLinkConditions()
     /// Kept until a successful offer so a network retry reuses the same folder
     /// identity and cannot create a second offer for the same selection.
     @State private var draftFolderId = UUID()
@@ -218,6 +220,7 @@ struct MacFoldersView: View {
             .foregroundStyle(.secondary)
           if isSettingsRow(share, status: status), let settings = share.linkSettings {
             linkSettingsStatus(settings, share: share)
+            linkRunStatus(settings, share: share, status: status)
           }
         } else {
           Text("Existing two-way folder")
@@ -298,6 +301,28 @@ struct MacFoldersView: View {
 
         if isSettingsRow(share, status: status), let settings = share.linkSettings {
           linkSettingsActions(settings, share: share)
+          if let saved = model.pendingFolderLinkRunRequests.first(where: {
+            $0.folderId == share.folderId
+          }) {
+            if saved.requiresReview {
+              Button("Review Run Status") {
+                Task { await model.reviewPendingFolderLinkRunRequest(folderId: share.folderId) }
+              }
+            } else {
+              Button("Try Run Request Again") {
+                Task { _ = await model.retryFolderLinkRun(folderId: share.folderId) }
+              }
+            }
+          } else if settings.confirmed, settings.pendingChange == nil,
+                    settings.conflictedChange == nil,
+                    settings.settings.permitsRunNow,
+                    share.linkRun?.pendingRequest == nil,
+                    share.linkRun?.isActive != true {
+            Button("Run Now") {
+              Task { _ = await model.runFolderLinkNow(folderId: share.folderId) }
+            }
+            .accessibilityLabel("Run \(share.label) now")
+          }
         }
 
         if state == .needsAttention {
@@ -438,7 +463,120 @@ struct MacFoldersView: View {
 
     private func settingsSummary(_ settings: FolderLinkSettings) -> String {
       let pause = settings.paused ? "Paused" : "Running"
-      return "\(pause). \(settings.deletionPolicy.sourceDeletionExplanation) \(settings.deletionPolicy.destinationDeletionExplanation)"
+      return "\(pause). \(cadenceSummary(settings.cadence)) \(androidConditionsSummary(settings.androidConditions)) \(settings.deletionPolicy.sourceDeletionExplanation) \(settings.deletionPolicy.destinationDeletionExplanation)"
+    }
+
+    private func cadenceSummary(_ cadence: FolderLinkCadence) -> String {
+      switch cadence {
+      case .manual: "Manual transfers."
+      case .continuous: "Continuous transfers."
+      case let .scheduled(minutes): "Scheduled every \(formattedInterval(minutes))."
+      }
+    }
+
+    private func androidConditionsSummary(_ conditions: AndroidLinkConditions) -> String {
+      switch (conditions.wifiOnly, conditions.chargingOnly) {
+      case (false, false): "Android devices have no power or network restrictions."
+      case (true, false): "Android devices use Wi-Fi only."
+      case (false, true): "Android devices run only while charging."
+      case (true, true): "Android devices use Wi-Fi and run only while charging."
+      }
+    }
+
+    private func formattedInterval(_ minutes: UInt32) -> String {
+      if minutes == 60 { return "hour" }
+      if minutes == 1_440 { return "day" }
+      return "\(minutes) minutes"
+    }
+
+    private func formattedRunDate(_ unixMs: UInt64) -> String {
+      Date(timeIntervalSince1970: Double(unixMs) / 1_000)
+        .formatted(date: .abbreviated, time: .shortened)
+    }
+
+    private func runPhaseLabel(_ phase: FolderLinkRunPhase) -> String {
+      switch phase {
+      case .preparing: "Preparing this run"
+      case .running: "Run in progress"
+      case .succeeded: "Last run completed"
+      case .incomplete: "Run incomplete after 24 hours"
+      case .interrupted: "Run interrupted"
+      case .cancelled: "Run cancelled"
+      }
+    }
+
+    private func runPhaseSymbol(_ phase: FolderLinkRunPhase) -> String {
+      switch phase {
+      case .preparing: "clock"
+      case .running: "arrow.triangle.2.circlepath"
+      case .succeeded: "checkmark.circle"
+      case .incomplete, .interrupted: "exclamationmark.triangle"
+      case .cancelled: "xmark.circle"
+      }
+    }
+
+    private func destinationLabel(_ result: FolderLinkRunDestinationResult) -> String {
+      switch result {
+      case .pending: "Waiting"
+      case .succeeded: "Completed"
+      case .failed: "Failed"
+      case .timedOut: "Incomplete after 24 hours"
+      case .interrupted: "Interrupted"
+      case .cancelled: "Cancelled"
+      }
+    }
+
+    @ViewBuilder
+    private func linkRunStatus(
+      _ settings: FolderLinkSettingsState,
+      share: FolderShare,
+      status: FolderSyncStatus
+    ) -> some View {
+      if let saved = model.pendingFolderLinkRunRequests.first(where: { $0.folderId == share.folderId }) {
+        Label(
+          saved.requiresReview ? "Run request needs review" : "Run request is not confirmed",
+          systemImage: saved.requiresReview ? "exclamationmark.triangle" : "wifi.exclamationmark"
+        )
+        .foregroundStyle(saved.requiresReview ? .orange : .secondary)
+      } else if share.linkRun?.pendingRequest != nil {
+        Label("Run request is waiting for the source device", systemImage: "clock")
+        .foregroundStyle(.secondary)
+      } else if share.linkRun?.rejectedRequest != nil {
+        Label("A run request needs review", systemImage: "exclamationmark.triangle")
+          .foregroundStyle(.orange)
+      }
+
+      if let run = share.linkRun, let phase = run.phase {
+        Label(runPhaseLabel(phase), systemImage: runPhaseSymbol(phase))
+          .foregroundStyle(
+            phase == .incomplete || phase == .interrupted
+              ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary)
+          )
+        ForEach(run.destinations, id: \.peerId) { destination in
+          let peer = status.peers.first { $0.peerId == destination.peerId }
+          LabeledContent(
+            peer?.displayName ?? (share.incoming ? "This Mac" : "Destination"),
+            value: destinationLabel(destination.result)
+          )
+            .font(.callout)
+        }
+      } else if settings.settings.cadence == .manual {
+        Text("Idle. Run this link when you want to transfer changes.")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+      }
+
+      if case .scheduled = settings.settings.cadence {
+        if share.incoming {
+          Text("The source device starts scheduled runs.")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        } else if let next = share.linkRun?.nextDueAtUnixMs {
+          Text("Next run: \(formattedRunDate(next))")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
+      }
     }
 
     private func destinationComposer(source: FolderShare, status: FolderSyncStatus) -> some View {
@@ -448,7 +586,7 @@ struct MacFoldersView: View {
       let availablePeers = status.peers.filter { !existingPeers.contains($0.peerId) }
       return Section("Add Destination") {
         LabeledContent("Source Link", value: source.label)
-        Text("Covalent will reuse this link’s source folder and deletion settings.")
+        Text("Covalent will reuse this link’s source folder and shared settings.")
           .font(.callout)
           .foregroundStyle(.secondary)
 
@@ -534,6 +672,15 @@ struct MacFoldersView: View {
           Text(linkPolicy.destinationDeletionExplanation)
             .font(.callout)
             .foregroundStyle(.secondary)
+          FolderCadenceControls(cadence: $cadence)
+            .disabled(pendingOffer != nil)
+          Toggle("Use Wi-Fi only on Android devices", isOn: $androidConditions.wifiOnly)
+            .disabled(pendingOffer != nil)
+          Toggle("Run only while charging on Android devices", isOn: $androidConditions.chargingOnly)
+            .disabled(pendingOffer != nil)
+          Text("These conditions apply only on Android devices. Wi-Fi can be a local network without internet access.")
+            .font(.callout)
+            .foregroundStyle(.secondary)
 
           if let pendingOffer {
             Label("The previous result was uncertain. Retry the same folder offer.", systemImage: "arrow.clockwise")
@@ -567,7 +714,9 @@ struct MacFoldersView: View {
           folderId: offer.folderId,
           label: offer.label,
           grant: offer.grant,
-          linkPolicy: offer.linkPolicy
+          linkPolicy: offer.linkPolicy,
+          cadence: offer.cadence,
+          androidConditions: offer.androidConditions
         )
         if succeeded {
           pendingOffer = nil
@@ -582,13 +731,17 @@ struct MacFoldersView: View {
       guard let peerId = chosenPeer else { return }
       let safeLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
       let selectedPolicy = linkPolicy
+      let selectedCadence = cadence
+      let selectedAndroidConditions = androidConditions
       chooseFolder(purpose: .folderSync) { grant in
         let offer = PendingOffer(
           peerId: peerId,
           folderId: draftFolderId,
           label: safeLabel.isEmpty ? grant.displayName : safeLabel,
           grant: grant,
-          linkPolicy: selectedPolicy
+          linkPolicy: selectedPolicy,
+          cadence: selectedCadence,
+          androidConditions: selectedAndroidConditions
         )
         pendingOffer = offer
         submit(offer)
@@ -645,6 +798,8 @@ struct MacFoldersView: View {
       let label: String
       let grant: SelectedDirectoryGrant
       let linkPolicy: FolderLinkPolicy
+      let cadence: FolderLinkCadence
+      let androidConditions: AndroidLinkConditions
     }
 
     private func chooseFolder(
@@ -697,6 +852,12 @@ private struct MacFolderLinkSettingsEditor: View {
     Form {
       Section("\(editor.label) Settings") {
         Toggle("Pause this link", isOn: $proposed.paused)
+        FolderCadenceControls(cadence: $proposed.cadence)
+        Toggle("Use Wi-Fi only on Android devices", isOn: $proposed.androidConditions.wifiOnly)
+        Toggle("Run only while charging on Android devices", isOn: $proposed.androidConditions.chargingOnly)
+        Text("These conditions apply only on Android devices. Wi-Fi can be a local network without internet access.")
+          .font(.callout)
+          .foregroundStyle(.secondary)
         Toggle(
           "Delete destination copies when source files are deleted",
           isOn: $proposed.deletionPolicy.propagateSourceDeletions
@@ -727,7 +888,7 @@ private struct MacFolderLinkSettingsEditor: View {
       }
     }
     .formStyle(.grouped)
-    .frame(width: 520, height: 390)
+    .frame(width: 560, height: 560)
     .confirmationDialog(
       "Apply Settings With File Consequences?",
       isPresented: $confirmsConsequences
@@ -762,5 +923,68 @@ private struct MacFolderLinkSettingsEditor: View {
   private func commit() {
     save(proposed)
     dismiss()
+  }
+}
+
+private struct FolderCadenceControls: View {
+  @Binding var cadence: FolderLinkCadence
+
+  var body: some View {
+    Picker("Transfers", selection: mode) {
+      Text("Manual").tag(FolderLinkCadenceMode.manual)
+      Text("Scheduled").tag(FolderLinkCadenceMode.scheduled)
+      Text("Continuous").tag(FolderLinkCadenceMode.continuous)
+    }
+    .accessibilityHint("Chooses whether this link runs on request, on a schedule, or continuously.")
+
+    if case .scheduled = cadence {
+      HStack {
+        Text("Common intervals")
+        Spacer()
+        Button("15 Minutes") { cadence = .scheduled(intervalMinutes: 15) }
+        Button("Hourly") { cadence = .scheduled(intervalMinutes: 60) }
+        Button("Daily") { cadence = .scheduled(intervalMinutes: 1_440) }
+      }
+      LabeledContent("Interval in minutes") {
+        TextField("Minutes", value: minutes, format: .number)
+          .frame(width: 90)
+          .accessibilityLabel("Scheduled interval in minutes")
+        Stepper(
+          "Scheduled interval",
+          value: minutes,
+          in: Int(FolderLinkCadence.minimumIntervalMinutes)...Int(FolderLinkCadence.maximumIntervalMinutes)
+        )
+        .labelsHidden()
+      }
+      Text("Choose 15 to 525,600 minutes. The source device starts each scheduled run.")
+        .font(.callout)
+        .foregroundStyle(.secondary)
+    }
+  }
+
+  private var mode: Binding<FolderLinkCadenceMode> {
+    Binding(
+      get: { cadence.mode },
+      set: { selected in
+        switch selected {
+        case .manual: cadence = .manual
+        case .continuous: cadence = .continuous
+        case .scheduled: cadence = .scheduled(intervalMinutes: cadence.intervalMinutes ?? 60)
+        }
+      }
+    )
+  }
+
+  private var minutes: Binding<Int> {
+    Binding(
+      get: { Int(cadence.intervalMinutes ?? 60) },
+      set: { value in
+        let bounded = min(
+          max(value, Int(FolderLinkCadence.minimumIntervalMinutes)),
+          Int(FolderLinkCadence.maximumIntervalMinutes)
+        )
+        cadence = .scheduled(intervalMinutes: UInt32(bounded))
+      }
+    )
   }
 }

@@ -197,15 +197,19 @@ emit_failed_result_details() {
     done < <(
       jq -r '
         .[]?.attachments[]?
-        | select(
-            .suggestedHumanReadableName == "Accessibility audit element"
-            or .suggestedHumanReadableName == "Accessibility audit element.txt"
-          )
         | .exportedFileName
       ' "$manifest" 2>/dev/null
     )
     if (( count == 0 )); then
       print -u2 -- "No text accessibility audit attachments were exported."
+      print -u2 -- "--- bounded xcresult attachment manifest metadata ---"
+      jq -r '
+        .[0:16][]?
+        | .testIdentifier as $test
+        | .attachments[0:16][]?
+        | [$test, .suggestedHumanReadableName, .exportedFileName, .isAssociatedWithFailure]
+        | @tsv
+      ' "$manifest" 2>/dev/null | sed -n '1,64p' >&2
     fi
   fi
   return 0

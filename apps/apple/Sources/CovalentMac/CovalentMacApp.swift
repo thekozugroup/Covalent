@@ -214,12 +214,50 @@ private struct MacMenuBarMenu: View {
                     let peer = status.peers.first { $0.peerId == share.peerId }
                     Text(peer?.displayName ?? "Paired Device")
                     Text(status.displayLabel(for: share))
+                    if isLinkSummaryRow(share, status: status), let settings = share.linkSettings {
+                        Text(menuCadenceLabel(settings.settings.cadence, incoming: share.incoming))
+                        if let run = share.linkRun {
+                            Text(menuRunLabel(run))
+                            ForEach(run.destinations, id: \.peerId) { destination in
+                                let destinationPeer = status.peers.first { $0.peerId == destination.peerId }
+                                let destinationName = destinationPeer?.displayName
+                                    ?? (share.incoming ? "This Mac" : "Destination")
+                                Text("\(destinationName): \(menuDestinationLabel(destination.result))")
+                            }
+                        }
+                    }
                     Button("Show in Covalent") {
                         model.selectedSection = .folders
                         showMainWindow()
                     }
                     Divider()
                     let state = status.displayState(for: share)
+                    if isLinkSummaryRow(share, status: status), let settings = share.linkSettings {
+                        if let saved = model.pendingFolderLinkRunRequests.first(where: {
+                            $0.folderId == share.folderId
+                        }) {
+                            if saved.requiresReview {
+                                Button("Review Run Status") {
+                                    model.selectedSection = .folders
+                                    showMainWindow()
+                                }
+                            } else {
+                                Button("Try Run Request Again") {
+                                    Task { _ = await model.retryFolderLinkRun(folderId: share.folderId) }
+                                }
+                                .disabled(!model.isAuthorized || model.folderSyncMutationInFlight)
+                            }
+                        } else if settings.confirmed, settings.pendingChange == nil,
+                                  settings.conflictedChange == nil,
+                                  settings.settings.permitsRunNow,
+                                  share.linkRun?.pendingRequest == nil,
+                                  share.linkRun?.isActive != true {
+                            Button("Run Now", systemImage: "play.fill") {
+                                Task { _ = await model.runFolderLinkNow(folderId: share.folderId) }
+                            }
+                            .disabled(!model.isAuthorized || model.folderSyncMutationInFlight)
+                        }
+                    }
                     if state == .needsAttention {
                         Button("Try Again") {
                             Task { await model.retryFolderSync() }
@@ -254,7 +292,7 @@ private struct MacMenuBarMenu: View {
                 } label: {
                     Label(
                         "\(share.label) — \(status.displayLabel(for: share))",
-                        systemImage: share.phase == .paused ? "pause.circle" : "folder"
+                        systemImage: menuFolderSymbol(share)
                     )
                 }
             }
@@ -270,6 +308,54 @@ private struct MacMenuBarMenu: View {
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         Task { await model.removeFolder(share.offerId) }
+    }
+
+    private func isLinkSummaryRow(_ share: FolderShare, status: FolderSyncStatus) -> Bool {
+        status.shares.first(where: {
+            $0.folderId == share.folderId && $0.phase != .removed
+        })?.offerId == share.offerId
+    }
+
+    private func menuFolderSymbol(_ share: FolderShare) -> String {
+        if share.phase == .paused { return "pause.circle" }
+        switch share.linkRun?.phase {
+        case .preparing, .running: return "arrow.triangle.2.circlepath"
+        case .incomplete, .interrupted: return "exclamationmark.triangle"
+        default: return "folder"
+        }
+    }
+
+    private func menuCadenceLabel(_ cadence: FolderLinkCadence, incoming: Bool) -> String {
+        switch cadence {
+        case .manual: return "Manual"
+        case .continuous: return "Continuous"
+        case let .scheduled(minutes):
+            return incoming ? "Scheduled by source" : "Scheduled every \(minutes) minutes"
+        }
+    }
+
+    private func menuRunLabel(_ run: FolderLinkRunSummary) -> String {
+        if run.pendingRequest != nil { return "Run request waiting for source" }
+        switch run.phase {
+        case .preparing: return "Preparing run"
+        case .running: return "Run in progress"
+        case .succeeded: return "Last run completed"
+        case .incomplete: return "Run incomplete after 24 hours"
+        case .interrupted: return "Run interrupted"
+        case .cancelled: return "Run cancelled"
+        case nil: return "Idle"
+        }
+    }
+
+    private func menuDestinationLabel(_ result: FolderLinkRunDestinationResult) -> String {
+        switch result {
+        case .pending: return "waiting"
+        case .succeeded: return "completed"
+        case .failed: return "failed"
+        case .timedOut: return "incomplete"
+        case .interrupted: return "interrupted"
+        case .cancelled: return "cancelled"
+        }
     }
 
     private func showMainWindow() {

@@ -381,6 +381,14 @@ public enum NodeAPIErrorCopy {
             "Link settings changed on another device. Review the current settings before trying again.",
             .none
         ),
+        "link_run_pending": (
+            "Another run request is waiting for the source device. Check the link status before trying again.",
+            .none
+        ),
+        "link_run_conflict": (
+            "The link changed before this run could start. Review its current status before trying again.",
+            .none
+        ),
         "invalid_peer_address": (
             "Enter the device address as a numeric IP address and port, such as 192.168.1.20:8787, then try again.",
             .none

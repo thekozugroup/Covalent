@@ -174,6 +174,7 @@ public actor AppleAppPersistence {
     private let grantsURL: URL
     private let pendingFolderRepairsURL: URL
     private let pendingFolderLinkSettingsURL: URL
+    private let pendingFolderLinkRunsURL: URL
     private let snapshotsURL: URL
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
@@ -184,6 +185,7 @@ public actor AppleAppPersistence {
         grantsURL = directory.appending(path: "directory-grants.json")
         pendingFolderRepairsURL = directory.appending(path: "pending-folder-repairs.json")
         pendingFolderLinkSettingsURL = directory.appending(path: "pending-folder-link-settings.json")
+        pendingFolderLinkRunsURL = directory.appending(path: "pending-folder-link-runs.json")
         snapshotsURL = directory.appending(path: "snapshot-history.json")
         decoder.dateDecodingStrategy = .iso8601
         encoder.dateEncodingStrategy = .iso8601
@@ -242,6 +244,29 @@ public actor AppleAppPersistence {
               Set(changes.map(\.folderId)).count == changes.count
         else { throw NodeClientError.invalidResponse }
         try save(changes, to: pendingFolderLinkSettingsURL)
+    }
+
+    public func loadPendingFolderLinkRunRequests() throws -> [PendingFolderLinkRunRequest] {
+        let requests = try load(
+            [PendingFolderLinkRunRequest].self,
+            from: pendingFolderLinkRunsURL,
+            fallback: []
+        )
+        let zero = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+        guard requests.count <= 128,
+              Set(requests.map(\.folderId)).count == requests.count,
+              requests.allSatisfy({ $0.requestId != zero })
+        else { throw NodeClientError.invalidResponse }
+        return requests
+    }
+
+    public func savePendingFolderLinkRunRequests(
+      _ requests: [PendingFolderLinkRunRequest]
+    ) throws {
+        guard requests.count <= 128,
+              Set(requests.map(\.folderId)).count == requests.count
+        else { throw NodeClientError.invalidResponse }
+        try save(requests, to: pendingFolderLinkRunsURL)
     }
 
     public func loadSnapshots() throws -> [SnapshotRecord] {

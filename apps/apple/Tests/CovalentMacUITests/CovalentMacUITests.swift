@@ -53,7 +53,7 @@ final class CovalentMacUITests: XCTestCase {
         app.typeKey("1", modifierFlags: .command)
         XCTAssertTrue(app.staticTexts["Your devices"].waitForExistence(timeout: uiTransitionTimeout))
         app.typeKey("2", modifierFlags: .command)
-        XCTAssertTrue(app.staticTexts["Folder Sync Is Unavailable"].waitForExistence(timeout: uiTransitionTimeout))
+        assertEmptyState("Folder Sync Is Unavailable", in: app)
         app.typeKey("3", modifierFlags: .command)
         XCTAssertTrue(app.staticTexts["Settings transfer"].waitForExistence(timeout: uiTransitionTimeout))
         showOverview(in: app)
@@ -119,8 +119,17 @@ final class CovalentMacUITests: XCTestCase {
         app.typeKey("2", modifierFlags: .command)
         // This harness deliberately runs an unpackaged node. Its Links pane
         // must explain that state and remain accessible.
-        XCTAssertTrue(app.staticTexts["Folder Sync Is Unavailable"].waitForExistence(timeout: uiTransitionTimeout))
+        assertEmptyState("Folder Sync Is Unavailable", in: app)
         try auditMainWindow(in: app)
+    }
+
+    private func assertEmptyState(_ title: String, in app: XCUIApplication) {
+        let emptyState = app.descendants(matching: .any)["mac.emptyState"].firstMatch
+        XCTAssertTrue(emptyState.waitForExistence(timeout: uiTransitionTimeout))
+        XCTAssertTrue(
+            emptyState.label.contains(title),
+            "Expected empty-state label to contain '\(title)', got '\(emptyState.label)'."
+        )
     }
 
     private func auditMainWindow(in app: XCUIApplication) throws {

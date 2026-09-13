@@ -5,23 +5,13 @@ struct MacOverviewView: View {
 
     var body: some View {
         ScrollView {
-            // 20 and 24, not 28 and 32. At the default window size on a
-            // 1024x768 display this screen was 39pt taller than its scroll
-            // view, which put the safeguards row across the fold: its last
-            // line of copy was sliced in half by the bottom of the window on
-            // first launch, with nothing to suggest there was more to scroll
-            // to. The tighter rhythm fits all four sections in the viewport
-            // with about a point to spare and still reads as generous.
-            //
-            // It is also what the accessibility audit was reporting. macOS
-            // draws the Dock over the bottom 14pt of a window this tall, and
-            // the audit screenshots each element's rectangle off the screen —
-            // so an element that reaches into that band is graded partly on
-            // the Dock's chrome, which is mid-grey on white at 2.6:1. Every
-            // run inside these tiles measures 11.6:1 or better; what failed
-            // was never the app's own ink. Keeping content out of the band is
-            // the fix, and it is the same thing a person wants anyway.
-            VStack(alignment: .leading, spacing: 20) {
+            // At 1024x768 this screen previously exceeded its viewport by
+            // 39pt, placing the safeguards row at the bottom window and Dock
+            // boundary. A 20pt section gap left about one point of clearance,
+            // and checkpoint 49 still reported an Overview contrast failure.
+            // The exported result did not identify the exact element. A
+            // standard 16pt gap adds 12pt of clearance for the bottom row.
+            VStack(alignment: .leading, spacing: 16) {
                 header
                 if model.phase != .ready {
                     connectionCallout

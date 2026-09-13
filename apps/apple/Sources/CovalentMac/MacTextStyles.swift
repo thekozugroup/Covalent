@@ -209,6 +209,7 @@ struct MacEmptyState<Actions: View>: View {
                     .frame(width: 360)
             }
             .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("mac.emptyState")
             actions()
                 .padding(.top, 4)
         }
