@@ -90,10 +90,6 @@ internal class SafFolderGrantStore(
         recordsLocked().filter { hasPermission(it.treeUri) }
     }
 
-    fun allRecordsAccessible(): Boolean = synchronized(LOCK) {
-        recordsLocked().all { hasPermission(it.treeUri) }
-    }
-
     private fun recordsLocked(): List<SafFolderGrant> {
         check(persistence.readable) { "Folder choices are unavailable until this phone is unlocked." }
         val encoded = persistence.read() ?: "[]"

@@ -48,13 +48,13 @@ internal fun nodeServiceConfigurationChanged(
     currentDemand: NodeServiceDemand,
 ): Boolean = launchedAccessUnavailable != currentAccessUnavailable || launchedDemand != currentDemand
 
-/** Fail closed when Android cannot prove that the durable capability journal is clear. */
+/** Fail closed when durable grant state is unreadable or a capability change remains pending. */
 internal fun folderSyncAccessUnavailable(
     requested: Boolean,
-    allSafGrantsAccessible: Boolean,
+    safGrantStoreReadable: Boolean,
     hasPendingCapabilityChange: () -> Boolean,
 ): Boolean = requested && (
-    !allSafGrantsAccessible || runCatching(hasPendingCapabilityChange).getOrDefault(true)
+    !safGrantStoreReadable || runCatching(hasPendingCapabilityChange).getOrDefault(true)
 )
 
 /**
@@ -281,8 +281,9 @@ class EmbeddedNodeManager(context: Context) {
 
     internal fun folderSyncAccessUnavailable(): Boolean = folderSyncAccessUnavailable(
         requested = folderSyncRequested(),
-        allSafGrantsAccessible = runCatching {
-            SafFolderGrantStore(applicationContext).allRecordsAccessible()
+        safGrantStoreReadable = runCatching {
+            SafFolderGrantStore(applicationContext).records()
+            true
         }.getOrDefault(false),
         hasPendingCapabilityChange = {
             FolderSyncGrantStore(applicationContext).hasPendingCapabilityChange()

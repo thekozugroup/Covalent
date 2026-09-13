@@ -7,7 +7,7 @@ import org.junit.Test
 
 class FolderSyncLifecycleContractTest {
     @Test
-    fun pendingOrUnreadableCapabilityChangeKeepsFolderExchangeUnavailable() {
+    fun unreadableStoresOrPendingChangesBlockWithoutTreatingLostGrantsAsGlobal() {
         var consulted = false
         assertFalse(
             folderSyncAccessUnavailable(false, false) {
@@ -18,6 +18,8 @@ class FolderSyncLifecycleContractTest {
         assertFalse(consulted)
         assertTrue(folderSyncAccessUnavailable(true, false) { false })
         assertTrue(folderSyncAccessUnavailable(true, true) { true })
+        // Lost permissions are handled per selected root by the native registry.
+        // A readable grant store must not block every unrelated folder link.
         assertFalse(folderSyncAccessUnavailable(true, true) { false })
         assertTrue(folderSyncAccessUnavailable(true, true) { error("unreadable journal") })
     }
