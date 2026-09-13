@@ -183,15 +183,21 @@ final class RealFolderLinkUITests: XCTestCase {
         recordPhase("Covalent phase: manual idle wait entered")
         let idle = app.staticTexts["Idle. Run this link when you want to transfer changes."]
         scrollTo(idle, in: linksScrollView)
-        XCTAssertTrue(idle.waitForExistence(timeout: transferTimeout))
+        guard idle.waitForExistence(timeout: transferTimeout) else {
+            throw FixtureError.missing("manual idle status")
+        }
         recordPhase("Covalent phase: manual idle wait completed")
         recordPhase("Covalent phase: manual link completed")
 
         recordPhase("Covalent phase: first run entered")
         let run = app.buttons["Run Mac UI Link now"]
         scrollTo(run, in: linksScrollView)
-        XCTAssertTrue(run.waitForExistence(timeout: transitionTimeout))
-        XCTAssertTrue(run.isHittable)
+        guard run.waitForExistence(timeout: transitionTimeout) else {
+            throw FixtureError.missing("Run Now control")
+        }
+        guard run.isHittable else {
+            throw FixtureError.missing("hittable Run Now control")
+        }
         run.click()
         let copiedForward = await waitForFile(
             destinationRoot + "/forward.txt",

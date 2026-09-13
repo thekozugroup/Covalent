@@ -164,7 +164,7 @@ public actor NodeClient {
       for share in status.shares {
         guard let state = share.linkSettings else { continue }
         guard share.linkPolicy == state.settings.deletionPolicy,
-              state.changeId != zero,
+              (state.revision == 0) == (state.changeId == zero),
               state.changedBy != zero
         else { throw NodeClientError.invalidResponse }
         for change in [state.pendingChange, state.conflictedChange].compactMap({ $0 }) {
