@@ -1241,6 +1241,7 @@ public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
     public let supersededOfferIds: [UUID]
     /// Local removal is durable; the peer has not yet acknowledged withdrawal.
     public let remoteRemovalPending: Bool
+    public let pairingUpgradeRequired: Bool
 
     public var id: UUID { offerId }
 
@@ -1256,6 +1257,7 @@ public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
       peerConnection: PeerConnectionState = .unknown,
       supersededOfferIds: [UUID] = [],
       remoteRemovalPending: Bool = false,
+      pairingUpgradeRequired: Bool = false,
       linkPolicy: FolderLinkPolicy? = nil,
       linkSettings: FolderLinkSettingsState? = nil,
       linkRun: FolderLinkRunSummary? = nil
@@ -1274,11 +1276,12 @@ public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
       self.peerConnection = peerConnection
       self.supersededOfferIds = supersededOfferIds
       self.remoteRemovalPending = remoteRemovalPending
+      self.pairingUpgradeRequired = pairingUpgradeRequired
     }
 
     private enum CodingKeys: String, CodingKey {
       case offerId, folderId, label, peerId, incoming, phase, expiresAtUnixMs, expired
-      case peerConnection, supersededOfferIds, remoteRemovalPending, linkPolicy, linkSettings, linkRun
+      case peerConnection, supersededOfferIds, remoteRemovalPending, pairingUpgradeRequired, linkPolicy, linkSettings, linkRun
     }
 
     public init(from decoder: Decoder) throws {
@@ -1300,6 +1303,8 @@ public struct FolderShare: Codable, Equatable, Identifiable, Sendable {
         ? try values.decode([UUID].self, forKey: .supersededOfferIds) : []
       remoteRemovalPending = values.contains(.remoteRemovalPending)
         ? try values.decode(Bool.self, forKey: .remoteRemovalPending) : false
+      pairingUpgradeRequired = values.contains(.pairingUpgradeRequired)
+        ? try values.decode(Bool.self, forKey: .pairingUpgradeRequired) : false
       guard !remoteRemovalPending || phase == .removed else { throw NodeClientError.invalidResponse }
     }
 }
@@ -1498,6 +1503,7 @@ extension FolderSyncStatus {
     /// This combines local engine health with a fresh peer reachability
     /// observation. It never claims remote convergence.
     public func displayState(for share: FolderShare) -> FolderShareDisplayState {
+      if share.pairingUpgradeRequired { return .needsAttention }
       if share.expired {
         return .invitationExpired
       }
@@ -1546,6 +1552,7 @@ extension FolderSyncStatus {
     }
 
     public func displayLabel(for share: FolderShare) -> String {
+      if share.pairingUpgradeRequired { return "Pairing Needs an Update" }
       let state = displayState(for: share)
       if state == .folderReady, isExpectedBatchIdle(share),
          let settings = share.linkSettings?.settings {

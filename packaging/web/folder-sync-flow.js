@@ -347,6 +347,7 @@
         ? share.peerConnection : "unknown";
       const superseded = Object.hasOwn(share, "supersededOfferIds") ? share.supersededOfferIds : [];
       const remoteRemovalPending = Object.hasOwn(share, "remoteRemovalPending") ? share.remoteRemovalPending : false;
+      const pairingUpgradeRequired = Object.hasOwn(share, "pairingUpgradeRequired") ? share.pairingUpgradeRequired : false;
       if (!Array.isArray(superseded) || superseded.length > 128) {
         throw guidance("The node returned invalid replacement invitations.");
       }
@@ -354,6 +355,7 @@
         || !PHASES.has(share.phase) || !CONNECTION_STATES.has(peerConnection)
         || typeof share.incoming !== "boolean"
         || typeof share.expired !== "boolean"
+        || typeof pairingUpgradeRequired !== "boolean"
         || typeof remoteRemovalPending !== "boolean" || remoteRemovalPending && share.phase !== "removed"
         || !(share.expiresAtUnixMs === null || share.expiresAtUnixMs === undefined
           || Number.isSafeInteger(share.expiresAtUnixMs) && share.expiresAtUnixMs >= 0)) {
@@ -381,6 +383,7 @@
         expired: share.expired,
         peerConnection,
         remoteRemovalPending,
+        pairingUpgradeRequired,
         supersededOfferIds: Object.freeze(superseded.map((id) => uuid(id))),
       });
     });
@@ -527,6 +530,7 @@
         ? "Stopped here. Waiting for the other device to confirm removal. Files stay on both devices."
         : "Sharing stopped. Files stay on both devices.",
     });
+    if (share.pairingUpgradeRequired) return Object.freeze({ kind: "attention", text: "Pairing needs an update before this connection can transfer. Files stay on both devices." });
     if (share.expired) return Object.freeze({ kind: "expired", text: "Invitation expired" });
     if (share.phase === "paused") return Object.freeze({ kind: "paused", text: "Paused" });
     if (status.lifecycle === "initialScanning") return Object.freeze({ kind: "checking", text: "Checking folder" });

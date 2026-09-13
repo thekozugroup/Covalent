@@ -16,6 +16,18 @@ const changeId = "55555555-5555-4555-8555-555555555555";
 const runRequestId = "66666666-6666-4666-8666-666666666666";
 const secondOfferId = "77777777-7777-4777-8777-777777777777";
 
+test("legacy pairing needs attention without blocking unrelated links", () => {
+  const legacy = share({ pairingUpgradeRequired: true });
+  const decoded = folders.requireStatus(status({ shares: [legacy] }));
+  assert.deepEqual(folders.shareView(decoded, decoded.shares[0]), {
+    kind: "attention",
+    text: "Pairing needs an update before this connection can transfer. Files stay on both devices.",
+  });
+  assert.equal(folders.statusSummary(decoded).kind, "ready");
+  assert.equal(folders.requireStatus(status({ shares: [share()] })).shares[0].pairingUpgradeRequired, false);
+  assert.throws(() => folders.requireStatus(status({ shares: [share({ pairingUpgradeRequired: "false" })] })));
+});
+
 test("idle batch links remain ready while their transfer worker is stopped", () => {
   for (const cadence of [{ mode: "manual" }, { mode: "scheduled", intervalMinutes: 60 }]) {
     const item = share({ phase: "ready", linkPolicy, linkRun: linkRun(),

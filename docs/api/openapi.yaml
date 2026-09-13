@@ -2171,6 +2171,10 @@ components:
           type: boolean
           default: false
           description: This local Android host is waiting for an observation satisfying the link's Wi-Fi or charging requirements. Missing or stale observations also mean waiting. This is not an offline-peer claim or a report about another device.
+        pairingUpgradeRequired:
+          type: boolean
+          default: false
+          description: This connection lacks an authenticated SSH key for the rclone transfer engine. It cannot transfer until its paired engine binding is updated. Other connections remain usable.
     FolderHealthObservation:
       type: object
       additionalProperties: false

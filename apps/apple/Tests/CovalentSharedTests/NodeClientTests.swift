@@ -2320,6 +2320,15 @@ func realDaemonBackupVerifyAndRestore() async throws {
         healthFreshness: "unknown", peers: [], shares: [offered], folders: []
     )
     #expect(!unavailable.isInitialScanning)
+
+    let legacyShare = FolderShare(
+        offerId: UUID(), folderId: UUID(), label: "Old connection", peerId: peer,
+        incoming: false, phase: .ready, expiresAtUnixMs: nil, expired: false,
+        pairingUpgradeRequired: true
+    )
+    #expect(scanning.displayState(for: legacyShare) == .needsAttention)
+    #expect(scanning.displayLabel(for: legacyShare) == "Pairing Needs an Update")
+    #expect(scanning.displayState(for: offered) == .checkingFolder)
 }
 
 private func policyRestorePlan(

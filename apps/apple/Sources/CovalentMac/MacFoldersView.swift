@@ -208,6 +208,10 @@ struct MacFoldersView: View {
         }
         LabeledContent("Paired Device", value: peerName(for: share, status: status))
           .font(.subheadline)
+        if share.pairingUpgradeRequired {
+          Text("Pairing needs an update before this connection can transfer. Files stay on both devices.")
+            .font(.callout)
+        }
         if let policy = share.linkPolicy {
           Label(share.incoming ? "Receives files from the source" : "Sends files to the destination",
                 systemImage: share.incoming ? "arrow.down.circle" : "arrow.up.circle")
