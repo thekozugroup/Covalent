@@ -21,6 +21,16 @@ Updated 2026-09-13 after the owner reaffirmed the lightweight one-way scope. The
 
 [Current requirements](../product/requirements.md). Atlas remains offline; Docker is the accepted Unraid target. Queued builds, source inspection, and unverified agent claims cannot complete a check.
 
+Rclone migration: the restricted upstream v1.75.1 worker builds for macOS arm64,
+Android arm64, and Linux amd64/arm64. The macOS worker is 20.0 MB and Android is
+21.6 MB. Eighteen prototype policy/transport checks and ten packaged read-only
+SFTP checks pass, including denied source writes, host-key verification, scoped
+access, and removal followed by receiver restart. The authorization helper's
+boundary tests pass. These results do not yet prove the integrated app runtime.
+The simplified web console passes a real browser fixture journey; native Mac
+sources typecheck for macOS 15. The Rust runtime, Android integration, packaging,
+full device journeys, and final release remain in progress.
+
 Implementation evidence: the full Rust workspace run passed 908 tests (real worker tests run separately). The current Android build, lint, and 175 JVM tests pass. All 24 Mac production Swift sources compiled and linked, and eight focused Swift tests passed. The web console passed 128 tests. The integrated three-node runtime passes one-way fan-out with an offline destination, retained deletions, source deletion propagation, restoration after restart, and shared/offline/conflicting settings. A separate three-node collection journey passes distinct child-folder ownership, identical filename isolation, overlapping-root rejection, independent settings, and scoped deletion. Missing source mounts and failed source scans preserve destination files while the healthy contributor keeps transferring; restoring the source resumes transfers. The full foundation check and strict integration-test Clippy pass.
 
 Checkpoint 47 hosted CI found Android error-catalog omissions, Docker manifest rejection, and Mac packaging/model-test failures. Corrections now pass Android's full build gate, all 175 Swift tests, Mac engine packaging/signing, and seven host-validation tests on each platform. The fresh Atmos arm64 image passes its dynamic contract and 13-check one-way transfer gate; original server containers, tagged images, networks, and volumes are restored. Android's actual API 37 device journey passes pairing, one-way transfer, pause/resume, address changes, cold restart, visible deletion-setting confirmation, authenticated settings convergence, restoration, deletion propagation, permission loss, recovery, and safe removal. The native deletion explanations and the independently tested failed-scan protection complete row 3. The historical test selector still contains BothWays; its assertions now verify one-way behavior. Scheduling, native HIG/device acceptance, final packages, performance, and publication remain open.

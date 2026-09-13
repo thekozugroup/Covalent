@@ -79,7 +79,7 @@ A later source edit must not silently bypass keep-deleted behavior. Destructive 
 
 Provide Run Now, Scheduled, and Continuous. Settings apply across the whole link. Android provides Wi-Fi and charging conditions and respects operating-system background limits; show waiting conditions without promising exact timing or unrestricted background work.
 
-Scheduled/manual links stop their transfer worker when idle. Continuous links use file events and coalesce changes. Do not promise zero application or operating-system overhead.
+Scheduled/manual links stop their transfer worker when idle. Continuous links check for changes automatically, coalesce work, and respect platform background limits. Use a bounded cadence without adding a separate watcher framework unless measurements justify it. Do not promise zero application or operating-system overhead.
 
 Show per-destination status, meaningful progress, last success, pending settings, and actionable errors. Support pause, resume, retry, and file-preserving removal. An offline destination must not stop other destinations.
 
