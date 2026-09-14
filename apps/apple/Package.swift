@@ -5,7 +5,6 @@ let package = Package(
     name: "CovalentApple",
     platforms: [
         .macOS(.v15),
-        .iOS(.v18),
     ],
     products: [
         .library(name: "CovalentShared", targets: ["CovalentShared"]),

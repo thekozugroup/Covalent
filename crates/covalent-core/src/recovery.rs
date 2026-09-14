@@ -349,15 +349,7 @@ impl RecoveryCapsule {
         master: &RecoveryMasterKey,
         owner: &PublicIdentity,
     ) -> Result<OpenedRecoveryCapsule, CoreError> {
-        validate_suite(self.schema_version, &self.cipher_suite)?;
-        if self.signer_device_id != owner.device_id {
-            return Err(CoreError::IdentityMismatch);
-        }
-        owner.verify(
-            RECOVERY_CAPSULE_SIGNATURE_DOMAIN,
-            &capsule_signing_bytes(self)?,
-            &self.signature,
-        )?;
+        self.verify_signature(owner)?;
         let context = capsule_context(
             self.schema_version,
             self.backup_id,
@@ -403,6 +395,18 @@ impl RecoveryCapsule {
             backup_key,
             provider_directory: payload.provider_directory,
         })
+    }
+
+    pub(crate) fn verify_signature(&self, owner: &PublicIdentity) -> Result<(), CoreError> {
+        validate_suite(self.schema_version, &self.cipher_suite)?;
+        if self.signer_device_id != owner.device_id {
+            return Err(CoreError::IdentityMismatch);
+        }
+        owner.verify(
+            RECOVERY_CAPSULE_SIGNATURE_DOMAIN,
+            &capsule_signing_bytes(self)?,
+            &self.signature,
+        )
     }
 
     /// Stable opaque identifier used by providers for immutable capsule storage.

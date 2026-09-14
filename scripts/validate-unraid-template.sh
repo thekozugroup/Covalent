@@ -92,15 +92,17 @@ require_mode() {
 
 # These are the intended deployment mounts. Generic occurrences of Mode=ro
 # are insufficient: every input and the separate KEK must be read-only, while
-# only state and the explicit restore destination may be writable.
+# only state, the selected sync folder and the explicit restore destination may be writable.
 require_mode /source ro
 require_mode /boot-source ro
 require_mode /run/secrets/covalent-kek ro
 require_mode /config rw
 require_mode /data rw
 require_mode /restore rw
+require_mode /sync rw
 require_mode 8443 tcp
 require_mode 8787 udp
+require_mode 8789 tcp
 
 if grep -Eiq '(docker|tailscale)\.sock|/var/run/docker|/var/run/tailscale' "$template"; then
   echo "Unraid template must not mount Docker or Tailscale control sockets" >&2

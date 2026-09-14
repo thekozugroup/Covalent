@@ -1,0 +1,2468 @@
+//! Real three-node one-way folder-link integration coverage.
+//!
+//! Run explicitly with maintained test executables:
+//! `COVALENT_TEST_SYNC_WORKER=/absolute/worker COVALENT_TEST_SYNC_GUARDIAN=/absolute/guardian cargo test -p covalent-node --test one_way_links -- --ignored --exact three_node_one_way_links_enforce_deletions_restore_and_shared_settings --nocapture`
+
+use std::fs::{self, DirBuilder};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
+use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use covalent_core::StaticKeyProtector;
+use covalent_node::runtime::{NodeRuntime, NodeRuntimeConfig};
+use covalent_node::sync_engine::{FolderSyncRuntimeConfig, VerifiedEngineExecutable};
+use serde_json::{Value, json};
+use sha2::{Digest as _, Sha256};
+use tempfile::TempDir;
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use uuid::Uuid;
+
+const WAIT_LIMIT: Duration = Duration::from_secs(60);
+const POLL_INTERVAL: Duration = Duration::from_millis(200);
+
+#[derive(Clone)]
+struct TestBinaries {
+    worker: PathBuf,
+    worker_sha256: [u8; 32],
+    guardian: PathBuf,
+    guardian_sha256: [u8; 32],
+}
+
+struct NodeSpec {
+    data_directory: PathBuf,
+    runtime_parent: PathBuf,
+    device_name: &'static str,
+    key_byte: u8,
+    peer_address: SocketAddr,
+    sync_address: SocketAddr,
+}
+
+impl NodeSpec {
+    fn new(root: &Path, name: &'static str, key_byte: u8) -> Self {
+        let data_directory = root.join(name);
+        let runtime_parent = root.join(format!("{name}-runtime"));
+        private_directory(&data_directory);
+        private_directory(&runtime_parent);
+        Self {
+            data_directory,
+            runtime_parent,
+            device_name: name,
+            key_byte,
+            peer_address: loopback_zero(),
+            sync_address: reserve_loopback(),
+        }
+    }
+}
+
+fn loopback_zero() -> SocketAddr {
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)
+}
+
+fn reserve_loopback() -> SocketAddr {
+    let listener = TcpListener::bind(loopback_zero()).expect("reserve loopback port");
+    let address = listener.local_addr().expect("reserved loopback address");
+    drop(listener);
+    address
+}
+
+fn private_directory(path: &Path) {
+    DirBuilder::new()
+        .mode(0o700)
+        .create(path)
+        .unwrap_or_else(|error| panic!("create private directory {}: {error}", path.display()));
+}
+
+fn executable_from_env(name: &str) -> (PathBuf, [u8; 32]) {
+    let path = PathBuf::from(
+        std::env::var(name).unwrap_or_else(|_| panic!("{name} must name an absolute executable")),
+    );
+    assert!(
+        path.is_absolute(),
+        "{name} must be absolute: {}",
+        path.display()
+    );
+    let bytes = fs::read(&path)
+        .unwrap_or_else(|error| panic!("read {name} executable {}: {error}", path.display()));
+    (path, Sha256::digest(bytes).into())
+}
+
+fn test_binaries() -> TestBinaries {
+    let (worker, worker_sha256) = executable_from_env("COVALENT_TEST_SYNC_WORKER");
+    let (guardian, guardian_sha256) = executable_from_env("COVALENT_TEST_SYNC_GUARDIAN");
+    TestBinaries {
+        worker,
+        worker_sha256,
+        guardian,
+        guardian_sha256,
+    }
+}
+
+fn verified(path: &Path, sha256: [u8; 32]) -> VerifiedEngineExecutable {
+    VerifiedEngineExecutable::open(path, sha256)
+        .unwrap_or_else(|error| panic!("verify executable {}: {error}", path.display()))
+}
+
+async fn start_node(spec: &NodeSpec, binaries: &TestBinaries) -> NodeRuntime {
+    let mut configuration =
+        NodeRuntimeConfig::new(&spec.data_directory, loopback_zero(), spec.peer_address);
+    configuration.device_name = spec.device_name.to_owned();
+    configuration.key_protector = Some(Arc::new(
+        StaticKeyProtector::new(1, [spec.key_byte; 32]).expect("test key protector"),
+    ));
+    configuration.advertised_peer_address = Some(spec.peer_address);
+    configuration.folder_sync = Some(FolderSyncRuntimeConfig {
+        guardian: verified(&binaries.guardian, binaries.guardian_sha256),
+        worker: verified(&binaries.worker, binaries.worker_sha256),
+        runtime_parent: spec.runtime_parent.clone(),
+        listener: spec.sync_address,
+        advertised_address: Some(spec.sync_address),
+    });
+    NodeRuntime::start(configuration)
+        .await
+        .unwrap_or_else(|error| panic!("start {} runtime: {error:#}", spec.device_name))
+}
+
+struct HttpResponse {
+    status: u16,
+    body: String,
+}
+
+impl HttpResponse {
+    fn json(&self) -> Value {
+        serde_json::from_str(&self.body)
+            .unwrap_or_else(|error| panic!("decode JSON body {:?}: {error}", self.body))
+    }
+}
+
+async fn call(node: &NodeRuntime, method: &str, path: &str, body: Option<&Value>) -> HttpResponse {
+    let body = body.map(Value::to_string);
+    let mut request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {}\r\nConnection: close\r\n",
+        node.ready_info().api_token().expose()
+    );
+    match body.as_deref() {
+        Some(body) => request.push_str(&format!(
+            "Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )),
+        None => request.push_str("Content-Length: 0\r\n\r\n"),
+    }
+    let mut stream = tokio::net::TcpStream::connect(node.ready_info().api_address())
+        .await
+        .expect("connect local API");
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("write local API request");
+    stream.flush().await.expect("flush local API request");
+    let mut raw = Vec::new();
+    stream
+        .read_to_end(&mut raw)
+        .await
+        .expect("read local API response");
+    let raw = String::from_utf8_lossy(&raw);
+    let (head, body) = raw
+        .split_once("\r\n\r\n")
+        .expect("well-formed HTTP response");
+    let status = head
+        .split_whitespace()
+        .nth(1)
+        .and_then(|value| value.parse().ok())
+        .expect("HTTP response status");
+    HttpResponse {
+        status,
+        body: body.to_owned(),
+    }
+}
+
+async fn post_ok(node: &NodeRuntime, path: &str, body: Value) -> Value {
+    let response = call(node, "POST", path, Some(&body)).await;
+    assert_eq!(response.status, 200, "POST {path}: {}", response.body);
+    response.json()
+}
+
+async fn status(node: &NodeRuntime) -> Value {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        let response = call(node, "GET", "/api/v1/sync/status", None).await;
+        if response.status == 200 {
+            return response.json();
+        }
+        let retryable_busy = response.status == 503
+            && response.json().get("code").and_then(Value::as_str) == Some("folder_sync_busy");
+        assert!(
+            retryable_busy && Instant::now() < deadline,
+            "sync status {}: {}",
+            response.status,
+            response.body
+        );
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+fn string_field<'a>(value: &'a Value, name: &str) -> &'a str {
+    value
+        .get(name)
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("missing string field {name} in {value}"))
+}
+
+async fn pair(source: &NodeRuntime, destination: &NodeRuntime, name: &str) -> String {
+    let invitation = post_ok(
+        source,
+        "/api/v1/pair/invitations",
+        json!({
+            "lifetimeMs": 600_000,
+            "endpoints": [source.ready_info().peer_address().to_string()],
+        }),
+    )
+    .await;
+    let accepted = post_ok(
+        destination,
+        "/api/v1/pair/accept",
+        json!({
+            "invitation": invitation,
+            "responderName": name,
+            "responderRoles": ["storage_provider", "backup_reader"],
+            "inviterRoles": ["backup_writer", "backup_reader"],
+        }),
+    )
+    .await;
+    let code = string_field(&accepted, "authenticationString").to_owned();
+    let session = post_ok(
+        destination,
+        "/api/v1/pair/confirm/responder",
+        json!({"session": accepted, "displayedCode": code}),
+    )
+    .await;
+    let session = post_ok(
+        source,
+        "/api/v1/pair/confirm/inviter",
+        json!({"session": session, "displayedCode": code}),
+    )
+    .await;
+    let finalized = post_ok(
+        source,
+        "/api/v1/pair/finalize/inviter",
+        json!({"session": session}),
+    )
+    .await;
+    post_ok(
+        destination,
+        "/api/v1/pair/finalize/responder",
+        json!({"session": session}),
+    )
+    .await;
+    string_field(
+        finalized
+            .get("peerTransport")
+            .filter(|value| !value.is_null())
+            .unwrap_or_else(|| panic!("missing signed peer transport in {finalized}")),
+        "peerId",
+    )
+    .to_owned()
+}
+
+async fn wait_for_status(
+    node: &NodeRuntime,
+    description: &str,
+    predicate: impl Fn(&Value) -> bool,
+) -> Value {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        let last = status(node).await;
+        if predicate(&last) {
+            return last;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {description}; last status: {last}"
+        );
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+fn folder_shares(status: &Value, folder_id: Uuid) -> Vec<&Value> {
+    status
+        .get("shares")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("missing shares in {status}"))
+        .iter()
+        .filter(|share| {
+            share.get("folderId").and_then(Value::as_str) == Some(&folder_id.to_string())
+        })
+        .collect()
+}
+
+fn policy_matches(value: &Value, propagate: bool, restore: bool) -> bool {
+    value
+        .get("propagateSourceDeletions")
+        .and_then(Value::as_bool)
+        == Some(propagate)
+        && value.get("restoreLocalDeletions").and_then(Value::as_bool) == Some(restore)
+}
+
+fn shares_ready_at(
+    status: &Value,
+    folder_id: Uuid,
+    count: usize,
+    revision: u64,
+    propagate: bool,
+    restore: bool,
+) -> bool {
+    let shares = folder_shares(status, folder_id);
+    shares.len() == count
+        && shares.iter().all(|share| {
+            share.get("phase").and_then(Value::as_str) == Some("ready")
+                && share
+                    .get("linkPolicy")
+                    .is_some_and(|policy| policy_matches(policy, propagate, restore))
+                && share.get("linkSettings").is_some_and(|state| {
+                    state.get("revision").and_then(Value::as_u64) == Some(revision)
+                        && state.get("confirmed").and_then(Value::as_bool) == Some(true)
+                        && state.get("pendingChange").is_some_and(Value::is_null)
+                        && state.get("conflictedChange").is_some_and(Value::is_null)
+                        && state
+                            .pointer("/settings/deletionPolicy")
+                            .is_some_and(|policy| policy_matches(policy, propagate, restore))
+                })
+        })
+}
+
+fn shares_converged_after_competing_edits(
+    status: &Value,
+    folder_id: Uuid,
+    count: usize,
+    committed_change_id: Uuid,
+    propagate: bool,
+    restore: bool,
+    conflict: Option<(Uuid, bool, bool)>,
+) -> bool {
+    let committed_change_id = committed_change_id.to_string();
+    let shares = folder_shares(status, folder_id);
+    shares.len() == count
+        && shares.iter().all(|share| {
+            let Some(state) = share.get("linkSettings") else {
+                return false;
+            };
+            let conflict_matches = match conflict {
+                None => state.get("conflictedChange").is_some_and(Value::is_null),
+                Some((change_id, conflict_propagate, conflict_restore)) => {
+                    state.get("conflictedChange").is_some_and(|request| {
+                        request.get("changeId").and_then(Value::as_str)
+                            == Some(change_id.to_string().as_str())
+                            && request.get("expectedRevision").and_then(Value::as_u64) == Some(4)
+                            && request
+                                .pointer("/settings/deletionPolicy")
+                                .is_some_and(|policy| {
+                                    policy_matches(policy, conflict_propagate, conflict_restore)
+                                })
+                    })
+                }
+            };
+            share.get("phase").and_then(Value::as_str) == Some("ready")
+                && share
+                    .get("linkPolicy")
+                    .is_some_and(|policy| policy_matches(policy, propagate, restore))
+                && state.get("revision").and_then(Value::as_u64) == Some(5)
+                && state.get("changeId").and_then(Value::as_str)
+                    == Some(committed_change_id.as_str())
+                && state.get("confirmed").and_then(Value::as_bool) == Some(true)
+                && state.get("pendingChange").is_some_and(Value::is_null)
+                && state
+                    .pointer("/settings/deletionPolicy")
+                    .is_some_and(|policy| policy_matches(policy, propagate, restore))
+                && conflict_matches
+        })
+}
+
+async fn wait_ready_at(
+    node: &NodeRuntime,
+    description: &str,
+    folder_id: Uuid,
+    count: usize,
+    revision: u64,
+    propagate: bool,
+    restore: bool,
+) -> Value {
+    wait_for_status(node, description, |value| {
+        shares_ready_at(value, folder_id, count, revision, propagate, restore)
+    })
+    .await
+}
+
+async fn offer_and_accept(
+    source: &NodeRuntime,
+    destination: &NodeRuntime,
+    peer_id: &str,
+    folder_id: Uuid,
+    source_root: &Path,
+    destination_root: &Path,
+) {
+    offer_and_accept_at_cadence(
+        source,
+        destination,
+        peer_id,
+        folder_id,
+        source_root,
+        destination_root,
+        json!({"mode": "continuous"}),
+    )
+    .await;
+}
+
+async fn offer_and_accept_at_cadence(
+    source: &NodeRuntime,
+    destination: &NodeRuntime,
+    peer_id: &str,
+    folder_id: Uuid,
+    source_root: &Path,
+    destination_root: &Path,
+    cadence: Value,
+) {
+    let offered = post_ok(
+        source,
+        "/api/v1/sync/folders",
+        json!({
+            "peerId": peer_id,
+            "folderId": folder_id,
+            "label": "Three-node one-way link",
+            "cadence": cadence,
+            "selectedRoot": source_root,
+            "linkPolicy": {
+                "propagateSourceDeletions": false,
+                "restoreLocalDeletions": false,
+            },
+        }),
+    )
+    .await;
+    let offer_id = string_field(&offered, "offerId").to_owned();
+    wait_for_status(destination, "signed incoming folder offer", |value| {
+        folder_shares(value, folder_id).iter().any(|share| {
+            share.get("offerId").and_then(Value::as_str) == Some(offer_id.as_str())
+                && share.get("incoming").and_then(Value::as_bool) == Some(true)
+        })
+    })
+    .await;
+    post_ok(
+        destination,
+        "/api/v1/sync/accept",
+        json!({"offerId": offer_id, "selectedRoot": destination_root}),
+    )
+    .await;
+}
+
+async fn update_settings(
+    node: &NodeRuntime,
+    folder_id: Uuid,
+    expected_revision: u64,
+    change_id: Uuid,
+    propagate: bool,
+    restore: bool,
+) {
+    post_ok(
+        node,
+        "/api/v1/sync/settings",
+        json!({
+            "folderId": folder_id,
+            "changeId": change_id,
+            "expectedRevision": expected_revision,
+            "settings": {
+                "deletionPolicy": {
+                    "propagateSourceDeletions": propagate,
+                    "restoreLocalDeletions": restore,
+                },
+                "paused": false,
+            },
+        }),
+    )
+    .await;
+}
+
+async fn wait_file(path: &Path, expected: &[u8], description: &str) {
+    assert!(
+        wait_file_until(path, expected).await,
+        "timed out waiting for {description}: {}",
+        path.display()
+    );
+}
+
+async fn wait_file_until(path: &Path, expected: &[u8]) -> bool {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        match fs::read(path) {
+            Ok(bytes) if bytes == expected => return true,
+            _ => {}
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+async fn wait_absent(path: &Path, description: &str) {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        match fs::symlink_metadata(path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            _ => {}
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {description}: {}",
+            path.display()
+        );
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+fn write(root: &Path, name: &str, bytes: &[u8]) {
+    fs::write(root.join(name), bytes)
+        .unwrap_or_else(|error| panic!("write {name} in {}: {error}", root.display()));
+}
+
+fn assert_absent(path: &Path, description: &str) {
+    assert!(
+        matches!(fs::symlink_metadata(path), Err(error) if error.kind() == std::io::ErrorKind::NotFound),
+        "{description}: {} exists",
+        path.display()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires explicit maintained folder-sync worker and freshly compiled guardian paths"]
+async fn three_node_one_way_links_enforce_deletions_restore_and_shared_settings() {
+    let binaries = test_binaries();
+    let root = TempDir::new().expect("isolated three-node test root");
+    let mut source_spec = NodeSpec::new(root.path(), "source", 0x91);
+    let destination_a_spec = NodeSpec::new(root.path(), "destination-a", 0x92);
+    let destination_b_spec = NodeSpec::new(root.path(), "destination-b", 0x93);
+    let source_root = root.path().join("source-files");
+    let destination_a_root = root.path().join("destination-a-files");
+    let destination_b_root = root.path().join("destination-b-files");
+    for path in [&source_root, &destination_a_root, &destination_b_root] {
+        private_directory(path);
+    }
+
+    let mut source = start_node(&source_spec, &binaries).await;
+    source_spec.peer_address = source.ready_info().peer_address();
+    let destination_a = start_node(&destination_a_spec, &binaries).await;
+    let destination_b = start_node(&destination_b_spec, &binaries).await;
+
+    let destination_a_id = pair(&source, &destination_a, "Destination A").await;
+    let destination_b_id = pair(&source, &destination_b, "Destination B").await;
+    let folder_id = Uuid::new_v4();
+    offer_and_accept(
+        &source,
+        &destination_a,
+        &destination_a_id,
+        folder_id,
+        &source_root,
+        &destination_a_root,
+    )
+    .await;
+    offer_and_accept(
+        &source,
+        &destination_b,
+        &destination_b_id,
+        folder_id,
+        &source_root,
+        &destination_b_root,
+    )
+    .await;
+    wait_ready_at(
+        &source,
+        "source fanout ready",
+        folder_id,
+        2,
+        0,
+        false,
+        false,
+    )
+    .await;
+    wait_ready_at(
+        &destination_a,
+        "destination A ready",
+        folder_id,
+        1,
+        0,
+        false,
+        false,
+    )
+    .await;
+    wait_ready_at(
+        &destination_b,
+        "destination B ready",
+        folder_id,
+        1,
+        0,
+        false,
+        false,
+    )
+    .await;
+
+    write(&source_root, "initial.txt", b"source initial\n");
+    wait_file(
+        &destination_a_root.join("initial.txt"),
+        b"source initial\n",
+        "initial transfer to destination A",
+    )
+    .await;
+    wait_file(
+        &destination_b_root.join("initial.txt"),
+        b"source initial\n",
+        "initial transfer to destination B",
+    )
+    .await;
+
+    write(
+        &destination_a_root,
+        "destination-only.txt",
+        b"must stay local\n",
+    );
+    write(&source_root, "destination-barrier.txt", b"barrier one\n");
+    wait_file(
+        &destination_a_root.join("destination-barrier.txt"),
+        b"barrier one\n",
+        "destination A barrier after its local write",
+    )
+    .await;
+    wait_file(
+        &destination_b_root.join("destination-barrier.txt"),
+        b"barrier one\n",
+        "destination B barrier after destination A local write",
+    )
+    .await;
+    assert_absent(
+        &source_root.join("destination-only.txt"),
+        "destination-created file reached source",
+    );
+    assert_absent(
+        &destination_b_root.join("destination-only.txt"),
+        "destination-created file reached another destination",
+    );
+
+    write(&source_root, "local-delete.txt", b"source version one\n");
+    wait_file(
+        &destination_a_root.join("local-delete.txt"),
+        b"source version one\n",
+        "local-deletion seed at destination A",
+    )
+    .await;
+    wait_file(
+        &destination_b_root.join("local-delete.txt"),
+        b"source version one\n",
+        "local-deletion seed at destination B",
+    )
+    .await;
+    fs::remove_file(destination_a_root.join("local-delete.txt"))
+        .expect("delete destination A local copy");
+    write(
+        &source_root,
+        "local-delete.txt",
+        b"source version two is different\n",
+    );
+    write(&source_root, "local-delete-barrier.txt", b"barrier two\n");
+    wait_file(
+        &destination_b_root.join("local-delete.txt"),
+        b"source version two is different\n",
+        "source edit at destination B",
+    )
+    .await;
+    wait_file(
+        &destination_a_root.join("local-delete-barrier.txt"),
+        b"barrier two\n",
+        "destination A barrier after source edit",
+    )
+    .await;
+    assert_absent(
+        &destination_a_root.join("local-delete.txt"),
+        "locally deleted destination file was restored without restore policy",
+    );
+
+    write(
+        &source_root,
+        "keep-after-source-delete.txt",
+        b"keep this copy\n",
+    );
+    wait_file(
+        &destination_a_root.join("keep-after-source-delete.txt"),
+        b"keep this copy\n",
+        "kept-copy seed at destination A",
+    )
+    .await;
+    wait_file(
+        &destination_b_root.join("keep-after-source-delete.txt"),
+        b"keep this copy\n",
+        "kept-copy seed at destination B",
+    )
+    .await;
+    fs::remove_file(source_root.join("keep-after-source-delete.txt"))
+        .expect("delete source file under keep policy");
+    write(
+        &source_root,
+        "source-delete-barrier.txt",
+        b"barrier three\n",
+    );
+    wait_file(
+        &destination_a_root.join("source-delete-barrier.txt"),
+        b"barrier three\n",
+        "destination A barrier after kept source deletion",
+    )
+    .await;
+    wait_file(
+        &destination_b_root.join("source-delete-barrier.txt"),
+        b"barrier three\n",
+        "destination B barrier after kept source deletion",
+    )
+    .await;
+    assert_eq!(
+        fs::read(destination_a_root.join("keep-after-source-delete.txt"))
+            .expect("destination A retained source deletion"),
+        b"keep this copy\n"
+    );
+    assert_eq!(
+        fs::read(destination_b_root.join("keep-after-source-delete.txt"))
+            .expect("destination B retained source deletion"),
+        b"keep this copy\n"
+    );
+
+    update_settings(&source, folder_id, 0, Uuid::new_v4(), true, false).await;
+    wait_ready_at(&source, "source revision 1", folder_id, 2, 1, true, false).await;
+    wait_ready_at(
+        &destination_a,
+        "destination A revision 1",
+        folder_id,
+        1,
+        1,
+        true,
+        false,
+    )
+    .await;
+    wait_ready_at(
+        &destination_b,
+        "destination B revision 1",
+        folder_id,
+        1,
+        1,
+        true,
+        false,
+    )
+    .await;
+    assert_absent(
+        &destination_a_root.join("local-delete.txt"),
+        "destination-local deletion did not survive the revision 1 worker restart",
+    );
+    assert_eq!(
+        fs::read(source_root.join("local-delete.txt"))
+            .expect("source update after revision 1 restart"),
+        b"source version two is different\n"
+    );
+    assert_eq!(
+        fs::read(destination_b_root.join("local-delete.txt"))
+            .expect("destination B update after revision 1 restart"),
+        b"source version two is different\n"
+    );
+
+    write(
+        &source_root,
+        "propagated-delete.txt",
+        b"delete everywhere\n",
+    );
+    wait_file(
+        &destination_a_root.join("propagated-delete.txt"),
+        b"delete everywhere\n",
+        "propagated-deletion seed at destination A",
+    )
+    .await;
+    wait_file(
+        &destination_b_root.join("propagated-delete.txt"),
+        b"delete everywhere\n",
+        "propagated-deletion seed at destination B",
+    )
+    .await;
+    fs::remove_file(source_root.join("propagated-delete.txt"))
+        .expect("delete source file under propagation policy");
+    write(&source_root, "propagation-barrier.txt", b"barrier four\n");
+    wait_file(
+        &destination_a_root.join("propagation-barrier.txt"),
+        b"barrier four\n",
+        "destination A barrier after propagated deletion",
+    )
+    .await;
+    wait_file(
+        &destination_b_root.join("propagation-barrier.txt"),
+        b"barrier four\n",
+        "destination B barrier after propagated deletion",
+    )
+    .await;
+    wait_absent(
+        &destination_a_root.join("propagated-delete.txt"),
+        "propagated deletion at destination A",
+    )
+    .await;
+    wait_absent(
+        &destination_b_root.join("propagated-delete.txt"),
+        "propagated deletion at destination B",
+    )
+    .await;
+
+    let restore_bytes = b"restore without source edit\n";
+    let source_restore_file = source_root.join("restore-toggle.txt");
+    let destination_a_restore_file = destination_a_root.join("restore-toggle.txt");
+    write(&source_root, "restore-toggle.txt", restore_bytes);
+    wait_file(
+        &destination_a_restore_file,
+        restore_bytes,
+        "restore seed at destination A",
+    )
+    .await;
+    wait_file(
+        &destination_b_root.join("restore-toggle.txt"),
+        restore_bytes,
+        "restore seed at destination B",
+    )
+    .await;
+    fs::remove_file(&destination_a_restore_file)
+        .expect("delete destination A copy before restore toggle");
+    assert_absent(
+        &destination_a_restore_file,
+        "destination A restore seed deletion",
+    );
+    update_settings(&source, folder_id, 1, Uuid::new_v4(), true, true).await;
+    wait_ready_at(&source, "source revision 2", folder_id, 2, 2, true, true).await;
+    wait_ready_at(
+        &destination_a,
+        "destination A revision 2",
+        folder_id,
+        1,
+        2,
+        true,
+        true,
+    )
+    .await;
+    wait_ready_at(
+        &destination_b,
+        "destination B revision 2",
+        folder_id,
+        1,
+        2,
+        true,
+        true,
+    )
+    .await;
+    let restored = wait_file_until(&destination_a_restore_file, restore_bytes).await;
+    assert_eq!(
+        fs::read(&source_restore_file).expect("source restore file remains readable"),
+        restore_bytes,
+        "source restore file changed during destination restart"
+    );
+    assert!(
+        restored,
+        "background restore did not recover the destination file after confirmed revision 2"
+    );
+
+    update_settings(&destination_a, folder_id, 2, Uuid::new_v4(), false, false).await;
+    wait_ready_at(
+        &source,
+        "source accepted destination revision 3",
+        folder_id,
+        2,
+        3,
+        false,
+        false,
+    )
+    .await;
+    wait_ready_at(
+        &destination_a,
+        "requesting destination converged at revision 3",
+        folder_id,
+        1,
+        3,
+        false,
+        false,
+    )
+    .await;
+    wait_ready_at(
+        &destination_b,
+        "second destination converged at revision 3",
+        folder_id,
+        1,
+        3,
+        false,
+        false,
+    )
+    .await;
+
+    source
+        .stop()
+        .await
+        .expect("stop source before offline edit");
+    let offline_change_id = Uuid::new_v4();
+    update_settings(&destination_a, folder_id, 3, offline_change_id, false, true).await;
+    wait_for_status(
+        &destination_a,
+        "durable pending offline settings request",
+        |value| {
+            let shares = folder_shares(value, folder_id);
+            shares.len() == 1
+                && shares[0]
+                    .pointer("/linkSettings/pendingChange/changeId")
+                    .and_then(Value::as_str)
+                    == Some(&offline_change_id.to_string())
+        },
+    )
+    .await;
+    drop(source);
+    source = start_node(&source_spec, &binaries).await;
+    assert_eq!(
+        source.ready_info().peer_address(),
+        source_spec.peer_address,
+        "source restarted on its signed peer endpoint"
+    );
+    wait_ready_at(
+        &source,
+        "restarted source revision 4",
+        folder_id,
+        2,
+        4,
+        false,
+        true,
+    )
+    .await;
+    wait_ready_at(
+        &destination_a,
+        "offline requester converged at revision 4",
+        folder_id,
+        1,
+        4,
+        false,
+        true,
+    )
+    .await;
+    wait_ready_at(
+        &destination_b,
+        "other destination converged after source restart",
+        folder_id,
+        1,
+        4,
+        false,
+        true,
+    )
+    .await;
+
+    source
+        .stop()
+        .await
+        .expect("stop source before competing offline edits");
+    let destination_a_change = Uuid::new_v4();
+    let destination_b_change = Uuid::new_v4();
+    update_settings(
+        &destination_a,
+        folder_id,
+        4,
+        destination_a_change,
+        true,
+        false,
+    )
+    .await;
+    update_settings(
+        &destination_b,
+        folder_id,
+        4,
+        destination_b_change,
+        false,
+        false,
+    )
+    .await;
+    for (node, description, change_id, propagate) in [
+        (
+            &destination_a,
+            "destination A competing request is pending",
+            destination_a_change,
+            true,
+        ),
+        (
+            &destination_b,
+            "destination B competing request is pending",
+            destination_b_change,
+            false,
+        ),
+    ] {
+        wait_for_status(node, description, |value| {
+            let shares = folder_shares(value, folder_id);
+            shares.len() == 1
+                && shares[0]
+                    .pointer("/linkSettings/pendingChange")
+                    .is_some_and(|request| {
+                        request.get("changeId").and_then(Value::as_str)
+                            == Some(change_id.to_string().as_str())
+                            && request.get("expectedRevision").and_then(Value::as_u64) == Some(4)
+                            && request
+                                .pointer("/settings/deletionPolicy")
+                                .is_some_and(|policy| policy_matches(policy, propagate, false))
+                    })
+        })
+        .await;
+    }
+
+    drop(source);
+    source = start_node(&source_spec, &binaries).await;
+    assert_eq!(
+        source.ready_info().peer_address(),
+        source_spec.peer_address,
+        "source restarted on its signed peer endpoint after competing edits"
+    );
+    let source_status = wait_for_status(&source, "one competing edit wins revision 5", |value| {
+        shares_converged_after_competing_edits(
+            value,
+            folder_id,
+            2,
+            destination_a_change,
+            true,
+            false,
+            None,
+        ) || shares_converged_after_competing_edits(
+            value,
+            folder_id,
+            2,
+            destination_b_change,
+            false,
+            false,
+            None,
+        )
+    })
+    .await;
+    let committed_change_id = Uuid::parse_str(
+        folder_shares(&source_status, folder_id)[0]
+            .pointer("/linkSettings/changeId")
+            .and_then(Value::as_str)
+            .expect("source revision 5 change ID"),
+    )
+    .expect("source revision 5 UUID");
+    let destination_a_won = committed_change_id == destination_a_change;
+    assert!(
+        destination_a_won || committed_change_id == destination_b_change,
+        "source committed neither competing request"
+    );
+    let (winner_propagate, loser_change, loser_propagate) = if destination_a_won {
+        (true, destination_b_change, false)
+    } else {
+        (false, destination_a_change, true)
+    };
+    wait_for_status(
+        &destination_a,
+        "destination A observes the CAS winner",
+        |value| {
+            shares_converged_after_competing_edits(
+                value,
+                folder_id,
+                1,
+                committed_change_id,
+                winner_propagate,
+                false,
+                (!destination_a_won).then_some((loser_change, loser_propagate, false)),
+            )
+        },
+    )
+    .await;
+    wait_for_status(
+        &destination_b,
+        "destination B observes the CAS winner",
+        |value| {
+            shares_converged_after_competing_edits(
+                value,
+                folder_id,
+                1,
+                committed_change_id,
+                winner_propagate,
+                false,
+                destination_a_won.then_some((loser_change, loser_propagate, false)),
+            )
+        },
+    )
+    .await;
+    assert!(
+        shares_converged_after_competing_edits(
+            &status(&source).await,
+            folder_id,
+            2,
+            committed_change_id,
+            winner_propagate,
+            false,
+            None,
+        ),
+        "the losing request overwrote the revision 5 winner"
+    );
+
+    destination_b
+        .stop()
+        .await
+        .expect("stop destination B before independent fanout");
+    write(
+        &source_root,
+        "offline-destination.txt",
+        b"online destination continues\n",
+    );
+    wait_file(
+        &destination_a_root.join("offline-destination.txt"),
+        b"online destination continues\n",
+        "online destination while another destination is offline",
+    )
+    .await;
+    assert_absent(
+        &destination_b_root.join("offline-destination.txt"),
+        "stopped destination unexpectedly transferred",
+    );
+    source.stop().await.expect("stop source");
+    destination_a.stop().await.expect("stop destination A");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires explicit maintained folder-sync worker and freshly compiled guardian paths"]
+async fn collection_links_isolate_sources_and_preserve_files_when_a_source_cannot_scan() {
+    let binaries = test_binaries();
+    let root = TempDir::new().expect("isolated collection test root");
+    let mut a_spec = NodeSpec::new(root.path(), "family-a", 0xa1);
+    let b_spec = NodeSpec::new(root.path(), "family-b", 0xa2);
+    let pool_spec = NodeSpec::new(root.path(), "collection", 0xa3);
+    let a_root = root.path().join("a-photos");
+    let b_root = root.path().join("b-photos");
+    let collection = root.path().join("family-photos");
+    let a_target = collection.join("Family A");
+    let b_target = collection.join("Family B");
+    for path in [&a_root, &b_root, &collection, &a_target, &b_target] {
+        private_directory(path);
+    }
+    let mut a = start_node(&a_spec, &binaries).await;
+    a_spec.peer_address = a.ready_info().peer_address();
+    let b = start_node(&b_spec, &binaries).await;
+    let pool = start_node(&pool_spec, &binaries).await;
+    let a_peer = pair(&a, &pool, "Family collection A").await;
+    let b_peer = pair(&b, &pool, "Family collection B").await;
+    let a_folder = Uuid::new_v4();
+    let b_folder = Uuid::new_v4();
+    offer_and_accept(&a, &pool, &a_peer, a_folder, &a_root, &a_target).await;
+    let offered = post_ok(
+        &b,
+        "/api/v1/sync/folders",
+        json!({
+            "peerId": b_peer,
+            "folderId": b_folder,
+            "label": "Family B photos",
+            "selectedRoot": b_root,
+            "linkPolicy": {
+                "propagateSourceDeletions": false,
+                "restoreLocalDeletions": false,
+            },
+        }),
+    )
+    .await;
+    let offer_id = string_field(&offered, "offerId");
+    wait_for_status(&pool, "second collection offer", |value| {
+        folder_shares(value, b_folder)
+            .iter()
+            .any(|share| share.get("offerId").and_then(Value::as_str) == Some(offer_id))
+    })
+    .await;
+    // Two links cannot share a root or claim the parent of another link.
+    for rejected_root in [&a_target, &collection] {
+        let response = call(
+            &pool,
+            "POST",
+            "/api/v1/sync/accept",
+            Some(&json!({"offerId": offer_id, "selectedRoot": rejected_root})),
+        )
+        .await;
+        assert_eq!(
+            response.status, 409,
+            "overlapping collection root accepted: {}",
+            response.body
+        );
+    }
+    post_ok(
+        &pool,
+        "/api/v1/sync/accept",
+        json!({"offerId": offer_id, "selectedRoot": b_target}),
+    )
+    .await;
+    wait_ready_at(&pool, "family A link ready", a_folder, 1, 0, false, false).await;
+    wait_ready_at(&pool, "family B link ready", b_folder, 1, 0, false, false).await;
+    write(&a_root, "IMG_0001.jpg", b"family A photo\n");
+    write(&a_root, "a-only.jpg", b"only family A\n");
+    write(&b_root, "IMG_0001.jpg", b"family B photo\n");
+    write(&b_root, "b-only.jpg", b"only family B\n");
+    for (path, bytes) in [
+        (
+            a_target.join("IMG_0001.jpg"),
+            b"family A photo\n".as_slice(),
+        ),
+        (a_target.join("a-only.jpg"), b"only family A\n".as_slice()),
+        (
+            b_target.join("IMG_0001.jpg"),
+            b"family B photo\n".as_slice(),
+        ),
+        (b_target.join("b-only.jpg"), b"only family B\n".as_slice()),
+    ] {
+        wait_file(&path, bytes, "isolated collection transfer").await;
+    }
+    for path in [
+        a_root.join("b-only.jpg"),
+        b_root.join("a-only.jpg"),
+        a_target.join("b-only.jpg"),
+        b_target.join("a-only.jpg"),
+    ] {
+        assert_absent(&path, "another link's photo crossed collection boundaries");
+    }
+
+    update_settings(&a, a_folder, 0, Uuid::new_v4(), true, false).await;
+    wait_ready_at(
+        &a,
+        "family A propagation enabled",
+        a_folder,
+        1,
+        1,
+        true,
+        false,
+    )
+    .await;
+    wait_ready_at(
+        &pool,
+        "collection confirms family A propagation",
+        a_folder,
+        1,
+        1,
+        true,
+        false,
+    )
+    .await;
+    assert!(
+        shares_ready_at(&status(&b).await, b_folder, 1, 0, false, false),
+        "family A settings changed family B"
+    );
+
+    a.stop()
+        .await
+        .expect("stop family A before missing-mount simulation");
+    drop(a);
+    let saved_root = root.path().join("a-original-mount");
+    fs::rename(&a_root, &saved_root).expect("detach selected source root");
+    private_directory(&a_root);
+    a = start_node(&a_spec, &binaries).await;
+    wait_for_status(&a, "empty replacement root rejected", |value| {
+        value.get("lifecycle").and_then(Value::as_str) == Some("needsAttention")
+            && value.get("issue").and_then(Value::as_str) == Some("journal")
+    })
+    .await;
+    write(&b_root, "online.jpg", b"family B continues\n");
+    wait_file(
+        &b_target.join("online.jpg"),
+        b"family B continues\n",
+        "healthy collection link while another source is unavailable",
+    )
+    .await;
+    assert_eq!(
+        fs::read(a_target.join("IMG_0001.jpg")).unwrap(),
+        b"family A photo\n",
+        "empty replacement source deleted destination files"
+    );
+
+    a.stop().await.expect("stop unavailable source");
+    drop(a);
+    fs::remove_dir(&a_root).expect("remove owned empty mount replacement");
+    fs::rename(&saved_root, &a_root).expect("reattach original selected source");
+    a = start_node(&a_spec, &binaries).await;
+    write(&a_root, "recovered.jpg", b"mount recovered\n");
+    wait_file(
+        &a_target.join("recovered.jpg"),
+        b"mount recovered\n",
+        "source resumes after its original mount returns",
+    )
+    .await;
+    fs::remove_file(a_root.join("IMG_0001.jpg")).expect("delete only family A photo");
+    write(
+        &a_root,
+        "delete-barrier.jpg",
+        b"family A deletion observed\n",
+    );
+    wait_file(
+        &a_target.join("delete-barrier.jpg"),
+        b"family A deletion observed\n",
+        "collection deletion barrier",
+    )
+    .await;
+    wait_absent(
+        &a_target.join("IMG_0001.jpg"),
+        "family A deletion propagation",
+    )
+    .await;
+    assert_eq!(
+        fs::read(b_target.join("IMG_0001.jpg")).unwrap(),
+        b"family B photo\n",
+        "one link deleted another source's identically named photo"
+    );
+
+    // An unreadable child folder must fail the mandatory source scan before
+    // apparent deletions can be published. Keep removed data in this fixture.
+    a.stop().await.expect("stop source before scan failure");
+    drop(a);
+    let unreadable = a_root.join("unreadable-child");
+    let missing_photo = root.path().join("saved-source-photo.jpg");
+    fs::rename(a_root.join("a-only.jpg"), &missing_photo)
+        .expect("withhold indexed photo during failed scan");
+    fs::create_dir(&unreadable).expect("create owned unreadable child");
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000))
+        .expect("deny source child access");
+    assert!(
+        fs::read_dir(&unreadable).is_err(),
+        "source permission-failure journey requires an unprivileged test user"
+    );
+    a = start_node(&a_spec, &binaries).await;
+    wait_for_status(&a, "failed source scan remains blocked", |value| {
+        value.get("lifecycle").and_then(Value::as_str) == Some("needsAttention")
+            && value.get("issue").and_then(Value::as_str) == Some("initialScan")
+    })
+    .await;
+    write(
+        &b_root,
+        "scan-failure-barrier.jpg",
+        b"family B still works\n",
+    );
+    wait_file(
+        &b_target.join("scan-failure-barrier.jpg"),
+        b"family B still works\n",
+        "healthy link during other source scan failure",
+    )
+    .await;
+    assert_eq!(
+        fs::read(a_target.join("a-only.jpg")).unwrap(),
+        b"only family A\n",
+        "failed source scan propagated a deletion"
+    );
+    a.stop().await.expect("stop source after scan failure");
+    drop(a);
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o700))
+        .expect("restore source child access");
+    fs::remove_dir(&unreadable).expect("remove owned source scan fixture");
+    fs::rename(&missing_photo, a_root.join("a-only.jpg")).expect("restore indexed photo");
+    a = start_node(&a_spec, &binaries).await;
+    write(&a_root, "scan-recovered.jpg", b"scan recovered\n");
+    wait_file(
+        &a_target.join("scan-recovered.jpg"),
+        b"scan recovered\n",
+        "source recovers after successful scan",
+    )
+    .await;
+    assert_absent(
+        &b_root.join("scan-recovered.jpg"),
+        "collection downloaded family A data to family B",
+    );
+    a.stop().await.expect("stop family A");
+    b.stop().await.expect("stop family B");
+    pool.stop().await.expect("stop collection");
+}
+
+async fn request_batch(node: &NodeRuntime, folder: Uuid, generation: u64, revision: u64) -> Value {
+    let request = json!({"folderId": folder, "requestId": Uuid::new_v4(),
+        "expectedGeneration": generation, "settingsRevision": revision});
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        let response = call(node, "POST", "/api/v1/sync/run", Some(&request)).await;
+        if response.status == 200 {
+            return request;
+        }
+        assert!(
+            response.status == 503
+                && response.json()["code"] == "folder_sync_busy"
+                && Instant::now() < deadline,
+            "run request failed: {}",
+            response.body
+        );
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+async fn wait_batch(node: &NodeRuntime, folder: Uuid, generation: u64, phase: &str) -> Value {
+    wait_for_status(node, "batch phase", |value| {
+        let shares = folder_shares(value, folder);
+        !shares.is_empty()
+            && shares.iter().all(|share| {
+                share["linkRun"]["generation"] == generation && share["linkRun"]["phase"] == phase
+            })
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires explicit maintained folder-sync worker and freshly compiled guardian paths"]
+async fn manual_fanout_runs_finish_empty_and_retained_deletions_across_restart() {
+    let binaries = test_binaries();
+    let root = TempDir::new().expect("isolated manual fanout test root");
+    let mut source_spec = NodeSpec::new(root.path(), "batch-source", 0xA1);
+    let mut a_spec = NodeSpec::new(root.path(), "batch-a", 0xA2);
+    let b_spec = NodeSpec::new(root.path(), "batch-b", 0xA3);
+    let source_root = root.path().join("source-files");
+    let a_root = root.path().join("a-files");
+    let b_root = root.path().join("b-files");
+    for path in [&source_root, &a_root, &b_root] {
+        private_directory(path);
+    }
+    let mut source = start_node(&source_spec, &binaries).await;
+    source_spec.peer_address = source.ready_info().peer_address();
+    let mut a = start_node(&a_spec, &binaries).await;
+    a_spec.peer_address = a.ready_info().peer_address();
+    let b = start_node(&b_spec, &binaries).await;
+    let a_id = pair(&source, &a, "Batch A").await;
+    let b_id = pair(&source, &b, "Batch B").await;
+    let folder = Uuid::new_v4();
+    for (destination, id, path) in [(&a, &a_id, &a_root), (&b, &b_id, &b_root)] {
+        offer_and_accept_at_cadence(
+            &source,
+            destination,
+            id,
+            folder,
+            &source_root,
+            path,
+            json!({"mode": "manual"}),
+        )
+        .await;
+    }
+    for (node, count) in [(&source, 2), (&a, 1), (&b, 1)] {
+        let current =
+            wait_ready_at(node, "manual link ready", folder, count, 0, false, false).await;
+        assert_eq!(
+            current["lifecycle"], "stopped",
+            "manual link must not start a worker"
+        );
+        assert!(
+            folder_shares(&current, folder)
+                .iter()
+                .all(|share| share["linkSettings"]["settings"]["cadence"]["mode"] == "manual")
+        );
+    }
+    // Empty directories still need a positive initial scan and receiver pull proof.
+    let first_request = request_batch(&a, folder, 0, 0).await;
+    for node in [&source, &a, &b] {
+        let done = wait_batch(node, folder, 1, "succeeded").await;
+        assert_eq!(done["lifecycle"], "stopped");
+    }
+    let retried = call(&a, "POST", "/api/v1/sync/run", Some(&first_request)).await;
+    assert_eq!(
+        retried.status, 200,
+        "exact completed request replay: {}",
+        retried.body
+    );
+    assert_eq!(
+        folder_shares(&status(&source).await, folder)[0]["linkRun"]["generation"],
+        1
+    );
+
+    write(&source_root, "photo.txt", b"first version\n");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_absent(
+        &a_root.join("photo.txt"),
+        "manual link copied without Run Now",
+    );
+    assert_absent(
+        &b_root.join("photo.txt"),
+        "manual fanout copied without Run Now",
+    );
+    request_batch(&source, folder, 1, 0).await;
+    for node in [&source, &a, &b] {
+        wait_batch(node, folder, 2, "succeeded").await;
+    }
+    assert_eq!(
+        fs::read(a_root.join("photo.txt")).unwrap(),
+        b"first version\n"
+    );
+    assert_eq!(
+        fs::read(b_root.join("photo.txt")).unwrap(),
+        b"first version\n"
+    );
+
+    // A destination deletion remains absent after source edits. Raw Need may stay nonzero.
+    fs::remove_file(a_root.join("photo.txt")).unwrap();
+    write(&source_root, "photo.txt", b"changed source version\n");
+    write(&source_root, "another.txt", b"new file still transfers\n");
+    request_batch(&b, folder, 2, 0).await;
+    for node in [&source, &a, &b] {
+        wait_batch(node, folder, 3, "succeeded").await;
+    }
+    assert_absent(
+        &a_root.join("photo.txt"),
+        "deleted destination file was recreated",
+    );
+    assert_eq!(
+        fs::read(a_root.join("another.txt")).unwrap(),
+        b"new file still transfers\n"
+    );
+    assert_eq!(
+        fs::read(b_root.join("photo.txt")).unwrap(),
+        b"changed source version\n"
+    );
+    source.stop().await.expect("stop completed source");
+    a.stop().await.expect("stop completed destination");
+    source = start_node(&source_spec, &binaries).await;
+    a = start_node(&a_spec, &binaries).await;
+    for node in [&source, &a] {
+        let retained = wait_batch(node, folder, 3, "succeeded").await;
+        assert_eq!(retained["lifecycle"], "stopped");
+    }
+    post_ok(&a, "/api/v1/sync/settings", json!({
+        "folderId": folder, "changeId": Uuid::new_v4(), "expectedRevision": 0,
+        "settings": {"paused": false,
+            "deletionPolicy": {"propagateSourceDeletions": false, "restoreLocalDeletions": true}}
+    })).await;
+    for (node, count) in [(&source, 2), (&a, 1), (&b, 1)] {
+        let status = wait_ready_at(
+            node,
+            "shared restore setting",
+            folder,
+            count,
+            1,
+            false,
+            true,
+        )
+        .await;
+        assert_eq!(
+            folder_shares(&status, folder)[0]["linkSettings"]["settings"]["cadence"]["mode"],
+            "manual",
+            "An older client's deletion edit must preserve the manual schedule"
+        );
+    }
+    request_batch(&a, folder, 3, 1).await;
+    for node in [&source, &a, &b] {
+        wait_batch(node, folder, 4, "succeeded").await;
+    }
+    assert_eq!(
+        fs::read(a_root.join("photo.txt")).unwrap(),
+        b"changed source version\n"
+    );
+
+    // One offline destination cannot keep the successful destination's worker awake.
+    b.stop().await.expect("stop isolated offline destination");
+    write(&source_root, "offline.txt", b"online target continues\n");
+    request_batch(&source, folder, 4, 1).await;
+    wait_for_status(
+        &a,
+        "online destination completed its local batch",
+        |value| {
+            folder_shares(value, folder)
+                .iter()
+                .any(|share| share["linkRun"]["generation"] == 5)
+                && value["lifecycle"] == "stopped"
+                && a_root.join("offline.txt").exists()
+        },
+    )
+    .await;
+    assert_eq!(
+        fs::read(a_root.join("offline.txt")).unwrap(),
+        b"online target continues\n"
+    );
+    assert_absent(&b_root.join("offline.txt"), "offline destination changed");
+    source.stop().await.expect("stop unfinished source batch");
+    source = start_node(&source_spec, &binaries).await;
+    let interrupted = wait_batch(&source, folder, 5, "interrupted").await;
+    assert_eq!(interrupted["lifecycle"], "stopped");
+    wait_batch(&a, folder, 5, "interrupted").await;
+    source
+        .stop()
+        .await
+        .expect("stop source after restart proof");
+    a.stop()
+        .await
+        .expect("stop destination after restart proof");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires explicit maintained folder-sync worker and freshly compiled guardian paths"]
+async fn scheduled_link_waits_for_source_due_time_transfers_and_stops_workers() {
+    fn now_unix_ms() -> u64 {
+        u64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock after Unix epoch")
+                .as_millis(),
+        )
+        .expect("current Unix time fits u64")
+    }
+
+    let binaries = test_binaries();
+    let root = tempfile::Builder::new()
+        .prefix("covalent-scheduled-link-")
+        .tempdir()
+        .expect("isolated scheduled link test root");
+    let source_spec = NodeSpec::new(root.path(), "scheduled-source", 0xB1);
+    let destination_spec = NodeSpec::new(root.path(), "scheduled-destination", 0xB2);
+    let source_root = root.path().join("source-files");
+    let destination_root = root.path().join("destination-files");
+    private_directory(&source_root);
+    private_directory(&destination_root);
+
+    let source = start_node(&source_spec, &binaries).await;
+    let destination = start_node(&destination_spec, &binaries).await;
+    let peer_id = pair(&source, &destination, "Scheduled destination").await;
+    let folder = Uuid::new_v4();
+    offer_and_accept_at_cadence(
+        &source,
+        &destination,
+        &peer_id,
+        folder,
+        &source_root,
+        &destination_root,
+        json!({"mode": "manual"}),
+    )
+    .await;
+    for node in [&source, &destination] {
+        let ready = wait_ready_at(
+            node,
+            "manual scheduled-test link",
+            folder,
+            1,
+            0,
+            false,
+            false,
+        )
+        .await;
+        assert_eq!(ready["lifecycle"], "stopped");
+    }
+
+    let scheduled_file = destination_root.join("scheduled.txt");
+    write(
+        &source_root,
+        "scheduled.txt",
+        b"transferred only when the source schedule is due\n",
+    );
+    assert_absent(
+        &scheduled_file,
+        "manual link transferred before its schedule was edited",
+    );
+
+    post_ok(
+        &destination,
+        "/api/v1/sync/settings",
+        json!({
+            "folderId": folder,
+            "changeId": Uuid::new_v4(),
+            "expectedRevision": 0,
+            "settings": {
+                "deletionPolicy": {
+                    "propagateSourceDeletions": false,
+                    "restoreLocalDeletions": false,
+                },
+                "paused": false,
+                "cadence": {"mode": "scheduled", "intervalMinutes": 15},
+                "androidConditions": {"wifiOnly": false, "chargingOnly": false},
+            },
+        }),
+    )
+    .await;
+
+    let source_scheduled = wait_for_status(
+        &source,
+        "source accepted the destination schedule",
+        |value| {
+            let shares = folder_shares(value, folder);
+            shares.len() == 1
+                && shares[0]["linkSettings"]["revision"] == 1
+                && shares[0]["linkSettings"]["confirmed"] == true
+                && shares[0]["linkSettings"]["settings"]["cadence"]
+                    == json!({"mode": "scheduled", "intervalMinutes": 15})
+                && shares[0]["linkRun"]["nextDueAtUnixMs"].is_u64()
+                && value["lifecycle"] == "stopped"
+        },
+    )
+    .await;
+    let due_at = folder_shares(&source_scheduled, folder)[0]["linkRun"]["nextDueAtUnixMs"]
+        .as_u64()
+        .expect("source owns the scheduled due time");
+    let observed_at = now_unix_ms();
+    assert!(
+        due_at > observed_at + 13 * 60_000 && due_at <= observed_at + 15 * 60_000,
+        "source due time does not reflect the production 15-minute interval: now={observed_at}, due={due_at}"
+    );
+    let destination_scheduled = wait_for_status(
+        &destination,
+        "destination received the source-confirmed schedule",
+        |value| {
+            let shares = folder_shares(value, folder);
+            shares.len() == 1
+                && shares[0]["linkSettings"]["revision"] == 1
+                && shares[0]["linkSettings"]["confirmed"] == true
+                && shares[0]["linkSettings"]["pendingChange"].is_null()
+                && shares[0]["linkSettings"]["settings"]["cadence"]
+                    == json!({"mode": "scheduled", "intervalMinutes": 15})
+                && value["lifecycle"] == "stopped"
+        },
+    )
+    .await;
+    assert!(
+        folder_shares(&destination_scheduled, folder)[0]["linkRun"]["nextDueAtUnixMs"].is_null(),
+        "destination must not publish its own schedule clock"
+    );
+
+    while now_unix_ms() < due_at {
+        assert_absent(
+            &scheduled_file,
+            "scheduled link transferred before the source due time",
+        );
+        let remaining = due_at.saturating_sub(now_unix_ms());
+        tokio::time::sleep(Duration::from_millis(remaining.min(1_000))).await;
+    }
+
+    wait_file(
+        &scheduled_file,
+        b"transferred only when the source schedule is due\n",
+        "automatic scheduled transfer",
+    )
+    .await;
+    for node in [&source, &destination] {
+        let completed = wait_batch(node, folder, 1, "succeeded").await;
+        assert_eq!(
+            completed["lifecycle"], "stopped",
+            "scheduled transfer workers must stop after the batch"
+        );
+    }
+
+    source.stop().await.expect("stop scheduled source");
+    destination
+        .stop()
+        .await
+        .expect("stop scheduled destination");
+}
+
+fn sha256_hex(digest: [u8; 32]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(64);
+    for byte in digest {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
+}
+
+fn process_is_alive(pid: rustix::process::Pid) -> bool {
+    rustix::process::test_kill_process(pid).is_ok()
+}
+
+fn read_worker_receipt(path: &Path) -> Option<(&'static str, rustix::process::Pid)> {
+    let receipt = fs::read_to_string(path).ok()?;
+    let (kind, raw_pid) = receipt.trim().split_once('\t')?;
+    let kind = match kind {
+        "copy" => "copy",
+        "sync" => "sync",
+        _ => return None,
+    };
+    let pid = raw_pid
+        .parse()
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)?;
+    Some((kind, pid))
+}
+
+async fn wait_for_active_transfer(
+    receipt: &Path,
+    sentinel: &Path,
+    sentinel_bytes: &[u8],
+    tail: &Path,
+) -> (&'static str, rustix::process::Pid) {
+    fn receipt_state(path: &Path) -> String {
+        match fs::read_to_string(path) {
+            Ok(contents) => match read_worker_receipt(path) {
+                Some((kind, pid)) => {
+                    format!(
+                        "valid kind={kind} pid={pid} alive={}",
+                        process_is_alive(pid)
+                    )
+                }
+                None => format!("malformed bytes={}", contents.len()),
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => "absent".to_owned(),
+            Err(error) => format!("error kind={:?}", error.kind()),
+        }
+    }
+
+    fn file_state(path: &Path, expected: Option<&[u8]>) -> String {
+        match fs::read(path) {
+            Ok(bytes) => match expected {
+                Some(expected) => {
+                    format!("present bytes={} exact={}", bytes.len(), bytes == expected)
+                }
+                None => format!("present bytes={}", bytes.len()),
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => "absent".to_owned(),
+            Err(error) => format!("error kind={:?}", error.kind()),
+        }
+    }
+
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        if let Some((kind, pid)) = read_worker_receipt(receipt)
+            && process_is_alive(pid)
+            && fs::read(sentinel).is_ok_and(|bytes| bytes == sentinel_bytes)
+            && !tail.exists()
+        {
+            return (kind, pid);
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "never observed the exact real copy/sync worker alive after publishing the sentinel while the final tail was absent; receipt={}; sentinel={}; final_tail={}; partial_tail={}",
+                receipt_state(receipt),
+                file_state(sentinel, Some(sentinel_bytes)),
+                file_state(tail, None),
+                file_state(&tail.with_file_name("99-tail.bin.partial"), None),
+            );
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+async fn wait_for_process_exit(pid: rustix::process::Pid) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match rustix::process::test_kill_process(pid) {
+            Err(rustix::io::Errno::SRCH) => return,
+            Ok(()) => {}
+            Err(error) => panic!("check exact worker process {pid}: {error}"),
+        }
+        assert!(
+            Instant::now() < deadline,
+            "managed destination stop did not reap exact worker process {pid}"
+        );
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+async fn wait_for_natural_process_exit(pid: rustix::process::Pid) {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        match rustix::process::test_kill_process(pid) {
+            Err(rustix::io::Errno::SRCH) => return,
+            Ok(()) => {}
+            Err(error) => panic!("check exact worker process {pid}: {error}"),
+        }
+        assert!(
+            Instant::now() < deadline,
+            "real Continuous worker process {pid} did not exit naturally"
+        );
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+async fn start_registered_node(
+    spec: &NodeSpec,
+    binaries: &TestBinaries,
+    registry: &Arc<std::sync::Mutex<Vec<Arc<NodeRuntime>>>>,
+) -> Arc<NodeRuntime> {
+    let node = Arc::new(start_node(spec, binaries).await);
+    registry
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(Arc::clone(&node));
+    node
+}
+
+fn has_access_unavailable_folder(status: &Value, folder: Uuid) -> bool {
+    status["folders"].as_array().is_some_and(|folders| {
+        folders.iter().any(|candidate| {
+            candidate["folderId"] == folder.to_string() && candidate["accessUnavailable"] == true
+        })
+    })
+}
+
+fn instrumented_real_worker(
+    root: &Path,
+    receipt_name: &str,
+    wrapper_name: &str,
+    bandwidth_limit: &str,
+    provenance_prefix: &str,
+) -> (TestBinaries, PathBuf) {
+    assert!(
+        !bandwidth_limit.is_empty()
+            && bandwidth_limit
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || byte == b'K'),
+        "test bandwidth limit must be a simple KiB rate"
+    );
+    let original = test_binaries();
+    let bin_directory = root.join("bin");
+    private_directory(&bin_directory);
+    let real_rclone = bin_directory.join("real-rclone");
+    fs::copy(&original.worker, &real_rclone).expect("copy reviewed rclone privately");
+    let private_worker_sha256: [u8; 32] = Sha256::digest(
+        fs::read(&real_rclone).expect("read private rclone immediately after copying"),
+    )
+    .into();
+    assert_eq!(
+        private_worker_sha256, original.worker_sha256,
+        "private rclone copy changed after executable verification"
+    );
+    fs::set_permissions(&real_rclone, fs::Permissions::from_mode(0o500))
+        .expect("make private rclone executable");
+    let real_rclone = fs::canonicalize(real_rclone).expect("canonical private rclone path");
+    let receipt = fs::canonicalize(root)
+        .expect("canonical real-worker test root")
+        .join(receipt_name);
+    assert!(
+        !real_rclone.to_string_lossy().contains('\'') && !receipt.to_string_lossy().contains('\''),
+        "private executable paths must be shell-safe"
+    );
+    let wrapper = bin_directory.join(wrapper_name);
+    fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\numask 077\ncase \"$1\" in\n  copy|sync)\n    printf '%s\\t%s\\n' \"$1\" \"$$\" > '{}'\n    exec '{}' \"$@\" --check-first --transfers 1 --order-by name,ascending --bwlimit {}\n    ;;\n  *)\n    exec '{}' \"$@\"\n    ;;\nesac\n",
+            receipt.display(),
+            real_rclone.display(),
+            bandwidth_limit,
+            real_rclone.display(),
+        ),
+    )
+    .expect("write private real-worker wrapper");
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o500))
+        .expect("make private real-worker wrapper executable");
+    let wrapper = fs::canonicalize(wrapper).expect("canonical real-worker wrapper path");
+    let wrapper_sha256: [u8; 32] = Sha256::digest(
+        fs::read(&wrapper).expect("read private real-worker wrapper for verification"),
+    )
+    .into();
+    eprintln!(
+        "{provenance_prefix} temp_root={} worker_sha256={} wrapper_sha256={} guardian_sha256={}",
+        root.display(),
+        sha256_hex(private_worker_sha256),
+        sha256_hex(wrapper_sha256),
+        sha256_hex(original.guardian_sha256),
+    );
+    (
+        TestBinaries {
+            worker: wrapper,
+            worker_sha256: wrapper_sha256,
+            guardian: original.guardian,
+            guardian_sha256: original.guardian_sha256,
+        },
+        receipt,
+    )
+}
+
+async fn finish_registered_scenario(
+    root: TempDir,
+    registry: Arc<std::sync::Mutex<Vec<Arc<NodeRuntime>>>>,
+    scenario: tokio::task::JoinHandle<()>,
+    scenario_name: &str,
+    event_prefix: &str,
+) {
+    let scenario = scenario.await;
+    let owned_root = root.path().to_path_buf();
+    let runtimes = registry
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let mut cleanup_errors = Vec::new();
+    for (index, runtime) in runtimes.iter().enumerate().rev() {
+        if let Err(error) = runtime.stop().await {
+            cleanup_errors.push(format!("stop runtime {index}: {error:#}"));
+        }
+    }
+    drop(runtimes);
+    registry
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
+    drop(registry);
+
+    if cleanup_errors.is_empty() {
+        if let Err(error) = root.close() {
+            cleanup_errors.push(format!("remove owned temp root: {error}"));
+        }
+    } else {
+        let _preserved_root = root.keep();
+    }
+    if cleanup_errors.is_empty() {
+        assert!(
+            !owned_root.exists(),
+            "owned {scenario_name} temporary root was not removed: {}",
+            owned_root.display()
+        );
+        eprintln!(
+            "{event_prefix}_CLEANUP temp_root={} runtimes_stopped=true temp_root_absent=true",
+            owned_root.display(),
+        );
+    } else {
+        eprintln!(
+            "{event_prefix}_CLEANUP_FAILED temp_root={} preserved={} errors={cleanup_errors:?}",
+            owned_root.display(),
+            owned_root.exists(),
+        );
+    }
+
+    match scenario {
+        Ok(()) if cleanup_errors.is_empty() => {}
+        Ok(()) => panic!("{scenario_name} cleanup failed: {cleanup_errors:?}"),
+        Err(error) if error.is_panic() => {
+            if !cleanup_errors.is_empty() {
+                eprintln!("{event_prefix}_CLEANUP_ERRORS {cleanup_errors:?}");
+            }
+            std::panic::resume_unwind(error.into_panic());
+        }
+        Err(error) => panic!("{scenario_name} scenario task failed: {error}"),
+    }
+}
+
+fn pending_copy_diagnostic(
+    data_directory: &Path,
+    folder: Uuid,
+    sentinel: &str,
+    source_root: &Path,
+    target_root: &Path,
+) -> String {
+    let policy = fs::read(
+        data_directory
+            .join("folder-sync/database")
+            .join(format!("rclone-policy-{folder}.v1.json")),
+    )
+    .ok()
+    .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+    let folder_key = folder.to_string();
+    let state = policy
+        .as_ref()
+        .and_then(|value| value.get("folders"))
+        .and_then(|folders| folders.get(&folder_key));
+    let pending = state.and_then(|value| value.get("pending"));
+    let set_contains = |value: Option<&Value>| {
+        value
+            .and_then(Value::as_array)
+            .is_some_and(|values| values.iter().any(|value| value.as_str() == Some(sentinel)))
+    };
+    format!(
+        "policyReadable={} folderState={} pending={} copyCompleted={} sentinelAllowed={} sentinelInPendingSource={} sentinelOwned={} sourcePresent={} targetPresent={}",
+        policy.is_some(),
+        state.is_some(),
+        pending.is_some_and(|value| !value.is_null()),
+        state
+            .and_then(|value| value.get("copyCompleted"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        set_contains(pending.and_then(|value| value.get("allowed"))),
+        pending
+            .and_then(|value| value.get("source"))
+            .is_some_and(|source| source.get(sentinel).is_some()),
+        set_contains(state.and_then(|value| value.get("owned"))),
+        source_root.join(sentinel).exists(),
+        target_root.join(sentinel).exists(),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires explicit maintained rclone worker and freshly compiled guardian paths"]
+async fn interrupted_real_copy_preserves_unowned_bytes_and_fails_promptly_after_restart() {
+    let root = tempfile::Builder::new()
+        .prefix("covalent-interrupted-copy-")
+        .tempdir()
+        .expect("isolated interrupted-copy test root");
+    let (binaries, receipt) = instrumented_real_worker(
+        root.path(),
+        "worker-receipt",
+        "rclone-interruption-wrapper",
+        "16K",
+        "INTERRUPTED_COPY_PROVENANCE",
+    );
+
+    let source_spec = NodeSpec::new(root.path(), "interrupted-source", 0xC1);
+    let mut destination_spec = NodeSpec::new(root.path(), "interrupted-destination", 0xC2);
+    let source_root = root.path().join("source-files");
+    let destination_root = root.path().join("destination-files");
+    private_directory(&source_root);
+    private_directory(&destination_root);
+    let registry = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let scenario_registry = Arc::clone(&registry);
+    let scenario_receipt = receipt.clone();
+    let scenario = tokio::spawn(async move {
+        let source = start_registered_node(&source_spec, &binaries, &scenario_registry).await;
+        let mut destination =
+            start_registered_node(&destination_spec, &binaries, &scenario_registry).await;
+        destination_spec.peer_address = destination.ready_info().peer_address();
+        let destination_id = pair(&source, &destination, "Interrupted destination").await;
+        let folder = Uuid::new_v4();
+        offer_and_accept_at_cadence(
+            &source,
+            &destination,
+            &destination_id,
+            folder,
+            &source_root,
+            &destination_root,
+            json!({"mode": "manual"}),
+        )
+        .await;
+        update_settings(&source, folder, 0, Uuid::new_v4(), true, true).await;
+        for node in [&source, &destination] {
+            let ready = wait_ready_at(
+                node,
+                "interrupted-copy link ready with deletion propagation and restoration",
+                folder,
+                1,
+                1,
+                true,
+                true,
+            )
+            .await;
+            assert_eq!(ready["lifecycle"], "stopped");
+        }
+
+        let sentinel_bytes = vec![0x53; 64 * 1024];
+        let tail_bytes = vec![0x54; 8 * 1024 * 1024];
+        let source_control_bytes = b"source must remain unchanged\n";
+        let destination_owned_elsewhere_bytes = b"destination-created and unowned\n";
+        write(&source_root, "00-sentinel.bin", &sentinel_bytes);
+        write(&source_root, "50-source-control.txt", source_control_bytes);
+        write(&source_root, "99-tail.bin", &tail_bytes);
+        write(
+            &destination_root,
+            "destination-unowned.txt",
+            destination_owned_elsewhere_bytes,
+        );
+        let destination_sentinel = destination_root.join("00-sentinel.bin");
+        let destination_tail = destination_root.join("99-tail.bin");
+        let run_requested_at = Instant::now();
+        request_batch(&source, folder, 0, 1).await;
+        let (transfer_kind, worker_pid) = wait_for_active_transfer(
+            &scenario_receipt,
+            &destination_sentinel,
+            &sentinel_bytes,
+            &destination_tail,
+        )
+        .await;
+        assert_eq!(
+            transfer_kind, "sync",
+            "propagated deletion run must use real rclone sync"
+        );
+        eprintln!(
+            "INTERRUPTED_COPY_ACTIVE kind={transfer_kind} pid={worker_pid} sentinel_bytes={} tail_absent=true observed_after_ms={}",
+            sentinel_bytes.len(),
+            run_requested_at.elapsed().as_millis(),
+        );
+
+        let stop_started_at = Instant::now();
+        destination
+            .stop()
+            .await
+            .expect("managed stop of destination during exact real transfer");
+        wait_for_process_exit(worker_pid).await;
+        assert_absent(
+            &destination_tail,
+            "final tail appeared after interrupted destination stopped",
+        );
+        eprintln!(
+            "INTERRUPTED_COPY_STOP pid={worker_pid} worker_gone=true tail_absent=true completed_after_ms={}",
+            stop_started_at.elapsed().as_millis(),
+        );
+        fs::remove_file(source_root.join("00-sentinel.bin"))
+            .expect("delete source sentinel after proved interruption");
+        drop(destination);
+        let restart_started_at = Instant::now();
+        destination = start_registered_node(&destination_spec, &binaries, &scenario_registry).await;
+
+        let source_incomplete = wait_batch(&source, folder, 1, "incomplete").await;
+        assert!(
+            folder_shares(&source_incomplete, folder)[0]["linkRun"]["destinations"]
+                .as_array()
+                .is_some_and(|destinations| destinations.iter().any(|result| {
+                    result["peerId"] == destination_id && result["result"] == "failed"
+                })),
+            "source did not report the interrupted destination as failed: {source_incomplete}"
+        );
+        let destination_incomplete = wait_batch(&destination, folder, 1, "incomplete").await;
+        for current in [&source_incomplete, &destination_incomplete] {
+            assert_eq!(current["availability"], "available");
+            assert!(
+                current["issue"].is_null(),
+                "terminal destination-run failure became a false global worker or permission issue: {current}"
+            );
+            assert!(
+                !has_access_unavailable_folder(current, folder),
+                "terminal destination-run failure became a false folder-access failure: {current}"
+            );
+        }
+        eprintln!(
+            "INTERRUPTED_COPY_RECOVERY destination_phase=incomplete source_phase=incomplete destination_result=failed global_issue=null folder_access_unavailable=false recovered_after_ms={}",
+            restart_started_at.elapsed().as_millis(),
+        );
+        assert_eq!(
+            fs::read(&destination_sentinel).expect("preserved unowned destination sentinel"),
+            sentinel_bytes,
+            "restart changed or removed the unowned sentinel"
+        );
+        assert_absent(
+            &destination_tail,
+            "restart published the tail after terminal recovery failure",
+        );
+        assert_eq!(
+            fs::read(destination_root.join("destination-unowned.txt"))
+                .expect("independent destination-created file remains"),
+            destination_owned_elsewhere_bytes
+        );
+        assert_absent(
+            &source_root.join("destination-unowned.txt"),
+            "independent destination-created file reached source",
+        );
+        assert_eq!(
+            fs::read(source_root.join("50-source-control.txt"))
+                .expect("source control remains readable"),
+            source_control_bytes,
+            "destination interruption or restart changed the source"
+        );
+        assert_eq!(
+            fs::read(source_root.join("99-tail.bin")).expect("source tail remains readable"),
+            tail_bytes,
+            "destination interruption or restart changed the source tail"
+        );
+    });
+
+    finish_registered_scenario(
+        root,
+        registry,
+        scenario,
+        "interrupted-copy",
+        "INTERRUPTED_COPY",
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires explicit maintained rclone worker and freshly compiled guardian paths"]
+async fn continuous_real_copy_propagates_source_deletion_without_authored_stop() {
+    const SENTINEL: &str = "00-sentinel.bin";
+    const TAIL: &str = "99-tail.bin";
+    const DELETION_LIMIT: Duration = Duration::from_secs(120);
+
+    fn healthy(status: &Value, folder: Uuid) -> bool {
+        status["availability"] == "available"
+            && status["lifecycle"] == "running"
+            && status["issue"].is_null()
+            && status["folders"].as_array().is_some_and(|folders| {
+                folders.iter().any(|candidate| {
+                    candidate["folderId"] == folder.to_string()
+                        && candidate["state"] != "error"
+                        && candidate["accessUnavailable"] != true
+                        && candidate["scanPullErrorCount"] == 0
+                        && candidate["reportedErrorRows"] == 0
+                        && candidate["statusError"] == false
+                        && candidate["watchError"] == false
+                })
+            })
+    }
+
+    let root = tempfile::Builder::new()
+        .prefix("covalent-continuous-source-delete-")
+        .tempdir()
+        .expect("isolated Continuous source-deletion test root");
+    let (binaries, receipt) = instrumented_real_worker(
+        root.path(),
+        "continuous-worker-receipt",
+        "rclone-continuous-wrapper",
+        "64K",
+        "CONTINUOUS_SOURCE_DELETE_PROVENANCE",
+    );
+    let source_spec = NodeSpec::new(root.path(), "continuous-source", 0xD1);
+    let destination_spec = NodeSpec::new(root.path(), "continuous-destination", 0xD2);
+    let destination_data_directory = destination_spec.data_directory.clone();
+    let source_root = root.path().join("source-files");
+    let destination_root = root.path().join("destination-files");
+    private_directory(&source_root);
+    private_directory(&destination_root);
+    let registry = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let scenario_registry = Arc::clone(&registry);
+    let scenario_receipt = receipt.clone();
+    let scenario = tokio::spawn(async move {
+        let source = start_registered_node(&source_spec, &binaries, &scenario_registry).await;
+        let destination =
+            start_registered_node(&destination_spec, &binaries, &scenario_registry).await;
+        let destination_id = pair(&source, &destination, "Continuous destination").await;
+        let folder = Uuid::new_v4();
+        offer_and_accept_at_cadence(
+            &source,
+            &destination,
+            &destination_id,
+            folder,
+            &source_root,
+            &destination_root,
+            json!({"mode": "continuous"}),
+        )
+        .await;
+        post_ok(
+            &source,
+            "/api/v1/sync/settings",
+            json!({
+                "folderId": folder,
+                "changeId": Uuid::new_v4(),
+                "expectedRevision": 0,
+                "settings": {
+                    "deletionPolicy": {
+                        "propagateSourceDeletions": true,
+                        "restoreLocalDeletions": true,
+                    },
+                    "paused": false,
+                    "cadence": {"mode": "continuous"},
+                    "androidConditions": {"wifiOnly": false, "chargingOnly": false},
+                },
+            }),
+        )
+        .await;
+        for node in [&source, &destination] {
+            wait_for_status(node, "confirmed Continuous deletion settings", |value| {
+                shares_ready_at(value, folder, 1, 1, true, true)
+                    && folder_shares(value, folder).iter().all(|share| {
+                        share["linkSettings"]["settings"]["cadence"]
+                            == json!({"mode": "continuous"})
+                    })
+            })
+            .await;
+        }
+
+        let sentinel_bytes = vec![0x53; 64 * 1024];
+        let tail_bytes = vec![0x54; 2 * 1024 * 1024];
+        let source_control_bytes = b"source control remains exact\n";
+        let destination_unowned_bytes = b"destination-created and unowned\n";
+        write(&source_root, SENTINEL, &sentinel_bytes);
+        write(&source_root, "50-source-control.txt", source_control_bytes);
+        write(&source_root, TAIL, &tail_bytes);
+        write(
+            &destination_root,
+            "destination-unowned.txt",
+            destination_unowned_bytes,
+        );
+        let destination_sentinel = destination_root.join(SENTINEL);
+        let destination_tail = destination_root.join(TAIL);
+        let (transfer_kind, worker_pid) = wait_for_active_transfer(
+            &scenario_receipt,
+            &destination_sentinel,
+            &sentinel_bytes,
+            &destination_tail,
+        )
+        .await;
+        assert_eq!(
+            transfer_kind, "sync",
+            "Continuous deletion propagation must use real rclone sync"
+        );
+        let active = wait_for_status(&source, "active Continuous source generation", |value| {
+            let shares = folder_shares(value, folder);
+            !shares.is_empty()
+                && shares.iter().all(|share| {
+                    share["linkRun"]["phase"] == "running"
+                        && share["linkRun"]["generation"].is_u64()
+                })
+        })
+        .await;
+        let observed_generation = folder_shares(&active, folder)[0]["linkRun"]["generation"]
+            .as_u64()
+            .expect("active Continuous generation");
+        assert!(
+            process_is_alive(worker_pid),
+            "exact real sync worker exited before source deletion"
+        );
+        let deletion_deadline = Instant::now() + DELETION_LIMIT;
+        fs::remove_file(source_root.join(SENTINEL))
+            .expect("delete source sentinel during active real sync");
+        assert!(
+            process_is_alive(worker_pid),
+            "exact real sync worker was not alive immediately after source deletion"
+        );
+        eprintln!(
+            "CONTINUOUS_SOURCE_DELETE_ACTIVE kind={transfer_kind} pid={worker_pid} generation={observed_generation} sentinel_exact=true tail_final_absent=true"
+        );
+
+        wait_for_natural_process_exit(worker_pid).await;
+        while destination_sentinel.exists() && Instant::now() < deletion_deadline {
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+        if destination_sentinel.exists() {
+            panic!(
+                "Continuous source deletion did not remove the destination sentinel; {}",
+                pending_copy_diagnostic(
+                    &destination_data_directory,
+                    folder,
+                    SENTINEL,
+                    &source_root,
+                    &destination_root,
+                )
+            );
+        }
+        wait_file(
+            &destination_tail,
+            &tail_bytes,
+            "bounded tail after propagated deletion",
+        )
+        .await;
+        let completed =
+            wait_for_status(&source, "fresh Continuous generation completed", |value| {
+                let shares = folder_shares(value, folder);
+                !shares.is_empty()
+                    && shares.iter().all(|share| {
+                        share["linkRun"]["generation"]
+                            .as_u64()
+                            .is_some_and(|generation| generation > observed_generation)
+                            && share["linkRun"]["phase"] == "succeeded"
+                    })
+            })
+            .await;
+        let completed_generation = folder_shares(&completed, folder)[0]["linkRun"]["generation"]
+            .as_u64()
+            .expect("completed fresh Continuous generation");
+        wait_batch(&destination, folder, completed_generation, "succeeded").await;
+        for node in [&source, &destination] {
+            wait_for_status(node, "healthy after Continuous source deletion", |value| {
+                healthy(value, folder)
+            })
+            .await;
+        }
+
+        assert_absent(
+            &source_root.join(SENTINEL),
+            "source sentinel returned after deletion",
+        );
+        assert_absent(
+            &destination_sentinel,
+            "destination sentinel returned after propagated deletion",
+        );
+        assert_eq!(
+            fs::read(source_root.join("50-source-control.txt")).expect("read exact source control"),
+            source_control_bytes
+        );
+        assert_eq!(
+            fs::read(destination_root.join("50-source-control.txt"))
+                .expect("read exact destination control"),
+            source_control_bytes
+        );
+        assert_eq!(
+            fs::read(source_root.join(TAIL)).expect("read exact source tail"),
+            tail_bytes
+        );
+        assert_eq!(
+            fs::read(&destination_tail).expect("read exact destination tail"),
+            tail_bytes
+        );
+        assert_eq!(
+            fs::read(destination_root.join("destination-unowned.txt"))
+                .expect("read preserved destination-created file"),
+            destination_unowned_bytes
+        );
+        assert_absent(
+            &source_root.join("destination-unowned.txt"),
+            "destination-created file reached source",
+        );
+        eprintln!(
+            "CONTINUOUS_SOURCE_DELETE_COMPLETE initial_generation={observed_generation} completed_generation={completed_generation} sentinel_removed=true tail_exact=true healthy=true"
+        );
+    });
+
+    finish_registered_scenario(
+        root,
+        registry,
+        scenario,
+        "Continuous source-deletion",
+        "CONTINUOUS_SOURCE_DELETE",
+    )
+    .await;
+}

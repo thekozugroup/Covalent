@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-struct MacBackupsView: View {
+struct MacLegacyBackupsView: View {
     @ObservedObject var model: CovalentAppModel
     @State private var selectedSnapshotId: UUID?
     @State private var restoreSnapshot: SnapshotRecord?
@@ -10,14 +10,10 @@ struct MacBackupsView: View {
         Group {
             if model.snapshots.isEmpty {
                 MacEmptyState(
-                    systemImage: "externaldrive.badge.plus",
-                    title: "No backups yet",
-                    message: "A backup appears here once your backup server finishes encrypting and saving it."
-                ) {
-                    Button("New Backup") { model.requestNewBackup() }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(!model.isAuthorized)
-                }
+                    systemImage: "externaldrive",
+                    title: "No Legacy Backups Found",
+                    message: "Backups created by the legacy service appear here when they are available."
+                )
             } else {
                 HSplitView {
                     snapshotList
@@ -38,7 +34,8 @@ struct MacBackupsView: View {
                 }
             }
         }
-        .navigationTitle("Backups")
+        .accessibilityElement(children: .contain)
+        .navigationTitle("Legacy Backups")
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
             if selectedSnapshotId == nil {
@@ -222,27 +219,29 @@ private struct MacSnapshotDetail: View {
                                 .lineLimit(1)
                         }
                         Spacer()
-                        if model.providers.contains(where: { $0.peerId == providerId }) {
-                            Label("Connected", systemImage: "checkmark.circle.fill")
+                        if let provider = model.providers.first(where: { $0.peerId == providerId }) {
+                            TimelineView(.periodic(from: .now, by: 1)) { context in
+                                let reachability = provider.displayedReachability(
+                                    atUnixMs: UInt64(max(0, context.date.timeIntervalSince1970 * 1_000))
+                                )
+                                Label(
+                                    reachability.connectionStatusLabel,
+                                    systemImage: reachability.connectionStatusSymbol
+                                )
                                 .font(.caption)
-                                .foregroundStyle(.green)
+                                .foregroundStyle(reachability == .reachable ? Color.green : Color.secondary)
+                                .accessibilityLabel("\(providerName(providerId)), \(reachability.connectionStatusLabel)")
+                            }
                         } else {
-                            Label("Offline", systemImage: "bolt.slash")
+                            Label("No saved connection", systemImage: "questionmark.circle")
                                 .font(.caption)
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(.secondary)
                         }
                     }
                     .padding(12)
                     .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
                 }
             }
-            Button("Change Extra Copies for Next Backup…") {
-                model.requestNewBackup(existingBackupId: snapshot.backupId)
-            }
-            .disabled(model.activeTask != nil)
-            Text("Adding or removing a device changes only the next backup. Existing backups keep their original encrypted copies.")
-                .font(.caption)
-                .secondaryLabelStyle()
         }
     }
 

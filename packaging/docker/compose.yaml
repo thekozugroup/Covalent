@@ -20,6 +20,8 @@ services:
       COVALENT_PEER_LISTEN: "0.0.0.0:8787"
       COVALENT_HTTPS_HOST: "${COVALENT_HTTPS_HOST:-localhost}"
       COVALENT_ADVERTISED_PEER_ADDRESS: "${COVALENT_ADVERTISED_PEER_ADDRESS:-}"
+      COVALENT_SYNC_PORT: "${COVALENT_SYNC_PORT:-8789}"
+      COVALENT_SYNC_ADVERTISED_ADDRESS: "${COVALENT_SYNC_ADVERTISED_ADDRESS:-}"
       COVALENT_DATA_DIR: /data
       COVALENT_CONFIG_DIR: /config
       COVALENT_KEY_ENCRYPTION_KEY_FILE: /run/secrets/covalent-kek
@@ -27,8 +29,9 @@ services:
     ports:
       - "${COVALENT_HTTPS_BIND_IP:-127.0.0.1}:${COVALENT_HTTPS_PORT:-8443}:8443/tcp"
       - "${COVALENT_PEER_BIND_IP:-0.0.0.0}:${COVALENT_PEER_PORT:-8787}:8787/udp"
+      - "${COVALENT_SYNC_BIND_IP:-0.0.0.0}:${COVALENT_SYNC_PORT:-8789}:8789/tcp"
     tmpfs:
-      - /tmp:size=64m,mode=1777
+      - /tmp:size=64m,mode=1777,noexec,nosuid,nodev
     volumes:
       # Keep the two durable paths explicit so operators know exactly what to
       # back up and can migrate them without hunting through Docker volumes.

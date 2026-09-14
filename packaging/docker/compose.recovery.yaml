@@ -1,0 +1,28 @@
+# Explicit, temporary startup override for replacing a lost owner device.
+# Use only with newly prepared /config and /data mounts and a separately
+# provisioned KEK. The node refuses an unrelated existing identity.
+services:
+  node:
+    command:
+      - recover
+      - --recovery-kit-file
+      - /run/secrets/covalent-recovery-kit
+      - --recovery-key-file
+      - /run/secrets/covalent-recovery-key
+    secrets:
+      - source: covalent-recovery-kit
+        target: covalent-recovery-kit
+        uid: "65532"
+        gid: "65532"
+        mode: 0400
+      - source: covalent-recovery-key
+        target: covalent-recovery-key
+        uid: "65532"
+        gid: "65532"
+        mode: 0400
+
+secrets:
+  covalent-recovery-kit:
+    file: "${COVALENT_RECOVERY_KIT_FILE:?Set the path to the saved raw .covalent-recovery file}"
+  covalent-recovery-key:
+    file: "${COVALENT_RECOVERY_KEY_FILE:?Set the path to the separate .covalent-recovery-key file}"

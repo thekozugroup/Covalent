@@ -201,7 +201,11 @@ validate_android_api37_result() {
   # Self-consistency: JUnit's own total must agree with the per-test records, so
   # a truncated log or an `OK (0 tests)` run cannot slip past the name checks.
   cai_expected_count=$(printf '%s\n' "$cai_wanted" | grep -c '^' )
-  if ! grep -Eq "^OK \\(${cai_expected_count} tests\\)[[:space:]]*$" "$cai_result_log"; then
+  cai_test_word=tests
+  if [ "$cai_expected_count" -eq 1 ]; then
+    cai_test_word=test
+  fi
+  if ! grep -Eq "^OK \\(${cai_expected_count} ${cai_test_word}\\)[[:space:]]*$" "$cai_result_log"; then
     echo "Android instrumentation did not summarise exactly ${cai_expected_count} passing tests." >&2
     grep -E '^(OK \(|Tests run|FAILURES)' "$cai_result_log" >&2 || \
       echo "The log has no JUnit summary line at all." >&2

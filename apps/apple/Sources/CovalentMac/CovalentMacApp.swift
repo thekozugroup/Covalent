@@ -4,11 +4,21 @@ import SwiftUI
 @main
 struct CovalentMacApp: App {
     @StateObject private var model: CovalentAppModel
-    private let localNodeManager: LocalNodeManager?
+    private let localNodeManager: (any LocalNodeBootstrapping)?
 
     init() {
         let isUITest = ProcessInfo.processInfo.environment["COVALENT_UI_TEST_BASE_URL"] != nil
-        let manager = isUITest ? nil : LocalNodeManager()
+        let manager: (any LocalNodeBootstrapping)?
+        #if DEBUG
+        if isUITest,
+           ProcessInfo.processInfo.environment["COVALENT_UI_TEST_FIRST_LAUNCH"] == "1" {
+            manager = FirstLaunchUITestBootstrapper()
+        } else {
+            manager = isUITest ? nil : LocalNodeManager()
+        }
+        #else
+        manager = isUITest ? nil : LocalNodeManager()
+        #endif
         localNodeManager = manager
         _model = StateObject(wrappedValue: CovalentAppModel(localNodeBootstrapper: manager))
     }
@@ -28,11 +38,12 @@ struct CovalentMacApp: App {
         .defaultSize(width: 1_080, height: 720)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("New Backup…") {
-                    model.requestNewBackup()
+                Button("Create Link") {
+                    model.selectedSection = .folders
+                    Task { await model.refreshFolders() }
                 }
                 .keyboardShortcut("n")
-                .disabled(!model.isAuthorized || model.activeTask != nil)
+                .disabled(!model.isAuthorized)
 
                 Button("Pair Device…") {
                     model.selectedSection = .devices
@@ -43,12 +54,15 @@ struct CovalentMacApp: App {
             }
             CommandGroup(after: .sidebar) {
                 Divider()
-                Button("Overview") { model.selectedSection = .overview }
+                Button("Links") { model.selectedSection = .folders }
                     .keyboardShortcut("1")
-                Button("Backups") { model.selectedSection = .backups }
-                    .keyboardShortcut("2")
                 Button("Devices") { model.selectedSection = .devices }
+                    .keyboardShortcut("2")
+                Button("Status") { model.selectedSection = .overview }
                     .keyboardShortcut("3")
+                Divider()
+                Button("Legacy Backups") { model.selectedSection = .backups }
+                Button("Advanced Settings") { model.selectedSection = .settings }
             }
             CommandMenu("Service") {
                 Button("Refresh") {
@@ -98,51 +112,66 @@ struct CovalentMacApp: App {
 
     private var menuBarSymbol: String {
         switch model.phase {
-        case .starting: "arrow.trianglehead.2.clockwise.rotate.90"
-        case .ready: "externaldrive.badge.checkmark"
-        case .needsAuthorization: "externaldrive.badge.questionmark"
-        case .offline: "externaldrive.badge.xmark"
+        case .starting: "arrow.triangle.2.circlepath"
+        case .ready: "checkmark.circle"
+        case .needsAuthorization: "questionmark.circle"
+        case .offline: "exclamationmark.triangle"
         }
     }
 }
+
+#if DEBUG
+@MainActor
+private final class FirstLaunchUITestBootstrapper: LocalNodeBootstrapping {
+    func startupDisposition() throws -> LocalNodeStartupDisposition { .needsFirstLaunchChoice }
+
+    func start(mode: LocalNodeStartupMode) async throws -> NodeConnectionConfiguration {
+        let environment = ProcessInfo.processInfo.environment
+        guard let address = environment["COVALENT_UI_TEST_BASE_URL"],
+              let url = URL(string: address),
+              let tokenFile = environment["COVALENT_UI_TEST_TOKEN_FILE"],
+              let token = readPrivateUITestToken(relativePath: tokenFile)
+        else { throw CocoaError(.fileNoSuchFile) }
+        return try NodeConnectionConfiguration(baseURL: url, apiToken: token)
+    }
+}
+#endif
 
 private struct MacMenuBarMenu: View {
     @ObservedObject var model: CovalentAppModel
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Button("Open Covalent") {
+      Group {
+        Button("Open Links", systemImage: "link") {
+            model.selectedSection = .folders
             showMainWindow()
         }
 
         Divider()
 
-        Text(statusSummary)
-        if let task = model.activeTask {
-            Text("\(task.kind.label): \(task.title)")
-            if task.jobId != nil {
-                Button(task.state == .paused ? "Resume Active Job" : "Pause Active Job") {
-                    Task { await model.controlActiveTask(task.state == .paused ? .resume : .pause) }
-                }
-                Button("Cancel Active Job…", role: .destructive) {
-                    Task { await model.controlActiveTask(.cancel) }
-                }
-            }
-        }
+        Label(statusSummary, systemImage: serviceSymbol)
+        linkRows
 
         Divider()
 
-        Button("New Backup…") {
-            model.requestNewBackup()
+        Button("Create Link", systemImage: "folder.badge.plus") {
+            model.selectedSection = .folders
             showMainWindow()
         }
-        .disabled(!model.isAuthorized || model.activeTask != nil)
+        .disabled(!model.isAuthorized)
 
-        Button("Restore Latest Backup…") {
-            model.requestRestoreLatest()
+        Button("Pair Device", systemImage: "laptopcomputer.and.iphone") {
+            model.selectedSection = .devices
+            Task { await model.refreshDiscovery() }
             showMainWindow()
         }
-        .disabled(!model.isAuthorized || model.snapshots.isEmpty || model.activeTask != nil)
+        .disabled(!model.isAuthorized)
+
+        Button("Legacy Backups", systemImage: "externaldrive") {
+            model.selectedSection = .backups
+            showMainWindow()
+        }
 
         Button("Refresh Status") {
             Task { await model.refresh() }
@@ -151,13 +180,17 @@ private struct MacMenuBarMenu: View {
         Divider()
 
         SettingsLink {
-            Text("Settings…")
+            Text("Advanced Settings…")
         }
 
         Button("Quit Covalent") {
             NSApplication.shared.terminate(nil)
         }
         .keyboardShortcut("q")
+      }
+      .onAppear {
+        Task { await model.refreshFolders() }
+      }
     }
 
     private var statusSummary: String {
@@ -165,6 +198,100 @@ private struct MacMenuBarMenu: View {
             return "\(model.serviceStatusLabel) · \(status.deviceName)"
         }
         return model.serviceStatusLabel
+    }
+
+    @ViewBuilder
+    private var linkRows: some View {
+        if let error = model.folderSyncError {
+            Label(error, systemImage: "exclamationmark.triangle")
+        } else if let status = model.folderSyncStatus {
+            let shares = status.shares.filter { isLinkSummaryRow($0, status: status) }
+            if shares.isEmpty {
+                Text("No links")
+            }
+            ForEach(shares) { share in
+                Label(
+                    "\(share.label) — \(status.displayLabel(for: share))",
+                    systemImage: menuFolderSymbol(share)
+                )
+                if let run = share.linkRun, run.phase != nil || run.pendingRequest != nil {
+                    Text(menuRunLabel(run))
+                }
+                runAction(for: share)
+            }
+        } else {
+            Text("Checking links…")
+        }
+    }
+
+    @ViewBuilder
+    private func runAction(for share: FolderShare) -> some View {
+        if let settings = share.linkSettings {
+            if let saved = model.pendingFolderLinkRunRequests.first(where: {
+                $0.folderId == share.folderId
+            }) {
+                if saved.requiresReview {
+                    Button("Review \(share.label) Run") {
+                        model.selectedSection = .folders
+                        showMainWindow()
+                    }
+                } else {
+                    Button("Try \(share.label) Run Again", systemImage: "arrow.clockwise") {
+                        Task { _ = await model.retryFolderLinkRun(folderId: share.folderId) }
+                    }
+                    .disabled(!model.isAuthorized || model.folderSyncMutationInFlight)
+                }
+            } else if settings.confirmed, settings.pendingChange == nil,
+                      settings.conflictedChange == nil,
+                      model.folderSyncStatus?.shares.contains(where: {
+                          $0.folderId == share.folderId && $0.phase == .ready
+                      }) == true,
+                      settings.settings.permitsRunNow,
+                      share.linkRun?.pendingRequest == nil,
+                      share.linkRun?.isActive != true {
+                Button("Run \(share.label) Now", systemImage: "play.fill") {
+                    Task { _ = await model.runFolderLinkNow(folderId: share.folderId) }
+                }
+                .disabled(!model.isAuthorized || model.folderSyncMutationInFlight)
+            }
+        }
+    }
+
+    private func isLinkSummaryRow(_ share: FolderShare, status: FolderSyncStatus) -> Bool {
+        status.shares.first(where: {
+            $0.folderId == share.folderId && $0.phase != .removed
+        })?.offerId == share.offerId
+    }
+
+    private func menuFolderSymbol(_ share: FolderShare) -> String {
+        if share.phase == .paused { return "pause.circle" }
+        switch share.linkRun?.phase {
+        case .preparing, .running: return "arrow.triangle.2.circlepath"
+        case .incomplete, .interrupted: return "exclamationmark.triangle"
+        default: return "folder"
+        }
+    }
+
+    private func menuRunLabel(_ run: FolderLinkRunSummary) -> String {
+        if run.pendingRequest != nil { return "Run request waiting for source" }
+        switch run.phase {
+        case .preparing: return "Preparing run"
+        case .running: return "Run in progress"
+        case .succeeded: return "Last run completed"
+        case .incomplete: return "Run incomplete after 24 hours"
+        case .interrupted: return "Run interrupted"
+        case .cancelled: return "Run cancelled"
+        case nil: return "Idle"
+        }
+    }
+
+    private var serviceSymbol: String {
+        switch model.phase {
+        case .starting: "arrow.triangle.2.circlepath"
+        case .ready: "checkmark.circle"
+        case .needsAuthorization: "questionmark.circle"
+        case .offline: "exclamationmark.triangle"
+        }
     }
 
     private func showMainWindow() {

@@ -16,6 +16,7 @@ prebuilt=${COVALENT_ANDROID_PREBUILT:-false}
 tls_image=covalent:android-api37-e2e
 tls_hostname=10.0.2.2
 tls_suffix=$$
+device_ui_dump="/sdcard/covalent-ui-$tls_suffix.xml"
 tls_container="covalent-android-tls-$tls_suffix"
 wrong_tls_container="covalent-android-wrong-tls-$tls_suffix"
 tls_data_volume="$tls_container-data"
@@ -29,16 +30,28 @@ tls_client_token_directory=""
 tls_client_token_file=""
 tls_token_file_name=covalent-api37-tls-token
 instrumentation_log=""
+instrumentation_directory=""
 expected_suite=""
+base_suite=""
+journey_suite=""
+native_library_directory=""
 docker_source_before=""
 docker_source_after=""
 device_gate_lock="${TMPDIR:-/tmp}/covalent-api37-device-gate.lock"
 lock_acquired=false
+installed_fixture_owned=false
 
 cleanup() {
   if [ -n "$adb" ] && [ -n "$serial" ]; then
-    "$adb" -s "$serial" shell -T run-as life.michaelwong.covalent \
-      rm -f files/covalent-api37-tls-token >/dev/null 2>&1 || true
+    if [ "$installed_fixture_owned" = true ]; then
+      # Only the exact debug fixture installed on the verified emulator is
+      # owned by this gate. Keep failures' private recovery receipts; stop the
+      # app and remove the gate's credential without clearing unrelated data.
+      "$adb" -s "$serial" shell am force-stop life.michaelwong.covalent >/dev/null 2>&1 || true
+      "$adb" -s "$serial" shell -T run-as life.michaelwong.covalent \
+        rm -f files/covalent-api37-tls-token >/dev/null 2>&1 || true
+      "$adb" -s "$serial" shell rm -f "$device_ui_dump" >/dev/null 2>&1 || true
+    fi
   fi
   docker rm -f "$tls_container" "$wrong_tls_container" >/dev/null 2>&1 || true
   docker volume rm \
@@ -61,8 +74,17 @@ cleanup() {
   if [ -n "$instrumentation_log" ] && [ -f "$instrumentation_log" ]; then
     rm -f "$instrumentation_log"
   fi
+  if [ -n "$instrumentation_directory" ] && [ -d "$instrumentation_directory" ]; then
+    rm -rf "$instrumentation_directory"
+  fi
   if [ -n "$expected_suite" ] && [ -f "$expected_suite" ]; then
     rm -f "$expected_suite"
+  fi
+  if [ -n "$base_suite" ] && [ -f "$base_suite" ]; then
+    rm -f "$base_suite"
+  fi
+  if [ -n "$journey_suite" ] && [ -f "$journey_suite" ]; then
+    rm -f "$journey_suite"
   fi
   if [ -n "$docker_source_before" ] && [ -f "$docker_source_before" ]; then
     rm -f "$docker_source_before"
@@ -89,6 +111,19 @@ if ! derive_android_instrumentation_suite \
 fi
 echo "API 37 device gate must prove $(grep -c '^' "$expected_suite") named tests:"
 sed 's/^/  /' "$expected_suite"
+journey_class=life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest
+base_suite=$(mktemp "${TMPDIR:-/tmp}/covalent-api37-base-suite.XXXXXX")
+journey_suite=$(mktemp "${TMPDIR:-/tmp}/covalent-api37-journey-suite.XXXXXX")
+awk -v prefix="$journey_class#" 'index($0, prefix) != 1' "$expected_suite" > "$base_suite"
+awk -v prefix="$journey_class#" 'index($0, prefix) == 1' "$expected_suite" > "$journey_suite"
+expected_test_count=$(grep -c '^' "$expected_suite")
+base_test_count=$(grep -c '^' "$base_suite")
+journey_test_count=$(grep -c '^' "$journey_suite" || true)
+if [ "$journey_test_count" -eq 0 ] || \
+  [ "$((base_test_count + journey_test_count))" -ne "$expected_test_count" ]; then
+  echo "The SAF journey partition must cover the exact derived device suite." >&2
+  exit 1
+fi
 
 if [ -z "$android_sdk" ] && [ -d "${HOME}/Library/Android/sdk" ]; then
   android_sdk="${HOME}/Library/Android/sdk"
@@ -477,6 +512,7 @@ if [ "$prebuilt" != true ]; then
     "$repo_root/apps/android/gradlew" \
     -p "$repo_root/apps/android" \
     --no-daemon \
+    -PcovalentBuildSyncEngine=true \
     assembleDebug \
     assembleDebugAndroidTest
 fi
@@ -666,6 +702,43 @@ install_or_dump "$test_apk"
 # Android 17 installs instrumentation packages disabled. Enable the exact
 # package before launch so the device gate cannot silently report zero tests.
 "$adb" -s "$serial" shell pm enable life.michaelwong.covalent.test >/dev/null
+# dumpsys package does not reliably expose ApplicationInfo.nativeLibraryDir.
+# Resolve the exact installed base APK instead, then verify the proposed helper
+# directory and every helper's actual bytes before authorizing the fixture.
+if ! native_preflight=$(
+  "$adb" -s "$serial" shell pm path life.michaelwong.covalent \
+    | python3 -B "$repo_root/scripts/android-native-library-directory.py" "$apk"
+); then
+  echo "The installed app's exact native-library location could not be verified." >&2
+  dump_guest_failure_evidence
+  exit 1
+fi
+native_library_directory=$(printf '%s\n' "$native_preflight" | head -1)
+printf 'Verified installed base APK proposes native helper directory: %s\n' "$native_library_directory"
+for helper in libcovalentrclone.so libengineguardian.so; do
+  if ! "$adb" -s "$serial" shell -T run-as life.michaelwong.covalent \
+    test -x "$native_library_directory/$helper" >/dev/null; then
+    echo "The installed immutable helper $helper is unavailable." >&2
+    exit 1
+  fi
+  expected_helper_hash=$(printf '%s\n' "$native_preflight" | awk -v name="$helper" '$2 == name {print $1}')
+  actual_helper_hash=$(
+    "$adb" -s "$serial" shell -T run-as life.michaelwong.covalent \
+      /system/bin/sha256sum "$native_library_directory/$helper" | awk '{print $1}'
+  )
+  if [ -z "$expected_helper_hash" ] || [ "$actual_helper_hash" != "$expected_helper_hash" ]; then
+    echo "The installed immutable helper $helper differs from the exact debug APK." >&2
+    exit 1
+  fi
+done
+if [ "$("$adb" -s "$serial" shell getprop ro.kernel.qemu | tr -d '\r')" != 1 ]; then
+  echo "The destructive folder-access fixture requires the verified API 37 emulator." >&2
+  exit 1
+fi
+# The serial, AVD name, API level, emulator kernel, exclusive gate lock, exact
+# installed debug package, and immutable helper paths have all been verified.
+# Only after this point may cleanup or the test fixture mutate the app UID.
+installed_fixture_owned=true
 
 # Stream the deterministic token into the target app's private files directory
 # through adb stdin. Every filesystem operation is a direct run-as child: adb
@@ -697,7 +770,6 @@ if "$adb" -s "$serial" shell -T run-as life.michaelwong.covalent \
   echo "Private Android TLS test credential resolved to a symlink." >&2
   exit 1
 fi
-
 # The post-mortem above is a post-mortem: it runs after `am instrument` returns,
 # which on a 56-test suite is tens of minutes after the first test failed. A
 # guest that was credential-encrypted-locked at t=0 and recovered by the time
@@ -756,31 +828,50 @@ framework_pids_before=$(framework_pids)
 echo "$framework_pids_before"
 echo "--- end guest state ---"
 
-instrumentation_log=$(mktemp "${TMPDIR:-/tmp}/covalent-api37-instrumentation.XXXXXX")
-if ! "$adb" -s "$serial" shell am instrument -w -r \
+instrumentation_directory=$(mktemp -d "${TMPDIR:-/tmp}/covalent-api37-instrumentation.XXXXXX")
+
+run_instrumentation_phase() {
+  phase_name=$1
+  phase_expectation=$2
+  shift 2
+  phase_log="$instrumentation_directory/$phase_name.log"
+  if ! "$adb" -s "$serial" shell am instrument -w -r "$@" \
+    life.michaelwong.covalent.test/androidx.test.runner.AndroidJUnitRunner >"$phase_log" 2>&1; then
+    cat "$phase_log" >&2
+    echo "Android instrumentation phase '$phase_name' failed on $serial." >&2
+    dump_guest_failure_evidence
+    exit 1
+  fi
+  cat "$phase_log"
+  if ! validate_android_api37_result "$phase_log" "$phase_expectation"; then
+    echo "Android instrumentation phase '$phase_name' is invalid on $serial." >&2
+    dump_guest_failure_evidence
+    exit 1
+  fi
+}
+
+run_instrumentation_phase baseline "$base_suite" \
+  -e notClass "$journey_class" \
   -e covalentTlsBaseUrl "https://$tls_hostname:$tls_port" \
   -e covalentTlsTokenFile "$tls_token_file_name" \
   -e covalentTlsCa "$tls_ca" \
   -e covalentTlsWrongCa "$wrong_tls_ca" \
-  -e covalentTlsPin "$tls_pin" \
-  life.michaelwong.covalent.test/androidx.test.runner.AndroidJUnitRunner >"$instrumentation_log" 2>&1; then
-  cat "$instrumentation_log" >&2
-  echo "Android instrumentation command failed on $serial." >&2
-  dump_guest_failure_evidence
+  -e covalentTlsPin "$tls_pin"
+
+if ! "$adb" -s "$serial" shell pm grant life.michaelwong.covalent \
+  android.permission.ACCESS_LOCAL_NETWORK >/dev/null; then
+  echo "Could not grant the debug fixture local-network permission." >&2
   exit 1
 fi
-cat "$instrumentation_log"
+run_instrumentation_phase folder-journey "$journey_suite" \
+  -e class "$journey_class"
+
+echo "Android instrumentation proved all $expected_test_count expected tests by name, including the real SAF folder journey."
 if "$adb" -s "$serial" shell -T run-as life.michaelwong.covalent \
   test -e files/covalent-api37-tls-token >/dev/null 2>&1; then
   echo "Android TLS test did not delete its private credential." >&2
   exit 1
 fi
-if ! validate_android_api37_result "$instrumentation_log" "$expected_suite"; then
-  echo "Android instrumentation result is invalid on $serial." >&2
-  dump_guest_failure_evidence
-  exit 1
-fi
-
 # The suite passed. Now say whether it passed on the guest it started on.
 #
 # scripts/disable-android-guest-launcher.sh removes the CompositionSamplingListener
@@ -822,8 +913,8 @@ evidence_dir=${COVALENT_ANDROID_EVIDENCE_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/coval
 mkdir -p "$evidence_dir"
 if [ "$headless_ci" = true ]; then
   "$adb" -s "$serial" exec-out screencap -p > "$evidence_dir/first-launch.png"
-  "$adb" -s "$serial" shell uiautomator dump /sdcard/covalent-ui.xml >/dev/null
-  "$adb" -s "$serial" pull /sdcard/covalent-ui.xml "$evidence_dir/first-launch-ui.xml" >/dev/null
+  "$adb" -s "$serial" shell uiautomator dump "$device_ui_dump" >/dev/null
+  "$adb" -s "$serial" pull "$device_ui_dump" "$evidence_dir/first-launch-ui.xml" >/dev/null
 else
   mobilecli screenshot \
     --device "$avd_name" \
@@ -832,7 +923,5 @@ else
   mobilecli dump ui --device "$avd_name" > "$evidence_dir/first-launch-ui.txt"
 fi
 
-"$adb" -s "$serial" reverse tcp:8787 tcp:8787
 echo "API 37 device gate passed on $serial ($avd_name)."
 echo "Evidence: $evidence_dir"
-echo "ADB reverse is ready: Android http://127.0.0.1:8787 -> host 127.0.0.1:8787."

@@ -3,6 +3,17 @@ import XCTest
 
 @MainActor
 final class CovalentMacUITests: XCTestCase {
+    override func record(_ issue: XCTIssue) {
+        let location = issue.sourceCodeContext.location
+        let details = "UI test failure: \(issue.compactDescription)\n"
+            + "\(location?.fileURL.path ?? "unknown file"):\(location?.lineNumber ?? 0)\n"
+        let attachment = XCTAttachment(string: details)
+        attachment.name = "UI test failure location"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        super.record(issue)
+    }
+
     /// How long a screen transition may take before the test gives up.
     ///
     /// This is a tolerance for runner contention, not an assertion. Three
@@ -20,23 +31,54 @@ final class CovalentMacUITests: XCTestCase {
     /// is several times the largest transition that has ever been observed.
     private let uiTransitionTimeout: TimeInterval = 10
 
+    func testFirstLaunchChoiceCanSetUpAndRecoveryCancelLeavesChoiceVisible() throws {
+        let app = try launchApp(firstLaunch: true)
+        XCTAssertTrue(app.staticTexts["Set up Covalent"].waitForExistence(timeout: uiTransitionTimeout))
+        XCTAssertTrue(app.buttons["firstLaunch.setup"].isHittable)
+        XCTAssertTrue(app.buttons["firstLaunch.chooseKit"].isHittable)
+        XCTAssertTrue(app.buttons["firstLaunch.chooseCode"].isHittable)
+        XCTAssertFalse(app.buttons["firstLaunch.recover"].isEnabled)
+
+        // Cancelling before selection must not start a service or create an
+        // identity; the choice remains the only visible path.
+        app.buttons["firstLaunch.chooseKit"].click()
+        // AppKit also exposes a Cancel button in the system Touch Bar. Target
+        // the open panel so the test exercises the file chooser's cancellation.
+        let openPanel = app.dialogs["open-panel"]
+        XCTAssertTrue(openPanel.waitForExistence(timeout: uiTransitionTimeout))
+        let cancel = openPanel.buttons["CancelButton"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: uiTransitionTimeout))
+        cancel.click()
+        XCTAssertTrue(waitForDisappearance(of: openPanel, timeout: uiTransitionTimeout))
+        XCTAssertTrue(app.staticTexts["Set up Covalent"].exists)
+
+        app.buttons["firstLaunch.setup"].click()
+        XCTAssertTrue(waitForDisappearance(of: app.staticTexts["Set up Covalent"], timeout: uiTransitionTimeout))
+        assertEmptyState("Folder Sync Is Unavailable", in: app)
+        showStatus(in: app)
+        assertStatusDevice("Apple UI Test Node", in: app)
+    }
+
     func testTierOneNavigationAndPrimaryWorkflowsAreReachable() throws {
         let app = try launchApp()
         continueAfterFailure = false
-        XCTAssertTrue(app.staticTexts["Apple UI Test Node is protected here"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["overview.newBackup"].isEnabled)
+        app.typeKey("1", modifierFlags: .command)
+        assertEmptyState("Folder Sync Is Unavailable", in: app)
+        app.typeKey("2", modifierFlags: .command)
+        XCTAssertTrue(app.staticTexts["Your devices"].waitForExistence(timeout: uiTransitionTimeout))
+        app.typeKey("3", modifierFlags: .command)
+        assertStatusDevice("Apple UI Test Node", in: app)
+        XCTAssertTrue(app.buttons["status.createLink"].isEnabled)
+        XCTAssertTrue(app.buttons["status.pairDevice"].isEnabled)
 
-        app.buttons["overview.newBackup"].click()
-        XCTAssertTrue(app.staticTexts["New Backup"].waitForExistence(timeout: uiTransitionTimeout))
-        XCTAssertTrue(app.textFields["backup.name"].exists)
-        XCTAssertFalse(app.buttons["backup.create"].isEnabled)
-        app.buttons["Cancel"].click()
+        app.buttons["status.createLink"].click()
+        assertEmptyState("Folder Sync Is Unavailable", in: app)
 
-        app.staticTexts["Devices"].click()
-        XCTAssertTrue(app.staticTexts["Your backup network"].waitForExistence(timeout: uiTransitionTimeout))
+        app.descendants(matching: .any).matching(identifier: "sidebar.devices").firstMatch.click()
+        XCTAssertTrue(app.staticTexts["Your devices"].waitForExistence(timeout: uiTransitionTimeout))
         let advanced = app.descendants(matching: .any)["devices.advancedRecovery"]
+        scrollTo(advanced, in: app.scrollViews["devices.view"])
         XCTAssertTrue(advanced.waitForExistence(timeout: uiTransitionTimeout))
-        scrollTo(advanced, in: app)
         XCTAssertTrue(advanced.isHittable, "Advanced recovery never became clickable.")
         expandDisclosure(advanced)
         XCTAssertEqual(
@@ -47,8 +89,8 @@ final class CovalentMacUITests: XCTestCase {
         let offlinePairing = app.buttons["devices.offlinePairing"]
         // Revealing the group pushes its contents below the fold, and macOS
         // keeps off-screen scroll content out of the accessibility tree, so
-        // bring it into view before asserting — exactly as the iOS test does.
-        scrollTo(offlinePairing, in: app)
+        // bring it into view before asserting.
+        scrollTo(offlinePairing, in: app.scrollViews["devices.view"])
         XCTAssertTrue(offlinePairing.waitForExistence(timeout: uiTransitionTimeout))
         XCTAssertTrue(offlinePairing.isHittable)
         offlinePairing.click()
@@ -60,18 +102,243 @@ final class CovalentMacUITests: XCTestCase {
         close.click()
         XCTAssertTrue(waitForDisappearance(of: app.staticTexts["Secure Pairing"], timeout: uiTransitionTimeout))
 
-        app.staticTexts["Settings"].click()
+        app.staticTexts["Advanced Settings"].click()
         XCTAssertTrue(app.staticTexts["Settings transfer"].waitForExistence(timeout: uiTransitionTimeout))
         XCTAssertTrue(app.staticTexts["Private identity keys and folder permissions never leave this device."].exists)
+        let notices = app.buttons["settings.openSourceNotices"]
+        scrollTo(notices, in: app.scrollViews["settings.view"])
+        XCTAssertTrue(notices.waitForExistence(timeout: uiTransitionTimeout))
+        notices.click()
+        let noticesTitle = app.staticTexts["Open Source Notices"]
+        XCTAssertTrue(noticesTitle.waitForExistence(timeout: uiTransitionTimeout))
+        let noticeText = app.descendants(matching: .any)["settings.openSourceNotices.text"]
+        XCTAssertTrue(noticeText.waitForExistence(timeout: uiTransitionTimeout))
+        app.buttons["Done"].click()
+        XCTAssertTrue(waitForDisappearance(of: noticesTitle, timeout: uiTransitionTimeout))
+
+        let backups = app.descendants(matching: .any).matching(identifier: "sidebar.backups").firstMatch
+        XCTAssertTrue(backups.waitForExistence(timeout: uiTransitionTimeout))
+        XCTAssertTrue(backups.isHittable)
+        backups.click()
+        assertEmptyState("No Legacy Backups Found", in: app)
+        XCTAssertFalse(app.buttons["New Backup"].exists)
     }
 
-    func testOverviewPassesSystemAccessibilityAudit() throws {
+    func testStatusPassesSystemAccessibilityAudit() throws {
         let app = try launchApp()
+        showStatus(in: app)
+        assertStatusDevice("Apple UI Test Node", in: app)
+        try auditMainWindow(in: app, timeout: uiTransitionTimeout)
+    }
+
+    func testLinksPassesSystemAccessibilityAudit() throws {
+        let app = try launchApp()
+        app.typeKey("1", modifierFlags: .command)
+        // This harness deliberately runs an unpackaged node. Its Links pane
+        // must explain that state and remain accessible.
+        assertEmptyState("Folder Sync Is Unavailable", in: app)
+        try auditMainWindow(in: app, timeout: uiTransitionTimeout)
+    }
+
+    private func assertEmptyState(_ title: String, in app: XCUIApplication) {
+        let emptyState = app.descendants(matching: .any).matching(
+            NSPredicate(
+                format: "identifier == %@ AND (label CONTAINS %@ OR value CONTAINS %@)",
+                "mac.emptyState",
+                title,
+                title
+            )
+        ).firstMatch
+        let reachedExpectedState = emptyState.waitForExistence(timeout: uiTransitionTimeout)
+        let candidateDetails: String
+        if reachedExpectedState {
+            candidateDetails = ""
+        } else {
+            let candidates = app.descendants(matching: .any)
+                .matching(identifier: "mac.emptyState")
+                .allElementsBoundByIndex
+                .prefix(4)
+                .map { String($0.debugDescription.prefix(768)) }
+            candidateDetails = candidates.isEmpty
+                ? " No mac.emptyState candidates were present."
+                : " mac.emptyState candidates: \(candidates.joined(separator: " | "))"
+        }
+        XCTAssertTrue(
+            reachedExpectedState,
+            "Expected the '\(title)' empty state to be reachable.\(candidateDetails)"
+        )
+        let text = accessibilityText(of: emptyState)
+        XCTAssertTrue(
+            text.contains(title),
+            "Expected empty-state accessibility text to contain '\(title)', got '\(text)'."
+        )
+    }
+
+    private func assertStatusDevice(_ name: String, in app: XCUIApplication) {
+        let device = app.descendants(matching: .any)["status.device"]
+        XCTAssertTrue(device.waitForExistence(timeout: uiTransitionTimeout))
+        let text = accessibilityText(of: device)
+        XCTAssertTrue(
+            text.contains(name),
+            "Expected status device accessibility text to contain '\(name)', got '\(text)'."
+        )
+    }
+
+    private func accessibilityText(of element: XCUIElement) -> String {
+        [element.label, element.value as? String ?? ""]
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    func testNativeMenuBarQuickActionsAreReachable() throws {
+        let app = try launchApp()
+        continueAfterFailure = false
+        showStatus(in: app)
+        assertStatusDevice("Apple UI Test Node", in: app)
+
+        // macOS maps a menu-bar status item's accessible title into an exact
+        // statusItems[title] query, while XCUIElement.label remains empty for
+        // that role. The named lookup proves the product AX title; enumeration
+        // below proves it is the only visible target we then click.
+        let namedStatusItem = app.statusItems["Covalent"]
+        XCTAssertTrue(
+            namedStatusItem.waitForExistence(timeout: 10),
+            "Covalent menu-bar target must expose the exact accessible title. \(namedStatusItem.debugDescription)"
+        )
+        let statusItems = app.statusItems.allElementsBoundByIndex
+        XCTAssertEqual(statusItems.count, 1, "Covalent must vend exactly one menu-bar status item.")
+        guard statusItems.count == 1 else { return }
+        let statusItem = statusItems[0]
+        XCTAssertTrue(statusItem.waitForExistence(timeout: 10))
+        let statusFrame = statusItem.frame
+        var displayCount: UInt32 = 0
+        let countError = CGGetActiveDisplayList(0, nil, &displayCount)
+        guard countError == .success, displayCount > 0 else {
+            XCTFail("Could not enumerate active displays: \(countError); count=\(displayCount)")
+            return
+        }
+        var displayIDs = [CGDirectDisplayID](repeating: 0, count: Int(displayCount))
+        let listError = CGGetActiveDisplayList(displayCount, &displayIDs, &displayCount)
+        guard listError == .success, displayCount > 0 else {
+            XCTFail("Could not read active display bounds: \(listError); count=\(displayCount)")
+            return
+        }
+        let screenFrames = displayIDs.prefix(Int(displayCount)).map { CGDisplayBounds($0) }
+        let statusValue = String(describing: statusItem.value ?? "")
+        let isVisibleStatusTarget = !statusFrame.isEmpty
+            && screenFrames.contains { $0.intersects(statusFrame) }
+        let statusTargetEvidence = XCTAttachment(
+            string: "Covalent status item label: \(statusItem.label); value: \(statusValue); frame: \(statusFrame); screens: \(screenFrames); AX: \(statusItem.debugDescription)"
+        )
+        statusTargetEvidence.name = "Covalent status item target"
+        statusTargetEvidence.lifetime = .keepAlways
+        add(statusTargetEvidence)
+        XCTAssertTrue(
+            isVisibleStatusTarget,
+            "Covalent menu-bar target must have a nonempty frame on a visible screen. frame=\(statusFrame)"
+        )
+        // XCTest reports a SwiftUI MenuBarExtra as non-hittable while its
+        // target has a visible frame. Its `isHittable` predicate is therefore
+        // not a useful proxy for this workflow: use the exact center and let
+        // the assertions below prove every quick action is exposed.
+        statusItem.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+
+        XCTAssertTrue(app.menuItems["Open Links"].waitForExistence(timeout: uiTransitionTimeout))
+        XCTAssertTrue(app.menuItems["Create Link"].exists)
+        XCTAssertTrue(app.menuItems["Pair Device"].exists)
+        XCTAssertTrue(app.menuItems["Legacy Backups"].exists)
+        XCTAssertTrue(app.menuItems["Refresh Status"].exists)
+        XCTAssertTrue(app.menuItems["Advanced Settings…"].exists)
+        XCTAssertTrue(app.menuItems["Quit Covalent"].exists)
+    }
+
+    private func showStatus(in app: XCUIApplication) {
+        let status = app.descendants(matching: .any).matching(identifier: "sidebar.overview").firstMatch
+        XCTAssertTrue(status.waitForExistence(timeout: uiTransitionTimeout))
+        status.click()
+    }
+
+    /// Expands a macOS `DisclosureGroup`.
+    ///
+    /// Click the control itself first. A previous ordering reached outside the
+    /// element's leading edge first, hunting for the triangle glyph: for this
+    /// group that offset resolved to x=227 while the enclosing scroll view
+    /// starts at x=228, so the click landed in the sidebar and the group was
+    /// never touched. Anything the control offers has to be reachable within
+    /// its own bounds, so that is where this looks; the leading-edge offsets
+    /// remain as fallbacks and are kept small enough to stay inside the pane.
+    private func expandDisclosure(_ element: XCUIElement) {
+        let targets = [
+            element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)),
+            element.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)),
+            element.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: -6, dy: 8)),
+        ]
+        for target in targets {
+            guard String(describing: element.value ?? "") != "1" else { return }
+            target.click()
+            _ = XCTWaiter.wait(
+                for: [
+                    XCTNSPredicateExpectation(
+                        predicate: NSPredicate(format: "value == 1"),
+                        object: element
+                    )
+                ],
+                timeout: 2
+            )
+        }
+    }
+
+    /// Scrolls `element` into view, so an assertion measures whether the app
+    /// offers the control — not whether it happened to be above the fold.
+    ///
+    /// macOS keeps off-screen scroll content out of the accessibility tree, so
+    /// without this a perfectly good control reads as missing.
+    private func scrollTo(_ element: XCUIElement, in scrollView: XCUIElement) {
+        // Scroll until the control can actually be clicked, not merely until
+        // it exists. macOS keeps below-the-fold rows in the accessibility tree,
+        // so `exists` goes true while the element is still off screen — and a
+        // click at its coordinate then lands on nothing, silently doing
+        // nothing at all.
+        guard !element.isHittable else { return }
+        guard scrollView.waitForExistence(timeout: uiTransitionTimeout) else { return }
+        let page = scrollView.frame.height * 0.75
+        for delta in Array(repeating: -page, count: 8) + Array(repeating: page, count: 8)
+        where !element.isHittable {
+            scrollView.scroll(byDeltaX: 0, deltaY: delta)
+        }
+    }
+
+    private func launchApp(firstLaunch: Bool = false) throws -> XCUIApplication {
+        let environment = ProcessInfo.processInfo.environment
+        let app = XCUIApplication()
+        let testBundle = Bundle(for: CovalentMacUITests.self)
+        let port = environment["COVALENT_UI_TEST_PORT"]
+            ?? testBundle.object(forInfoDictionaryKey: "CovalentUITestPort") as? String
+        let tokenFile = environment["COVALENT_UI_TEST_TOKEN_FILE"]
+            ?? testBundle.object(forInfoDictionaryKey: "CovalentUITestTokenFile") as? String
+        app.launchEnvironment["COVALENT_UI_TEST_BASE_URL"] = "http://127.0.0.1:\(try XCTUnwrap(port))"
+        app.launchEnvironment["COVALENT_UI_TEST_TOKEN_FILE"] = try XCTUnwrap(tokenFile)
+        if firstLaunch { app.launchEnvironment["COVALENT_UI_TEST_FIRST_LAUNCH"] = "1" }
+        app.launch()
+        return app
+    }
+
+    private func waitForDisappearance(of element: XCUIElement, timeout: TimeInterval) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: element
+        )
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+}
+
+@MainActor
+extension XCTestCase {
+    func auditMainWindow(in app: XCUIApplication, timeout: TimeInterval) throws {
         // Every audit finding still fails this test; stopping at the first one
         // only hid how many there were, which turned a single run into a
         // one-finding-at-a-time search. Report them all.
         continueAfterFailure = true
-        XCTAssertTrue(app.staticTexts["Apple UI Test Node is protected here"].waitForExistence(timeout: 10))
 
         // ---------------------------------------------------------------
         // Why this audit is scoped to the main window.
@@ -123,7 +390,7 @@ final class CovalentMacUITests: XCTestCase {
         //
         //       - A bare `.accessibilityLabel` on the outermost view of the
         //         detail column produced `Group {{0, 31}, {1024, 692}}` (still
-        //         unnamed) -> `ScrollView, label: 'Overview'`. The name landed
+        //         unnamed) -> `ScrollView, label: 'Status'`. The name landed
         //         on the scroll view underneath it.
         //
         //     In both cases the label attached *below* the container, because
@@ -139,18 +406,15 @@ final class CovalentMacUITests: XCTestCase {
         // Covalent draws — sidebar, toolbar, detail pane, sheets — is inside
         // this window and is still audited, and the ten app-owned findings
         // this change was made alongside were *fixed*, not excluded: the
-        // status grid was named, and seven contrast findings were traced to
-        // their real causes (a 50%-alpha `.secondary`, then rendered stroke
-        // coverage at small sizes, then two decorative glyphs inside combined
-        // elements) and fixed at the source in `MacTextStyles.swift`,
-        // `MacOverviewView.swift` and `MacRootView.swift`. If you are here
+        // app content was named, and contrast findings were fixed at the source
+        // in `MacTextStyles.swift` and `MacRootView.swift`. If you are here
         // because you want a failing finding to go away, this is not the
         // precedent for it: exclude only elements that no Covalent source file
         // can reach, prove it the way entry 3 does, and add a counted
         // assertion so the exclusion cannot widen.
         // ---------------------------------------------------------------
         let window = app.windows["main"]
-        XCTAssertTrue(window.waitForExistence(timeout: uiTransitionTimeout))
+        XCTAssertTrue(window.waitForExistence(timeout: timeout))
         let windowFrame = window.frame
         XCTAssertFalse(windowFrame.isEmpty, "Cannot scope the audit to a window with no frame.")
 
@@ -248,125 +512,5 @@ final class CovalentMacUITests: XCTestCase {
             would mean SwiftUI stopped synthesizing them, and this exclusion should be deleted.
             """
         )
-    }
-
-    func testNativeMenuBarQuickActionsAreReachable() throws {
-        let app = try launchApp()
-        continueAfterFailure = false
-        XCTAssertTrue(app.staticTexts["Apple UI Test Node is protected here"].waitForExistence(timeout: 10))
-
-        // macOS maps a menu-bar status item's accessible title into an exact
-        // statusItems[title] query, while XCUIElement.label remains empty for
-        // that role. The named lookup proves the product AX title; enumeration
-        // below proves it is the only visible target we then click.
-        let namedStatusItem = app.statusItems["Covalent"]
-        XCTAssertTrue(
-            namedStatusItem.waitForExistence(timeout: 10),
-            "Covalent menu-bar target must expose the exact accessible title. \(namedStatusItem.debugDescription)"
-        )
-        let statusItems = app.statusItems.allElementsBoundByIndex
-        XCTAssertEqual(statusItems.count, 1, "Covalent must vend exactly one menu-bar status item.")
-        guard statusItems.count == 1 else { return }
-        let statusItem = statusItems[0]
-        XCTAssertTrue(statusItem.waitForExistence(timeout: 10))
-        let statusFrame = statusItem.frame
-        let screenFrames = NSScreen.screens.map(\.frame)
-        let statusValue = String(describing: statusItem.value ?? "")
-        let isVisibleStatusTarget = !statusFrame.isEmpty
-            && screenFrames.contains { $0.intersects(statusFrame) }
-        let statusTargetEvidence = XCTAttachment(
-            string: "Covalent status item label: \(statusItem.label); value: \(statusValue); frame: \(statusFrame); screens: \(screenFrames); AX: \(statusItem.debugDescription)"
-        )
-        statusTargetEvidence.name = "Covalent status item target"
-        statusTargetEvidence.lifetime = .keepAlways
-        add(statusTargetEvidence)
-        XCTAssertTrue(
-            isVisibleStatusTarget,
-            "Covalent menu-bar target must have a nonempty frame on a visible screen. frame=\(statusFrame)"
-        )
-        // XCTest reports a SwiftUI MenuBarExtra as non-hittable while its
-        // target has a visible frame. Its `isHittable` predicate is therefore
-        // not a useful proxy for this workflow: use the exact center and let
-        // the assertions below prove every quick action is exposed.
-        statusItem.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-
-        XCTAssertTrue(app.menuItems["Open Covalent"].waitForExistence(timeout: uiTransitionTimeout))
-        XCTAssertTrue(app.menuItems["New Backup…"].exists)
-        XCTAssertTrue(app.menuItems["Restore Latest Backup…"].exists)
-        XCTAssertTrue(app.menuItems["Refresh Status"].exists)
-        XCTAssertTrue(app.menuItems["Settings…"].exists)
-        XCTAssertTrue(app.menuItems["Quit Covalent"].exists)
-    }
-
-    /// Expands a macOS `DisclosureGroup`.
-    ///
-    /// Click the control itself first. A previous ordering reached outside the
-    /// element's leading edge first, hunting for the triangle glyph: for this
-    /// group that offset resolved to x=227 while the enclosing scroll view
-    /// starts at x=228, so the click landed in the sidebar and the group was
-    /// never touched. Anything the control offers has to be reachable within
-    /// its own bounds, so that is where this looks; the leading-edge offsets
-    /// remain as fallbacks and are kept small enough to stay inside the pane.
-    private func expandDisclosure(_ element: XCUIElement) {
-        let targets = [
-            element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)),
-            element.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)),
-            element.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: -6, dy: 8)),
-        ]
-        for target in targets {
-            guard String(describing: element.value ?? "") != "1" else { return }
-            target.click()
-            _ = XCTWaiter.wait(
-                for: [
-                    XCTNSPredicateExpectation(
-                        predicate: NSPredicate(format: "value == 1"),
-                        object: element
-                    )
-                ],
-                timeout: 2
-            )
-        }
-    }
-
-    /// Scrolls `element` into view, so an assertion measures whether the app
-    /// offers the control — not whether it happened to be above the fold.
-    ///
-    /// macOS keeps off-screen scroll content out of the accessibility tree, so
-    /// without this a perfectly good control reads as missing.
-    private func scrollTo(_ element: XCUIElement, in app: XCUIApplication) {
-        // Scroll until the control can actually be clicked, not merely until
-        // it exists. macOS keeps below-the-fold rows in the accessibility tree,
-        // so `exists` goes true while the element is still off screen — and a
-        // click at its coordinate then lands on nothing, silently doing
-        // nothing at all.
-        guard !element.isHittable else { return }
-        let scrollView = app.scrollViews.firstMatch
-        guard scrollView.waitForExistence(timeout: uiTransitionTimeout) else { return }
-        for delta in [-60.0, -60.0, -60.0, -60.0, -60.0, 60.0, 60.0, 60.0, 60.0, 60.0]
-        where !element.isHittable {
-            scrollView.scroll(byDeltaX: 0, deltaY: CGFloat(delta))
-        }
-    }
-
-    private func launchApp() throws -> XCUIApplication {
-        let environment = ProcessInfo.processInfo.environment
-        let app = XCUIApplication()
-        let testBundle = Bundle(for: CovalentMacUITests.self)
-        let port = environment["COVALENT_UI_TEST_PORT"]
-            ?? testBundle.object(forInfoDictionaryKey: "CovalentUITestPort") as? String
-        let tokenFile = environment["COVALENT_UI_TEST_TOKEN_FILE"]
-            ?? testBundle.object(forInfoDictionaryKey: "CovalentUITestTokenFile") as? String
-        app.launchEnvironment["COVALENT_UI_TEST_BASE_URL"] = "http://127.0.0.1:\(try XCTUnwrap(port))"
-        app.launchEnvironment["COVALENT_UI_TEST_TOKEN_FILE"] = try XCTUnwrap(tokenFile)
-        app.launch()
-        return app
-    }
-
-    private func waitForDisappearance(of element: XCUIElement, timeout: TimeInterval) -> Bool {
-        let expectation = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "exists == false"),
-            object: element
-        )
-        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 }

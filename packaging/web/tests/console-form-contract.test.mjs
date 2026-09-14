@@ -1,22 +1,68 @@
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+const require = createRequire(import.meta.url);
+const consoleRuntime = require("../app.js");
+const tabs = require("../tab-flow.js");
 const root = new URL("../", import.meta.url);
 
 async function source(name) {
   return readFile(new URL(name, root), "utf8");
 }
 
-test("backup submission exposes progress, prevents duplicate posts, and retries the same job", async () => {
-  const [html, app] = await Promise.all([source("index.html"), source("app.js")]);
-  assert.match(html, /data-backup-status role="status" aria-live="polite"/);
-  assert.match(html, /data-backup-retry hidden>Try again</);
-  assert.match(app, /form\.setAttribute\("aria-busy", String\(inFlight\)\)/);
-  assert.match(app, /if \(backupSubmissionInFlight\) return;/);
-  assert.match(app, /jobId: randomId\("backup"\)/);
-  assert.match(app, /pending\?\.phase === "request" \? pending\.attempt : failedBackupAttempt/);
-  assert.match(app, /await submitBackupLocked\(retryAttempt\)/);
+class FakeElement {
+  constructor(dataset, selected = false) {
+    this.dataset = dataset;
+    this.hidden = false;
+    this.attributes = new Map([
+      ["aria-selected", String(selected)],
+      ["tabindex", selected ? "0" : "-1"],
+    ]);
+    this.listeners = new Map();
+  }
+
+  addEventListener(type, listener) { this.listeners.set(type, listener); }
+  getAttribute(name) { return this.attributes.get(name) ?? null; }
+  setAttribute(name, value) { this.attributes.set(name, value); }
+  focus() {}
+  fire(type) { this.listeners.get(type)?.({ preventDefault() {} }); }
+}
+
+test("unlock initializes Links without archive APIs and primary tabs work", async () => {
+  const calls = [];
+  const api = async (path) => { calls.push(path); return {}; };
+  await consoleRuntime.initializeUnlockedConsole({
+    authorize: () => api("/api/v1/config/export"),
+    initializeLinks: async () => {
+      await api("/api/v1/transport/identity");
+      await api("/api/v1/sync/status");
+    },
+    refreshPairings: () => api("/api/v1/pair/network/pending"),
+    onLinksError: assert.fail,
+  });
+  assert.deepEqual(calls, [
+    "/api/v1/config/export",
+    "/api/v1/transport/identity",
+    "/api/v1/sync/status",
+    "/api/v1/pair/network/pending",
+  ]);
+  assert.equal(calls.some((path) => /backup|restore|recovery|provider|archive/.test(path)), false);
+
+  const names = ["pair", "folders", "settings"];
+  const tabElements = names.map((name) => new FakeElement({ tab: name }, name === "folders"));
+  const panels = names.map((name) => Object.assign(new FakeElement({ panel: name }), { hidden: name !== "folders" }));
+  tabs.install({
+    querySelectorAll(selector) {
+      if (selector === "[data-tab]") return tabElements;
+      if (selector === "[data-panel]") return panels;
+      return [];
+    },
+  });
+  tabElements[0].fire("click");
+  assert.deepEqual(tabElements.map((tab) => tab.getAttribute("aria-selected")), ["true", "false", "false"]);
+  assert.deepEqual(panels.map((panel) => panel.hidden), [false, true, true]);
 });
 
 test("console access uses trusted claim output and never a server-state token path", async () => {
@@ -27,42 +73,31 @@ test("console access uses trusted claim output and never a server-state token pa
   assert.doesNotMatch(html, /token from <code>\/data\//);
 });
 
-test("backup providers come from verified connected devices, never a raw ID entry field", async () => {
-  const [html, app, pairing] = await Promise.all([
-    source("index.html"), source("app.js"), source("pairing-flow.js"),
-  ]);
-  assert.match(html, /data-providers-list/);
-  assert.match(html, /data-providers-refresh/);
-  assert.doesNotMatch(html, /<textarea name="providers"/);
-  assert.match(app, /pairing\.providers\.listNamed\(api\)/);
-  assert.match(app, /pairing\.providers\.selectedIds\(providerConnections, selected\(form, "providers"\)\)/);
-  assert.match(pairing, /api\("\/api\/v1\/providers\/connect"/);
-  assert.match(pairing, /JSON\.stringify\(\{ peerTransport: transport \}\)/);
-  assert.match(pairing, /api\("\/api\/v1\/rosters\/current"\)/);
-  assert.match(pairing, /async function networkDismiss/);
+test("primary console contains one-way Links and keeps legacy data available through the CLI", async () => {
+  const html = await source("index.html");
+  assert.match(html, /Create a one-way link/);
+  assert.match(html, /covalent backups/);
+  assert.match(html, /does not delete files, keys, archives, or settings/);
+  assert.doesNotMatch(html, /data-backup-form|data-restore-preview|data-recovery-export|data-provider-selection/);
+  assert.doesNotMatch(html, /(?:backup|restore|recovery)-(?:selection|terminal|verification|plan|preview|flow)\.js/);
 });
 
-test("normal backup results are decoded before their terminal job receipt is acknowledged", async () => {
-  const [html, app, terminal] = await Promise.all([
-    source("index.html"), source("app.js"), source("backup-terminal-flow.js"),
+test("link cadence controls use shared settings and Run Now contracts without exposing counters", async () => {
+  const [html, app, flow] = await Promise.all([
+    source("index.html"), source("app.js"), source("folder-sync-flow.js"),
   ]);
-  assert.match(html, /backup-terminal-flow\.js/);
-  assert.match(app, /response\.headers\.get\("x-covalent-job-ack-required"\)/);
-  assert.match(app, /if \(acknowledgement !== "true"\)/);
-  assert.match(app, /acknowledgementRequired: true/);
-  assert.match(app, /backupTerminal\.submit/);
-  assert.match(app, /backupTerminal\.acknowledge/);
-  assert.match(app, /setBackupSubmissionState\("complete", complete\);[\s\S]*?await acknowledgeBackupTerminalReceipt/);
-  assert.match(app, /backupTerminal\.load\(globalThis\.localStorage, backupServerContext\)/);
-  assert.match(app, /globalThis\.localStorage,[\s\S]*?backupServerContext,[\s\S]*?apiResponse/);
-  assert.doesNotMatch(app, /backupTerminal\.(?:load|submit|acknowledge)\(globalThis\.sessionStorage/);
-  assert.match(app, /pairing\.storage\.saveTabSession\(globalThis\.sessionStorage/);
-  assert.match(terminal, /persist\(storage, receipt\)/);
-  assert.match(terminal, /RECEIPT_REVIEW_AFTER_MS/);
-  assert.match(terminal, /serverContext/);
-  assert.match(terminal, /locks\.request\([\s\S]*?mode: "exclusive", ifAvailable: true/);
-  assert.match(app, /withBackupTerminalLock\([\s\S]*?submitBackupLocked/);
-  assert.match(app, /exclusive same-origin lock remains held[\s\S]*?acknowledgeBackupTerminalReceipt/);
-  assert.match(terminal, /response\.status !== 204/);
-  assert.match(terminal, /apiResponse\("\/api\/v1\/jobs\/acknowledge"/);
+  assert.match(html, /name="cadenceMode" value="manual" required/);
+  assert.match(html, /name="cadenceMode" value="scheduled" required/);
+  assert.match(html, /name="cadenceMode" value="continuous" required/);
+  assert.match(html, /name="intervalMinutes" type="number" min="15" max="525600"/);
+  assert.match(html, /Wi-Fi only on Android devices/);
+  assert.match(html, /Charging only on Android devices/);
+  assert.match(app, /folderController\.updateLinkSettings\(share\.folderId, settings\)/);
+  assert.match(app, /folderController\.runNow\(share\.folderId\)/);
+  assert.match(flow, /"\/api\/v1\/sync\/run"/);
+  assert.match(flow, /expectedGeneration: share\.linkRun\.generation/);
+  assert.match(flow, /settingsRevision: share\.linkSettings\.revision/);
+  assert.doesNotMatch(html, /generation|settings revision/i);
+  assert.doesNotMatch(app, /textContent\s*=.*(?:generation|revision)/i);
+  assert.doesNotMatch(app, /\/api\/v1\/sync\/conditions/);
 });

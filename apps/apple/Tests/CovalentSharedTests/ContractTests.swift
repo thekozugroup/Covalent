@@ -23,6 +23,8 @@ import Testing
     #expect(!text.contains("identitykey"))
     #expect(!text.contains("bookmark"))
     #expect(!text.contains("token"))
+    #expect(!text.contains("recoverykit"))
+    #expect(!text.contains("recoverykey"))
 }
 
 @Test func committedSettingsFixtureDecodes() throws {

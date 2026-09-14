@@ -14,9 +14,7 @@ The release surfaces are:
   menu-bar item/menu.
 - Docker/Unraid web console, served by the Covalent node.
 
-iOS is informational/Tier 2 only. It is not a supported release client and its
-screenshots or tests cannot approve a release. Windows has no client or
-packaging.
+iOS and Windows are unsupported and have no release clients or CI lanes.
 
 ## Evidence rules
 

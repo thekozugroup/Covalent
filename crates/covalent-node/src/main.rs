@@ -13,7 +13,10 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use covalent_core::{CoreError, KeyEncryptionKey, KeyProtector, StaticKeyProtector};
 use covalent_node::ArchiveLimits;
-use covalent_node::runtime::{LocalApiTokenSource, NodeRuntime, NodeRuntimeConfig};
+use covalent_node::runtime::{
+    LocalApiTokenSource, NodeRuntime, NodeRuntimeConfig, RecoveryBootstrap,
+    load_recovery_bootstrap_files,
+};
 use covalent_protocol::PlatformTier;
 use rand_core::{OsRng, RngCore};
 use tracing::info;
@@ -30,16 +33,22 @@ use zeroize::{Zeroize, Zeroizing};
 /// it in memory through `LocalApiTokenSource::Provided`; it is never persisted.
 const PIPE_KEY_V1_MAGIC: &[u8; 8] = b"CVKEK001";
 const PIPE_SECRET_V2_MAGIC: &[u8; 8] = b"CVSEC002";
+const PIPE_SECRET_V3_MAGIC: &[u8; 8] = b"CVSEC003";
 const PIPE_KEY_LENGTH: usize = 32;
 const PIPE_KEY_MAXIMUM_COUNT: usize = 16;
 const PIPE_KEY_V1_HEADER_LENGTH: usize = PIPE_KEY_V1_MAGIC.len() + 4 + 2;
 const PIPE_SECRET_V2_HEADER_LENGTH: usize = PIPE_SECRET_V2_MAGIC.len() + 4 + 2 + 2;
+const PIPE_SECRET_V3_HEADER_LENGTH: usize = PIPE_SECRET_V3_MAGIC.len() + 4 + 2 + 2 + 4 + 2;
 const PIPE_KEY_ENTRY_LENGTH: usize = 4 + PIPE_KEY_LENGTH;
 const PIPE_API_TOKEN_MINIMUM_LENGTH: usize = 32;
 const PIPE_API_TOKEN_MAXIMUM_LENGTH: usize = 512;
-const PIPE_SECRET_MAXIMUM_LENGTH: usize = PIPE_SECRET_V2_HEADER_LENGTH
+const PIPE_RECOVERY_KIT_MAXIMUM_LENGTH: usize = 16 * 1_024 * 1_024;
+const PIPE_RECOVERY_KEY_LENGTH: usize = 43;
+const PIPE_SECRET_MAXIMUM_LENGTH: usize = PIPE_SECRET_V3_HEADER_LENGTH
     + (PIPE_KEY_MAXIMUM_COUNT * PIPE_KEY_ENTRY_LENGTH)
-    + PIPE_API_TOKEN_MAXIMUM_LENGTH;
+    + PIPE_API_TOKEN_MAXIMUM_LENGTH
+    + PIPE_RECOVERY_KIT_MAXIMUM_LENGTH
+    + PIPE_RECOVERY_KEY_LENGTH;
 
 #[derive(Debug, Parser)]
 #[command(name = "covalent-node", version, about = "Covalent backup node")]
@@ -94,6 +103,48 @@ enum Command {
         /// Boxed so this variant does not dwarf `Healthcheck`: eight tuning
         /// numbers is most of the subcommand's footprint and none of it is on a
         /// hot path.
+        #[command(flatten)]
+        archive_limits: Box<ArchiveLimitArguments>,
+    },
+    /// Restores a lost owner identity into a fresh state root, then keeps serving for claim.
+    Recover {
+        /// Owner-readable raw decoded `.covalent-recovery` file exported by the old owner.
+        #[arg(long, value_name = "PATH")]
+        recovery_kit_file: Option<PathBuf>,
+        /// Owner-readable `.covalent-recovery-key` file containing the 43-character key.
+        #[arg(long, value_name = "PATH")]
+        recovery_key_file: Option<PathBuf>,
+        /// Loopback-only cleartext management socket.
+        #[arg(long, env = "COVALENT_LISTEN", default_value = "127.0.0.1:8787")]
+        listen: SocketAddr,
+        /// QUIC peer socket.
+        #[arg(long, env = "COVALENT_PEER_LISTEN", default_value = "127.0.0.1:8787")]
+        peer_listen: SocketAddr,
+        /// Address other devices dial to reach this node.
+        #[arg(long, env = "COVALENT_ADVERTISED_PEER_ADDRESS")]
+        advertised_peer_address: Option<SocketAddr>,
+        /// Fresh durable node state directory. Existing identity state is refused.
+        #[arg(long, env = "COVALENT_DATA_DIR", default_value = ".covalent-data")]
+        data_dir: PathBuf,
+        /// User-visible fallback name; the signed kit's identity configuration wins.
+        #[arg(long, env = "COVALENT_DEVICE_NAME", default_value = "Covalent node")]
+        device_name: String,
+        /// Initial fallback discovery preference.
+        #[arg(long, env = "COVALENT_LAN_DISCOVERY", default_value_t = false)]
+        lan_discovery: bool,
+        /// Readiness tier represented by this package.
+        #[arg(long, env = "COVALENT_PLATFORM_TIER", value_enum, default_value_t = Tier::Tier1)]
+        platform_tier: Tier,
+        /// CA certificate delivered by the first-run ownership claim.
+        #[arg(long, env = "COVALENT_TLS_CA_FILE")]
+        tls_ca_file: Option<PathBuf>,
+        /// Optional private readiness JSON for an app that owns this process.
+        #[arg(long, env = "COVALENT_READY_FILE")]
+        ready_file: Option<PathBuf>,
+        /// Key protection source and version for the new local state.
+        #[command(flatten)]
+        key_protection: Box<KeyProtectionArguments>,
+        /// Streamed archive admission and capacity limits.
         #[command(flatten)]
         archive_limits: Box<ArchiveLimitArguments>,
     },
@@ -225,6 +276,8 @@ struct ServeConfiguration {
     key_encryption_key_stdin: bool,
     api_token_file: Option<PathBuf>,
     archive_limits: ArchiveLimits,
+    recovery_required: bool,
+    recovery_files: Option<(PathBuf, PathBuf)>,
 }
 
 #[tokio::main]
@@ -298,6 +351,56 @@ async fn main() -> Result<()> {
                 key_encryption_key_stdin,
                 api_token_file,
                 archive_limits: (*archive_limits).into(),
+                recovery_required: false,
+                recovery_files: None,
+            })
+            .await
+        }
+        Command::Recover {
+            recovery_kit_file,
+            recovery_key_file,
+            listen,
+            peer_listen,
+            advertised_peer_address,
+            data_dir,
+            device_name,
+            lan_discovery,
+            platform_tier,
+            tls_ca_file,
+            ready_file,
+            key_protection,
+            archive_limits,
+        } => {
+            let KeyProtectionArguments {
+                key_encryption_key_file,
+                key_encryption_key_version,
+                key_encryption_key_stdin,
+                api_token_file,
+            } = *key_protection;
+            let recovery_files = match (recovery_kit_file, recovery_key_file) {
+                (Some(kit), Some(key)) => Some((kit, key)),
+                (None, None) => None,
+                _ => bail!(
+                    "provide both --recovery-kit-file and --recovery-key-file, or neither when CVSEC003 is supplied through --key-encryption-key-stdin"
+                ),
+            };
+            serve(ServeConfiguration {
+                listen,
+                peer_listen,
+                advertised_peer_address,
+                data_dir,
+                device_name,
+                lan_discovery,
+                platform_tier: platform_tier.into(),
+                ready_file,
+                tls_ca_file,
+                key_encryption_key_file,
+                key_encryption_key_version,
+                key_encryption_key_stdin,
+                api_token_file,
+                archive_limits: (*archive_limits).into(),
+                recovery_required: true,
+                recovery_files,
             })
             .await
         }
@@ -325,6 +428,8 @@ async fn serve(configuration: ServeConfiguration) -> Result<()> {
         key_encryption_key_stdin,
         api_token_file,
         archive_limits,
+        recovery_required,
+        recovery_files,
     } = configuration;
     let mut runtime_configuration = NodeRuntimeConfig::new(data_dir, listen, peer_listen);
     runtime_configuration.advertised_peer_address = advertised_peer_address;
@@ -332,12 +437,14 @@ async fn serve(configuration: ServeConfiguration) -> Result<()> {
     runtime_configuration.lan_discovery_enabled = lan_discovery;
     runtime_configuration.platform_tier = platform_tier;
     runtime_configuration.archive_limits = archive_limits;
-    let inherited = headless_secrets(
+    let mut inherited = headless_secrets(
         key_encryption_key_file,
         key_encryption_key_version,
         key_encryption_key_stdin,
         api_token_file,
     )?;
+    runtime_configuration.recovery =
+        select_recovery_bootstrap(recovery_required, recovery_files, inherited.recovery.take())?;
     runtime_configuration.key_protector = Some(inherited.key_protector);
     let api_token_was_provided = inherited.api_token.is_some();
     runtime_configuration.api_token = inherited.api_token.map_or(
@@ -350,6 +457,29 @@ async fn serve(configuration: ServeConfiguration) -> Result<()> {
     runtime_configuration.first_run_claim_enabled = ready_file.is_none() && !api_token_was_provided;
     runtime_configuration.tls_ca_certificate_file = tls_ca_file;
     runtime_configuration.ready_file = ready_file;
+    #[cfg(target_os = "macos")]
+    {
+        runtime_configuration.folder_sync_access_unavailable =
+            std::env::var_os("COVALENT_SYNC_ACCESS_UNAVAILABLE").is_some_and(|value| value == "1");
+    }
+    #[cfg(target_os = "macos")]
+    match covalent_node::sync_engine::discover_packaged_engine() {
+        Ok(Some(package)) => runtime_configuration.folder_sync = Some(package),
+        Ok(None) => {}
+        Err(error) => {
+            runtime_configuration.folder_sync_package_invalid = true;
+            tracing::warn!(?error, "packaged folder sync needs attention");
+        }
+    }
+    #[cfg(target_os = "linux")]
+    match covalent_node::sync_engine::discover_packaged_linux_engine() {
+        Ok(Some(package)) => runtime_configuration.folder_sync = Some(package),
+        Ok(None) => {}
+        Err(error) => {
+            runtime_configuration.folder_sync_package_invalid = true;
+            tracing::warn!(?error, "packaged folder sync needs attention");
+        }
+    }
     let runtime = NodeRuntime::start(runtime_configuration).await?;
     shutdown_signal().await;
     runtime.stop().await
@@ -358,6 +488,7 @@ async fn serve(configuration: ServeConfiguration) -> Result<()> {
 struct HeadlessSecrets {
     key_protector: Arc<dyn KeyProtector>,
     api_token: Option<Zeroizing<String>>,
+    recovery: Option<RecoveryBootstrap>,
 }
 
 fn headless_secrets(
@@ -376,8 +507,11 @@ fn headless_secrets(
             .take((PIPE_SECRET_MAXIMUM_LENGTH + 1) as u64)
             .read_to_end(&mut serialized)
             .context("read secret payload from inherited pipe")?;
-        let (protector, mut api_token) =
-            ProvisionedKeyProtector::from_pipe_bytes(serialized.as_ref())?;
+        let PipeSecrets {
+            protector,
+            mut api_token,
+            recovery,
+        } = ProvisionedKeyProtector::from_pipe_bytes(serialized.as_ref())?;
         if api_token.is_some() && api_token_file.is_some() {
             bail!("choose either the inherited v2 API token or --api-token-file, not both");
         }
@@ -387,6 +521,7 @@ fn headless_secrets(
         return Ok(HeadlessSecrets {
             key_protector: Arc::new(protector),
             api_token,
+            recovery,
         });
     }
     let path = key_file.context(
@@ -403,7 +538,34 @@ fn headless_secrets(
     Ok(HeadlessSecrets {
         key_protector: Arc::new(StaticKeyProtector::from_base64(key_version, &encoded)?),
         api_token,
+        recovery: None,
     })
+}
+
+fn select_recovery_bootstrap(
+    required: bool,
+    files: Option<(PathBuf, PathBuf)>,
+    inherited: Option<RecoveryBootstrap>,
+) -> Result<Option<RecoveryBootstrap>> {
+    match (required, files, inherited) {
+        (false, None, None) => Ok(None),
+        (false, _, Some(_)) => bail!("CVSEC003 is accepted only by the recover command"),
+        (true, Some(_), Some(_)) => bail!("choose either recovery files or CVSEC003, not both"),
+        (true, Some((kit, key)), None) => load_recovery_bootstrap_files(&kit, &key)
+            .map(Some)
+            .map_err(Into::into),
+        (true, None, Some(recovery)) => Ok(Some(recovery)),
+        (true, None, None) => bail!(
+            "recover requires both recovery files or CVSEC003 through --key-encryption-key-stdin"
+        ),
+        (false, Some(_), None) => bail!("recovery files are accepted only by the recover command"),
+    }
+}
+
+struct PipeSecrets {
+    protector: ProvisionedKeyProtector,
+    api_token: Option<Zeroizing<String>>,
+    recovery: Option<RecoveryBootstrap>,
 }
 
 struct ProvisionedKeyProtector {
@@ -412,25 +574,46 @@ struct ProvisionedKeyProtector {
 }
 
 impl ProvisionedKeyProtector {
-    fn from_pipe_bytes(serialized: &[u8]) -> Result<(Self, Option<Zeroizing<String>>), CoreError> {
+    fn from_pipe_bytes(serialized: &[u8]) -> Result<PipeSecrets, CoreError> {
         if serialized.len() < PIPE_KEY_V1_HEADER_LENGTH
             || serialized.len() > PIPE_SECRET_MAXIMUM_LENGTH
         {
             return Err(CoreError::InvalidKeyMaterial);
         }
-        let (header_length, token_length) = if serialized.starts_with(PIPE_KEY_V1_MAGIC) {
-            (PIPE_KEY_V1_HEADER_LENGTH, 0)
-        } else if serialized.starts_with(PIPE_SECRET_V2_MAGIC) {
-            let token_length = usize::from(read_u16(serialized, PIPE_SECRET_V2_MAGIC.len() + 6)?);
-            if !(PIPE_API_TOKEN_MINIMUM_LENGTH..=PIPE_API_TOKEN_MAXIMUM_LENGTH)
-                .contains(&token_length)
-            {
+        let (header_length, token_length, kit_length, recovery_key_length, is_recovery) =
+            if serialized.starts_with(PIPE_KEY_V1_MAGIC) {
+                (PIPE_KEY_V1_HEADER_LENGTH, 0, 0, 0, false)
+            } else if serialized.starts_with(PIPE_SECRET_V2_MAGIC) {
+                let token_length =
+                    usize::from(read_u16(serialized, PIPE_SECRET_V2_MAGIC.len() + 6)?);
+                if !(PIPE_API_TOKEN_MINIMUM_LENGTH..=PIPE_API_TOKEN_MAXIMUM_LENGTH)
+                    .contains(&token_length)
+                {
+                    return Err(CoreError::InvalidKeyMaterial);
+                }
+                (PIPE_SECRET_V2_HEADER_LENGTH, token_length, 0, 0, false)
+            } else if serialized.starts_with(PIPE_SECRET_V3_MAGIC) {
+                let token_length = usize::from(read_u16(serialized, 14)?);
+                let kit_length = usize::try_from(read_u32(serialized, 16)?)
+                    .map_err(|_| CoreError::InvalidKeyMaterial)?;
+                let recovery_key_length = usize::from(read_u16(serialized, 20)?);
+                if !(PIPE_API_TOKEN_MINIMUM_LENGTH..=PIPE_API_TOKEN_MAXIMUM_LENGTH)
+                    .contains(&token_length)
+                    || !(1..=PIPE_RECOVERY_KIT_MAXIMUM_LENGTH).contains(&kit_length)
+                    || recovery_key_length != PIPE_RECOVERY_KEY_LENGTH
+                {
+                    return Err(CoreError::InvalidKeyMaterial);
+                }
+                (
+                    PIPE_SECRET_V3_HEADER_LENGTH,
+                    token_length,
+                    kit_length,
+                    recovery_key_length,
+                    true,
+                )
+            } else {
                 return Err(CoreError::InvalidKeyMaterial);
-            }
-            (PIPE_SECRET_V2_HEADER_LENGTH, token_length)
-        } else {
-            return Err(CoreError::InvalidKeyMaterial);
-        };
+            };
         let current_version = read_u32(serialized, 8)?;
         let count = usize::from(read_u16(serialized, 12)?);
         let expected_length = header_length
@@ -440,6 +623,8 @@ impl ProvisionedKeyProtector {
                     .ok_or(CoreError::InvalidKeyMaterial)?,
             )
             .and_then(|length| length.checked_add(token_length))
+            .and_then(|length| length.checked_add(kit_length))
+            .and_then(|length| length.checked_add(recovery_key_length))
             .ok_or(CoreError::InvalidKeyMaterial)?;
         if current_version == 0
             || count == 0
@@ -466,24 +651,37 @@ impl ProvisionedKeyProtector {
         if !keys.contains_key(&current_version) {
             return Err(CoreError::InvalidKeyMaterial);
         }
+        let entries_end = header_length + (count * PIPE_KEY_ENTRY_LENGTH);
+        let token_end = entries_end + token_length;
+        let kit_end = token_end + kit_length;
         let api_token = if token_length == 0 {
             None
         } else {
-            let token_offset = header_length + (count * PIPE_KEY_ENTRY_LENGTH);
-            let token = std::str::from_utf8(&serialized[token_offset..])
+            let token = std::str::from_utf8(&serialized[entries_end..token_end])
                 .map_err(|_| CoreError::InvalidKeyMaterial)?;
             if !token.bytes().all(|byte| byte.is_ascii_graphic()) {
                 return Err(CoreError::InvalidKeyMaterial);
             }
             Some(Zeroizing::new(token.to_owned()))
         };
-        Ok((
-            Self {
+        let recovery = if is_recovery {
+            let recovery_key = std::str::from_utf8(&serialized[kit_end..expected_length])
+                .map_err(|_| CoreError::InvalidKeyMaterial)?;
+            Some(RecoveryBootstrap {
+                kit: Zeroizing::new(serialized[token_end..kit_end].to_vec()),
+                unlock: covalent_core::RecoveryUnlockKey::from_base64(recovery_key)?,
+            })
+        } else {
+            None
+        };
+        Ok(PipeSecrets {
+            protector: Self {
                 current_version,
                 keys,
             },
             api_token,
-        ))
+            recovery,
+        })
     }
 }
 
@@ -759,11 +957,16 @@ fn healthcheck(url: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use covalent_core::{CoreError, KeyProtector as _};
+    use std::sync::Arc;
+
+    use covalent_core::{
+        CoreError, Engine, EngineOptions, KeyProtector as _, RecoveryUnlockKey, StaticKeyProtector,
+    };
 
     use super::{
-        Arguments, Command, PIPE_KEY_V1_MAGIC, PIPE_SECRET_V2_MAGIC, PROVISION_KEY_FAILPOINT,
-        ProvisionedKeyProtector, provision_key, read_kek_file,
+        Arguments, Command, PIPE_KEY_V1_MAGIC, PIPE_RECOVERY_KIT_MAXIMUM_LENGTH,
+        PIPE_SECRET_V2_MAGIC, PIPE_SECRET_V3_MAGIC, PROVISION_KEY_FAILPOINT, PipeSecrets,
+        ProvisionedKeyProtector, provision_key, read_kek_file, select_recovery_bootstrap,
     };
     use clap::Parser as _;
 
@@ -791,15 +994,43 @@ mod tests {
         bytes
     }
 
+    fn serialized_recovery_secrets(
+        current: u32,
+        entries: &[(u32, u8)],
+        token: &str,
+        kit: &[u8],
+        recovery_key: &str,
+    ) -> Vec<u8> {
+        let mut bytes = PIPE_SECRET_V3_MAGIC.to_vec();
+        bytes.extend_from_slice(&current.to_be_bytes());
+        bytes.extend_from_slice(&(entries.len() as u16).to_be_bytes());
+        bytes.extend_from_slice(&(token.len() as u16).to_be_bytes());
+        bytes.extend_from_slice(&(kit.len() as u32).to_be_bytes());
+        bytes.extend_from_slice(&(recovery_key.len() as u16).to_be_bytes());
+        for (version, fill) in entries {
+            bytes.extend_from_slice(&version.to_be_bytes());
+            bytes.extend_from_slice(&[*fill; 32]);
+        }
+        bytes.extend_from_slice(token.as_bytes());
+        bytes.extend_from_slice(kit);
+        bytes.extend_from_slice(recovery_key.as_bytes());
+        bytes
+    }
+
     #[test]
     fn inherited_pipe_hierarchy_supplies_current_and_historical_versions() {
-        let (protector, token) = ProvisionedKeyProtector::from_pipe_bytes(&serialized_hierarchy(
+        let PipeSecrets {
+            protector,
+            api_token: token,
+            recovery,
+        } = ProvisionedKeyProtector::from_pipe_bytes(&serialized_hierarchy(
             3,
             &[(1, 0x11), (3, 0x33)],
         ))
         .expect("valid hierarchy");
 
         assert!(token.is_none(), "v1 is explicitly KEK-only");
+        assert!(recovery.is_none());
         assert_eq!(protector.current_key_version().unwrap(), 3);
         protector
             .key_encryption_key(1)
@@ -836,7 +1067,11 @@ mod tests {
     #[test]
     fn inherited_v2_payload_supplies_an_in_memory_api_token() {
         let expected = "provided-local-api-token-with-at-least-thirty-two-bytes";
-        let (protector, token) = ProvisionedKeyProtector::from_pipe_bytes(&serialized_secrets(
+        let PipeSecrets {
+            protector,
+            api_token: token,
+            recovery,
+        } = ProvisionedKeyProtector::from_pipe_bytes(&serialized_secrets(
             4,
             &[(2, 0x22), (4, 0x44)],
             expected,
@@ -845,6 +1080,7 @@ mod tests {
 
         assert_eq!(protector.current_key_version().expect("version"), 4);
         assert_eq!(token.as_ref().map(|token| token.as_str()), Some(expected));
+        assert!(recovery.is_none());
     }
 
     #[test]
@@ -866,6 +1102,119 @@ mod tests {
                 Err(CoreError::InvalidKeyMaterial)
             ));
         }
+    }
+
+    #[test]
+    fn inherited_v3_payload_is_exact_bounded_and_recovery_only() {
+        let token = "provided-local-api-token-with-at-least-thirty-two-bytes";
+        let recovery_key = RecoveryUnlockKey::from_bytes([0x71; 32]).expose_base64();
+        let valid = serialized_recovery_secrets(
+            4,
+            &[(2, 0x22), (4, 0x44)],
+            token,
+            b"raw signed encrypted kit",
+            &recovery_key,
+        );
+        let PipeSecrets {
+            protector,
+            api_token,
+            recovery,
+        } = ProvisionedKeyProtector::from_pipe_bytes(&valid).expect("valid v3 payload");
+        assert_eq!(protector.current_key_version().expect("version"), 4);
+        assert_eq!(api_token.as_ref().map(|value| value.as_str()), Some(token));
+        let recovery = recovery.expect("recovery input");
+        assert_eq!(recovery.kit.as_slice(), b"raw signed encrypted kit");
+        assert!(select_recovery_bootstrap(false, None, Some(recovery)).is_err());
+        let mixed = ProvisionedKeyProtector::from_pipe_bytes(&valid)
+            .expect("valid v3 again")
+            .recovery;
+        assert!(
+            select_recovery_bootstrap(true, Some(("kit".into(), "key".into())), mixed,).is_err()
+        );
+
+        let mut trailing = valid.clone();
+        trailing.push(0);
+        let missing_kit = serialized_recovery_secrets(1, &[(1, 0x11)], token, b"", &recovery_key);
+        let missing_token = serialized_recovery_secrets(1, &[(1, 0x11)], "", b"kit", &recovery_key);
+        let invalid_key = serialized_recovery_secrets(
+            1,
+            &[(1, 0x11)],
+            token,
+            b"kit",
+            "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+        );
+        let duplicate_versions =
+            serialized_recovery_secrets(1, &[(1, 0x11), (1, 0x22)], token, b"kit", &recovery_key);
+        let mut oversized = valid;
+        oversized[16..20].copy_from_slice(
+            &(u32::try_from(PIPE_RECOVERY_KIT_MAXIMUM_LENGTH).expect("u32") + 1).to_be_bytes(),
+        );
+        for bytes in [
+            trailing,
+            missing_kit,
+            missing_token,
+            invalid_key,
+            duplicate_versions,
+            oversized,
+        ] {
+            assert!(matches!(
+                ProvisionedKeyProtector::from_pipe_bytes(&bytes),
+                Err(CoreError::InvalidKeyMaterial)
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn inherited_v3_pipe_recovers_a_fresh_serving_runtime_without_secret_files() {
+        let root = tempfile::TempDir::new().expect("root");
+        let owner_path = root.path().join("lost-owner");
+        let recovered_path = root.path().join("recovered-owner");
+        let owner = Engine::open(EngineOptions::new(&owner_path).with_key_protector(Arc::new(
+            StaticKeyProtector::new(1, [0x31; 32]).expect("owner protector"),
+        )))
+        .expect("owner");
+        let owner_id = owner.device_id();
+        let unlock = RecoveryUnlockKey::generate();
+        let kit = owner.export_recovery_kit(&unlock).expect("recovery kit");
+        let recovery_key = unlock.expose_base64();
+        drop(owner);
+        std::fs::remove_dir_all(&owner_path).expect("lose owner state");
+
+        let token = "provided-local-api-token-with-at-least-thirty-two-bytes";
+        let payload = serialized_recovery_secrets(7, &[(7, 0x77)], token, &kit, &recovery_key);
+        let PipeSecrets {
+            protector,
+            api_token,
+            recovery,
+        } = ProvisionedKeyProtector::from_pipe_bytes(&payload).expect("parse v3");
+        let recovery = select_recovery_bootstrap(true, None, recovery)
+            .expect("recovery selection")
+            .expect("recovery input");
+        let ready_file = root.path().join("recovered-ready.json");
+        let mut configuration = covalent_node::runtime::NodeRuntimeConfig::new(
+            &recovered_path,
+            "127.0.0.1:0".parse().expect("API address"),
+            "127.0.0.1:0".parse().expect("peer address"),
+        );
+        configuration.key_protector = Some(Arc::new(protector));
+        configuration.api_token =
+            covalent_node::runtime::LocalApiTokenSource::Provided(api_token.expect("API token"));
+        configuration.recovery = Some(recovery);
+        configuration.ready_file = Some(ready_file.clone());
+        let runtime = covalent_node::runtime::NodeRuntime::start(configuration)
+            .await
+            .expect("recovered runtime serves");
+        assert!(
+            ready_file.exists(),
+            "app-owned recovery publishes readiness"
+        );
+        runtime.stop().await.expect("stop runtime");
+        let identity: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(recovered_path.join("identity.json")).expect("identity"),
+        )
+        .expect("identity JSON");
+        assert_eq!(identity["deviceId"], owner_id.to_string());
+        assert!(!recovered_path.join("local-api-token").exists());
     }
 
     #[test]
@@ -900,6 +1249,72 @@ mod tests {
             Some(std::path::Path::new("/run/secrets/node-token"))
         );
         assert!(!format!("{key_protection:?}").contains("local-api-token-with"));
+    }
+
+    #[test]
+    fn recover_accepts_only_private_file_paths_for_recovery_material() {
+        let arguments = Arguments::try_parse_from([
+            "covalent-node",
+            "recover",
+            "--recovery-kit-file",
+            "/run/secrets/covalent-kit",
+            "--recovery-key-file",
+            "/run/secrets/covalent-recovery-key",
+            "--key-encryption-key-file",
+            "/run/secrets/node-kek",
+        ])
+        .expect("parse recovery files");
+        let Some(Command::Recover {
+            recovery_kit_file,
+            recovery_key_file,
+            ..
+        }) = arguments.command
+        else {
+            panic!("recover command");
+        };
+        assert_eq!(
+            recovery_kit_file.as_deref(),
+            Some(std::path::Path::new("/run/secrets/covalent-kit"))
+        );
+        assert_eq!(
+            recovery_key_file.as_deref(),
+            Some(std::path::Path::new("/run/secrets/covalent-recovery-key"))
+        );
+        assert!(
+            Arguments::try_parse_from([
+                "covalent-node",
+                "recover",
+                "--recovery-key",
+                "a-secret-must-not-be-accepted",
+            ])
+            .is_err()
+        );
+
+        let pipe_arguments = Arguments::try_parse_from([
+            "covalent-node",
+            "recover",
+            "--key-encryption-key-stdin",
+            "--ready-file",
+            "/tmp/covalent-ready.json",
+        ])
+        .expect("parse inherited recovery pipe");
+        let Some(Command::Recover {
+            recovery_kit_file,
+            recovery_key_file,
+            ready_file,
+            key_protection,
+            ..
+        }) = pipe_arguments.command
+        else {
+            panic!("recover pipe command");
+        };
+        assert!(recovery_kit_file.is_none());
+        assert!(recovery_key_file.is_none());
+        assert!(key_protection.key_encryption_key_stdin);
+        assert_eq!(
+            ready_file.as_deref(),
+            Some(std::path::Path::new("/tmp/covalent-ready.json"))
+        );
     }
 
     #[cfg(unix)]
@@ -966,5 +1381,27 @@ mod tests {
         symlink(&target, &link).expect("symlink");
 
         assert!(read_kek_file(&link).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovery_material_reader_refuses_symlinks_and_broad_permissions() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        let directory = tempfile::TempDir::new().expect("directory");
+        let kit = directory.path().join("owner.covalent-recovery");
+        let target = directory.path().join("recovery.key");
+        let link = directory.path().join("recovery-link.key");
+        std::fs::write(&kit, b"encrypted kit").expect("kit");
+        std::fs::set_permissions(&kit, std::fs::Permissions::from_mode(0o600))
+            .expect("protect kit");
+        std::fs::write(&target, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n").expect("target");
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644))
+            .expect("broad permissions");
+        assert!(super::load_recovery_bootstrap_files(&kit, &target).is_err());
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600))
+            .expect("private permissions");
+        symlink(&target, &link).expect("symlink");
+        assert!(super::load_recovery_bootstrap_files(&kit, &link).is_err());
     }
 }

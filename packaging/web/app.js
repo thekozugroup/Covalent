@@ -78,6 +78,8 @@
       RECOVERY.retry,
     ],
     confirmation_required: ["This has to be confirmed on the other device before it can finish.", RECOVERY.none],
+    recovery_confirmation_required: ["Confirm that you want to create recovery files or retry recovery, then continue.", RECOVERY.none],
+    recovery_not_configured: ["This backup server was set up normally. To replace a lost device, start a new installation with its recovery files.", RECOVERY.none],
 
     // Source folder
     source_changed: ["Files changed while Covalent was copying them. Try again once they stop changing.", RECOVERY.retry],
@@ -88,6 +90,31 @@
     invalid_authorized_root: [
       "The folder you chose is no longer available to Covalent. Choose it again.",
       RECOVERY.chooseFolderAgain,
+    ],
+    folder_sync_unavailable: [
+      "Folder sync is unavailable on this server. Check its folder-sync package and mounted folder, then try again.",
+      RECOVERY.retry,
+    ],
+    folder_sync_busy: ["Another folder change is still in progress. Try again shortly.", RECOVERY.retry],
+    link_settings_conflict: ["Link settings changed on another device. Refresh and review the current settings before submitting again.", RECOVERY.none],
+    link_settings_pending: ["A link-settings change is waiting for the source. Review that request before making another change.", RECOVERY.none],
+    link_run_conflict: ["The link changed before this run started. Refresh link status and try again.", RECOVERY.none],
+    link_run_pending: ["Another run request is waiting for the source. Refresh link status before trying again.", RECOVERY.none],
+    folder_sync_needs_attention: [
+      "Folder sync needs attention before it can continue. Check the folder status, then try again.",
+      RECOVERY.retry,
+    ],
+    invalid_peer_address: [
+      "Enter the device address as a numeric IP address and port, such as 192.168.1.20:8787, then try again.",
+      RECOVERY.none,
+    ],
+    peer_address_changed: [
+      "The saved device address changed before this update finished. Refresh the saved device, then try again.",
+      RECOVERY.retry,
+    ],
+    peer_address_unreachable: [
+      "Covalent could not authenticate the trusted device at the new address. Check the address and network connection, then try again.",
+      RECOVERY.retry,
     ],
 
     // Restore
@@ -428,6 +455,16 @@
     return describeTransport(error, context);
   }
 
+  async function initializeUnlockedConsole({ authorize, initializeLinks, refreshPairings, onLinksError }) {
+    await authorize();
+    try {
+      await initializeLinks();
+    } catch (error) {
+      onLinksError(error);
+    }
+    await refreshPairings();
+  }
+
   const nodeErrorCopy = Object.freeze({
     CATALOG,
     RECOVERY,
@@ -437,6 +474,7 @@
     describeApi,
     describeProtocol,
     describeTransport,
+    initializeUnlockedConsole,
   });
   scope.CovalentNodeErrorCopy = nodeErrorCopy;
   if (typeof module === "object" && module.exports) module.exports = nodeErrorCopy;
@@ -453,26 +491,27 @@ const message = $("[data-message]");
 const messageDetails = $("[data-message-details]");
 const messageDetail = $("[data-message-detail]");
 let token = "";
-let restorePlan = null;
-let restorePage = null;
-let restoreCursor = null;
-let restoreCursorHistory = [];
 let networkPairing = null;
 let networkPoll = null;
-let providerConnections = [];
-let manualProviderConfirmation = null;
-let backupSubmissionInFlight = false;
-let failedBackupAttempt = null;
 const pairing = globalThis.CovalentPairingFlow;
-const restore = globalThis.CovalentRestorePlanFlow;
-const backupTerminal = globalThis.CovalentBackupTerminalFlow;
 const tabFlow = globalThis.CovalentTabFlow;
 const errorCopy = globalThis.CovalentNodeErrorCopy;
-const pairingStorageKey = "covalent.pairing-session.v1";
-const backupServerContext = backupTerminal.requireContext({
-  origin: globalThis.location.origin,
-  protocolVersion: PROTOCOL_VERSION,
+const folderSync = globalThis.CovalentFolderSyncFlow;
+let folderDeviceId = null;
+const folderController = folderSync.coordinator({
+  api: folderApi,
+  storage: folderSync.lazySessionStorage(globalThis),
+  onStatus: renderFolderStatus,
+  onLockChange: setFolderMutationLock,
 });
+
+function folderApi(path, options) {
+  return api(path, options, folderSync.readJson);
+}
+
+function formData(form) {
+  return new FormData(form);
+}
 
 class NodeApiError extends Error {
   constructor(status, payload) {
@@ -514,14 +553,14 @@ function fail(error) {
   message.dataset.recovery = failure.recovery;
 }
 
-async function apiResponse(path, options = {}) {
+async function apiResponse(path, options = {}, readJson = (response) => response.json()) {
   const headers = new Headers(options.headers || {});
   headers.set("Accept", "application/json");
   if (token) headers.set("Authorization", `Bearer ${token}`);
   if (options.body) headers.set("Content-Type", "application/json");
   const response = await fetch(path, { ...options, headers, cache: "no-store" });
   if (!response.ok) {
-    const decoded = await response.json().catch(() => ({}));
+    const decoded = await readJson(response).catch(() => ({}));
     const body = decoded && typeof decoded === "object" ? decoded : {};
     if (body.protocolVersion !== undefined && body.protocolVersion !== PROTOCOL_VERSION) {
       throw new ProtocolMismatchError(body.protocolVersion);
@@ -530,13 +569,13 @@ async function apiResponse(path, options = {}) {
   }
   return {
     status: response.status,
-    body: response.status === 204 ? null : await response.json(),
+    body: response.status === 204 ? null : await readJson(response),
     headers: response.headers,
   };
 }
 
-async function api(path, options = {}) {
-  return (await apiResponse(path, options)).body;
+async function api(path, options = {}, readJson) {
+  return (await apiResponse(path, options, readJson)).body;
 }
 
 async function loadStatus() {
@@ -555,118 +594,764 @@ async function loadStatus() {
   }
 }
 
-async function loadBackups() {
-  if (!token) return;
-  const backups = await api("/api/v1/backups");
-  const list = $("[data-backups-list]");
-  list.replaceChildren();
-  backups.forEach((backup) => {
-    const item = document.createElement("li");
-    const latest = backup.latestSnapshotId ? `latest ${backup.latestSnapshotId}` : "no local snapshot";
-    item.textContent = `${backup.name} — ${latest}; ${backup.snapshotCount} retained; ${backup.selectedProviderIds.length} explicitly selected providers`;
-    list.append(item);
-  });
-  $("[data-backups-empty]").hidden = backups.length > 0;
-  if (backups.length === 0) $("[data-backups-empty]").textContent = "No remembered backups on this node.";
+function folderPollingEligible() {
+  const foldersSelected = $("[data-tab=folders]").getAttribute("aria-selected") === "true";
+  const pairSelected = $("[data-tab=pair]").getAttribute("aria-selected") === "true";
+  return Boolean(
+    token
+    && folderDeviceId
+    && document.visibilityState === "visible"
+    && (foldersSelected || pairSelected),
+  );
 }
 
-function formatBytes(bytes) {
-  const units = ["bytes", "KiB", "MiB", "GiB", "TiB", "PiB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return unit === 0 ? `${value} ${units[unit]}` : `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unit]}`;
+function syncFolderPolling(refreshNow = false) {
+  const enabled = folderPollingEligible();
+  folderController.setPollingEnabled(enabled);
+  if (enabled && refreshNow) void loadFolders(false);
 }
 
-function renderProviders(providers) {
-  const form = $("[data-backup-form]");
-  const previouslySelected = new Set(selected(form, "providers"));
-  const list = $("[data-providers-list]");
-  const empty = $("[data-providers-empty]");
-  list.replaceChildren();
-  for (const provider of providers) {
-    const availability = pairing.providers.availability(provider);
-    const item = document.createElement("li");
-    const label = document.createElement("label");
-    const choice = document.createElement("input");
-    choice.type = "checkbox";
-    choice.name = "providers";
-    choice.value = provider.peerId;
-    choice.disabled = !availability.eligible;
-    choice.checked = availability.eligible && previouslySelected.has(provider.peerId);
-    const details = document.createElement("span");
-    const name = document.createElement("strong");
-    name.textContent = provider.displayName;
-    const identity = document.createElement("code");
-    identity.textContent = provider.peerId;
-    const status = document.createElement("span");
-    if (availability.eligible) {
-      status.textContent = `Ready — ${formatBytes(provider.usableBytes)} usable; ${formatBytes(provider.allocatedBytes)} allocated of ${formatBytes(provider.quotaBytes)}.`;
-    } else {
-      status.textContent = availability.status;
+function renderFolderError(error) {
+  const failure = errorCopy.describe(error);
+  const status = $("[data-folders-status]");
+  status.textContent = failure.summary;
+  status.className = "folder-state";
+  status.dataset.kind = "attention";
+}
+
+const folderMutationDisabledState = new WeakMap();
+
+function setFolderMutationLock(locked) {
+  document.querySelectorAll("[data-folder-mutation]").forEach((control) => {
+    if (locked) {
+      folderMutationDisabledState.set(control, control.disabled);
+      control.disabled = true;
+    } else if (folderMutationDisabledState.has(control)) {
+      control.disabled = folderMutationDisabledState.get(control);
+      folderMutationDisabledState.delete(control);
     }
-    details.append(name, document.createElement("br"), identity, document.createElement("br"), status);
-    label.append(choice, details);
-    item.append(label);
-    list.append(item);
+  });
+  $("[data-folder-offer-form]").setAttribute("aria-busy", String(locked));
+}
+
+function folderPeerName(status, peerId) {
+  return status.peers.find((peer) => peer.peerId === peerId)?.displayName
+    ?? "Confirmed paired device unavailable";
+}
+
+function folderActionButton(label, action, className = "secondary") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = className;
+  button.dataset.folderMutation = "";
+  button.textContent = label;
+  button.disabled = folderController.isMutationLocked();
+  button.addEventListener("click", action);
+  return button;
+}
+
+async function runFolderMutation(action, success) {
+  try {
+    await action();
+    renderPendingFolderOffer();
+    renderPendingLinkSettings();
+    renderPendingLinkRun();
+    await loadFolders(false);
+    say(success);
+  } catch (error) {
+    renderPendingFolderOffer();
+    renderPendingLinkSettings();
+    renderPendingLinkRun();
+    fail(error);
   }
-  empty.hidden = providers.length > 0;
-  if (providers.length === 0) {
-    empty.textContent = "No connected backup devices yet. Pair one first, or make a local-only copy.";
+}
+
+function firstLinkMember(status, share) {
+  return status.shares.find((item) => item.folderId === share.folderId
+    && item.linkSettings !== null && item.phase !== "removed")?.offerId === share.offerId;
+}
+
+function cadenceControls(settings) {
+  const cadenceLabel = document.createElement("label");
+  cadenceLabel.textContent = "Transfer timing ";
+  const cadence = document.createElement("select");
+  cadence.name = "cadenceMode";
+  for (const [value, label] of [["manual", "Manual"], ["scheduled", "Scheduled"], ["continuous", "Continuous"]]) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    cadence.append(option);
+  }
+  cadence.value = settings.cadence.mode;
+  cadenceLabel.append(cadence);
+
+  const intervalLabel = document.createElement("label");
+  intervalLabel.textContent = "Run every ";
+  const interval = document.createElement("input");
+  interval.name = "intervalMinutes";
+  interval.type = "number";
+  interval.min = "15";
+  interval.max = "525600";
+  interval.step = "1";
+  interval.setAttribute("list", "folder-schedule-options");
+  interval.required = true;
+  interval.value = String(settings.cadence.mode === "scheduled" ? settings.cadence.intervalMinutes : 60);
+  intervalLabel.append(interval, " minutes");
+  const syncInterval = () => {
+    intervalLabel.hidden = cadence.value !== "scheduled";
+    interval.disabled = intervalLabel.hidden;
+  };
+  cadence.addEventListener("change", syncInterval);
+  syncInterval();
+  return { cadenceLabel, cadence, intervalLabel, interval };
+}
+
+function cadenceValue(mode, interval) {
+  return mode === "scheduled"
+    ? { mode, intervalMinutes: Number(interval) }
+    : { mode };
+}
+
+function syncOfferScheduleInput() {
+  const form = $("[data-folder-offer-form]");
+  const scheduled = form.elements.cadenceMode.value === "scheduled";
+  const label = $("[data-folder-schedule-interval]");
+  label.hidden = !scheduled;
+  form.elements.intervalMinutes.disabled = !scheduled;
+}
+
+function runResultCopy(result) {
+  return ({
+    pending: "Waiting",
+    succeeded: "Complete",
+    failed: "Failed",
+    timedOut: "Incomplete after 24 hours",
+    interrupted: "Interrupted",
+    cancelled: "Cancelled",
+  })[result];
+}
+
+function runDestinationName(status, peerId) {
+  if (peerId === folderDeviceId) return "This device";
+  return status.peers.find((peer) => peer.peerId === peerId)?.displayName ?? "Another destination";
+}
+
+function renderLinkRun(container, status, share) {
+  const run = share.linkRun;
+  if (run === null || !share.linkSettings.confirmed) return;
+  const section = document.createElement("section");
+  section.className = "link-run";
+  const heading = document.createElement("strong");
+  heading.textContent = "Transfer";
+  const summary = document.createElement("p");
+  summary.setAttribute("role", "status");
+  if (run.pendingRequest !== null) summary.textContent = "Run requested. Waiting for the source to come online and start it.";
+  else if (run.phase === "preparing") summary.textContent = "Preparing this run and checking source files.";
+  else if (run.phase === "running") summary.textContent = "This run is active.";
+  else if (run.phase === "succeeded") summary.textContent = "The last run completed for every destination.";
+  else if (run.phase === "incomplete") summary.textContent = "The last run was incomplete. Review each destination and run it again when ready.";
+  else if (run.phase === "interrupted") summary.textContent = "The last run was interrupted before completion. Run it again when ready.";
+  else if (run.phase === "cancelled") summary.textContent = "The last run was cancelled before completion.";
+  else if (share.linkSettings.settings.cadence.mode === "manual") {
+    summary.textContent = "Ready. No transfer starts until a link member chooses Run Now.";
+  } else if (share.linkSettings.settings.cadence.mode === "continuous") {
+    summary.textContent = "Continuous transfer is ready.";
+  } else summary.textContent = "Scheduled transfer is ready.";
+  section.append(heading, summary);
+
+  if (share.linkSettings.settings.cadence.mode === "scheduled") {
+    const schedule = document.createElement("p");
+    schedule.className = "muted";
+    schedule.textContent = run.nextDueAtUnixMs === null
+      ? "The source owns this schedule. The next run time is not available yet."
+      : `The source owns this schedule. Next run: ${new Date(run.nextDueAtUnixMs).toLocaleString()}.`;
+    section.append(schedule);
+  }
+  if (run.destinations.length > 0) {
+    const destinations = document.createElement("ul");
+    for (const destination of run.destinations) {
+      const item = document.createElement("li");
+      item.textContent = `${runDestinationName(status, destination.peerId)}: ${runResultCopy(destination.result)}`;
+      destinations.append(item);
+    }
+    section.append(destinations);
+  }
+  if (run.rejectedRequest !== null) {
+    const rejected = document.createElement("p");
+    rejected.setAttribute("role", "alert");
+    rejected.textContent = "A Run Now request was not started because the link changed. Refresh and try again.";
+    section.append(rejected);
+  }
+  const active = run.pendingRequest !== null || ["preparing", "running"].includes(run.phase);
+  let saved = null;
+  try { saved = folderController.pendingRun(); }
+  catch (error) { renderFolderError(error); }
+  const button = folderActionButton(saved?.folderId === share.folderId ? "Retry Run Now" : "Run Now", () => {
+    void runFolderMutation(
+      () => saved?.folderId === share.folderId ? folderController.retryPendingRun() : folderController.runNow(share.folderId),
+      "Run request saved. Link status shows progress for every destination.",
+    );
+  });
+  button.disabled = button.disabled || active || share.linkSettings.settings.paused
+    || (saved !== null && saved.folderId !== share.folderId);
+  section.append(button);
+  container.append(section);
+}
+
+function renderLinkSettings(container, status, share) {
+  const state = share.linkSettings;
+  const details = document.createElement("details");
+  details.className = "advanced";
+  const summary = document.createElement("summary");
+  summary.textContent = "Link settings";
+  const current = document.createElement("p");
+  current.className = "muted";
+  current.textContent = state.confirmed
+    ? "These settings apply to every destination in this link."
+    : "Waiting for the source to confirm current settings. File transfer has not started.";
+  details.append(summary, current);
+
+  if (state.pendingChange !== null) {
+    const pending = document.createElement("p");
+    pending.setAttribute("role", "status");
+    pending.textContent = `Waiting for the source to confirm this request: ${folderSync.settingsExplanation(state.pendingChange.settings)}`;
+    details.append(pending);
+  }
+  if (state.conflictedChange !== null) {
+    const conflict = document.createElement("p");
+    conflict.setAttribute("role", "alert");
+    conflict.textContent = `An outdated request was not applied: ${folderSync.settingsExplanation(state.conflictedChange.settings)} Review the current choices below before submitting again.`;
+    details.append(conflict);
+  }
+
+  const form = document.createElement("form");
+  form.className = "inline-form";
+  const sourceDeletes = document.createElement("label");
+  const sourceDeletesInput = document.createElement("input");
+  sourceDeletesInput.type = "checkbox";
+  sourceDeletesInput.name = "propagateSourceDeletions";
+  sourceDeletesInput.checked = state.settings.deletionPolicy.propagateSourceDeletions;
+  sourceDeletes.append(sourceDeletesInput, " Delete destination copies when source files are deleted");
+  const localDeletes = document.createElement("label");
+  const localDeletesInput = document.createElement("input");
+  localDeletesInput.type = "checkbox";
+  localDeletesInput.name = "restoreLocalDeletions";
+  localDeletesInput.checked = state.settings.deletionPolicy.restoreLocalDeletions;
+  localDeletes.append(localDeletesInput, " Restore files deleted at a destination");
+  const timing = cadenceControls(state.settings);
+  const wifi = document.createElement("label");
+  const wifiInput = document.createElement("input");
+  wifiInput.type = "checkbox";
+  wifiInput.name = "wifiOnly";
+  wifiInput.checked = state.settings.androidConditions.wifiOnly;
+  wifi.append(wifiInput, " Wi-Fi only on Android devices");
+  const charging = document.createElement("label");
+  const chargingInput = document.createElement("input");
+  chargingInput.type = "checkbox";
+  chargingInput.name = "chargingOnly";
+  chargingInput.checked = state.settings.androidConditions.chargingOnly;
+  charging.append(chargingInput, " Charging only on Android devices");
+  const androidHelp = document.createElement("p");
+  androidHelp.className = "muted";
+  androidHelp.textContent = "These shared conditions apply only on Android devices in this link.";
+  const submit = document.createElement("button");
+  submit.dataset.folderMutation = "";
+  submit.disabled = folderController.isMutationLocked() || !state.confirmed || state.pendingChange !== null;
+  submit.textContent = state.conflictedChange === null ? "Save link settings" : "Submit reviewed settings";
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const policy = {
+      propagateSourceDeletions: sourceDeletesInput.checked,
+      restoreLocalDeletions: localDeletesInput.checked,
+    };
+    const settings = {
+      deletionPolicy: policy,
+      paused: state.settings.paused,
+      cadence: cadenceValue(timing.cadence.value, timing.interval.value),
+      androidConditions: { wifiOnly: wifiInput.checked, chargingOnly: chargingInput.checked },
+    };
+    const currentPolicy = state.settings.deletionPolicy;
+    const enablesDeletion = policy.propagateSourceDeletions && !currentPolicy.propagateSourceDeletions
+      || policy.restoreLocalDeletions && !currentPolicy.restoreLocalDeletions;
+    if (enablesDeletion && !globalThis.confirm(`${folderSync.policyExplanation(policy)} Apply these choices to every destination in this link?`)) return;
+    void runFolderMutation(
+      () => folderController.updateLinkSettings(share.folderId, settings),
+      "Link settings request saved. Current link status shows whether the source confirmed it.",
+    );
+  });
+  form.append(sourceDeletes, localDeletes, timing.cadenceLabel, timing.intervalLabel,
+    wifi, charging, androidHelp, submit);
+  details.append(form);
+  container.append(details);
+}
+
+function renderAddDestination(container, status, share) {
+  const memberIds = new Set(status.shares
+    .filter((item) => item.folderId === share.folderId && item.phase !== "removed")
+    .map((item) => item.peerId));
+  const peers = status.peers.filter((peer) => !memberIds.has(peer.peerId));
+  const details = document.createElement("details");
+  details.className = "advanced";
+  const summary = document.createElement("summary");
+  summary.textContent = "Add destination";
+  const explanation = document.createElement("p");
+  explanation.className = "muted";
+  explanation.textContent = "Enter the same source path used by this link. The server verifies the existing folder identity before adding a destination.";
+  details.append(summary, explanation);
+  if (peers.length === 0) {
+    const empty = document.createElement("p");
+    empty.textContent = "Every paired device is already a destination for this link.";
+    details.append(empty);
+    container.append(details);
+    return;
+  }
+  const form = document.createElement("form");
+  form.className = "inline-form";
+  const peerLabel = document.createElement("label");
+  peerLabel.textContent = "Destination device ";
+  const select = document.createElement("select");
+  select.name = "peerId";
+  select.required = true;
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "Choose a confirmed paired device";
+  select.append(placeholder);
+  for (const peer of peers) {
+    const option = document.createElement("option");
+    option.value = peer.peerId;
+    option.textContent = peer.displayName;
+    select.append(option);
+  }
+  peerLabel.append(select);
+  const pathLabel = document.createElement("label");
+  pathLabel.textContent = "Existing source path on this server ";
+  const path = document.createElement("input");
+  path.name = "selectedRoot";
+  path.maxLength = 1024;
+  path.required = true;
+  path.placeholder = "/sync";
+  pathLabel.append(path);
+  const submit = document.createElement("button");
+  submit.dataset.folderMutation = "";
+  submit.textContent = "Send destination invitation";
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const body = {
+      peerId: select.value,
+      folderId: share.folderId,
+      label: share.label,
+      selectedRoot: path.value,
+      linkPolicy: share.linkPolicy,
+      cadence: share.linkSettings.settings.cadence,
+      androidConditions: share.linkSettings.settings.androidConditions,
+    };
+    if (!globalThis.confirm(`Confirm that ${path.value} is the same source folder already used by ${share.label}. Add this destination?`)) return;
+    void runFolderMutation(
+      () => folderController.sendOffer(body),
+      "Destination invitation sent with this link's existing identity and settings.",
+    );
+  });
+  form.append(peerLabel, pathLabel, submit);
+  details.append(form);
+  container.append(details);
+}
+
+function renderFolderActions(container, status, share, view) {
+  if (share.phase === "removed") return;
+  if (share.incoming && share.phase === "offered" && !share.expired) {
+    const pathLabel = document.createElement("label");
+    pathLabel.textContent = "Folder path on this server";
+    const path = document.createElement("input");
+    path.value = "/sync";
+    path.maxLength = 1024;
+    path.required = true;
+    pathLabel.append(path);
+    const accept = folderActionButton("Accept folder", () => {
+      void runFolderMutation(
+        () => folderController.accept(share.offerId, path.value),
+        "Folder accepted. Covalent is checking its local contents.",
+      );
+    }, "");
+    container.append(pathLabel, accept);
+  }
+
+  const firstMember = share.linkSettings === null || firstLinkMember(status, share);
+  if (firstMember && !share.expired && !(share.incoming && share.phase === "offered")) {
+    const paused = share.phase === "paused";
+    const pause = folderActionButton(share.linkPolicy === null
+      ? (paused ? "Resume" : "Pause") : (paused ? "Resume link" : "Pause link"), () => {
+      void runFolderMutation(
+        () => folderController.pause(share.offerId, !paused),
+        share.linkPolicy === null ? (paused ? "Folder sync resumed." : "Folder sync paused.")
+          : "Link pause change saved. It applies to all devices when the source confirms it.",
+      );
+    });
+    container.append(pause);
+  }
+
+  if (share.linkSettings !== null && firstMember) {
+    renderLinkRun(container, status, share);
+    renderLinkSettings(container, status, share);
+    if (!share.incoming && share.linkSettings.confirmed && ["ready", "paused"].includes(share.phase)) {
+      renderAddDestination(container, status, share);
+    }
+  }
+
+  if (share.expired && !share.incoming && ["offered", "paused"].includes(share.phase)) {
+    container.append(folderActionButton("Send new invitation", () => {
+      void runFolderMutation(
+        () => folderController.renew(share.offerId),
+        "New invitation created. Accept it on the other device to start syncing.",
+      );
+    }));
+  }
+
+  const removeLabel = share.incoming && share.phase === "offered" && !share.expired ? "Decline" : "Remove…";
+  const confirmation = document.createElement("div");
+  confirmation.className = "folder-removal-confirmation";
+  confirmation.hidden = true;
+  confirmation.setAttribute("role", "group");
+  confirmation.setAttribute("aria-label", `Stop sharing ${share.label}`);
+  const explanation = document.createElement("p");
+  explanation.textContent = "Stop syncing this folder? Sync stops here now and on the other device when it reconnects. Files stay on both devices.";
+  const remove = folderActionButton(removeLabel, () => {
+    confirmation.hidden = false;
+    cancel.focus();
+  }, "quiet");
+  const cancel = folderActionButton("Keep sharing", () => {
+    confirmation.hidden = true;
+    remove.focus();
+  }, "quiet");
+  const confirmed = folderActionButton("Stop sharing", () => {
+    void runFolderMutation(
+      () => folderController.remove(share.offerId),
+      "Sync stopped here. The other device will stop when it reconnects. Files stay on both devices.",
+    );
+  }, "quiet");
+  confirmation.append(explanation, cancel, confirmed);
+  container.append(remove, confirmation);
+
+  if (view.kind === "expired") {
+    const guidance = document.createElement("p");
+    guidance.textContent = share.incoming
+      ? `Ask ${folderPeerName(status, share.peerId)} to send a new invitation, then choose your folder again.`
+      : "Send a new invitation so the other device can choose its folder and accept again.";
+    container.append(guidance);
   }
 }
 
-async function loadProviders() {
-  if (!token) return [];
-  providerConnections = await pairing.providers.listNamed(api);
-  renderProviders(providerConnections);
-  return providerConnections;
+function renderFolderPeers(status) {
+  const select = $("[data-folder-peer]");
+  const previous = select.value;
+  const labels = status.peers.map((peer) => [peer.peerId, peer.displayName]);
+  const rendered = Array.from(select.options).slice(1).map((option) => [option.value, option.textContent]);
+  const placeholderText = status.peers.length === 0
+    ? "No confirmed paired devices"
+    : "Choose a confirmed paired device";
+  if (select.options[0]?.textContent === placeholderText && JSON.stringify(labels) === JSON.stringify(rendered)) {
+    select.disabled = status.peers.length === 0;
+    return;
+  }
+  select.replaceChildren();
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = placeholderText;
+  select.append(placeholder);
+  for (const peer of status.peers) {
+    const option = document.createElement("option");
+    option.value = peer.peerId;
+    // Peer-controlled labels are always assigned as text, never parsed as markup.
+    option.textContent = peer.displayName;
+    select.append(option);
+  }
+  select.value = status.peers.some((peer) => peer.peerId === previous) ? previous : "";
+  select.disabled = status.peers.length === 0;
 }
 
-function formData(form) { return new FormData(form); }
-function selected(form, name) { return [...form.querySelectorAll(`[name="${name}"]:checked`)].map((input) => input.value); }
-function randomId(prefix) { return `${prefix}-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`; }
-function display(value) { return JSON.stringify(value, null, 2); }
+function pairedDeviceItem(peer) {
+  const item = document.createElement("li");
+  item.dataset.pairedPeerId = peer.peerId;
+  const details = document.createElement("div");
+  const name = document.createElement("strong");
+  const address = document.createElement("span");
+  details.append(name, address);
 
-function renderRestorePage(page) {
-  restorePage = page;
-  const first = page.entries.length === 0 ? 0 : page.entryOffset + 1;
-  const last = page.entryOffset + page.entries.length;
-  $("[data-restore-summary]").textContent = restorePlan.totalEntries
-    + " entries are signed for " + restorePlan.authorizedRoot
-    + ". Showing " + first + "–" + last + ".";
-  $("[data-restore-plan]").textContent = display(page.entries);
-  $("[data-restore-previous]").disabled = restoreCursorHistory.length === 0;
-  $("[data-restore-next]").disabled = page.nextCursor === null;
+  const update = folderActionButton("Update address", () => {
+    const current = folderController.current()?.peers.find((entry) => entry.peerId === peer.peerId);
+    if (!current || current.address === null) return;
+    const pending = folderController.pendingPeerAddressRefresh();
+    if (form.hidden) {
+      input.value = pending?.peerId === peer.peerId ? pending.candidateAddress : current.address;
+    }
+    form.hidden = false;
+    update.setAttribute("aria-expanded", "true");
+    input.focus();
+  });
+  update.setAttribute("aria-expanded", "false");
+
+  const form = document.createElement("form");
+  form.className = "inline-form";
+  form.hidden = true;
+  form.id = `paired-address-form-${peer.peerId}`;
+  update.setAttribute("aria-controls", form.id);
+  const inputId = `paired-address-${peer.peerId}`;
+  const label = document.createElement("label");
+  label.htmlFor = inputId;
+  label.textContent = "New numeric IP address and port";
+  const input = document.createElement("input");
+  input.id = inputId;
+  input.name = "candidateAddress";
+  input.maxLength = 128;
+  input.placeholder = "192.0.2.10:8787 or [2001:db8::10]:8787";
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  input.required = true;
+  label.append(input);
+  const explanation = document.createElement("p");
+  explanation.className = "muted";
+  explanation.textContent = "Covalent will contact this address and require the same paired identity and certificate before saving it.";
+  const state = document.createElement("p");
+  state.className = "muted";
+  state.setAttribute("role", "status");
+  state.setAttribute("aria-live", "polite");
+  const submit = document.createElement("button");
+  submit.dataset.folderMutation = "";
+  submit.disabled = folderController.isMutationLocked();
+  submit.textContent = "Verify and save";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "quiet";
+  cancel.dataset.folderMutation = "";
+  cancel.disabled = folderController.isMutationLocked();
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => {
+    folderController.cancelPeerAddressRefresh(peer.peerId);
+    form.hidden = true;
+    update.setAttribute("aria-expanded", "false");
+    state.textContent = "";
+    update.focus();
+  });
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!requireUnlocked()) return;
+    state.textContent = folderController.pendingPeerAddressRefresh() === null
+      ? "Verifying this address with the paired device…"
+      : "Retrying the exact saved address request…";
+    input.disabled = true;
+    try {
+      await folderController.refreshPeerAddress(peer.peerId, input.value);
+      state.textContent = "Address verified and saved.";
+      submit.textContent = "Verify and save";
+      form.hidden = true;
+      update.setAttribute("aria-expanded", "false");
+      update.focus();
+      say("Address verified and saved for this paired device.");
+    } catch (error) {
+      if (folderController.pendingPeerAddressRefresh()?.peerId === peer.peerId) {
+        submit.textContent = "Retry saved update";
+        state.textContent = "The update is not confirmed. Retry this exact address, or cancel it before entering another one.";
+      } else if (/saved address changed/.test(error?.covalentGuidance ?? "")) {
+        state.textContent = "The saved address changed. Review the current address before submitting again.";
+      } else {
+        state.textContent = "The update is not confirmed. Refresh paired devices before trying again.";
+      }
+      fail(error);
+    } finally {
+      input.disabled = false;
+    }
+  });
+  form.append(label, explanation, state, submit, cancel);
+  item.append(details, update, form);
+  return item;
 }
 
-async function loadRestorePage(cursor, rememberCurrent = false) {
-  if (!restorePlan) return;
-  const page = await restore.page(api, restorePlan, cursor, 100);
-  if (rememberCurrent) restoreCursorHistory.push(restoreCursor);
-  restoreCursor = cursor;
-  renderRestorePage(page);
+function renderPairedDevices(status) {
+  const list = $("[data-paired-devices]");
+  const retained = new Map(Array.from(list.children).map((item) => [item.dataset.pairedPeerId, item]));
+  const visible = new Set(status.peers.map((peer) => peer.peerId));
+  for (const [id, item] of retained) {
+    if (!visible.has(id)) item.remove();
+  }
+  for (const [index, peer] of status.peers.entries()) {
+    let item = retained.get(peer.peerId);
+    if (!item) item = pairedDeviceItem(peer);
+    const [details, update, form] = item.children;
+    const [name, address] = details.children;
+    name.textContent = peer.displayName;
+    address.textContent = peer.address === null
+      ? " — Address unavailable from this server version"
+      : ` — ${peer.address}`;
+    update.hidden = peer.address === null;
+    if (peer.address === null) {
+      form.hidden = true;
+      update.setAttribute("aria-expanded", "false");
+    }
+    if (list.children[index] !== item) list.insertBefore(item, list.children[index] ?? null);
+  }
+  const empty = $("[data-paired-devices-empty]");
+  empty.hidden = status.peers.length > 0;
+  if (status.peers.length === 0) empty.textContent = "No confirmed paired devices are available.";
 }
 
-function clearRestorePreview() {
-  restorePlan = null;
-  restorePage = null;
-  restoreCursor = null;
-  restoreCursorHistory = [];
-  $("[data-restore-result]").hidden = true;
-  $("[data-restore-confirm]").checked = false;
-  $("[data-restore-execute]").disabled = true;
+function renderFolderStatus(status) {
+  const summary = folderSync.statusSummary(status);
+  const statusCopy = $("[data-folders-status]");
+  statusCopy.textContent = summary.text;
+  statusCopy.className = "folder-state";
+  statusCopy.dataset.kind = summary.kind;
+  renderFolderPeers(status);
+  renderPairedDevices(status);
+
+  const retry = $("[data-folders-retry-service]");
+  retry.hidden = !(status.lifecycle === "needsAttention" || status.issue !== null);
+  const list = $("[data-folders-list]");
+  const visibleShares = status.shares.filter((share) => share.phase !== "removed" || share.remoteRemovalPending);
+  let savedSettings = null;
+  try { savedSettings = folderController.pendingLinkSettings(); }
+  catch (error) { renderFolderError(error); }
+  const retained = new Map(Array.from(list.children).map((item) => [item.dataset.folderOfferId, item]));
+  const visibleIds = new Set(visibleShares.map((share) => share.offerId));
+  for (const [id, item] of retained) {
+    if (!visibleIds.has(id)) item.remove();
+  }
+  for (const [index, share] of visibleShares.entries()) {
+    const view = folderSync.shareView(status, share);
+    let item = retained.get(share.offerId);
+    if (!item) {
+      item = document.createElement("li");
+      item.dataset.folderOfferId = share.offerId;
+      const details = document.createElement("div");
+      const name = document.createElement("strong");
+      const peer = document.createElement("span");
+      const state = document.createElement("span");
+      state.className = "folder-state";
+      const policy = document.createElement("span");
+      policy.className = "muted";
+      const linkState = document.createElement("span");
+      linkState.className = "muted";
+      details.append(name, peer, state, policy, linkState);
+      const actions = document.createElement("div");
+      actions.className = "folder-actions";
+      item.append(details, actions);
+    }
+    const [details, actions] = item.children;
+    const [name, peer, state, policy, linkState] = details.children;
+    name.textContent = share.label;
+    const peerName = folderPeerName(status, share.peerId);
+    peer.textContent = share.linkPolicy === null ? `${peerName} · Legacy two-way`
+      : share.incoming ? `${peerName} → This server` : `This server → ${peerName}`;
+    policy.textContent = folderSync.policyExplanation(share.linkPolicy);
+    linkState.textContent = share.linkSettings === null ? ""
+      : !share.linkSettings.confirmed ? "Waiting for source-confirmed link settings before transfer starts."
+        : share.linkSettings.pendingChange !== null ? "A change is waiting for the source; current settings remain active."
+          : share.linkSettings.conflictedChange !== null ? "A stale settings request needs review; current settings remain active."
+            : share.linkSettings.settings.paused ? "Whole link paused."
+              : "Link settings confirmed by the source.";
+    state.dataset.kind = view.kind;
+    state.textContent = view.text;
+    // Routine health polling must preserve typed paths, keyboard focus, and
+    // explicit confirmation. Rebuild controls only when their meaning changes.
+    const linkMembers = status.shares.filter((item) => item.folderId === share.folderId && item.phase !== "removed")
+      .map((item) => item.peerId);
+    const actionState = JSON.stringify([
+      folderDeviceId, share.incoming, share.phase, share.expired, share.linkSettings, share.linkRun,
+      linkMembers, status.peers.map((item) => [item.peerId, item.displayName]),
+      savedSettings?.folderId === share.folderId ? savedSettings : null,
+      folderController.pendingRun()?.folderId === share.folderId,
+    ]);
+    if (actions.dataset.state !== actionState) {
+      actions.replaceChildren();
+      renderFolderActions(actions, status, share, view);
+      actions.dataset.state = actionState;
+    }
+    if (list.children[index] !== item) list.insertBefore(item, list.children[index] ?? null);
+  }
+  const empty = $("[data-folders-empty]");
+  empty.hidden = visibleShares.length > 0;
+  if (visibleShares.length === 0) {
+    empty.textContent = status.availability === "available"
+      ? "No shared folders yet. Choose a confirmed paired device below."
+      : "Shared folders cannot be loaded while folder sync is offline.";
+  }
 }
 
-// ------------------------------------------------------------ network pairing
-//
-// The same four steps the phone and Mac apps use: look for devices, start with
-// one, compare the short code on both screens, confirm. The node runs the
-// exchange itself, so nothing signed passes through this browser and there is
-// no JSON to copy anywhere on this path.
+function renderPendingFolderOffer() {
+  const card = $("[data-folder-pending]");
+  const form = $("[data-folder-offer-form]");
+  let pending = null;
+  try { pending = folderController.loadPending(); }
+  catch (error) { renderFolderError(error); }
+  card.hidden = pending === null;
+  form.querySelector("[data-folder-offer-submit]").disabled = pending !== null
+    || folderController.isMutationLocked()
+    || folderDeviceId === null
+    || (folderController.current()?.peers.length ?? 0) === 0;
+  if (pending === null) return;
+  const peerName = folderController.current()
+    ? folderPeerName(folderController.current(), pending.peerId)
+    : "the saved confirmed device";
+  $("[data-folder-pending-summary]").textContent = `${pending.label} for ${peerName}, using ${pending.selectedRoot}.`;
+}
+
+function renderPendingLinkSettings() {
+  const card = $("[data-link-settings-pending]");
+  let pending = null;
+  try { pending = folderController.pendingLinkSettings(); }
+  catch (error) { renderFolderError(error); }
+  card.hidden = pending === null;
+  if (pending === null) return;
+  const share = folderController.current()?.shares.find((item) => item.folderId === pending.folderId);
+  const label = share?.label ?? "this link";
+  $("[data-link-settings-pending-summary]").textContent = `${label}: ${folderSync.settingsExplanation(pending.settings)}`;
+}
+
+function renderPendingLinkRun() {
+  const card = $("[data-link-run-pending]");
+  let pending = null;
+  try { pending = folderController.pendingRun(); }
+  catch (error) { renderFolderError(error); }
+  card.hidden = pending === null;
+  if (pending === null) return;
+  const share = folderController.current()?.shares.find((item) => item.folderId === pending.folderId);
+  $("[data-link-run-pending-summary]").textContent = `${share?.label ?? "This link"}: retry the saved request or discard it after checking current link status.`;
+}
+
+async function loadFolders(reportError = false) {
+  try {
+    const result = await folderController.refresh();
+    if (result.applied) {
+      renderPendingFolderOffer();
+      renderPendingLinkSettings();
+      renderPendingLinkRun();
+    }
+  } catch (error) {
+    renderFolderError(error);
+    if (reportError) fail(error);
+  }
+}
+
+async function initializeFolderSync() {
+  const identity = await folderApi("/api/v1/transport/identity");
+  folderDeviceId = identity?.deviceId ?? null;
+  folderController.setAccess({ deviceId: folderDeviceId, unlocked: true });
+  renderPendingFolderOffer();
+  renderPendingLinkSettings();
+  renderPendingLinkRun();
+  syncFolderPolling(false);
+  if (folderPollingEligible()) await loadFolders(false);
+}
+
+function clearFolderSyncAccess() {
+  folderDeviceId = null;
+  folderController.setAccess({ deviceId: null, unlocked: false });
+  folderController.setPollingEnabled(false);
+  $("[data-link-settings-pending]").hidden = true;
+  $("[data-link-run-pending]").hidden = true;
+  $("[data-paired-devices]").replaceChildren();
+  const empty = $("[data-paired-devices-empty]");
+  empty.hidden = false;
+  empty.textContent = "Unlock the console to load paired devices.";
+}
 
 function requireUnlocked() {
   if (token) return true;
@@ -746,7 +1431,7 @@ async function refreshNetworkPairings() {
     const priorState = networkPairing.state;
     const updated = pending.find((item) => item.pairingId === networkPairing.pairingId);
     renderNetworkPairing(updated ?? null);
-    if (updated?.state === "complete" && priorState !== "complete") await loadProviders();
+    if (updated?.state === "complete" && priorState !== "complete") await loadFolders(false);
     return;
   }
   // An incoming request is the other device asking to pair with this one; it is
@@ -754,7 +1439,7 @@ async function refreshNetworkPairings() {
   const incoming = pending.find((item) => item.direction === "incoming" && item.state !== "failed");
   if (incoming !== undefined) {
     renderNetworkPairing(incoming);
-    if (incoming.state === "complete") await loadProviders();
+    if (incoming.state === "complete") await loadFolders(false);
   }
 }
 
@@ -770,32 +1455,113 @@ $("[data-token-form]").addEventListener("submit", async (event) => {
   event.preventDefault();
   token = formData(event.currentTarget).get("token").trim();
   try {
-    await api("/api/v1/config/export", { method: "POST" });
-    await loadBackups();
-    await loadProviders();
-    await refreshNetworkPairings();
-    const resumedBackup = await resumeBackupTerminalReceipt();
-    if (!resumedBackup) say("Console unlocked for this tab only.");
+    await errorCopy.initializeUnlockedConsole({
+      authorize: () => api("/api/v1/config/export", { method: "POST" }),
+      initializeLinks: initializeFolderSync,
+      refreshPairings: refreshNetworkPairings,
+      onLinksError(error) { clearFolderSyncAccess(); renderFolderError(error); },
+    });
+    say("Console unlocked for this tab only.");
   }
-  catch (error) { token = ""; fail(error); }
+  catch (error) { token = ""; clearFolderSyncAccess(); fail(error); }
 });
 
 $("[data-refresh]").addEventListener("click", async () => {
   await loadStatus();
   if (!token) return;
-  try { await Promise.all([loadBackups(), loadProviders()]); }
+  try { await Promise.all([loadFolders(false), refreshNetworkPairings()]); }
   catch (error) { fail(error); }
 });
-$("[data-backups-refresh]").addEventListener("click", async () => {
-  try { await loadBackups(); say("Backup list refreshed from the node."); }
-  catch (error) { fail(error); }
-});
-$("[data-providers-refresh]").addEventListener("click", async () => {
+$("[data-folders-refresh]").addEventListener("click", async () => {
   if (!requireUnlocked()) return;
-  try { await loadProviders(); say("Connected backup devices and capacity refreshed from the node."); }
-  catch (error) { fail(error); }
+  syncFolderPolling(false);
+  await loadFolders(true);
+});
+$("[data-folders-retry-service]").addEventListener("click", () => {
+  void runFolderMutation(() => folderController.retryService(), "Folder sync retry started.");
+});
+$('[data-folder-offer-form]').addEventListener("change", (event) => {
+  if (event.target.name === "cadenceMode") syncOfferScheduleInput();
+});
+$("[data-folder-offer-form]").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (!requireUnlocked()) return;
+  // DOM Event.currentTarget becomes null once dispatch returns. Keep the form
+  // itself across the async offer so a successful response can reset it.
+  const form = event.currentTarget;
+  const data = formData(form);
+  const body = {
+    peerId: data.get("peerId"),
+    folderId: crypto.randomUUID(),
+    label: data.get("label"),
+    selectedRoot: data.get("selectedRoot"),
+    linkPolicy: {
+      propagateSourceDeletions: data.get("propagateSourceDeletions") === "on",
+      restoreLocalDeletions: data.get("restoreLocalDeletions") === "on",
+    },
+    cadence: cadenceValue(data.get("cadenceMode"), data.get("intervalMinutes")),
+    androidConditions: {
+      wifiOnly: data.get("wifiOnly") === "on",
+      chargingOnly: data.get("chargingOnly") === "on",
+    },
+  };
+  if ((body.linkPolicy.propagateSourceDeletions || body.linkPolicy.restoreLocalDeletions)
+    && !globalThis.confirm(`${folderSync.policyExplanation(body.linkPolicy)} Create this link?`)) return;
+  void runFolderMutation(async () => {
+    await folderController.sendOffer(body);
+    form.reset();
+    form.elements.selectedRoot.value = "/sync";
+    syncOfferScheduleInput();
+  }, "Folder offer sent to the confirmed paired device.");
+});
+$("[data-folder-offer-retry]").addEventListener("click", () => {
+  void runFolderMutation(() => folderController.retryPendingOffer(), "Saved folder offer sent.");
+});
+$("[data-folder-offer-discard]").addEventListener("click", () => {
+  if (!globalThis.confirm("Discard this saved retry? This does not remove an offer that may already have reached the server.")) return;
+  try {
+    folderController.discardPendingOffer();
+    renderPendingFolderOffer();
+    say("Saved folder-offer retry discarded.");
+  } catch (error) { fail(error); }
+});
+$('[data-link-settings-retry]').addEventListener("click", () => {
+  void runFolderMutation(
+    () => folderController.retryPendingLinkSettings(),
+    "Saved link-settings request reconciled with the server.",
+  );
+});
+$('[data-link-settings-discard]').addEventListener("click", () => {
+  if (!globalThis.confirm("Discard this exact retry only after reviewing current link settings. The request may already have reached the server. Continue?")) return;
+  try {
+    folderController.discardPendingLinkSettings();
+    renderPendingLinkSettings();
+    say("Saved link-settings retry discarded. Current server settings were not changed.");
+  } catch (error) { fail(error); }
+});
+$('[data-link-run-retry]').addEventListener("click", () => {
+  void runFolderMutation(
+    () => folderController.retryPendingRun(),
+    "Saved Run Now request reconciled with the server.",
+  );
+});
+$('[data-link-run-discard]').addEventListener("click", () => {
+  if (!globalThis.confirm("Discard this exact retry only after checking current link status. The run request may already have reached the source. Continue?")) return;
+  try {
+    folderController.discardPendingRun();
+    renderPendingLinkRun();
+    say("Saved Run Now retry discarded. No new run request was sent.");
+  } catch (error) { fail(error); }
 });
 tabFlow.install(document);
+document.querySelectorAll("[data-tab]").forEach((tab) => {
+  tab.addEventListener("click", () => queueMicrotask(() => syncFolderPolling(true)));
+  tab.addEventListener("keydown", () => queueMicrotask(() => syncFolderPolling(true)));
+});
+document.addEventListener("visibilitychange", () => syncFolderPolling(true));
+setInterval(() => {
+  if (folderPollingEligible()) void loadFolders(false);
+}, 5000);
 
 $("[data-network-discover]").addEventListener("click", async () => {
   if (!requireUnlocked()) return;
@@ -819,9 +1585,9 @@ $("[data-network-confirm]").addEventListener("click", async () => {
   try {
     const confirmed = await pairing.network.confirm(api, networkPairing);
     renderNetworkPairing(confirmed);
-    if (confirmed.state === "complete") await loadProviders();
+    if (confirmed.state === "complete") await loadFolders(false);
     say(confirmed.state === "complete"
-      ? "Backup device added. Its signed identity and current capacity are now available in the Backup tab."
+      ? "Device paired. Its signed identity is now available for one-way links."
       : "Confirmed here. Waiting for the other device.");
   } catch (error) { fail(error); }
 });
@@ -838,339 +1604,8 @@ $("[data-network-cancel]").addEventListener("click", async () => {
   catch (error) { fail(error); }
 });
 
-$("[data-pair-create]").addEventListener("submit", async (event) => {
-  event.preventDefault(); const data = formData(event.currentTarget);
-  try {
-    const invitation = await api("/api/v1/pair/invitations", { method: "POST", body: JSON.stringify({ endpoints: [data.get("endpoint")], lifetimeMs: Number(data.get("minutes")) * 60000 }) });
-    say(`Invitation created. Copy this JSON to the other device:\n${display(invitation)}`);
-  } catch (error) { fail(error); }
-});
-
-$("[data-pair-accept]").addEventListener("submit", async (event) => {
-  event.preventDefault(); const data = formData(event.currentTarget);
-  try {
-    const session = await api("/api/v1/pair/accept", { method: "POST", body: JSON.stringify({ invitation: JSON.parse(data.get("invitation")), responderName: data.get("name"), responderRoles: selected(event.currentTarget, "responderRole"), inviterRoles: selected(event.currentTarget, "inviterRole") }) });
-    const details = showPairingSession(session);
-    say(`Compare identities, exact roles, and this code on both devices: ${details.code}\nThe accepted session is preserved below. Add one confirmation, then send the updated JSON to the other device.`);
-  } catch (error) { fail(error); }
-});
-
-$("[data-pair-confirm]").addEventListener("submit", async (event) => {
-  event.preventDefault(); const data = formData(event.currentTarget); const submitter = event.submitter;
-  try {
-    const session = JSON.parse(data.get("session")); const side = submitter.value;
-    if (submitter.dataset.pairAction === "confirm") {
-      const confirmed = await pairing.confirm(api, session, side, data.get("code"));
-      const details = showPairingSession(confirmed);
-      say(details.mutuallyConfirmed
-        ? `Both signed confirmations are present. Send this exact session to the other device, then finalize on each device:\n${display(confirmed)}`
-        : `This device signed the exchange. Finalize is still locked. Send this updated session to the other device for its confirmation:\n${display(confirmed)}`);
-      return;
-    }
-    const confirmation = await pairing.finalize(api, session, side);
-    clearPairingSession();
-    if (showManualProviderActivation(confirmation)) {
-      say("Pairing finalized on this device. Review the signed backup-device connection below before adding it.");
-    } else {
-      say("Pairing finalized on this device. The other device must finalize the same mutually signed session. This pairing did not grant a backup-device role here.");
-    }
-  } catch (error) { fail(error); }
-});
-$("[data-pair-confirm] [name=session]").addEventListener("input", (event) => {
-  try { showPairingSession(JSON.parse(event.currentTarget.value)); } catch (_) {
-    $("[data-pair-consent]").hidden = true;
-    $("[data-pair-confirm]").querySelectorAll("[data-pair-action=finalize]").forEach((button) => { button.disabled = true; });
-  }
-});
-$("[data-pair-clear]").addEventListener("click", () => { clearPairingSession(); say("Pairing exchange cleared from this browser tab."); });
-
-function clearManualProviderActivation() {
-  manualProviderConfirmation = null;
-  $("[data-manual-provider-card]").hidden = true;
-}
-
-function showManualProviderActivation(confirmation) {
-  if (!confirmation || confirmation.peerTransport === null || confirmation.peerTransport === undefined) {
-    clearManualProviderActivation();
-    return false;
-  }
-  const transport = pairing.providers.finalizedTransport(confirmation);
-  manualProviderConfirmation = confirmation;
-  $("[data-manual-provider-summary]").textContent = `${transport.displayName} · immutable ID ${transport.peerId}`;
-  $("[data-manual-provider-connect]").disabled = false;
-  $("[data-manual-provider-card]").hidden = false;
-  return true;
-}
-
-$("[data-manual-provider-connect]").addEventListener("click", async () => {
-  if (!requireUnlocked() || manualProviderConfirmation === null) return;
-  const button = $("[data-manual-provider-connect]");
-  button.disabled = true;
-  try {
-    const activation = await pairing.providers.activate(api, manualProviderConfirmation);
-    providerConnections = activation.providers;
-    renderProviders(providerConnections);
-    const availability = pairing.providers.availability(activation.provider);
-    say(availability.eligible
-      ? "Backup device connected and ready to select in the Backup tab."
-      : `Backup device was connected, but ${availability.status}`);
-  } catch (error) {
-    button.disabled = false;
-    fail(error);
-  }
-});
-
-function setBackupSubmissionState(state, detail = "") {
-  const form = $("[data-backup-form]");
-  const submit = $("[data-backup-submit]");
-  const retry = $("[data-backup-retry]");
-  const status = $("[data-backup-status]");
-  const inFlight = state === "starting" || state === "acknowledging";
-  const confirmationPending = state === "ack_failed" || state === "receipt_blocked" || state === "lock_busy";
-  backupSubmissionInFlight = inFlight;
-  form.setAttribute("aria-busy", String(inFlight));
-  form.querySelectorAll("input, textarea, button").forEach((control) => {
-    if (control !== retry) control.disabled = inFlight || confirmationPending;
-  });
-  submit.textContent = state === "starting" ? "Starting backup…"
-    : state === "acknowledging" ? "Confirming receipt…"
-      : "Start backup";
-  retry.hidden = state !== "failed" && state !== "ack_failed" && state !== "lock_busy";
-  retry.textContent = state === "ack_failed" ? "Confirm receipt"
-    : state === "lock_busy" ? "Check again"
-      : "Try again";
-  retry.disabled = inFlight;
-  status.textContent = detail;
-  status.classList.toggle(
-    "error",
-    state === "failed" || state === "ack_failed" || state === "receipt_blocked" || state === "lock_busy",
-  );
-}
-
-function withBackupTerminalLock(callback) {
-  return backupTerminal.withExclusiveLock(callback, globalThis.navigator?.locks);
-}
-
-function newBackupAttempt(form) {
-  const data = formData(form);
-  return backupTerminal.requireAttempt({
-    sourceRoot: data.get("sourceRoot"),
-    displayName: data.get("displayName"),
-    snapshotId: data.get("snapshotId"),
-    selectedProviderIds: pairing.providers.selectedIds(providerConnections, selected(form, "providers")),
-    // Retry reuses this ID if a response was interrupted after acceptance.
-    jobId: randomId("backup"),
-  });
-}
-
-function backupCompletionCopy(result) {
-  return `Backup complete: ${result.backupId}, ${result.entries} entries, ${result.selectedProviders} explicitly selected providers.`;
-}
-
-async function requestBackupTerminalResult(attempt) {
-  const response = await apiResponse("/api/v1/backups", {
-    method: "POST",
-    body: JSON.stringify(attempt),
-  });
-  const acknowledgement = response.headers.get("x-covalent-job-ack-required");
-  if (acknowledgement !== "true") {
-    throw backupTerminal.guidance("This backup response had an invalid receipt-confirmation instruction, so it was not accepted.");
-  }
-  return {
-    result: response.body,
-    acknowledgementRequired: true,
-  };
-}
-
-async function refreshBackupsAfterTerminalResult(complete) {
-  try { await loadBackups(); }
-  catch (error) {
-    setBackupSubmissionState("complete", `${complete} The list could not refresh: ${errorCopy.describe(error).summary}`);
-  }
-}
-
-async function acknowledgeBackupTerminalReceipt(receipt = null) {
-  if (receipt === null) {
-    receipt = await backupTerminal.load(globalThis.localStorage, backupServerContext);
-  }
-  if (receipt === null || receipt.phase !== "receipt") return false;
-  const complete = backupCompletionCopy(receipt.result);
-  // The decoded result is already rendered below before this function is
-  // called. Only now may the terminal server result be acknowledged.
-  setBackupSubmissionState("acknowledging", `${complete} Confirming this receipt with the backup server…`);
-  try {
-    await backupTerminal.acknowledge(
-      globalThis.localStorage,
-      backupServerContext,
-      apiResponse,
-    );
-    setBackupSubmissionState("complete", `${complete} Receipt confirmed.`);
-    await refreshBackupsAfterTerminalResult(complete);
-    return true;
-  } catch (error) {
-    setBackupSubmissionState(
-      "ack_failed",
-      `${complete} Covalent could not confirm receipt yet. Use Confirm receipt to retry the same completed backup.`,
-    );
-    const failure = errorCopy.describe(error);
-    say(`Backup completed, but its receipt still needs confirmation. ${failure.summary}`, true, failure.detail);
-    return false;
-  }
-}
-
-async function resumeBackupTerminalReceipt() {
-  try {
-    return await withBackupTerminalLock(async () => {
-      const pending = await backupTerminal.load(globalThis.localStorage, backupServerContext);
-      if (pending === null) return false;
-      if (pending.phase === "request") {
-        failedBackupAttempt = pending.attempt;
-        setBackupSubmissionState(
-          "failed",
-          "A previous backup request may have reached the server. Use Try again to resume the same backup job safely.",
-        );
-        return true;
-      }
-      failedBackupAttempt = null;
-      const complete = backupCompletionCopy(pending.result);
-      setBackupSubmissionState("complete", `${complete} Resuming receipt confirmation…`);
-      say(`${complete} Resuming receipt confirmation.`);
-      await acknowledgeBackupTerminalReceipt(pending);
-      return true;
-    });
-  } catch (error) {
-    setBackupSubmissionState(
-      error?.covalentBackupLockFailure === "busy" ? "lock_busy" : "receipt_blocked",
-      error?.covalentBackupLockFailure === "busy"
-        ? "Another tab is handling the durable backup receipt. Use Check again after that tab closes."
-        : "A durable backup receipt cannot be verified or locked. Covalent kept it and blocked new backups to protect the server result.",
-    );
-    fail(error);
-    return true;
-  }
-}
-
-async function submitBackupLocked(attempt) {
-  failedBackupAttempt = null;
-  setBackupSubmissionState("starting", "Starting backup. Covalent is asking the backup server to read the selected folder.");
-  const receipt = await backupTerminal.submit(
-    globalThis.localStorage,
-    backupServerContext,
-    attempt,
-    requestBackupTerminalResult,
-  );
-  const complete = backupCompletionCopy(receipt.result);
-  setBackupSubmissionState("complete", complete);
-  say(complete);
-  // The exclusive same-origin lock remains held while the checked result is
-  // rendered and until the exact receipt is acknowledged or safely retained.
-  if (receipt.phase === "receipt") {
-    await acknowledgeBackupTerminalReceipt(receipt);
-  } else {
-    await refreshBackupsAfterTerminalResult(complete);
-  }
-}
-
-async function handleBackupTerminalFailure(error, attempt) {
-  if (error?.covalentBackupLockFailure) {
-    failedBackupAttempt = null;
-    const busy = error.covalentBackupLockFailure === "busy";
-    setBackupSubmissionState(
-      busy ? "lock_busy" : "receipt_blocked",
-      busy
-        ? "Another tab is handling a backup. Use Check again after that tab closes."
-        : "This browser cannot lock durable backup work across tabs, so no backup was sent.",
-    );
-    fail(error);
-    return;
-  }
-  let durableReceiptBlocked = false;
-  try {
-    await withBackupTerminalLock(() => backupTerminal.load(globalThis.localStorage, backupServerContext));
-  } catch (_) { durableReceiptBlocked = true; }
-  failedBackupAttempt = durableReceiptBlocked ? null : attempt;
-  setBackupSubmissionState(
-    durableReceiptBlocked ? "receipt_blocked" : "failed",
-    durableReceiptBlocked
-      ? "A durable backup receipt cannot be verified. Covalent kept it and blocked new backups to protect the server result."
-      : `Backup needs attention. ${errorCopy.describe(error).summary} Try again when ready.`,
-  );
-  fail(error);
-}
-
-async function submitBackup(attempt) {
-  if (backupSubmissionInFlight) return;
-  try {
-    await withBackupTerminalLock(() => submitBackupLocked(attempt));
-  } catch (error) {
-    await handleBackupTerminalFailure(error, attempt);
-  }
-}
-
-$("[data-backup-form]").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (backupSubmissionInFlight) return;
-  try { await submitBackup(newBackupAttempt(event.currentTarget)); }
-  catch (error) { fail(error); }
-});
-$("[data-backup-retry]").addEventListener("click", async () => {
-  if (backupSubmissionInFlight) return;
-  try {
-    await withBackupTerminalLock(async () => {
-      const pending = await backupTerminal.load(globalThis.localStorage, backupServerContext);
-      if (pending?.phase === "receipt") {
-        await acknowledgeBackupTerminalReceipt(pending);
-        return;
-      }
-      const retryAttempt = pending?.phase === "request" ? pending.attempt : failedBackupAttempt;
-      if (retryAttempt !== null && retryAttempt !== undefined) {
-        await submitBackupLocked(retryAttempt);
-      } else {
-        setBackupSubmissionState("complete", "No pending backup receipt remains in this browser.");
-        await loadBackups();
-      }
-    });
-  } catch (error) { await handleBackupTerminalFailure(error, failedBackupAttempt); }
-});
-
-$("[data-restore-preview]").addEventListener("submit", async (event) => {
-  event.preventDefault(); const data = formData(event.currentTarget);
-  let candidate = null;
-  try {
-    const previous = restorePlan;
-    candidate = restore.requireReference(await api("/api/v1/restores/preview", { method: "POST", body: JSON.stringify({ backupId: data.get("backupId"), snapshotId: data.get("snapshotId"), targetRoot: data.get("targetRoot"), conflictPolicy: data.get("conflictPolicy"), jobId: randomId("restore") }) }));
-    const firstPage = await restore.page(api, candidate, null, 100);
-    restorePlan = candidate;
-    restoreCursor = null; restoreCursorHistory = [];
-    renderRestorePage(firstPage);
-    if (previous) await restore.discard(api, previous).catch(() => {});
-    $("[data-restore-result]").hidden = false; $("[data-restore-confirm]").checked = false; $("[data-restore-execute]").disabled = true;
-    say("Preview complete. Review the target and conflict actions before authorizing the write.");
-  } catch (error) { if (candidate) await restore.discard(api, candidate).catch(() => {}); fail(error); }
-});
-$("[data-restore-next]").addEventListener("click", async () => {
-  if (!restorePage?.nextCursor) return;
-  try { await loadRestorePage(restorePage.nextCursor, true); } catch (error) { fail(error); }
-});
-$("[data-restore-previous]").addEventListener("click", async () => {
-  if (restoreCursorHistory.length === 0) return;
-  const cursor = restoreCursorHistory.pop();
-  try { await loadRestorePage(cursor); } catch (error) { fail(error); }
-});
-$("[data-restore-discard]").addEventListener("click", async () => {
-  const plan = restorePlan;
-  clearRestorePreview();
-  try { await restore.discard(api, plan); say("Restore preview discarded without writing files."); } catch (error) { fail(error); }
-});
-$("[data-restore-confirm]").addEventListener("change", (event) => { $("[data-restore-execute]").disabled = !event.currentTarget.checked || !restorePlan; });
-$("[data-restore-execute]").addEventListener("click", async () => {
-  if (!restorePlan) return;
-  try { const plan = restorePlan; const result = await restore.execute(api, plan); await restore.discard(api, plan).catch(() => {}); clearRestorePreview(); say(`Restore complete: ${result.filesRestored} files, ${result.directoriesCreated} directories.`); }
-  catch (error) { fail(error); }
-});
-
 $("[data-settings-export]").addEventListener("click", async () => {
-  try { const settings = await api("/api/v1/config/export", { method: "POST" }); const blob = new Blob([display(settings)], { type: "application/json" }); const link = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: "covalent-settings.json" }); link.click(); URL.revokeObjectURL(link.href); say("Safe settings downloaded."); }
+  try { const settings = await api("/api/v1/config/export", { method: "POST" }); const blob = new Blob([JSON.stringify(settings, null, 2)], { type: "application/json" }); const link = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: "covalent-settings.json" }); link.click(); URL.revokeObjectURL(link.href); say("Safe settings downloaded."); }
   catch (error) { fail(error); }
 });
 $("[data-settings-import]").addEventListener("submit", async (event) => {
@@ -1179,39 +1614,5 @@ $("[data-settings-import]").addEventListener("submit", async (event) => {
   catch (error) { fail(error); }
 });
 
-// Kept as the single write point for the tab-scoped exchange the loader below
-// reads back. The JSON exchange is the fallback path now, so nothing on the
-// network-pairing flow depends on it.
-function persistPairingSession(session) {
-  try { pairing.storage.saveTabSession(globalThis.sessionStorage, pairingStorageKey, session); } catch (_) {}
-}
-
-function clearPairingSession() {
-  try { pairing.storage.clearTabSession(globalThis.sessionStorage, pairingStorageKey); } catch (_) {}
-  clearManualProviderActivation();
-  const form = $("[data-pair-confirm]");
-  form.reset();
-  $("[data-pair-consent]").hidden = true;
-  form.querySelectorAll("[data-pair-action=finalize]").forEach((button) => { button.disabled = true; });
-}
-
-function showPairingSession(session) {
-  const details = pairing.summary(session);
-  const form = $("[data-pair-confirm]");
-  form.elements.session.value = display(session);
-  $("[data-pair-inviter]").textContent = `${details.inviter.name} (${details.inviter.id}) — ${details.inviter.roles}`;
-  $("[data-pair-responder]").textContent = `${details.responder.name} (${details.responder.id}) — ${details.responder.roles}`;
-  $("[data-pair-code]").textContent = details.code;
-  $("[data-pair-signatures]").textContent = `Creator ${details.inviter.confirmed ? "signed" : "waiting"}; accepter ${details.responder.confirmed ? "signed" : "waiting"}.`;
-  $("[data-pair-consent]").hidden = false;
-  form.querySelectorAll("[data-pair-action=finalize]").forEach((button) => { button.disabled = !details.mutuallyConfirmed; });
-  persistPairingSession(session);
-  return details;
-}
-
-try {
-  const savedPairingSession = pairing.storage.loadTabSession(globalThis.sessionStorage, pairingStorageKey);
-  if (savedPairingSession) showPairingSession(savedPairingSession);
-} catch (_) { /* invalid or unavailable tab storage starts a fresh exchange */ }
 loadStatus();
 }

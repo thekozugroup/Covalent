@@ -36,7 +36,9 @@
     const initial = tabs.find((tab) => tab.getAttribute("aria-selected") === "true") ?? tabs[0];
     activate(tabs, panels, initial);
     for (const tab of tabs) {
-      tab.addEventListener("click", () => activate(tabs, panels, tab));
+      tab.addEventListener("click", () => {
+        activate(tabs, panels, tab);
+      });
       tab.addEventListener("keydown", (event) => {
         const next = targetIndex(tabs.indexOf(tab), tabs.length, event.key);
         if (next === null) return;

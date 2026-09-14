@@ -151,7 +151,7 @@ group narrower than the client group:
     {
       "src": ["group:covalent-clients"],
       "dst": ["tag:covalent-atlas"],
-      "ip": ["tcp:8443", "udp:8787"]
+      "ip": ["tcp:8443", "udp:8787", "tcp:8789"]
     },
     {
       "src": ["group:covalent-operators"],
@@ -179,12 +179,15 @@ The operator computer needs:
 
 - this exact Covalent source checkout, because the preflight and template
   validator run from it;
-- `ssh`, `ssh-keygen`, `ssh-keyscan`, `jq`, and a working key-only SSH login;
-- an Atlas SSH account written as `USER@atlas.example-tailnet.ts.net`;
+- `ssh`, `ssh-keygen`, `ssh-keyscan`, and a working key-only SSH login;
+- an Atlas SSH account written as `USER@atlas.example-tailnet.ts.net` that logs in as UID 0 (normally Unraid's `root` account); the preflight refuses a weaker identity check;
 - Atlas's ED25519 SSH fingerprint obtained from its local console.
 
 `BatchMode=yes` deliberately rejects password prompts. Set up and test the SSH
-key before running Covalent's preflight.
+key before running Covalent's preflight. Atlas itself needs `docker`,
+`tailscale`, `jq`, `python3`, `setpriv`, `ss`, `find`, `getent`, and GNU `readlink -e` or
+`realpath`; the helper fails closed when an identity or DNS-verification tool is
+unavailable.
 
 Run the read-only Atlas preflight before any host-side install or deployment.
 First pin the SSH host key. On Atlas's local console, obtain the trusted
@@ -214,7 +217,7 @@ fi
 cat "$candidate_key" >> "$HOME/.ssh/known_hosts"
 chmod 600 "$HOME/.ssh/known_hosts"
 ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
-  operator@atlas.example-tailnet.ts.net true
+  root@atlas.example-tailnet.ts.net true
 ```
 
 Do not trust the `ssh-keyscan` result by itself, and do not delete a changed
@@ -222,11 +225,11 @@ known-host entry merely to make SSH connect. Investigate a mismatch first.
 After strict known-host verification succeeds, run:
 
 ```sh
-scripts/atlas-preflight.sh --ssh operator@atlas.example-tailnet.ts.net \
+scripts/atlas-preflight.sh --ssh root@atlas.example-tailnet.ts.net \
   --source /mnt/user/Photos --source /mnt/user/Documents
 
 ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
-  operator@atlas.example-tailnet.ts.net sh -s -- \
+  root@atlas.example-tailnet.ts.net sh -s -- \
   --config /mnt/user/appdata/covalent/config \
   --data /mnt/user/appdata/covalent/data \
   --source /mnt/user/Photos \
@@ -248,31 +251,21 @@ the container is rootless/read-only/no-capabilities; and no Docker or Tailscale
 control socket is mounted. A writable source mapping fails this gate.
 
 Over strict-host-key SSH, it verifies Docker/Tailscale availability, requires
-TCP 8443 and UDP 8787 to have no current listener, and canonicalizes every
-source with `readlink -e` or `realpath`. Each `--source` must be a normalized,
+Tailscale to be running, and checks that every IPv4 or IPv6 address returned by
+MagicDNS for the requested hostname belongs to Atlas itself in `tailscale status
+--json`. It requires TCP 8443 and UDP 8787 to have no current listener, and
+canonicalizes every source with `readlink -e` or `realpath`. Each `--source` must be a normalized,
 non-symlink path below one explicit `/mnt/user` share; `/mnt/user/system`,
 appdata, dot-segment escapes, and paths enclosing the KEK fail closed. The
-remote check actually opens each directory for a bounded one-entry listing.
+remote check actually opens each directory for a bounded one-entry listing
+twice: once as the SSH identity, then under `setpriv --reuid=99 --regid=100
+--clear-groups`, which matches the template's fixed container identity without
+pulling or starting an image. It fails closed if `setpriv` is unavailable or the
+SSH session is not UID 0.
 It does not claim that host readability makes the host path read-only: the
 validated Unraid `ro` bind is the no-write control. The preflight does not
 SSH-mutate, write a source, pull an image, create a directory, or deploy
 anything. Stop or move any existing listener before deployment, then rerun it.
-
-The current helper proves that Tailscale responds and that the requested DNS
-name resolves; it does not yet prove that every returned address equals Atlas's
-own Tailnet address or that UID/GID `99:100` can read every selected source.
-Until those checks move into the helper, verify them on Atlas before deploy:
-
-```sh
-test "$(tailscale status --json | jq -r '.BackendState')" = Running
-atlas_ip=$(tailscale ip -4 | sed -n '1p')
-resolved_ip=$(getent ahostsv4 atlas.example-tailnet.ts.net | awk 'NR == 1 { print $1 }')
-test -n "$atlas_ip"
-test "$resolved_ip" = "$atlas_ip"
-docker run --rm --user 99:100 --entrypoint /bin/sh \
-  -v /mnt/user/Photos:/source:ro covalent:local \
-  -c 'test -r /source && find /source -mindepth 1 -maxdepth 1 -print -quit >/dev/null'
-```
 
 After the container exists, inspect its actual image, user, ports, security
 flags, and bind mounts. Rerun the path validator with the host `Source` values

@@ -29,8 +29,21 @@ esac
 output_dir="$repo_root/artifacts/install"
 archive_name="Covalent-v${version}-macOS-arm64-personal.zip"
 checksum_name="${archive_name}.sha256"
+receipt_name="${archive_name}.build-receipt.json"
 archive="$output_dir/$archive_name"
 checksum="$output_dir/$checksum_name"
+receipt="$output_dir/$receipt_name"
+
+source_commit=$(git -C "$repo_root" rev-parse HEAD)
+git -C "$repo_root" diff --quiet && git -C "$repo_root" diff --cached --quiet ||
+  fail "The source checkout has tracked changes; refusing an unbound build."
+if [ -n "$(git -C "$repo_root" ls-files --others --exclude-standard)" ]; then
+  fail "The source checkout has untracked files; refusing an unbound build."
+fi
+source_fingerprint=$("$repo_root/scripts/docker-source-fingerprint.sh" "$repo_root")
+case "$source_commit:$source_fingerprint" in *[!0-9a-f:]*|'') fail "Could not bind the build to the source checkout." ;; esac
+[ "${#source_commit}" -eq 40 ] && [ "${#source_fingerprint}" -eq 64 ] ||
+  fail "Could not bind the build to the source checkout."
 
 if ! git -C "$repo_root" check-ignore -q "artifacts/install/.ignore-check"; then
   fail "artifacts/install is not ignored by Git; refusing to create install artifacts."
@@ -45,7 +58,7 @@ for directory in "$repo_root/artifacts" "$output_dir"; do
   fi
 done
 
-for path in "$archive" "$checksum"; do
+for path in "$archive" "$checksum" "$receipt"; do
   if [ -e "$path" ] || [ -L "$path" ]; then
     fail "Refusing to overwrite existing output: $path"
   fi
@@ -53,9 +66,9 @@ done
 
 mkdir -p "$output_dir"
 umask 077
-build_dir=$(mktemp -d "$output_dir/.personal-macos-build.XXXXXX")
+build_dir=$(mktemp -d "${TMPDIR:-/tmp}/covalent-personal-macos-build.XXXXXX")
 case "$build_dir" in
-  "$output_dir"/.personal-macos-build.*) ;;
+  */covalent-personal-macos-build.*) ;;
   *) fail "Could not create a private build directory." ;;
 esac
 
@@ -76,6 +89,19 @@ fi
 if [ ! -s "$repo_root/apps/apple/Package.resolved" ]; then
   fail "Locked Swift package data is missing: apps/apple/Package.resolved"
 fi
+
+printf '%s\n' "Preparing the private Go toolchain..."
+go_archive="$build_dir/go1.26.7.darwin-arm64.tar.gz"
+curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+  --connect-timeout 15 --max-time 300 --max-filesize 67108864 \
+  --output "$go_archive" https://go.dev/dl/go1.26.7.darwin-arm64.tar.gz
+if [ "$(shasum -a 256 "$go_archive" | awk '{print $1}')" != \
+  020a1e8224811be75163e920bc77e0926a1390a6aeea19bdcf23f74b9d749f6d ] || \
+  [ "$(wc -c < "$go_archive" | tr -d '[:space:]')" -ne 64772572 ]; then
+  fail "The private Go toolchain did not match its pinned checksum and size."
+fi
+COVALENT_GO_ARCHIVE="$go_archive"
+export COVALENT_GO_ARCHIVE
 
 archive_path="$build_dir/CovalentMac.xcarchive"
 swift_packages="$build_dir/swift-packages"
@@ -126,6 +152,7 @@ fi
 
 staged_archive="$build_dir/$archive_name"
 staged_checksum="$build_dir/$checksum_name"
+staged_receipt="$build_dir/$receipt_name"
 ditto -c -k --sequesterRsrc --keepParent "$app" "$staged_archive"
 (
   cd "$build_dir"
@@ -142,10 +169,62 @@ if ! codesign -d --verbose=4 "$unpacked_app" 2>&1 | grep -Fq 'Signature=adhoc'; 
   fail "The packaged app does not retain the required ad-hoc signature."
 fi
 
+# Bind the distributed archive and its executable inputs to one clean source
+# snapshot. Recheck after the long build so an in-flight edit cannot inherit the
+# original commit label.
+[ "$(git -C "$repo_root" rev-parse HEAD)" = "$source_commit" ] &&
+  git -C "$repo_root" diff --quiet && git -C "$repo_root" diff --cached --quiet ||
+  fail "The source checkout changed during the build."
+if [ -n "$(git -C "$repo_root" ls-files --others --exclude-standard)" ] ||
+   [ "$("$repo_root/scripts/docker-source-fingerprint.sh" "$repo_root")" != "$source_fingerprint" ]; then
+  fail "The source checkout changed during the build."
+fi
+app_executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$unpacked_app/Contents/Info.plist")
+python3 - "$staged_receipt" "$source_commit" "$source_fingerprint" "$version" \
+  "$staged_archive" "$unpacked_app/Contents/MacOS/$app_executable" \
+  "$unpacked_app/Contents/MacOS/covalent-node" \
+  "$unpacked_app/Contents/MacOS/covalent-rclone" \
+  "$unpacked_app/Contents/MacOS/covalent-engine-guardian" \
+  "$unpacked_app/Contents/Resources/CovalentSyncEngine/manifest.json" <<'PY'
+import hashlib
+import json
+import os
+import pathlib
+import sys
+
+output, commit, fingerprint, version, archive, app, node, worker, guardian, manifest = sys.argv[1:]
+
+def descriptor(path):
+    value = pathlib.Path(path)
+    payload = value.read_bytes()
+    return {"bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}
+
+value = {
+    "schemaVersion": 1,
+    "sourceCommit": commit,
+    "sourceFingerprint": fingerprint,
+    "releaseVersion": version,
+    "archive": descriptor(archive),
+    "components": {
+        "appExecutable": descriptor(app),
+        "covalent-node": descriptor(node),
+        "covalent-rclone": descriptor(worker),
+        "covalent-engine-guardian": descriptor(guardian),
+        "engineManifest": descriptor(manifest),
+    },
+}
+encoded = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+descriptor_fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(descriptor_fd, "wb") as stream:
+    stream.write(encoded)
+    stream.flush()
+    os.fsync(stream.fileno())
+PY
+
 # Check again after the long build. BSD mv -n leaves the staged file in place
 # when another process created the destination, which makes the collision
 # detectable without replacing either output.
-for path in "$archive" "$checksum"; do
+for path in "$archive" "$checksum" "$receipt"; do
   if [ -e "$path" ] || [ -L "$path" ]; then
     fail "Refusing to overwrite output created during the build: $path"
   fi
@@ -159,11 +238,15 @@ mv -n "$staged_checksum" "$checksum"
 if [ -e "$staged_checksum" ]; then
   fail "Could not publish without overwriting: $checksum"
 fi
+mv -n "$staged_receipt" "$receipt"
+if [ -e "$staged_receipt" ]; then
+  fail "Could not publish without overwriting: $receipt"
+fi
 
 (
   cd "$output_dir"
   shasum -a 256 -c "$checksum_name"
 )
 
-printf '\nPersonal macOS app ready:\n  %s\n  %s\n' "$archive" "$checksum"
+printf '\nPersonal macOS app ready:\n  %s\n  %s\n  %s\n' "$archive" "$checksum" "$receipt"
 printf '%s\n' "Nothing was installed or replaced. Follow docs/platform/macos.md to install it."

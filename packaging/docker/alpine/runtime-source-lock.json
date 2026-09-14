@@ -1,0 +1,2583 @@
+{
+  "schema": 2,
+  "baseIndexDigest": "sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40",
+  "golangIndexDigest": "sha256:b17af760035fc2f338eed92d448a6c67f2d45438844fc6c60678fa5f99e44b57",
+  "architectures": {
+    "amd64": "x86_64",
+    "arm64": "aarch64"
+  },
+  "packages": [
+    {
+      "name": "alpine-baselayout",
+      "version": "3.7.2-r0",
+      "origin": "alpine-baselayout",
+      "license": "GPL-2.0-only",
+      "aportsCommit": "15b3b78187b3808104f98f765e9632e0b09281a7"
+    },
+    {
+      "name": "alpine-baselayout-data",
+      "version": "3.7.2-r0",
+      "origin": "alpine-baselayout",
+      "license": "GPL-2.0-only",
+      "aportsCommit": "15b3b78187b3808104f98f765e9632e0b09281a7"
+    },
+    {
+      "name": "alpine-keys",
+      "version": "2.6-r0",
+      "origin": "alpine-keys",
+      "license": "MIT",
+      "aportsCommit": "b9f23becced4d7b3ccc0fa0f28530243ccd314a0"
+    },
+    {
+      "name": "alpine-release",
+      "version": "3.23.5-r0",
+      "origin": "alpine-base",
+      "license": "MIT",
+      "aportsCommit": "1fa9ca1a79c5fd52c46a70b2199059c41ead572a"
+    },
+    {
+      "name": "apk-tools",
+      "version": "3.0.6-r0",
+      "origin": "apk-tools",
+      "license": "GPL-2.0-only",
+      "aportsCommit": "3812c9da974bef8b28f995490ca8233f1472ccc4"
+    },
+    {
+      "name": "busybox",
+      "version": "1.37.0-r1000",
+      "origin": "busybox",
+      "license": "GPL-2.0-only",
+      "aportsCommit": "1e823a60eb85606954b3a5af5f8e5bbd1ea680cf",
+      "installedDatabaseCommit": null
+    },
+    {
+      "name": "busybox-binsh",
+      "version": "1.37.0-r1000",
+      "origin": "busybox",
+      "license": "GPL-2.0-only",
+      "aportsCommit": "1e823a60eb85606954b3a5af5f8e5bbd1ea680cf",
+      "architecture": "noarch",
+      "installedDatabaseCommit": null
+    },
+    {
+      "name": "ca-certificates-bundle",
+      "version": "20260611-r0",
+      "origin": "ca-certificates",
+      "license": "MPL-2.0 AND MIT",
+      "aportsCommit": "6e30aafe4fa807ba70797509731f1e7d644dc8f3"
+    },
+    {
+      "name": "libapk",
+      "version": "3.0.6-r0",
+      "origin": "apk-tools",
+      "license": "GPL-2.0-only",
+      "aportsCommit": "3812c9da974bef8b28f995490ca8233f1472ccc4"
+    },
+    {
+      "name": "libcrypto3",
+      "version": "3.5.8-r0",
+      "origin": "openssl",
+      "license": "Apache-2.0",
+      "aportsCommit": "2b4b2590f782b95276d31dcaaf41554b1a597a0b"
+    },
+    {
+      "name": "libssl3",
+      "version": "3.5.8-r0",
+      "origin": "openssl",
+      "license": "Apache-2.0",
+      "aportsCommit": "2b4b2590f782b95276d31dcaaf41554b1a597a0b"
+    },
+    {
+      "name": "musl",
+      "version": "1.2.5-r23",
+      "origin": "musl",
+      "license": "MIT",
+      "aportsCommit": "8aef0c37b0ad23dc4137f0e4755b97a59dc698b8"
+    },
+    {
+      "name": "musl-utils",
+      "version": "1.2.5-r23",
+      "origin": "musl",
+      "license": "MIT AND BSD-2-Clause AND GPL-2.0-or-later",
+      "aportsCommit": "8aef0c37b0ad23dc4137f0e4755b97a59dc698b8"
+    },
+    {
+      "name": "scanelf",
+      "version": "1.3.8-r2",
+      "origin": "pax-utils",
+      "license": "GPL-2.0-only",
+      "aportsCommit": "3912b4fa83437852312ad3c37a00229ff59fab1c"
+    },
+    {
+      "name": "ssl_client",
+      "version": "1.37.0-r1000",
+      "origin": "busybox",
+      "license": "GPL-2.0-only",
+      "aportsCommit": "1e823a60eb85606954b3a5af5f8e5bbd1ea680cf",
+      "installedDatabaseCommit": null
+    },
+    {
+      "name": "zlib",
+      "version": "1.3.2-r0",
+      "origin": "zlib",
+      "license": "Zlib",
+      "aportsCommit": "f8c94d2e1d318ab29eb4ac5f00225341c877ed65"
+    }
+  ],
+  "sourceBundleOrigins": [
+    "alpine-base",
+    "alpine-baselayout",
+    "alpine-keys",
+    "apk-tools",
+    "busybox",
+    "ca-certificates",
+    "musl",
+    "pax-utils",
+    "zlib"
+  ],
+  "copiedCABundle": {
+    "package": "ca-certificates-bundle",
+    "version": "20260611-r0",
+    "origin": "ca-certificates",
+    "license": "MPL-2.0 AND MIT",
+    "aportsCommit": "6e30aafe4fa807ba70797509731f1e7d644dc8f3",
+    "bytes": 179359,
+    "sha256": "b8d837841b88bfaa1a0fa827cbca8e2576418dd47c9fc4bb7f1f9d89c83111b9"
+  },
+  "files": [
+    {
+      "origin": "alpine-base",
+      "name": "APKBUILD",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1fa9ca1a79c5fd52c46a70b2199059c41ead572a/main/alpine-base/APKBUILD",
+      "bytes": 1507,
+      "sha256": "0ddd6f619824d5299f9b52c879e4942a96f93d8f6c646d75aaa84824e9ba1aee",
+      "gitBlob": "03eec9e54b8e19f186aff772c0161dec67907c03"
+    },
+    {
+      "origin": "alpine-baselayout",
+      "name": "20locale.sh",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/15b3b78187b3808104f98f765e9632e0b09281a7/main/alpine-baselayout/20locale.sh",
+      "bytes": 97,
+      "sha256": "284a6ef56ab97a13a777c6b01ae14f2cc3d2b7a29c19e750e622e70cc3c73186",
+      "gitBlob": "9b9fde51f510e8d4ddb79f3ea0423ec75efb9297",
+      "apkbuildSHA512": "03361d912cf29c127608697ee14bfa5972f82a5c475e653378ca5f7670cbd8183efc7c8c339ff046ff6537944fe00c4a732bb6b552aecaecd1214ed3e11bdf90"
+    },
+    {
+      "origin": "alpine-baselayout",
+      "name": "APKBUILD",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/15b3b78187b3808104f98f765e9632e0b09281a7/main/alpine-baselayout/APKBUILD",
+      "bytes": 8670,
+      "sha256": "3e87be1806f9513edfd22a555bf16cba43c5e66b9b1b91319925bea4d5c385c3",
+      "gitBlob": "fa8f0085c8cbfd18f6f0c119ce86b09c61191314"
+    },
+    {
+      "origin": "alpine-baselayout",
+      "name": "aliases.conf",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/15b3b78187b3808104f98f765e9632e0b09281a7/main/alpine-baselayout/aliases.conf",
+      "bytes": 1545,
+      "sha256": "3ebaba946f213670170c7d69949f690a3854553bd0b1560f1d980cba4c83a942",
+      "gitBlob": "b1790179608c46f117fd36073e2316546ca08acd",
+      "apkbuildSHA512": "bfe947bdd69e7d93b32c8cb4e2cabe5717cb6c1e1f49a74015ac2cfb13e96d1f12c4be23ae93a1d61aaa3760d33a032fa9bd99f227fb21223a76b5f5908acc65"
+    },
+    {
+      "origin": "alpine-baselayout",
+      "name": "alpine-baselayout.post-install",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/15b3b78187b3808104f98f765e9632e0b09281a7/main/alpine-baselayout/alpine-baselayout.post-install",
+      "bytes": 453,
+      "sha256": "dd30b63bfbe4f7d8085f57840e15b84015b3518d6f282a3e0924f73a61000016",
+      "gitBlob": "88966d35c3327efc03e5d383fa577782ea256c5d"
+    },
+    {
+      "origin": "alpine-baselayout",
+      "name": "alpine-baselayout.post-upgrade",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/15b3b78187b3808104f98f765e9632e0b09281a7/main/alpine-baselayout/alpine-baselayout.post-upgrade",
+      "bytes": 30,
+      "sha256": "53f570f015ac2086597ab62accc6ad08600e2994577ac622263f17e9de39d2e2",
+      "gitBlob": "0e73fc07f3bfd966d5ed2e4be2a4838422dab0ed"
+    },
+    {
+      "origin": "alpine-baselayout",
+      "name": "alpine-baselayout.pre-install",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/15b3b78187b3808104f98f765e9632e0b09281a7/main/alpine-baselayout/alpine-baselayout.pre-install",
+      "bytes": 56,
+      "sha256": "28ecff91a36f438ca26bc8cc08d857863378aa94eab399a1f413e52501b86f85",
+      "gitBlob": "fc0d0b9f5dab5ce07189ead013e0fb8a6fbc0bc8"
+    },
+    {
+      "origin": "alpine-baselayout",
+      "name": "alpine-baselayout.pre-upgrade",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/15b3b78187b3808104f98f765e9632e0b09281a7/main/alpine-baselayout/alpine-baselayout.pre-upgrade",
+      "bytes": 944,
+      "sha256": "3f35fa5402d397389f366e8934ba0f800a017a149f4281dc8c22762419e47e10",
+      "gitBlob": "b89ad05a74debf8a6f6001b05526770feb40ee88"
+    },
+    {
+      "origin": "alpine-baselayout",
+      "name": "blacklist.conf",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/15b3b78187b3808104f98f765e9632e0b09281a7/main/alpine-baselayout/blacklist.conf",
+      "bytes": 2247,
+      "sha256": "0e9ab848289bfb20b9b066d05c8b1383a7c92b97ff8072a50806054b5d3fd739",
+      "gitBlob": "f14a1233af1c6160f3ed507283b09853ee8ad5ca",
+      "apkbuildSHA512": "b5a098097592612d244e03c295d660701c15deba25b6da6c32817d562a1c0b7e1c4f5ed260979780251b2e66a640324b1819469beb8cd2687a61fb789d81afd3"
+    },
+    {
+      "origin": "alpine-baselayout",
+      "name": "color_prompt.sh.disabled",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/15b3b78187b3808104f98f765e9632e0b09281a7/main/alpine-baselayout/color_prompt.sh.disabled",
+      "bytes": 447,
+      "sha256": "ba24425c6864a5d17fa0fdaf914c4d21419e47c4d62080c33830af059fe46617",
+      "gitBlob": "96e47891b31f72ed8f4073061ff48288a4d3cb7b",
+      "apkbuildSHA512": "558071efdce2fe92afe4277006235b1a6368b070337c7567e5632a1a3fe531f87ca692eb36f3dda498d4d29d1f834fc8f7139f2985669ae3400b6d103d6f4c5e"
+    },
+    {
+      "origin": "alpine-baselayout",
+      "name": "crontab",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/15b3b78187b3808104f98f765e9632e0b09281a7/main/alpine-baselayout/crontab",
+      "bytes": 283,
+      "sha256": "575d810a9fae5f2f0671c9b2c0ce973e46c7207fbe5cb8d1b0d1836a6a0470e3",
+      "gitBlob": "fd8acd8b9a27203f33bd213e9a38d975cbef8dcc",
+      "apkbuildSHA512": "6e169c0975a1ad1ad871a863e8ee83f053de9ad0b58d94952efa4c28a8c221445d9e9732ad8b52832a50919c2f39aa965a929b3d5b3f9e62f169e2b2e0813d82"
+    },
+    {
+      "origin": "alpine-baselayout",
+      "name": "group",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/15b3b78187b3808104f98f765e9632e0b09281a7/main/alpine-baselayout/group",
+      "bytes": 510,
+      "sha256": "6fb6ab5a5526e6f4896b70c7e3c350fd475158a1f0d7b5fc0f3f9bd57f1c3be8",
+      "gitBlob": "4a0d291366667f110e5f4d890c585f929fba517e",
+      "apkbuildSHA512": "b5eb01165c714861e860f17c0156911ff882a9010306b7fc4cdb22251acf8b1c91a3fa1d44cc41cb3d9b50892e2f98f43da57b002c5c33200c1bf49c3d2d587d"
+    },
+    {
+      "origin": "alpine-baselayout",
+      "name": "hier.7",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/15b3b78187b3808104f98f765e9632e0b09281a7/main/alpine-baselayout/hier.7",
+      "bytes": 6734,
+      "sha256": "161752158d4dcb84570b33b1c4041c11d754a4bf799a3ade2ce56b811b6b7578",
+      "gitBlob": "66ea51b42d3918658f98672d084de90c4834bd30",
+      "apkbuildSHA512": "7ac84bf4df98179b2b28df4407b8455bbe06808b672ed14718c250deef8ed696e70376b5289f8eeaaf7604bc9d24f98a9d36bc42fcabacfcd6468c9bde09b309"
+    },
+    {
+      "origin": "alpine-baselayout",
+      "name": "i386.conf",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/15b3b78187b3808104f98f765e9632e0b09281a7/main/alpine-baselayout/i386.conf",
+      "bytes": 122,
+      "sha256": "6c46c4cbfb8b7594f19eb94801a350fa2221ae9ac5239a8819d15555caa76ae8",
+      "gitBlob": "b89459f1ef675fced8b3fcf97cca1a4ed0e55f01",
+      "apkbuildSHA512": "49109d434b577563849c43dd8141961ca798dada74d4d3f49003dac1911f522c43438b8241fa254e4faacdd90058f4d39a7d69b1f493f6d57422c1f706547c95"
+    },
+    {
+      "origin": "alpine-baselayout",
+      "name": "inittab",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/15b3b78187b3808104f98f765e9632e0b09281a7/main/alpine-baselayout/inittab",
+      "bytes": 570,
+      "sha256": "7326d8ad56bf5fea63b1ca516a747ff6e6723e25ae84a93c31620b03de6c001d",
+      "gitBlob": "5294b8f53b1c9946e66bf75b37644af6cd94cfb1",
+      "apkbuildSHA512": "37d7b8348e604b12c055d9d7e79afb568ededea7153ff552c9f383cffd537d9c78cfd9facd612d2a6753fc626ff608a6d22d62637585a33166aa28f59fabed22"
+    },
+    {
+      "origin": "alpine-baselayout",
+      "name": "passwd",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/15b3b78187b3808104f98f765e9632e0b09281a7/main/alpine-baselayout/passwd",
+      "bytes": 702,
+      "sha256": "31a94f06f17bc3b9085fccab1d0fa6ee9e79c4a1e4d91f617fa5de95863be015",
+      "gitBlob": "1130fa0b21cc1bf66f41206ffad4748ffe457af1",
+      "apkbuildSHA512": "f0d12f365839e7e262ec91e151119de7f2f253e9d0443157de4d52e183f421fbbb9eb0a83b9267a9ee850bebe41bff3c3cef553f9bda6e70d59a754a955be57d"
+    },
+    {
+      "origin": "alpine-baselayout",
+      "name": "profile",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/15b3b78187b3808104f98f765e9632e0b09281a7/main/alpine-baselayout/profile",
+      "bytes": 547,
+      "sha256": "87e8643d3ce156de0c09370d4d39446f30bd00d264bea248abc191c4d7b9df3e",
+      "gitBlob": "fbc3ba0cd506424c1b67b1a2397aa1097803ad25",
+      "apkbuildSHA512": "4eb857ed59c2edb257636d2bf196989e514a273e9701e9f076c9ae8c1589b4898269180569960acf072c0981ec7ea54014fd230f014401d6bb92314285d1e6aa"
+    },
+    {
+      "origin": "alpine-baselayout",
+      "name": "protocols-6.4",
+      "url": "https://distfiles.alpinelinux.org/distfiles/v3.23/protocols-6.4",
+      "bytes": 3144,
+      "sha256": "4959498abbadaa1e50894a266f8d0d94500101cfe5b5f09dcad82e9d5bdfab46",
+      "apkbuildSHA512": "3a00083bcdf5a9e884c9d07877d52311e3d99e79cbee656e236ba06e08ba0dddb7ba76494fdc9dd1a826c48e197a790a69e6bb458e9df64832d6b5e904e9fd15"
+    },
+    {
+      "origin": "alpine-baselayout",
+      "name": "services-6.4",
+      "url": "https://distfiles.alpinelinux.org/distfiles/v3.23/services-6.4",
+      "bytes": 12813,
+      "sha256": "f6183055fd949f9c53d49ee620f85d0150123ea691d25ed1bba0c641b4ee2f48",
+      "apkbuildSHA512": "47b0f3ee73af2d259bd206a026204be0ea25531a895a0b035a904b38fe5407bc3dd2beab7f8fcb3d760587e6159702ebdb9cbc4f508942befdf7f10c10c87888"
+    },
+    {
+      "origin": "alpine-baselayout",
+      "name": "usr_merge_nag.sh",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/15b3b78187b3808104f98f765e9632e0b09281a7/main/alpine-baselayout/usr_merge_nag.sh",
+      "bytes": 699,
+      "sha256": "3add5845c64bec8ef8dfe27087401a83816ea7cdda20e77826d2ba5516c7434c",
+      "gitBlob": "fc2b5ceb054986a3bbb50350e96c3c4b833fdbbd",
+      "apkbuildSHA512": "8df0a63ebedbff39ded6b72cc4f95f6055edb96a34c3e9d26e1f27ddc0679c5f5233be60eb9f75f19d516137738b6c218f2982e5c09386dac221e1285b2dc8cf"
+    },
+    {
+      "origin": "alpine-keys",
+      "name": "APKBUILD",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/b9f23becced4d7b3ccc0fa0f28530243ccd314a0/main/alpine-keys/APKBUILD",
+      "bytes": 5259,
+      "sha256": "cb352e13b9e481b424763bd36d3afdb81ac308e508abed15eb7175530050bd3f",
+      "gitBlob": "ce73c58e12d1687ca50e27c962c159aaf99e6180"
+    },
+    {
+      "origin": "alpine-keys",
+      "name": "alpine-devel@lists.alpinelinux.org-4a6a0840.rsa.pub",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/b9f23becced4d7b3ccc0fa0f28530243ccd314a0/main/alpine-keys/alpine-devel%40lists.alpinelinux.org-4a6a0840.rsa.pub",
+      "bytes": 451,
+      "sha256": "9c102bcc376af1498d549b77bdbfa815ae86faa1d2d82f040e616b18ef2df2d4",
+      "gitBlob": "bb4bdc80fd10d0609f67076f05e17aafdff75415",
+      "apkbuildSHA512": "2d4064cbe09ff958493ec86bcb925af9b7517825d1d9d8d00f2986201ad5952f986fea83d1e2c177e92130700bafa8c0bff61411b3cdb59a41e460ed719580a6"
+    },
+    {
+      "origin": "alpine-keys",
+      "name": "alpine-devel@lists.alpinelinux.org-5243ef4b.rsa.pub",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/b9f23becced4d7b3ccc0fa0f28530243ccd314a0/main/alpine-keys/alpine-devel%40lists.alpinelinux.org-5243ef4b.rsa.pub",
+      "bytes": 451,
+      "sha256": "ebf31683b56410ecc4c00acd9f6e2839e237a3b62b5ae7ef686705c7ba0396a9",
+      "gitBlob": "6cbfad7441d0193d6f2f64dfb47797975bcc54b1",
+      "apkbuildSHA512": "e18e65ee911eb1f8ea869f758e8f2c94cf2ac254ee7ab90a3de1d47b94a547c2066214abf710da21910ebedc0153d05fd4fe579cc5ce24f46e0cfd29a02b1a68"
+    },
+    {
+      "origin": "alpine-keys",
+      "name": "alpine-devel@lists.alpinelinux.org-524d27bb.rsa.pub",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/b9f23becced4d7b3ccc0fa0f28530243ccd314a0/main/alpine-keys/alpine-devel%40lists.alpinelinux.org-524d27bb.rsa.pub",
+      "bytes": 451,
+      "sha256": "1bb2a846c0ea4ca9d0e7862f970863857fc33c32f5506098c636a62a726a847b",
+      "gitBlob": "1d34c93e37843fc494ae8d685d08665e844fecba",
+      "apkbuildSHA512": "698fda502f70365a852de3c10636eadfc4f70a7a00f096581119aef665e248b787004ceef63f4c8cb18c6f88d18b8b1bd6b3c5d260e79e6d73a3cc09537b196e"
+    },
+    {
+      "origin": "alpine-keys",
+      "name": "alpine-devel@lists.alpinelinux.org-5261cecb.rsa.pub",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/b9f23becced4d7b3ccc0fa0f28530243ccd314a0/main/alpine-keys/alpine-devel%40lists.alpinelinux.org-5261cecb.rsa.pub",
+      "bytes": 451,
+      "sha256": "12f899e55a7691225603d6fb3324940fc51cd7f133e7ead788663c2b7eecb00c",
+      "gitBlob": "83f0658e9ca16c4bad20a219318497313a45b7bb",
+      "apkbuildSHA512": "721134f289ab1e7dde9158359906017daee40983199fe55f28206c8cdc46b8fcf177a36f270ce374b0eba5dbe01f68cbb3e385ae78a54bb0a2ed1e83a4d820a5"
+    },
+    {
+      "origin": "alpine-keys",
+      "name": "alpine-devel@lists.alpinelinux.org-58199dcc.rsa.pub",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/b9f23becced4d7b3ccc0fa0f28530243ccd314a0/main/alpine-keys/alpine-devel%40lists.alpinelinux.org-58199dcc.rsa.pub",
+      "bytes": 451,
+      "sha256": "73867d92083f2f8ab899a26ccda7ef63dfaa0032a938620eda605558958a8041",
+      "gitBlob": "2b99a0d195116f2c7ba081747da873f9b74b07d4",
+      "apkbuildSHA512": "e4f9e314f8e506fba2cb3e599c6412a036ec37ce3a54990fc7d80a821d8728f40ee3b4aa8a15218d50341fa785d9ddf7c7471f45018c6a2065ab13664a1aa9e9"
+    },
+    {
+      "origin": "alpine-keys",
+      "name": "alpine-devel@lists.alpinelinux.org-58cbb476.rsa.pub",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/b9f23becced4d7b3ccc0fa0f28530243ccd314a0/main/alpine-keys/alpine-devel%40lists.alpinelinux.org-58cbb476.rsa.pub",
+      "bytes": 451,
+      "sha256": "9a4cd858d9710963848e6d5f555325dc199d1c952b01cf6e64da2c15deedbd97",
+      "gitBlob": "a9ead55ed05182378d50e40ff94f15eac1b40419",
+      "apkbuildSHA512": "bb5a3df8fac14a62d5936fb3722873fa6a121219b703cba955eb77de38c4384aeaf378fb9321a655e255f0be761e894e309b3789867279c1524dab6300cd8ef1"
+    },
+    {
+      "origin": "alpine-keys",
+      "name": "alpine-devel@lists.alpinelinux.org-58e4f17d.rsa.pub",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/b9f23becced4d7b3ccc0fa0f28530243ccd314a0/main/alpine-keys/alpine-devel%40lists.alpinelinux.org-58e4f17d.rsa.pub",
+      "bytes": 451,
+      "sha256": "780b3ed41786772cbc7b68136546fa3f897f28a23b30c72dde6225319c44cfff",
+      "gitBlob": "8f990949b9e70dd3be886664e5c4a41dc67c1ecb",
+      "apkbuildSHA512": "0666389ca53121453578cd4bef5fd06e159e291164b3e3233e7d6521604f8bebd30caeef1663adcd5309e07278833402c8a92c33294ec0c5cada24dc47c8cc98"
+    },
+    {
+      "origin": "alpine-keys",
+      "name": "alpine-devel@lists.alpinelinux.org-5e69ca50.rsa.pub",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/b9f23becced4d7b3ccc0fa0f28530243ccd314a0/main/alpine-keys/alpine-devel%40lists.alpinelinux.org-5e69ca50.rsa.pub",
+      "bytes": 451,
+      "sha256": "59c01c57b446633249f67c04b115dd6787f4378f183dff2bbf65406df93f176d",
+      "gitBlob": "097740ebd32935ed9b6b2f9e7bd227320fb4dabd",
+      "apkbuildSHA512": "66ce9677e9c2a7961d5d7bc5b162ed3114a7aef6d01181073c1f42a9934966eecded2ec09deb210f5a389d434d1641ba35fe3abdd5246b2e97d5a5b26a945c5c"
+    },
+    {
+      "origin": "alpine-keys",
+      "name": "alpine-devel@lists.alpinelinux.org-60ac2099.rsa.pub",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/b9f23becced4d7b3ccc0fa0f28530243ccd314a0/main/alpine-keys/alpine-devel%40lists.alpinelinux.org-60ac2099.rsa.pub",
+      "bytes": 451,
+      "sha256": "db0b49163f07ffba64a5ca198bcf1688610b0bd1f0d8d5afeaf78559d73f2278",
+      "gitBlob": "2b8a4a93e060a3c03a2e482a0dc959aa06542282",
+      "apkbuildSHA512": "34514100e502f449dcabe0aa550232c3330ed2f0b789b977eb228d4ac86afc93479474ac005914992a3b47c18ee3eb32ca27ccd0d392700a8f11f47d64a78969"
+    },
+    {
+      "origin": "alpine-keys",
+      "name": "alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/b9f23becced4d7b3ccc0fa0f28530243ccd314a0/main/alpine-keys/alpine-devel%40lists.alpinelinux.org-6165ee59.rsa.pub",
+      "bytes": 800,
+      "sha256": "207e4696d3c05f7cb05966aee557307151f1f00217af4143c1bcaf33b8df733f",
+      "gitBlob": "f2165aebadab1c1e43798f1278c3897d85f16da1",
+      "apkbuildSHA512": "8b9c2208c904c9f34d9d01d3d68b224208530e684265df214deb8c9e6b4b19633aa48a405e673249c9e93a8ee194a336e951cd82a4e27e5e66e85fdc5e0d495e"
+    },
+    {
+      "origin": "alpine-keys",
+      "name": "alpine-devel@lists.alpinelinux.org-61666e3f.rsa.pub",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/b9f23becced4d7b3ccc0fa0f28530243ccd314a0/main/alpine-keys/alpine-devel%40lists.alpinelinux.org-61666e3f.rsa.pub",
+      "bytes": 800,
+      "sha256": "128d34d4aec39b0daedea8163cd8dc24dff36fd3d848630ab97eeb1d3084bbb3",
+      "gitBlob": "aa63d81d6625e3b16d87db1946b69466f3bd2095",
+      "apkbuildSHA512": "b89d825e6af73687339848817791b294e2404162e2e069d9212d76d4ee53d6216eb75421a07b02f9778ef57dbb27962b2436247264eea1a1d882967ca0c18724"
+    },
+    {
+      "origin": "alpine-keys",
+      "name": "alpine-devel@lists.alpinelinux.org-616a9724.rsa.pub",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/b9f23becced4d7b3ccc0fa0f28530243ccd314a0/main/alpine-keys/alpine-devel%40lists.alpinelinux.org-616a9724.rsa.pub",
+      "bytes": 800,
+      "sha256": "10877cce0a935e46ad88cb79e174a2491680508eccda08e92bf04fb9bf37fbc1",
+      "gitBlob": "59c330e9f73cc10ae21bf94062711637141cf81b",
+      "apkbuildSHA512": "7aa5526a88519ae91f997bf914a9bd3d230b21c011587f155ce22c4bb94b70181b28590027eb555d96d1122dffb8242c1fb044228e99b4e9b7650fcf6f5121c7"
+    },
+    {
+      "origin": "alpine-keys",
+      "name": "alpine-devel@lists.alpinelinux.org-616abc23.rsa.pub",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/b9f23becced4d7b3ccc0fa0f28530243ccd314a0/main/alpine-keys/alpine-devel%40lists.alpinelinux.org-616abc23.rsa.pub",
+      "bytes": 800,
+      "sha256": "4a095a9daca86da496a3cd9adcd95ee2197fdbeb84638656d469f05a4d740751",
+      "gitBlob": "915bc566b7429b7ee6ca06b0947163c49d496dda",
+      "apkbuildSHA512": "bad4da65221150a5d4cc6f63981e4dd203d40844d32e82c17f346eee5350e460e32d28f0e231a2b78d326ec32b898eec597d3787dae47dcacc9a9776d19fb4a1"
+    },
+    {
+      "origin": "alpine-keys",
+      "name": "alpine-devel@lists.alpinelinux.org-616ac3bc.rsa.pub",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/b9f23becced4d7b3ccc0fa0f28530243ccd314a0/main/alpine-keys/alpine-devel%40lists.alpinelinux.org-616ac3bc.rsa.pub",
+      "bytes": 800,
+      "sha256": "0caf5662fde45616d88cfd7021b7bda269a2fcaf311e51c48945a967a609ec0b",
+      "gitBlob": "1e49d246902b76996e4eefb52c7ae61cc09f45f9",
+      "apkbuildSHA512": "83fc29066f6073418ecf01176ce24c1c0e788508f3083a97691706e2c78323e53448060fb0d2abb8118a759570f1f0db9d39953c63fe26fe06da2be05dff393c"
+    },
+    {
+      "origin": "alpine-keys",
+      "name": "alpine-devel@lists.alpinelinux.org-616adfeb.rsa.pub",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/b9f23becced4d7b3ccc0fa0f28530243ccd314a0/main/alpine-keys/alpine-devel%40lists.alpinelinux.org-616adfeb.rsa.pub",
+      "bytes": 800,
+      "sha256": "ebe717d228555aa58133c202314a451f81e71f174781fd7ff8d8970d6cfa60da",
+      "gitBlob": "bb15efe96d7c95a0602b243ce0848aa42cf80020",
+      "apkbuildSHA512": "a98095a626f2dcbda73ffd8873ba2d609ee1d881f5da13b0eb3469ddd58b06440b4b0b2f791b037c88073e9a17c6dfc62dc1a4c8491bed871524d772ef04ad24"
+    },
+    {
+      "origin": "alpine-keys",
+      "name": "alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/b9f23becced4d7b3ccc0fa0f28530243ccd314a0/main/alpine-keys/alpine-devel%40lists.alpinelinux.org-616ae350.rsa.pub",
+      "bytes": 800,
+      "sha256": "d11f6b21c61b4274e182eb888883a8ba8acdbf820dcc7a6d82a7d9fc2fd2836d",
+      "gitBlob": "0ecbccc2e4aea1d7394ace8f9a896b061a821453",
+      "apkbuildSHA512": "51a5ec21283fe218809b2325202e1f8c9b2551705db48254b9d48a04f4ed0075de51e9886c4704647ffb309fd32d9850d14013848a53038039e85011251fe1cc"
+    },
+    {
+      "origin": "alpine-keys",
+      "name": "alpine-devel@lists.alpinelinux.org-616db30d.rsa.pub",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/b9f23becced4d7b3ccc0fa0f28530243ccd314a0/main/alpine-keys/alpine-devel%40lists.alpinelinux.org-616db30d.rsa.pub",
+      "bytes": 800,
+      "sha256": "40a216cbd163f22e5f16a9e0929de7cde221b9cbae8e36aa368b1e128afe0a31",
+      "gitBlob": "ceffa3ace9c4454c8cde399732ecee535a13efac",
+      "apkbuildSHA512": "7cea57204a50d72bddff201c509ccbf06773d87062a3ead0a206cc6e4a00e0960f52d21f7cee7aaec6a4abba7a697e2e2e7f630fa1ccef7ee2c33908fca18998"
+    },
+    {
+      "origin": "alpine-keys",
+      "name": "alpine-devel@lists.alpinelinux.org-66ba20fe.rsa.pub",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/b9f23becced4d7b3ccc0fa0f28530243ccd314a0/main/alpine-keys/alpine-devel%40lists.alpinelinux.org-66ba20fe.rsa.pub",
+      "bytes": 800,
+      "sha256": "7cf4cb8314e6ccc985b0d7f1aa0c6e0a81e3588f69a41f383af7a63d1ba61793",
+      "gitBlob": "e8bb47600fed4bdace8a3c366cd3762aec119933",
+      "apkbuildSHA512": "383ee8cdd7be983289ac7c31b3d6e8f11dd07008ec615503abad69ff69c96047434ec812a3778b6fe393ed59ff3ac3961a660b29a87febe85667c58493cb9e4b"
+    },
+    {
+      "origin": "apk-tools",
+      "name": "APKBUILD",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/3812c9da974bef8b28f995490ca8233f1472ccc4/main/apk-tools/APKBUILD",
+      "bytes": 4179,
+      "sha256": "9f76c34490ad5a32f50f9a875839322b69c09eecfde37d55c2e4b12c136ef2db",
+      "gitBlob": "533d95f499b8ea17d70903f396f693611618f6fa"
+    },
+    {
+      "origin": "apk-tools",
+      "name": "_apk",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/3812c9da974bef8b28f995490ca8233f1472ccc4/main/apk-tools/_apk",
+      "bytes": 17285,
+      "sha256": "87824378d2caa2f6bc5e3d103ddec4a9e7cb7a95d03ce0fb7c0e311cdbc9efc6",
+      "gitBlob": "03f641724fc2e5587bf44817f374545a068881d4",
+      "apkbuildSHA512": "993518cafcc5a932c9a418f7aac48012fc48f03c55964ad99d04b034bfa185d550c38dab46f1046adfaa1d65b422b4095b5a54d9a2504dee9278f25e76f9e3ed"
+    },
+    {
+      "origin": "apk-tools",
+      "name": "apk-tools-v3.0.6.tar.gz",
+      "url": "https://distfiles.alpinelinux.org/distfiles/v3.23/apk-tools-v3.0.6.tar.gz",
+      "bytes": 384537,
+      "sha256": "e9b62742ef7e9e8c1c051efdaed3a2f49d06d8ce20c707697aa23d29bbc7c86a",
+      "apkbuildSHA512": "86c6ba9aad517d7a39d204373b37a28c143afe1438fa5090df90845f205c7f01e8aaee00ed0b6f7b27206ff745e0f1db160e3b919d17b37639fb19ae78bd13e6"
+    },
+    {
+      "origin": "apk-tools",
+      "name": "repo-hash-sha1.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/3812c9da974bef8b28f995490ca8233f1472ccc4/main/apk-tools/repo-hash-sha1.patch",
+      "bytes": 1245,
+      "sha256": "0ef3ecc88a5c627ee9486632bbc26e66dd0073e6a9be0c143b25c6e366162df0",
+      "gitBlob": "33ad944259835f90e0f7dd6b28f78f0f2daa1c89",
+      "apkbuildSHA512": "6f6442d73d994964d78f06433a611902cbb066a457f3532544278b1422aa0aa276ccec1f2438ea7e93a8a048d3fdbf72ccd9a79d210f44870fda467bc43cb9fd"
+    },
+    {
+      "origin": "busybox",
+      "name": "0001-awk-fix-handling-of-literal-backslashes-in-replaceme.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0001-awk-fix-handling-of-literal-backslashes-in-replaceme.patch",
+      "bytes": 2187,
+      "sha256": "522e48b25b320b854885419f3ee3a092bd58ad2ed111da87a57cafbc8420feae",
+      "gitBlob": "3ff61ace0646523576ff583ebdcece18c4563c38",
+      "apkbuildSHA512": "7165661f3972f1800faf8d263126e3f238bb26bb7891230dbaad2d085e49e2ababc555294ecefed9d8ff00d93c8c3963e786db796cf3d03d68bf9e0492305d0c"
+    },
+    {
+      "origin": "busybox",
+      "name": "0001-blkdiscard-ship-link-to-sbin-instead-of-usr-bin.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0001-blkdiscard-ship-link-to-sbin-instead-of-usr-bin.patch",
+      "bytes": 1100,
+      "sha256": "f490ce643412a33dfd3c92aaaeff501a10c0f78662172d1cf55e5d632b7f8033",
+      "gitBlob": "a89dd69b39f0e08c9820b84e1d797c1123674d70",
+      "apkbuildSHA512": "b8b408974dbcf803889786500d37970c3c3fc3ff7b651998616301691c29287e786ecca07a5b959ed31cf22b0c54b9da82385650c3961afb9f7c09233f46f864"
+    },
+    {
+      "origin": "busybox",
+      "name": "0001-hexdump-fix-regression-with-n4-e-u.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0001-hexdump-fix-regression-with-n4-e-u.patch",
+      "bytes": 1619,
+      "sha256": "c289b3ed7096557846069f6814e063226b2552e6d26a959c9e35116469dddf35",
+      "gitBlob": "8b714b2eb4858232ab8e3460d03e534f606ec723",
+      "apkbuildSHA512": "ac026f8b289d1431c46d51a8c512eb0184aa81de1c41971a87c99bcdc5c63c2d9abed412cad20d3032b480d87a52ee2602411149eb5f271fa9d051165a7b8188"
+    },
+    {
+      "origin": "busybox",
+      "name": "0001-init-add-support-for-separate-reboot-action.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0001-init-add-support-for-separate-reboot-action.patch",
+      "bytes": 7263,
+      "sha256": "df5b272582ebf19de062341469ade926b1c747278871190855ac0d16c079f519",
+      "gitBlob": "fccb39f4927f579a93fe340267a17d4ab50de92a",
+      "apkbuildSHA512": "211d8a70b7e40d885e2961bb1a1143af3666901dd81c79d1a5b1ddb1d3c069bd1083417188e35513f9a678791d9cd2a08373c6151596a5162904131e489baf46"
+    },
+    {
+      "origin": "busybox",
+      "name": "0001-mount-fix-parsing-proc-mounts-with-long-lines.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0001-mount-fix-parsing-proc-mounts-with-long-lines.patch",
+      "bytes": 2098,
+      "sha256": "5971026ad9e4b252370bf4be615f7da6ab146cccc58a7e5cb3f21b92c32ae50d",
+      "gitBlob": "85e65967f3c6df4655cbe43faf04a523a21757f9",
+      "apkbuildSHA512": "626078b2d05c5821e5d23e8cb35c7bb5ea8bd76b54aa49a00844ab698d4b88b7084381b30fe5ce2e3796aa5f3559db16f0cc6a949d70a8725b153f2090999889"
+    },
+    {
+      "origin": "busybox",
+      "name": "0001-netstat-sanitize-process-names.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0001-netstat-sanitize-process-names.patch",
+      "bytes": 970,
+      "sha256": "daf4282120acbc4eb1d90721565d2e01c9ddc3eeeabed4c5f5faa04fe3d33dd3",
+      "gitBlob": "4d7adaf3410747cd0c624ebee46a71cc906d405d",
+      "apkbuildSHA512": "bc6dcd9651f02da3d848e8c848b536fe412311f7bdc66ff65912a1aa175c96c8d5336e5a4e21f8a73b76438c9d1bae444736994ec460d5645917fa46273fff88"
+    },
+    {
+      "origin": "busybox",
+      "name": "0001-tar-fix-16018-masking-of-potentially-malicious-tar-cpio-content.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0001-tar-fix-16018-masking-of-potentially-malicious-tar-cpio-content.patch",
+      "bytes": 3442,
+      "sha256": "8b4262ffbaaa721d3c1d6a2b1deb84a794a99252b1b15e974ec76ccb9eb3c517",
+      "gitBlob": "9ff81d3fb282e737022f2017b576b635b7ab085b",
+      "apkbuildSHA512": "fa200c556a8b79506aa398e0d81eb2690726860ab15e48ba80c1680abab2a48e9093bf3c5a67dc5d8eef90a3e15e5a873a9eef1047cef0c031b233f8a211ee68"
+    },
+    {
+      "origin": "busybox",
+      "name": "0001-tar-fix-TOCTOU-symlink-race-condition.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0001-tar-fix-TOCTOU-symlink-race-condition.patch",
+      "bytes": 1103,
+      "sha256": "1a65d0870075fc83d58d75e91a2e518d1bee1898083086fb950281eb79b7d3a8",
+      "gitBlob": "4514d6df2a6d4a9762f312865dd6f2e7c66155c4",
+      "apkbuildSHA512": "906d6c9ff1a9b911997f8ca9debfc07c48c7f5ac8eac51860b076e8483979ea175028f7207cbe878769e58213e8293ada155b03c9691077ce2f6a91820ab319a"
+    },
+    {
+      "origin": "busybox",
+      "name": "0001-tunctl-fix-segfault-on-ioctl-failure.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0001-tunctl-fix-segfault-on-ioctl-failure.patch",
+      "bytes": 1387,
+      "sha256": "d8488651d7af4450310dce234bc62cf5737a473478f67e298a1ad50c6205a78c",
+      "gitBlob": "d2b9e307eacdbc7a7a92e33c73d06e3d8e6ffc07",
+      "apkbuildSHA512": "9548603cbadf690ab31354642ab3f7bef1b9f696df6b661ea644548fb831b2f78a47a9b09b5489aa43da7061dcc6808864d130d053906f44090983f5cb3dc169"
+    },
+    {
+      "origin": "busybox",
+      "name": "0001-wget-add-header-Accept.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0001-wget-add-header-Accept.patch",
+      "bytes": 3158,
+      "sha256": "0edc53c34e0b7f82efb4010ac417c42c182890088f83944f1fb557ba5826968b",
+      "gitBlob": "2b2ee3780a3ee8601581cec8762f60faf0b8e69e",
+      "apkbuildSHA512": "b148e37fc23d65ac011fa85142fcd645a55171593e889a86743b1557d9be05b6c39e8d0a798a536dfa29d17f71d6fb0b422f031128415b07ddec3c209ce93814"
+    },
+    {
+      "origin": "busybox",
+      "name": "0002-adduser-default-to-sbin-nologin-as-shell-for-system-.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0002-adduser-default-to-sbin-nologin-as-shell-for-system-.patch",
+      "bytes": 789,
+      "sha256": "1f7d95849b0cda0a75d608afca994d782f0a67fe0f1cb47578424ebadeb266c7",
+      "gitBlob": "e6d8f6ace28b4305c85d97f76949f04299d2491f",
+      "apkbuildSHA512": "c725043253cae924b989cfba739d024b172b20a300de63acd26d4ec0624a13b5ea4b07f53cf991c4991cb611454c70ebe5bdb8e1a8e62d5d5d7e2e3823bed2bf"
+    },
+    {
+      "origin": "busybox",
+      "name": "0003-ash-add-built-in-BB_ASH_VERSION-variable.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0003-ash-add-built-in-BB_ASH_VERSION-variable.patch",
+      "bytes": 3423,
+      "sha256": "9059fe07e7a872ed16e66f9cb711dbfcf4d5d28308f20dd9a6c36956326911c9",
+      "gitBlob": "5e397b2401ad2542d46017844159f095412fd1e1",
+      "apkbuildSHA512": "e9ba4f56bd0841f6b998f79aaf73a09c4096fec0f817594be294c12a03ba712f1103fb8b0716fcf2fb04f5dc9efa04aa6dc9b61150b3df00b302ab6f9608d313"
+    },
+    {
+      "origin": "busybox",
+      "name": "0004-Avoid-redefined-warnings-when-buiding-with-utmps.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0004-Avoid-redefined-warnings-when-buiding-with-utmps.patch",
+      "bytes": 3226,
+      "sha256": "8ac54787fe6bfeb42a6c13e49b39ac7c61e839c4cea243d273c71ba10f1b4a2c",
+      "gitBlob": "c17164c85164405a24995096d7d2d6a42a972fea",
+      "apkbuildSHA512": "c6acd1a4cbbc8b7b6c66b20c4cb958c12e887a43edbea35c0c4db3b4139afc5b4246058f503a5aaac0d05badffee93e6bf91111ad0cc856d9f5074baa7194df8"
+    },
+    {
+      "origin": "busybox",
+      "name": "0005-libbb-sockaddr2str-ensure-only-printable-characters-.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0005-libbb-sockaddr2str-ensure-only-printable-characters-.patch",
+      "bytes": 1313,
+      "sha256": "3d16e43c11fa3afeb441c64129071168ce9a7a9e584fc78ccc18bbae99feda87",
+      "gitBlob": "1d37b08e2ebec463f338a31e984190f6823a643d",
+      "apkbuildSHA512": "0c4eba3a6690b4989ced7f40a2f2369fe8ca97caa226838bde6412031290722d380a27203c67f8a2bfb3319590c67a0a108f8d8a04cff9add54085bdea520c25"
+    },
+    {
+      "origin": "busybox",
+      "name": "0006-modinfo-add-k-option-for-kernel-version.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0006-modinfo-add-k-option-for-kernel-version.patch",
+      "bytes": 4906,
+      "sha256": "6832669fa413d9a236a22bb4d0519e6cc89771a0ef24abd723afd99ce52e900f",
+      "gitBlob": "30f342cfdfb48c68504be1148cc4cb701610098d",
+      "apkbuildSHA512": "68637265f28f73e1538045bb23f6a585248a73d60eb81b1fb75a67e9946b9f3928ebb6d8794976f724a6f0e0324748e3eafbf1dff5e1c78254200cb3acbc51cd"
+    },
+    {
+      "origin": "busybox",
+      "name": "0007-nologin-Install-applet-to-sbin-instead-of-usr-sbin.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0007-nologin-Install-applet-to-sbin-instead-of-usr-sbin.patch",
+      "bytes": 1064,
+      "sha256": "3bf06e5cdd1a0d4a0ad541c8a838004fd0c4e46e44ad3af6d146ad2f69967d3b",
+      "gitBlob": "c0a1cb5bb43779455c1a07c3fb5551a0aee54e50",
+      "apkbuildSHA512": "6a0714d051dc29e39d62271c317455bb7d1b28117f60cdc3e887dddbb38df28ae5c17da8033b4250c1bed76f1e8e29b2c013e87f9d547a5bdf75c4b9433fc2bd"
+    },
+    {
+      "origin": "busybox",
+      "name": "0008-pgrep-add-support-for-matching-against-UID-and-RUID.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0008-pgrep-add-support-for-matching-against-UID-and-RUID.patch",
+      "bytes": 4704,
+      "sha256": "c43b6ede059656adb473481aff2aa29239d232b998f735302e97a324650e77a3",
+      "gitBlob": "bb362304b4bb8c245a48eb7a6b66386d1b60c8e9",
+      "apkbuildSHA512": "220da5e908ae3c6f836faf8549f5c610e74a76563103152f9d20e2b2ca1663ba7baf803067286684753a2c737427c5fcf317d7da60293412f601b4ca17e77e00"
+    },
+    {
+      "origin": "busybox",
+      "name": "0009-properly-fix-wget-https-support.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0009-properly-fix-wget-https-support.patch",
+      "bytes": 2560,
+      "sha256": "4be0a9d28acaa4c117c694a4816fad4a2d3f78e224676dfc2d1407d3ad0dc17a",
+      "gitBlob": "849bd15b01fce9004397b03e311ebc0b5b53ba41",
+      "apkbuildSHA512": "b4697696c2c44f5c2c2be167774784b87f45d7d1433db8ed040ae37a99d01275a2a0b79db7e6314636f76db0f7b69288f1f7d2fb96c097929524d49832ea0913"
+    },
+    {
+      "origin": "busybox",
+      "name": "0010-fsck-resolve-LABEL-.-UUID-.-spec-to-device.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0010-fsck-resolve-LABEL-.-UUID-.-spec-to-device.patch",
+      "bytes": 1986,
+      "sha256": "f45615c7a985b30465da5d93a3535404636f45a83cbeefafbd0bcb6b0c86371f",
+      "gitBlob": "d5dc8b2e44463fddeddf147cf745abca875053a7",
+      "apkbuildSHA512": "16e490902496cfe199551432dd3cce480d20d79b98056b6fd5086a5b5a16ace0cda8357d8fb7bdc3e758273c3ec91e416f926c3e54dbeb54136c6853ce23bc7e"
+    },
+    {
+      "origin": "busybox",
+      "name": "0011-nslookup-sanitize-all-printed-strings-with-printable.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0011-nslookup-sanitize-all-printed-strings-with-printable.patch",
+      "bytes": 2412,
+      "sha256": "a1f28268047e9e268f9760f3f3c9bf53f41eb5a712e0922f105dd23b96c00dc7",
+      "gitBlob": "3263d61f2a3630875f4a66ee873da4a85edf7df1",
+      "apkbuildSHA512": "6671165e7dc3546b42edc7cf3304ddb755c707a7c7976bc544f7da6ad974c09bfa5e7cc2e83a98ece8e919808ae73199b19930d390c8ac34527f58f28ba836b6"
+    },
+    {
+      "origin": "busybox",
+      "name": "0012-ash-exec-busybox.static.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0012-ash-exec-busybox.static.patch",
+      "bytes": 841,
+      "sha256": "813555bb69bc9b97ff3d7ec14569eb2763ec16bfd9650bba5f1f08ba5cd4226c",
+      "gitBlob": "7d49daee94b5b757d1b13cff06a869d8b5bf7329",
+      "apkbuildSHA512": "f2a44cf6903d6ecac3bd226b2abb2fbd692f883dc0d296df0a8d2c34350673c51f18d68bc9819d7badbab0541839f4e91361d85f014159af8e0fab82e324f84e"
+    },
+    {
+      "origin": "busybox",
+      "name": "0013-app-location-for-cpio-vi-and-lspci.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0013-app-location-for-cpio-vi-and-lspci.patch",
+      "bytes": 1730,
+      "sha256": "7f083b5705dac1cfa80953e32e83aaa65e4234c41a59f1578bfc403a1abf4eed",
+      "gitBlob": "b3ee65f19cf1682152bb7009f44cb91510c1edc4",
+      "apkbuildSHA512": "9788eed96fc490ea393e760657b8d8d7a09696e24515e30099dffe8c3d534a6018ca2cf17e689e8740438b2fdcc0c3ed67dc841e6c03f39322d12b60edc66a97"
+    },
+    {
+      "origin": "busybox",
+      "name": "0014-udhcpc-set-default-discover-retries-to-5.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0014-udhcpc-set-default-discover-retries-to-5.patch",
+      "bytes": 2459,
+      "sha256": "3e306b052a2df4134de61012de907893aebeb9cd107e9410e81770d60608c41d",
+      "gitBlob": "bab8bcd15f2c5b3e912974bddbb9e8be274f9b87",
+      "apkbuildSHA512": "52094fb50723d924feeb31b86d8b71143505b8d66f6b881c43859c1a346d5a52ef8fb5aa7806f1f1892cbd083b03fc294d1181761eef01ffb564717e121a2300"
+    },
+    {
+      "origin": "busybox",
+      "name": "0015-ping-make-ping-work-without-root-privileges.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0015-ping-make-ping-work-without-root-privileges.patch",
+      "bytes": 6389,
+      "sha256": "802827589eb1c04f634ba8f69158cf0ba87e41061935ba5047ccc8322bf20f41",
+      "gitBlob": "fc75470021d48c5ad7f723acaf6bef446887fd48",
+      "apkbuildSHA512": "dae2f3a137edcbf31e0afb8565f372a549ba67997c391e755a9f29b4c986219a9516b1e1be589fddf81f136d6c7700c91fb83c46aed74c018a58ab06ea2d0567"
+    },
+    {
+      "origin": "busybox",
+      "name": "0016-fbsplash-support-console-switching.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0016-fbsplash-support-console-switching.patch",
+      "bytes": 5465,
+      "sha256": "4db1b0fe9178c1a04f8ea63a9915db86159120398e8bd619c0231afa303472d4",
+      "gitBlob": "8bba26a6d8379bf9198a5dc9a493ad75bf1ff35b",
+      "apkbuildSHA512": "6ede756c01ce7fdcd02a38188a86f4cacff4066eb5032bbb716edf8d4eb3e437de767f04cd0ed8a3e915ee10270465be59248f72d2e7a15abc3d865feba0a361"
+    },
+    {
+      "origin": "busybox",
+      "name": "0017-fbsplash-support-image-and-bar-alignment-and-positio.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0017-fbsplash-support-image-and-bar-alignment-and-positio.patch",
+      "bytes": 5655,
+      "sha256": "d128fa633cfad0845d6bd5f0aee634ab9971b2edd6001ad91d99b3c1be8aee91",
+      "gitBlob": "bec3e08dd5509eabb974a60a33b1d871169f8149",
+      "apkbuildSHA512": "85209a0fb5368dfbb831095d381ec135313c26030f3eb4c5df8a40051fa6932e6b49a91965ea745b670efbc7a8e32707a08bfde36c923912f5e67fe2d6bbb1a5"
+    },
+    {
+      "origin": "busybox",
+      "name": "0018-depmod-support-generating-kmod-binary-index-files.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0018-depmod-support-generating-kmod-binary-index-files.patch",
+      "bytes": 14161,
+      "sha256": "6817e14f68dae612a91aa7d75e76b1212a5bba8e9cfdff11336e606bdeed98eb",
+      "gitBlob": "f37b637af3d94a784c6e1de3d60dd223ef11f59c",
+      "apkbuildSHA512": "67a21b4754534b5faceee3da1c24e037e8e259924fd415cdfd5aabfff6c2bea3d15d58cd32c29359bf5b311e666ad1ff01a1ec043be1051ba359c52921449c18"
+    },
+    {
+      "origin": "busybox",
+      "name": "0019-Add-flag-for-not-following-symlinks-when-recursing.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0019-Add-flag-for-not-following-symlinks-when-recursing.patch",
+      "bytes": 2471,
+      "sha256": "a4f0e598874e0229071c6fe59380cd6c739d68ecbc74e1eef2de76e60ea49030",
+      "gitBlob": "466bd5646750d677f028356bf0d59b78d4459c3b",
+      "apkbuildSHA512": "b74cb8d9c635432f7a2205a91debf023cc4e5fcf5cf8b25e690711afaf24956f772aa70782f266a9b997e16069b828f993a015e93248842808a721e00a8530b7"
+    },
+    {
+      "origin": "busybox",
+      "name": "0020-udhcpc-Don-t-background-if-n-is-given.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0020-udhcpc-Don-t-background-if-n-is-given.patch",
+      "bytes": 3578,
+      "sha256": "3cc2b21429514b57d75e66a48b6e4c2068c931f91e993e8625a8f22d04daad4b",
+      "gitBlob": "eb76936fa85c891a7cfa02f6004112641915f25c",
+      "apkbuildSHA512": "95b82ac5cd0367c15008dd3568ffb68f6489065618fe3f5d04c30650a5492d1314374a3d83b5aeea078b003b43c1b856a0a1b52434fdfe0e3eb299fd44d16a59"
+    },
+    {
+      "origin": "busybox",
+      "name": "0021-tests-fix-tarball-creation.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0021-tests-fix-tarball-creation.patch",
+      "bytes": 1012,
+      "sha256": "dd4c10e0d2a1479d2367cf116e05bda09f0f2921636f65af99428d0cff542412",
+      "gitBlob": "57a89693ae9e0c1e1f37dd7c2ea5ab572f0f730b",
+      "apkbuildSHA512": "65a62f6013d2ee55e0ba32836adf48fd572fe7f931b50bb56bf778673a5ea6883d85c08bda0df4b87f5181433a3663bd15d805f75cdef3974e355a05f5b13c70"
+    },
+    {
+      "origin": "busybox",
+      "name": "0022-tests-musl-doesn-t-seem-to-recognize-UTC0-as-a-timez.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0022-tests-musl-doesn-t-seem-to-recognize-UTC0-as-a-timez.patch",
+      "bytes": 1258,
+      "sha256": "ab1f225416915acf048a2cce3571dbbe942ecd7b114492401b9e0634567e633a",
+      "gitBlob": "ee49449e7f362e3955e455c1f282e4af216ef218",
+      "apkbuildSHA512": "99f3469a057040b38f4a66053109fb874bac7b4ec0481c515fe675c24ed8f99a89b756fce977ad122edff43aedf722ebdd7e7e475adb5edbae207fdcc4429b5d"
+    },
+    {
+      "origin": "busybox",
+      "name": "0023-Hackfix-to-disable-HW-acceleration-for-MD5-SHA1-on-x.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0023-Hackfix-to-disable-HW-acceleration-for-MD5-SHA1-on-x.patch",
+      "bytes": 1731,
+      "sha256": "bb9858725f62c1aec9baeeace4a217a4a216ae8488a4a04e92fc225ef4f063c5",
+      "gitBlob": "5bf2387d9352cd6ab3e340a57caa1daa9b652d78",
+      "apkbuildSHA512": "d82c99af216d8f4a90cf7dae78ca73ad348fa1c70cd50a65376a768a6426e87071e1036cc9c3ab3606986cc99886b4a4f53685d4f26f3aec20c0cb07df5a936a"
+    },
+    {
+      "origin": "busybox",
+      "name": "0024-umount-Implement-O-option-to-unmount-by-mount-option.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0024-umount-Implement-O-option-to-unmount-by-mount-option.patch",
+      "bytes": 6560,
+      "sha256": "fe1b1ed4983c26960bf9d88062e52f6f1f2735a54d15234361d2b2c53eef14ce",
+      "gitBlob": "6110c04b29d7468abe4624acfab823a180ed626f",
+      "apkbuildSHA512": "a67640383d0b02c1a1eb177543270776922c09bdf8ac442d5dfa16ba63b99cf31f105b8db4f5ca21413be1057e55cc4a42314143bea505027d3a36e7e7e786a9"
+    },
+    {
+      "origin": "busybox",
+      "name": "0025-find-fix-xdev-depth-and-delete.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0025-find-fix-xdev-depth-and-delete.patch",
+      "bytes": 8172,
+      "sha256": "d88146dbec6996345b825805408a8c855e616decb4ad25555012b37d605c6b62",
+      "gitBlob": "7363ea6df521e46b454018a7ac8027adf13a630f",
+      "apkbuildSHA512": "e6aaa90843082ee01d4a0e14756399bbed386e6ff30ed853bb1420bc351a8a15b773be60d5f86f9a3ddbe5106e08e2b185b44e64a6ef210eb26b270dc32b211f"
+    },
+    {
+      "origin": "busybox",
+      "name": "0026-awk.c-fix-CVE-2023-42366-bug-15874.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0026-awk.c-fix-CVE-2023-42366-bug-15874.patch",
+      "bytes": 926,
+      "sha256": "34a52455ba3866c43d53558047fa40edba5118218930a3f860d1d343dc7d09a8",
+      "gitBlob": "1e2bce7c2b142617e8f9c04684f03e1229599d44",
+      "apkbuildSHA512": "e2c6367162b886654d64a1988e383c05e2792183265c3542d68e535daa5a9509c3e6a42b9aad0367a872fd494089a7b3911e8a438c47db16fbf21b656b030382"
+    },
+    {
+      "origin": "busybox",
+      "name": "0027-awk-Mark-test-for-handling-of-start-of-word-pattern-.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0027-awk-Mark-test-for-handling-of-start-of-word-pattern-.patch",
+      "bytes": 1572,
+      "sha256": "f478b2c38a12fad318b43839f4aa97c6116087d4c986ed6ce11320e19b8409c1",
+      "gitBlob": "2c2931587f947d3c9d9afbd8a6294f90990adbfc",
+      "apkbuildSHA512": "82b203472b8cdb790c15dbdb5374de45dbe2fcf926c16910b890540278d4ff6bb843fed3a8840a0eb6d340e0eac27ced0c2a4103d37848b51c61e94a3f0436da"
+    },
+    {
+      "origin": "busybox",
+      "name": "0028-od-Skip-od-B-on-big-endian.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0028-od-Skip-od-B-on-big-endian.patch",
+      "bytes": 785,
+      "sha256": "83483a14589224a6f7e7c03883abd8b54d68dc46f00628be59a61ecc68d79067",
+      "gitBlob": "e2747465cc1bc2a4ce8c4b57225f9694f03e4559",
+      "apkbuildSHA512": "711c92902f4d99863c0433e0670999a456c588cf8a1a4729678244d61607aa82269c1944942617650902ce242fbfe3f9d68593ae0a21e4c17bfc04470f4253ba"
+    },
+    {
+      "origin": "busybox",
+      "name": "0029-ash-reject-unknown-long-options.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0029-ash-reject-unknown-long-options.patch",
+      "bytes": 1500,
+      "sha256": "4ed1b9592b75abb740878804dc8cc48cffc5e6da6cd6d4319a8c35082b6b1a77",
+      "gitBlob": "49b8171bad19780b45bf1b9f66a815e015b04596",
+      "apkbuildSHA512": "d9625580bdfe7036e0a3e01c33ddffcc8c70737dfa031c9f97a5a45635910dbd5cf3ebb8d28256a10ee7a13efa1e396a93404099db7a5143adf924a953d4cbe7"
+    },
+    {
+      "origin": "busybox",
+      "name": "0030-hexdump-Skip-a-single-test-on-big-endian-systems.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0030-hexdump-Skip-a-single-test-on-big-endian-systems.patch",
+      "bytes": 1101,
+      "sha256": "a03e66c5768d4fa5acb2778943019c1ccc96c9f7f5b8b56206df917c9d28967c",
+      "gitBlob": "f1ba3bd7cc859f1fd4a3d66764a450b177531495",
+      "apkbuildSHA512": "3b9542d3ec24d9d3fd12b69f60ca1014b49240b92d8517e4467f62b0e266102a73cdac784766a5548a909e08a497c577b1e880604d1859eee18ac455d8bc56b2"
+    },
+    {
+      "origin": "busybox",
+      "name": "0031-syslogd-fix-wrong-OPT_locallog-flag-detection.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0031-syslogd-fix-wrong-OPT_locallog-flag-detection.patch",
+      "bytes": 1225,
+      "sha256": "a4b8e95aefd53ac360bfc898f0f08ca7d86ef5178058a3499783a99e37247412",
+      "gitBlob": "efb1410b2280b68f6d39578d1ba9dd18b853bd7a",
+      "apkbuildSHA512": "4c2b7d7c623b318087f20b0bef9140cfa3f83111bfc922bba50ddd16edb8844c848c8b93c5d31303b7f253673fbff8ccf3d4ab4b9dad52fde3e04744b0782170"
+    },
+    {
+      "origin": "busybox",
+      "name": "0032-lineedit-fix-some-tab-completions-written-to-stdout.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0032-lineedit-fix-some-tab-completions-written-to-stdout.patch",
+      "bytes": 1551,
+      "sha256": "032a2e416980a21a6dca1b702543b29b675a8ef843998d9c24d31eacb7fc27cb",
+      "gitBlob": "c78be1d03cf9d1f1f1082dc328409c46d2ba767b",
+      "apkbuildSHA512": "ac56a170a31f4329d00155a2a7d3950c4fe365e69e2e6b773a28fe3faa214a1330f0dd910bf0712453f033abc9e8465f9cec80f4e3e820a5d6ffafbf36e503e7"
+    },
+    {
+      "origin": "busybox",
+      "name": "0033-lineedit-use-stdout-for-shell-history-builtin.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0033-lineedit-use-stdout-for-shell-history-builtin.patch",
+      "bytes": 1499,
+      "sha256": "61265873d32d0d0b12c429a736de6c949f0dbcd434e1ead1765bf3fd19cfc084",
+      "gitBlob": "e5238e3e8773c183f34e7126b583c35be6f2e214",
+      "apkbuildSHA512": "82c328921c4034b561f31fe5da77fd1a03033911bb6f50383b59885b184e010bbf66065ce0d90e0bc138a7608a4a5b51cab5d3598f974ee600d06eb161d5b0c3"
+    },
+    {
+      "origin": "busybox",
+      "name": "0034-adduser-remove-preconfigured-GECOS-full-name-field.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0034-adduser-remove-preconfigured-GECOS-full-name-field.patch",
+      "bytes": 1602,
+      "sha256": "b1b62318d5b4550c2a4ae6cad74330bbb9159dacdd8f0617759311d9d977dbbf",
+      "gitBlob": "aeb47b83e248a27fd8450be5517331d525f246f8",
+      "apkbuildSHA512": "04ed80099092bf6cafa293d13039184307197d5b71e2052a7b5650eed4364845cca3910e701e01c67a23dff7c9552506b682d553d6bdd7dfcbc7724e98595c4d"
+    },
+    {
+      "origin": "busybox",
+      "name": "0035-cpio-map-F-to-file-long-option.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/0035-cpio-map-F-to-file-long-option.patch",
+      "bytes": 998,
+      "sha256": "6a65af49b8497220eb8ef502167d76bf12a30f7cf1a12eb620041e1efd0747b5",
+      "gitBlob": "49e6ed2796c5b511595efa0ab57a5eae029385d2",
+      "apkbuildSHA512": "8ea1f59ad19c4dc42d95af3a1e590180483689536dbd6932fd500e1f6bcbc1eb12b50e81b6ea26ea93297ce527d1aa850fbe0b23210a3db79039409392935242"
+    },
+    {
+      "origin": "busybox",
+      "name": "APKBUILD",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/APKBUILD",
+      "bytes": 24569,
+      "sha256": "fb2323ac3121c6cd1122c42cabbd19ec28a29a1cf434a4c0759792c63a1c63a8",
+      "gitBlob": "348c9f595feedd47c6f91c52a11c70467d6a147f"
+    },
+    {
+      "origin": "busybox",
+      "name": "acpid-poweroff.sh",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/acpid-poweroff.sh",
+      "bytes": 19,
+      "sha256": "745a5f25dd586f7574f5867fdb3d9b0f7cda97224cadc7a178fc72e26b51b7e7",
+      "gitBlob": "7836c5a609795cfd99e7181416be5cf5c7f6b6fc",
+      "apkbuildSHA512": "95187d7f4f91a1be353d9c5922238da6ff1f688a1a7366678c10163c683ba7fd82b3fecc71e86e04197aa322322e0152a3cf86b4ceca19dd04e9a9c763fede2f"
+    },
+    {
+      "origin": "busybox",
+      "name": "acpid.initd",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/acpid.initd",
+      "bytes": 267,
+      "sha256": "e9a57d04084733e20b57c4f17e94e8d277ef42f2836f33d96be1250e9672b2a8",
+      "gitBlob": "ec31833ad7fa3e81591061d9062c4f160f439e68",
+      "apkbuildSHA512": "fcb532233fd7ba8cad302d037b88cff00ee8b96b37c90b34fc823479208cf7cdda48818c972ce2c4703b7283fd58e99ba8a724818f884f3b09eaa7e2d6ffad21"
+    },
+    {
+      "origin": "busybox",
+      "name": "acpid.logrotate",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/acpid.logrotate",
+      "bytes": 140,
+      "sha256": "d608a3b7715886b5735def0cc50a6359fd364fac2e0e0a459c588c04be471031",
+      "gitBlob": "4cf5fdda97e154c56e55a1d75925fe361a35b2b9",
+      "apkbuildSHA512": "aa93095e20de88730f526c6f463cef711b290b9582cdbd8c1ba2bd290019150cbeaa7007c2e15f0362d5b9315dd63f60511878f0ea05e893f4fdfb4a54af3fb1"
+    },
+    {
+      "origin": "busybox",
+      "name": "bbsuid.c",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/bbsuid.c",
+      "bytes": 2182,
+      "sha256": "99f6275a53a4005d8f03d87e5361699419b33a52b2b2e2fe1c45e90ab6d51f58",
+      "gitBlob": "24d0d7d3e3abe077b4cdc0615df066f7ca3b6462",
+      "apkbuildSHA512": "0becc2186d6c32fb0c401cf7bc0e46268b38ce8892db33be1daf40273024c1c02d518283f44086a313a2ccef34230a1d945ec148cc173f26e6aa9d88a7426e54"
+    },
+    {
+      "origin": "busybox",
+      "name": "busybox-1.37.0.tar.bz2",
+      "url": "https://distfiles.alpinelinux.org/distfiles/v3.23/busybox-1.37.0.tar.bz2",
+      "bytes": 2565764,
+      "sha256": "3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4",
+      "apkbuildSHA512": "ad8fd06f082699774f990a53d7a73b189ed404fe0a2166aff13eae4d9d8ee5c9239493befe949c98801fe7897520dbff3ed0224faa7205854ce4fa975e18467e"
+    },
+    {
+      "origin": "busybox",
+      "name": "busybox-extras.post-install",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/busybox-extras.post-install",
+      "bytes": 79,
+      "sha256": "d9fc2353305920237a46b75c8b184166e6a2f9b6aaba5c96ed80d5234534141c",
+      "gitBlob": "dc663a554fd7a8fc1a3c1e15477fae249a399dee"
+    },
+    {
+      "origin": "busybox",
+      "name": "busybox-extras.pre-deinstall",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/busybox-extras.pre-deinstall",
+      "bytes": 195,
+      "sha256": "921289ece87e6a645d15dcd7fea4cd96e3c1a3ad393f7a98f6cad03bb7266aea",
+      "gitBlob": "2634c6a31cb022233b8e111d3884e9a768c1f9b9"
+    },
+    {
+      "origin": "busybox",
+      "name": "busybox.post-install",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/busybox.post-install",
+      "bytes": 335,
+      "sha256": "13c120a1c714ecafa7fe1fc748406a89dfffc549118ebce324b53d4bbb4ba75f",
+      "gitBlob": "f575396bb1a66c0a4f07c838ee908fc08201cc2d"
+    },
+    {
+      "origin": "busybox",
+      "name": "busybox.post-upgrade",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/busybox.post-upgrade",
+      "bytes": 1640,
+      "sha256": "3cf0a22d2d6c6ed34be6b77ed3973b7c0b7434525744026c0159f5a76f827f49",
+      "gitBlob": "5e3263c7cb6d1b9c32ce2e00a35efc488c922349"
+    },
+    {
+      "origin": "busybox",
+      "name": "busybox.trigger",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/busybox.trigger",
+      "bytes": 576,
+      "sha256": "c7840b111dd82669de2074ea3c7e345c063928db2bbff650a81289777b3ff98f",
+      "gitBlob": "4f80847e37adacf84a2ab7f6087fec4656e94647"
+    },
+    {
+      "origin": "busybox",
+      "name": "busyboxconfig",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/busyboxconfig",
+      "bytes": 31637,
+      "sha256": "65b29f6085cd79ab5f032d7e4299534a86c3efad240e78c16186a19bf847fcca",
+      "gitBlob": "f94784573735b83ad7129c92ef37c170a676bf8e",
+      "apkbuildSHA512": "b45b8a3e3433cb271035135904aa0376d70c397f291c63cd2d4fdf4848998a1e172b21eacbddbb6edf1d2207172318fa18e90646408b2562453d3f80a55c3274"
+    },
+    {
+      "origin": "busybox",
+      "name": "busyboxconfig-extras",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/busyboxconfig-extras",
+      "bytes": 37893,
+      "sha256": "1d539797a78b17e815acb6afb97e8883fe65d0c094801395c014ac5f7b3a7e98",
+      "gitBlob": "2345ed1f3d651132d13c7b5b0df7008d0e5583ec",
+      "apkbuildSHA512": "2f6efba02078647137f0518284c60004bf28d29a77146d488f813c4db6971ccf6ec5157734c521516e6f3aa570c804fe3ed2c69c46a3ef8636c5f88758948eb7"
+    },
+    {
+      "origin": "busybox",
+      "name": "crond.confd",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/crond.confd",
+      "bytes": 54,
+      "sha256": "d058d9ed0824f877b4e88158fe25d71ad76fca4b71542c4c6d7991ee2ecd20f8",
+      "gitBlob": "542af1ed1d75d417aafbe2b14741ef2ce0b3d645",
+      "apkbuildSHA512": "34c6f3197064bb91619b899b28a201bd4d920b18bded3845440b2cb36dc6f16cabf447c96878349b16e46c30184cbe48bac00a01c5f7cf1be038c0b7136064c5"
+    },
+    {
+      "origin": "busybox",
+      "name": "crond.initd",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/crond.initd",
+      "bytes": 204,
+      "sha256": "9c7955d5227326ea4a1e55c225606e34d148a831cca3e05b23ad5c58f525c8e0",
+      "gitBlob": "992037210b694e3dd6a849fc2b97fd6351b4c61c",
+      "apkbuildSHA512": "0e8266b1bf1d533de7531f32b27c815db00378df6e9ee98232ba3b9cb4f3e1770db65290d338ac0745aca52dd99c3c128dde3fa81ed110dd02c4a298a2f62b1b"
+    },
+    {
+      "origin": "busybox",
+      "name": "dad.if-up",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/dad.if-up",
+      "bytes": 285,
+      "sha256": "2fd20d1bc67d9ee711990002b24f156635a73f56b8935b2f76592938817fa4e7",
+      "gitBlob": "7903822c8fd25941ea82c12b30ec7a90bf5b710b",
+      "apkbuildSHA512": "afc27da5f95bec3e3ccb5b1fcb5bd80a8317d8753e6c70cc0750d0875313e44bf2e487472c8499d7bbe5afba3e583c75548ccdcff4dcadc94bb791f53fb77ba3"
+    },
+    {
+      "origin": "busybox",
+      "name": "default.script",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/default.script",
+      "bytes": 4010,
+      "sha256": "c7b39bba4d7f1ce05dbdeba7d2fd97b96a8c3c0c1ebc0259f641fb8e1c3827d2",
+      "gitBlob": "9395587148be2bf89e0fc29cd882de485d7c6531",
+      "apkbuildSHA512": "6a34185447d48537317379181abc703f47f93f6a5399d8dcb33fcb0d9247c8659ef739b011ec9e16052505d9a5e4950d557d7f5a8236f5744be0b206390e9a10"
+    },
+    {
+      "origin": "busybox",
+      "name": "dnsd.initd",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/dnsd.initd",
+      "bytes": 198,
+      "sha256": "4a2b86475c9a3e06729265093cfc71711575089472b68671fe59158999f829c3",
+      "gitBlob": "42e4a34c13a96091c62ea81f6124125a08bddfb1",
+      "apkbuildSHA512": "8af4a5652c418274c3f9ea2698d5026ebea78cd6cbd78e7779125d039aa5807fe92a44e70062b53fe6b830c3fe479f0e6d6ee4a61f37cf4814e895cf1b6ea215"
+    },
+    {
+      "origin": "busybox",
+      "name": "httpd.initd",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/httpd.initd",
+      "bytes": 210,
+      "sha256": "834284a025ef92049ffb6b67264591de2da0e61b85226eb48bd2eead52dce860",
+      "gitBlob": "bf9573052134f1aa6763fb7cb2c04325c4fb5496",
+      "apkbuildSHA512": "b8ffad8394dee7c2613a047cc34d6b7d650b576c6c9c8427c1ecf9148ca57e4cb3ea9fbc13525f104dde8e30bc78fe3ad4747d534b55750f5c76e8f98368cd33"
+    },
+    {
+      "origin": "busybox",
+      "name": "inetd.initd",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/inetd.initd",
+      "bytes": 216,
+      "sha256": "bc35f55a9cb9930f5ffbde4cd93037b29a384b155a45a9bd1e1c7ea0a9139138",
+      "gitBlob": "5ef7b395ff9b2b406ea3f081258bbe9b52251d43",
+      "apkbuildSHA512": "7b286eaba66a4c86366eec38cd94d8547a15bff72923456edf8c683d4e02bf55d85628adbdb7c1c44f3b16b545ea0ca238afa14a73fc1ade0c33ed7e9fcf2b49"
+    },
+    {
+      "origin": "busybox",
+      "name": "klogd.confd",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/klogd.confd",
+      "bytes": 14,
+      "sha256": "f6cd63d6e5f384dcb01a4906c9a0b6c5923794380235dfe0d79b48a686b03c5d",
+      "gitBlob": "100deedaac53882975ef8f037f91abd5ab44b0b2",
+      "apkbuildSHA512": "f9bf43b72142bbb4c0665c1268a3d91586ef8a057dfe64c53b6923815d2db1f669b8080a38311ad89cda0b783a8628700fc5414d834a21d8e48515760bb910f7"
+    },
+    {
+      "origin": "busybox",
+      "name": "klogd.initd",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/klogd.initd",
+      "bytes": 280,
+      "sha256": "855bf399d4c689dcb8c67a1062e02f1f925297eb18e7ac6942219ab84330a547",
+      "gitBlob": "274b7d969131d6c6ccc2282d9048d92c8a77a18e",
+      "apkbuildSHA512": "50b975ac94722e8584249a73b7f36134cb954ad19716b7f3437a6e2cde2a81465ef153b04a0b8e734fc7971320df71cd8c75e669bb4da86233c1991bc516260f"
+    },
+    {
+      "origin": "busybox",
+      "name": "loadkmap.confd",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/loadkmap.confd",
+      "bytes": 111,
+      "sha256": "85de66e8a23c60061d8ddf20075ce89ae3cab368a4b995aa863a6e9ec552a0d0",
+      "gitBlob": "2bdbc0608c2a843dff2c498854b7095e1c4269dc",
+      "apkbuildSHA512": "acbba3385fb2c416362eb9176f24146b617a2e394ee0e00b9eff89350f82468a5ab8396f4f52b0aaf03d341ac6150c73182e808fa3f29a2dc71c69271cdfb811"
+    },
+    {
+      "origin": "busybox",
+      "name": "loadkmap.initd",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/loadkmap.initd",
+      "bytes": 289,
+      "sha256": "7778397c308a89ab2b49e22be498051808ee97c2918afca6563638c0d9d6aae3",
+      "gitBlob": "7149dd729e05b9dee91bc2809b8f496e73914104",
+      "apkbuildSHA512": "1b61a0f1eb40f2ea14bf3ed3441996f343d70fd45858d443f21244f133dcdf1c64433c3deaef769eee4e3e698b405f25e1bbc185a25c351a88ce7d120d61cf00"
+    },
+    {
+      "origin": "busybox",
+      "name": "mdev.initd",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/mdev.initd",
+      "bytes": 745,
+      "sha256": "754d37775157f138ed8834e041765ee6aed3a14915a783be480d1f34a6d5783d",
+      "gitBlob": "630d83777d61314f47cf2ecdf33c02cc54b23551",
+      "apkbuildSHA512": "6ce0b2a8fe69cc7ea657c5b9076aba51c8f0beeaafa4a887d8673bcc9f9cf8ee40f4b07d2d901ec7a1a1e4f29c150c496559559e803595d0bd487dec56b530a2"
+    },
+    {
+      "origin": "busybox",
+      "name": "ntpd.confd",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/ntpd.confd",
+      "bytes": 106,
+      "sha256": "4224e5c6b5ffeb815c15f3e9f17ddaa169d4e6b7da169dbd0939fe06dbe8914d",
+      "gitBlob": "c5b4c1c1d435f7c360bc047dac623e3469912a13",
+      "apkbuildSHA512": "b0ba67585f39d83320ed6de183d7463a0e163807b9f3dc6f0baa212236056f22aeb2c5399dfdcd54929eb5ae06a15714c2fed133b5888869ed9d9cf589cef843"
+    },
+    {
+      "origin": "busybox",
+      "name": "ntpd.initd",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/ntpd.initd",
+      "bytes": 305,
+      "sha256": "7c64ee24b972bee7397407955198d3d336c71deb83a784c7e2656709802c0040",
+      "gitBlob": "17ca150e9e91db826f0080ed507357d307b67d3b",
+      "apkbuildSHA512": "49d3b84e7f3fde1fe4f8d38e74fa175c55e6edd1c82e3e41c5ea368abdeea359207c984c644550bc6f96949e09cd4a8da6a473c495287a163a0248a9bb452411"
+    },
+    {
+      "origin": "busybox",
+      "name": "rdate.confd",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/rdate.confd",
+      "bytes": 48,
+      "sha256": "521f5171e20a353e68155620ce7c847c53dcfb7c45ab02d7566efd99cff2dbf2",
+      "gitBlob": "03eadfdb1fbcba276898135d23b6d2da492038fa",
+      "apkbuildSHA512": "11b2a71c38c87d95cd19307481b5f05d9aa980f1ee8348a90b14d698a78b5d0109974fef782ae6538177bcf8bb9fc9cd6f8e4a368ff6b6266276745f1394c2e0"
+    },
+    {
+      "origin": "busybox",
+      "name": "rdate.initd",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/rdate.initd",
+      "bytes": 253,
+      "sha256": "0c6eb4dc269386472f475cf9c549ba53b73aa33f044fbfb3b6bc6dd2574bb341",
+      "gitBlob": "708429f17bb025adc6eba9638f182011f6867d71",
+      "apkbuildSHA512": "a95d03564712803fc58c48534f2fbbf23dd8418ffd3a6a06f840e969627892eea518b4fe17f059850665fc056cedf972c26aee52c309805987fb5c59a710bd30"
+    },
+    {
+      "origin": "busybox",
+      "name": "securetty",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/securetty",
+      "bytes": 156,
+      "sha256": "713fcea5109728883b9147e822429133fcc8b5e253afd3c2a197b10cd0bc3b4d",
+      "gitBlob": "f33a1c15c821d17233d2813606d69b6f3b523fa7",
+      "apkbuildSHA512": "38d6ce0dfff65ce7ec644f5d7aca70de943f4d5fb8820c772f5d945926b678de280f19831d3f3d0dc0dcda16812841748b57eaa745b784a5e216a59657afbd71"
+    },
+    {
+      "origin": "busybox",
+      "name": "ssl_client.c",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/ssl_client.c",
+      "bytes": 3418,
+      "sha256": "f36fb83637a12fe0706f828a3e9a4181ac6ed452b59d5d30fcf4dbe1884b8aed",
+      "gitBlob": "45c62a5c80b64f3ef212d76d7cdd11a14b3013b1",
+      "apkbuildSHA512": "1c7c78afb274d1316725b22585452efd7de9a80ad326f099f25e34d0877c5d81ced579e2dc795314221e316f58071374f61ee22c6ffd34072266525f65d3614c"
+    },
+    {
+      "origin": "busybox",
+      "name": "syslog.confd",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/syslog.confd",
+      "bytes": 18,
+      "sha256": "47b6e2ae625578903f8cf78410a981ab3103cb6de156a853034c57363bf39e0a",
+      "gitBlob": "2f00667118c696126cdc6266f0a98c9dbd19e6ad",
+      "apkbuildSHA512": "bf8173ee33a5d2b61cbdbc1b070e599a17a21e5433a0d8aa9beef71e4ac831304076af8e7e58dc594cdee61562329793afdc57af91e5496bf5fffb9b734a3d9c"
+    },
+    {
+      "origin": "busybox",
+      "name": "syslog.initd",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/syslog.initd",
+      "bytes": 292,
+      "sha256": "f5e471c5bf96a706655b043516403f7aabe2c893f9597e345aa625b6a6375a7f",
+      "gitBlob": "3b20345d7065a89aeca61212f0c9d8f9d5357d59",
+      "apkbuildSHA512": "a13a6add6f7fb10a3a2563391b6f8b68161249147e9f50e6d857c5689123f6d974368ce4f13b8d93312fa38d05f604d67c4c976d8a7eef301af50a3a6ad50c23"
+    },
+    {
+      "origin": "busybox",
+      "name": "udhcpc.conf",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/udhcpc.conf",
+      "bytes": 287,
+      "sha256": "5b372209e01cda07c87b8afa6d1ab3d7e8daf18a1f2332d744203a6dc289eb1a",
+      "gitBlob": "0407c553ffb5ab4ac52f9a14a4c2bddd1b4365c1",
+      "apkbuildSHA512": "5f9ff70f99a970e88460c0de81a6637d8a82252fba6715e259833f16ed8cbfc3440972b1fa454eb77dbbcd1e244774c96b4eef96f71a2b67a9039a0dd5e6fc1e"
+    },
+    {
+      "origin": "busybox",
+      "name": "udhcpd.initd",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/udhcpd.initd",
+      "bytes": 202,
+      "sha256": "5c2d05f2cb2a47847c345881ea41de15afe7d1c10f76f8e3cbbadeb0cba4dc50",
+      "gitBlob": "e4dabd5b343f0fc717990a8d9372dec4d6846765",
+      "apkbuildSHA512": "4a8d1e924284fca730a262fedc3cb76b4f4689a6c650b0c5544b65eeab6cfd9e8eb91f448d9ebbba6efbb056695428c1b26e5eaeb7233bae090676d1789954cc"
+    },
+    {
+      "origin": "busybox",
+      "name": "watchdog.confd",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/watchdog.confd",
+      "bytes": 40,
+      "sha256": "77f6f9069afdbb477a7e822aa2c7265d64fd22fdd9338bb3beb0cee901d202ce",
+      "gitBlob": "5cfd2c2cc40ae9a6d0cd96ac7d993d000b6a8564",
+      "apkbuildSHA512": "359af0a4a1841dd6557eaf3e71d39f0d7a2687bad6a8fc6ef436eccf72a40f85c6400a3b7880c7f64d8e460b6af8a0ff3dd5ffc3a4b1aa8eb0d8f7eaf99ee3e4"
+    },
+    {
+      "origin": "busybox",
+      "name": "watchdog.initd",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/1e823a60eb85606954b3a5af5f8e5bbd1ea680cf/main/busybox/watchdog.initd",
+      "bytes": 315,
+      "sha256": "8bf9f4caa14f2e0a1ded5f76130bfec07c325e89045e5ba6fc10f890270b5752",
+      "gitBlob": "d87210044a0d1c73908dc06ee34acc6613bb84a3",
+      "apkbuildSHA512": "53d19009e571dcd3920890c88da815709bfadfffc6946e2dec347d80291622475381a61e9b5cccc15f69f15c0778c192c0112a9f70f379205490b1924ad44a20"
+    },
+    {
+      "origin": "ca-certificates",
+      "name": "APKBUILD",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/6e30aafe4fa807ba70797509731f1e7d644dc8f3/main/ca-certificates/APKBUILD",
+      "bytes": 2520,
+      "sha256": "a1429622d05b27e016c1266312be8a9a7e4610da01d7d40826b1681677c53843",
+      "gitBlob": "3d7cba6056b58a3fbce01f7c81e20fa6c085684c"
+    },
+    {
+      "origin": "ca-certificates",
+      "name": "ca-certificates-20260611.tar.bz2",
+      "url": "https://distfiles.alpinelinux.org/distfiles/v3.23/ca-certificates-20260611.tar.bz2",
+      "bytes": 226096,
+      "sha256": "32ca73f2e81e2b88dc614f12e1ee04a82b1ec5a8e29d9f359ddf8905a0afcbb0",
+      "apkbuildSHA512": "f473a1111eb508ef5d1096489479dba07db6b0d76ef2b900b3473933d57419429061d83e9c1e881ab61c4b0f17c64859ec74d670da6fc1d83d9b0fa73e1b7d8d"
+    },
+    {
+      "origin": "ca-certificates",
+      "name": "ca-certificates.post-deinstall",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/6e30aafe4fa807ba70797509731f1e7d644dc8f3/main/ca-certificates/ca-certificates.post-deinstall",
+      "bytes": 137,
+      "sha256": "9523860edc396093bd41270c6e33a569a30657e2ffd729829514ee6b6d54d652",
+      "gitBlob": "10d219f03f526641af8a366db975b010b3c260e1"
+    },
+    {
+      "origin": "ca-certificates",
+      "name": "ca-certificates.trigger",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/6e30aafe4fa807ba70797509731f1e7d644dc8f3/main/ca-certificates/ca-certificates.trigger",
+      "bytes": 67,
+      "sha256": "1bf77c8eae3220b1bd7dd86561d0899315f51d72257c1aeb4066072ed4304fe5",
+      "gitBlob": "0ed2ac4980c97739fb6addfbf41a5700c6d286a1"
+    },
+    {
+      "origin": "musl",
+      "name": "0001-add-stub-for-pthread_mutexattr_setprioceiling.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/0001-add-stub-for-pthread_mutexattr_setprioceiling.patch",
+      "bytes": 896,
+      "sha256": "b2067680c66af9eb9f4fdc1fa5d9337a9fd62bdab2c437b416aa97d79eb884ee",
+      "gitBlob": "0afb1fbc2e96c3f6a41d02635d64115184b8e614",
+      "apkbuildSHA512": "83ec0f774dbb5d4f4d4b917d149ea0ef609d028d18ae7624e90fedda6e3174c91ade93751bfd376adfa2848155110fc4dd02b6790363b98e5395c4787e8731e8"
+    },
+    {
+      "origin": "musl",
+      "name": "APKBUILD",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/APKBUILD",
+      "bytes": 8830,
+      "sha256": "e8425e24c5c3c6d8f74b4412b11c6990fda6dbf7648c79ec6e2efa082fc5adcf",
+      "gitBlob": "a32f2d25e53fe961bd4f1130bbddbeb7195f638f"
+    },
+    {
+      "origin": "musl",
+      "name": "CVE-2025-26519.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/CVE-2025-26519.patch",
+      "bytes": 2832,
+      "sha256": "ab382da2bb5e1cc32d8904be28fb13f8ad3ce813967bd4bf7f5b1c6baee33e17",
+      "gitBlob": "8d5ba6cc8390c322cac11070911df61f48572172",
+      "apkbuildSHA512": "7a6a9836d2de91afc1115868e68f347bd2365fa48188e65938cfa654ae9bafdbb3a56bf12d3185a96800a85198378c8dbf9c25d977ca0e318220529fa4458123"
+    },
+    {
+      "origin": "musl",
+      "name": "CVE-2026-40200.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/CVE-2026-40200.patch",
+      "bytes": 5594,
+      "sha256": "1ee29f64f9ca8e8ad7c349779d661ff6b52126a27575d3586981357a52c406fb",
+      "gitBlob": "88298ca471d38b2c8861f817caf394a591fcdc26",
+      "apkbuildSHA512": "a64ab7688d1a85e560b5687783df482d2467a79a74400da5a1601382847d6b4e6a79b7529a8dc80c46ddda8dc2a812f2261557fc8ee98dc3bdf7322761bd6d9c"
+    },
+    {
+      "origin": "musl",
+      "name": "LoongArch64-add-new-reloc-types-and-NT_LOONGARCH_HW_.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/LoongArch64-add-new-reloc-types-and-NT_LOONGARCH_HW_.patch",
+      "bytes": 2569,
+      "sha256": "8a9b516a62b5d7f2fd739ac4f67080a6a9137a1074429e23be5d5b69e5cc4280",
+      "gitBlob": "699ffd7f6d4c3bcc6c4170be4585d3d440076d88",
+      "apkbuildSHA512": "546fa317b532c3a63a592b6613e9a2136ee7750113ab048b261acf94e33a34732f3f26d6f734879c025d944f0b8e5307656c485bd32ce8f2364ee537ab236c95"
+    },
+    {
+      "origin": "musl",
+      "name": "__NR_riscv_hwprobe.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/__NR_riscv_hwprobe.patch",
+      "bytes": 984,
+      "sha256": "8dc4d0771e915149a3b75205e4611f0093a57f1fe0f8365362c697dbec83655c",
+      "gitBlob": "68c2237e4d6e6006eb499351b2a41115cdfc0cce",
+      "apkbuildSHA512": "284ace5c9587fe8379bfbec12b3dc5c157b540f1873c183d82f7c5f086710d402f4813ad2244bb9bef6c3838c37a2c19337f7a1275d54024568eb42368ec5e4b"
+    },
+    {
+      "origin": "musl",
+      "name": "__stack_chk_fail_local.c",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/__stack_chk_fail_local.c",
+      "bytes": 133,
+      "sha256": "299a7d75a09de3e2e11e7fb4acc3182e4a14e868093d2f30938fce9bfcff13da",
+      "gitBlob": "2b403a6e046fb288af4b3d16eda76980a599aea4",
+      "apkbuildSHA512": "062bb49fa54839010acd4af113e20f7263dde1c8a2ca359b5fb2661ef9ed9d84a0f7c3bc10c25dcfa10bb3c5a4874588dff636ac43d5dbb3d748d75400756d0b"
+    },
+    {
+      "origin": "musl",
+      "name": "backport-posix_getdents.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/backport-posix_getdents.patch",
+      "bytes": 3587,
+      "sha256": "b49cee4c3c095a30855d788cccb84436868e5c568f821967437c73004f330025",
+      "gitBlob": "ebb7543d6531e07630bebe37eb8adfa691932147",
+      "apkbuildSHA512": "703982a7624a377037c28cfd572cf22b64ee57e362a60975c91caa9c85fd1edde1f82933e91fb44425976178c59f50f5ebb651216f96c05c0f755e205e578eb0"
+    },
+    {
+      "origin": "musl",
+      "name": "fix-loongarch64-zero-len-extcontext.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/fix-loongarch64-zero-len-extcontext.patch",
+      "bytes": 738,
+      "sha256": "92c8e965798ed516c15cb2a4e7c4ac45ec1eb68b6abff16c73adff2a3bae1b14",
+      "gitBlob": "7955bddd4db379bdf668d80666a141cbf175c986",
+      "apkbuildSHA512": "6eae45aa82db69bc96386aedf3d1bfe83dfa0a7b4b824326c1c7e1bab31100d635ed0e8930c26a1694697fad59167a42e2b5f3a2ac51b07e36d85f047e268cff"
+    },
+    {
+      "origin": "musl",
+      "name": "getconf.c",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/getconf.c",
+      "bytes": 11614,
+      "sha256": "d87d0cbb3690ae2c5d8cc218349fd8278b93855dd625deaf7ae50e320aad247c",
+      "gitBlob": "c4235242b0ef70bb7a99cb210a134d19c15dc0b9",
+      "apkbuildSHA512": "0d80f37b34a35e3d14b012257c50862dfeb9d2c81139ea2dfa101d981d093b009b9fa450ba27a708ac59377a48626971dfc58e20a3799084a65777a0c32cbc7d"
+    },
+    {
+      "origin": "musl",
+      "name": "getent.c",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/getent.c",
+      "bytes": 11656,
+      "sha256": "a6171c2db641cdd99c164169d3c5c6ca323617483cedec4cbbe3eb39c5834df0",
+      "gitBlob": "bcc8b81c10bef1de5af8db7053dac48547c8e14d",
+      "apkbuildSHA512": "246e029350d4295147fe311108dcfb991ef130271b856040c1fb6a9955414f263d2a51f978b8ae91f52ff49705e8e4572b8f0e6939801fa854e3f095a67d3d64"
+    },
+    {
+      "origin": "musl",
+      "name": "handle-aux-at_base.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/handle-aux-at_base.patch",
+      "bytes": 1214,
+      "sha256": "2a65e03b94217063d72fe998e5fb2e25cd01716078a3ba1b0ab574ab205111e6",
+      "gitBlob": "7c9f2dc5fc05abaf82f2e7b59704862b325c0aab",
+      "apkbuildSHA512": "a76f79b801497ad994746cf82bb6eaf86f9e1ae646e6819fbae8532a7f4eee53a96ac1d4e789ec8f66aea2a68027b0597f7a579b3369e01258da8accfce41370"
+    },
+    {
+      "origin": "musl",
+      "name": "iconv-gb18030-fix.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/iconv-gb18030-fix.patch",
+      "bytes": 7506,
+      "sha256": "1d0be2e72b9d5bd16546b923aa8af861d271322f01644716a81823bec4065c99",
+      "gitBlob": "4c52c0a3211ec70c5010bc6bce0446c183914380",
+      "apkbuildSHA512": "f7849abeab0e4eab992a80464afa07b9c8aae5cee76040523b9dbc0931435f28ea8f5792b8a4a0cd6d608ac2f37e3225e89afcb3171a0a6df44450ed57cee83b"
+    },
+    {
+      "origin": "musl",
+      "name": "iconv.c",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/iconv.c",
+      "bytes": 2577,
+      "sha256": "f79a2930a2e5bb0624321589edf8b889d1e9b603e01e6b7ae214616605b3fdd7",
+      "gitBlob": "f5d5ce2aa730461df126cdf8bc8b084b4ebb881c",
+      "apkbuildSHA512": "9d42d66fb1facce2b85dad919be5be819ee290bd26ca2db00982b2f8e055a0196290a008711cbe2b18ec9eee8d2270e3b3a4692c5a1b807013baa5c2b70a2bbf"
+    },
+    {
+      "origin": "musl",
+      "name": "isatty-glibc-align.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/isatty-glibc-align.patch",
+      "bytes": 456,
+      "sha256": "1321d542b40921a4c248bb2d15dbd03fcbbf008c8725eb2043d3cab62faeba48",
+      "gitBlob": "d73ee79a92373d6c6b9e4e7afeb54a5f2fc172c1",
+      "apkbuildSHA512": "4fe4309d9e5eb12f3aaf9dac300c7bf1a9e104d9b0e7754353314f4b6507de68d8d5bf0ac45164d7e2ab4d71728b5ef8b302f8ee7a6b548f54e022218031e2cf"
+    },
+    {
+      "origin": "musl",
+      "name": "ldconfig",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/ldconfig",
+      "bytes": 393,
+      "sha256": "7065021e04a5060957b5c6907af671a7028230d91927fb0c25892cadd9312b7c",
+      "gitBlob": "9a6c05978d1bfae6871fb96a862dfd3e7bb9c326",
+      "apkbuildSHA512": "29da5e89358103846a42987c2a5ff26ec131e29a6a7a714cd0e2941baf1f1e5cd9b1ee66f488c8e222135031bf2de507d7d05b037ab65c30482147dba63d2e52"
+    },
+    {
+      "origin": "musl",
+      "name": "ldso-fix-non-functional-fix-to-early-dynamic-PAGE_SI.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/ldso-fix-non-functional-fix-to-early-dynamic-PAGE_SI.patch",
+      "bytes": 1486,
+      "sha256": "7f5806124d4a89536e53a07bfe95fcd0a8f1b7a27fc0dfc89c78c724dea1c924",
+      "gitBlob": "05bbd99d7f483bf57ccbd5083c8530126fc5c273",
+      "apkbuildSHA512": "1b85079c706b017106ecbf4afbc65b4a2171297a673035645e4c3ddb7e2aae0549b04932df83778323b7329ae8d32160a89e0c1b2534c278708c61b1f40a1ed8"
+    },
+    {
+      "origin": "musl",
+      "name": "loongarch64-Add-lsx-and-lasx-vector-structure-defini.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/loongarch64-Add-lsx-and-lasx-vector-structure-defini.patch",
+      "bytes": 907,
+      "sha256": "28efacd507c01b89e1725ed33723f3f9fdfe6cb83eb78ffea1e2acb7fda8a52c",
+      "gitBlob": "4cc1d296ae339af698d277c3f63e1582d50ae8e9",
+      "apkbuildSHA512": "b4d95231944fd236827a62343bbce74b20a56739e2b8937bda69bfc7b53f2ce5bd709459ee61615bd10d2839f43311eced9344ee8185701fd38ec0de0d43c6ae"
+    },
+    {
+      "origin": "musl",
+      "name": "loongarch64-add-TLSDESC-support.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/loongarch64-add-TLSDESC-support.patch",
+      "bytes": 2527,
+      "sha256": "1efb4604e0b28b84e10faf37d17bad448510e73f6a3db89c8be47d38b9e85138",
+      "gitBlob": "17b07138d95bab71b860f01dd8958fb8630db273",
+      "apkbuildSHA512": "363d0cbfe11f024b120b6d54e909c038cd5b37f1f195048ddb29591191a1288ff50842ccd14e0cab80359e5b46c0e02d2b5af3016bd1507c1d269e590690a3fe"
+    },
+    {
+      "origin": "musl",
+      "name": "loongarch64-add-bits-hwcap.h.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/loongarch64-add-bits-hwcap.h.patch",
+      "bytes": 1406,
+      "sha256": "8849080b49dff046b1f29db24e54ffe6262b5884078091994db77efdafca2505",
+      "gitBlob": "92581675627e46b48367091a468b16c2a94fddf0",
+      "apkbuildSHA512": "70003d89e31b1c83274d1e850f86d8a54f30c1d5e22f769ae229d30d2bbdc095dbf4c262fb55079aaf8bfdf9a213f9468150b50c000b6596b051729a0d25f913"
+    },
+    {
+      "origin": "musl",
+      "name": "loongarch64-add-fpu-and-simd-context-to-signal.h.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/loongarch64-add-fpu-and-simd-context-to-signal.h.patch",
+      "bytes": 2142,
+      "sha256": "d73f85a90fe52930dd8b5d16cb7f3369a994918c0e41ae3c3dc9a25df4b45099",
+      "gitBlob": "9eea20e136e949dc5ba6acdd1c6c1520c2d12e96",
+      "apkbuildSHA512": "b0f93f8868caf15d436ebe81088f4914cac3e21cc5b86cb0d5f40092edc6e29909188a14cde0c69ab86b51631aa34a4b8136a515f2a1b53c424c8b251c5ea689"
+    },
+    {
+      "origin": "musl",
+      "name": "musl-1.2.5.tar.gz",
+      "url": "https://distfiles.alpinelinux.org/distfiles/v3.23/musl-1.2.5.tar.gz",
+      "bytes": 1080786,
+      "sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "apkbuildSHA512": "7bb7f7833923cd69c7a1a9b8a5f1784bfd5289663eb6061dcd43d583e45987df8a68a1be05d75cc1c88a3f5b610653d1a70f4a9cff4d8f7fd41ae73ee058c17c"
+    },
+    {
+      "origin": "musl",
+      "name": "s390x-dont-allow-br-r0-in-crtjmp.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/s390x-dont-allow-br-r0-in-crtjmp.patch",
+      "bytes": 1031,
+      "sha256": "3568d09f086e1d8957542d195e7a5f14d17ae8805e4d793fd30a3b331eafe537",
+      "gitBlob": "93e947bd6cd694258856dfa337cd7a142b140df1",
+      "apkbuildSHA512": "711ff7eb53e1cb1f5d21d821346dca4ff24e8273a978cba10f3e9901875ced96b7a693e128fa6f92492e5c18f1fc2b4079ca445cc67d14081baff22297e2d375"
+    },
+    {
+      "origin": "musl",
+      "name": "stdio-skip-empty-iovec-when-buffering-is-disabled.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/stdio-skip-empty-iovec-when-buffering-is-disabled.patch",
+      "bytes": 1157,
+      "sha256": "7b405d6faf271cf13b415bc9688c1fbd728510fdef25d134fbd4a1b93db83e18",
+      "gitBlob": "461ff4c32cec035b7f520a209e39c90d54722dae",
+      "apkbuildSHA512": "a70068d2a16b64188f04fccd180585b025aa8bccd4e823d8fdea0be1a80ee8b74cb485ecd22e72b5ce3f141526aca563b6c69e1389c0340fad15c9b9bee6885c"
+    },
+    {
+      "origin": "openssl",
+      "name": "APKBUILD",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/2b4b2590f782b95276d31dcaaf41554b1a597a0b/main/openssl/APKBUILD",
+      "bytes": 7297,
+      "sha256": "612ccf2841efe957089e825b50292a20efb0d9ba8ca3f2a292cefa2515963d21",
+      "gitBlob": "cfc6fc58b828d2f0411773e91132e1015cac9d57"
+    },
+    {
+      "origin": "openssl",
+      "name": "auxv.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/2b4b2590f782b95276d31dcaaf41554b1a597a0b/main/openssl/auxv.patch",
+      "bytes": 2013,
+      "sha256": "0b3a36c0f1b3d8e0adcf02c251374ce4d2578b0c9f4b88207bf85c5c1b58c7d8",
+      "gitBlob": "7803ef811cc802650a1a3b3808899fb8202c7b34",
+      "apkbuildSHA512": "b2541075148fd5af4552d34158deb1a325f5adced90626dc03fd126f47323cde949b15b2657523c34b26530b322312a43bd42ada7295b4f2dd1d3b5d11892c62"
+    },
+    {
+      "origin": "openssl",
+      "name": "openssl-3.5.8.tar.gz",
+      "url": "https://distfiles.alpinelinux.org/distfiles/v3.23/openssl-3.5.8.tar.gz",
+      "bytes": 53213818,
+      "sha256": "a8f84a39918ec6415ce765d9b429d313ba97b8143169c172e734b9514464f5b2",
+      "apkbuildSHA512": "62a1dbed0fad75245b332e41b85a1f7c2379189525e7628a7cf68947d115e90a47f179e3f87d27641e5b2d357c357292179fc0e64eccecdebc81c083f7a8ebe4"
+    },
+    {
+      "origin": "openssl",
+      "name": "openssl-fips.post-install",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/2b4b2590f782b95276d31dcaaf41554b1a597a0b/main/openssl/openssl-fips.post-install",
+      "bytes": 235,
+      "sha256": "c0a577c5bc04764084adc337135e05bdfc29a641983def7c6514e9dd2affc586",
+      "gitBlob": "cba1ad8ae8c8bb62b636409eff9cf003735ac577"
+    },
+    {
+      "origin": "pax-utils",
+      "name": "APKBUILD",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/3912b4fa83437852312ad3c37a00229ff59fab1c/main/pax-utils/APKBUILD",
+      "bytes": 1782,
+      "sha256": "d3ab7f1f1de34d023921a8f09cf80ba70063b05f1a99d8e2056ff8667c0f1213",
+      "gitBlob": "612f8f021a0c3ff9b25aba448a42b7c7cf8ee543"
+    },
+    {
+      "origin": "pax-utils",
+      "name": "pax-utils-1.3.8.tar.xz",
+      "url": "https://distfiles.alpinelinux.org/distfiles/v3.23/pax-utils-1.3.8.tar.xz",
+      "bytes": 123556,
+      "sha256": "12a168d1aeae2626efdbde3979da88a60ca80bb38e1db565e95ee441ff1d5a0c",
+      "apkbuildSHA512": "0dde95f86802729d80b7b38af84dec636e973f6abc70600633edcb05d3d5f95c1b2861300ce478dd7f798c7a1e5eccb1011c06c53adba38e11a996b69d463656"
+    },
+    {
+      "origin": "pax-utils",
+      "name": "unsigned.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/3912b4fa83437852312ad3c37a00229ff59fab1c/main/pax-utils/unsigned.patch",
+      "bytes": 4037,
+      "sha256": "0a2f4088f5474603388091230c0332fbb7a7f8a7b93ca8f83f96ba2095450012",
+      "gitBlob": "7ec479337d2606844e36f358553f2b46f03729ad",
+      "apkbuildSHA512": "6687f4aad61dfcfb16be9ececc123ce93adb8e87c52e7964594ac8f9a48d040882aae6cbcfcf41cbbec9ed893303aa70c6c682d4173933793019f15797bd24af"
+    },
+    {
+      "origin": "zlib",
+      "name": "APKBUILD",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/f8c94d2e1d318ab29eb4ac5f00225341c877ed65/main/zlib/APKBUILD",
+      "bytes": 901,
+      "sha256": "e9ad3aa7ecf048f4bfa26b946275bee347f75254385320e90eecd3fd6651bcf4",
+      "gitBlob": "8f13e10a5896cd49fddf39e8229b5ced6b6a3cd8"
+    },
+    {
+      "origin": "zlib",
+      "name": "zlib-1.3.2.tar.gz",
+      "url": "https://distfiles.alpinelinux.org/distfiles/v3.23/zlib-1.3.2.tar.gz",
+      "bytes": 1502830,
+      "sha256": "bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16",
+      "apkbuildSHA512": "70963771ea5d763614278a69b474f09b7d237ef8f53b675a10fe31d9923aeef601504b35d7ebd1b1e7f347e9ebb048e6b3b47fffdf137e7bdc7e8d5eb4ec4692"
+    }
+  ],
+  "limits": {
+    "fileBytes": 67108864,
+    "totalSourceBytes": 134217728,
+    "sourceBundleBytes": 12582912,
+    "inventoryBytes": 4194304,
+    "noticeBytes": 2097152
+  },
+  "supplementalLicenses": [
+    {
+      "name": "MPL-2.0.txt",
+      "url": "https://www.mozilla.org/en-US/MPL/2.0/",
+      "bytes": 14935,
+      "sha256": "9ae7f1cb6480a5862a60ca0848e93856902c43d978850aad4e92042a08e8128b",
+      "scope": "Standard license terms; component copyright notices remain in original source.",
+      "sourceHTMLSHA256": "657c6bf1f09f877dcc862e214cecc312f77a9f4f7693cdf7ee7b1281854941a4"
+    },
+    {
+      "name": "curl.txt",
+      "url": "https://curl.se/docs/copyright.html",
+      "bytes": 1091,
+      "sha256": "51f42209c989f0704f035dcdc52e8a653d8c17c8047151d45c7595a3f0c5b52e",
+      "scope": "Standard license terms; component copyright notices remain in original source.",
+      "sourceHTMLSHA256": "8c404d1465ad207f867a7d2590dcd5e2b5ebdc47505c0d44ff874c236785b0a5"
+    },
+    {
+      "name": "MIT-terms.txt",
+      "url": "https://opensource.org/license/mit",
+      "bytes": 1205,
+      "sha256": "a5d9f3c738c3aab3477c634138cbc82b086a1343454e9993021de89f8b616859",
+      "scope": "Standard license terms; component copyright notices remain in original source."
+    }
+  ],
+  "archiveNotices": [
+    {
+      "origin": "apk-tools",
+      "archive": "apk-tools-v3.0.6.tar.gz",
+      "member": "apk-tools-v3.0.6/LICENSE",
+      "bytes": 17622,
+      "sha256": "b3c87315aae4c9f276c37168f2655dd8bd990544d7a0bbfb929664155c7ab257"
+    },
+    {
+      "origin": "busybox",
+      "archive": "busybox-1.37.0.tar.bz2",
+      "member": "busybox-1.37.0/LICENSE",
+      "bytes": 18348,
+      "sha256": "bbfc9843646d483c334664f651c208b9839626891d8f17604db2146962f43548"
+    },
+    {
+      "origin": "busybox",
+      "archive": "busybox-1.37.0.tar.bz2",
+      "member": "busybox-1.37.0/archival/libarchive/bz/LICENSE",
+      "bytes": 1999,
+      "sha256": "b5a136ed67798e51fe2e0ca0b2a21cb01b904ff0c9f7d563a6292e276607e58f"
+    },
+    {
+      "origin": "ca-certificates",
+      "archive": "ca-certificates-20260611.tar.bz2",
+      "member": "ca-certificates-20260611/c_rehash.c",
+      "bytes": 9533,
+      "sha256": "a68fedc0edd976b9f35ecfdcb252d80dc12084b1bc4e945be7dc42c437d8b540"
+    },
+    {
+      "origin": "ca-certificates",
+      "archive": "ca-certificates-20260611.tar.bz2",
+      "member": "ca-certificates-20260611/mk-ca-bundle.pl",
+      "bytes": 24507,
+      "sha256": "0c66ca4c5418e2137d20e65bd10df0b193bf9578f7e7a947e5413e198652b4bd"
+    },
+    {
+      "origin": "musl",
+      "archive": "musl-1.2.5.tar.gz",
+      "member": "musl-1.2.5/COPYRIGHT",
+      "bytes": 6204,
+      "sha256": "f9bc4423732350eb0b3f7ed7e91d530298476f8fec0c6c427a1c04ade22655af"
+    },
+    {
+      "origin": "openssl",
+      "archive": "openssl-3.5.8.tar.gz",
+      "member": "openssl-3.5.8/LICENSE.txt",
+      "bytes": 10175,
+      "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a"
+    },
+    {
+      "origin": "openssl",
+      "archive": "openssl-3.5.8.tar.gz",
+      "member": "openssl-3.5.8/AUTHORS.md",
+      "bytes": 1022,
+      "sha256": "b9f638dfc06b59c2d3b808186c3b30f713805a5db390f5b77b1703ac58acb83e"
+    },
+    {
+      "origin": "pax-utils",
+      "archive": "pax-utils-1.3.8.tar.xz",
+      "member": "pax-utils-1.3.8/COPYING",
+      "bytes": 18011,
+      "sha256": "e6d6a009505e345fe949e1310334fcb0747f28dae2856759de102ab66b722cb4"
+    },
+    {
+      "origin": "zlib",
+      "archive": "zlib-1.3.2.tar.gz",
+      "member": "zlib-1.3.2/LICENSE",
+      "bytes": 1002,
+      "sha256": "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2"
+    }
+  ],
+  "originNoticeReferences": {
+    "alpine-base": [
+      "MIT-terms.txt"
+    ],
+    "alpine-baselayout": [
+      "apk-tools-v3.0.6/LICENSE"
+    ],
+    "alpine-keys": [
+      "MIT-terms.txt"
+    ],
+    "apk-tools": [
+      "apk-tools-v3.0.6/LICENSE"
+    ],
+    "busybox": [
+      "busybox-1.37.0/LICENSE",
+      "busybox-1.37.0/archival/libarchive/bz/LICENSE"
+    ],
+    "ca-certificates": [
+      "MPL-2.0.txt",
+      "MIT-terms.txt",
+      "curl.txt",
+      "ca-certificates-20260611/c_rehash.c",
+      "ca-certificates-20260611/mk-ca-bundle.pl"
+    ],
+    "musl": [
+      "musl-1.2.5/COPYRIGHT",
+      "apk-tools-v3.0.6/LICENSE"
+    ],
+    "openssl": [
+      "openssl-3.5.8/LICENSE.txt",
+      "openssl-3.5.8/AUTHORS.md"
+    ],
+    "pax-utils": [
+      "pax-utils-1.3.8/COPYING"
+    ],
+    "zlib": [
+      "zlib-1.3.2/LICENSE"
+    ]
+  },
+  "recipeDirectories": [
+    {
+      "origin": "alpine-base",
+      "aportsCommit": "1fa9ca1a79c5fd52c46a70b2199059c41ead572a",
+      "treeSHA1": "29cf61e89e36e5f840bef7635969b32b51146cc2",
+      "entries": [
+        {
+          "name": "APKBUILD",
+          "mode": "100644",
+          "gitBlob": "03eec9e54b8e19f186aff772c0161dec67907c03"
+        }
+      ]
+    },
+    {
+      "origin": "alpine-baselayout",
+      "aportsCommit": "15b3b78187b3808104f98f765e9632e0b09281a7",
+      "treeSHA1": "66d0248ae48341daf9aadef40ccac407e12d67a1",
+      "entries": [
+        {
+          "name": "20locale.sh",
+          "mode": "100644",
+          "gitBlob": "9b9fde51f510e8d4ddb79f3ea0423ec75efb9297"
+        },
+        {
+          "name": "APKBUILD",
+          "mode": "100644",
+          "gitBlob": "fa8f0085c8cbfd18f6f0c119ce86b09c61191314"
+        },
+        {
+          "name": "aliases.conf",
+          "mode": "100644",
+          "gitBlob": "b1790179608c46f117fd36073e2316546ca08acd"
+        },
+        {
+          "name": "alpine-baselayout.post-install",
+          "mode": "100644",
+          "gitBlob": "88966d35c3327efc03e5d383fa577782ea256c5d"
+        },
+        {
+          "name": "alpine-baselayout.post-upgrade",
+          "mode": "120000",
+          "gitBlob": "0e73fc07f3bfd966d5ed2e4be2a4838422dab0ed"
+        },
+        {
+          "name": "alpine-baselayout.pre-install",
+          "mode": "100644",
+          "gitBlob": "fc0d0b9f5dab5ce07189ead013e0fb8a6fbc0bc8"
+        },
+        {
+          "name": "alpine-baselayout.pre-upgrade",
+          "mode": "100644",
+          "gitBlob": "b89ad05a74debf8a6f6001b05526770feb40ee88"
+        },
+        {
+          "name": "blacklist.conf",
+          "mode": "100644",
+          "gitBlob": "f14a1233af1c6160f3ed507283b09853ee8ad5ca"
+        },
+        {
+          "name": "color_prompt.sh.disabled",
+          "mode": "100644",
+          "gitBlob": "96e47891b31f72ed8f4073061ff48288a4d3cb7b"
+        },
+        {
+          "name": "crontab",
+          "mode": "100644",
+          "gitBlob": "fd8acd8b9a27203f33bd213e9a38d975cbef8dcc"
+        },
+        {
+          "name": "group",
+          "mode": "100644",
+          "gitBlob": "4a0d291366667f110e5f4d890c585f929fba517e"
+        },
+        {
+          "name": "hier.7",
+          "mode": "100644",
+          "gitBlob": "66ea51b42d3918658f98672d084de90c4834bd30"
+        },
+        {
+          "name": "i386.conf",
+          "mode": "100644",
+          "gitBlob": "b89459f1ef675fced8b3fcf97cca1a4ed0e55f01"
+        },
+        {
+          "name": "inittab",
+          "mode": "100644",
+          "gitBlob": "5294b8f53b1c9946e66bf75b37644af6cd94cfb1"
+        },
+        {
+          "name": "passwd",
+          "mode": "100644",
+          "gitBlob": "1130fa0b21cc1bf66f41206ffad4748ffe457af1"
+        },
+        {
+          "name": "profile",
+          "mode": "100644",
+          "gitBlob": "fbc3ba0cd506424c1b67b1a2397aa1097803ad25"
+        },
+        {
+          "name": "usr_merge_nag.sh",
+          "mode": "100644",
+          "gitBlob": "fc2b5ceb054986a3bbb50350e96c3c4b833fdbbd"
+        }
+      ]
+    },
+    {
+      "origin": "alpine-keys",
+      "aportsCommit": "b9f23becced4d7b3ccc0fa0f28530243ccd314a0",
+      "treeSHA1": "ce77b3572b098dcdd3ce7a81e24aa4454f5448a5",
+      "entries": [
+        {
+          "name": "APKBUILD",
+          "mode": "100644",
+          "gitBlob": "ce73c58e12d1687ca50e27c962c159aaf99e6180"
+        },
+        {
+          "name": "alpine-devel@lists.alpinelinux.org-4a6a0840.rsa.pub",
+          "mode": "100644",
+          "gitBlob": "bb4bdc80fd10d0609f67076f05e17aafdff75415"
+        },
+        {
+          "name": "alpine-devel@lists.alpinelinux.org-5243ef4b.rsa.pub",
+          "mode": "100644",
+          "gitBlob": "6cbfad7441d0193d6f2f64dfb47797975bcc54b1"
+        },
+        {
+          "name": "alpine-devel@lists.alpinelinux.org-524d27bb.rsa.pub",
+          "mode": "100644",
+          "gitBlob": "1d34c93e37843fc494ae8d685d08665e844fecba"
+        },
+        {
+          "name": "alpine-devel@lists.alpinelinux.org-5261cecb.rsa.pub",
+          "mode": "100644",
+          "gitBlob": "83f0658e9ca16c4bad20a219318497313a45b7bb"
+        },
+        {
+          "name": "alpine-devel@lists.alpinelinux.org-58199dcc.rsa.pub",
+          "mode": "100644",
+          "gitBlob": "2b99a0d195116f2c7ba081747da873f9b74b07d4"
+        },
+        {
+          "name": "alpine-devel@lists.alpinelinux.org-58cbb476.rsa.pub",
+          "mode": "100644",
+          "gitBlob": "a9ead55ed05182378d50e40ff94f15eac1b40419"
+        },
+        {
+          "name": "alpine-devel@lists.alpinelinux.org-58e4f17d.rsa.pub",
+          "mode": "100644",
+          "gitBlob": "8f990949b9e70dd3be886664e5c4a41dc67c1ecb"
+        },
+        {
+          "name": "alpine-devel@lists.alpinelinux.org-5e69ca50.rsa.pub",
+          "mode": "100644",
+          "gitBlob": "097740ebd32935ed9b6b2f9e7bd227320fb4dabd"
+        },
+        {
+          "name": "alpine-devel@lists.alpinelinux.org-60ac2099.rsa.pub",
+          "mode": "100644",
+          "gitBlob": "2b8a4a93e060a3c03a2e482a0dc959aa06542282"
+        },
+        {
+          "name": "alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub",
+          "mode": "100644",
+          "gitBlob": "f2165aebadab1c1e43798f1278c3897d85f16da1"
+        },
+        {
+          "name": "alpine-devel@lists.alpinelinux.org-61666e3f.rsa.pub",
+          "mode": "100644",
+          "gitBlob": "aa63d81d6625e3b16d87db1946b69466f3bd2095"
+        },
+        {
+          "name": "alpine-devel@lists.alpinelinux.org-616a9724.rsa.pub",
+          "mode": "100644",
+          "gitBlob": "59c330e9f73cc10ae21bf94062711637141cf81b"
+        },
+        {
+          "name": "alpine-devel@lists.alpinelinux.org-616abc23.rsa.pub",
+          "mode": "100644",
+          "gitBlob": "915bc566b7429b7ee6ca06b0947163c49d496dda"
+        },
+        {
+          "name": "alpine-devel@lists.alpinelinux.org-616ac3bc.rsa.pub",
+          "mode": "100644",
+          "gitBlob": "1e49d246902b76996e4eefb52c7ae61cc09f45f9"
+        },
+        {
+          "name": "alpine-devel@lists.alpinelinux.org-616adfeb.rsa.pub",
+          "mode": "100644",
+          "gitBlob": "bb15efe96d7c95a0602b243ce0848aa42cf80020"
+        },
+        {
+          "name": "alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub",
+          "mode": "100644",
+          "gitBlob": "0ecbccc2e4aea1d7394ace8f9a896b061a821453"
+        },
+        {
+          "name": "alpine-devel@lists.alpinelinux.org-616db30d.rsa.pub",
+          "mode": "100644",
+          "gitBlob": "ceffa3ace9c4454c8cde399732ecee535a13efac"
+        },
+        {
+          "name": "alpine-devel@lists.alpinelinux.org-66ba20fe.rsa.pub",
+          "mode": "100644",
+          "gitBlob": "e8bb47600fed4bdace8a3c366cd3762aec119933"
+        }
+      ]
+    },
+    {
+      "origin": "apk-tools",
+      "aportsCommit": "3812c9da974bef8b28f995490ca8233f1472ccc4",
+      "treeSHA1": "356b899c8995bd9e8a4afc250ec2e874e294e48e",
+      "entries": [
+        {
+          "name": "APKBUILD",
+          "mode": "100644",
+          "gitBlob": "533d95f499b8ea17d70903f396f693611618f6fa"
+        },
+        {
+          "name": "_apk",
+          "mode": "100644",
+          "gitBlob": "03f641724fc2e5587bf44817f374545a068881d4"
+        },
+        {
+          "name": "repo-hash-sha1.patch",
+          "mode": "100644",
+          "gitBlob": "33ad944259835f90e0f7dd6b28f78f0f2daa1c89"
+        }
+      ]
+    },
+    {
+      "origin": "busybox",
+      "aportsCommit": "1e823a60eb85606954b3a5af5f8e5bbd1ea680cf",
+      "treeSHA1": "f2af67c6e12d0a7576b76d205c1f4bc072614c0a",
+      "entries": [
+        {
+          "name": "0001-awk-fix-handling-of-literal-backslashes-in-replaceme.patch",
+          "mode": "100644",
+          "gitBlob": "3ff61ace0646523576ff583ebdcece18c4563c38"
+        },
+        {
+          "name": "0001-blkdiscard-ship-link-to-sbin-instead-of-usr-bin.patch",
+          "mode": "100644",
+          "gitBlob": "a89dd69b39f0e08c9820b84e1d797c1123674d70"
+        },
+        {
+          "name": "0001-hexdump-fix-regression-with-n4-e-u.patch",
+          "mode": "100644",
+          "gitBlob": "8b714b2eb4858232ab8e3460d03e534f606ec723"
+        },
+        {
+          "name": "0001-init-add-support-for-separate-reboot-action.patch",
+          "mode": "100644",
+          "gitBlob": "fccb39f4927f579a93fe340267a17d4ab50de92a"
+        },
+        {
+          "name": "0001-mount-fix-parsing-proc-mounts-with-long-lines.patch",
+          "mode": "100644",
+          "gitBlob": "85e65967f3c6df4655cbe43faf04a523a21757f9"
+        },
+        {
+          "name": "0001-netstat-sanitize-process-names.patch",
+          "mode": "100644",
+          "gitBlob": "4d7adaf3410747cd0c624ebee46a71cc906d405d"
+        },
+        {
+          "name": "0001-tar-fix-16018-masking-of-potentially-malicious-tar-cpio-content.patch",
+          "mode": "100644",
+          "gitBlob": "9ff81d3fb282e737022f2017b576b635b7ab085b"
+        },
+        {
+          "name": "0001-tar-fix-TOCTOU-symlink-race-condition.patch",
+          "mode": "100644",
+          "gitBlob": "4514d6df2a6d4a9762f312865dd6f2e7c66155c4"
+        },
+        {
+          "name": "0001-tunctl-fix-segfault-on-ioctl-failure.patch",
+          "mode": "100644",
+          "gitBlob": "d2b9e307eacdbc7a7a92e33c73d06e3d8e6ffc07"
+        },
+        {
+          "name": "0001-wget-add-header-Accept.patch",
+          "mode": "100644",
+          "gitBlob": "2b2ee3780a3ee8601581cec8762f60faf0b8e69e"
+        },
+        {
+          "name": "0002-adduser-default-to-sbin-nologin-as-shell-for-system-.patch",
+          "mode": "100644",
+          "gitBlob": "e6d8f6ace28b4305c85d97f76949f04299d2491f"
+        },
+        {
+          "name": "0003-ash-add-built-in-BB_ASH_VERSION-variable.patch",
+          "mode": "100644",
+          "gitBlob": "5e397b2401ad2542d46017844159f095412fd1e1"
+        },
+        {
+          "name": "0004-Avoid-redefined-warnings-when-buiding-with-utmps.patch",
+          "mode": "100644",
+          "gitBlob": "c17164c85164405a24995096d7d2d6a42a972fea"
+        },
+        {
+          "name": "0005-libbb-sockaddr2str-ensure-only-printable-characters-.patch",
+          "mode": "100644",
+          "gitBlob": "1d37b08e2ebec463f338a31e984190f6823a643d"
+        },
+        {
+          "name": "0006-modinfo-add-k-option-for-kernel-version.patch",
+          "mode": "100644",
+          "gitBlob": "30f342cfdfb48c68504be1148cc4cb701610098d"
+        },
+        {
+          "name": "0007-nologin-Install-applet-to-sbin-instead-of-usr-sbin.patch",
+          "mode": "100644",
+          "gitBlob": "c0a1cb5bb43779455c1a07c3fb5551a0aee54e50"
+        },
+        {
+          "name": "0008-pgrep-add-support-for-matching-against-UID-and-RUID.patch",
+          "mode": "100644",
+          "gitBlob": "bb362304b4bb8c245a48eb7a6b66386d1b60c8e9"
+        },
+        {
+          "name": "0009-properly-fix-wget-https-support.patch",
+          "mode": "100644",
+          "gitBlob": "849bd15b01fce9004397b03e311ebc0b5b53ba41"
+        },
+        {
+          "name": "0010-fsck-resolve-LABEL-.-UUID-.-spec-to-device.patch",
+          "mode": "100644",
+          "gitBlob": "d5dc8b2e44463fddeddf147cf745abca875053a7"
+        },
+        {
+          "name": "0011-nslookup-sanitize-all-printed-strings-with-printable.patch",
+          "mode": "100644",
+          "gitBlob": "3263d61f2a3630875f4a66ee873da4a85edf7df1"
+        },
+        {
+          "name": "0012-ash-exec-busybox.static.patch",
+          "mode": "100644",
+          "gitBlob": "7d49daee94b5b757d1b13cff06a869d8b5bf7329"
+        },
+        {
+          "name": "0013-app-location-for-cpio-vi-and-lspci.patch",
+          "mode": "100644",
+          "gitBlob": "b3ee65f19cf1682152bb7009f44cb91510c1edc4"
+        },
+        {
+          "name": "0014-udhcpc-set-default-discover-retries-to-5.patch",
+          "mode": "100644",
+          "gitBlob": "bab8bcd15f2c5b3e912974bddbb9e8be274f9b87"
+        },
+        {
+          "name": "0015-ping-make-ping-work-without-root-privileges.patch",
+          "mode": "100644",
+          "gitBlob": "fc75470021d48c5ad7f723acaf6bef446887fd48"
+        },
+        {
+          "name": "0016-fbsplash-support-console-switching.patch",
+          "mode": "100644",
+          "gitBlob": "8bba26a6d8379bf9198a5dc9a493ad75bf1ff35b"
+        },
+        {
+          "name": "0017-fbsplash-support-image-and-bar-alignment-and-positio.patch",
+          "mode": "100644",
+          "gitBlob": "bec3e08dd5509eabb974a60a33b1d871169f8149"
+        },
+        {
+          "name": "0018-depmod-support-generating-kmod-binary-index-files.patch",
+          "mode": "100644",
+          "gitBlob": "f37b637af3d94a784c6e1de3d60dd223ef11f59c"
+        },
+        {
+          "name": "0019-Add-flag-for-not-following-symlinks-when-recursing.patch",
+          "mode": "100644",
+          "gitBlob": "466bd5646750d677f028356bf0d59b78d4459c3b"
+        },
+        {
+          "name": "0020-udhcpc-Don-t-background-if-n-is-given.patch",
+          "mode": "100644",
+          "gitBlob": "eb76936fa85c891a7cfa02f6004112641915f25c"
+        },
+        {
+          "name": "0021-tests-fix-tarball-creation.patch",
+          "mode": "100644",
+          "gitBlob": "57a89693ae9e0c1e1f37dd7c2ea5ab572f0f730b"
+        },
+        {
+          "name": "0022-tests-musl-doesn-t-seem-to-recognize-UTC0-as-a-timez.patch",
+          "mode": "100644",
+          "gitBlob": "ee49449e7f362e3955e455c1f282e4af216ef218"
+        },
+        {
+          "name": "0023-Hackfix-to-disable-HW-acceleration-for-MD5-SHA1-on-x.patch",
+          "mode": "100644",
+          "gitBlob": "5bf2387d9352cd6ab3e340a57caa1daa9b652d78"
+        },
+        {
+          "name": "0024-umount-Implement-O-option-to-unmount-by-mount-option.patch",
+          "mode": "100644",
+          "gitBlob": "6110c04b29d7468abe4624acfab823a180ed626f"
+        },
+        {
+          "name": "0025-find-fix-xdev-depth-and-delete.patch",
+          "mode": "100644",
+          "gitBlob": "7363ea6df521e46b454018a7ac8027adf13a630f"
+        },
+        {
+          "name": "0026-awk.c-fix-CVE-2023-42366-bug-15874.patch",
+          "mode": "100644",
+          "gitBlob": "1e2bce7c2b142617e8f9c04684f03e1229599d44"
+        },
+        {
+          "name": "0027-awk-Mark-test-for-handling-of-start-of-word-pattern-.patch",
+          "mode": "100644",
+          "gitBlob": "2c2931587f947d3c9d9afbd8a6294f90990adbfc"
+        },
+        {
+          "name": "0028-od-Skip-od-B-on-big-endian.patch",
+          "mode": "100644",
+          "gitBlob": "e2747465cc1bc2a4ce8c4b57225f9694f03e4559"
+        },
+        {
+          "name": "0029-ash-reject-unknown-long-options.patch",
+          "mode": "100644",
+          "gitBlob": "49b8171bad19780b45bf1b9f66a815e015b04596"
+        },
+        {
+          "name": "0030-hexdump-Skip-a-single-test-on-big-endian-systems.patch",
+          "mode": "100644",
+          "gitBlob": "f1ba3bd7cc859f1fd4a3d66764a450b177531495"
+        },
+        {
+          "name": "0031-syslogd-fix-wrong-OPT_locallog-flag-detection.patch",
+          "mode": "100644",
+          "gitBlob": "efb1410b2280b68f6d39578d1ba9dd18b853bd7a"
+        },
+        {
+          "name": "0032-lineedit-fix-some-tab-completions-written-to-stdout.patch",
+          "mode": "100644",
+          "gitBlob": "c78be1d03cf9d1f1f1082dc328409c46d2ba767b"
+        },
+        {
+          "name": "0033-lineedit-use-stdout-for-shell-history-builtin.patch",
+          "mode": "100644",
+          "gitBlob": "e5238e3e8773c183f34e7126b583c35be6f2e214"
+        },
+        {
+          "name": "0034-adduser-remove-preconfigured-GECOS-full-name-field.patch",
+          "mode": "100644",
+          "gitBlob": "aeb47b83e248a27fd8450be5517331d525f246f8"
+        },
+        {
+          "name": "0035-cpio-map-F-to-file-long-option.patch",
+          "mode": "100644",
+          "gitBlob": "49e6ed2796c5b511595efa0ab57a5eae029385d2"
+        },
+        {
+          "name": "APKBUILD",
+          "mode": "100644",
+          "gitBlob": "348c9f595feedd47c6f91c52a11c70467d6a147f"
+        },
+        {
+          "name": "acpid-poweroff.sh",
+          "mode": "100644",
+          "gitBlob": "7836c5a609795cfd99e7181416be5cf5c7f6b6fc"
+        },
+        {
+          "name": "acpid.initd",
+          "mode": "100644",
+          "gitBlob": "ec31833ad7fa3e81591061d9062c4f160f439e68"
+        },
+        {
+          "name": "acpid.logrotate",
+          "mode": "100644",
+          "gitBlob": "4cf5fdda97e154c56e55a1d75925fe361a35b2b9"
+        },
+        {
+          "name": "bbsuid.c",
+          "mode": "100644",
+          "gitBlob": "24d0d7d3e3abe077b4cdc0615df066f7ca3b6462"
+        },
+        {
+          "name": "busybox-extras.post-install",
+          "mode": "100644",
+          "gitBlob": "dc663a554fd7a8fc1a3c1e15477fae249a399dee"
+        },
+        {
+          "name": "busybox-extras.pre-deinstall",
+          "mode": "100644",
+          "gitBlob": "2634c6a31cb022233b8e111d3884e9a768c1f9b9"
+        },
+        {
+          "name": "busybox.post-install",
+          "mode": "100644",
+          "gitBlob": "f575396bb1a66c0a4f07c838ee908fc08201cc2d"
+        },
+        {
+          "name": "busybox.post-upgrade",
+          "mode": "100644",
+          "gitBlob": "5e3263c7cb6d1b9c32ce2e00a35efc488c922349"
+        },
+        {
+          "name": "busybox.trigger",
+          "mode": "100644",
+          "gitBlob": "4f80847e37adacf84a2ab7f6087fec4656e94647"
+        },
+        {
+          "name": "busyboxconfig",
+          "mode": "100644",
+          "gitBlob": "f94784573735b83ad7129c92ef37c170a676bf8e"
+        },
+        {
+          "name": "busyboxconfig-extras",
+          "mode": "100644",
+          "gitBlob": "2345ed1f3d651132d13c7b5b0df7008d0e5583ec"
+        },
+        {
+          "name": "crond.confd",
+          "mode": "100644",
+          "gitBlob": "542af1ed1d75d417aafbe2b14741ef2ce0b3d645"
+        },
+        {
+          "name": "crond.initd",
+          "mode": "100644",
+          "gitBlob": "992037210b694e3dd6a849fc2b97fd6351b4c61c"
+        },
+        {
+          "name": "dad.if-up",
+          "mode": "100644",
+          "gitBlob": "7903822c8fd25941ea82c12b30ec7a90bf5b710b"
+        },
+        {
+          "name": "default.script",
+          "mode": "100644",
+          "gitBlob": "9395587148be2bf89e0fc29cd882de485d7c6531"
+        },
+        {
+          "name": "dnsd.initd",
+          "mode": "100644",
+          "gitBlob": "42e4a34c13a96091c62ea81f6124125a08bddfb1"
+        },
+        {
+          "name": "httpd.initd",
+          "mode": "100644",
+          "gitBlob": "bf9573052134f1aa6763fb7cb2c04325c4fb5496"
+        },
+        {
+          "name": "inetd.initd",
+          "mode": "100644",
+          "gitBlob": "5ef7b395ff9b2b406ea3f081258bbe9b52251d43"
+        },
+        {
+          "name": "klogd.confd",
+          "mode": "100644",
+          "gitBlob": "100deedaac53882975ef8f037f91abd5ab44b0b2"
+        },
+        {
+          "name": "klogd.initd",
+          "mode": "100644",
+          "gitBlob": "274b7d969131d6c6ccc2282d9048d92c8a77a18e"
+        },
+        {
+          "name": "loadkmap.confd",
+          "mode": "100644",
+          "gitBlob": "2bdbc0608c2a843dff2c498854b7095e1c4269dc"
+        },
+        {
+          "name": "loadkmap.initd",
+          "mode": "100644",
+          "gitBlob": "7149dd729e05b9dee91bc2809b8f496e73914104"
+        },
+        {
+          "name": "mdev.initd",
+          "mode": "100644",
+          "gitBlob": "630d83777d61314f47cf2ecdf33c02cc54b23551"
+        },
+        {
+          "name": "ntpd.confd",
+          "mode": "100644",
+          "gitBlob": "c5b4c1c1d435f7c360bc047dac623e3469912a13"
+        },
+        {
+          "name": "ntpd.initd",
+          "mode": "100644",
+          "gitBlob": "17ca150e9e91db826f0080ed507357d307b67d3b"
+        },
+        {
+          "name": "rdate.confd",
+          "mode": "100644",
+          "gitBlob": "03eadfdb1fbcba276898135d23b6d2da492038fa"
+        },
+        {
+          "name": "rdate.initd",
+          "mode": "100644",
+          "gitBlob": "708429f17bb025adc6eba9638f182011f6867d71"
+        },
+        {
+          "name": "securetty",
+          "mode": "100644",
+          "gitBlob": "f33a1c15c821d17233d2813606d69b6f3b523fa7"
+        },
+        {
+          "name": "ssl_client.c",
+          "mode": "100644",
+          "gitBlob": "45c62a5c80b64f3ef212d76d7cdd11a14b3013b1"
+        },
+        {
+          "name": "syslog.confd",
+          "mode": "100644",
+          "gitBlob": "2f00667118c696126cdc6266f0a98c9dbd19e6ad"
+        },
+        {
+          "name": "syslog.initd",
+          "mode": "100644",
+          "gitBlob": "3b20345d7065a89aeca61212f0c9d8f9d5357d59"
+        },
+        {
+          "name": "udhcpc.conf",
+          "mode": "100644",
+          "gitBlob": "0407c553ffb5ab4ac52f9a14a4c2bddd1b4365c1"
+        },
+        {
+          "name": "udhcpd.initd",
+          "mode": "100644",
+          "gitBlob": "e4dabd5b343f0fc717990a8d9372dec4d6846765"
+        },
+        {
+          "name": "watchdog.confd",
+          "mode": "100644",
+          "gitBlob": "5cfd2c2cc40ae9a6d0cd96ac7d993d000b6a8564"
+        },
+        {
+          "name": "watchdog.initd",
+          "mode": "100644",
+          "gitBlob": "d87210044a0d1c73908dc06ee34acc6613bb84a3"
+        }
+      ]
+    },
+    {
+      "origin": "ca-certificates",
+      "aportsCommit": "6e30aafe4fa807ba70797509731f1e7d644dc8f3",
+      "treeSHA1": "fced8a110cb00ff453951328192429e930d5af66",
+      "entries": [
+        {
+          "name": "APKBUILD",
+          "mode": "100644",
+          "gitBlob": "3d7cba6056b58a3fbce01f7c81e20fa6c085684c"
+        },
+        {
+          "name": "ca-certificates.post-deinstall",
+          "mode": "100644",
+          "gitBlob": "10d219f03f526641af8a366db975b010b3c260e1"
+        },
+        {
+          "name": "ca-certificates.trigger",
+          "mode": "100644",
+          "gitBlob": "0ed2ac4980c97739fb6addfbf41a5700c6d286a1"
+        }
+      ]
+    },
+    {
+      "origin": "musl",
+      "aportsCommit": "8aef0c37b0ad23dc4137f0e4755b97a59dc698b8",
+      "treeSHA1": "a6909a71d0bc6e13917b628abb7ffc272a508808",
+      "entries": [
+        {
+          "name": "0001-add-stub-for-pthread_mutexattr_setprioceiling.patch",
+          "mode": "100644",
+          "gitBlob": "0afb1fbc2e96c3f6a41d02635d64115184b8e614"
+        },
+        {
+          "name": "APKBUILD",
+          "mode": "100644",
+          "gitBlob": "a32f2d25e53fe961bd4f1130bbddbeb7195f638f"
+        },
+        {
+          "name": "CVE-2025-26519.patch",
+          "mode": "100644",
+          "gitBlob": "8d5ba6cc8390c322cac11070911df61f48572172"
+        },
+        {
+          "name": "CVE-2026-40200.patch",
+          "mode": "100644",
+          "gitBlob": "88298ca471d38b2c8861f817caf394a591fcdc26"
+        },
+        {
+          "name": "LoongArch64-add-new-reloc-types-and-NT_LOONGARCH_HW_.patch",
+          "mode": "100644",
+          "gitBlob": "699ffd7f6d4c3bcc6c4170be4585d3d440076d88"
+        },
+        {
+          "name": "__NR_riscv_hwprobe.patch",
+          "mode": "100644",
+          "gitBlob": "68c2237e4d6e6006eb499351b2a41115cdfc0cce"
+        },
+        {
+          "name": "__stack_chk_fail_local.c",
+          "mode": "100644",
+          "gitBlob": "2b403a6e046fb288af4b3d16eda76980a599aea4"
+        },
+        {
+          "name": "backport-posix_getdents.patch",
+          "mode": "100644",
+          "gitBlob": "ebb7543d6531e07630bebe37eb8adfa691932147"
+        },
+        {
+          "name": "fix-loongarch64-zero-len-extcontext.patch",
+          "mode": "100644",
+          "gitBlob": "7955bddd4db379bdf668d80666a141cbf175c986"
+        },
+        {
+          "name": "getconf.c",
+          "mode": "100644",
+          "gitBlob": "c4235242b0ef70bb7a99cb210a134d19c15dc0b9"
+        },
+        {
+          "name": "getent.c",
+          "mode": "100644",
+          "gitBlob": "bcc8b81c10bef1de5af8db7053dac48547c8e14d"
+        },
+        {
+          "name": "handle-aux-at_base.patch",
+          "mode": "100644",
+          "gitBlob": "7c9f2dc5fc05abaf82f2e7b59704862b325c0aab"
+        },
+        {
+          "name": "iconv-gb18030-fix.patch",
+          "mode": "100644",
+          "gitBlob": "4c52c0a3211ec70c5010bc6bce0446c183914380"
+        },
+        {
+          "name": "iconv.c",
+          "mode": "100644",
+          "gitBlob": "f5d5ce2aa730461df126cdf8bc8b084b4ebb881c"
+        },
+        {
+          "name": "isatty-glibc-align.patch",
+          "mode": "100644",
+          "gitBlob": "d73ee79a92373d6c6b9e4e7afeb54a5f2fc172c1"
+        },
+        {
+          "name": "ldconfig",
+          "mode": "100644",
+          "gitBlob": "9a6c05978d1bfae6871fb96a862dfd3e7bb9c326"
+        },
+        {
+          "name": "ldso-fix-non-functional-fix-to-early-dynamic-PAGE_SI.patch",
+          "mode": "100644",
+          "gitBlob": "05bbd99d7f483bf57ccbd5083c8530126fc5c273"
+        },
+        {
+          "name": "loongarch64-Add-lsx-and-lasx-vector-structure-defini.patch",
+          "mode": "100644",
+          "gitBlob": "4cc1d296ae339af698d277c3f63e1582d50ae8e9"
+        },
+        {
+          "name": "loongarch64-add-TLSDESC-support.patch",
+          "mode": "100644",
+          "gitBlob": "17b07138d95bab71b860f01dd8958fb8630db273"
+        },
+        {
+          "name": "loongarch64-add-bits-hwcap.h.patch",
+          "mode": "100644",
+          "gitBlob": "92581675627e46b48367091a468b16c2a94fddf0"
+        },
+        {
+          "name": "loongarch64-add-fpu-and-simd-context-to-signal.h.patch",
+          "mode": "100644",
+          "gitBlob": "9eea20e136e949dc5ba6acdd1c6c1520c2d12e96"
+        },
+        {
+          "name": "s390x-dont-allow-br-r0-in-crtjmp.patch",
+          "mode": "100644",
+          "gitBlob": "93e947bd6cd694258856dfa337cd7a142b140df1"
+        },
+        {
+          "name": "stdio-skip-empty-iovec-when-buffering-is-disabled.patch",
+          "mode": "100644",
+          "gitBlob": "461ff4c32cec035b7f520a209e39c90d54722dae"
+        }
+      ]
+    },
+    {
+      "origin": "openssl",
+      "aportsCommit": "2b4b2590f782b95276d31dcaaf41554b1a597a0b",
+      "treeSHA1": "fe393605f21a8532a7bd0e941790b0114621deb8",
+      "entries": [
+        {
+          "name": "APKBUILD",
+          "mode": "100644",
+          "gitBlob": "cfc6fc58b828d2f0411773e91132e1015cac9d57"
+        },
+        {
+          "name": "auxv.patch",
+          "mode": "100644",
+          "gitBlob": "7803ef811cc802650a1a3b3808899fb8202c7b34"
+        },
+        {
+          "name": "openssl-fips.post-install",
+          "mode": "100644",
+          "gitBlob": "cba1ad8ae8c8bb62b636409eff9cf003735ac577"
+        }
+      ]
+    },
+    {
+      "origin": "pax-utils",
+      "aportsCommit": "3912b4fa83437852312ad3c37a00229ff59fab1c",
+      "treeSHA1": "f44e34c2e5d37a9738730007a429564b3cbc061f",
+      "entries": [
+        {
+          "name": "APKBUILD",
+          "mode": "100644",
+          "gitBlob": "612f8f021a0c3ff9b25aba448a42b7c7cf8ee543"
+        },
+        {
+          "name": "unsigned.patch",
+          "mode": "100644",
+          "gitBlob": "7ec479337d2606844e36f358553f2b46f03729ad"
+        }
+      ]
+    },
+    {
+      "origin": "zlib",
+      "aportsCommit": "f8c94d2e1d318ab29eb4ac5f00225341c877ed65",
+      "treeSHA1": "e1663bfdb7923b07c6b9116df50ba3999d4b2e6e",
+      "entries": [
+        {
+          "name": "APKBUILD",
+          "mode": "100644",
+          "gitBlob": "8f13e10a5896cd49fddf39e8229b5ced6b6a3cd8"
+        }
+      ]
+    }
+  ],
+  "localRecipeOverrides": [
+    {
+      "addedRecipeFiles": [
+        {
+          "apkbuildSHA512": "4d747fd4fdd5405b029d95bdd0e5a5517713851915181f1ff2dfd4fb1ff7915cbfa066f987bb847426f08bdc81fbebbb2f276962242d76f6a21e21cc17117203",
+          "bytes": 2677,
+          "gitBlob": "3d6e549c5d32b0b3e95c0ffa23b682e424272b17",
+          "path": "aport/0036-wget-percent-encode-request-target.patch",
+          "sha256": "bdd8391fa2e4020079df71557d880e475f5f517fa949b5e80ef633cdafc71a2a"
+        }
+      ],
+      "baseAPKBUILDName": "APKBUILD.alpine-1.37.0-r30",
+      "baseAportsCommit": "1e823a60eb85606954b3a5af5f8e5bbd1ea680cf",
+      "baseRecipeTreeSHA1": "f2af67c6e12d0a7576b76d205c1f4bc072614c0a",
+      "baseVersion": "1.37.0-r30",
+      "localAPKBUILD": {
+        "bytes": 24931,
+        "gitBlob": "1626194728f48b95ca0d0373311e2f6255ed2339",
+        "path": "aport/APKBUILD",
+        "sha256": "0161ab98fc692638cda6eeaa521204f7b5e4839050ff53bbc9be0601224d9a13"
+      },
+      "localRecipeTreeSHA1": "9671326f32878f51ef3e2bdb61e40fc0abf24869",
+      "localVersion": "1.37.0-r1000",
+      "origin": "busybox",
+      "packageNames": [
+        "busybox",
+        "busybox-binsh",
+        "ssl_client"
+      ],
+      "provenance": {
+        "bytes": 2893,
+        "path": "PROVENANCE.md",
+        "sha256": "2fe9d03684a01d7acfa47c68d79cd5a2e0ba997f2a6dd425ed4cf91ca3d0d0d6"
+      },
+      "transformation": {
+        "bytes": 2176,
+        "path": "APKBUILD.covalent.patch",
+        "sha256": "456a11845f9c11771794fe86fbb50e07bd1ee2a9a5a65d10f167b142033a5b9c"
+      }
+    }
+  ]
+}

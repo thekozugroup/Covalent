@@ -1,7 +1,10 @@
 # Unraid operation
 
-Start with [Back up your first folder](../getting-started.md), then return here
-for Unraid-specific paths and recovery rules.
+Docker is the accepted Unraid path for the current
+[one-way link product](../product/synchronization.md). Atlas is offline; no
+Atlas runtime validation is claimed. The complete simplified release remains
+under development. The provisioning and historical backup operations below
+are retained until the final image and installation guide are published.
 
 Unraid is Tier 1. The template is intentionally unprivileged (`99:100`),
 read-only, capability-free, and uses `no-new-privileges` with a temporary
@@ -115,7 +118,24 @@ That shortcut is only a convenience link; it may fail strict certificate
 hostname verification. Open the configured HTTPS hostname shown in the template
 instead. Do not work around this with a hostname bypass.
 
-## First backup and restore check
+## Create the first one-way link
+
+Select one existing folder in **Folder for one-way links (optional)** in the
+template. Covalent sees this folder as `/sync`. Use a small temporary folder
+first, then follow [Create your first one-way link](../getting-started-links.md).
+Pair the devices, create the link on its source, and accept it at its destination.
+Choose `/sync` or a distinct child folder on this server. Select **Manual** and
+run the link, then compare the destination files with the source.
+
+For phone-to-server transfers, the phone is the source. Each family member
+uses a separate child folder on the server, so their files and link settings
+stay independent. The server does not send the combined collection back to the
+phones. Review both deletion choices before enabling automatic transfers.
+
+<details>
+<summary>Existing backup and restore installations</summary>
+
+### First backup and restore check
 
 In the unlocked console, back up `/source` with no backup device selected and
 wait for receipt confirmation. Then restore that snapshot to `/restore` with
@@ -123,6 +143,8 @@ wait for receipt confirmation. Then restore that snapshot to `/restore` with
 file. This proves setup only. Pair and explicitly select another device before
 relying on Covalent for source-loss protection. See the full
 [success checklist](../getting-started.md#you-are-protected-when).
+
+</details>
 
 ## Required and optional mappings
 
@@ -132,14 +154,33 @@ relying on Covalent for source-loss protection. See the full
 | `/data` | `/mnt/user/appdata/covalent/data` | read/write | Encrypted chunks, metadata, identity, keys, and the wrapped local API-token record. |
 | `/run/secrets/covalent-kek` | `/mnt/user/system/covalent-secrets/key-encryption-key` | read-only | Required KEK in the reserved system-share path. `/mnt/user/system` and any enclosing path are forbidden as sources. Keep independent offline escrow. |
 | `/source` | One selected `/mnt/user/<share>` | read-only | A chosen share to back up. Add distinct mappings for more shares; never map all of `/mnt/user`. |
-| `/boot-source` | `/boot` | read-only | Optional boot-drive backup only. |
+| `/boot-source` | `/boot` | read-only | Optional legacy access to readable boot files; this does not establish boot recovery. |
 | `/restore` | A chosen writable destination | read/write | Add only while restoring; Covalent inventories existing files and applies the selected conflict policy. |
 
 Restores write only beneath the exact selected target and chosen conflict policy; traversal, absolute paths, and symlink escapes are rejected by the core before writes.
 
+## Appdata and boot files
+
+Docker can transfer readable files from explicitly mounted folders. A live
+database or an application's changing files may not form a consistent backup.
+Use the application's export or backup command, a consistent snapshot, or stop
+the application while preparing a copy. Place that prepared copy in a dedicated
+share folder outside Covalent's state and secrets, then select it as the source
+of a one-way link. Check the application's restore procedure separately.
+
+Use the same approach for a copy of readable boot files. Keep the source mount
+read-only and select only the intended files; do not put Covalent's keys there.
+A file copy does not test bootability or replace Unraid's recovery procedure.
+Current Docker transfer checks do not yet establish an appdata restore or a
+boot-file drill. Atlas remains offline. No plugin is required by the demonstrated
+file-transfer behavior; a plugin would need a specific Docker limitation.
+
 ## Pairing with phones and laptops
 
-Bridge mode maps TLS management on TCP 8443 and authenticated QUIC on UDP 8787. The daemon's cleartext API listens only on loopback inside the container; a pinned Caddy build terminates HTTPS in the same network namespace.
+Bridge mode maps TLS management on TCP 8443, authenticated QUIC on UDP 8787,
+and rclone's authenticated folder transport on TCP 8789. The daemon's cleartext
+API listens only on loopback inside the container; a pinned Caddy build
+terminates HTTPS in the same network namespace.
 
 Covalent has to tell your other devices which address to dial. On bridge networking — Unraid's default — the only address the container can see is its own, typically `172.17.0.2`, which your phone cannot reach: the peer port is published on the Unraid host, not on the container. Covalent resolves this from the **HTTPS hostname** you already set, which is by definition the name your devices use.
 

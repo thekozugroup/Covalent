@@ -22,7 +22,7 @@ class TransferWorker(appContext: Context, parameters: WorkerParameters) : Corout
             return Result.failure()
         }
         setForeground(ForegroundInfo(TRANSFER_NOTIFICATION_ID, TransferNotification.create(applicationContext)))
-        return when (runInterruptible(Dispatchers.IO) { TransferExecution.run(applicationContext, jobId) }) {
+        return when (runInterruptible(Dispatchers.IO) { TransferExecution.runSafely(applicationContext, jobId) }) {
             TransferOutcome.SUCCESS -> Result.success()
             TransferOutcome.RETRY -> Result.retry()
             TransferOutcome.FAILURE -> Result.failure()

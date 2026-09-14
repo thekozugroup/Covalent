@@ -9,12 +9,58 @@ case "${0##*/}" in
     ;;
   tailscale)
     [ "${1:-}" = status ] || exit 64
-    printf '%s\n' '{}'
+    if [ "${COVALENT_FIXTURE_TAILSCALE_NOT_RUNNING:-}" = 1 ]; then
+      printf '%s\n' '{"BackendState":"Stopped","Self":{"TailscaleIPs":["100.64.0.1","fd7a:115c:a1e0::6233:936e"]}}'
+    else
+      printf '%s\n' '{"BackendState":"Running","Self":{"TailscaleIPs":["100.64.0.1","fd7a:115c:a1e0::6233:936e"]}}'
+    fi
     exit 0
     ;;
   getent)
-    printf '%s\n' '100.64.0.1 atlas.example-tailnet.ts.net'
+    case "${1:-}" in
+      ahostsv4)
+        if [ "${COVALENT_FIXTURE_DNS_MISMATCH:-}" = 1 ]; then
+          printf '%s\n' \
+            '100.64.0.1 STREAM atlas.example-tailnet.ts.net' \
+            '100.64.0.2 STREAM atlas.example-tailnet.ts.net'
+        else
+          printf '%s\n' '100.64.0.1 STREAM atlas.example-tailnet.ts.net'
+        fi
+        exit 0
+        ;;
+      ahostsv6)
+        if [ "${COVALENT_FIXTURE_DNS_V6_MISMATCH:-}" = 1 ]; then
+          printf '%s\n' 'fd7a:115c:a1e0::bad STREAM atlas.example-tailnet.ts.net'
+        else
+          # Ubuntu glibc reports the A record as IPv4-mapped IPv6 here. The
+          # second spelling is the same IPv6 value as the status JSON, but
+          # written without zero compression.
+          printf '%s\n' \
+            '::ffff:100.64.0.1 STREAM atlas.example-tailnet.ts.net' \
+            'fd7a:115c:a1e0:0:0:0:6233:936e STREAM atlas.example-tailnet.ts.net'
+        fi
+        exit 0
+        ;;
+      *) exit 64 ;;
+    esac
+    ;;
+  id)
+    [ "${1:-}" = -u ] || exit 64
+    if [ "${COVALENT_FIXTURE_NOT_ROOT:-}" = 1 ]; then
+      printf '%s\n' 1000
+    else
+      printf '%s\n' 0
+    fi
     exit 0
+    ;;
+  setpriv)
+    if [ "${COVALENT_FIXTURE_IDENTITY_DENIED:-}" = 1 ]; then
+      echo 'fixture permission denied' >&2
+      exit 1
+    fi
+    [ "$#" -ge 4 ] || exit 64
+    shift 3
+    exec "$@"
     ;;
   hostname)
     printf '%s\n' atlas
@@ -61,17 +107,63 @@ fake_bin="$fixture_dir/bin"
 source_root="$fixture_dir/mnt/user"
 mkdir -p "$fake_bin" "$source_root/Photos" "$source_root/system/covalent-secrets"
 touch "$source_root/Photos/example"
-for command_name in docker tailscale getent hostname ss ssh; do
+for command_name in docker tailscale getent hostname ss ssh id setpriv; do
   ln -s "$repo_root/scripts/test-atlas-preflight.sh" "$fake_bin/$command_name"
 done
 
 fixture_path="$fake_bin:/usr/bin:/bin"
+if ! command -v jq >/dev/null 2>&1; then
+  echo "jq is required for Atlas preflight fixtures" >&2
+  exit 1
+fi
+fixture_path="$fake_bin:$(dirname "$(command -v jq)"):/usr/bin:/bin"
 digest='sha256:0000000000000000000000000000000000000000000000000000000000000000'
 
 PATH="$fixture_path" "$remote" "$digest" atlas.example-tailnet.ts.net "$source_root" "$source_root/Photos" \
   > "$fixture_dir/success.out"
 grep -Fq 'Ports: TCP 8443 and UDP 8787 are free' "$fixture_dir/success.out"
 grep -Fq '1 canonical directories opened without writes for inspection' "$fixture_dir/success.out"
+grep -Fq "resolves only to this Atlas node's Tailnet address(es)" "$fixture_dir/success.out"
+
+if COVALENT_FIXTURE_DNS_MISMATCH=1 PATH="$fixture_path" \
+  "$remote" "$digest" atlas.example-tailnet.ts.net "$source_root" "$source_root/Photos" \
+  > "$fixture_dir/dns-mismatch.out" 2>&1; then
+  echo "mismatched MagicDNS address fixture unexpectedly passed" >&2
+  exit 1
+fi
+grep -Fq 'is not an Atlas Tailnet address' "$fixture_dir/dns-mismatch.out"
+
+if COVALENT_FIXTURE_DNS_V6_MISMATCH=1 PATH="$fixture_path" \
+  "$remote" "$digest" atlas.example-tailnet.ts.net "$source_root" "$source_root/Photos" \
+  > "$fixture_dir/dns-v6-mismatch.out" 2>&1; then
+  echo "mismatched IPv6 MagicDNS address fixture unexpectedly passed" >&2
+  exit 1
+fi
+grep -Fq 'is not an Atlas Tailnet address' "$fixture_dir/dns-v6-mismatch.out"
+
+if COVALENT_FIXTURE_TAILSCALE_NOT_RUNNING=1 PATH="$fixture_path" \
+  "$remote" "$digest" atlas.example-tailnet.ts.net "$source_root" "$source_root/Photos" \
+  > "$fixture_dir/tailscale-stopped.out" 2>&1; then
+  echo "stopped Tailscale fixture unexpectedly passed" >&2
+  exit 1
+fi
+grep -Fq 'Tailscale is not running (BackendState: Stopped)' "$fixture_dir/tailscale-stopped.out"
+
+if COVALENT_FIXTURE_IDENTITY_DENIED=1 PATH="$fixture_path" \
+  "$remote" "$digest" atlas.example-tailnet.ts.net "$source_root" "$source_root/Photos" \
+  > "$fixture_dir/identity-denied.out" 2>&1; then
+  echo "container identity source-read fixture unexpectedly passed" >&2
+  exit 1
+fi
+grep -Fq 'cannot be opened for reading by container UID/GID 99:100' "$fixture_dir/identity-denied.out"
+
+if COVALENT_FIXTURE_NOT_ROOT=1 PATH="$fixture_path" \
+  "$remote" "$digest" atlas.example-tailnet.ts.net "$source_root" "$source_root/Photos" \
+  > "$fixture_dir/not-root.out" 2>&1; then
+  echo "non-root runtime-identity fixture unexpectedly passed" >&2
+  exit 1
+fi
+grep -Fq 'must run as UID 0' "$fixture_dir/not-root.out"
 
 if COVALENT_FIXTURE_TCP_OCCUPIED=1 PATH="$fixture_path" \
   "$remote" "$digest" atlas.example-tailnet.ts.net "$source_root" "$source_root/Photos" \
