@@ -108,10 +108,10 @@ jobs:
           path: ${{ runner.temp }}/covalent-apple-inventory
           if-no-files-found: error
       - run: apps/apple/Scripts/integration-test.sh
-      - name: Run bounded macOS UI and accessibility gates
+      - name: Run six hosted macOS UI and accessibility checks
         env:
           COVALENT_TEST_ARTIFACT_DIR: ${{ runner.temp }}/covalent-macos-ui
-        run: apps/apple/Scripts/macos-ui-test.sh
+        run: apps/apple/Scripts/macos-ui-test.sh --hosted
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
@@ -904,4 +904,4 @@ jobs:
             echo "Release candidate rejected: not every software gate concluded success." >&2
             exit 1
           fi
-          echo "Software gates passed. The published image and live Unraid evidence remain separate release blockers; Apple Developer ID is excluded and Android production signing is deferred."
+          echo "Hosted software gates passed. The exact-release-SHA local full seven-test macOS run with actual VoiceOver speech/action, the published image, and isolated Atmos Docker validation remain separate release blockers; Apple Developer ID is excluded and Android production signing is deferred."

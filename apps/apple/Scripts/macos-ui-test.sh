@@ -1,6 +1,46 @@
 #!/bin/zsh
 set -euo pipefail
 
+case $# in
+  0)
+    ui_test_mode=full
+    ;;
+  1)
+    if [[ "$1" != "--hosted" ]]; then
+      print -u2 -- "usage: ${0:t} [--hosted]"
+      exit 64
+    fi
+    ui_test_mode=hosted
+    ;;
+  *)
+    print -u2 -- "usage: ${0:t} [--hosted]"
+    exit 64
+    ;;
+esac
+
+typeset -a ui_test_selectors expected_ui_tests
+expected_ui_tests=(
+  'testFirstLaunchChoiceCanSetUpAndRecoveryCancelLeavesChoiceVisible()'
+  'testTierOneNavigationAndPrimaryWorkflowsAreReachable()'
+  'testStatusPassesSystemAccessibilityAudit()'
+  'testLinksPassesSystemAccessibilityAudit()'
+  'testNativeMenuBarQuickActionsAreReachable()'
+  'testNativeManualFolderLinkTransfersOneWayAndUpdatesMenuBar()'
+)
+if [[ "$ui_test_mode" == "hosted" ]]; then
+  ui_test_selectors=(
+    '-only-testing:CovalentMacUITests/CovalentMacUITests'
+    '-only-testing:CovalentMacUITests/RealFolderLinkUITests'
+  )
+  expected_ui_test_count=6
+  hosted_limit='Hosted mode excludes actual VoiceOver speech/action. A green hosted run does not replace the required exact-release-SHA full seven-test run on a headed, unlocked Apple Silicon Mac.'
+  print -u2 -- "$hosted_limit"
+else
+  ui_test_selectors=('-only-testing:CovalentMacUITests')
+  expected_ui_tests+=('testHostedRunnerCanExposeActualVoiceOverSpeech()')
+  expected_ui_test_count=7
+fi
+
 script_dir=${0:A:h}
 apple_dir=${script_dir:h}
 repo_root=${apple_dir:h:h}
@@ -461,7 +501,7 @@ if ! run_bounded 600 xcodebuild \
   -destination-timeout 30 \
   -parallel-testing-enabled NO \
   -maximum-parallel-testing-workers 1 \
-  -only-testing:CovalentMacUITests \
+  "${ui_test_selectors[@]}" \
   build-for-testing >"$build_log" 2>&1; then
   tail -200 "$build_log" >&2
   exit 1
@@ -820,7 +860,7 @@ if ! run_bounded 480 xcodebuild \
   -destination-timeout 30 \
   -parallel-testing-enabled NO \
   -maximum-parallel-testing-workers 1 \
-  -only-testing:CovalentMacUITests \
+  "${ui_test_selectors[@]}" \
   -resultBundlePath "$result_bundle" \
   -test-timeouts-enabled YES \
   -default-test-execution-time-allowance 120 \
@@ -839,7 +879,13 @@ if ! run_bounded 480 xcodebuild \
   tail -240 "$ui_log" >&2
   codesign --verify --deep --strict --verbose=4 "$runner" >&2 || true
   pgrep -alf 'xcodebuild|CovalentMacUITests|testmanagerd' >&2 || true
+  if [[ "$ui_test_mode" == "hosted" ]]; then
+    print -u2 -- "$hosted_limit"
+  fi
   exit 1
+fi
+if [[ "$ui_test_mode" == "hosted" ]]; then
+  print -u2 -- "$hosted_limit"
 fi
 if ! wait "$relaunch_writer_pid"; then
   sed -n '1,4p' "$real_fixture/relaunch-fixture-writer.log" >&2
@@ -862,26 +908,18 @@ if ! tests=$(xcrun xcresulttool get test-results tests --compact --path "$result
   print -u2 -- "macOS UI test result bundle test list could not be parsed."
   exit 1
 fi
-if ! jq -e '
+if ! jq -e --argjson expected_count "$expected_ui_test_count" '
   .result == "Passed" and
-  .totalTestCount == 7 and
-  .passedTests == 7 and
+  .totalTestCount == $expected_count and
+  .passedTests == $expected_count and
   .failedTests == 0 and
   .skippedTests == 0
 ' <<<"$summary" >/dev/null; then
-  print -u2 -- "macOS UI test result did not prove exactly seven passing, unskipped tests."
+  print -u2 -- "macOS UI test result did not prove exactly ${expected_ui_test_count} passing, unskipped tests."
   print -u2 -- "$summary"
   exit 1
 fi
-for expected_test in \
-  'testFirstLaunchChoiceCanSetUpAndRecoveryCancelLeavesChoiceVisible()' \
-  'testTierOneNavigationAndPrimaryWorkflowsAreReachable()' \
-  'testStatusPassesSystemAccessibilityAudit()' \
-  'testLinksPassesSystemAccessibilityAudit()' \
-  'testNativeMenuBarQuickActionsAreReachable()' \
-  'testHostedRunnerCanExposeActualVoiceOverSpeech()' \
-  'testNativeManualFolderLinkTransfersOneWayAndUpdatesMenuBar()'
-do
+for expected_test in "${expected_ui_tests[@]}"; do
   if ! jq -e --arg expected_test "$expected_test" '
     [.. | objects | select(.nodeType == "Test Case") | .name] |
     any(. == $expected_test)
