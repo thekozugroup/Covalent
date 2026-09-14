@@ -173,15 +173,23 @@ PY
 
 pids_for_exact_executable() {
   python3 - "$1" <<'PY'
+import os
 import subprocess
 import sys
 
-expected = sys.argv[1]
+expected = os.path.realpath(sys.argv[1])
+aliases = {sys.argv[1], expected}
+if expected.startswith("/private/tmp/"):
+    tmp_alias = "/tmp/" + expected.removeprefix("/private/tmp/")
+    if os.path.realpath(tmp_alias) == expected:
+        aliases.add(tmp_alias)
 for line in subprocess.run(
     ["ps", "-axo", "pid=,command="], check=True, text=True, capture_output=True
 ).stdout.splitlines():
     fields = line.strip().split(None, 1)
-    if len(fields) == 2 and (fields[1] == expected or fields[1].startswith(expected + " ")):
+    if len(fields) == 2 and any(
+        fields[1] == alias or fields[1].startswith(alias + " ") for alias in aliases
+    ):
         print(fields[0])
 PY
 }

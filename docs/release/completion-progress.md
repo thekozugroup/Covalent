@@ -31,16 +31,22 @@ The real-folder workflow completes at 248.94 seconds, beyond its unchanged
 The timing change has no established cause. Actual VoiceOver is excluded from
 hosted execution because the runner lacks system keyboard access.
 
-Local Mac builds and strict ad-hoc signature checks pass after fixing physical
-`/private/tmp` path comparisons and explicit personal signing settings. XCTest
-then times out enabling automation mode before any product test runs. A separate
-Debug app builds in 22.344 seconds, but direct inspection is blocked while the
-Mac is locked. Unlock and developer-permission replies remain pending; neither
-permission nor successful UI testing is assumed.
+Local Mac automation and Developer Mode are now enabled. The full seven-test run
+from `a4ee49c` passes four tests and fails three, with no skips. First launch,
+navigation, and the empty Links and Status accessibility audits pass. The menu
+icon is off-screen while Hidden Bar is active; VoiceOver keyboard delivery fails;
+and the local-network permission prompt interrupts navigation before real-folder
+pairing begins. This run supplies no local transfer or actual VoiceOver credit.
+
+Narrow fixes use native XCTest keystrokes, handle the exact Covalent network
+prompt, compare menu coordinates against matching display bounds, and recognize
+verified `/tmp` executable aliases during cleanup. Syntax checks pass; runtime
+verification remains pending. One owned helper missed by the previous literal
+path comparison was stopped, and its managed state and credential are absent.
 
 The harness keeps the full seven-test suite as its default. Its explicit hosted
 mode selects the six functional/accessibility tests supported by GitHub's runner.
-All test bodies, assertions, and time limits remain unchanged. The hosted run
+Acceptance assertions and time limits are preserved. The hosted run
 selected exactly those six tests. Before publication, the exact release SHA must pass
 the full local suite, including actual VoiceOver speech and native action, plus
 the defined HIG and keyboard checks. Green hosted CI alone cannot complete this

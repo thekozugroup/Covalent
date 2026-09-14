@@ -1,6 +1,4 @@
 import AppKit
-import Carbon.HIToolbox
-import CoreGraphics
 import Foundation
 import XCTest
 
@@ -11,10 +9,6 @@ final class HostedVoiceOverCapabilityProbe: XCTestCase {
     private let transitionTimeout: TimeInterval = 10
     private let probeDuration: TimeInterval = 45
     private let speechTarget = "Set Up This Mac"
-    private let voiceOverModifiers: [(Int, CGEventFlags)] = [
-        (kVK_Control, .maskControl), (kVK_Option, .maskAlternate),
-    ]
-
     func testHostedRunnerCanExposeActualVoiceOverSpeech() throws {
         let softDeadline = Date().addingTimeInterval(probeDuration)
         let pasteboard = NSPasteboard.general
@@ -46,7 +40,7 @@ final class HostedVoiceOverCapabilityProbe: XCTestCase {
         }
         guard !initiallyEnabled else { throw ProbeError.voiceOverInitiallyEnabled }
 
-        try postChord(kVK_F5, modifiers: [(kVK_Command, .maskCommand)])
+        app.typeKey(.F5, modifierFlags: .command)
         changedVoiceOver = true
         let enablement = try waitForVoiceOverEnablement(before: softDeadline)
         guard enablement.enabled else {
@@ -71,6 +65,7 @@ final class HostedVoiceOverCapabilityProbe: XCTestCase {
         app.activate()
         let copiedExpectedSpeech = try navigateAndCopySpeech(
             containing: speechTarget,
+            app: app,
             pasteboard: pasteboard,
             before: softDeadline
         )
@@ -83,7 +78,7 @@ final class HostedVoiceOverCapabilityProbe: XCTestCase {
 
         let setupTitle = app.staticTexts["Set up Covalent"]
         guard setupTitle.exists else { throw ProbeError.voiceOverSetupActionFailed }
-        try postChord(kVK_Space, modifiers: voiceOverModifiers)
+        app.typeKey(.space, modifierFlags: [.control, .option])
         guard waitForDisappearance(of: setupTitle, before: softDeadline),
               app.state == .runningForeground,
               app.windows.firstMatch.exists else {
@@ -126,7 +121,7 @@ final class HostedVoiceOverCapabilityProbe: XCTestCase {
                 let dialog = voiceOver.dialogs.firstMatch
                 guard dialog.exists else { throw ProbeError.unexpectedWelcome }
                 voiceOver.activate()
-                try postChord(kVK_Return)
+                voiceOver.typeKey(.return, modifierFlags: [])
                 welcomeAccepted = true
                 guard waitForDisappearance(of: welcome, before: deadline) else {
                     throw ProbeError.unexpectedWelcome
@@ -142,6 +137,7 @@ final class HostedVoiceOverCapabilityProbe: XCTestCase {
 
     private func navigateAndCopySpeech(
         containing expected: String,
+        app: XCUIApplication,
         pasteboard: NSPasteboard,
         before deadline: Date
     ) throws -> Bool {
@@ -151,10 +147,7 @@ final class HostedVoiceOverCapabilityProbe: XCTestCase {
                 throw ProbeError.pasteboardWriteFailed
             }
             let markerChange = pasteboard.changeCount
-            try postChord(
-                kVK_ANSI_C,
-                modifiers: voiceOverModifiers + [(kVK_Shift, .maskShift)]
-            )
+            app.typeKey("c", modifierFlags: [.control, .option, .shift])
             let changed = waitForPasteboardChange(
                 after: markerChange,
                 pasteboard: pasteboard,
@@ -167,12 +160,9 @@ final class HostedVoiceOverCapabilityProbe: XCTestCase {
             guard traversal < 11, Date() < deadline else { continue }
             let normalized = spoken?.lowercased()
             if normalized?.contains(" group") == true || normalized?.contains("scroll area") == true {
-                try postChord(
-                    kVK_DownArrow,
-                    modifiers: voiceOverModifiers + [(kVK_Shift, .maskShift)]
-                )
+                app.typeKey(.downArrow, modifierFlags: [.control, .option, .shift])
             } else {
-                try postChord(kVK_RightArrow, modifiers: voiceOverModifiers)
+                app.typeKey(.rightArrow, modifierFlags: [.control, .option])
             }
         }
         return false
@@ -188,7 +178,7 @@ final class HostedVoiceOverCapabilityProbe: XCTestCase {
         if !initiallyEnabled, welcome.exists {
             let cleanupDeadline = Date().addingTimeInterval(transitionTimeout)
             voiceOver.activate()
-            do { try postChord(kVK_Escape) } catch { return false }
+            voiceOver.typeKey(.escape, modifierFlags: [])
             return waitForDisappearance(of: welcome, before: cleanupDeadline)
                 && waitForVoiceOver(enabled: false, before: cleanupDeadline)
         }
@@ -196,11 +186,7 @@ final class HostedVoiceOverCapabilityProbe: XCTestCase {
         guard current != initiallyEnabled else { return true }
         guard changedVoiceOver else { return false }
         app.activate()
-        do {
-            try postChord(kVK_F5, modifiers: [(kVK_Command, .maskCommand)])
-        } catch {
-            return false
-        }
+        app.typeKey(.F5, modifierFlags: .command)
         return waitForVoiceOver(
             enabled: initiallyEnabled,
             before: Date().addingTimeInterval(transitionTimeout)
@@ -209,39 +195,6 @@ final class HostedVoiceOverCapabilityProbe: XCTestCase {
 
     private func waitForVoiceOver(enabled: Bool, before deadline: Date) -> Bool {
         wait(before: deadline) { NSWorkspace.shared.isVoiceOverEnabled == enabled }
-    }
-
-    // VoiceOver consumes system shortcuts. Use public system events, with a
-    // read-only permission check; this probe never requests or changes TCC access.
-    private func postChord(_ key: Int, modifiers: [(Int, CGEventFlags)] = []) throws {
-        guard CGPreflightPostEventAccess() else {
-            attachAuditResult("Accessibility audit: VoiceOver system keyboard access unavailable")
-            throw ProbeError.systemKeyboardAccessUnavailable
-        }
-        guard let source = CGEventSource(stateID: .hidSystemState) else {
-            throw ProbeError.keyboardEventCreationFailed
-        }
-        var flags: CGEventFlags = []
-        var strokes: [(Int, Bool, CGEventFlags)] = []
-        for (modifierKey, modifierFlag) in modifiers {
-            flags.insert(modifierFlag)
-            strokes.append((modifierKey, true, flags))
-        }
-        strokes.append((key, true, flags))
-        strokes.append((key, false, flags))
-        for (modifierKey, modifierFlag) in modifiers.reversed() {
-            flags.remove(modifierFlag)
-            strokes.append((modifierKey, false, flags))
-        }
-        // Allocate every release event before posting any key-down event.
-        let events = try strokes.map { key, down, flags in
-            guard let event = CGEvent(
-                keyboardEventSource: source, virtualKey: CGKeyCode(key), keyDown: down
-            ) else { throw ProbeError.keyboardEventCreationFailed }
-            event.flags = flags
-            return event
-        }
-        for event in events { event.post(tap: .cghidEventTap) }
     }
 
     private func waitForPasteboardChange(
@@ -318,8 +271,6 @@ final class HostedVoiceOverCapabilityProbe: XCTestCase {
         case missingFixtureLabel
         case voiceOverInitiallyEnabled
         case voiceOverDidNotEnable
-        case systemKeyboardAccessUnavailable
-        case keyboardEventCreationFailed
         case expectedSpeechNotCopied
         case voiceOverSetupActionFailed
         case unexpectedWelcome

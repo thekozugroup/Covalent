@@ -211,7 +211,19 @@ final class CovalentMacUITests: XCTestCase {
         let statusItem = statusItems[0]
         XCTAssertTrue(statusItem.waitForExistence(timeout: 10))
         let statusFrame = statusItem.frame
-        let screenFrames = NSScreen.screens.map(\.frame)
+        var displayCount: UInt32 = 0
+        let countError = CGGetActiveDisplayList(0, nil, &displayCount)
+        guard countError == .success, displayCount > 0 else {
+            XCTFail("Could not enumerate active displays: \(countError); count=\(displayCount)")
+            return
+        }
+        var displayIDs = [CGDirectDisplayID](repeating: 0, count: Int(displayCount))
+        let listError = CGGetActiveDisplayList(displayCount, &displayIDs, &displayCount)
+        guard listError == .success, displayCount > 0 else {
+            XCTFail("Could not read active display bounds: \(listError); count=\(displayCount)")
+            return
+        }
+        let screenFrames = displayIDs.prefix(Int(displayCount)).map { CGDisplayBounds($0) }
         let statusValue = String(describing: statusItem.value ?? "")
         let isVisibleStatusTarget = !statusFrame.isEmpty
             && screenFrames.contains { $0.intersects(statusFrame) }

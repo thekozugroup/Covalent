@@ -32,6 +32,20 @@ final class RealFolderLinkUITests: XCTestCase {
         recordPhase("Covalent phase: setup entered")
         let app = launchManagedApp()
         defer { app.terminate() }
+        var handledLocalNetworkConsent = false
+        let localNetworkConsentMonitor = addUIInterruptionMonitor(
+            withDescription: "Allow Covalent local-network access"
+        ) { alert in
+            let title = alert.staticTexts[
+                "Allow “Covalent” to find devices on local networks?"
+            ]
+            let allow = alert.buttons["Allow"]
+            guard title.exists, allow.exists else { return false }
+            allow.click()
+            handledLocalNetworkConsent = true
+            return true
+        }
+        defer { removeUIInterruptionMonitor(localNetworkConsentMonitor) }
 
         let setup = app.buttons["firstLaunch.setup"]
         XCTAssertTrue(setup.waitForExistence(timeout: transitionTimeout))
@@ -43,8 +57,12 @@ final class RealFolderLinkUITests: XCTestCase {
         recordPhase("Covalent phase: setup completed")
 
         recordPhase("Covalent phase: pairing entered")
+        let devicesTitle = app.staticTexts["Your devices"]
         app.typeKey("2", modifierFlags: .command)
-        XCTAssertTrue(app.staticTexts["Your devices"].waitForExistence(timeout: transitionTimeout))
+        if handledLocalNetworkConsent, !devicesTitle.exists {
+            app.typeKey("2", modifierFlags: .command)
+        }
+        XCTAssertTrue(devicesTitle.waitForExistence(timeout: transitionTimeout))
         let devicesScrollView = app.scrollViews["devices.view"]
         XCTAssertTrue(devicesScrollView.waitForExistence(timeout: transitionTimeout))
         let address = devicesScrollView.textFields["devices.address"]
