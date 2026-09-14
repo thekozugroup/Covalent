@@ -1,8 +1,13 @@
 # Back up your first folder
 
-This is the shortest safe path from a new checkout to a backup you have
-restored successfully. Allow about 20–30 minutes for the first source build;
-later starts take only a few minutes.
+> **Legacy backup reference.** The current app no longer exposes this backup
+> workflow. This page is retained as historical reference for existing encrypted
+> backups. For new one-way rclone links, use
+> [Create your first one-way link](getting-started-links.md).
+
+The steps below describe the superseded encrypted-backup workflow. They remain
+for reference when inspecting existing legacy data and are not the current setup
+path.
 
 ## Choose your setup
 

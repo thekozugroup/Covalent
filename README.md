@@ -79,7 +79,7 @@ maintainer-only publishing detail lives in [docs/release/publishing.md](docs/rel
 
 ## Contribute
 
-Prerequisites by area: Rust 1.97.1 for the shared engine; an Apple Silicon Mac with Swift 6.3, Xcode 26, and XcodeGen for Apple; JDK 17 through 25 (`17` in CI), `adb`, and Android SDK/API 37 for Android; Docker with Compose/Buildx for containers. Choose a mode so a core-only contributor is not blocked by unrelated platform tools.
+Prerequisites by area: Rust 1.97.1 for the shared service; an Apple Silicon Mac with Swift 6.3, Xcode 26, and XcodeGen for Apple; JDK 17 through 25 (`17` in CI), `adb`, and Android SDK/API 37 for Android; Docker with Compose/Buildx for containers. Choose a mode so a core-only contributor is not blocked by unrelated platform tools.
 
 ```sh
 ./scripts/bootstrap.sh core
@@ -87,7 +87,7 @@ Prerequisites by area: Rust 1.97.1 for the shared engine; an Apple Silicon Mac w
 cargo run -p covalent-cli -- doctor
 ```
 
-Use `apple`, `android`, `container`, or `all` with both scripts for broader work. Android headed validation additionally requires the exact `Covalent_API_37` AVD and an explicit `ANDROID_SERIAL`; Apple UI gates use the bounded scripts under `apps/apple/Scripts`. Container validation includes TLS-only management, the three-node disaster drill, and artifact budgets. Public package promotion remains required. Docker is the accepted Unraid validation target while Atlas is offline; a physical Atlas drill does not gate the current scope. Apple Developer ID/notarization is excluded, and Android production signing is deferred.
+Use `apple`, `android`, `container`, or `all` with both scripts for broader work. Android headed validation additionally requires the exact `Covalent_API_37` AVD and an explicit `ANDROID_SERIAL`; Apple UI gates use the bounded scripts under `apps/apple/Scripts`. Container validation includes TLS-only management, three-node one-way transfer drills, and artifact budgets. Public package promotion remains required. Docker is the accepted Unraid validation target while Atlas is offline; a physical Atlas drill does not gate the current scope. Apple Developer ID/notarization is excluded, and Android production signing is deferred.
 
 Bootstrap checks tools; it does not start a node. A headless node requires an
 explicitly provisioned KEK, and network access requires the TLS container path.
@@ -95,7 +95,7 @@ Use the [Docker source setup](packaging/docker/README.md#personal-use-from-this-
 instead of launching `covalent-node serve` without those protections. No secret
 or external account is required for bootstrap or core tests.
 
-The implemented Rust vertical slice includes signed pairing and revocation, streaming encrypted backup, exact explicit replicas, authenticated QUIC providers, corruption repair, signed restore preview, crash recovery, and resumable root-confined restore. A direct CLI disaster-recovery drill is available through `./scripts/smoke.sh`; the full property/adversarial/multi-node suite runs with `cargo test --workspace --all-features`.
+The implemented Rust service includes signed pairing and revocation, authenticated QUIC link control, shared link settings, restricted rclone orchestration, safe deletion handling, interruption recovery, and actionable status. `./scripts/smoke.sh` remains legacy encrypted backup/restore compatibility coverage; it is not the active one-way product journey. The full Rust suite runs with `cargo test --workspace --all-features`.
 
 The persisted/local API contract remains protocol v1. Peer QUIC framing is independently negotiated as transport v3, so framing changes cannot silently reuse an old ALPN or signature domain. Transport v3 intentionally fails closed against v0.1.0 transport-v2 peers. See [local API](docs/api/openapi.yaml), [protocol](docs/protocol/protocol.md), [architecture](docs/architecture/overview.md), [threat model](docs/security/threat-model.md), and [validation matrix](docs/release/validation-matrix.md).
 

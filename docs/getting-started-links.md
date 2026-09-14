@@ -17,7 +17,9 @@ Android debug APK.
   macOS HIG validation is still open.
 - Android uses the system folder picker to grant access to each selected
   folder. It does not require all-files permission. Real API 37 transfers and
-  permission-loss recovery pass; complete native device acceptance remains open.
+  permission-loss recovery pass; native Android acceptance tests pass.
+  Mac HIG and VoiceOver acceptance, final package acceptance, and laptop–Atmos
+  validation remain open.
 
 Install guidance: [macOS](platform/macos.md),
 [Android](platform/android.md), and
@@ -92,8 +94,8 @@ Fan-out destinations, separate family collection folders, destination-deletion
 retention and explicit restoration, and shared link settings have verified
 three-node journeys. Manual transfers, restart, and an actual 15-minute
 scheduled transfer pass. Real Android charging and Wi-Fi conditions also block
-and resume transfers. Complete native app acceptance and laptop–Atmos validation
-remain open. Do not treat a local build as a
+and resume transfers. Mac HIG and VoiceOver acceptance, final package acceptance,
+and laptop–Atmos validation remain open. Do not treat a local build as a
 release-ready package.
 
 See [product requirements](product/requirements.md) and the

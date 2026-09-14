@@ -12,23 +12,24 @@ restoration, cadence, and link-wide settings have working validation evidence.
 The Android app's native pairing, permission, transfer, and background journeys
 pass. Earlier bidirectional and multi-provider backup requirements are superseded.
 
-The latest completed CI run tests the same source tree as `2bde4a9`:
-[CI 34789989171](https://github.com/thekozugroup/Covalent/actions/runs/34789989171).
+The latest completed CI run tests the same source tree as `8b01377`:
+[CI 34792839553](https://github.com/thekozugroup/Covalent/actions/runs/34792839553).
 Seven direct jobs pass: Rust/contracts, Android foundation and device checks,
 Mac packaging, both Docker architectures, and dependency review. CodeQL and
 version checks also pass. Mac UI and its aggregate software gate fail.
 
-Android passes all 82 baseline device tests in 85.262 seconds and the unchanged
-full SAF journey in 424.523 seconds: 83 tests, zero failures or skips. Its worker,
+Android passes all 82 baseline device tests in 63.070 seconds and the unchanged
+full SAF journey in 448.716 seconds: 83 tests, zero failures or skips. Its worker,
 guardian, picker fixture, second-node data, and private credential cleanup checks
 pass. The hosted emulator stops; the runner reaps one remaining ADB process.
 The log does not enumerate the trap-driven container cleanup afterward.
 
-The Mac suite passes five of seven tests with no skips. All four native popup
+The hosted Mac suite passes five of six tests with no skips. All four native popup
 selections and functional transfer, relaunch, menu, and status phases complete.
-The real-folder test finishes in 222.205 seconds, inside its unchanged 240-second
-allowance. Six contrast occurrences across five strings remain. Hosted VoiceOver
-fails its system keyboard-access preflight before speech or native action.
+The real-folder workflow completes at 248.94 seconds, beyond its unchanged
+240-second allowance. Six contrast occurrences across five strings remain.
+The timing change has no established cause. Actual VoiceOver is excluded from
+hosted execution because the runner lacks system keyboard access.
 
 Local Mac builds and strict ad-hoc signature checks pass after fixing physical
 `/private/tmp` path comparisons and explicit personal signing settings. XCTest
@@ -39,8 +40,8 @@ permission nor successful UI testing is assumed.
 
 The harness keeps the full seven-test suite as its default. Its explicit hosted
 mode selects the six functional/accessibility tests supported by GitHub's runner.
-All test bodies, assertions, and time limits remain unchanged. The new selection
-still needs hosted execution. Before publication, the exact release SHA must pass
+All test bodies, assertions, and time limits remain unchanged. The hosted run
+selected exactly those six tests. Before publication, the exact release SHA must pass
 the full local suite, including actual VoiceOver speech and native action, plus
 the defined HIG and keyboard checks. Green hosted CI alone cannot complete this
 goal. This is a documented operator gate, like the isolated Atmos drill.
@@ -66,7 +67,9 @@ whole-app battery evidence. It establishes neither a new speedup nor a regressio
 No additional performance rerun is currently justified.
 
 Completed transfer fixtures, private test helpers, and the performance checkout
-are removed. Reusable toolchains, the temporary Mac inspection build, and tested
+are removed. A further 191,115,811 bytes of disposable Mac build files are removed;
+the retained inspection app is unchanged and still passes strict signature checks.
+Reusable toolchains, the temporary Mac inspection build, and tested
 candidate/evidence files remain while needed. The retained personal Android
 candidate from `6499ded` passed its full SAF journey in 394.998 seconds; its
 emulator, private ADB, worktree, and build files are removed. Final-source Mac,
