@@ -57,6 +57,7 @@ struct MacFoldersView: View {
         }
       }
       .formStyle(.grouped)
+      .macLinksScrollEdgeEffect()
       .accessibilityIdentifier("links.view")
       .navigationTitle("Links")
       .task { await refreshWhileVisible() }
@@ -887,6 +888,17 @@ struct MacFoldersView: View {
       }
       completion(grant)
     }
+}
+
+private extension View {
+  @ViewBuilder
+  func macLinksScrollEdgeEffect() -> some View {
+    if #available(macOS 26.0, *) {
+      scrollEdgeEffectHidden(for: .bottom)
+    } else {
+      self
+    }
+  }
 }
 
 private struct FolderLinkSettingsEditorContext: Identifiable {

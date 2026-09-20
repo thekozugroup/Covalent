@@ -1,6 +1,6 @@
 # Completion progress
 
-Updated 2026-09-19. The active goal is defined in [Product requirements](../product/requirements.md#active-completion-goal).
+Updated 2026-09-20. The active goal is defined in [Product requirements](../product/requirements.md#active-completion-goal).
 
 **Current scope: 80% verified, 8 of 10 complete acceptance checks. Rclone migration: 100%.**
 These percentages count accepted user journeys, not remaining development time.
@@ -12,76 +12,68 @@ restoration, cadence, and link-wide settings have working validation evidence.
 The Android app's native pairing, permission, transfer, and background journeys
 pass. Earlier bidirectional and multi-provider backup requirements are superseded.
 
-The latest completed CI run tests `778e3fd`:
-[CI 35486573392](https://github.com/thekozugroup/Covalent/actions/runs/35486573392).
-Rust/contracts, Android foundation, Mac packaging, and dependency review pass.
-Both Docker builds and transfer checks pass, but their vulnerability scan finds
-High CVE-2026-85091 in zlib 1.3.2-r0. Hosted Mac contrast failures have a passing
-local fix below. Android's full SAF journey reaches shared source-deletion
-propagation but times out with both peers running; isolated reproduction with
-the current candidate remains open. No deadline increase is credited as a fix.
+Current CI tests `6d28e5e`:
+[CI 35489446586](https://github.com/thekozugroup/Covalent/actions/runs/35489446586).
+Rust/contracts, both Docker architecture builds and vulnerability/runtime checks,
+Android foundation and API 37 device checks, Mac packaging, and dependency review
+pass. Android passes 82 baseline tests and the full SAF journey, including the
+source-deletion step that previously timed out. Hosted Mac UI passes five checks;
+its real-folder journey reaches the rendered audit and finds two contrast failures
+near the bottom of the Links form. The bounded fix hides that form's bottom
+scroll-edge fade on macOS 26 and later. Pinned compilation passes; the local UI
+runner stops because the login session is locked. Hosted verification remains open.
 
-The personal Android debug APK from `dedea61` is built: 49,341,349 bytes,
-package `life.michaelwong.covalent`, version `0.2.0`. Device validation awaits
-the final tagged build. This candidate installed and launched on a Pixel 10 Pro XL
-running Android 17. The temporary app was removed without changing existing data.
+The retained Android candidate uses `06b12b5`, is 49,344,953 bytes, and has APK
+SHA-256 `8f9257350ed8c35b78f4601903edfd43b19cb853ac2498cda67bc37b12804eae`.
+Package, native libraries, signer, notices, and provenance checks pass. The prior
+`25971fe` APK passes its full SAF journey on a private emulator in 380.332 seconds.
+Final tagged-APK validation is still required. The physical Pixel is not used.
 
-The current local Mac run passes all six checks in 264.9 seconds, including
-native pairing, two transfers, relaunch, link settings, menu actions, keyboard
-navigation, and rendered accessibility audits. Its source tree is
-`0efc1b3ab875a323d3fa4f290b6f8933d337582d`. Decorative sidebar symbols now
-have explicit contrast and separate accessible text. The personal Apple Silicon
-package also builds and passes its architecture, signature, and provenance checks.
-VoiceOver automation is removed by owner override. Default and `--hosted` select
-the same six native checks; keyboard, contrast, and HIG requirements remain.
+The retained local Mac six-check run passes in 264.9 seconds, including native
+pairing, two transfers, relaunch, saved folder grants, link settings, menu actions,
+keyboard navigation, and rendered accessibility audits. Its source tree is
+`0efc1b3ab875a323d3fa4f290b6f8933d337582d`. The `06b12b5` personal Apple Silicon
+archive passes architecture, signature, sandbox inheritance, manifest, and component
+hash checks. The final package must include the scroll-edge correction. VoiceOver
+is excluded by owner instruction; both default and hosted checks omit it.
 
-Atmos old owned cleanup is complete. Native Docker images built on Atmos and
-Waypoint, and both runtime containers are healthy. All 7,344 music files,
-totaling 15,389,291,455 bytes, reached Waypoint's E-Music share. Full engine
-verification and independent path, size, and sampled hash checks passed.
-Hourly cadence is confirmed on both devices; unrelated services and source
-metadata are unchanged. These deployed images still use `dedea61`; the final
-upgrade must include the subsequent security, mapped-port, and scan fixes.
+The matching `06b12b5` packaged helpers receive three real Atmos files totaling
+3,748,005 bytes, with exact path, size, and SHA-256 equality. Both processes exit
+normally. All temporary copies, helpers, tokens, and source fixtures are removed;
+source hashes/metadata and unrelated services stay unchanged. This drill uses
+copied helpers without app entitlements; native sandbox integration is covered by
+the separate real-folder app journey and bundle verification.
 
-The real Continuous source-deletion test passes in 148.03 seconds. It deletes a
-source file while the same rclone process is copying, without stopping or
-reconfiguring the link. The destination copy disappears within 120 seconds;
-remaining files are exact, unrelated destination files stay intact, and a newer
-generation succeeds on both devices. The interrupted-copy regression passes in
-57.38 seconds; stopping the receiver reaps its worker in 105 milliseconds.
+All 7,344 music files, totaling 15,389,291,455 bytes, reached Waypoint's E-Music
+share. Full engine verification and independent path, size, and sampled hash checks
+pass. Hourly cadence is confirmed on both devices, and a scheduled run starts
+4.831 seconds after its due time. Source metadata and unrelated services remain
+unchanged. Final runtime upgrades and their performance comparison are pending.
 
-Ambiguous interrupted copies fail visibly. If ownership of a published copy
-cannot be confirmed, recovery requires restoring the source file or removing
-only that uncertain copy before retrying. The historical `ec49a3d` Android
-deletion timeout remains recorded; its unrecorded internal cause is not another
-gate after the reviewed current-source deletion and interruption checks pass.
+The current real-worker failure test passes and preserves recovery state, source
+files, and unrelated destination files. Completed job errors now produce a failed
+run instead of silently restarting. Unique temporary file lists are removed on
+success, error, or cancellation. The real Continuous source-deletion regression
+passes in 143.06 seconds, including deletion during an active copy. Existing
+interrupted-copy checks remain valid. Ambiguous published copies require explicit
+recovery before retrying; ownership is not guessed.
 
-The current performance sample copies 101 files, totaling 67,518,464 bytes,
-correctly in 35.30 seconds. During 29.985 seconds of Manual/Scheduled idle time,
-no rclone worker or guardian is observed; sampled CPU time is 0.01 seconds.
-This is one warm macOS loopback sample including control/status delivery, not
-whole-app battery evidence. It establishes neither a new speedup nor a regression.
-The real music library exposed a separate performance cost: an unchanged run
-took 853.421 seconds and read 42,889,273,344 bytes from Atmos. Destination
-metadata stayed unchanged, both transfer workers stopped afterward, and idle
-CPU samples were 0.12% and 0.23%. The source prepared the same hash inventory
-twice because of an obsolete Syncthing safeguard. Rclone obtains the complete
-proof in one inventory; removing the duplicate leaves destination pre-copy and
-post-copy integrity checks intact. Forty-seven service tests and the real
-fan-out/restart regression pass. A deployed speedup has not yet been measured.
+A warm local sample copies 101 files totaling 67,518,464 bytes in 35.30 seconds.
+During 29.985 seconds of Manual/Scheduled idle time, no worker or guardian is
+observed and sampled CPU time is 0.01 seconds. This is not whole-app battery evidence.
+The real music library exposes a separate cost: an unchanged run takes 853.421
+seconds and reads 42,889,273,344 bytes from Atmos. Destination metadata remains
+unchanged and idle CPU samples are 0.12% and 0.23%. The redundant second source hash
+inventory is removed; destination comparison and post-copy integrity checks remain.
+Forty-seven service tests and the real fan-out/restart check pass. A deployed
+speedup is not yet claimed.
 
-Completed transfer fixtures, private test helpers, and the performance checkout
-are removed. A further 191,115,811 bytes of disposable Mac build files are removed;
-the retained inspection app is unchanged and still passes strict signature checks.
-Reusable toolchains, the temporary Mac inspection build, and tested
-candidate/evidence files remain while needed. The retained personal Android
-candidate from `6499ded` passed its full SAF journey in 394.998 seconds; its
-emulator, private ADB, worktree, and build files are removed. Final-source Mac,
-Android, and Docker candidates still need acceptance.
-
-The Android candidate scratch directory (8,219,709,440 bytes) was moved to Trash;
-those bytes are reclaimable, not yet freed. Active Mac tools and server caches
-remain scoped for the remaining builds and tests.
+Superseded Mac candidates and an old build cache with an observed 5,671,329,792-byte
+footprint are removed. This is a measured file footprint, not guaranteed physical
+blocks freed. Completed worker and cross-host fixtures are also removed. Current
+packages, reusable tools, the private Android emulator/ADB, and warm build caches
+remain only while needed for final acceptance. Protected historical source and
+validation evidence remain intact.
 
 Atmos access is restored. Follow the [isolated Atmos drill](atmos-one-way-drill.md)
 without disrupting other server resources. Atlas remains offline. Docker is the accepted Unraid target;
