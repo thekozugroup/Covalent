@@ -11,29 +11,34 @@ Rclone is the sole transfer engine. Native setup, pairing, one-way transfer,
 fan-out, independent collection contributors, deletion choices, explicit
 restoration, cadence, and link-wide settings have working validation evidence.
 The Android app's native pairing, permission, transfer, and background journeys
-have prior passing evidence; the current full journey fails during deletion
-propagation. Earlier bidirectional and multi-provider backup requirements are superseded.
+pass the latest hosted run. An earlier intermittent deletion-propagation failure
+remains unexplained. Earlier bidirectional and multi-provider backup requirements are superseded.
 
-The most recently completed CI tests `91979b7`:
-[CI 35490922447](https://github.com/thekozugroup/Covalent/actions/runs/35490922447).
-Rust/contracts, both Docker architecture builds and vulnerability/runtime checks,
-Android foundation, Mac packaging, and dependency review pass. Android passes
-82 baseline device tests, but its SAF journey fails during source-deletion
-propagation: the destination reports a failed run before the wait expires.
-The same Android and Rust inputs passed that journey on `6d28e5e`; the
-intermittent worker failure remains under diagnosis. Current hosted Mac UI
-passes five checks. Its real-folder journey
-completes both transfers and relaunch, then still reports contrast failures for
-destination-deletion guidance and a partially clipped Transfers label. The
-scroll-edge change did not resolve these failures, and the four-minute test
-allowance also expires during the final audit. Diagnosis remains open; no
-assertion is waived or timeout increased.
+The most recently completed CI tests `1fa0440`:
+[CI 35493547929](https://github.com/thekozugroup/Covalent/actions/runs/35493547929).
+Both Docker architecture builds and vulnerability/runtime checks, Android
+foundation, Mac packaging, dependency review, CodeQL, and version checks pass.
+Android passes all 82 baseline device tests and its SAF journey in 430.958 seconds.
+The earlier `91979b7` source-deletion failure remains under diagnosis; this pass
+does not explain it. Shared Rust/contracts fails a stale release-note wording
+assertion; the corrected assertion and foundation checks pass locally.
+Hosted Mac UI passes five checks. Its real-folder journey completes both transfers,
+relaunch, settings, and menu actions in 212.294 seconds, but reports contrast
+findings for Local service, destination-deletion guidance, and a partially clipped
+Transfers label. No timeout occurs this run. No assertion is waived or timeout increased.
 
 The ineffective scroll-edge modifier is removed. Mac failure labels now say
 "Last run incomplete" without claiming 24 hours elapsed. Android no longer
 offers Run Now for Continuous links, which reject explicit run requests.
 Affected Android UI compilation and all 196 existing JVM tests pass; current
 hosted native acceptance remains open.
+
+The newer local development commit `947ab21` uses semantic primary text for the
+two Form labels and passes typechecking of all 24 Mac/shared Swift sources.
+Its Android deletion test waits for a successful acknowledged seed before testing
+source deletion; the test APK compiles. Existing independent active-copy deletion
+and ambiguous-copy recovery checks remain intact. These changes still need native
+acceptance. VoiceOver remains excluded by the owner's repeated instruction.
 
 The retained Android candidate uses `06b12b5`, is 49,344,953 bytes, and has APK
 SHA-256 `8f9257350ed8c35b78f4601903edfd43b19cb853ac2498cda67bc37b12804eae`.
