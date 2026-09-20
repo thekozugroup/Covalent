@@ -661,7 +661,7 @@
     <string name="folder_link_run_result_timed_out">timed out</string>
     <string name="folder_link_run_result_interrupted">interrupted</string>
     <string name="folder_link_run_result_cancelled">cancelled</string>
-    <string name="folder_link_run_failed_interrupted_restore_disabled">If this failed after an interrupted copy, choose Edit shared settings, enable Restore files deleted at the destination, and confirm before Run Now. Files you deleted at a destination may download again.</string>
+    <string name="folder_link_run_failed_interrupted_restore_disabled">If this failed after an interrupted copy, choose Edit shared settings, enable Restore files deleted at the destination, and confirm before the next run. Files you deleted at a destination may download again.</string>
     <string name="folder_link_run_failed_unknown_destination_copy">If a deleted source file may still have an unknown copy at a destination, restore the source file or remove only that copy before retrying.</string>
     <string name="folder_link_run_ready">Ready</string>
     <string name="folder_link_waiting_conditions">Waiting for transfer conditions</string>

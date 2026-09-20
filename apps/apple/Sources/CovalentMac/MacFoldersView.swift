@@ -588,7 +588,7 @@ struct MacFoldersView: View {
           Label("A destination did not finish this run", systemImage: "exclamationmark.triangle")
             .foregroundStyle(.orange)
           if !settings.settings.deletionPolicy.restoreLocalDeletions {
-            Text("If this failed after an interrupted copy, choose Edit Link Settings, enable Restore files deleted at a destination, and confirm before Run Now. Files you deleted at a destination may download again.")
+            Text("If this failed after an interrupted copy, choose Edit Link Settings, enable Restore files deleted at a destination, and confirm before the next run. Files you deleted at a destination may download again.")
               .font(.callout.weight(.medium))
               .secondaryLabelStyle()
           }
