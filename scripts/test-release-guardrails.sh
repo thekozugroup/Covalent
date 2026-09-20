@@ -28,8 +28,8 @@ grep -Fq "QUIC transport v${transport_version}" docs/protocol/protocol.md
 grep -Fq "\`covalent-quic/${transport_version}\`" docs/protocol/protocol.md
 grep -Fq "\`covalent/authenticated-quic/v${transport_version}\`" docs/protocol/protocol.md
 grep -Fq 'v0.1.0 transport-v2 peers' docs/protocol/protocol.md
-grep -Fq 'v0.1.0 peers' docs/release/notes/v0.2.0.md
-grep -Fq 'speak QUIC transport v2 while v0.2.0 peers speak transport v3' docs/release/notes/v0.2.0.md
+grep -Fq 'v0.1.0 transport v2 and v0.2.0 transport v3' docs/release/notes/v0.2.0.md
+grep -Fq 'are deliberately incompatible' docs/release/notes/v0.2.0.md
 if grep -qi 'unraid' scripts/release-version.sh; then
   echo "release-version.sh must not replace the immutable Unraid image digest" >&2
   exit 1

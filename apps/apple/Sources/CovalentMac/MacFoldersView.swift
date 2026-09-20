@@ -734,7 +734,7 @@ struct MacFoldersView: View {
           .disabled(pendingOffer != nil)
           Text(linkPolicy.destinationDeletionExplanation)
             .font(.body.weight(.semibold))
-            .foregroundStyle(MacLabelColor.sidebarUnselected)
+            .foregroundStyle(.primary)
           FolderCadenceControls(cadence: $cadence)
             .disabled(pendingOffer != nil)
           Toggle(isOn: $androidConditions.wifiOnly) {
@@ -1012,7 +1012,7 @@ private struct FolderCadenceControls: View {
     } label: {
       Text("Transfers")
         .font(.body.weight(.semibold))
-        .foregroundStyle(MacLabelColor.sidebarUnselected)
+        .foregroundStyle(.primary)
     }
 
     if case .scheduled = cadence {

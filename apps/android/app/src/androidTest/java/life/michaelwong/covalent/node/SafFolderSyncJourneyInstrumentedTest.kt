@@ -507,6 +507,7 @@ class SafFolderSyncJourneyInstrumentedTest {
                 SAF_RESTORE_CONTENT,
             )
 
+            val generationBeforeDeletionSeed = checkNotNull(sourceShare(repairedA).linkRun).generation
             writeSafFile(sourceGrant, "propagate-source.txt", SAF_PROPAGATE_CONTENT)
             awaitSafFile(
                 "source deletion seed",
@@ -515,6 +516,13 @@ class SafFolderSyncJourneyInstrumentedTest {
                 SAF_PROPAGATE_CONTENT,
             )
             val seedVisibleAtUnixMs = System.currentTimeMillis()
+            // Readable SAF bytes can precede copy acknowledgement. This phase
+            // verifies deletion of a completed, owned copy.
+            await("source deletion seed acknowledged", TRANSFER_TIMEOUT_MILLIS) {
+                sourceShare(repairedA).linkRun?.let {
+                    it.generation > generationBeforeDeletionSeed && it.phase == FolderLinkRunPhase.SUCCEEDED
+                } == true
+            }
             assertTrue(deleteSafFile(sourceGrant, "propagate-source.txt"))
             assertTrue(readSafFile(sourceGrant, "propagate-source.txt") == null)
             val runAfterDeletion = sourceShare(repairedA).linkRun
