@@ -1,6 +1,6 @@
 # Completion progress
 
-Updated 2026-09-14. The active goal is defined in [Product requirements](../product/requirements.md#active-completion-goal).
+Updated 2026-09-19. The active goal is defined in [Product requirements](../product/requirements.md#active-completion-goal).
 
 **Current scope: 70% verified, 7 of 10 complete acceptance checks. Rclone migration: 100%.**
 These percentages count accepted user journeys, not remaining development time.
@@ -18,39 +18,19 @@ Seven direct jobs pass: Rust/contracts, Android foundation and device checks,
 Mac packaging, both Docker architectures, and dependency review. CodeQL and
 version checks also pass. Mac UI and its aggregate software gate fail.
 
-Android passes all 82 baseline device tests in 63.070 seconds and the unchanged
-full SAF journey in 448.716 seconds: 83 tests, zero failures or skips. Its worker,
-guardian, picker fixture, second-node data, and private credential cleanup checks
-pass. The hosted emulator stops; the runner reaps one remaining ADB process.
-The log does not enumerate the trap-driven container cleanup afterward.
+The personal Android debug APK from `dedea61` is built: 49,341,349 bytes,
+package `life.michaelwong.covalent`, version `0.2.0`. Device validation awaits
+an authorized Android device; the existing ADB server reports no devices.
 
-The hosted Mac suite passes five of six tests with no skips. All four native popup
-selections and functional transfer, relaunch, menu, and status phases complete.
-The real-folder workflow completes at 248.94 seconds, beyond its unchanged
-240-second allowance. Six contrast occurrences across five strings remain.
-The timing change has no established cause. Actual VoiceOver is excluded from
-hosted execution because the runner lacks system keyboard access.
+The `dedea61` local Mac result is historical: three tests pass and four fail.
+VoiceOver is excluded from future test targets by owner override. The three
+remaining in-scope failures are menu-bar visibility, local-network prompt
+handling, and real-folder pairing. Native accessibility, keyboard, and HIG
+requirements remain active. Default and `--hosted` now select the same six
+functional/native-accessibility checks; no VoiceOver verification is claimed.
 
-Local Mac automation and Developer Mode are now enabled. The full seven-test run
-from `a4ee49c` passes four tests and fails three, with no skips. First launch,
-navigation, and the empty Links and Status accessibility audits pass. The menu
-icon is off-screen while Hidden Bar is active; VoiceOver keyboard delivery fails;
-and the local-network permission prompt interrupts navigation before real-folder
-pairing begins. This run supplies no local transfer or actual VoiceOver credit.
-
-Narrow fixes use native XCTest keystrokes, handle the exact Covalent network
-prompt, compare menu coordinates against matching display bounds, and recognize
-verified `/tmp` executable aliases during cleanup. Syntax checks pass; runtime
-verification remains pending. One owned helper missed by the previous literal
-path comparison was stopped, and its managed state and credential are absent.
-
-The harness keeps the full seven-test suite as its default. Its explicit hosted
-mode selects the six functional/accessibility tests supported by GitHub's runner.
-Acceptance assertions and time limits are preserved. The hosted run
-selected exactly those six tests. Before publication, the exact release SHA must pass
-the full local suite, including actual VoiceOver speech and native action, plus
-the defined HIG and keyboard checks. Green hosted CI alone cannot complete this
-goal. This is a documented operator gate, like the isolated Atmos drill.
+Atmos old owned cleanup is complete. Waypoint authorization permits hourly
+E-Music transfer on the real Unraid target, but no transfer has occurred yet.
 
 The real Continuous source-deletion test passes in 148.03 seconds. It deletes a
 source file while the same rclone process is copying, without stopping or
@@ -95,7 +75,7 @@ Atlas validation is claimed.
 | 4 | Destination deletions stay local across source edits/restarts; explicit restoration works. | Verified |
 | 5 | Manual, scheduled, and continuous transfers respect platform limits; idle batch workers stop. | Verified |
 | 6 | Settings edited on any authorized member converge across the link; pending/stale edits remain visible. | Verified |
-| 7 | Mac setup, links, settings, and per-link menu bar status pass native HIG/keyboard/VoiceOver checks. | Open |
+| 7 | Mac setup, links, settings, and per-link menu bar status pass native HIG, keyboard, and accessibility checks. | Open |
 | 8 | Tomato-inspired Android floating actions, typography, data/status visuals, and top bar; actual pairing, permission, transfer, and background journeys pass. | Verified |
 | 9 | Installable Mac/Android/Docker candidates pass real laptop–Atmos transfers and server mount handling; use an Unraid plugin only for a demonstrated Docker limitation. | Open |
 | 10 | Relevant fault/security checks pass; idle/transfer performance is measured; temporary fixtures are removed; GitHub releases and installation guidance are published. | Open |

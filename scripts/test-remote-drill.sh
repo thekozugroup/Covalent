@@ -58,7 +58,17 @@ git -C "$root" diff --quiet && git -C "$root" diff --cached --quiet || {
 if [ -n "$(git -C "$root" ls-files --others --exclude-standard)" ]; then
   echo "release source checkout has untracked files" >&2; exit 1
 fi
-source_fingerprint=$("$root/scripts/docker-source-fingerprint.sh" "$root")
+source_fingerprint=$(python3 - "$root" <<'PYFINGERPRINT'
+import hashlib
+import pathlib
+import subprocess
+import sys
+
+root = pathlib.Path(sys.argv[1])
+manifest = subprocess.check_output([str(root / "scripts/docker-source-fingerprint.sh"), str(root)])
+print(hashlib.sha256(manifest).hexdigest())
+PYFINGERPRINT
+)
 case "$source_fingerprint" in *[!0-9a-f]*|'') echo "invalid Docker source fingerprint" >&2; exit 1 ;; esac
 [ "${#source_fingerprint}" -eq 64 ] || { echo "invalid Docker source fingerprint" >&2; exit 1; }
 

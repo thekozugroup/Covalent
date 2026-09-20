@@ -3,14 +3,12 @@ set -euo pipefail
 
 case $# in
   0)
-    ui_test_mode=full
     ;;
   1)
     if [[ "$1" != "--hosted" ]]; then
       print -u2 -- "usage: ${0:t} [--hosted]"
       exit 64
     fi
-    ui_test_mode=hosted
     ;;
   *)
     print -u2 -- "usage: ${0:t} [--hosted]"
@@ -27,19 +25,11 @@ expected_ui_tests=(
   'testNativeMenuBarQuickActionsAreReachable()'
   'testNativeManualFolderLinkTransfersOneWayAndUpdatesMenuBar()'
 )
-if [[ "$ui_test_mode" == "hosted" ]]; then
-  ui_test_selectors=(
-    '-only-testing:CovalentMacUITests/CovalentMacUITests'
-    '-only-testing:CovalentMacUITests/RealFolderLinkUITests'
-  )
-  expected_ui_test_count=6
-  hosted_limit='Hosted mode excludes actual VoiceOver speech/action. A green hosted run does not replace the required exact-release-SHA full seven-test run on a headed, unlocked Apple Silicon Mac.'
-  print -u2 -- "$hosted_limit"
-else
-  ui_test_selectors=('-only-testing:CovalentMacUITests')
-  expected_ui_tests+=('testHostedRunnerCanExposeActualVoiceOverSpeech()')
-  expected_ui_test_count=7
-fi
+ui_test_selectors=(
+  '-only-testing:CovalentMacUITests/CovalentMacUITests'
+  '-only-testing:CovalentMacUITests/RealFolderLinkUITests'
+)
+expected_ui_test_count=6
 
 script_dir=${0:A:h}
 apple_dir=${script_dir:h}
@@ -488,7 +478,7 @@ emit_bounded_ui_progress() {
   [[ -f "$file" && ! -L "$file" ]] || return 0
   print -u2 -- "--- bounded UI test progress ---"
   LC_ALL=C grep -E \
-    '^(Test (Suite|Case) |Covalent phase: |Accessibility audit: VoiceOver )' \
+    '^(Test (Suite|Case) |Covalent phase: |Accessibility audit:)' \
     "$file" | tail -160 >&2 || true
 }
 if ! run_bounded 600 xcodebuild \
@@ -858,7 +848,7 @@ relaunch_writer_pid=$!
 
 # A hang detector, not a quality gate: it decides when to kill a wedged run,
 # not whether the app is fast enough. CI run 32461742319 executed the
-# then-three-test suite in 43s on a real runner; the seven-test suite retains
+# then-three-test suite in 43s on a real runner; the six-test suite retains
 # within the same deliberately generous 480s hang detector. 900s was
 # set when this lane had never passed and nothing had been measured.
 managed_app_may_have_started=1
@@ -887,13 +877,7 @@ if ! run_bounded 480 xcodebuild \
   tail -240 "$ui_log" >&2
   codesign --verify --deep --strict --verbose=4 "$runner" >&2 || true
   pgrep -alf 'xcodebuild|CovalentMacUITests|testmanagerd' >&2 || true
-  if [[ "$ui_test_mode" == "hosted" ]]; then
-    print -u2 -- "$hosted_limit"
-  fi
   exit 1
-fi
-if [[ "$ui_test_mode" == "hosted" ]]; then
-  print -u2 -- "$hosted_limit"
 fi
 if ! wait "$relaunch_writer_pid"; then
   sed -n '1,4p' "$real_fixture/relaunch-fixture-writer.log" >&2

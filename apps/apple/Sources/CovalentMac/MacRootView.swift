@@ -48,6 +48,12 @@ struct MacRootView: View {
             .accessibilityLabel(macLabel(for: model.selectedSection))
         }
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text(macLabel(for: model.selectedSection))
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+            }
+
             ToolbarItemGroup {
                 Button {
                     model.selectedSection = .folders
@@ -195,12 +201,19 @@ struct MacRootView: View {
     }
 
     private func sidebarLabel(for section: AppSection) -> some View {
-        Label(macLabel(for: section), systemImage: section.systemImage)
+        Label {
+            Text(macLabel(for: section))
+                .foregroundStyle(
+                    section == selectedSection ? Color.white : MacLabelColor.sidebarUnselected
+                )
+        } icon: {
+            Image(systemName: section.systemImage)
+                .foregroundStyle(
+                    section == selectedSection ? Color.white : MacLabelColor.accentGlyph
+                )
+        }
             .tag(section)
             .font(.body.weight(.medium))
-            .foregroundStyle(
-                section == selectedSection ? Color.white : MacLabelColor.sidebarUnselected
-            )
             .accessibilityIdentifier("sidebar.\(section.rawValue)")
     }
 

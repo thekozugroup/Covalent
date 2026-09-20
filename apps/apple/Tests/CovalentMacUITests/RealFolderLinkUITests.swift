@@ -32,7 +32,6 @@ final class RealFolderLinkUITests: XCTestCase {
         recordPhase("Covalent phase: setup entered")
         let app = launchManagedApp()
         defer { app.terminate() }
-        var handledLocalNetworkConsent = false
         let localNetworkConsentMonitor = addUIInterruptionMonitor(
             withDescription: "Allow Covalent local-network access"
         ) { alert in
@@ -42,7 +41,6 @@ final class RealFolderLinkUITests: XCTestCase {
             let allow = alert.buttons["Allow"]
             guard title.exists, allow.exists else { return false }
             allow.click()
-            handledLocalNetworkConsent = true
             return true
         }
         defer { removeUIInterruptionMonitor(localNetworkConsentMonitor) }
@@ -57,11 +55,12 @@ final class RealFolderLinkUITests: XCTestCase {
         recordPhase("Covalent phase: setup completed")
 
         recordPhase("Covalent phase: pairing entered")
+        // A concrete click lets XCTest handle first-run network consent.
+        // The navigation test separately verifies Command-1/2/3 shortcuts.
+        let devices = app.descendants(matching: .any)["sidebar.devices"].firstMatch
+        XCTAssertTrue(devices.waitForExistence(timeout: transitionTimeout))
+        devices.click()
         let devicesTitle = app.staticTexts["Your devices"]
-        app.typeKey("2", modifierFlags: .command)
-        if handledLocalNetworkConsent, !devicesTitle.exists {
-            app.typeKey("2", modifierFlags: .command)
-        }
         XCTAssertTrue(devicesTitle.waitForExistence(timeout: transitionTimeout))
         let devicesScrollView = app.scrollViews["devices.view"]
         XCTAssertTrue(devicesScrollView.waitForExistence(timeout: transitionTimeout))

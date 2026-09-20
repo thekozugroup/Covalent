@@ -40,7 +40,17 @@ git -C "$repo_root" diff --quiet && git -C "$repo_root" diff --cached --quiet ||
 if [ -n "$(git -C "$repo_root" ls-files --others --exclude-standard)" ]; then
   fail "The source checkout has untracked files; refusing an unbound build."
 fi
-source_fingerprint=$("$repo_root/scripts/docker-source-fingerprint.sh" "$repo_root")
+source_fingerprint=$(python3 - "$repo_root" <<'PYFINGERPRINT'
+import hashlib
+import pathlib
+import subprocess
+import sys
+
+root = pathlib.Path(sys.argv[1])
+manifest = subprocess.check_output([str(root / "scripts/docker-source-fingerprint.sh"), str(root)])
+print(hashlib.sha256(manifest).hexdigest())
+PYFINGERPRINT
+)
 case "$source_commit:$source_fingerprint" in *[!0-9a-f:]*|'') fail "Could not bind the build to the source checkout." ;; esac
 [ "${#source_commit}" -eq 40 ] && [ "${#source_fingerprint}" -eq 64 ] ||
   fail "Could not bind the build to the source checkout."
@@ -176,7 +186,17 @@ fi
   git -C "$repo_root" diff --quiet && git -C "$repo_root" diff --cached --quiet ||
   fail "The source checkout changed during the build."
 if [ -n "$(git -C "$repo_root" ls-files --others --exclude-standard)" ] ||
-   [ "$("$repo_root/scripts/docker-source-fingerprint.sh" "$repo_root")" != "$source_fingerprint" ]; then
+   [ "$(python3 - "$repo_root" <<'PYFINGERPRINT'
+import hashlib
+import pathlib
+import subprocess
+import sys
+
+root = pathlib.Path(sys.argv[1])
+manifest = subprocess.check_output([str(root / "scripts/docker-source-fingerprint.sh"), str(root)])
+print(hashlib.sha256(manifest).hexdigest())
+PYFINGERPRINT
+)" != "$source_fingerprint" ]; then
   fail "The source checkout changed during the build."
 fi
 app_executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$unpacked_app/Contents/Info.plist")

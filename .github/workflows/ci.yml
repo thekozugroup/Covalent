@@ -904,4 +904,4 @@ jobs:
             echo "Release candidate rejected: not every software gate concluded success." >&2
             exit 1
           fi
-          echo "Hosted software gates passed. The exact-release-SHA local full seven-test macOS run with actual VoiceOver speech/action, the published image, and isolated Atmos Docker validation remain separate release blockers; Apple Developer ID is excluded and Android production signing is deferred."
+          echo "Software gates passed. Owner override removes VoiceOver speech/action automation; six macOS functional/native-accessibility checks remain. The published image and isolated Atmos Docker validation remain separate release blockers; Apple Developer ID is excluded and Android production signing is deferred."

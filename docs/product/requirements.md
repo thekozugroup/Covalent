@@ -85,7 +85,7 @@ Show per-destination status, meaningful progress, last success, pending settings
 
 ## Native interfaces
 
-macOS follows Apple HIG: system typography, standard windows/settings, keyboard navigation, VoiceOver, and a menu bar item with a small status symbol and per-link status/actions. Use the supported menu bar API, not an invented third-party Control Center extension.
+macOS follows Apple HIG: system typography, standard windows/settings, keyboard navigation, native accessibility, and a menu bar item with a small status symbol and per-link status/actions. Use the supported menu bar API, not an invented third-party Control Center extension.
 
 Android uses native Compose/Material controls. The reference is [Tomato](https://github.com/nsh07/Tomato); the owner prefers its floating action bar, typography, data visuals, and top bar. Adapt those ideas to transfers and accessibility. Inspect licensing before reusing code, fonts, or assets.
 
