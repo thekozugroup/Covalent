@@ -1540,6 +1540,13 @@ extension FolderSyncStatus {
           return .syncing
         }
       }
+      if availability == "available", lifecycle == "running" {
+        switch share.linkRun?.phase {
+        case .preparing: return .checkingFolder
+        case .running: return .syncing
+        default: break
+        }
+      }
       if isExpectedBatchIdle(share) {
         return .folderReady
       }

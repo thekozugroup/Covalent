@@ -5,6 +5,8 @@ import life.michaelwong.covalent.model.FolderHealthFreshness
 import life.michaelwong.covalent.model.AndroidLinkConditions
 import life.michaelwong.covalent.model.FolderLinkPolicy
 import life.michaelwong.covalent.model.FolderLinkCadence
+import life.michaelwong.covalent.model.FolderLinkRunPhase
+import life.michaelwong.covalent.model.FolderLinkRunSummary
 import life.michaelwong.covalent.model.FolderLinkSettings
 import life.michaelwong.covalent.model.FolderLinkSettingsState
 import life.michaelwong.covalent.model.FolderShare
@@ -31,6 +33,21 @@ class FolderSyncContractsTest {
         )
         val errored = status(share).copy(folders = listOf(health.copy(statusError = true)))
         assertEquals(FolderShareSummary.NEEDS_ATTENTION, errored.summaryFor(share))
+    }
+
+    @Test
+    fun activeLinkRunPrecedesDisconnectedPeerUnlessAnErrorExists() {
+        val disconnected = share(PeerConnectionState.DISCONNECTED)
+        val preparing = disconnected.copy(linkRun = linkRun(FolderLinkRunPhase.PREPARING))
+        val running = disconnected.copy(linkRun = linkRun(FolderLinkRunPhase.RUNNING))
+        assertEquals(FolderShareSummary.CHECKING, status(preparing).summaryFor(preparing))
+        assertEquals(FolderShareSummary.SYNCING, status(running).summaryFor(running))
+        assertEquals(
+            FolderShareSummary.WAITING_FOR_PEER,
+            status(running).copy(availability = FolderSyncAvailability.NOT_PACKAGED).summaryFor(running),
+        )
+        val errored = status(running).copy(folders = listOf(health.copy(statusError = true)))
+        assertEquals(FolderShareSummary.NEEDS_ATTENTION, errored.summaryFor(running))
     }
 
     @Test
@@ -139,6 +156,10 @@ class FolderSyncContractsTest {
         shares = listOf(share),
         folders = listOf(health),
         connectionFreshness = PeerConnectionFreshness.FRESH,
+    )
+
+    private fun linkRun(phase: FolderLinkRunPhase) = FolderLinkRunSummary(
+        1, 1, 1, phase, 0, null, null, null, null, null, emptyList(),
     )
 
     private companion object {

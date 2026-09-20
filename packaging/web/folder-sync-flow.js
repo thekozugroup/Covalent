@@ -199,9 +199,13 @@
 
   function linkSettingsState(value, folderId, policy) {
     const state = object(value, "The node returned invalid link settings.");
-    exactKeys(state, ["revision", "settings", "changeId", "changedBy", "confirmed", "pendingChange", "conflictedChange"],
+    const hasAcceptedAt = Object.hasOwn(state, "acceptedAtUnixMs");
+    exactKeys(state, ["revision", "settings", "changeId", "changedBy", "confirmed", "pendingChange", "conflictedChange",
+      ...(hasAcceptedAt ? ["acceptedAtUnixMs"] : [])],
       "The node returned invalid link settings.");
     const revision = unsigned(state.revision, "The node returned an invalid link-settings revision.");
+    const acceptedAtUnixMs = hasAcceptedAt
+      ? unsigned(state.acceptedAtUnixMs, "The node returned an invalid link-settings acceptance time.") : 0;
     const changeId = state.changeId === NIL_UUID ? NIL_UUID
       : uuid(state.changeId, "The node returned an invalid link-settings change.");
     const settings = folderLinkSettings(state.settings);
@@ -220,6 +224,7 @@
       settings,
       changeId,
       changedBy: uuid(state.changedBy, "The node returned an invalid link-settings editor."),
+      acceptedAtUnixMs,
       confirmed: state.confirmed,
       pendingChange,
       conflictedChange,
@@ -561,6 +566,8 @@
       || share.linkPolicy == null && (health.remainingFiles > 0 || health.remainingBytes > 0))) {
       return Object.freeze({ kind: "syncing", text: "Syncing" });
     }
+    if (share.linkRun?.phase === "preparing") return Object.freeze({ kind: "checking", text: "Checking folder" });
+    if (share.linkRun?.phase === "running") return Object.freeze({ kind: "syncing", text: "Syncing" });
     if (status.connectionFreshness === "fresh" && share.peerConnection === "paused") {
       return Object.freeze({ kind: "paused", text: "Paused" });
     }

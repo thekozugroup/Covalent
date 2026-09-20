@@ -485,6 +485,19 @@ test("older status safely defaults new reachability fields to unknown", () => {
   assert.equal(decoded.peers[0].address, null);
 });
 
+test("active run phases override idle rclone reachability without hiding errors", () => {
+  const health = { folderId, state: "idle", remainingFiles: 0, remainingBytes: 0,
+    scanPullErrorCount: 0, reportedErrorRows: 0, statusError: false, watchError: false };
+  for (const phase of ["preparing", "running"]) {
+    const item = share({ phase: "ready", peerConnection: "disconnected", linkPolicy,
+      linkRun: linkRun({ phase }) });
+    const snapshot = status({ shares: [item], folders: [health] });
+    assert.equal(folders.shareView(snapshot, item).kind, phase === "preparing" ? "checking" : "syncing");
+    assert.equal(folders.shareView({ ...snapshot, folders: [{ ...health, state: "error" }] }, item).kind, "attention");
+    assert.equal(folders.shareView({ ...snapshot, lifecycle: "stopped" }, item).kind, "offline");
+  }
+});
+
 test("paired addresses accept bounded numeric endpoints and reject ambiguous input", () => {
   for (const address of ["192.0.2.10:8787", "[2001:db8::10]:8787"]) {
     const decoded = folders.requireStatus(status({
@@ -828,6 +841,12 @@ test("link settings require complete consistent bounded server state", () => {
     linkSettings: linkState({ confirmed: true, changedBy: deviceId }),
   });
   assert.equal(folders.requireStatus(status({ shares: [valid] })).shares[0].linkSettings.confirmed, true);
+  assert.equal(folders.requireStatus(status({ shares: [valid] })).shares[0].linkSettings.acceptedAtUnixMs, 0);
+  for (const acceptedAtUnixMs of [0, 1789862400000]) {
+    const current = { ...valid, linkSettings: { ...valid.linkSettings, acceptedAtUnixMs } };
+    assert.equal(folders.requireStatus(status({ shares: [current] })).shares[0].linkSettings.acceptedAtUnixMs,
+      acceptedAtUnixMs);
+  }
 
   for (const invalid of [
     { ...valid, linkSettings: null },
@@ -837,6 +856,8 @@ test("link settings require complete consistent bounded server state", () => {
     { ...valid, linkSettings: { ...valid.linkSettings,
       settings: { deletionPolicy: { ...linkPolicy, restoreLocalDeletions: true }, paused: false } } },
     { ...valid, linkSettings: { ...valid.linkSettings, extra: true } },
+    ...[-1, 1.5, "1789862400000", null, Number.MAX_SAFE_INTEGER + 1].map((acceptedAtUnixMs) =>
+      ({ ...valid, linkSettings: { ...valid.linkSettings, acceptedAtUnixMs } })),
   ]) {
     assert.throws(() => folders.requireStatus(status({ shares: [invalid] })), /folder sync guidance/);
   }

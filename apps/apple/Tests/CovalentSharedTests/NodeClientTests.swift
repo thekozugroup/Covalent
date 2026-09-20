@@ -2278,6 +2278,21 @@ func realDaemonBackupVerifyAndRestore() async throws {
     #expect(waiting.displayState(for: disconnected) == .waitingForConnection)
     #expect(waiting.displayLabel(for: disconnected) == "Waiting for Kitchen Mac")
 
+    for phase in [FolderLinkRunPhase.preparing, .running] {
+        let active = FolderShare(
+            offerId: ready.offerId, folderId: ready.folderId, label: ready.label, peerId: peer,
+            incoming: false, phase: .ready, expiresAtUnixMs: nil, expired: false,
+            peerConnection: .disconnected, linkPolicy: FolderLinkPolicy(),
+            linkRun: FolderLinkRunSummary(
+                generation: 1, stateRevision: 1, settingsRevision: 1, phase: phase,
+                startedAtUnixMs: 1, deadlineUnixMs: 86_400_001, endedAtUnixMs: nil,
+                nextDueAtUnixMs: nil, pendingRequest: nil, rejectedRequest: nil, destinations: []
+            )
+        )
+        #expect(waiting.displayState(for: active) == (phase == .preparing ? .checkingFolder : .syncing))
+        #expect(failed.displayState(for: active) == .needsAttention)
+    }
+
     let settingsId = UUID()
     let manualSettings = FolderLinkSettingsState(
         revision: 1,

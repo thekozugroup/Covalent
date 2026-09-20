@@ -164,6 +164,11 @@ fun FolderSyncStatus.summaryFor(share: FolderShare): FolderShareSummary {
             share.linkPolicy == null && (health.remainingFiles > 0 || health.remainingBytes > 0)
         ) return FolderShareSummary.SYNCING
     }
+    when (if (availability == FolderSyncAvailability.AVAILABLE) share.linkRun?.phase else null) {
+        FolderLinkRunPhase.PREPARING -> return FolderShareSummary.CHECKING
+        FolderLinkRunPhase.RUNNING -> return FolderShareSummary.SYNCING
+        else -> Unit
+    }
     return if (connectionFreshness != PeerConnectionFreshness.FRESH) {
         FolderShareSummary.CONNECTION_UNKNOWN
     } else when (share.peerConnection) {
