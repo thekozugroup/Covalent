@@ -20,9 +20,9 @@ CADDY_VERSION = "v2.11.5-0.20260711231708-b2693fb63a30"
 CADDY_COMMIT = "b2693fb63a30e6d7be0972c3645e9a2c0a500e93"
 CONSUMER_RECORD = {
     "module": "covalent.local/caddy",
-    "goModSha256": "2855429aae39f4f05afa5ac60bebb2dd0a335a4ce5620af7fec94a039e3f44f7",
-    "goSumSha256": "3ac528097eb986c6c39b8a42362c0eb7753f67680f680f3a4c77f9775d6de00a",
-    "mainGoSha256": "148320867ca029601e6bb4d221922f7d1f6817a6c50da2e84761e859e7505800",
+    "goModSha256": "a5191a03243552503f0604e196b4292b412807142dbfbb351fb09fca5c42105c",
+    "goSumSha256": "4e5f62a6782d38008bd14336a038a7d1002eeb66ae6644e096b3d214cdc9445c",
+    "mainGoSha256": "427a8c81a8341f6d60eed09afa2248052701ca1a2c7b6e41cf15b402bff2dd78",
     "license": "MIT",
     "licenseSha256": "ff9bc316792502655bcae384b8e5a4604da93385fda00552b77d85c334b94acd",
 }
@@ -45,19 +45,19 @@ GO_TOOLCHAIN_RECORD = {
 }
 EXPECTED_TARGET_RECORDS = {
     "linux-amd64": {
-        "packageCount": 921,
-        "moduleCount": 142,
-        "inventorySha256": "2a23939c5e5385730dafc7652266aa836543d10048ade190fc5835e22a30f4c8",
-        "noticeSha256": "5024f49556fa614b3f835bda2557443c96172fe2c3624dd3373e8c3083b1b2ca",
-        "binarySha256": "8e434b9905b36de078f40608af6d5c1df73394ef056bae6240a8563176182fac",
+        "packageCount": 942,
+        "moduleCount": 148,
+        "inventorySha256": "0b63cfb29263a52b10ea4955883f3235eb06acd99440a10e057e5988cd63c458",
+        "noticeSha256": "942969c1df28ba3c3b1a4ca3000efcbafdfdb7ed744adcc50755a4540c1224f7",
+        "binarySha256": "3c7629687e30f40c82173cf6f1163f9e3e24a04df0a58fccd805626911af43e0"
     },
     "linux-arm64": {
-        "packageCount": 919,
-        "moduleCount": 142,
-        "inventorySha256": "0ce4c352f590179305fb0bef88235d3ebf6a23fb9651cb7f404c3e32e882870c",
-        "noticeSha256": "5024f49556fa614b3f835bda2557443c96172fe2c3624dd3373e8c3083b1b2ca",
-        "binarySha256": "80d7c728cb232c9b5914d1df3a837b3adb5481d468730088bae07a9c7438881d",
-    },
+        "packageCount": 940,
+        "moduleCount": 148,
+        "inventorySha256": "b09c6c05789e2729c739e8e447a8738724a26aa936f19f43ff249e207584b3d5",
+        "noticeSha256": "942969c1df28ba3c3b1a4ca3000efcbafdfdb7ed744adcc50755a4540c1224f7",
+        "binarySha256": "0c60398f8fcfd42fa6c6e585f0213dd975a32fa40f5790693163255e851d95a3"
+    }
 }
 MYSQL_SOURCE_MEMBER_MANIFEST_SHA256 = "4a565566abcab4711cb605658718e7fa8b86c5b8d436a4b11387b6d11a607110"
 CA_RECORD = {

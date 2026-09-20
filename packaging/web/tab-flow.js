@@ -8,8 +8,8 @@
   function targetIndex(current, count, key) {
     if (!Number.isInteger(current) || !Number.isInteger(count) || count < 1
       || current < 0 || current >= count) return null;
-    if (key === "ArrowRight") return (current + 1) % count;
-    if (key === "ArrowLeft") return (current - 1 + count) % count;
+    if (key === "ArrowRight" || key === "ArrowDown") return (current + 1) % count;
+    if (key === "ArrowLeft" || key === "ArrowUp") return (current - 1 + count) % count;
     if (key === "Home") return 0;
     if (key === "End") return count - 1;
     return null;
@@ -22,6 +22,7 @@
     for (const tab of tabs) {
       const selected = tab === target;
       tab.setAttribute("aria-selected", String(selected));
+      tab.setAttribute("data-active", String(selected));
       tab.setAttribute("tabindex", selected ? "0" : "-1");
     }
     for (const panel of panels) panel.hidden = panel.dataset.panel !== target.dataset.tab;

@@ -13,6 +13,30 @@ Verify it with the exact identity
 before running it. See the [Atlas/Tailscale runbook](../../docs/platform/atlas-tailscale.md)
 for the `cosign` command, KEK setup, and container mounts.
 
+## Web console updates
+
+The console has a collapsible sidebar. Open **Links**, then **Settings** on a
+link to change its shared timing and deletion options from either endpoint.
+**Server** contains settings and help specific to this server. The console
+must be unlocked before it shows private links and their controls.
+
+For a UI-only update, `Dockerfile.webui` retains the pinned release engine and
+adds the current console and Caddy static-file support. Build the proxy from
+the same checkout first, including its license and source evidence:
+
+```sh
+# Use arm64 on an ARM host, amd64 on an Intel/AMD host.
+docker build --target caddy-evidence --build-arg TARGETARCH=amd64 \
+  -f packaging/docker/Dockerfile -t covalent-webui-caddy:local .
+docker build -f packaging/docker/Dockerfile.webui \
+  --build-arg WEBUI_REVISION="$(git rev-parse HEAD)" -t covalent-webui:local .
+```
+
+This is a local derivative, not the signed release image. Keep existing
+container mounts, secrets, ports, resource limits, and security options when
+replacing it. The API still requires the node token; only the explicit public
+HTML, CSS, and JavaScript routes are served as static files.
+
 ## Personal use from this checkout
 
 This path builds the exact checked-out source, starts in the background, claims

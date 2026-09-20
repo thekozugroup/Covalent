@@ -7,6 +7,20 @@
 	default_sni {$COVALENT_HTTPS_HOST:localhost}
 }
 
+# Keep the console independent of the transfer engine. Only these public
+# assets are served from disk; all API requests retain node authentication.
+(console) {
+	@console path / /assets/app.css /assets/app.js /assets/folder-sync-flow.js /assets/pairing-flow.js /assets/tab-flow.js
+	handle @console {
+		root * /usr/local/share/covalent/web
+		header Cache-Control "no-cache"
+		file_server
+	}
+	handle {
+		reverse_proxy 127.0.0.1:8787
+	}
+}
+
 https://{$COVALENT_HTTPS_HOST:localhost}:8443 {
 	tls internal
 	encode zstd gzip
@@ -15,7 +29,7 @@ https://{$COVALENT_HTTPS_HOST:localhost}:8443 {
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"
 	}
-	reverse_proxy 127.0.0.1:8787
+	import console
 }
 
 # Optional local ingress for a host TLS proxy such as Tailscale Serve. The
@@ -29,5 +43,5 @@ http:// {
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"
 	}
-	reverse_proxy 127.0.0.1:8787
+	import console
 }

@@ -806,8 +806,8 @@ test("the primary Links tab uses server paths, confirmed names, and visible unlo
     readFile(new URL("index.html", root), "utf8"),
     readFile(new URL("app.js", root), "utf8"),
   ]);
-  assert.match(html, /data-tab="folders">Links<\/button>/);
-  assert.ok(html.indexOf('data-tab="pair"') < html.indexOf('data-tab="folders"'));
+  assert.match(html, /data-tab="folders"[^>]*>[\s\S]*?class="sidebar-label">Links<\/span><\/button>/);
+  assert.ok(html.indexOf('data-tab="folders"') < html.indexOf('data-tab="pair"'));
   assert.ok(html.indexOf('data-tab="folders"') < html.indexOf('data-tab="settings"'));
   assert.doesNotMatch(html, /data-tool-panel|data-backup-form|data-restore-preview/);
   assert.match(html, /Advanced server folder path/);

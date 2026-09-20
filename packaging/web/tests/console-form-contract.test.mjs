@@ -157,3 +157,81 @@ test("Manual and Scheduled render Run Now while Continuous only renders its stat
     assert.equal(buttons.some((item) => item.disabled), false);
   }
 });
+
+test("sender and receiver Settings buttons open editable shared controls and remain open after refresh", async () => {
+  const app = await source("app.js");
+  const body = /function renderLinkSettings\(container, status, share\) \{([\s\S]*?)\n\}\n/.exec(app)?.[1];
+  assert.ok(body);
+  const element = () => ({
+    children: [], dataset: {}, attributes: {}, listeners: {},
+    append(...items) { this.children.push(...items); },
+    setAttribute(name, value) { this.attributes[name] = value; },
+    addEventListener(name, handler) { this.listeners[name] = handler; },
+  });
+  for (const incoming of [false, true]) {
+    const expanded = new Set();
+    const submitted = [];
+    const card = () => {
+      const shell = element();
+      const content = element();
+      shell.append(content);
+      shell.querySelector = () => content;
+      return shell;
+    };
+    const render = new Function("document", "$", "expandedLinkSettings", "folderController", "cadenceControls", "cadenceValue", "runFolderMutation", "folderSync",
+      `return (container, status, share) => {${body}};`)(
+      { createElement: element }, () => ({ content: { firstElementChild: { cloneNode: card } } }), expanded,
+      { isMutationLocked: () => false, updateLinkSettings: (id, settings) => submitted.push({ id, settings }) },
+      () => ({ cadenceLabel: element(), intervalLabel: element(), cadence: { value: "scheduled" }, interval: { value: "60" } }),
+      (mode, interval) => ({ mode, intervalMinutes: Number(interval) }), (action) => action(), {},
+    );
+    const share = { incoming, offerId: "offer", folderId: "shared-link", label: "Music", linkSettings: {
+      confirmed: true, pendingChange: null, conflictedChange: null,
+      settings: { cadence: { mode: "scheduled", intervalMinutes: 60 }, deletionPolicy: { propagateSourceDeletions: false, restoreLocalDeletions: false }, androidConditions: { wifiOnly: false, chargingOnly: false }, paused: false },
+    } };
+    const first = element();
+    render(first, {}, share);
+    const [button, panel] = first.children;
+    assert.equal(button.attributes["aria-label"], "Settings for Music");
+    assert.equal(panel.hidden, true);
+    button.listeners.click();
+    assert.equal(panel.hidden, false);
+    assert.equal(button.attributes["aria-expanded"], "true");
+    panel.children[0].children[0].listeners.submit({ preventDefault() {} });
+    assert.deepEqual(submitted, [{ id: "shared-link", settings: share.linkSettings.settings }]);
+    const refreshed = element();
+    render(refreshed, {}, share);
+    assert.equal(refreshed.children[1].hidden, false);
+  }
+});
+
+test("sidebar navigation handles vertical arrow keys", () => {
+  assert.equal(tabs.targetIndex(0, 3, "ArrowDown"), 1);
+  assert.equal(tabs.targetIndex(0, 3, "ArrowUp"), 2);
+});
+
+test("service refresh updates node status without replacing shadcn sidebar contents", async () => {
+  const [app, html] = await Promise.all([source("app.js"), source("index.html")]);
+  assert.match(html, /<aside[^>]*data-state="expanded"/);
+  assert.match(html, /<p[^>]*data-node-state[^>]*aria-live="polite"/);
+  const body = /async function loadStatus\(\) \{([\s\S]*?)\n\}\n/.exec(app)?.[1];
+  assert.ok(body);
+  for (const offline of [false, true]) {
+    const name = { textContent: "" };
+    const status = { textContent: "" };
+    const sidebar = { set textContent(value) { assert.fail(`Service refresh destroyed navigation: ${value}`); } };
+    const load = new Function("$", "api", "document", "PROTOCOL_VERSION", "ProtocolMismatchError", "errorCopy", "fail",
+      `return async () => {${body}};`)(
+      (selector) => ({ "[data-device-name]": name, "[data-node-state]": status, "[data-state]": sidebar })[selector],
+      async () => {
+        if (offline) throw new Error("offline");
+        return { protocolVersion: 1, deviceName: "Waypoint", state: "ready", lanDiscovery: false };
+      },
+      { querySelectorAll: () => [] }, 1, Error,
+      { describe: () => ({ summary: "Server unavailable" }) }, () => {},
+    );
+    await load();
+    assert.equal(name.textContent, offline ? "Node unavailable" : "Waypoint");
+    assert.equal(status.textContent, offline ? "Server unavailable" : "Service: ready");
+  }
+});

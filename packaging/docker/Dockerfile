@@ -323,6 +323,8 @@ COPY --from=builder /sync-engine/share/ /usr/local/share/covalent/sync-engine/
 COPY --from=caddy /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --chmod=0555 packaging/docker/entrypoint.sh /usr/local/bin/covalent-entrypoint
 COPY packaging/docker/Caddyfile /etc/caddy/Caddyfile
+COPY packaging/web/index.html /usr/local/share/covalent/web/index.html
+COPY packaging/web/*.js packaging/web/*.css /usr/local/share/covalent/web/assets/
 
 ENV COVALENT_LISTEN=127.0.0.1:8787 \
     COVALENT_PEER_LISTEN=0.0.0.0:8787 \

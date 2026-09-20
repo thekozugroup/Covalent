@@ -585,11 +585,11 @@ async function loadStatus() {
       throw new ProtocolMismatchError(status.protocolVersion);
     }
     $("[data-device-name]").textContent = status.deviceName;
-    $("[data-state]").textContent = `Service: ${status.state}`;
+    $("[data-node-state]").textContent = `Service: ${status.state}`;
     document.querySelectorAll("[data-discovery]").forEach((el) => { el.textContent = status.lanDiscovery ? "On" : "Off"; });
   } catch (error) {
     $("[data-device-name]").textContent = "Node unavailable";
-    $("[data-state]").textContent = errorCopy.describe(error).summary;
+    $("[data-node-state]").textContent = errorCopy.describe(error).summary;
     fail(error);
   }
 }
@@ -803,18 +803,33 @@ function renderLinkRun(container, status, share) {
   container.append(section);
 }
 
+const expandedLinkSettings = new Set();
+
 function renderLinkSettings(container, status, share) {
   const state = share.linkSettings;
-  const details = document.createElement("details");
-  details.className = "advanced";
-  const summary = document.createElement("summary");
-  summary.textContent = "Link settings";
-  const current = document.createElement("p");
-  current.className = "muted";
-  current.textContent = state.confirmed
-    ? "These settings apply to every destination in this link."
-    : "Waiting for the source to confirm current settings. File transfer has not started.";
-  details.append(summary, current);
+  const card = $("#link-settings-card").content.firstElementChild.cloneNode(true);
+  const details = card.querySelector('[data-slot="card-content"]');
+  card.id = `link-settings-${share.offerId}`;
+  card.hidden = !expandedLinkSettings.has(share.folderId);
+  const settingsButton = document.createElement("button");
+  settingsButton.type = "button";
+  settingsButton.className = "secondary link-settings-button";
+  settingsButton.textContent = "Settings";
+  settingsButton.setAttribute("aria-label", `Settings for ${share.label}`);
+  settingsButton.setAttribute("aria-controls", card.id);
+  settingsButton.setAttribute("aria-expanded", String(!card.hidden));
+  settingsButton.addEventListener("click", () => {
+    card.hidden = !card.hidden;
+    settingsButton.setAttribute("aria-expanded", String(!card.hidden));
+    if (card.hidden) expandedLinkSettings.delete(share.folderId);
+    else expandedLinkSettings.add(share.folderId);
+  });
+  if (!state.confirmed) {
+    const current = document.createElement("p");
+    current.className = "notice";
+    current.textContent = "Waiting for the source to confirm current settings. File transfer has not started.";
+    details.append(current);
+  }
 
   if (state.pendingChange !== null) {
     const pending = document.createElement("p");
@@ -884,10 +899,25 @@ function renderLinkSettings(container, status, share) {
       "Link settings request saved. Current link status shows whether the source confirmed it.",
     );
   });
-  form.append(sourceDeletes, localDeletes, timing.cadenceLabel, timing.intervalLabel,
-    wifi, charging, androidHelp, submit);
+  const group = (title, ...controls) => {
+    const fieldset = document.createElement("fieldset");
+    const legend = document.createElement("legend");
+    legend.textContent = title;
+    fieldset.append(legend, ...controls);
+    return fieldset;
+  };
+  const deletionHelp = document.createElement("p");
+  deletionHelp.className = "muted";
+  deletionHelp.textContent = "With both options off, deleting a source file keeps the destination copy. Deleting a destination file does not download it again.";
+  const android = document.createElement("details");
+  android.className = "android-conditions";
+  const androidSummary = document.createElement("summary");
+  androidSummary.textContent = "Android conditions";
+  android.append(androidSummary, androidHelp, wifi, charging);
+  form.append(group("Timing", timing.cadenceLabel, timing.intervalLabel),
+    group("Deleted files", sourceDeletes, localDeletes, deletionHelp), android, submit);
   details.append(form);
-  container.append(details);
+  container.append(settingsButton, card);
 }
 
 function renderAddDestination(container, status, share) {
@@ -1691,6 +1721,25 @@ $("[data-settings-import]").addEventListener("submit", async (event) => {
   event.preventDefault(); const data = formData(event.currentTarget);
   try { await api("/api/v1/config/import", { method: "POST", body: JSON.stringify({ confirmed: data.get("confirmed") === "on", settings: JSON.parse(data.get("settings")) }) }); await loadStatus(); say("Safe settings imported. LAN discovery state was refreshed from the running node."); }
   catch (error) { fail(error); }
+});
+
+// Sidebar collapse changes presentation only; navigation keeps its labels.
+function setSidebarExpanded(expanded) {
+  const sidebar = $("#console-sidebar");
+  const button = $("[data-sidebar-toggle]");
+  sidebar.dataset.state = expanded ? "expanded" : "collapsed";
+  document.body.classList.toggle("sidebar-collapsed", !expanded);
+  button.setAttribute("aria-expanded", String(expanded));
+  button.setAttribute("aria-label", expanded ? "Collapse sidebar" : "Expand sidebar");
+  button.title = expanded ? "Collapse sidebar" : "Expand sidebar";
+}
+$("[data-sidebar-toggle]").addEventListener("click", () => {
+  setSidebarExpanded($("#console-sidebar").dataset.state !== "expanded");
+});
+const compactSidebar = globalThis.matchMedia("(max-width:700px)");
+if (compactSidebar.matches) setSidebarExpanded(false);
+compactSidebar.addEventListener("change", (event) => {
+  if (event.matches) setSidebarExpanded(false);
 });
 
 loadStatus();

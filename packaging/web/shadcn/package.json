@@ -1,0 +1,13 @@
+{
+  "name": "covalent-console-components",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node render.mjs",
+    "check": "node render.mjs --check"
+  },
+  "devDependencies": {
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  }
+}

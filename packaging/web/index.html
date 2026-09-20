@@ -13,6 +13,33 @@
   </head>
   <body>
     <a class="skip-link" href="#content">Skip to console</a>
+    <!-- shadcn:sidebar:start -->
+    <!-- shadcn/ui components adapted under the following license:
+MIT License
+
+Copyright (c) 2023 shadcn
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-->
+    <aside data-slot="sidebar" data-state="expanded" data-collapsible="icon" id="console-sidebar" aria-label="Console navigation"><div data-slot="sidebar-header"><span class="sidebar-brand">Covalent</span><button type="button" data-sidebar-toggle="" aria-label="Collapse sidebar" aria-expanded="true" aria-controls="console-sidebar" title="Collapse sidebar"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h16v16H4z"></path><path d="M9 4v16"></path></svg></button></div><div data-slot="sidebar-content"><div data-slot="sidebar-menu" role="tablist" aria-label="Covalent actions" aria-orientation="vertical"><button data-slot="sidebar-menu-button" data-active="true" type="button" id="folders-tab" role="tab" aria-selected="true" aria-controls="folders-panel" tabindex="0" data-tab="folders" title="Links" aria-label="Links"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-2 2"></path><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l2-2"></path></svg><span class="sidebar-label">Links</span></button><button data-slot="sidebar-menu-button" data-active="false" type="button" id="pair-tab" role="tab" aria-selected="false" aria-controls="pair-panel" tabindex="-1" data-tab="pair" title="Devices" aria-label="Devices"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h12v12H3z"></path><path d="M6 20h6"></path><path d="M9 16v4"></path><path d="M17 9h5v11h-5z"></path></svg><span class="sidebar-label">Devices</span></button><button data-slot="sidebar-menu-button" data-active="false" type="button" id="settings-tab" role="tab" aria-selected="false" aria-controls="settings-panel" tabindex="-1" data-tab="settings" title="Server" aria-label="Server"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 3h16v7H4z"></path><path d="M4 14h16v7H4z"></path><path d="M8 6.5h.01"></path><path d="M8 17.5h.01"></path><path d="M12 6.5h5"></path><path d="M12 17.5h5"></path></svg><span class="sidebar-label">Server</span></button></div></div></aside>
+    <!-- shadcn:sidebar:end -->
+    <div class="console-workspace">
     <header>
       <div class="brand"><span class="brand-mark" aria-hidden="true">C</span><div><h1>Covalent</h1><p class="muted">Server console</p></div></div>
       <span class="access-state" data-access-state>Console locked</span>
@@ -22,9 +49,9 @@
         <div>
           <p class="eyebrow">This server</p>
           <h2 id="node-heading" data-device-name>Loading node…</h2>
-          <p class="muted" data-state aria-live="polite">Connecting to the local service.</p>
+          <p class="muted" data-node-state aria-live="polite">Connecting to the local service.</p>
         </div>
-        <div class="button-row"><button type="button" class="quiet" data-refresh>Refresh status</button><button type="button" class="secondary" data-open-tab="settings">Server help</button></div>
+        <div class="button-row"><button type="button" class="quiet" data-refresh>Refresh status</button><button type="button" class="secondary" data-open-tab="settings">Server settings</button></div>
       </section>
 
       <details class="security-card" data-access-panel open>
@@ -50,15 +77,11 @@
         <pre data-message-detail></pre>
       </details>
 
-      <nav class="tabs" aria-label="Covalent actions" role="tablist">
-        <button id="pair-tab" role="tab" aria-selected="false" aria-controls="pair-panel" tabindex="-1" data-tab="pair">Devices</button>
-        <button id="folders-tab" role="tab" aria-selected="true" aria-controls="folders-panel" tabindex="0" data-tab="folders">Links</button>
-        <button id="settings-tab" role="tab" aria-selected="false" aria-controls="settings-panel" tabindex="-1" data-tab="settings">Settings</button>
-      </nav>
+
 
       <section id="folders-panel" role="tabpanel" aria-labelledby="folders-tab" tabindex="0" data-panel="folders">
         <div class="panel-heading"><div><p class="eyebrow">Overview</p><h2>Your links</h2><p class="muted">Your files, where you need them. One source, one or more destinations.</p></div><div class="button-row"><button type="button" class="secondary" data-open-tab="pair">Pair device</button><button type="button" data-open-create aria-controls="create-link">Create link</button></div></div>
-        <div class="overview" aria-label="Server overview"><p><strong data-link-count>—</strong><span>Links</span></p><p><strong data-peer-count>—</strong><span>Paired devices</span></p><p class="overview-help">Files flow from the source.<br />Destination changes stay on that device.</p></div>
+        <div class="overview" aria-label="Server overview"><p><strong data-link-count>—</strong><span>Links</span></p><p><strong data-peer-count>—</strong><span>Paired devices</span></p><p class="overview-help">Files flow from the source.<br />Link settings are shared across devices.</p></div>
 
         <section class="card links-card" aria-live="polite">
           <div class="button-row"><h3>Link activity</h3><button type="button" class="secondary" data-folders-refresh>Refresh</button></div>
@@ -190,7 +213,7 @@
       </section>
 
       <section id="settings-panel" role="tabpanel" aria-labelledby="settings-tab" tabindex="0" data-panel="settings" hidden>
-        <div class="panel-heading"><div><h2>Settings and reachability</h2><p class="muted">LAN discovery is <strong data-discovery>Unknown</strong>. It can remain off when you use explicit LAN addresses or Tailscale; neither method bypasses pairing.</p></div></div>
+        <div class="panel-heading"><div><h2>Server settings</h2><p class="muted">LAN discovery is <strong data-discovery>Unknown</strong>. It can remain off when you use explicit LAN addresses or Tailscale; neither method bypasses pairing.</p></div></div>
         <section class="card server-help" aria-labelledby="server-help-heading">
           <h3 id="server-help-heading">Open your server console</h3>
           <ol class="setup-steps">
@@ -213,5 +236,9 @@
       </section>
     </main>
     <footer>Core workflows require no Covalent account or hosted coordinator.</footer>
+    </div>
+    <!-- shadcn:link-settings:start -->
+    <template id="link-settings-card"><section data-slot="card" class="shared-settings-card " hidden=""><div data-slot="card-header"><h4 data-slot="card-title">Shared link settings</h4><p data-slot="card-description">Edit here or on the other device. These choices apply to the whole link.</p></div><div data-slot="card-content"></div></section></template>
+    <!-- shadcn:link-settings:end -->
   </body>
 </html>
