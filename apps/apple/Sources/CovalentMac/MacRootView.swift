@@ -47,11 +47,12 @@ struct MacRootView: View {
             .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.activeTask)
             .accessibilityLabel(macLabel(for: model.selectedSection))
         }
+        .toolbar(removing: .title)
         .toolbar {
-            ToolbarItem(placement: .principal) {
-                Text(macLabel(for: model.selectedSection))
-                    .font(.headline)
-                    .foregroundStyle(.primary)
+            if #available(macOS 26.0, *) {
+                sectionTitle.sharedBackgroundVisibility(.hidden)
+            } else {
+                sectionTitle
             }
 
             ToolbarItemGroup {
@@ -200,6 +201,14 @@ struct MacRootView: View {
         }
     }
 
+    private var sectionTitle: some ToolbarContent {
+        ToolbarItem(placement: .principal) {
+            Text(macLabel(for: model.selectedSection))
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(MacLabelColor.sidebarUnselected)
+        }
+    }
+
     private func sidebarLabel(for section: AppSection) -> some View {
         Label {
             Text(macLabel(for: section))
@@ -213,7 +222,7 @@ struct MacRootView: View {
                 )
         }
             .tag(section)
-            .font(.body.weight(.medium))
+            .font(.body.weight(.semibold))
             .accessibilityIdentifier("sidebar.\(section.rawValue)")
     }
 

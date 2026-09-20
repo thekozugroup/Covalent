@@ -79,7 +79,7 @@ maintainer-only publishing detail lives in [docs/release/publishing.md](docs/rel
 
 ## Contribute
 
-Prerequisites by area: Rust 1.97.1 for the shared service; an Apple Silicon Mac with Swift 6.3, Xcode 26, and XcodeGen for Apple; JDK 17 through 25 (`17` in CI), `adb`, and Android SDK/API 37 for Android; Docker with Compose/Buildx for containers. Choose a mode so a core-only contributor is not blocked by unrelated platform tools.
+Prerequisites by area: Rust 1.97.1 for the shared service; an Apple Silicon Mac with Swift 6.3 or newer, Xcode 26 or newer, and XcodeGen for Apple; JDK 17 through 25 (`17` in CI), `adb`, and Android SDK/API 37 for Android; Docker with Compose/Buildx for containers. Choose a mode so a core-only contributor is not blocked by unrelated platform tools.
 
 ```sh
 ./scripts/bootstrap.sh core

@@ -432,6 +432,12 @@ extension XCTestCase {
             let isOutsideWindow = !elementFrame.isNull
                 && !elementFrame.isEmpty
                 && !elementFrame.intersects(windowFrame)
+            // Scrolled content has no pixels inside the window to assess.
+            // Other audit types still inspect these offscreen elements.
+            let isOffscreenContrast = isOutsideWindow && issue.auditType == .contrast
+            let isSystemTouchBar = isOutsideWindow
+                && issue.auditType == .sufficientElementDescription
+                && issue.element?.elementType == .touchBar
             let isHarnessChrome = expectsLegacyFullScreenButtonMismatch
                 && issue.auditType == .parentChild
                 && details.contains("_XCUI:FullScreenWindow")
@@ -452,7 +458,9 @@ extension XCTestCase {
                 && looksLikeAColumn
 
             let attachment = XCTAttachment(string: details)
-            if isOutsideWindow {
+            if isOffscreenContrast {
+                attachment.name = "Not rendered: contrast outside the main window"
+            } else if isSystemTouchBar {
                 outsideWindow.append(issue.compactDescription)
                 attachment.name = "Ignored: outside the main window"
             } else if isHarnessChrome {
@@ -472,7 +480,7 @@ extension XCTestCase {
             }
             attachment.lifetime = .keepAlways
             self.add(attachment)
-            return isOutsideWindow || isHarnessChrome || isSplitViewColumn
+            return isOffscreenContrast || isSystemTouchBar || isHarnessChrome || isSplitViewColumn
         }
 
         // Negative controls. Each exclusion is pinned to the exact population

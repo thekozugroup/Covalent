@@ -5,6 +5,7 @@ set -eu
 
 repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 builder="$repo_root/scripts/build-personal-macos-app.sh"
+doctor="$repo_root/scripts/setup-doctor.sh"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/covalent-personal-builder-contract.XXXXXX")
 trap 'rm -rf -- "$fixture"' EXIT HUP INT TERM
 
@@ -15,8 +16,34 @@ fail() {
 
 test -x "$builder" || fail "personal macOS builder is not executable"
 sh -n "$builder"
+sh -n "$doctor"
 git -C "$repo_root" check-ignore -q artifacts/install/.ignore-check ||
   fail "artifacts/install must stay ignored"
+
+mkdir "$fixture/bin"
+cat > "$fixture/bin/tool" <<'EOF'
+#!/bin/sh
+case "${0##*/}" in
+  uname) [ "${1:-}" = "-m" ] && echo arm64 || echo Darwin ;;
+  rustc) echo 'rustc 1.97.1 (fixture 2026-01-01)' ;;
+  xcodebuild) printf 'Xcode %s\nBuild version fixture\n' "$COVALENT_TEST_XCODE_VERSION" ;;
+  xcodegen) echo 'Version: 2.46.0' ;;
+esac
+EOF
+chmod +x "$fixture/bin/tool"
+for tool in uname rustc cargo rustup xcodebuild swift codesign lipo curl unzip xcodegen; do
+  ln -s tool "$fixture/bin/$tool"
+done
+for version in 26 26.4 27.0; do
+  COVALENT_TEST_XCODE_VERSION=$version PATH="$fixture/bin:$PATH" "$doctor" macos > "$fixture/doctor-$version.log"
+  grep -Fq "ok: Xcode $version" "$fixture/doctor-$version.log" ||
+    fail "setup doctor must accept Xcode $version"
+done
+if COVALENT_TEST_XCODE_VERSION=25.4 PATH="$fixture/bin:$PATH" "$doctor" macos > "$fixture/doctor-25.4.log" 2>&1; then
+  fail "setup doctor must reject Xcode 25.4"
+fi
+grep -Fq 'missing: Xcode 26 or newer (found 25.4)' "$fixture/doctor-25.4.log" ||
+  fail "setup doctor must explain the Xcode 26 minimum"
 
 # These are literal source contracts, not expressions to expand in this test.
 # shellcheck disable=SC2016

@@ -33,7 +33,7 @@ build. Follow the end-user guide to install and open the app.
 Required tools:
 
 - Apple Silicon Mac;
-- Xcode 26 with command-line tools selected;
+- Xcode 26 or newer with command-line tools selected;
 - `rustup` using `rust-toolchain.toml`;
 - Rust target `aarch64-apple-darwin`; and
 - checksum-pinned XcodeGen 2.46.0, installed by the repository script below.
