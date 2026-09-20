@@ -213,14 +213,14 @@ struct MacRootView: View {
         HStack(spacing: 8) {
             Image(systemName: section.systemImage)
                 .symbolRenderingMode(.monochrome)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.body.weight(.semibold))
                 .foregroundStyle(
                     section == selectedSection ? Color.white : MacLabelColor.accentGlyph
                 )
                 .frame(width: 20)
                 .accessibilityHidden(true)
             Text(macLabel(for: section))
-                .font(.system(size: 14, weight: .semibold))
+                .font(.body.weight(.semibold))
                 .foregroundStyle(
                     section == selectedSection ? Color.white : MacLabelColor.sidebarUnselected
                 )
