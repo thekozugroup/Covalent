@@ -57,7 +57,6 @@ struct MacFoldersView: View {
         }
       }
       .formStyle(.grouped)
-      .macLinksScrollEdgeEffect()
       .accessibilityIdentifier("links.view")
       .navigationTitle("Links")
       .task { await refreshWhileVisible() }
@@ -515,7 +514,7 @@ struct MacFoldersView: View {
       case .preparing: "Preparing this run"
       case .running: "Run in progress"
       case .succeeded: "Last run completed"
-      case .incomplete: "Run incomplete after 24 hours"
+      case .incomplete: "Last run incomplete"
       case .interrupted: "Run interrupted"
       case .cancelled: "Run cancelled"
       }
@@ -888,17 +887,6 @@ struct MacFoldersView: View {
       }
       completion(grant)
     }
-}
-
-private extension View {
-  @ViewBuilder
-  func macLinksScrollEdgeEffect() -> some View {
-    if #available(macOS 26.0, *) {
-      scrollEdgeEffectHidden(for: .bottom)
-    } else {
-      self
-    }
-  }
 }
 
 private struct FolderLinkSettingsEditorContext: Identifiable {

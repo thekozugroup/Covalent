@@ -74,6 +74,7 @@ import life.michaelwong.covalent.sync.FolderSyncGrantStore
 import life.michaelwong.covalent.sync.SafFolderGrant
 import life.michaelwong.covalent.sync.SafFolderGrantStore
 import life.michaelwong.covalent.sync.SafWebDavServer
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -533,7 +534,9 @@ class SafFolderSyncJourneyInstrumentedTest {
                     "${failure.message}\n" +
                         recoveryDiagnostic("source", repairedA, "source-deletion") +
                         "\n" +
-                        recoveryDiagnostic("destination", connectionB, "source-deletion"),
+                        recoveryDiagnostic("destination", connectionB, "source-deletion") +
+                        "\n" +
+                        sourceDeletionPolicyDiagnostic(folderId),
                     failure,
                 )
             }
@@ -751,6 +754,31 @@ class SafFolderSyncJourneyInstrumentedTest {
         }.getOrElse { error ->
             "COVALENT_RECOVERY_DIAGNOSTIC node=$label requestId=$requestId error=${error.javaClass.name}"
         }
+
+    private fun sourceDeletionPolicyDiagnostic(folderId: UUID): String = runCatching {
+        val policyFile = File(
+            checkNotNull(secondData),
+            "folder-sync/database/rclone-policy-$folderId.v1.json",
+        )
+        val policy = JSONObject(
+            policyFile.inputStream().use { input -> input.readBounded(MAX_TEST_FILE_BYTES) }
+                .toString(StandardCharsets.UTF_8),
+        )
+        val folder = policy.getJSONObject("folders").getJSONObject(folderId.toString())
+        val pending = folder.optJSONObject("pending")
+        val name = "propagate-source.txt"
+        "COVALENT_SOURCE_DELETION_POLICY " +
+            "pending=${pending != null} copyCompleted=${folder.optBoolean("copyCompleted")} " +
+            "owned=${folder.getJSONArray("owned").toStringList().contains(name)} " +
+            "pendingSource=${pending?.getJSONObject("source")?.has(name)} " +
+            "pendingAllowed=${pending?.getJSONArray("allowed")?.toStringList()?.contains(name)} " +
+            "propagateSourceDeletions=${pending?.optBoolean("propagateSourceDeletions")}"
+    }.getOrElse { error ->
+        "COVALENT_SOURCE_DELETION_POLICY error=${error.javaClass.name}"
+    }
+
+    private fun org.json.JSONArray.toStringList(): List<String> =
+        List(length()) { index -> getString(index) }
 
     private fun awaitStableFolderConnection(
         label: String,

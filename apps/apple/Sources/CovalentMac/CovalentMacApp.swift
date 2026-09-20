@@ -278,7 +278,7 @@ private struct MacMenuBarMenu: View {
         case .preparing: return "Preparing run"
         case .running: return "Run in progress"
         case .succeeded: return "Last run completed"
-        case .incomplete: return "Run incomplete after 24 hours"
+        case .incomplete: return "Last run incomplete"
         case .interrupted: return "Run interrupted"
         case .cancelled: return "Run cancelled"
         case nil: return "Idle"

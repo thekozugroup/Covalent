@@ -1283,7 +1283,10 @@ private fun FolderLinkRunSummary(
         ))
     }
     val active = run?.phase in setOf(FolderLinkRunPhase.PREPARING, FolderLinkRunPhase.RUNNING)
-    if (!settings.settings.paused && share.phase == FolderSharePhase.READY && !active) {
+    if (
+        !settings.settings.paused && settings.settings.cadence != FolderLinkCadence.Continuous &&
+        share.phase == FolderSharePhase.READY && !active
+    ) {
         OutlinedButton(
             onClick = { if (saved?.requiresReview == true) review() else runNow(saved) },
             enabled = !busy && run?.pendingRequest == null,

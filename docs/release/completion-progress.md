@@ -2,40 +2,61 @@
 
 Updated 2026-09-20. The active goal is defined in [Product requirements](../product/requirements.md#active-completion-goal).
 
-**Current scope: 80% verified, 8 of 10 complete acceptance checks. Rclone migration: 100%.**
+**Current scope: 50% verified, 5 of 10 complete acceptance checks. Rclone migration: 100%.**
 These percentages count accepted user journeys, not remaining development time.
-The project is not release-complete.
+The current native failures reopen three previously accepted checks. Historical
+acceptance reached 8 of 10. The project is not release-complete.
 
 Rclone is the sole transfer engine. Native setup, pairing, one-way transfer,
 fan-out, independent collection contributors, deletion choices, explicit
 restoration, cadence, and link-wide settings have working validation evidence.
 The Android app's native pairing, permission, transfer, and background journeys
-pass. Earlier bidirectional and multi-provider backup requirements are superseded.
+have prior passing evidence; the current full journey fails during deletion
+propagation. Earlier bidirectional and multi-provider backup requirements are superseded.
 
-Current CI tests `6d28e5e`:
-[CI 35489446586](https://github.com/thekozugroup/Covalent/actions/runs/35489446586).
+The most recently completed CI tests `91979b7`:
+[CI 35490922447](https://github.com/thekozugroup/Covalent/actions/runs/35490922447).
 Rust/contracts, both Docker architecture builds and vulnerability/runtime checks,
-Android foundation and API 37 device checks, Mac packaging, and dependency review
-pass. Android passes 82 baseline tests and the full SAF journey, including the
-source-deletion step that previously timed out. Hosted Mac UI passes five checks;
-its real-folder journey reaches the rendered audit and finds two contrast failures
-near the bottom of the Links form. The bounded fix hides that form's bottom
-scroll-edge fade on macOS 26 and later. Pinned compilation passes; the local UI
-runner stops because the login session is locked. Hosted verification remains open.
+Android foundation, Mac packaging, and dependency review pass. Android passes
+82 baseline device tests, but its SAF journey fails during source-deletion
+propagation: the destination reports a failed run before the wait expires.
+The same Android and Rust inputs passed that journey on `6d28e5e`; the
+intermittent worker failure remains under diagnosis. Current hosted Mac UI
+passes five checks. Its real-folder journey
+completes both transfers and relaunch, then still reports contrast failures for
+destination-deletion guidance and a partially clipped Transfers label. The
+scroll-edge change did not resolve these failures, and the four-minute test
+allowance also expires during the final audit. Diagnosis remains open; no
+assertion is waived or timeout increased.
+
+The ineffective scroll-edge modifier is removed. Mac failure labels now say
+"Last run incomplete" without claiming 24 hours elapsed. Android no longer
+offers Run Now for Continuous links, which reject explicit run requests.
+Affected Android UI compilation and all 196 existing JVM tests pass; current
+hosted native acceptance remains open.
 
 The retained Android candidate uses `06b12b5`, is 49,344,953 bytes, and has APK
 SHA-256 `8f9257350ed8c35b78f4601903edfd43b19cb853ac2498cda67bc37b12804eae`.
 Package, native libraries, signer, notices, and provenance checks pass. The prior
 `25971fe` APK passes its full SAF journey on a private emulator in 380.332 seconds.
 Final tagged-APK validation is still required. The physical Pixel is not used.
+The retained `06b12b5` APK also passes the unchanged full journey on the private
+arm64 emulator in 364.884 seconds, including deletion during an active run.
+Only failure diagnostics were added to the test APK. This pass does not explain
+the intermittent x86_64 hosted failure. The test apps, folder fixture, and private
+emulator are removed or stopped afterward; the temporary test source is restored.
 
 The retained local Mac six-check run passes in 264.9 seconds, including native
 pairing, two transfers, relaunch, saved folder grants, link settings, menu actions,
 keyboard navigation, and rendered accessibility audits. Its source tree is
-`0efc1b3ab875a323d3fa4f290b6f8933d337582d`. The `06b12b5` personal Apple Silicon
-archive passes architecture, signature, sandbox inheritance, manifest, and component
-hash checks. The final package must include the scroll-edge correction. VoiceOver
-is excluded by owner instruction; both default and hosted checks omit it.
+`0efc1b3ab875a323d3fa4f290b6f8933d337582d`. The `91979b7` personal Apple Silicon
+archive passes architecture, signature, sandbox inheritance, manifest, archive,
+and component hash checks. The archive SHA-256 is
+`f8b958cdb506cd87079cae4c0f20ffbd8ad4cc7ef0899b995c8fce9a0929541d`.
+Its three engine helpers and engine manifest remain byte-identical to the
+`06b12b5` package used for the network drill. Current native UI acceptance is
+still required. VoiceOver is excluded by owner instruction; both default and
+hosted checks omit it.
 
 The matching `06b12b5` packaged helpers receive three real Atmos files totaling
 3,748,005 bytes, with exact path, size, and SHA-256 equality. Both processes exit
@@ -48,7 +69,9 @@ All 7,344 music files, totaling 15,389,291,455 bytes, reached Waypoint's E-Music
 share. Full engine verification and independent path, size, and sampled hash checks
 pass. Hourly cadence is confirmed on both devices, and a scheduled run starts
 4.831 seconds after its due time. Source metadata and unrelated services remain
-unchanged. Final runtime upgrades and their performance comparison are pending.
+unchanged. Both durable nodes now run verified `06b12b5` native images. Their identities,
+mounts, hourly settings, deletion policy, resource limits, files, and unrelated
+services are preserved. Exactly one post-upgrade unchanged run succeeds.
 
 The current real-worker failure test passes and preserves recovery state, source
 files, and unrelated destination files. Completed job errors now produce a failed
@@ -61,12 +84,18 @@ recovery before retrying; ownership is not guessed.
 A warm local sample copies 101 files totaling 67,518,464 bytes in 35.30 seconds.
 During 29.985 seconds of Manual/Scheduled idle time, no worker or guardian is
 observed and sampled CPU time is 0.01 seconds. This is not whole-app battery evidence.
-The real music library exposes a separate cost: an unchanged run takes 853.421
-seconds and reads 42,889,273,344 bytes from Atmos. Destination metadata remains
-unchanged and idle CPU samples are 0.12% and 0.23%. The redundant second source hash
-inventory is removed; destination comparison and post-copy integrity checks remain.
-Forty-seven service tests and the real fan-out/restart check pass. A deployed
-speedup is not yet claimed.
+The real music library exposes a separate cost: an unchanged run initially
+takes 853.421 seconds and reads 42,889,273,344 bytes from Atmos. Removing a
+redundant source hash inventory reduces the measured run to 653.374 seconds
+and source disk reads to 22,461,243,392 bytes. Those samples are 23.44% shorter
+and 47.63% lower in disk reads; filesystem caching also affects the comparison.
+Two source hash inventories remain, so substantial hourly scanning still occurs.
+No copy worker runs during this unchanged check. Source and destination metadata
+stay unchanged. Transfer workers stop afterward; idle CPU samples are 0.12%
+and 0.24%. Docker working memory is 28.82 MiB and 14.2 MiB, while the Atmos
+cgroup also retains about 2 GiB of mostly file cache. These measurements are not
+whole-app battery or universal throughput claims. Existing safety checks and
+post-copy integrity verification remain intact.
 
 Superseded Mac candidates and an old build cache with an observed 5,671,329,792-byte
 footprint are removed. This is a measured file footprint, not guaranteed physical
@@ -84,12 +113,12 @@ Atlas validation is claimed.
 | --- | --- | --- |
 | 1 | Native setup pairs devices and creates a source/destination link; files never flow backward. | Verified |
 | 2 | Fan-out destinations work independently; multiple sources contribute safely to one collection. | Verified |
-| 3 | Both source-deletion options work with clear explanations and failed-scan protection. | Verified; ambiguous interrupted copies require explicit recovery |
+| 3 | Both source-deletion options work with clear explanations and failed-scan protection. | Reopened: intermittent Android source-deletion failure |
 | 4 | Destination deletions stay local across source edits/restarts; explicit restoration works. | Verified |
 | 5 | Manual, scheduled, and continuous transfers respect platform limits; idle batch workers stop. | Verified |
 | 6 | Settings edited on any authorized member converge across the link; pending/stale edits remain visible. | Verified |
-| 7 | Mac setup, links, settings, and per-link menu bar status pass native HIG, keyboard, and accessibility checks. | Verified; VoiceOver excluded by owner |
-| 8 | Tomato-inspired Android floating actions, typography, data/status visuals, and top bar; actual pairing, permission, transfer, and background journeys pass. | Verified |
+| 7 | Mac setup, links, settings, and per-link menu bar status pass native HIG, keyboard, and accessibility checks. | Reopened: current rendered contrast failures; VoiceOver excluded by owner |
+| 8 | Tomato-inspired Android floating actions, typography, data/status visuals, and top bar; actual pairing, permission, transfer, and background journeys pass. | Reopened: current full SAF journey fails |
 | 9 | Installable Mac/Android/Docker candidates pass real laptop–Atmos transfers and server mount handling; use an Unraid plugin only for a demonstrated Docker limitation. | Open |
 | 10 | Relevant fault/security checks pass; idle/transfer performance is measured; temporary fixtures are removed; GitHub releases and installation guidance are published. | Open |
 
