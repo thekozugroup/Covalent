@@ -67,8 +67,9 @@ jobs:
             test "${GITHUB_EVENT_NAME}" = workflow_dispatch
             test "${GITHUB_REF_TYPE}" = tag
             test "${version}" = v0.2.1
-            [[ "${ARTIFACT_RUN_ID}" =~ ^[0-9]+$ ]]
-            repair_tag="release-tools-${version}"
+            test "${source_sha}" = e7943db3d5785294bdbb389cc2f52142da860c87
+            test "${ARTIFACT_RUN_ID}" = 35515574466
+            repair_tag="release-tools-${version}-container"
             if [[ "${GITHUB_REF}" != "refs/tags/${repair_tag}" ]]; then
               echo "archive recovery must run from signed ${repair_tag}" >&2
               exit 1
@@ -583,8 +584,10 @@ jobs:
               --output json \
               "${subject}" > "${verification}"
             jq -S -c . "${sbom}" > "${expected}"
-            jq -e 'type == "array" and length > 0' "${verification}" >/dev/null
-            jq -r '.[].payload' "${verification}" > "${payloads}"
+            jq -e 'if type == "array" then length > 0 else type == "object" end' \
+              "${verification}" >/dev/null
+            jq -r 'if type == "array" then .[].payload else .payload end' \
+              "${verification}" > "${payloads}"
             matched=false
             while IFS= read -r payload; do
               printf '%s' "${payload}" | base64 --decode > "${decoded}"

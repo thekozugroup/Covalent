@@ -5,6 +5,7 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 workflow="$repo_root/.github/workflows/container-supply-chain.yml"
 
 python3 - "$workflow" <<'PY'
+import base64
 import json
 import re
 import subprocess
@@ -95,6 +96,51 @@ if converted.get("annotations") != {
 if converted["manifests"] != manifests:
     raise SystemExit("conversion changed child manifest descriptors")
 jq(contracts[0], outputs[0], exit_status=True)
+
+# Cosign 2.5 emits one verified DSSE envelope as an object. Older releases
+# emitted an array. The workflow must accept both without changing the signed
+# in-toto statement or weakening exact SPDX equality.
+verification_shape = re.search(
+    r"jq -e '(if type == \"array\" then length > 0 else type == \"object\" end)'",
+    workflow,
+)
+payload_shape = re.search(
+    r"jq -r '(if type == \"array\" then \.\[\]\.payload else \.payload end)'",
+    workflow,
+)
+if not verification_shape or not payload_shape:
+    raise SystemExit("missing Cosign object/array output normalization")
+
+statement = {
+    "_type": "https://in-toto.io/Statement/v0.1",
+    "subject": [{"name": "fixture", "digest": {"sha256": "c" * 64}}],
+    "predicateType": "https://spdx.dev/Document",
+    "predicate": {"spdxVersion": "SPDX-2.3", "SPDXID": "SPDXRef-DOCUMENT"},
+}
+payload = base64.b64encode(json.dumps(statement, separators=(",", ":")).encode()).decode()
+envelope = {"payloadType": "application/vnd.in-toto+json", "payload": payload, "signatures": []}
+for verification in (envelope, [envelope]):
+    shape = subprocess.run(
+        ["jq", "-e", verification_shape.group(1)],
+        input=json.dumps(verification).encode(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if shape.returncode:
+        raise SystemExit("valid Cosign verification shape was rejected")
+    extracted = subprocess.run(
+        ["jq", "-r", payload_shape.group(1)],
+        input=json.dumps(verification).encode(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    ).stdout.decode().splitlines()
+    if extracted != [payload]:
+        raise SystemExit("Cosign payload normalization changed the signed payload")
+
+decoded = json.loads(base64.b64decode(payload))
+if decoded["predicate"] != statement["predicate"]:
+    raise SystemExit("fixture predicate changed during DSSE extraction")
 
 # Parse every shell run step after replacing Actions expressions with a benign
 # word. This catches quoting or heredoc damage in the workflow itself.

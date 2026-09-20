@@ -42,11 +42,12 @@ Release notes come from `docs/release/notes/<tag>.md` when that file exists.
 
 ## v0.2.1 packaging repair
 
-The runtime source tag `v0.2.1` remains immutable. Its signing/publication repair
-uses the separate annotated signed `release-tools-v0.2.1` tag. This is an
-exception for v0.2.1 only and does not assert that repair or publication has
-completed. Until the final assets and image digest pass verification, keep the
-release in draft.
+The runtime source tag `v0.2.1` remains immutable. CLI signing/publication repair
+uses the separate annotated signed `release-tools-v0.2.1` tag. Container
+signing/publication repair uses the separate annotated signed
+`release-tools-v0.2.1-container` tag. These are exceptions for v0.2.1 only and
+do not assert that repair or publication has completed. Until the final assets
+and image digest pass verification, keep the release in draft.
 
 The repair must reuse the original CLI archive/SBOM bytes and scanned container
 architecture archives from their source-bound workflow runs. Record those run
@@ -58,7 +59,7 @@ Require these exact GitHub OIDC certificate identities for repaired v0.2.1
 assets, with issuer `https://token.actions.githubusercontent.com`:
 
 - CLI: `https://github.com/thekozugroup/Covalent/.github/workflows/cli-release.yml@refs/tags/release-tools-v0.2.1`
-- Container: `https://github.com/thekozugroup/Covalent/.github/workflows/container-supply-chain.yml@refs/tags/release-tools-v0.2.1`
+- Container: `https://github.com/thekozugroup/Covalent/.github/workflows/container-supply-chain.yml@refs/tags/release-tools-v0.2.1-container`
 
 The runtime tag controls the application version and source; the repair tag
 identifies the reviewed packaging code. Both must retain verified signatures.

@@ -38,7 +38,7 @@ version=v0.2.1
 digest=$(cat covalent-container-digest.txt)
 printf '%s\n' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$' || exit 1
 case "$version" in
-  v0.2.1) signing_ref=release-tools-v0.2.1 ;;
+  v0.2.1) signing_ref=release-tools-v0.2.1-container ;;
   *) signing_ref="$version" ;;
 esac
 cosign verify "ghcr.io/thekozugroup/covalent@$digest" \
@@ -47,7 +47,7 @@ cosign verify "ghcr.io/thekozugroup/covalent@$digest" \
 ```
 
 For v0.2.1 alone, the exact signing identity is
-`https://github.com/thekozugroup/Covalent/.github/workflows/container-supply-chain.yml@refs/tags/release-tools-v0.2.1`.
+`https://github.com/thekozugroup/Covalent/.github/workflows/container-supply-chain.yml@refs/tags/release-tools-v0.2.1-container`.
 The packaging repair must reuse the original scanned v0.2.1 architecture
 archives and retain their source provenance. The runtime source remains the
 signed `v0.2.1` tag. The separate repair tag identifies signing/publication

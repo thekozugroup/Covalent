@@ -223,6 +223,11 @@ grep -Fq -- '--certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.gi
 # signing identity, signature, and current SBOM attestation all verify first.
 grep -Fq 'candidate="${IMAGE}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' "$container_workflow"
 grep -Fq 'certificate_identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container-supply-chain.yml@${{ needs.validate.outputs.signing_ref }}"' "$container_workflow"
+grep -Fq 'test "${source_sha}" = e7943db3d5785294bdbb389cc2f52142da860c87' "$container_workflow"
+grep -Fq 'test "${ARTIFACT_RUN_ID}" = 35515574466' "$container_workflow"
+grep -Fq 'repair_tag="release-tools-${version}-container"' "$container_workflow"
+grep -Fq 'release-tools-v0.2.1-container' docs/release/publishing.md
+grep -Fq 'release-tools-v0.2.1-container' docs/platform/atlas-tailscale.md
 grep -Fq 'group: container-release-${{ github.repository_id }}' "$container_workflow"
 if grep -Fq 'group: container-release-${{ github.repository_id }}-${{ github.ref }}' "$container_workflow"; then
   echo "container promotion concurrency must serialize every release ref" >&2
