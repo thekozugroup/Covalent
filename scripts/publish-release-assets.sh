@@ -56,10 +56,11 @@ done
 release_record() {
   # Draft releases are not reliably addressable through the tag endpoint. List
   # every release visible to the authenticated publisher and select the exact
-  # tag instead. `--slurp` makes pagination one valid JSON value before jq runs.
+  # tag instead. `--slurp` makes pagination one valid JSON value for jq.
   gh api --paginate --slurp \
     "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
-    --jq ".[][] | select(.tag_name == \"${version}\") | [.id, .draft, .upload_url] | @tsv"
+    | jq -r --arg version "$version" \
+      '.[][] | select(.tag_name == $version) | [.id, .draft, .upload_url] | @tsv'
 }
 
 require_one_release_id() {
@@ -147,7 +148,8 @@ upload_asset() {
   # draft, which is exactly when all automated lanes upload their artifacts.
   existing_ids=$(gh api --paginate --slurp \
     "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" \
-    --jq ".[][] | select(.name == \"${asset_name}\") | .id")
+    | jq -r --arg asset_name "$asset_name" \
+      '.[][] | select(.name == $asset_name) | .id')
   for existing_id in $existing_ids; do
     case "$existing_id" in
       ''|*[!0-9]*)

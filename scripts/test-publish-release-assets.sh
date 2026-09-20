@@ -22,15 +22,15 @@ printf '%s\n' "$*" >> "$COVALENT_FAKE_GH_LOG"
 case "$*" in
   *"repos/thekozugroup/Covalent/releases?per_page=100"*)
     # Existing draft: tag endpoints may not expose it, authenticated listing does.
-    printf '424\ttrue\thttps://uploads.github.com/repos/thekozugroup/Covalent/releases/424/assets{?name,label}\n'
-    ;;
-  *"repos/thekozugroup/Covalent/releases/424/assets?per_page=100"*"select(.name"*)
-    printf '900\n'
+    printf '[[{"id":424,"draft":true,"tag_name":"v0.2.0","upload_url":"https://uploads.github.com/repos/thekozugroup/Covalent/releases/424/assets{?name,label}"}]]\n'
     ;;
   *"--method DELETE repos/thekozugroup/Covalent/releases/assets/900 --silent"*)
     ;;
   *"repos/thekozugroup/Covalent/releases/424/assets?per_page=100"*)
-    printf '  Covalent-v0.2.0-test.txt  23 bytes\n'
+    case "$*" in
+      *--slurp*) printf '[[{"id":900,"name":"Covalent-v0.2.0-test.txt","size":23}]]\n' ;;
+      *) printf '[{"id":900,"name":"Covalent-v0.2.0-test.txt","size":23}]\n' ;;
+    esac
     ;;
   *)
     echo "unexpected gh fixture call: $*" >&2
@@ -74,6 +74,10 @@ printf '%s\n' "$output" | grep -Fq 'uploaded Covalent-v0.2.0-test.txt'
 grep -Fq 'repos/thekozugroup/Covalent/releases?per_page=100' "$log"
 grep -Fq -- '--method DELETE repos/thekozugroup/Covalent/releases/assets/900 --silent' "$log"
 grep -Fq 'https://uploads.github.com/repos/thekozugroup/Covalent/releases/424/assets?name=Covalent-v0.2.0-test.txt' "$curl_log"
+if grep -E -- '--slurp.*(--jq|--template)|(--jq|--template).*--slurp' "$log"; then
+  echo "gh fixture saw an unsupported --slurp/--jq or --template combination" >&2
+  exit 1
+fi
 if grep -Eq '^release (view|create|upload)' "$log"; then
   echo "draft fixture fell back to a tag-addressed release operation" >&2
   exit 1

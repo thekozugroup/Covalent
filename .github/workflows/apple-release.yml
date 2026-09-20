@@ -78,6 +78,9 @@ jobs:
           test -s apps/apple/Package.resolved
           cd apps/apple
           xcodegen generate --quiet
+          swiftpm_dir="Covalent.xcodeproj/project.xcworkspace/xcshareddata/swiftpm"
+          mkdir -p "$swiftpm_dir"
+          cp Package.resolved "$swiftpm_dir/Package.resolved"
       # Dependency fetching and every build script run before any private
       # signing identity exists. The later signing job only handles this
       # checksummed app bundle and never invokes a build tool.

@@ -8,7 +8,7 @@ operations; those operations do not define the new link workflow.
 
 ## Personal use from this checkout
 
-This path works before a public `v0.2.0` image exists. It builds the exact
+This path works before a public `v0.2.1` image exists. It builds the exact
 checked-out source, starts in the background, claims the server, and leaves the
 source read-only.
 
@@ -68,7 +68,7 @@ behavior. The KEK is mounted read-only as `/run/secrets/covalent-kek`, outside
 `/config`, `/data`, and every backup source; do not include it in a selected
 source. Copying `/config` and `/data` without this file stays locked. Keep the
 file mode `0600` and `COVALENT_KEY_ENCRYPTION_KEY_VERSION=1` for the lifetime of
-this state directory: the current v0.2.0 contract has no automatic rotation.
+this state directory: the current v0.2.1 contract has no automatic rotation.
 The image never generates a missing KEK.
 
 The published v0.1.0 immutable GHCR digest predates this KEK contract and does not contain `provision-key`; it is not an installable release for this workflow. Do not substitute it for `covalent:local`. Production installation stays blocked until a newly signed immutable digest containing this code is published and the Unraid template is updated atomically.

@@ -106,7 +106,7 @@ Sign the real release commit normally. Do not create an empty verification
 commit or push directly to `main` only to test the key:
 
 ```sh
-git commit -S -m "release: prepare v0.2.0"
+git commit -S -m "release: prepare v0.2.1"
 git log -1 --show-signature --pretty=fuller
 git push origin codex/production-readiness
 release_commit=$(git rev-parse HEAD)
@@ -125,10 +125,10 @@ workflows do not require that commit to be on `main`; no PR merge is needed:
 release_commit=$(git rev-parse HEAD)
 gh api "repos/thekozugroup/Covalent/commits/${release_commit}" \
   --jq '.commit.verification | {verified,reason}'
-git tag -s v0.2.0 -m "Covalent v0.2.0"
-git verify-tag v0.2.0
-test "$(git rev-list -n 1 v0.2.0)" = "${release_commit}"
-git push origin v0.2.0
+git tag -s v0.2.1 -m "Covalent v0.2.1"
+git verify-tag v0.2.1
+test "$(git rev-list -n 1 v0.2.1)" = "${release_commit}"
+git push origin v0.2.1
 ```
 
 Pushing the tag starts `container-supply-chain.yml`,

@@ -102,6 +102,8 @@ grep -Fq 'GITHUB_REF}" != "refs/tags/${version}"' "$cli_workflow"
 grep -Fq 'GITHUB_REF_TYPE}" != "tag"' "$cli_workflow"
 grep -Fq 'certificate_identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/cli-release.yml@refs/tags/${RELEASE_VERSION}"' "$cli_workflow"
 test -x scripts/package-cli-release.sh
+test -x scripts/test-package-cli-release.sh
+./scripts/test-package-cli-release.sh
 test -x scripts/generate-cli-release-inventory.sh
 test -x scripts/test-cli-release-workflow.sh
 ./scripts/test-cli-release-workflow.sh

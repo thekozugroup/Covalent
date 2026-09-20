@@ -93,6 +93,9 @@ jobs:
           test -s apps/apple/Package.resolved
           cd apps/apple
           xcodegen generate --quiet
+          swiftpm_dir="Covalent.xcodeproj/project.xcworkspace/xcshareddata/swiftpm"
+          mkdir -p "$swiftpm_dir"
+          cp Package.resolved "$swiftpm_dir/Package.resolved"
           xcodebuild \
             -resolvePackageDependencies \
             -project Covalent.xcodeproj \

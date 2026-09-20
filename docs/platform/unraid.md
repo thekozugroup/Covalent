@@ -9,7 +9,7 @@ are retained until the final image and installation guide are published.
 Unraid is Tier 1. The template is intentionally unprivileged (`99:100`),
 read-only, capability-free, and uses `no-new-privileges` with a temporary
 filesystem. It is not listed in Community Applications yet. Until a new
-immutable `v0.2.0` image is published, do not import or start the historical
+immutable `v0.2.1` image is published, do not import or start the historical
 template. Do not enable privileged mode to solve mount permissions; correct the
 selected host paths instead.
 
@@ -17,7 +17,7 @@ The v0.1.0 template uses the released immutable GHCR digest, not a mutable tag. 
 
 ## Setting up
 
-These steps are ready for the future `v0.2.0` immutable digest. Today they stop
+These steps are ready for the future `v0.2.1` immutable digest. Today they stop
 before template installation because the only public digest is the blocked
 historical `v0.1.0` image.
 
@@ -44,7 +44,7 @@ historical `v0.1.0` image.
    and verify one byte-for-byte offline escrow copy on encrypted removable media
    that is never mounted into Covalent. Exclude the live KEK from every host and
    Covalent backup.
-2. After `v0.2.0` publishes, confirm this page and
+2. After `v0.2.1` publishes, confirm this page and
    `packaging/unraid/covalent.xml` name that exact signed immutable digest. Only
    then import the template manually. Community Applications availability is
    future work and must not be assumed.

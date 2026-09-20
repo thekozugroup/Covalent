@@ -69,8 +69,8 @@ android {
         applicationId = "life.michaelwong.covalent"
         minSdk = 26
         targetSdk = 37
-        versionCode = 2000
-        versionName = "0.2.0"
+        versionCode = 2001
+        versionName = "0.2.1"
         buildConfigField(
             "boolean",
             "COVALENT_SYNC_ENGINE_PACKAGED",
