@@ -36,7 +36,8 @@ fi
 
 rust_target=aarch64-apple-darwin
 if [ "$configuration" = "Release" ]; then
-  cargo build \
+  # Rust #157750: stripped proc-macro dylibs cannot be loaded on macOS 27.
+  CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_STRIP=none cargo build \
     --locked \
     --release \
     --manifest-path "$repo_root/Cargo.toml" \

@@ -210,21 +210,23 @@ struct MacRootView: View {
     }
 
     private func sidebarLabel(for section: AppSection) -> some View {
-        Label {
+        HStack(spacing: 8) {
+            Image(systemName: section.systemImage)
+                .symbolRenderingMode(.monochrome)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(
+                    section == selectedSection ? Color.white : MacLabelColor.accentGlyph
+                )
+                .frame(width: 20)
+                .accessibilityHidden(true)
             Text(macLabel(for: section))
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(
                     section == selectedSection ? Color.white : MacLabelColor.sidebarUnselected
                 )
-        } icon: {
-            Image(systemName: section.systemImage)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(
-                    section == selectedSection ? Color.white : MacLabelColor.accentGlyph
-                )
+                .accessibilityIdentifier("sidebar.\(section.rawValue)")
         }
-            .tag(section)
-            .accessibilityIdentifier("sidebar.\(section.rawValue)")
+        .tag(section)
     }
 
     private func macLabel(for section: AppSection) -> String {
