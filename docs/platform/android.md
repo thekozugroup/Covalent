@@ -62,6 +62,12 @@ Existing artifacts are never overwritten. Identical verified files are reused;
 a conflicting file stops the command. For a release, retain the exact APK's
 separate device-test receipt beside this build evidence.
 
+For v0.2.1, download the published
+[debug-signed personal APK](https://github.com/thekozugroup/Covalent/releases/download/v0.2.1/Covalent-v0.2.1-android-personal-debug-7157b555a2c9f684.apk)
+and its
+[SHA-256 checksum](https://github.com/thekozugroup/Covalent/releases/download/v0.2.1/Covalent-v0.2.1-android-personal-debug-7157b555a2c9f684.apk.sha256).
+This is a personal-use debug APK, not a production-signed package.
+
 If the prerequisite check reports missing tools, install the exact Android and
 Rust inputs below. Set `ANDROID_HOME` to your SDK directory first. On macOS,
 Android Studio normally uses `$HOME/Library/Android/sdk`.

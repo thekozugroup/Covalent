@@ -67,12 +67,22 @@ grep -Fq 'require_mode /source ro' scripts/validate-unraid-template.sh
 grep -Fq 'require_mode /boot-source ro' scripts/validate-unraid-template.sh
 grep -Fq 'require_mode /run/secrets/covalent-kek ro' scripts/validate-unraid-template.sh
 
+historical_image_digest='sha256:8b8b96bdea7437fecf6d9c3297c248fd9de7eeb25fe7d701aa6f0a5b633cf8a6'
+current_image_digest='sha256:393f8a0dafa7f17d8ad964d501f3d33668d547889dc493080e042489ee3e1677'
 image_digest=$(sed -n 's|^[[:space:]]*<Repository>.*@\(sha256:[0-9a-f]*\)</Repository>[[:space:]]*$|\1|p' packaging/unraid/covalent.xml)
-grep -Fq "$image_digest" docs/release/notes/v0.1.0.md
-grep -Fq "$image_digest" docs/platform/atlas-tailscale.md
+test "$image_digest" = "$current_image_digest"
+grep -Fq "$historical_image_digest" docs/release/notes/v0.1.0.md
+grep -Fq "$historical_image_digest" docs/platform/atlas-tailscale.md
+grep -Fq "$current_image_digest" README.md
+grep -Fq "$current_image_digest" docs/platform/unraid.md
+grep -Fq "$current_image_digest" docs/platform/atlas-tailscale.md
+grep -Fq "$current_image_digest" packaging/docker/README.md
 historical_container_identity='https://github.com/thekozugroup/Covalent/.github/workflows/container-supply-chain.yml@refs/tags/v0.1.0'
 grep -Fq -- "--certificate-identity '$historical_container_identity'" docs/platform/atlas-tailscale.md
 grep -Fq -- "--certificate-identity '$historical_container_identity'" docs/release/notes/v0.1.0.md
+current_container_identity='https://github.com/thekozugroup/Covalent/.github/workflows/container-supply-chain.yml@refs/tags/release-tools-v0.2.1-container'
+grep -Fq "$current_container_identity" docs/platform/atlas-tailscale.md
+grep -Fq "$current_container_identity" packaging/docker/README.md
 if rg -q -- '--certificate-identity-regexp.*thekozugroup/Covalent' \
   docs/platform/atlas-tailscale.md docs/release/notes/v0.1.0.md; then
   echo "container install documentation must pin the exact workflow and tag identity" >&2
@@ -407,10 +417,10 @@ grep -q 'must be an annotated tag' scripts/verify-release-commit-signature.sh
 grep -q 'git tag -s' scripts/verify-release-commit-signature.sh
 grep -q 'historical unsigned annotated tag is grandfathered' scripts/verify-release-commit-signature.sh
 grep -q 'No Android artifact is published in v0.1.0' README.md
-grep -q 'no active deployable release for the current KEK and trusted-claim' README.md
-grep -q 'no verified source-free CLI archive is published yet' README.md
-if grep -q 'published releases after v0.1.0 include verified source-free CLI archives' README.md; then
-  echo "README must not advertise unpublished CLI archives" >&2
+grep -q '`v0.2.1` is the current release for the KEK and trusted-claim contract' README.md
+grep -q 'verified v0.2.1 archive' README.md
+if grep -q 'no active deployable release for the current KEK and trusted-claim' README.md; then
+  echo "README must describe current release availability" >&2
   exit 1
 fi
 grep -Fq '(docs/getting-started.md)' README.md

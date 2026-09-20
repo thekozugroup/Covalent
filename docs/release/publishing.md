@@ -45,9 +45,8 @@ Release notes come from `docs/release/notes/<tag>.md` when that file exists.
 The runtime source tag `v0.2.1` remains immutable. CLI signing/publication repair
 uses the separate annotated signed `release-tools-v0.2.1` tag. Container
 signing/publication repair uses the separate annotated signed
-`release-tools-v0.2.1-container` tag. These are exceptions for v0.2.1 only and
-do not assert that repair or publication has completed. Until the final assets
-and image digest pass verification, keep the release in draft.
+`release-tools-v0.2.1-container` tag. These are exceptions for v0.2.1 only;
+they repair packaging and publication without moving the runtime tag.
 
 The repair must reuse the original CLI archive/SBOM bytes and scanned container
 architecture archives from their source-bound workflow runs. Record those run
@@ -67,8 +66,9 @@ Do not broaden the trust rule to a branch, arbitrary repair tags or an identity
 regular expression. Other releases continue to use their exact version-tag
 workflow identity. The CLI install guide and container verification instructions
 must use the same explicit v0.2.1 exception, including SBOM attestation checks.
-The final container digest remains unknown until that lane succeeds; use its
-verified `covalent-container-digest.txt`, then complete step 11 below.
+The verified v0.2.1 container digest is
+`sha256:393f8a0dafa7f17d8ad964d501f3d33668d547889dc493080e042489ee3e1677`;
+use the matching `covalent-container-digest.txt` when completing step 11.
 
 ## The version of record
 

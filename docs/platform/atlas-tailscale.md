@@ -4,9 +4,9 @@ Start with [Create your first one-way link](../getting-started-links.md). This
 runbook adds the Unraid, SSH, and Tailnet checks needed for Atlas.
 
 Atlas is offline; no Atlas runtime validation is claimed. Release installation
-remains conditional on publication of the verified v0.2.1 immutable image and
-matching template. The historical v0.1.0 image predates the required KEK and
-trusted claim client and must not be installed.
+uses the verified v0.2.1 immutable image and matching template. The historical
+v0.1.0 image predates the required KEK and trusted claim client and must not be
+installed.
 
 ## 1. Historical v0.1.0 boundary (do not install)
 
@@ -26,12 +26,13 @@ cosign verify ghcr.io/thekozugroup/covalent@sha256:8b8b96bdea7437fecf6d9c3297c24
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
-### Verify the replacement v0.2.1 image when published
+### Verify the v0.2.1 image
 
 Download `covalent-container-digest.txt` and the matching Unraid template from
-the published v0.2.1 release. No replacement digest is asserted here before the
-release lane finishes. The template must contain exactly that immutable digest.
-Verify it before pulling or installing:
+the v0.2.1 release. The digest must be
+`sha256:393f8a0dafa7f17d8ad964d501f3d33668d547889dc493080e042489ee3e1677`.
+The template must contain exactly that immutable digest. Verify it before
+pulling or installing:
 
 ```sh
 version=v0.2.1

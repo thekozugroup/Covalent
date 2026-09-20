@@ -1,16 +1,22 @@
 # Docker
 
 The current product is [one-way links](../../docs/product/synchronization.md).
-The complete simplified release remains under development; check the
-[acceptance ledger](../../docs/release/completion-progress.md) before relying on
-it. This page retains source-checkout provisioning and older backup/recovery
-operations; those operations do not define the new link workflow.
+Use the v0.2.1 release image for installation. This page also retains
+source-checkout provisioning and older backup/recovery operations; those
+operations do not define the new link workflow.
+
+## Release installation
+
+Use `ghcr.io/thekozugroup/covalent@sha256:393f8a0dafa7f17d8ad964d501f3d33668d547889dc493080e042489ee3e1677`.
+Verify it with the exact identity
+`https://github.com/thekozugroup/Covalent/.github/workflows/container-supply-chain.yml@refs/tags/release-tools-v0.2.1-container`
+before running it. See the [Atlas/Tailscale runbook](../../docs/platform/atlas-tailscale.md)
+for the `cosign` command, KEK setup, and container mounts.
 
 ## Personal use from this checkout
 
-This path works before a public `v0.2.1` image exists. It builds the exact
-checked-out source, starts in the background, claims the server, and leaves the
-source read-only.
+This path builds the exact checked-out source, starts in the background, claims
+the server, and leaves the source read-only.
 
 Run from the Covalent repository root on Linux or macOS with Docker Desktop.
 The example keeps every bind mount below `$HOME`, which Docker Desktop shares by
@@ -71,7 +77,7 @@ file mode `0600` and `COVALENT_KEY_ENCRYPTION_KEY_VERSION=1` for the lifetime of
 this state directory: the current v0.2.1 contract has no automatic rotation.
 The image never generates a missing KEK.
 
-The published v0.1.0 immutable GHCR digest predates this KEK contract and does not contain `provision-key`; it is not an installable release for this workflow. Do not substitute it for `covalent:local`. Production installation stays blocked until a newly signed immutable digest containing this code is published and the Unraid template is updated atomically.
+The published v0.1.0 immutable GHCR digest predates this KEK contract and does not contain `provision-key`; it is not an installable release for this workflow. Do not substitute it for `covalent:local`. Use the v0.2.1 release digest above for production installation.
 
 The image is rootless (`65532:65532`), has a read-only root filesystem, drops every Linux capability, enables `no-new-privileges`, and uses a `noexec,nosuid` temporary filesystem. `/data` is the durable encrypted engine state, identity, keys, local API token, and maintained folder-engine database. `/config` is sensitive Caddy state: it contains the local CA certificate and its signing key. Back it up with `/data`, but never treat the directory itself as a settings export or a source share.
 
@@ -274,9 +280,8 @@ removing the recovery-file mounts from the running container. Keep the saved
 pair offline; never include it in a source share. A crash during bootstrap can
 be retried with the exact same pair; do not replace or erase the target state.
 
-This development workflow needs the current source build. The unpublished
-release and Atlas/Unraid hardware gates remain listed in the
-[completion plan](../../docs/release/completion-plan.md).
+This development workflow needs the current source build. Atlas remains
+untested and offline; do not treat this guide as Atlas validation.
 
 ## LAN and Tailscale
 

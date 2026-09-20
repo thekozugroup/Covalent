@@ -1,9 +1,9 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>Covalent</Name>
-  <Repository>ghcr.io/thekozugroup/covalent@sha256:8b8b96bdea7437fecf6d9c3297c248fd9de7eeb25fe7d701aa6f0a5b633cf8a6</Repository>
+  <Repository>ghcr.io/thekozugroup/covalent@sha256:393f8a0dafa7f17d8ad964d501f3d33668d547889dc493080e042489ee3e1677</Repository>
   <Registry>https://github.com/thekozugroup/Covalent/pkgs/container/covalent</Registry>
-  <TemplateURL>https://raw.githubusercontent.com/thekozugroup/Covalent/main/packaging/unraid/covalent.xml</TemplateURL>
+  <TemplateURL>https://github.com/thekozugroup/Covalent/releases/download/v0.2.1/covalent-unraid-v0.2.1.xml</TemplateURL>
   <Network>bridge</Network>
   <Privileged>false</Privileged>
   <Support>https://github.com/thekozugroup/Covalent/issues</Support>
@@ -19,17 +19,15 @@
   <DonateText/>
   <DonateLink/>
   <Requires>Set the HTTPS hostname to the name you will use to reach this server. Map each share you want backed up separately, read-only; never map all of /mnt/user or any part of /mnt/user/system. A /boot mapping must also be read-only. The KEK stays in the reserved system-share path below; never mount /mnt/user/system, its parent, or a child containing this key as a source, and verify an independent offline escrow before first start. Add a writable restore target only when you are restoring.</Requires>
-  <Description>RELEASE BLOCKER: the pinned v0.1.0 digest predates the required KEK and trusted claim client. Do not install this template yet. It retains the current immutable digest truth; a release owner must publish a newly signed digest containing this workflow and replace this Repository value atomically.
-
-For that replacement release, first start needs one terminal action: create a KEK in the reserved Unraid system-share path, then map that one file read-only here. This is a standard persistent Unraid path, not a backup source: categorically never map /mnt/user/system, its parent, or any path containing this key as /source or /boot-source. Never put this key under /boot or /mnt/user/appdata. Before first start, make and verify a byte-for-byte offline escrow copy on encrypted removable media that is never mounted into Covalent. Any external backup of the system share must explicitly exclude this key path. On the Unraid terminal, run:
+  <Description>First start needs one terminal action: create a KEK in the reserved Unraid system-share path, then map that one file read-only here. This is a standard persistent Unraid path, not a backup source: categorically never map /mnt/user/system, its parent, or any path containing this key as /source or /boot-source. Never put this key under /boot or /mnt/user/appdata. Before first start, make and verify a byte-for-byte offline escrow copy on encrypted removable media that is never mounted into Covalent. Any external backup of the system share must explicitly exclude this key path. On the Unraid terminal, run:
 
 KEK_DIR=/mnt/user/system/covalent-secrets
 install -d -o 99 -g 100 -m 700 "$KEK_DIR"
-docker run --rm --user 99:100 -v "$KEK_DIR:/secrets:rw" ghcr.io/thekozugroup/covalent@&lt;replacement-signed-digest&gt; provision-key --key-file /secrets/key-encryption-key
+docker run --rm --user 99:100 -v "$KEK_DIR:/secrets:rw" ghcr.io/thekozugroup/covalent@sha256:393f8a0dafa7f17d8ad964d501f3d33668d547889dc493080e042489ee3e1677 provision-key --key-file /secrets/key-encryption-key
 
 Do not put this KEK in /data or /config. The command creates the key as the same fixed non-root UID/GID (`99:100`) used by this template, so its `0600` mode remains readable without broadening permissions. Keep its file mode 0600 and KEK version 1. Copying appdata without the separate KEK remains locked, and a backup must never contain both the encrypted state and its only KEK. Covalent never silently creates or replaces it.
 
-After the replacement-release container starts, use a trusted release-channel computer, not the WebUI, to claim it. Read the one-time setup code from this container's Log, save it in an owner-only file, then run:
+After the container starts, use a trusted release-channel computer, not the WebUI, to claim it. Read the one-time setup code from this container's Log, save it in an owner-only file, then run:
 
 claim_parent="$HOME/.config/covalent"
 setup_code_file="$claim_parent/unraid-setup-code"

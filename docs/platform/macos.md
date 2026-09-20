@@ -74,24 +74,23 @@ that version's three files elsewhere or remove them only after deciding they are
 no longer needed; the builder will not replace them. Developer build and test details live
 in the [Apple client README](../../apps/apple/README.md).
 
-### After publication: download the verified release build
+### Download the verified release build
 
-The v0.2.0 macOS assets are not published yet. Do not use this download path
-until the official release page contains both files listed below. The
-historical v0.1.0 archive is not a current Covalent setup.
+Download the v0.2.1 macOS assets from the official release page. The historical
+v0.1.0 archive is not a current Covalent setup.
 
 From the official
 [GitHub Releases page](https://github.com/thekozugroup/Covalent/releases),
 download both files for the same version:
 
-- `Covalent-v0.2.0-macOS-arm64-unsigned.zip`
-- `Covalent-v0.2.0-macOS-arm64-unsigned.zip.sha256`
+- `Covalent-v0.2.1-macOS-arm64-unsigned.zip`
+- `Covalent-v0.2.1-macOS-arm64-unsigned.zip.sha256`
 
 In Terminal, verify the download:
 
 ```sh
 cd "$HOME/Downloads"
-version=v0.2.0
+version=v0.2.1
 archive="Covalent-${version}-macOS-arm64-unsigned.zip"
 checksum="${archive}.sha256"
 test -f "$archive" && test -f "$checksum"

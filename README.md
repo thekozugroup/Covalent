@@ -2,14 +2,18 @@
 
 Covalent is a native, self-hosted wrapper around rclone for one-way file links: choose a source, pair destinations, configure the link once, and monitor transfers. macOS, Android, and Docker/Unraid are the supported targets.
 
-**Development build; the rclone switch is complete.** Real one-way transfers, fan-out, deletion choices, shared settings, and scheduled runs pass. Native app acceptance and final releases remain in progress. Follow the [current product requirements](docs/product/requirements.md) and [verified progress](docs/release/completion-progress.md). Earlier backup features remain as legacy support.
+**v0.2.1 release; the rclone switch is complete.** Real one-way transfers,
+fan-out, deletion choices, shared settings, and scheduled runs pass. Follow the
+[current product requirements](docs/product/requirements.md) and [verified
+progress](docs/release/completion-progress.md). Earlier backup features remain
+as legacy support.
 
 ## Start here
 
 **[Create your first one-way link](docs/getting-started-links.md)** is the
 primary setup guide. Pair devices, choose a source folder, review deletion
 settings, then authorize one or more destinations. It describes the current
-development state and what is verified.
+release and what is verified.
 
 The previous [backup setup guide](docs/getting-started.md) is a legacy
 reference for the superseded backup workflow.
@@ -18,9 +22,9 @@ Current personal-use paths do not require an Apple Developer ID or Android
 production signing:
 
 - Apple Silicon macOS uses the verified ad-hoc app build.
-- Android uses the debug-signed installable APK from this checkout.
-- An always-on server uses Docker built from this checkout until `v0.2.0` is
-  published and pinned by immutable digest.
+- Android uses the published debug-signed personal APK.
+- An always-on server uses the published Docker image pinned by immutable
+  digest.
 
 ## Supported platforms
 
@@ -39,27 +43,16 @@ Hosted accounts, automatic replica placement, and restores outside an authorized
 
 ## Release status
 
-There is no active deployable release for the current KEK and trusted-claim
-contract. The public `v0.1.0` alpha is historical release evidence only: it
-predates that contract, so do not deploy its Docker/Unraid image or use it for
-Atlas. A replacement signed release must update the template and all active
-install instructions together.
+`v0.2.1` is the current release for the KEK and trusted-claim contract. Use
+its verified CLI archives, personal-use Mac and Android packages, and immutable
+container digest. The public `v0.1.0` alpha is historical evidence only and
+predates this contract; do not deploy its Docker/Unraid image or use it for
+Atlas. No Android artifact is published in v0.1.0.
 
-- Docker and Unraid: deployment is blocked until that replacement immutable image is published. The digest in `packaging/unraid/covalent.xml` remains only to identify the historical release it will replace.
-- macOS on Apple Silicon: the published v0.1.0 `.zip` is an ad-hoc-signed historical evaluation artifact, not a current deployable client workflow.
-- Atlas claim client: no verified source-free CLI archive is published yet. The [CLI install guide](docs/release/cli-install.md) applies only when the replacement release attaches its verified Linux amd64, Linux arm64, and Apple Silicon macOS archives; never use a curl-pipe-shell installer.
-- No Android artifact is published in v0.1.0. The
-  [Android setup guide](docs/platform/android.md) documents the current
-  personal-use debug APK and its upgrade boundary.
-
-The source tree now carries the `v0.2.0` release candidate. It adds versioned
-key protection, verified CLI-only first-run claiming, and acknowledged terminal
-receipts. It is not published: no replacement immutable image digest or Atlas
-deployment exists yet. Personal-use Android and macOS packages are built and
-verified locally; production Android signing is deferred and Apple Developer
-ID/notarization is excluded. See
-[the v0.2.0 candidate notes](docs/release/notes/v0.2.0.md) before planning an
-upgrade.
+- Docker and Unraid: use `ghcr.io/thekozugroup/covalent@sha256:393f8a0dafa7f17d8ad964d501f3d33668d547889dc493080e042489ee3e1677` and the matching v0.2.1 template.
+- macOS on Apple Silicon: download the v0.2.1 ad-hoc-signed, non-notarized personal-use package.
+- Atlas claim client: use the verified v0.2.1 archive in the [CLI install guide](docs/release/cli-install.md); never use a curl-pipe-shell installer.
+- Android: download the v0.2.1 debug-signed personal APK from the [Android setup guide](docs/platform/android.md). Production Android signing is deferred.
 
 Primary setup belongs in [the one-way link guide](docs/getting-started-links.md).
 The [backup setup guide](docs/getting-started.md) remains a legacy reference.

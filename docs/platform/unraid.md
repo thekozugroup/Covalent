@@ -2,24 +2,26 @@
 
 Docker is the accepted Unraid path for the current
 [one-way link product](../product/synchronization.md). Atlas is offline; no
-Atlas runtime validation is claimed. The complete simplified release remains
-under development. The provisioning and historical backup operations below
-are retained until the final image and installation guide are published.
+Atlas runtime validation is claimed. Use the v0.2.1 template and its verified
+immutable image digest.
 
 Unraid is Tier 1. The template is intentionally unprivileged (`99:100`),
 read-only, capability-free, and uses `no-new-privileges` with a temporary
-filesystem. It is not listed in Community Applications yet. Until a new
-immutable `v0.2.1` image is published, do not import or start the historical
-template. Do not enable privileged mode to solve mount permissions; correct the
+filesystem. It is not listed in Community Applications yet. Do not import or
+start the historical v0.1.0 template. Do not enable privileged mode to solve mount permissions; correct the
 selected host paths instead.
 
-The v0.1.0 template uses the released immutable GHCR digest, not a mutable tag. Docker accepts `image@sha256:…` references and the repository validator rejects any other image form. This prevents a later tag rewrite from changing an existing Unraid install. That digest predates the mandatory KEK and trusted claim client, so **do not install it**: deployment is blocked until a newly signed immutable digest includes those features and updates the template atomically.
+The v0.1.0 template uses a historical immutable GHCR digest, not a mutable tag.
+Docker accepts `image@sha256:…` references and the repository validator rejects
+any other image form. That historical digest predates the mandatory KEK and
+trusted claim client, so **do not install it**. The v0.2.1 template pins the
+current verified digest and supersedes it.
 
 ## Setting up
 
-These steps are ready for the future `v0.2.1` immutable digest. Today they stop
-before template installation because the only public digest is the blocked
-historical `v0.1.0` image.
+Import the v0.2.1 template from the release and confirm that it pins
+`sha256:393f8a0dafa7f17d8ad964d501f3d33668d547889dc493080e042489ee3e1677`
+before installing it. The historical v0.1.0 image remains blocked.
 
 1. **Provision and escrow the KEK before installing or applying a template.**
    The reserved path is `/mnt/user/system/covalent-secrets`. It is never a

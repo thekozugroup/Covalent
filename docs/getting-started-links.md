@@ -6,24 +6,21 @@ never receives destination changes.
 
 ## Before you start
 
-Use a current checkout. There is no published current release: `v0.1.0` is
-historical, and `v0.2.0` has not been published. The development build paths are a
-locally built Docker server, the personal-use Mac build, and the personal-use
-Android debug APK.
+Use v0.2.1 for a current installation. `v0.1.0` is historical and must not be
+used for the current KEK and trusted-claim contract.
 
-- For an always-on destination, build Docker from this checkout. The current
-  rclone path passes hosted Docker transfer checks on amd64 and arm64.
-- Use the Mac app on Apple Silicon for the current source/package path. Native
-  macOS HIG validation is still open.
+- For an always-on destination, use the v0.2.1 Docker image and matching
+  Unraid template.
+- Use the v0.2.1 Mac app on Apple Silicon. It is ad-hoc signed and not
+  notarized.
 - Android uses the system folder picker to grant access to each selected
   folder. It does not require all-files permission. Real API 37 transfers and
   permission-loss recovery pass; native Android acceptance tests pass.
-  Mac HIG, keyboard, and native-accessibility acceptance, final package acceptance, and laptop–Atmos
-  validation remain open.
+  Android behavior was exercised on an emulator, not a physical phone.
 
 Install guidance: [macOS](platform/macos.md),
 [Android](platform/android.md), and
-[Docker from this checkout](../packaging/docker/README.md#personal-use-from-this-checkout).
+[Docker](../packaging/docker/README.md#release-installation).
 
 ## Create the link
 

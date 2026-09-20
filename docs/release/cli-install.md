@@ -1,12 +1,11 @@
 # Install the Covalent CLI
 
 No verified CLI archive is published with the historical v0.1.0 release. This
-guide applies to v0.2.1 only after its final CLI archives, checksums and
-Sigstore bundles are attached to the published release. Until then, do not
-treat the draft as an install path or use it to claim a v0.1.0 server.
+guide applies to the published v0.2.1 CLI archives, checksums, and Sigstore
+bundles. Do not use a v0.1.0 archive to claim a current server.
 
-Once published, the archive is the supported way to run `covalent claim` on a
-trusted Mac or Linux computer. It needs no source build and no installer script.
+The archive is the supported way to run `covalent claim` on a trusted Mac or
+Linux computer. It needs no source build and no installer script.
 Use the archive that exactly matches the computer running the command:
 
 | Computer | Archive suffix |
