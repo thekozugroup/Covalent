@@ -2,10 +2,10 @@
 
 Updated 2026-09-20. The active goal is defined in [Product requirements](../product/requirements.md#active-completion-goal).
 
-**Current scope: 50% verified, 5 of 10 complete acceptance checks. Rclone migration: 100%.**
+**Current scope: 70% verified, 7 of 10 complete acceptance checks. Rclone migration: 100%.**
 These percentages count accepted user journeys, not remaining development time.
-The current native failures reopen three previously accepted checks. Historical
-acceptance reached 8 of 10. The project is not release-complete.
+The remaining checks cover Mac rendered acceptance, final packages, and release
+completion. The project is not release-complete.
 
 Rclone is the sole transfer engine. Native setup, pairing, one-way transfer,
 fan-out, independent collection contributors, deletion choices, explicit
@@ -14,31 +14,33 @@ The Android app's native pairing, permission, transfer, and background journeys
 pass the latest hosted run. An earlier intermittent deletion-propagation failure
 remains unexplained. Earlier bidirectional and multi-provider backup requirements are superseded.
 
-The most recently completed CI tests `1fa0440`:
-[CI 35493547929](https://github.com/thekozugroup/Covalent/actions/runs/35493547929).
-Both Docker architecture builds and vulnerability/runtime checks, Android
-foundation, Mac packaging, dependency review, CodeQL, and version checks pass.
-Android passes all 82 baseline device tests and its SAF journey in 430.958 seconds.
-The earlier `91979b7` source-deletion failure remains under diagnosis; this pass
-does not explain it. Shared Rust/contracts fails a stale release-note wording
-assertion; the corrected assertion and foundation checks pass locally.
+The most recently completed CI tests `e40616a`:
+[CI 35494827886](https://github.com/thekozugroup/Covalent/actions/runs/35494827886).
+Shared Rust/contracts, both Docker architecture builds and vulnerability/runtime
+checks, Android foundation, Mac packaging, dependency review, CodeQL, and version
+checks pass. Android passes all 82 baseline device tests and its revised SAF
+journey in 423.033 seconds. The earlier `91979b7` source-deletion failure remains
+unexplained; this pass does not establish its cause.
 Hosted Mac UI passes five checks. Its real-folder journey completes both transfers,
-relaunch, settings, and menu actions in 212.294 seconds, but reports contrast
-findings for Local service, destination-deletion guidance, and a partially clipped
-Transfers label. No timeout occurs this run. No assertion is waived or timeout increased.
+relaunch, settings, and menu actions in 217.066 seconds, but reports contrast
+findings for destination-deletion guidance and a partially clipped Transfers
+label. No timeout occurs this run. No assertion is waived or timeout increased.
 
 The ineffective scroll-edge modifier is removed. Mac failure labels now say
 "Last run incomplete" without claiming 24 hours elapsed. Android no longer
 offers Run Now for Continuous links, which reject explicit run requests.
-Affected Android UI compilation and all 196 existing JVM tests pass; current
-hosted native acceptance remains open.
+Affected Android UI compilation, all 196 existing JVM tests, and the current
+hosted Android journey pass. Mac rendered acceptance remains open.
 
-The newer local development commit `947ab21` uses semantic primary text for the
-two Form labels and passes typechecking of all 24 Mac/shared Swift sources.
-Its Android deletion test waits for a successful acknowledged seed before testing
-source deletion; the test APK compiles. Existing independent active-copy deletion
-and ambiguous-copy recovery checks remain intact. These changes still need native
-acceptance. VoiceOver remains excluded by the owner's repeated instruction.
+Commit `947ab21` uses semantic primary text for the two Form labels; that change
+does not resolve their rendered contrast findings. Its Android deletion test now
+waits for a successful acknowledged seed before testing source deletion, and
+passes hosted acceptance. Existing independent active-copy deletion, ownership,
+recovery, and failed-scan checks remain valid against the unchanged transfer
+runtime. Historical failure causation is not an additional acceptance requirement;
+current behavior and safety evidence remain required. Local commit `74ff315`
+corrects recovery guidance to say "before the next run" for Continuous links.
+VoiceOver remains excluded by the owner's repeated instruction.
 
 The retained Android candidate uses `06b12b5`, is 49,344,953 bytes, and has APK
 SHA-256 `8f9257350ed8c35b78f4601903edfd43b19cb853ac2498cda67bc37b12804eae`.
@@ -105,9 +107,10 @@ post-copy integrity verification remain intact.
 Superseded Mac candidates and an old build cache with an observed 5,671,329,792-byte
 footprint are removed. This is a measured file footprint, not guaranteed physical
 blocks freed. Completed worker and cross-host fixtures are also removed. Current
-packages, reusable tools, the private Android emulator/ADB, and warm build caches
-remain only while needed for final acceptance. Protected historical source and
-validation evidence remain intact.
+packages, reusable tools, owned Android virtual-device files, and warm build
+caches remain only while needed for final acceptance. Test apps, fixtures, the
+private emulator, and its ADB server are removed or stopped. Protected historical
+source and validation evidence remain intact.
 
 Atmos access is restored. Follow the [isolated Atmos drill](atmos-one-way-drill.md)
 without disrupting other server resources. Atlas remains offline. Docker is the accepted Unraid target;
@@ -118,12 +121,12 @@ Atlas validation is claimed.
 | --- | --- | --- |
 | 1 | Native setup pairs devices and creates a source/destination link; files never flow backward. | Verified |
 | 2 | Fan-out destinations work independently; multiple sources contribute safely to one collection. | Verified |
-| 3 | Both source-deletion options work with clear explanations and failed-scan protection. | Reopened: intermittent Android source-deletion failure |
+| 3 | Both source-deletion options work with clear explanations and failed-scan protection. | Verified: current SAF acceptance and unchanged-runtime safety evidence |
 | 4 | Destination deletions stay local across source edits/restarts; explicit restoration works. | Verified |
 | 5 | Manual, scheduled, and continuous transfers respect platform limits; idle batch workers stop. | Verified |
 | 6 | Settings edited on any authorized member converge across the link; pending/stale edits remain visible. | Verified |
 | 7 | Mac setup, links, settings, and per-link menu bar status pass native HIG, keyboard, and accessibility checks. | Reopened: current rendered contrast failures; VoiceOver excluded by owner |
-| 8 | Tomato-inspired Android floating actions, typography, data/status visuals, and top bar; actual pairing, permission, transfer, and background journeys pass. | Reopened: current full SAF journey fails |
+| 8 | Tomato-inspired Android floating actions, typography, data/status visuals, and top bar; actual pairing, permission, transfer, and background journeys pass. | Verified: current 83-test native acceptance |
 | 9 | Installable Mac/Android/Docker candidates pass real laptop–Atmos transfers and server mount handling; use an Unraid plugin only for a demonstrated Docker limitation. | Open |
 | 10 | Relevant fault/security checks pass; idle/transfer performance is measured; temporary fixtures are removed; GitHub releases and installation guidance are published. | Open |
 
