@@ -2,14 +2,14 @@
 
 Updated 2026-09-20. The active goal is defined in [Product requirements](../product/requirements.md#active-completion-goal).
 
-**Current scope: 90% accepted, 9 of 10 complete acceptance checks. Rclone migration: 100%.**
+**Current scope: 100% accepted, 10 of 10 complete acceptance checks. Rclone migration: 100%.**
 These percentages count accepted checks, not remaining development time. The
 owner's 2026-09-20 threshold accepts working apps on each platform and at least
 one tested sync combination. Existing native Mac, Android emulator, both Docker
 architectures, and real Atmos-to-Waypoint and Atmos-to-Mac evidence meet that
 threshold. The subsequently requested Docker/Unraid web UI is now verified on
-both live servers. Row 9 is complete; final publication, installation guidance, and remaining owned cleanup keep row 10 open.
-The project is not release-complete.
+both live servers. All 10 checks are complete for this owner-approved
+personal-use release.
 
 The web UI passes 74 local JavaScript checks and browser acceptance covering
 token-file unlock, pairing/link controls, Run Now, shared timing, keyboard tabs,
@@ -38,7 +38,8 @@ The image index is `sha256:393f8a0dafa7f17d8ad964d501f3d33668d547889dc493080e042
 Both signed platform image IDs match the deployed images. Stored image references
 and Waypoint's template were updated without replacing or restarting containers.
 Evidence: `artifacts/validation-2026-09-20/web-ui-deployment/signed-promotion-393f8a0dafa7f17d/attempt-2/result.json`.
-Original containers and private rollback backups remain until final cleanup.
+Superseded containers, old images, and private rollout backups were removed
+after publication; both production containers remain healthy.
 
 Rclone is the sole transfer engine. Native setup, pairing, one-way transfer,
 fan-out, independent collection contributors, deletion choices, explicit
@@ -103,7 +104,11 @@ passes ARM64, strict ad-hoc signature, sandbox inheritance, engine and notice
 manifest, and dependency inventory checks. This package is not Developer ID signed
 or notarized, and was not launched for this inspection. Receipt:
 `artifacts/validation-2026-09-20/mac-final-e7943db/verified-package-receipt.json`.
-Final GitHub release publication remains pending.
+[Covalent v0.2.1](https://github.com/thekozugroup/Covalent/releases/tag/v0.2.1)
+is published with 36 verified assets, including the CLI archives, platform
+packages, container provenance, and current Unraid template. Installation links
+in the release use signed documentation commit
+`e344d1af0c45a3a4e6c0117de8d274c3e7a6bc7e`.
 
 Earlier Android ARM64 journeys, the six-check local Mac pass, and the packaged
 helper network drill remain supporting historical behavior evidence. No new
@@ -165,9 +170,13 @@ and recoverable source differences before removing the three remaining owned
 temporary roots. Current release artifacts, the durable Android update signing
 key, production identities/data, and deployment access remain protected.
 Receipts: `artifacts/validation-2026-09-20/final-cache-cleanup/result.json` and
-`remaining-cleanup-result.json` in that directory. Temporary release-tooling and
-rollout rollback resources still need final acceptance cleanup; durable user
-services are not test fixtures.
+`remaining-cleanup-result.json` in that directory. Temporary release tools, duplicate downloads, obsolete packages, and rollout
+rollback resources are now removed. Historical source differences are retained
+as a compact patch and changed-file evidence. Final receipts are
+`final-published-remote-cleanup.json`, `final-published-local-cleanup.json`, and
+`final-owned-ssh-cleanup.json` under `artifacts/validation-2026-09-20/`.
+An unrelated 7.6 MiB temporary zlib directory was preserved because ownership
+was not established. Durable user services are not test fixtures.
 
 Atmos access is restored. Follow the [isolated Atmos drill](atmos-one-way-drill.md)
 without disrupting other server resources. Atlas remains offline. Docker is the accepted Unraid target;
@@ -185,11 +194,11 @@ Atlas validation is claimed.
 | 7 | The native Mac app works, with native HIG controls, links, settings, and menu bar status; reuse completed keyboard and accessibility evidence. | Accepted under the owner's reduced release threshold; historical hosted contrast and snapshot failures retained; no VoiceOver or further XCTest |
 | 8 | Tomato-inspired Android floating actions, typography, data/status visuals, and top bar; actual pairing, permission, transfer, and background journeys pass. | Verified: current 83-test native acceptance |
 | 9 | Apps work on Mac, Android, and Docker/Unraid, with at least one tested sync combination and a minimal, clean, cohesive server web UI. | Verified: local functional browser checks and trusted live WebUI acceptance on both Atmos and Waypoint |
-| 10 | Relevant fault/security checks pass; idle/transfer performance is measured; temporary fixtures are removed; GitHub releases and installation guidance are published. | Open |
+| 10 | Relevant fault/security checks pass; idle/transfer performance is measured; temporary fixtures are removed; GitHub releases and installation guidance are published. | Verified: public v0.2.1, signed image provenance, current guides, and owned cleanup |
 
-Publication still requires the final signed container reference and provenance,
-completed GitHub release assets, current installation guidance, and remaining
-owned cleanup. The release source commit and annotated `v0.2.1` tag are verified;
+The signed container reference, provenance, all GitHub release assets, and
+current installation guidance are published. Task-owned cleanup is complete.
+The release source commit and annotated `v0.2.1` tag are verified;
 final Android and Mac package identity checks are complete. Personal ad-hoc Apple
 Silicon and Android debug signing are accepted; Developer ID/notarization and a
 production Android key are outside this release scope. Release-tooling fixes must
@@ -197,8 +206,8 @@ retain source/package identity and pass their relevant checks. The release may u
 the checked signed branch commit without a merge to `main`; preserve repository
 protections. See the [validation matrix](validation-matrix.md).
 
-The 90% score records completed live server-interface acceptance alongside the
-previously accepted platform and behavior evidence. Row 10 remains open until
-publication, install guidance, provenance, and cleanup are complete. Historical
-failures and limitations remain disclosed; material changes still require
+The 100% score records completion of the 10 owner-approved acceptance checks;
+it does not claim every platform combination, production signing, or absence
+of all possible defects. Historical failures and limitations remain disclosed;
+material changes still require
 relevant verification.
