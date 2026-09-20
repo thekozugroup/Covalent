@@ -2,7 +2,7 @@
 
 Updated 2026-09-19. The active goal is defined in [Product requirements](../product/requirements.md#active-completion-goal).
 
-**Current scope: 70% verified, 7 of 10 complete acceptance checks. Rclone migration: 100%.**
+**Current scope: 80% verified, 8 of 10 complete acceptance checks. Rclone migration: 100%.**
 These percentages count accepted user journeys, not remaining development time.
 The project is not release-complete.
 
@@ -12,25 +12,30 @@ restoration, cadence, and link-wide settings have working validation evidence.
 The Android app's native pairing, permission, transfer, and background journeys
 pass. Earlier bidirectional and multi-provider backup requirements are superseded.
 
-The latest completed CI run tests the same source tree as `8b01377`:
-[CI 34792839553](https://github.com/thekozugroup/Covalent/actions/runs/34792839553).
+The latest completed CI run tests `dedea61`:
+[CI 34797305748](https://github.com/thekozugroup/Covalent/actions/runs/34797305748).
 Seven direct jobs pass: Rust/contracts, Android foundation and device checks,
 Mac packaging, both Docker architectures, and dependency review. CodeQL and
 version checks also pass. Mac UI and its aggregate software gate fail.
 
 The personal Android debug APK from `dedea61` is built: 49,341,349 bytes,
 package `life.michaelwong.covalent`, version `0.2.0`. Device validation awaits
-an authorized Android device; the existing ADB server reports no devices.
+the final tagged build. This candidate installed and launched on a Pixel 10 Pro XL
+running Android 17. The temporary app was removed without changing existing data.
 
-The `dedea61` local Mac result is historical: three tests pass and four fail.
-VoiceOver is excluded from future test targets by owner override. The three
-remaining in-scope failures are menu-bar visibility, local-network prompt
-handling, and real-folder pairing. Native accessibility, keyboard, and HIG
-requirements remain active. Default and `--hosted` now select the same six
-functional/native-accessibility checks; no VoiceOver verification is claimed.
+The local Mac run at `6b07a9b` passes all six checks in 264.340 seconds, including
+native pairing, two transfers, relaunch, link settings, menu actions, keyboard
+navigation, and rendered accessibility audits. Decorative sidebar symbols now
+have explicit contrast and separate accessible text. The personal Apple Silicon
+package also builds and passes its architecture, signature, and provenance checks.
+VoiceOver automation is removed by owner override. Default and `--hosted` select
+the same six native checks; keyboard, contrast, and HIG requirements remain.
 
-Atmos old owned cleanup is complete. Waypoint authorization permits hourly
-E-Music transfer on the real Unraid target, but no transfer has occurred yet.
+Atmos old owned cleanup is complete. Native Docker images built on Atmos and
+Waypoint, and both isolated runtime containers are healthy. Their provenance is
+`dedea61`; final packages must include the subsequently tested Docker port-mapping
+fix. The initial Atmos music transfer to Waypoint's E-Music share is running;
+complete-copy integrity and hourly cadence still require validation.
 
 The real Continuous source-deletion test passes in 148.03 seconds. It deletes a
 source file while the same rclone process is copying, without stopping or
@@ -61,9 +66,12 @@ candidate from `6499ded` passed its full SAF journey in 394.998 seconds; its
 emulator, private ADB, worktree, and build files are removed. Final-source Mac,
 Android, and Docker candidates still need acceptance.
 
-Atmos validation and its remaining owned cleanup await SSH reauthentication.
-Follow the [isolated Atmos drill](atmos-one-way-drill.md); do not disrupt other
-server resources. Atlas remains offline. Docker is the accepted Unraid target;
+The Android candidate scratch directory (8,219,709,440 bytes) was moved to Trash;
+those bytes are reclaimable, not yet freed. Active Mac tools and server caches
+remain scoped for the remaining builds and tests.
+
+Atmos access is restored. Follow the [isolated Atmos drill](atmos-one-way-drill.md)
+without disrupting other server resources. Atlas remains offline. Docker is the accepted Unraid target;
 a plugin is required only for a demonstrated Docker limitation. No physical
 Atlas validation is claimed.
 
@@ -75,7 +83,7 @@ Atlas validation is claimed.
 | 4 | Destination deletions stay local across source edits/restarts; explicit restoration works. | Verified |
 | 5 | Manual, scheduled, and continuous transfers respect platform limits; idle batch workers stop. | Verified |
 | 6 | Settings edited on any authorized member converge across the link; pending/stale edits remain visible. | Verified |
-| 7 | Mac setup, links, settings, and per-link menu bar status pass native HIG, keyboard, and accessibility checks. | Open |
+| 7 | Mac setup, links, settings, and per-link menu bar status pass native HIG, keyboard, and accessibility checks. | Verified; VoiceOver excluded by owner |
 | 8 | Tomato-inspired Android floating actions, typography, data/status visuals, and top bar; actual pairing, permission, transfer, and background journeys pass. | Verified |
 | 9 | Installable Mac/Android/Docker candidates pass real laptop–Atmos transfers and server mount handling; use an Unraid plugin only for a demonstrated Docker limitation. | Open |
 | 10 | Relevant fault/security checks pass; idle/transfer performance is measured; temporary fixtures are removed; GitHub releases and installation guidance are published. | Open |

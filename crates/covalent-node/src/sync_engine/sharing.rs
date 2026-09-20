@@ -2318,7 +2318,6 @@ fn validate_snapshot(
         || snapshot.binding.covalent_device_id != engine.device_id()
         || snapshot.binding.engine_device_id.as_str() != installation.device_id().as_str()
         || snapshot.listener.port() == 0
-        || snapshot.listener.port() != advertised.port()
         || snapshot.listener.is_ipv4() != advertised.is_ipv4()
         || (!snapshot.listener.ip().is_unspecified() && snapshot.listener.ip() != advertised.ip())
         || snapshot.shares.len() > MAX_SHARES
@@ -2752,7 +2751,6 @@ fn validate_listener_route(
     advertised: SocketAddr,
 ) -> Result<(), SharingError> {
     if listener.port() == 0
-        || listener.port() != advertised.port()
         || listener.is_ipv4() != advertised.is_ipv4()
         || listener.ip().is_multicast()
         || (!listener.ip().is_unspecified() && listener.ip() != advertised.ip())

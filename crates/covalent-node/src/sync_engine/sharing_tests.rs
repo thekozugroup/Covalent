@@ -2538,6 +2538,51 @@ fn cold_core_new_address_recovery_preserves_and_retargets_removal_outbox() {
 }
 
 #[test]
+fn mapped_advertised_route_persists_and_unsafe_route_is_rejected() {
+    let device = Device::new("Docker", 43421);
+    let listener: SocketAddr = "0.0.0.0:8789".parse().unwrap();
+    let advertised: SocketAddr = "127.0.0.2:18789".parse().unwrap();
+    let created = FolderSharingJournal::create(
+        Arc::clone(&device.engine),
+        Arc::clone(&device.installation),
+        Arc::clone(&device.protector),
+        listener,
+        advertised,
+    )
+    .unwrap();
+    assert_eq!(created.binding().direct_address, advertised.to_string());
+    drop(created);
+
+    assert!(
+        FolderSharingJournal::open_at_route(
+            Arc::clone(&device.engine),
+            Arc::clone(&device.installation),
+            Arc::clone(&device.protector),
+            listener,
+            "0.0.0.0:18789".parse().unwrap(),
+        )
+        .is_err()
+    );
+
+    let reopened = FolderSharingJournal::open_at_route(
+        Arc::clone(&device.engine),
+        Arc::clone(&device.installation),
+        Arc::clone(&device.protector),
+        listener,
+        advertised,
+    )
+    .unwrap();
+    assert_eq!(reopened.listener(), listener);
+    assert_eq!(reopened.binding().direct_address, advertised.to_string());
+    drop(reopened);
+
+    assert_eq!(
+        device.reopen().binding().direct_address,
+        advertised.to_string()
+    );
+}
+
+#[test]
 fn cold_local_route_change_preserves_history_and_updates_listener() {
     let a = Device::new("Mac", 43421);
     let b = Device::new("Docker", 43422);

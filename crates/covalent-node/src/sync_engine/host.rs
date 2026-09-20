@@ -123,14 +123,7 @@ impl FolderSyncRuntimeConfig {
         // Validate before creating state. Existing historical invitations keep
         // their signed bytes; the journal separately advances the mutable
         // current local route peers can authenticate through a live proof.
-        if self.listener.port() == 0
-            || self.listener.port() != advertised_address.port()
-            || self.listener.is_ipv4() != advertised_address.is_ipv4()
-            || (!self.listener.ip().is_unspecified()
-                && self.listener.ip() != advertised_address.ip())
-        {
-            return Err(());
-        }
+        validate_runtime_route(self.listener, advertised_address)?;
         let root = data_directory.join("folder-sync");
         let created = match DirBuilder::new().mode(0o700).create(&root) {
             Ok(()) => {
@@ -177,5 +170,36 @@ impl FolderSyncRuntimeConfig {
             self.runtime_parent,
         )
         .map_err(|_| ())
+    }
+}
+
+fn validate_runtime_route(listener: SocketAddr, advertised: SocketAddr) -> Result<(), ()> {
+    if listener.port() == 0
+        || super::config::validate_peer_address(advertised).is_err()
+        || listener.is_ipv4() != advertised.is_ipv4()
+        || (!listener.ip().is_unspecified() && listener.ip() != advertised.ip())
+    {
+        return Err(());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mapped_advertised_port_is_allowed_but_unsafe_routes_are_rejected() {
+        let listener = "0.0.0.0:8789".parse().unwrap();
+        assert_eq!(
+            validate_runtime_route(listener, "192.168.1.50:18789".parse().unwrap()),
+            Ok(())
+        );
+        for advertised in ["192.168.1.50:0", "0.0.0.0:18789", "224.0.0.1:18789"] {
+            assert_eq!(
+                validate_runtime_route(listener, advertised.parse().unwrap()),
+                Err(())
+            );
+        }
     }
 }
