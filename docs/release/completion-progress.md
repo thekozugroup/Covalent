@@ -12,30 +12,36 @@ restoration, cadence, and link-wide settings have working validation evidence.
 The Android app's native pairing, permission, transfer, and background journeys
 pass. Earlier bidirectional and multi-provider backup requirements are superseded.
 
-The latest completed CI run tests `dedea61`:
-[CI 34797305748](https://github.com/thekozugroup/Covalent/actions/runs/34797305748).
-Seven direct jobs pass: Rust/contracts, Android foundation and device checks,
-Mac packaging, both Docker architectures, and dependency review. CodeQL and
-version checks also pass. Mac UI and its aggregate software gate fail.
+The latest completed CI run tests `778e3fd`:
+[CI 35486573392](https://github.com/thekozugroup/Covalent/actions/runs/35486573392).
+Rust/contracts, Android foundation, Mac packaging, and dependency review pass.
+Both Docker builds and transfer checks pass, but their vulnerability scan finds
+High CVE-2026-85091 in zlib 1.3.2-r0. Hosted Mac contrast failures have a passing
+local fix below. Android's full SAF journey reaches shared source-deletion
+propagation but times out with both peers running; isolated reproduction with
+the current candidate remains open. No deadline increase is credited as a fix.
 
 The personal Android debug APK from `dedea61` is built: 49,341,349 bytes,
 package `life.michaelwong.covalent`, version `0.2.0`. Device validation awaits
 the final tagged build. This candidate installed and launched on a Pixel 10 Pro XL
 running Android 17. The temporary app was removed without changing existing data.
 
-The local Mac run at `6b07a9b` passes all six checks in 264.340 seconds, including
+The current local Mac run passes all six checks in 264.9 seconds, including
 native pairing, two transfers, relaunch, link settings, menu actions, keyboard
-navigation, and rendered accessibility audits. Decorative sidebar symbols now
+navigation, and rendered accessibility audits. Its source tree is
+`0efc1b3ab875a323d3fa4f290b6f8933d337582d`. Decorative sidebar symbols now
 have explicit contrast and separate accessible text. The personal Apple Silicon
 package also builds and passes its architecture, signature, and provenance checks.
 VoiceOver automation is removed by owner override. Default and `--hosted` select
 the same six native checks; keyboard, contrast, and HIG requirements remain.
 
 Atmos old owned cleanup is complete. Native Docker images built on Atmos and
-Waypoint, and both isolated runtime containers are healthy. Their provenance is
-`dedea61`; final packages must include the subsequently tested Docker port-mapping
-fix. The initial Atmos music transfer to Waypoint's E-Music share is running;
-complete-copy integrity and hourly cadence still require validation.
+Waypoint, and both runtime containers are healthy. All 7,344 music files,
+totaling 15,389,291,455 bytes, reached Waypoint's E-Music share. Full engine
+verification and independent path, size, and sampled hash checks passed.
+Hourly cadence is confirmed on both devices; unrelated services and source
+metadata are unchanged. These deployed images still use `dedea61`; the final
+upgrade must include the subsequent security, mapped-port, and scan fixes.
 
 The real Continuous source-deletion test passes in 148.03 seconds. It deletes a
 source file while the same rclone process is copying, without stopping or
@@ -55,7 +61,14 @@ correctly in 35.30 seconds. During 29.985 seconds of Manual/Scheduled idle time,
 no rclone worker or guardian is observed; sampled CPU time is 0.01 seconds.
 This is one warm macOS loopback sample including control/status delivery, not
 whole-app battery evidence. It establishes neither a new speedup nor a regression.
-No additional performance rerun is currently justified.
+The real music library exposed a separate performance cost: an unchanged run
+took 853.421 seconds and read 42,889,273,344 bytes from Atmos. Destination
+metadata stayed unchanged, both transfer workers stopped afterward, and idle
+CPU samples were 0.12% and 0.23%. The source prepared the same hash inventory
+twice because of an obsolete Syncthing safeguard. Rclone obtains the complete
+proof in one inventory; removing the duplicate leaves destination pre-copy and
+post-copy integrity checks intact. Forty-seven service tests and the real
+fan-out/restart regression pass. A deployed speedup has not yet been measured.
 
 Completed transfer fixtures, private test helpers, and the performance checkout
 are removed. A further 191,115,811 bytes of disposable Mac build files are removed;

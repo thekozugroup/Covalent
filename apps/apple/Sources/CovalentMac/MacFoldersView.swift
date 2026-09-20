@@ -734,13 +734,13 @@ struct MacFoldersView: View {
           .disabled(pendingOffer != nil)
           Text(linkPolicy.destinationDeletionExplanation)
             .font(.body.weight(.semibold))
-            .foregroundStyle(.primary)
+            .foregroundStyle(MacLabelColor.sidebarUnselected)
           FolderCadenceControls(cadence: $cadence)
             .disabled(pendingOffer != nil)
           Toggle(isOn: $androidConditions.wifiOnly) {
             Text("Use Wi-Fi only on Android devices")
               .font(.body.weight(.semibold))
-              .foregroundStyle(.primary)
+              .foregroundStyle(MacLabelColor.sidebarUnselected)
           }
             .disabled(pendingOffer != nil)
           Toggle("Run only while charging on Android devices", isOn: $androidConditions.chargingOnly)
@@ -1011,8 +1011,8 @@ private struct FolderCadenceControls: View {
       )
     } label: {
       Text("Transfers")
-        .font(.body.weight(.medium))
-        .foregroundStyle(.primary)
+        .font(.body.weight(.semibold))
+        .foregroundStyle(MacLabelColor.sidebarUnselected)
     }
 
     if case .scheduled = cadence {

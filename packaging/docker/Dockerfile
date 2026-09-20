@@ -202,7 +202,7 @@ FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc
 # at exact versions: a future repository change can fail this build, but cannot
 # silently select a different runtime. Both libraries are retained because
 # apk-tools and BusyBox ssl_client require them even though Covalent and Caddy
-# are statically linked and do not load OpenSSL.
+# are statically linked and do not load OpenSSL. BusyBox ssl_client retains both.
 RUN apk add --no-cache --upgrade \
       libcrypto3=3.5.8-r0 \
       libssl3=3.5.8-r0 \
@@ -239,6 +239,7 @@ RUN apk add --no-cache python3=3.12.14-r0 \
 FROM runtime-base AS runtime-patched
 # Depending on the tested stage forces all wire checks to pass for this target.
 # The command-scoped public key and APK files exist only in this read-only mount.
+# The final image never installs packages; apk-tools is the only runtime zlib consumer.
 RUN --mount=type=bind,from=busybox-package-test,source=/packages,target=/tmp/busybox-backport,readonly \
     apk --keys-dir /tmp/busybox-backport/keys --no-network \
       --repositories-file /dev/null add --upgrade \
@@ -255,7 +256,11 @@ RUN --mount=type=bind,from=busybox-package-test,source=/packages,target=/tmp/bus
     && apk info --who-owns /usr/bin/ssl_client \
       | grep -Fx '/usr/bin/ssl_client is owned by ssl_client-1.37.0-r1000' \
     && sha256sum -c /tmp/busybox-backport/runtime-payload.sha256 \
-    && cat /tmp/busybox-backport/runtime-payload.sha256
+    && cat /tmp/busybox-backport/runtime-payload.sha256 \
+    && apk del --purge apk-tools \
+    && ! grep -Eq '^P:(apk-tools|libapk|zlib)$' /lib/apk/db/installed \
+    && test ! -e /sbin/apk \
+    && ! find /lib /usr/lib -maxdepth 1 \( -name 'libapk.so*' -o -name 'libz.so*' \) -print -quit | grep -q .
 
 # Bind the source and notices to the actual installed runtime database. The
 # copied CA comes from the unmodified Caddy builder; Python remains build-only.

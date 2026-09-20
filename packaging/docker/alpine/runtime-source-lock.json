@@ -36,13 +36,6 @@
       "aportsCommit": "1fa9ca1a79c5fd52c46a70b2199059c41ead572a"
     },
     {
-      "name": "apk-tools",
-      "version": "3.0.6-r0",
-      "origin": "apk-tools",
-      "license": "GPL-2.0-only",
-      "aportsCommit": "3812c9da974bef8b28f995490ca8233f1472ccc4"
-    },
-    {
       "name": "busybox",
       "version": "1.37.0-r1000",
       "origin": "busybox",
@@ -65,13 +58,6 @@
       "origin": "ca-certificates",
       "license": "MPL-2.0 AND MIT",
       "aportsCommit": "6e30aafe4fa807ba70797509731f1e7d644dc8f3"
-    },
-    {
-      "name": "libapk",
-      "version": "3.0.6-r0",
-      "origin": "apk-tools",
-      "license": "GPL-2.0-only",
-      "aportsCommit": "3812c9da974bef8b28f995490ca8233f1472ccc4"
     },
     {
       "name": "libcrypto3",
@@ -115,25 +101,16 @@
       "license": "GPL-2.0-only",
       "aportsCommit": "1e823a60eb85606954b3a5af5f8e5bbd1ea680cf",
       "installedDatabaseCommit": null
-    },
-    {
-      "name": "zlib",
-      "version": "1.3.2-r0",
-      "origin": "zlib",
-      "license": "Zlib",
-      "aportsCommit": "f8c94d2e1d318ab29eb4ac5f00225341c877ed65"
     }
   ],
   "sourceBundleOrigins": [
     "alpine-base",
     "alpine-baselayout",
     "alpine-keys",
-    "apk-tools",
     "busybox",
     "ca-certificates",
     "musl",
-    "pax-utils",
-    "zlib"
+    "pax-utils"
   ],
   "copiedCABundle": {
     "package": "ca-certificates-bundle",
@@ -486,40 +463,6 @@
       "sha256": "7cf4cb8314e6ccc985b0d7f1aa0c6e0a81e3588f69a41f383af7a63d1ba61793",
       "gitBlob": "e8bb47600fed4bdace8a3c366cd3762aec119933",
       "apkbuildSHA512": "383ee8cdd7be983289ac7c31b3d6e8f11dd07008ec615503abad69ff69c96047434ec812a3778b6fe393ed59ff3ac3961a660b29a87febe85667c58493cb9e4b"
-    },
-    {
-      "origin": "apk-tools",
-      "name": "APKBUILD",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/3812c9da974bef8b28f995490ca8233f1472ccc4/main/apk-tools/APKBUILD",
-      "bytes": 4179,
-      "sha256": "9f76c34490ad5a32f50f9a875839322b69c09eecfde37d55c2e4b12c136ef2db",
-      "gitBlob": "533d95f499b8ea17d70903f396f693611618f6fa"
-    },
-    {
-      "origin": "apk-tools",
-      "name": "_apk",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/3812c9da974bef8b28f995490ca8233f1472ccc4/main/apk-tools/_apk",
-      "bytes": 17285,
-      "sha256": "87824378d2caa2f6bc5e3d103ddec4a9e7cb7a95d03ce0fb7c0e311cdbc9efc6",
-      "gitBlob": "03f641724fc2e5587bf44817f374545a068881d4",
-      "apkbuildSHA512": "993518cafcc5a932c9a418f7aac48012fc48f03c55964ad99d04b034bfa185d550c38dab46f1046adfaa1d65b422b4095b5a54d9a2504dee9278f25e76f9e3ed"
-    },
-    {
-      "origin": "apk-tools",
-      "name": "apk-tools-v3.0.6.tar.gz",
-      "url": "https://distfiles.alpinelinux.org/distfiles/v3.23/apk-tools-v3.0.6.tar.gz",
-      "bytes": 384537,
-      "sha256": "e9b62742ef7e9e8c1c051efdaed3a2f49d06d8ce20c707697aa23d29bbc7c86a",
-      "apkbuildSHA512": "86c6ba9aad517d7a39d204373b37a28c143afe1438fa5090df90845f205c7f01e8aaee00ed0b6f7b27206ff745e0f1db160e3b919d17b37639fb19ae78bd13e6"
-    },
-    {
-      "origin": "apk-tools",
-      "name": "repo-hash-sha1.patch",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/3812c9da974bef8b28f995490ca8233f1472ccc4/main/apk-tools/repo-hash-sha1.patch",
-      "bytes": 1245,
-      "sha256": "0ef3ecc88a5c627ee9486632bbc26e66dd0073e6a9be0c143b25c6e366162df0",
-      "gitBlob": "33ad944259835f90e0f7dd6b28f78f0f2daa1c89",
-      "apkbuildSHA512": "6f6442d73d994964d78f06433a611902cbb066a457f3532544278b1422aa0aa276ccec1f2438ea7e93a8a048d3fdbf72ccd9a79d210f44870fda467bc43cb9fd"
     },
     {
       "origin": "busybox",
@@ -1546,22 +1489,6 @@
       "sha256": "0a2f4088f5474603388091230c0332fbb7a7f8a7b93ca8f83f96ba2095450012",
       "gitBlob": "7ec479337d2606844e36f358553f2b46f03729ad",
       "apkbuildSHA512": "6687f4aad61dfcfb16be9ececc123ce93adb8e87c52e7964594ac8f9a48d040882aae6cbcfcf41cbbec9ed893303aa70c6c682d4173933793019f15797bd24af"
-    },
-    {
-      "origin": "zlib",
-      "name": "APKBUILD",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/f8c94d2e1d318ab29eb4ac5f00225341c877ed65/main/zlib/APKBUILD",
-      "bytes": 901,
-      "sha256": "e9ad3aa7ecf048f4bfa26b946275bee347f75254385320e90eecd3fd6651bcf4",
-      "gitBlob": "8f13e10a5896cd49fddf39e8229b5ced6b6a3cd8"
-    },
-    {
-      "origin": "zlib",
-      "name": "zlib-1.3.2.tar.gz",
-      "url": "https://distfiles.alpinelinux.org/distfiles/v3.23/zlib-1.3.2.tar.gz",
-      "bytes": 1502830,
-      "sha256": "bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16",
-      "apkbuildSHA512": "70963771ea5d763614278a69b474f09b7d237ef8f53b675a10fe31d9923aeef601504b35d7ebd1b1e7f347e9ebb048e6b3b47fffdf137e7bdc7e8d5eb4ec4692"
     }
   ],
   "limits": {
@@ -1594,16 +1521,14 @@
       "bytes": 1205,
       "sha256": "a5d9f3c738c3aab3477c634138cbc82b086a1343454e9993021de89f8b616859",
       "scope": "Standard license terms; component copyright notices remain in original source."
+    },
+    {
+      "name": "GPL-2.0.txt",
+      "bytes": 17622,
+      "sha256": "b3c87315aae4c9f276c37168f2655dd8bd990544d7a0bbfb929664155c7ab257"
     }
   ],
   "archiveNotices": [
-    {
-      "origin": "apk-tools",
-      "archive": "apk-tools-v3.0.6.tar.gz",
-      "member": "apk-tools-v3.0.6/LICENSE",
-      "bytes": 17622,
-      "sha256": "b3c87315aae4c9f276c37168f2655dd8bd990544d7a0bbfb929664155c7ab257"
-    },
     {
       "origin": "busybox",
       "archive": "busybox-1.37.0.tar.bz2",
@@ -1659,13 +1584,6 @@
       "member": "pax-utils-1.3.8/COPYING",
       "bytes": 18011,
       "sha256": "e6d6a009505e345fe949e1310334fcb0747f28dae2856759de102ab66b722cb4"
-    },
-    {
-      "origin": "zlib",
-      "archive": "zlib-1.3.2.tar.gz",
-      "member": "zlib-1.3.2/LICENSE",
-      "bytes": 1002,
-      "sha256": "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2"
     }
   ],
   "originNoticeReferences": {
@@ -1673,13 +1591,10 @@
       "MIT-terms.txt"
     ],
     "alpine-baselayout": [
-      "apk-tools-v3.0.6/LICENSE"
+      "GPL-2.0.txt"
     ],
     "alpine-keys": [
       "MIT-terms.txt"
-    ],
-    "apk-tools": [
-      "apk-tools-v3.0.6/LICENSE"
     ],
     "busybox": [
       "busybox-1.37.0/LICENSE",
@@ -1694,7 +1609,7 @@
     ],
     "musl": [
       "musl-1.2.5/COPYRIGHT",
-      "apk-tools-v3.0.6/LICENSE"
+      "GPL-2.0.txt"
     ],
     "openssl": [
       "openssl-3.5.8/LICENSE.txt",
@@ -1702,9 +1617,6 @@
     ],
     "pax-utils": [
       "pax-utils-1.3.8/COPYING"
-    ],
-    "zlib": [
-      "zlib-1.3.2/LICENSE"
     ]
   },
   "recipeDirectories": [
@@ -1911,28 +1823,6 @@
           "name": "alpine-devel@lists.alpinelinux.org-66ba20fe.rsa.pub",
           "mode": "100644",
           "gitBlob": "e8bb47600fed4bdace8a3c366cd3762aec119933"
-        }
-      ]
-    },
-    {
-      "origin": "apk-tools",
-      "aportsCommit": "3812c9da974bef8b28f995490ca8233f1472ccc4",
-      "treeSHA1": "356b899c8995bd9e8a4afc250ec2e874e294e48e",
-      "entries": [
-        {
-          "name": "APKBUILD",
-          "mode": "100644",
-          "gitBlob": "533d95f499b8ea17d70903f396f693611618f6fa"
-        },
-        {
-          "name": "_apk",
-          "mode": "100644",
-          "gitBlob": "03f641724fc2e5587bf44817f374545a068881d4"
-        },
-        {
-          "name": "repo-hash-sha1.patch",
-          "mode": "100644",
-          "gitBlob": "33ad944259835f90e0f7dd6b28f78f0f2daa1c89"
         }
       ]
     },
@@ -2523,18 +2413,6 @@
           "name": "unsigned.patch",
           "mode": "100644",
           "gitBlob": "7ec479337d2606844e36f358553f2b46f03729ad"
-        }
-      ]
-    },
-    {
-      "origin": "zlib",
-      "aportsCommit": "f8c94d2e1d318ab29eb4ac5f00225341c877ed65",
-      "treeSHA1": "e1663bfdb7923b07c6b9116df50ba3999d4b2e6e",
-      "entries": [
-        {
-          "name": "APKBUILD",
-          "mode": "100644",
-          "gitBlob": "8f13e10a5896cd49fddf39e8229b5ced6b6a3cd8"
         }
       ]
     }

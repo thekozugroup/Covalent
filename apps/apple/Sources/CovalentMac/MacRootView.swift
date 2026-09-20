@@ -269,15 +269,20 @@ struct MacRootView: View {
         Label {
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.serviceStatusLabel)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(MacLabelColor.sidebarUnselected)
                 if let status = model.status {
                     Text(status.deviceName)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(MacLabelColor.secondary)
                         .lineLimit(1)
                 }
             }
         } icon: {
             Image(systemName: serviceSymbol)
+                .symbolRenderingMode(.monochrome)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(MacLabelColor.accentGlyph)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Local service, \(model.serviceStatusLabel)")

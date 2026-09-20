@@ -4,14 +4,14 @@ Covalent's Docker image includes Alpine packages in addition to the separately
 built Rust node, Caddy and rclone worker. The image's MIT label describes
 Covalent; it does not relicense those dependencies.
 
-`packaging/docker/alpine/runtime-source-lock.json` records the exact sixteen
-installed packages, their ten source origins, architecture, version, declared
+`packaging/docker/alpine/runtime-source-lock.json` records the exact thirteen
+installed packages, their eight source origins, architecture, version, declared
 license and base aports provenance. It applies the two pinned OpenSSL 3.5.8-r0
 updates and the three Covalent-local BusyBox 1.37.0-r1000 packages to the pinned
 Alpine 3.23.5 base. Schema 2 declares those three local packages explicitly:
 their `installedDatabaseCommit` is null because their actual APK records omit
 `c`, and only `busybox-binsh` overrides the target architecture with `noarch`.
-The other thirteen package identities retain their upstream requirements.
+The other ten package identities retain their upstream requirements.
 An empty `c:` value does not equal an absent field. Notices distinguish the
 absent package commit from the recorded original Alpine recipe commit.
 The installed package database from the actual
@@ -28,7 +28,7 @@ not only the final Alpine package record.
 
 ## Source selection
 
-The reviewed lock contains 161 distinct inputs: complete files from the ten
+The reviewed lock contains 155 distinct inputs: complete files from the eight
 exact aports recipe directories, upstream source archives, and the netbase
 inputs declared by the baselayout recipe. Each input has an exact HTTPS URL,
 size and SHA-256. Recipe entries also record their Git blob identity and original mode. Each origin
@@ -39,11 +39,16 @@ in an APKBUILD checksum section retain its SHA-512. The collector independently
 requires that every declared APKBUILD checksum is represented; it never runs a
 recipe or shell fragment to interpret this metadata.
 
-The final `runtime-source.tar.gz` contains 161 inputs across nine origins:
+After the final APK installation and package checks, the runtime stage removes
+`apk-tools`. Alpine then removes its unused `libapk` and `zlib` dependencies.
+The build checks the installed database and filesystem before packaging the
+runtime image; Covalent does not install packages after this point.
+
+The final `runtime-source.tar.gz` contains 155 inputs across seven origins:
 
 - `alpine-base`, `alpine-baselayout` and `alpine-keys`;
-- `apk-tools`, `busybox` and `ca-certificates`;
-- `musl`, `pax-utils` and `zlib`.
+- `busybox` and `ca-certificates`;
+- `musl` and `pax-utils`.
 
 This includes every GPL/MPL origin plus the small permissive components. Each
 origin directory contains its complete recorded recipe directory, patches,
@@ -136,7 +141,8 @@ reviewed source and match the actual inventory's compressed-file digest.
 Twelve focused verifier tests cover these conditions, including self-consistent
 tampering of the package's own inventory and changed local-package provenance.
 
-On September 12, schema 2 collection and package verification pass with all 161
+Before runtime package pruning, the September 12 schema 2 collection and package
+verification passed with all 161
 upstream inputs and four local inputs. The arm64 collection uses the actual raw
 APK database from the isolated Atmos `runtime-patched` build; amd64 uses an
 explicit candidate database. The source archive is 6,032,198 bytes, SHA-256
@@ -144,7 +150,7 @@ explicit candidate database. The source archive is 6,032,198 bytes, SHA-256
 These results do not establish either final Docker image, native amd64 package
 execution, vulnerability classification or final image-size acceptance.
 
-The initial real-source offline run verified all 161 inputs and both pinned
+That initial real-source offline run verified all 161 inputs and both pinned
 architecture package sets. Its runtime package databases were explicit
 candidate fixtures constructed from the verified base and exact OpenSSL
 package metadata. They are not claimed as final image executions. The source

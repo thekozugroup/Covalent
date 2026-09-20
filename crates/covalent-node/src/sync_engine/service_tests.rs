@@ -2686,7 +2686,8 @@ async fn manual_batch_waits_for_fresh_scan_and_exact_completion_then_reaps_worke
     );
     scan.notify_one();
     tokio::task::yield_now().await;
-    // Different healthy samples can straddle an index update. They cannot start a batch.
+    // One complete rclone inventory supplies the whole proof. Re-reading it
+    // would consume the empty observation and incorrectly leave this preparing.
     source_backend.set_run_observations(
         folder,
         vec![
@@ -2695,34 +2696,10 @@ async fn manual_batch_waits_for_fresh_scan_and_exact_completion_then_reaps_worke
                 completions: BTreeMap::new(),
                 failures: BTreeSet::new(),
             },
-            EngineRunObservation {
-                local_index: Some(EngineIndexSnapshot {
-                    sequence: 8,
-                    ..proof.clone()
-                }),
-                completions: BTreeMap::new(),
-                failures: BTreeSet::new(),
-            },
+            EngineRunObservation::default(),
         ],
     );
     source.observe_health_for_test().await;
-    source.advance_runs_for_test().await;
-    assert_eq!(
-        source.status().await.unwrap().shares()[0]
-            .link_run
-            .as_ref()
-            .unwrap()
-            .phase,
-        Some(LinkRunPhase::Preparing)
-    );
-    source_backend.set_run_observations(
-        folder,
-        vec![EngineRunObservation {
-            local_index: Some(proof.clone()),
-            completions: BTreeMap::new(),
-            failures: BTreeSet::new(),
-        }],
-    );
     source.advance_runs_for_test().await;
     let running = source
         .outbound_records()
@@ -2736,6 +2713,10 @@ async fn manual_batch_waits_for_fresh_scan_and_exact_completion_then_reaps_worke
         })
         .unwrap();
     assert_eq!(running.state.as_ref().unwrap().phase, LinkRunPhase::Running);
+    assert_eq!(
+        running.state.as_ref().unwrap().source_index,
+        Some(proof.clone())
+    );
     assert_eq!(
         source
             .receive_link_run_request(&request)

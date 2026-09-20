@@ -1671,23 +1671,18 @@ async fn advance_run_completion(shared: &ServiceShared, inner: &mut ServiceInner
         };
         let outcome = match item {
             super::LinkRunWorkItem::PrepareSource { .. } => {
-                let Some(first) = observed.local_index else {
+                let Some(index) = observed.local_index else {
                     continue;
                 };
-                // The worker reads local IndexID and sequence separately. Two
-                // identical healthy samples after this generation's positive
-                // full scan prevent combining values from an index reset.
-                let Ok(second) = session.run_observation(folder_id, None).await else {
-                    continue;
-                };
-                if second.local_index.as_ref() != Some(&first)
-                    || !run_still_active(inner, folder_id, generation)
-                {
+                // Rclone derives the whole proof from one completed inventory.
+                // Destinations compare their source inventory with this proof
+                // before copying; a second local scan only repeats all hashes.
+                if !run_still_active(inner, folder_id, generation) {
                     continue;
                 }
                 inner
                     .journal
-                    .start_link_run(folder_id, generation, first, crate::now_unix_ms())
+                    .start_link_run(folder_id, generation, index, crate::now_unix_ms())
                     .map(|_| ())
             }
             super::LinkRunWorkItem::ObserveDestination {
