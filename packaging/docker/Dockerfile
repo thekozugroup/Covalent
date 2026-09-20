@@ -204,6 +204,7 @@ FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc
 # apk-tools and BusyBox ssl_client require them even though Covalent and Caddy
 # are statically linked and do not load OpenSSL. BusyBox ssl_client retains both.
 RUN apk add --no-cache --upgrade \
+      ca-certificates-bundle=20260611-r0 \
       libcrypto3=3.5.8-r0 \
       libssl3=3.5.8-r0 \
     && apk info -e 'libcrypto3=3.5.8-r0' \
