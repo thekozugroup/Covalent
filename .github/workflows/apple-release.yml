@@ -477,6 +477,9 @@ jobs:
           done
 
   publish:
+    concurrency:
+      group: covalent-release-assets-${{ github.repository_id }}
+      cancel-in-progress: false
     name: Re-verify and publish notarized macOS artifacts
     needs: [build-unsigned, notarize-verify]
     runs-on: ubuntu-latest

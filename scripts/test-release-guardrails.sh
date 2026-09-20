@@ -100,7 +100,9 @@ cli_workflow=.github/workflows/cli-release.yml
 # happens to point at the selected branch commit. Cosign records this ref.
 grep -Fq 'GITHUB_REF}" != "refs/tags/${version}"' "$cli_workflow"
 grep -Fq 'GITHUB_REF_TYPE}" != "tag"' "$cli_workflow"
-grep -Fq 'certificate_identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/cli-release.yml@refs/tags/${RELEASE_VERSION}"' "$cli_workflow"
+grep -Fq 'certificate_identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/cli-release.yml@refs/tags/${version}"' "$cli_workflow"
+grep -Fq 'certificate_identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/cli-release.yml@refs/tags/${repair_tag}"' "$cli_workflow"
+grep -Fq 'CERTIFICATE_IDENTITY: ${{ needs.validate.outputs.certificate_identity }}' "$cli_workflow"
 test -x scripts/package-cli-release.sh
 test -x scripts/test-package-cli-release.sh
 ./scripts/test-package-cli-release.sh
@@ -124,6 +126,7 @@ fi
 # and handed to the credentialed promotion job only with checksums and its
 # locally reconstructed index digest.
 container_workflow=.github/workflows/container-supply-chain.yml
+./scripts/test-container-index.sh
 grep -q 'outputs: type=docker,dest=${{ runner.temp }}/covalent-' "$container_workflow"
 grep -Fq "'\${{ steps.private-images.outputs.amd64_image_id }}'" "$container_workflow"
 grep -Fq "'\${{ steps.private-images.outputs.arm64_image_id }}'" "$container_workflow"
@@ -213,13 +216,13 @@ if [ "$cleanup_count" -lt 2 ]; then
   echo "each private registry stage must have an always cleanup" >&2
   exit 1
 fi
-grep -Fq -- '--certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container-supply-chain.yml@refs/tags/${RELEASE_VERSION}"' "$container_workflow"
+grep -Fq -- '--certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container-supply-chain.yml@${{ needs.validate.outputs.signing_ref }}"' "$container_workflow"
 
 # GHCR receives only a unique non-consumer candidate before Cosign. Public
 # version/latest tags must remain unchanged unless the exact registry digest,
 # signing identity, signature, and current SBOM attestation all verify first.
 grep -Fq 'candidate="${IMAGE}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' "$container_workflow"
-grep -Fq 'certificate_identity="https://github.com/${GITHUB_WORKFLOW_REF}"' "$container_workflow"
+grep -Fq 'certificate_identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container-supply-chain.yml@${{ needs.validate.outputs.signing_ref }}"' "$container_workflow"
 grep -Fq 'group: container-release-${{ github.repository_id }}' "$container_workflow"
 if grep -Fq 'group: container-release-${{ github.repository_id }}-${{ github.ref }}' "$container_workflow"; then
   echo "container promotion concurrency must serialize every release ref" >&2
@@ -408,7 +411,14 @@ fi
 grep -Fq '(docs/getting-started.md)' README.md
 grep -Fq '(platform/atlas-tailscale.md)' docs/getting-started.md
 grep -q 'No verified CLI archive is published with the historical v0.1.0 release' docs/release/cli-install.md
-grep -Fq -- '--certificate-identity "https://github.com/thekozugroup/Covalent/.github/workflows/cli-release.yml@refs/tags/${version}"' docs/release/cli-install.md
+grep -Fq 'v0.2.1) signing_ref=release-tools-v0.2.1 ;;' docs/release/cli-install.md
+grep -Fq '*) signing_ref="${version}" ;;' docs/release/cli-install.md
+grep -Fq 'cli_certificate_identity="https://github.com/thekozugroup/Covalent/.github/workflows/cli-release.yml@refs/tags/${signing_ref}"' docs/release/cli-install.md
+grep -Fq -- '--certificate-identity "${cli_certificate_identity}"' docs/release/cli-install.md
+if grep -Fq -- '--certificate-identity-regexp' docs/release/cli-install.md; then
+  echo "CLI install documentation must use an exact workflow and tag identity" >&2
+  exit 1
+fi
 # Platform manifests cover more than the end-user archive. The install guide
 # must select and validate exactly one archive record instead of asking shasum
 # to open SBOM, inventory, and bundle files the reader did not download.

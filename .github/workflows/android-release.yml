@@ -365,6 +365,9 @@ jobs:
           shred --remove --zero "${keystore}" 2>/dev/null || rm -f "${keystore}"
 
   publish:
+    concurrency:
+      group: covalent-release-assets-${{ github.repository_id }}
+      cancel-in-progress: false
     name: Re-verify and publish signed Android artifacts
     needs: sign-verify
     runs-on: ubuntu-latest

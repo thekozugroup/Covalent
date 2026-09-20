@@ -194,6 +194,9 @@ jobs:
           retention-days: 7
 
   publish:
+    concurrency:
+      group: covalent-release-assets-${{ github.repository_id }}
+      cancel-in-progress: false
     name: Re-verify and publish unsigned macOS artifacts
     needs: build-verify
     runs-on: ubuntu-latest

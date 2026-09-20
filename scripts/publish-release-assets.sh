@@ -97,31 +97,32 @@ require_one_release_id() {
 
 ensure_release() {
   attempt=1
+  creation_attempted=false
   while [ "$attempt" -le 5 ]; do
     records=$(release_record)
     if [ -n "$records" ]; then
       require_one_release_id "$records"
       return
     fi
-    set -- --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "Covalent $version"
-    notes="$repo_root/docs/release/notes/$version.md"
-    if [ -f "$notes" ]; then
-      set -- "$@" --notes-file "$notes"
+    if [ "$creation_attempted" = false ]; then
+      creation_attempted=true
+      set -- --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "Covalent $version"
+      notes="$repo_root/docs/release/notes/$version.md"
+      if [ -f "$notes" ]; then
+        set -- "$@" --notes-file "$notes"
+      else
+        set -- "$@" --generate-notes
+      fi
+      case "$version" in
+        *-*) set -- "$@" --prerelease ;;
+      esac
+      if ! gh release create "$version" "$@" >/dev/null; then
+        # Another platform workflow most likely created it in the same moment.
+        echo "release creation did not succeed; polling authenticated release visibility" >&2
+      fi
     else
-      set -- "$@" --generate-notes
+      echo "release is not visible yet; polling without another create" >&2
     fi
-    case "$version" in
-      *-*) set -- "$@" --prerelease ;;
-    esac
-    if gh release create "$version" "$@" >/dev/null; then
-      # Resolve the numeric ID from the authenticated list on the next pass;
-      # neither later discovery nor upload depends on a draft tag endpoint.
-      attempt=$((attempt + 1))
-      sleep 1
-      continue
-    fi
-    # Another platform workflow most likely created it in the same moment.
-    echo "release creation attempt $attempt did not succeed; re-checking" >&2
     attempt=$((attempt + 1))
     sleep 5
   done

@@ -9,6 +9,10 @@ on:
         description: Existing v-prefixed version for this exact commit
         required: true
         type: string
+      artifact_run_id:
+        description: Failed container run whose exact architecture archives should be rescanned and promoted
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -29,26 +33,24 @@ jobs:
     permissions:
       contents: read
       checks: read
+      actions: read
     outputs:
       version: ${{ steps.release.outputs.version }}
       image_version: ${{ steps.release.outputs.image_version }}
       publish_latest: ${{ steps.release.outputs.publish_latest }}
+      source_sha: ${{ steps.release.outputs.source_sha }}
+      signing_ref: ${{ steps.release.outputs.signing_ref }}
+      artifact_run_id: ${{ steps.release.outputs.artifact_run_id }}
       source_fingerprint: ${{ steps.docker-source.outputs.fingerprint }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
-      - name: Compute the exact Docker source fingerprint
-        id: docker-source
-        run: |
-          set -euo pipefail
-          fingerprint=$(./scripts/docker-source-fingerprint.sh . | sha256sum | awk '{print $1}')
-          [[ "${fingerprint}" =~ ^[0-9a-f]{64}$ ]]
-          echo "fingerprint=${fingerprint}" >> "${GITHUB_OUTPUT}"
       - id: release
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_VERSION: ${{ inputs.version }}
+          ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME}"
@@ -59,39 +61,92 @@ jobs:
             echo "release version must be an explicit v-prefixed semantic version" >&2
             exit 1
           fi
-          workspace_version=$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)
+          source_sha=$(git rev-list -n 1 "${version}")
+          signing_ref="refs/tags/${version}"
+          if [[ -n "${ARTIFACT_RUN_ID}" ]]; then
+            test "${GITHUB_EVENT_NAME}" = workflow_dispatch
+            test "${GITHUB_REF_TYPE}" = tag
+            test "${version}" = v0.2.1
+            [[ "${ARTIFACT_RUN_ID}" =~ ^[0-9]+$ ]]
+            repair_tag="release-tools-${version}"
+            if [[ "${GITHUB_REF}" != "refs/tags/${repair_tag}" ]]; then
+              echo "archive recovery must run from signed ${repair_tag}" >&2
+              exit 1
+            fi
+            repair_ref=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${repair_tag}")
+            repair_tag_sha=$(jq -r '.object.sha // empty' <<<"${repair_ref}")
+            test "$(jq -r '.object.type // empty' <<<"${repair_ref}")" = tag
+            repair_tag_object=$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${repair_tag_sha}")
+            test "$(jq -r '.object.sha // empty' <<<"${repair_tag_object}")" = "${GITHUB_SHA}"
+            test "$(jq -r '.verification.verified // false' <<<"${repair_tag_object}")" = true
+            test "$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}" --jq '.commit.verification.verified')" = true
+
+            prior_run=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}")
+            jq -e \
+              --arg repo "${GITHUB_REPOSITORY}" \
+              --arg sha "${source_sha}" \
+              --arg branch "${version}" '
+              .repository.full_name == $repo and
+              .path == ".github/workflows/container-supply-chain.yml" and
+              .head_sha == $sha and
+              .head_branch == $branch and
+              .event == "push" and
+              .status == "completed" and
+              .conclusion == "failure"
+            ' <<<"${prior_run}" >/dev/null
+            prior_jobs=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/jobs?per_page=100" | jq -s '[.[].jobs[]]')
+            for required in "Validate source and release gates" "Build private linux/amd64 Docker archive" "Build private linux/arm64 Docker archive"; do
+              jq -e --arg name "${required}" '[.[] | select(.name == $name)] | length == 1 and .[0].conclusion == "success"' <<<"${prior_jobs}" >/dev/null
+            done
+            prior_artifacts=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/artifacts?per_page=100" | jq -s '[.[].artifacts[]]')
+            for required in container-amd64-archive container-arm64-archive; do
+              jq -e --arg name "${required}" '[.[] | select(.name == $name and .expired == false)] | length == 1' <<<"${prior_artifacts}" >/dev/null
+            done
+            signing_ref="${GITHUB_REF}"
+          elif [[ "${GITHUB_REF}" != "refs/tags/${version}" ]] || [[ "${source_sha}" != "${GITHUB_SHA}" ]]; then
+            echo "run this workflow from refs/tags/${version}; the Cosign identity is pinned to the exact signed tag ref" >&2
+            exit 1
+          fi
+          workspace_version=$(git show "${source_sha}:Cargo.toml" | awk -F'"' '/^version = "/ { print $2; exit }')
           if [[ "${version#v}" != "${workspace_version}" ]]; then
             echo "${version} does not match workspace version ${workspace_version}" >&2
             exit 1
           fi
-          if [[ "$(git rev-list -n 1 "${version}")" != "${GITHUB_SHA}" ]]; then
-            echo "tag does not resolve to the workflow commit" >&2
-            exit 1
-          fi
-          if [[ "${GITHUB_REF}" != "refs/tags/${version}" ]]; then
-            echo "run this workflow from refs/tags/${version}; the Cosign identity is pinned to the exact signed tag ref" >&2
-            exit 1
-          fi
-          checks=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100")
+          checks=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${source_sha}/check-runs?per_page=100")
           for required in "Shared Rust and contracts" "macOS integration and UI" "macOS app bundle" "Android foundation" "Android API 37 device" "Container foundation" "Container arm64 image" "CodeQL java-kotlin" "CodeQL swift" "CodeQL policy" "Release candidate software gates"; do
             if ! jq -e --arg name "${required}" '[.check_runs[] | select(.name == $name)] | sort_by(.started_at // .created_at) | last | select(.status == "completed" and .conclusion == "success")' <<<"${checks}" >/dev/null; then
               echo "latest required exact-commit check is not green: ${required}" >&2
               exit 1
             fi
           done
-          ./scripts/release-version.sh check
-          RELEASE_VERSION="${version}" ./scripts/verify-release-commit-signature.sh
+          GITHUB_SHA="${source_sha}" RELEASE_VERSION="${version}" ./scripts/verify-release-commit-signature.sh
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
           echo "image_version=${version#v}" >> "${GITHUB_OUTPUT}"
+          echo "source_sha=${source_sha}" >> "${GITHUB_OUTPUT}"
+          echo "signing_ref=${signing_ref}" >> "${GITHUB_OUTPUT}"
+          echo "artifact_run_id=${ARTIFACT_RUN_ID}" >> "${GITHUB_OUTPUT}"
           if [[ "${version}" == *-* ]]; then
             echo "publish_latest=false" >> "${GITHUB_OUTPUT}"
           else
             echo "publish_latest=true" >> "${GITHUB_OUTPUT}"
           fi
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ steps.release.outputs.source_sha }}
+          path: release-source
+      - name: Compute the exact Docker source fingerprint
+        id: docker-source
+        run: |
+          set -euo pipefail
+          (cd release-source && ./scripts/release-version.sh check)
+          fingerprint=$(release-source/scripts/docker-source-fingerprint.sh release-source | sha256sum | awk '{print $1}')
+          [[ "${fingerprint}" =~ ^[0-9a-f]{64}$ ]]
+          echo "fingerprint=${fingerprint}" >> "${GITHUB_OUTPUT}"
 
   build-digests:
     name: Build private ${{ matrix.platform }} Docker archive
     needs: validate
+    if: needs.validate.outputs.artifact_run_id == ''
     # Each platform builds on a runner of that architecture. Both legs used to
     # share ubuntu-latest, so the arm64 leg was QEMU-emulated - the same
     # emulated Rust build that never once finished inside CI's arm64 job. A
@@ -153,16 +208,27 @@ jobs:
   scan-private:
     name: Scan private images and seal verified handoff
     needs: [validate, build-digests]
+    if: always() && needs.validate.result == 'success' && (needs.build-digests.result == 'success' || needs.validate.outputs.artifact_run_id != '')
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        if: needs.validate.outputs.artifact_run_id == ''
         with:
           pattern: container-*-archive
           path: ${{ runner.temp }}/container-archives
           merge-multiple: true
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        if: needs.validate.outputs.artifact_run_id != ''
+        with:
+          pattern: container-*-archive
+          path: ${{ runner.temp }}/container-archives
+          merge-multiple: true
+          run-id: ${{ needs.validate.outputs.artifact_run_id }}
+          github-token: ${{ github.token }}
       - name: Load private architecture archives
         id: private-images
         run: |
@@ -212,7 +278,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: private-container-vulnerabilities-amd64-${{ github.sha }}
+          name: private-container-vulnerabilities-amd64-${{ needs.validate.outputs.source_sha }}
           path: ${{ runner.temp }}/covalent-container-vulnerabilities-amd64.json
           if-no-files-found: error
           retention-days: 14
@@ -220,7 +286,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: private-container-vulnerabilities-arm64-${{ github.sha }}
+          name: private-container-vulnerabilities-arm64-${{ needs.validate.outputs.source_sha }}
           path: ${{ runner.temp }}/covalent-container-vulnerabilities-arm64.json
           if-no-files-found: error
           retention-days: 14
@@ -283,6 +349,17 @@ jobs:
             --annotation "index:io.covalent.source.fingerprint=${{ needs.validate.outputs.source_fingerprint }}" \
             --tag "${staging}" \
             "${registry}/covalent:amd64" "${registry}/covalent:arm64"
+          docker buildx imagetools inspect --raw "${staging}" |
+            jq --arg version "${{ needs.validate.outputs.image_version }}" \
+              --arg fingerprint "${{ needs.validate.outputs.source_fingerprint }}" '
+              .mediaType = "application/vnd.oci.image.index.v1+json" |
+              .annotations["org.opencontainers.image.version"] = $version |
+              .annotations["io.covalent.source.fingerprint"] = $fingerprint
+            ' > private-index-upload.json
+          curl --fail --silent --show-error \
+            --header 'Content-Type: application/vnd.oci.image.index.v1+json' \
+            --request PUT --data-binary @private-index-upload.json \
+            "http://${registry}/v2/covalent/manifests/${staging##*:}" >/dev/null
           docker buildx imagetools inspect "${staging}" --format '{{json .Manifest}}' > private-index.json
           jq -e \
             --arg version "${{ needs.validate.outputs.image_version }}" \
@@ -326,7 +403,7 @@ jobs:
           docker rm --force covalent-private-registry >/dev/null 2>&1 || true
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: verified-container-${{ github.sha }}
+          name: verified-container-${{ needs.validate.outputs.source_sha }}
           path: ${{ runner.temp }}/verified-container
           if-no-files-found: error
           retention-days: 1
@@ -334,7 +411,11 @@ jobs:
   promote-sign:
     name: Promote, sign, and publish verified image
     needs: [validate, scan-private]
+    if: always() && needs.validate.result == 'success' && needs.scan-private.result == 'success'
     runs-on: ubuntu-latest
+    concurrency:
+      group: covalent-release-assets-${{ github.repository_id }}
+      cancel-in-progress: false
     permissions:
       contents: write
       packages: write
@@ -343,7 +424,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
-          name: verified-container-${{ github.sha }}
+          name: verified-container-${{ needs.validate.outputs.source_sha }}
           path: ${{ runner.temp }}/verified-container
       - name: Verify and load the scanned handoff
         run: |
@@ -397,6 +478,17 @@ jobs:
             --annotation "index:io.covalent.source.fingerprint=${{ needs.validate.outputs.source_fingerprint }}" \
             --tag "${staging}" \
             "${registry}/covalent:amd64" "${registry}/covalent:arm64"
+          docker buildx imagetools inspect --raw "${staging}" |
+            jq --arg version "${{ needs.validate.outputs.image_version }}" \
+              --arg fingerprint "${{ needs.validate.outputs.source_fingerprint }}" '
+              .mediaType = "application/vnd.oci.image.index.v1+json" |
+              .annotations["org.opencontainers.image.version"] = $version |
+              .annotations["io.covalent.source.fingerprint"] = $fingerprint
+            ' > private-index-upload.json
+          curl --fail --silent --show-error \
+            --header 'Content-Type: application/vnd.oci.image.index.v1+json' \
+            --request PUT --data-binary @private-index-upload.json \
+            "http://${registry}/v2/covalent/manifests/${staging##*:}" >/dev/null
           docker buildx imagetools inspect "${staging}" --format '{{json .Manifest}}' > private-index.json
           jq -e \
             --arg version "${{ needs.validate.outputs.image_version }}" \
@@ -457,7 +549,7 @@ jobs:
           index_subject="${IMAGE}@${{ steps.candidate.outputs.digest }}"
           amd64_subject="${IMAGE}@${{ steps.candidate.outputs.amd64_digest }}"
           arm64_subject="${IMAGE}@${{ steps.candidate.outputs.arm64_digest }}"
-          certificate_identity="https://github.com/${GITHUB_WORKFLOW_REF}"
+          certificate_identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container-supply-chain.yml@${{ needs.validate.outputs.signing_ref }}"
           certificate_issuer="https://token.actions.githubusercontent.com"
           for subject in "${index_subject}" "${amd64_subject}" "${arm64_subject}"; do
             cosign sign --yes "${subject}"
@@ -641,13 +733,13 @@ jobs:
           linux-amd64-sbom: covalent-container-linux-amd64.spdx.json
           linux-arm64-digest: ${IMAGE}@${ARM64_DIGEST}
           linux-arm64-sbom: covalent-container-linux-arm64.spdx.json
-          commit: ${GITHUB_SHA}
+          commit: ${{ needs.validate.outputs.source_sha }}
           source-fingerprint: ${{ needs.validate.outputs.source_fingerprint }}
-          verify-index: cosign verify ${IMAGE}@${IMAGE_DIGEST} --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container-supply-chain.yml@refs/tags/${RELEASE_VERSION}" --certificate-oidc-issuer https://token.actions.githubusercontent.com
-          verify-linux-amd64-signature: cosign verify ${IMAGE}@${AMD64_DIGEST} --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container-supply-chain.yml@refs/tags/${RELEASE_VERSION}" --certificate-oidc-issuer https://token.actions.githubusercontent.com
-          verify-linux-amd64-sbom-attestation: cosign verify-attestation --type spdxjson ${IMAGE}@${AMD64_DIGEST} --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container-supply-chain.yml@refs/tags/${RELEASE_VERSION}" --certificate-oidc-issuer https://token.actions.githubusercontent.com
-          verify-linux-arm64-signature: cosign verify ${IMAGE}@${ARM64_DIGEST} --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container-supply-chain.yml@refs/tags/${RELEASE_VERSION}" --certificate-oidc-issuer https://token.actions.githubusercontent.com
-          verify-linux-arm64-sbom-attestation: cosign verify-attestation --type spdxjson ${IMAGE}@${ARM64_DIGEST} --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container-supply-chain.yml@refs/tags/${RELEASE_VERSION}" --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          verify-index: cosign verify ${IMAGE}@${IMAGE_DIGEST} --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container-supply-chain.yml@${{ needs.validate.outputs.signing_ref }}" --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          verify-linux-amd64-signature: cosign verify ${IMAGE}@${AMD64_DIGEST} --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container-supply-chain.yml@${{ needs.validate.outputs.signing_ref }}" --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          verify-linux-amd64-sbom-attestation: cosign verify-attestation --type spdxjson ${IMAGE}@${AMD64_DIGEST} --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container-supply-chain.yml@${{ needs.validate.outputs.signing_ref }}" --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          verify-linux-arm64-signature: cosign verify ${IMAGE}@${ARM64_DIGEST} --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container-supply-chain.yml@${{ needs.validate.outputs.signing_ref }}" --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          verify-linux-arm64-sbom-attestation: cosign verify-attestation --type spdxjson ${IMAGE}@${ARM64_DIGEST} --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container-supply-chain.yml@${{ needs.validate.outputs.signing_ref }}" --certificate-oidc-issuer https://token.actions.githubusercontent.com
           EOF
           sha256sum \
             covalent-container-linux-amd64.spdx.json \
@@ -667,7 +759,7 @@ jobs:
             covalent-container-SHA256SUMS.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: container-sbom-${{ github.sha }}
+          name: container-sbom-${{ needs.validate.outputs.source_sha }}
           path: |
             covalent-container-linux-amd64.spdx.json
             covalent-container-linux-arm64.spdx.json

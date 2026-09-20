@@ -13,8 +13,13 @@ on:
         description: Existing v-prefixed version for this exact signed tag commit
         required: true
         type: string
+      artifact_run_id:
+        description: Existing failed CLI release run whose verified unsigned artifacts require re-signing
+        required: false
+        type: string
 
 permissions:
+  actions: read
   contents: read
   checks: read
   security-events: read
@@ -29,6 +34,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.release.outputs.version }}
+      source_sha: ${{ steps.release.outputs.source_sha }}
+      recovery: ${{ steps.release.outputs.recovery }}
+      certificate_identity: ${{ steps.release.outputs.certificate_identity }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -37,6 +45,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_VERSION: ${{ inputs.version }}
+          ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME}"
@@ -47,14 +56,59 @@ jobs:
             echo "release version must be an explicit v-prefixed semantic version" >&2
             exit 1
           fi
-          if [[ "${GITHUB_REF}" != "refs/tags/${version}" || "${GITHUB_REF_TYPE}" != "tag" ]]; then
-            echo "run this workflow from refs/tags/${version}; publication and Cosign identity require the exact signed tag ref" >&2
-            exit 1
+          recovery=false
+          source_sha="${GITHUB_SHA}"
+          certificate_identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/cli-release.yml@refs/tags/${version}"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && -n "${ARTIFACT_RUN_ID}" ]]; then
+            recovery=true
+            test "${version}" = v0.2.1
+            case "${ARTIFACT_RUN_ID}" in
+              *[!0-9]*) echo "artifact_run_id must be a GitHub Actions numeric run ID" >&2; exit 1 ;;
+            esac
+            repair_tag="release-tools-${version}"
+            if [[ "${GITHUB_REF}" != "refs/tags/${repair_tag}" || "${GITHUB_REF_TYPE}" != "tag" ]]; then
+              echo "recovery must run from refs/tags/${repair_tag}" >&2
+              exit 1
+            fi
+            test "$(git rev-list -n 1 "${repair_tag}")" = "${GITHUB_SHA}"
+            repair_verification=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}" --jq '.commit.verification.verified')
+            test "${repair_verification}" = true
+            source_sha=$(git rev-list -n 1 "${version}")
+            test -n "${source_sha}"
+            source_verification=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${source_sha}" --jq '.commit.verification.verified')
+            test "${source_verification}" = true
+            for tag in "${repair_tag}" "${version}"; do
+              tag_ref=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}")
+              test "$(printf '%s\n' "${tag_ref}" | jq -r '.object.type')" = tag
+              tag_object=$(printf '%s\n' "${tag_ref}" | jq -r '.object.sha')
+              tag_record=$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object}")
+              test "$(printf '%s\n' "${tag_record}" | jq -r '.verification.verified')" = true
+              test "$(printf '%s\n' "${tag_record}" | jq -r '.object.sha')" = "$(git rev-list -n 1 "${tag}")"
+            done
+            test "$(git rev-list -n 1 "${version}")" = "${source_sha}"
+            run=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}")
+            test "$(printf '%s\n' "${run}" | jq -r '.head_sha')" = "${source_sha}"
+            test "$(printf '%s\n' "${run}" | jq -r '.path')" = .github/workflows/cli-release.yml
+            test "$(printf '%s\n' "${run}" | jq -r '.repository.full_name')" = "${GITHUB_REPOSITORY}"
+            test "$(printf '%s\n' "${run}" | jq -r '.head_branch')" = "${version}"
+            test "$(printf '%s\n' "${run}" | jq -r '.event')" = push
+            test "$(printf '%s\n' "${run}" | jq -r '.status')" = completed
+            jobs=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/jobs?per_page=100" | jq -s '[.[].jobs[]]')
+            for name in "Verify signed source and exact-commit release gates" "Build and validate CLI linux-amd64" "Build and validate CLI linux-arm64" "Build and validate CLI macOS arm64"; do
+              printf '%s\n' "${jobs}" | jq -e --arg name "${name}" '[.[] | select(.name == $name)] | length == 1 and .[0].conclusion == "success"' >/dev/null
+            done
+            certificate_identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/cli-release.yml@refs/tags/${repair_tag}"
+          else
+            if [[ "${GITHUB_REF}" != "refs/tags/${version}" || "${GITHUB_REF_TYPE}" != "tag" ]]; then
+              echo "run this workflow from refs/tags/${version}; publication and Cosign identity require the exact signed tag ref" >&2
+              exit 1
+            fi
+            test "$(git rev-list -n 1 "${version}")" = "${GITHUB_SHA}"
           fi
           workspace_version=$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)
           test "${version#v}" = "${workspace_version}"
-          test "$(git rev-list -n 1 "${version}")" = "${GITHUB_SHA}"
-          checks=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100")
+          test "$(git show "${source_sha}:Cargo.toml" | awk -F'"' '/^version = "/ { print $2; exit }')" = "${version#v}"
+          checks=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${source_sha}/check-runs?per_page=100")
           for required in "Shared Rust and contracts" "macOS integration and UI" "macOS app bundle" "Android foundation" "Android API 37 device" "Container foundation" "Container arm64 image" "CodeQL java-kotlin" "CodeQL swift" "CodeQL policy" "Release candidate software gates"; do
             if ! jq -e --arg name "${required}" '[.check_runs[] | select(.name == $name)] | sort_by(.started_at // .created_at) | last | select(.status == "completed" and .conclusion == "success")' <<<"${checks}" >/dev/null; then
               echo "latest required exact-commit check is not green: ${required}" >&2
@@ -62,12 +116,16 @@ jobs:
             fi
           done
           ./scripts/release-version.sh check
-          RELEASE_VERSION="${version}" ./scripts/verify-release-commit-signature.sh
+          GITHUB_SHA="${source_sha}" RELEASE_VERSION="${version}" ./scripts/verify-release-commit-signature.sh
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "source_sha=${source_sha}" >> "${GITHUB_OUTPUT}"
+          echo "recovery=${recovery}" >> "${GITHUB_OUTPUT}"
+          echo "certificate_identity=${certificate_identity}" >> "${GITHUB_OUTPUT}"
 
   build-linux:
     name: Build and validate CLI ${{ matrix.platform }}
     needs: validate
+    if: needs.validate.outputs.recovery == 'false'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     permissions:
@@ -142,6 +200,7 @@ jobs:
   build-macos:
     name: Build and validate CLI macOS arm64
     needs: validate
+    if: needs.validate.outputs.recovery == 'false'
     runs-on: macos-26
     timeout-minutes: 45
     permissions:
@@ -200,9 +259,14 @@ jobs:
   sign-cli:
     name: Verify handoff, then sign CLI ${{ matrix.platform }}
     needs: [validate, build-linux, build-macos]
+    if: >-
+      always() && needs.validate.result == 'success' &&
+      (needs.validate.outputs.recovery == 'true' ||
+      (needs.build-linux.result == 'success' && needs.build-macos.result == 'success'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
+      actions: read
       contents: read
       id-token: write
     strategy:
@@ -212,12 +276,15 @@ jobs:
     steps:
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
-          name: unsigned-covalent-cli-${{ matrix.platform }}-${{ github.sha }}
+          name: unsigned-covalent-cli-${{ matrix.platform }}-${{ needs.validate.outputs.source_sha }}
           path: release-assets
+          run-id: ${{ inputs.artifact_run_id || github.run_id }}
+          github-token: ${{ github.token }}
       - name: Verify the exact checksummed unsigned handoff
         env:
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
           PLATFORM: ${{ matrix.platform }}
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
         run: |
           set -euo pipefail
           archive="Covalent-${RELEASE_VERSION}-${PLATFORM}.tar.gz"
@@ -229,7 +296,7 @@ jobs:
           test "${actual_files}" = "${expected_files}"
           test "$(find release-assets -mindepth 1 -maxdepth 1 ! -type f | wc -l | tr -d ' ')" = 0
           (cd release-assets && shasum -a 256 -c "${unsigned_sums}")
-          jq -e --arg platform "${PLATFORM}" --arg version "${RELEASE_VERSION}" --arg commit "${GITHUB_SHA}" \
+          jq -e --arg platform "${PLATFORM}" --arg version "${RELEASE_VERSION}" --arg commit "${SOURCE_SHA}" \
             '.platform == $platform and .version == $version and .commit == $commit and (.packages | length > 0)' \
             "release-assets/${inventory}" >/dev/null
           jq -e 'type == "object"' "release-assets/${sbom}" >/dev/null
@@ -248,7 +315,7 @@ jobs:
           rm -- "release-assets/${unsigned_sums}"
           cosign sign-blob --yes --bundle "release-assets/${archive}.sigstore.json" \
             "release-assets/${archive}"
-          cosign attest-blob --yes --type spdxjson --predicate "release-assets/${sbom}" \
+          cosign attest-blob --yes --new-bundle-format --type spdxjson --predicate "release-assets/${sbom}" \
             --bundle "release-assets/${archive}.attestation.sigstore.json" \
             "release-assets/${archive}"
           (cd release-assets && shasum -a 256 \
@@ -264,8 +331,12 @@ jobs:
   publish:
     name: Re-verify and publish complete CLI release assets
     needs: [validate, sign-cli]
+    if: always() && needs.validate.result == 'success' && needs.sign-cli.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    concurrency:
+      group: covalent-release-assets-${{ github.repository_id }}
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
@@ -279,12 +350,14 @@ jobs:
       - name: Verify complete asset set, checksums, signatures, and attestations
         env:
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+          CERTIFICATE_IDENTITY: ${{ needs.validate.outputs.certificate_identity }}
         run: |
           set -euo pipefail
           cd release-assets
           test "$(find . -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 18
           test "$(find . -mindepth 1 -maxdepth 1 ! -type f | wc -l | tr -d ' ')" = 0
-          certificate_identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/cli-release.yml@refs/tags/${RELEASE_VERSION}"
+          certificate_identity="${CERTIFICATE_IDENTITY}"
           certificate_issuer=https://token.actions.githubusercontent.com
           for platform in linux-amd64 linux-arm64 macos-arm64; do
             archive="Covalent-${RELEASE_VERSION}-${platform}.tar.gz"
@@ -298,7 +371,7 @@ jobs:
             test -f "${archive}.attestation.sigstore.json"
             test -f "${sums}"
             shasum -a 256 -c "${sums}"
-            jq -e --arg platform "${platform}" --arg version "${RELEASE_VERSION}" --arg commit "${GITHUB_SHA}" \
+            jq -e --arg platform "${platform}" --arg version "${RELEASE_VERSION}" --arg commit "${SOURCE_SHA}" \
               '.platform == $platform and .version == $version and .commit == $commit and (.packages | length > 0)' \
               "${inventory}" >/dev/null
             cosign verify-blob --bundle "${archive}.sigstore.json" \

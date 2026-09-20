@@ -40,6 +40,35 @@ publishing it — see steps 9 and 10 below.
 
 Release notes come from `docs/release/notes/<tag>.md` when that file exists.
 
+## v0.2.1 packaging repair
+
+The runtime source tag `v0.2.1` remains immutable. Its signing/publication repair
+uses the separate annotated signed `release-tools-v0.2.1` tag. This is an
+exception for v0.2.1 only and does not assert that repair or publication has
+completed. Until the final assets and image digest pass verification, keep the
+release in draft.
+
+The repair must reuse the original CLI archive/SBOM bytes and scanned container
+architecture archives from their source-bound workflow runs. Record those run
+IDs, artifact hashes and source revision in the final provenance. Do not rebuild
+runtime code or relabel different bytes as the original source. The repair
+workflows must verify the handoffs before signing and publishing.
+
+Require these exact GitHub OIDC certificate identities for repaired v0.2.1
+assets, with issuer `https://token.actions.githubusercontent.com`:
+
+- CLI: `https://github.com/thekozugroup/Covalent/.github/workflows/cli-release.yml@refs/tags/release-tools-v0.2.1`
+- Container: `https://github.com/thekozugroup/Covalent/.github/workflows/container-supply-chain.yml@refs/tags/release-tools-v0.2.1`
+
+The runtime tag controls the application version and source; the repair tag
+identifies the reviewed packaging code. Both must retain verified signatures.
+Do not broaden the trust rule to a branch, arbitrary repair tags or an identity
+regular expression. Other releases continue to use their exact version-tag
+workflow identity. The CLI install guide and container verification instructions
+must use the same explicit v0.2.1 exception, including SBOM attestation checks.
+The final container digest remains unknown until that lane succeeds; use its
+verified `covalent-container-digest.txt`, then complete step 11 below.
+
 ## The version of record
 
 `Cargo.toml` `[workspace.package] version` is the single source of truth.
@@ -58,11 +87,11 @@ with a mutable tag.
 `versionCode` and `CURRENT_PROJECT_VERSION` are both the monotonic integer
 `major * 1000000 + minor * 1000 + patch`, so they increase automatically and can
 never regress across releases. `0.1.0` is build `1000`; `0.2.0` is build
-`2000`.
+`2000`; `0.2.1` is build `2001`.
 
 ```sh
 scripts/release-version.sh check        # fails on any drift
-scripts/release-version.sh set 0.2.0    # rewrite every surface at once
+scripts/release-version.sh set 0.2.1    # rewrite every surface at once
 ```
 
 `version-sync.yml` runs the check on every push and pull request, so drift fails
@@ -112,9 +141,10 @@ before building anything.
    use the by-tag endpoint for this pre-publish check:
 
    ```sh
+   version=vX.Y.Z
    release_id=$(gh api --paginate --slurp \
      'repos/OWNER/REPO/releases?per_page=100' \
-     --jq '.[][] | select(.tag_name == "vX.Y.Z") | .id')
+     | jq -r --arg version "$version" '.[][] | select(.tag_name == $version) | .id')
    gh api "repos/OWNER/REPO/releases/${release_id}" \
      --jq '.assets[] | [.name, .size] | @tsv'
    ```
@@ -195,7 +225,10 @@ Confirm with an unauthenticated pull by digest:
 
 ```sh
 docker logout ghcr.io
-docker pull ghcr.io/thekozugroup/covalent@sha256:8b8b96bdea7437fecf6d9c3297c248fd9de7eeb25fe7d701aa6f0a5b633cf8a6
+# Use the digest file from the completed, verified release lane.
+digest=$(cat covalent-container-digest.txt)
+printf '%s\n' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$' || exit 1
+docker pull "ghcr.io/thekozugroup/covalent@$digest"
 ```
 
 ### macOS personal-use package
