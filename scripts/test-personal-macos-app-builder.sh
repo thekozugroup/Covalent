@@ -57,6 +57,7 @@ for contract in \
   'scripts/release-version.sh' \
   'scripts/docker-source-fingerprint.sh' \
   'xcodegen generate --quiet' \
+  'cp Package.resolved "$swiftpm_dir/Package.resolved"' \
   '-disableAutomaticPackageResolution' \
   '-onlyUsePackageVersionsFromResolvedFile' \
   'ARCHS=arm64' \

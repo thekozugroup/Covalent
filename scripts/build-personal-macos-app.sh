@@ -121,6 +121,9 @@ printf '%s\n' "Building Covalent for Apple Silicon..."
 (
   cd "$repo_root/apps/apple"
   xcodegen generate --quiet
+  swiftpm_dir="Covalent.xcodeproj/project.xcworkspace/xcshareddata/swiftpm"
+  mkdir -p "$swiftpm_dir"
+  cp Package.resolved "$swiftpm_dir/Package.resolved"
   xcodebuild \
     -resolvePackageDependencies \
     -project Covalent.xcodeproj \

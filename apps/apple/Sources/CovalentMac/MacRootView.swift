@@ -212,17 +212,18 @@ struct MacRootView: View {
     private func sidebarLabel(for section: AppSection) -> some View {
         Label {
             Text(macLabel(for: section))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(
                     section == selectedSection ? Color.white : MacLabelColor.sidebarUnselected
                 )
         } icon: {
             Image(systemName: section.systemImage)
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(
                     section == selectedSection ? Color.white : MacLabelColor.accentGlyph
                 )
         }
             .tag(section)
-            .font(.body.weight(.semibold))
             .accessibilityIdentifier("sidebar.\(section.rawValue)")
     }
 
