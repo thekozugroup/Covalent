@@ -2057,6 +2057,99 @@ fn pending_copy_diagnostic(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires explicit maintained rclone worker and freshly compiled guardian paths"]
+async fn completed_worker_error_reports_failed_run_and_preserves_recovery_state() {
+    let root = tempfile::Builder::new()
+        .prefix("covalent-worker-failure-")
+        .tempdir()
+        .unwrap();
+    let mut binaries = test_binaries();
+    let wrapper = root.path().join("fail-transfer");
+    assert!(!binaries.worker.to_string_lossy().contains('\''));
+    fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\ncase \"$1\" in\ncopy|sync) printf '%s\\n' '{{\"level\":\"error\",\"msg\":\"injected transfer failure\"}}' >&2; exit 5;;\n*) exec '{}' \"$@\";;\nesac\n",
+            binaries.worker.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o500)).unwrap();
+    binaries.worker_sha256 = Sha256::digest(fs::read(&wrapper).unwrap()).into();
+    binaries.worker = wrapper;
+    let source_spec = NodeSpec::new(root.path(), "failed-source", 0xE1);
+    let target_spec = NodeSpec::new(root.path(), "failed-target", 0xE2);
+    let source_root = root.path().join("source-files");
+    let target_root = root.path().join("target-files");
+    private_directory(&source_root);
+    private_directory(&target_root);
+    write(&source_root, "source.txt", b"source stays intact");
+    write(&target_root, "unowned.txt", b"target stays intact");
+    let registry = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let scenario_registry = Arc::clone(&registry);
+    let scenario = tokio::spawn(async move {
+        let source = start_registered_node(&source_spec, &binaries, &scenario_registry).await;
+        let target = start_registered_node(&target_spec, &binaries, &scenario_registry).await;
+        let target_id = pair(&source, &target, "Failed target").await;
+        let folder = Uuid::new_v4();
+        offer_and_accept_at_cadence(
+            &source,
+            &target,
+            &target_id,
+            folder,
+            &source_root,
+            &target_root,
+            json!({"mode": "manual"}),
+        )
+        .await;
+        for node in [&source, &target] {
+            wait_ready_at(
+                node,
+                "manual failure link ready",
+                folder,
+                1,
+                0,
+                false,
+                false,
+            )
+            .await;
+        }
+        request_batch(&source, folder, 0, 0).await;
+        for node in [&source, &target] {
+            let result = wait_batch(node, folder, 1, "incomplete").await;
+            assert!(result["issue"].is_null());
+            assert!(!has_access_unavailable_folder(&result, folder));
+        }
+        let policy: Value = serde_json::from_slice(
+            &fs::read(
+                target_spec
+                    .data_directory
+                    .join("folder-sync/database")
+                    .join(format!("rclone-policy-{folder}.v1.json")),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let state = &policy["folders"][folder.to_string()];
+        assert!(
+            !state["pending"].is_null(),
+            "failed copy recovery state was lost"
+        );
+        assert_eq!(state["copyCompleted"], false);
+        assert_eq!(
+            fs::read(source_root.join("source.txt")).unwrap(),
+            b"source stays intact"
+        );
+        assert_eq!(
+            fs::read(target_root.join("unowned.txt")).unwrap(),
+            b"target stays intact"
+        );
+        assert!(!target_root.join("source.txt").exists());
+    });
+    finish_registered_scenario(root, registry, scenario, "worker-failure", "WORKER_FAILURE").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires explicit maintained rclone worker and freshly compiled guardian paths"]
 async fn interrupted_real_copy_preserves_unowned_bytes_and_fails_promptly_after_restart() {
     let root = tempfile::Builder::new()
         .prefix("covalent-interrupted-copy-")

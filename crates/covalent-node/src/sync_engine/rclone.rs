@@ -428,7 +428,8 @@ impl RcloneRuntime {
         let verification_list =
             self.write_files_list_with_suffix(folder_id, "verify", &verified)?;
         let result = async {
-            self.run_transfer(folder, peer, &list, &pending).await?;
+            self.run_transfer(folder, peer, list.path(), &pending)
+                .await?;
             record_completed_copy(&policy_path, &policy_staged, folder_id, &pending)?;
             let after_copy = self
                 .list_sftp(folder.id, peer)
@@ -442,12 +443,11 @@ impl RcloneRuntime {
             if verified.is_empty() {
                 Ok(())
             } else {
-                self.check_transfer(folder, peer, &verification_list).await
+                self.check_transfer(folder, peer, verification_list.path())
+                    .await
             }
         }
         .await;
-        let _ = fs::remove_file(&list);
-        let _ = fs::remove_file(&verification_list);
         if let Err(error) = result {
             if error == EngineSessionError::TransferFailed {
                 clear_known_pending(&policy_path, &policy_staged, folder_id, &pending)?;
@@ -667,7 +667,7 @@ impl RcloneRuntime {
         &self,
         folder_id: Uuid,
         files: &BTreeSet<String>,
-    ) -> Result<PathBuf, EngineSessionError> {
+    ) -> Result<tempfile::NamedTempFile, EngineSessionError> {
         self.write_files_list_with_suffix(folder_id, "transfer", files)
     }
 
@@ -676,18 +676,12 @@ impl RcloneRuntime {
         folder_id: Uuid,
         suffix: &str,
         files: &BTreeSet<String>,
-    ) -> Result<PathBuf, EngineSessionError> {
-        let path = self
-            .runtime
-            .path()
-            .join(format!("files-{folder_id}-{suffix}"));
-        let mut bytes = Vec::new();
-        for path in files {
-            bytes.extend_from_slice(path.as_bytes());
-            bytes.push(0);
-        }
-        write_private_new(&path, &bytes, MAX_POLICY_BYTES)?;
-        Ok(path)
+    ) -> Result<tempfile::NamedTempFile, EngineSessionError> {
+        write_temporary_files_list(
+            self.runtime.path(),
+            &format!("files-{folder_id}-{suffix}-"),
+            files,
+        )
     }
 
     async fn run(
@@ -740,6 +734,29 @@ impl RcloneRuntime {
         let _discarded_stderr = output.stderr;
         Ok(output.stdout)
     }
+}
+
+fn write_temporary_files_list(
+    directory: &Path,
+    prefix: &str,
+    files: &BTreeSet<String>,
+) -> Result<tempfile::NamedTempFile, EngineSessionError> {
+    let mut bytes = Vec::new();
+    for path in files {
+        bytes.extend_from_slice(path.as_bytes());
+        bytes.push(0);
+    }
+    if bytes.len() as u64 > MAX_POLICY_BYTES {
+        return Err(EngineSessionError::RuntimeUnavailable);
+    }
+    let mut list = tempfile::Builder::new()
+        .prefix(prefix)
+        .tempfile_in(directory)
+        .map_err(|_| EngineSessionError::RuntimeUnavailable)?;
+    list.write_all(&bytes)
+        .and_then(|()| list.as_file().sync_all())
+        .map_err(|_| EngineSessionError::RuntimeUnavailable)?;
+    Ok(list)
 }
 
 impl Drop for RcloneRuntime {
@@ -1216,6 +1233,33 @@ fn save_policy(path: &Path, staged: &Path, state: &PolicyState) -> Result<(), En
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn temporary_files_list_is_removed_on_early_return() {
+        fn fail_after_creation(
+            directory: &Path,
+            observed_path: &mut Option<PathBuf>,
+        ) -> Result<(), EngineSessionError> {
+            let list = write_temporary_files_list(
+                directory,
+                "files-test-transfer-",
+                &BTreeSet::from(["one.txt".to_owned(), "two.txt".to_owned()]),
+            )?;
+            *observed_path = Some(list.path().to_path_buf());
+            assert_eq!(fs::read(list.path()).unwrap(), b"one.txt\0two.txt\0");
+            Err(EngineSessionError::TransferFailed)
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut observed_path = None;
+        assert_eq!(
+            fail_after_creation(directory.path(), &mut observed_path),
+            Err(EngineSessionError::TransferFailed)
+        );
+        let observed_path = observed_path.unwrap();
+        assert_eq!(observed_path.parent(), Some(directory.path()));
+        assert!(!observed_path.exists());
+    }
 
     #[test]
     fn inventory_index_is_stable_and_nonzero() {

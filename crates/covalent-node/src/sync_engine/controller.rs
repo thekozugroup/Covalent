@@ -407,7 +407,7 @@ impl ManagedEngineSession {
                 .remove(&folder)
                 .ok_or(EngineSessionError::EngineUnavailable)?
                 .await
-                .map_err(|_| EngineSessionError::EngineUnavailable)?;
+                .unwrap_or(Err(EngineSessionError::EngineUnavailable));
             let source = self
                 .settings
                 .folders
@@ -430,14 +430,13 @@ impl ManagedEngineSession {
                         failures: BTreeSet::new(),
                     })
                 }
-                Err(EngineSessionError::TransferFailed) => {
-                    Ok(super::run_observation::EngineRunObservation {
-                        local_index: None,
-                        completions: BTreeMap::new(),
-                        failures: BTreeSet::from([source]),
-                    })
-                }
-                Err(error) => Err(error),
+                // A completed attempt has failed. Preserve its recovery state
+                // and report failure instead of silently restarting the job.
+                Err(_) => Ok(super::run_observation::EngineRunObservation {
+                    local_index: None,
+                    completions: BTreeMap::new(),
+                    failures: BTreeSet::from([source]),
+                }),
             };
         }
         if !self.jobs.contains_key(&folder) {
