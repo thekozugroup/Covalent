@@ -127,7 +127,7 @@ local files; it does not serve as a backup of changes made before stopping.
 A same-container Caddy proxy serves `https://localhost:8443` and can reach the
 daemon only over its loopback socket. Claim and enroll the CA before opening
 that address; never click through the browser's certificate warning. The
-responsive no-framework console implements Links, Pair, Backup, Restore, and Settings
+responsive no-framework console implements Links, Pair, and Settings
 against the daemon's real `/api/v1/*` routes. Status is public; changes require
 a token.
 
@@ -152,6 +152,24 @@ test ! -e "$claim_output" # covalent claim must create this new 0700 directory
 The CLI durably saves an owner-only nonce-and-proof request beside the output path before connecting; that pending record contains neither the setup code nor token. It sends the proof rather than the code, decrypts the returned token only if it matches the delivered CA, then verifies that CA, the exact hostname, and the token over a second authenticated HTTPS request. Only then does it create `root.crt` and `local-api-token` mode `0600`, sync them, and remove the pending request. If the command or connection is interrupted, rerun the same command with the same three paths: the CLI reuses the exact request and the server returns the byte-identical sealed response, including after restart. Enroll `root.crt` before opening the console and enter only `local-api-token`; the web console never accepts setup codes.
 
 The first start creates a durable local certificate authority under `/config/caddy/data/caddy/pki/authorities/local/root.crt`. Before entering the token, enroll that exact CA on each native client or operating system and set `COVALENT_HTTPS_HOST` to the DNS name clients use. Never use a trust-all client or bypass hostname verification. Compose publishes HTTPS on host loopback by default; remove `127.0.0.1:` only after the CA is enrolled and the hostname resolves on the intended private network.
+
+If the Docker host already uses Tailscale, expose the WebUI without installing
+Covalent's local CA in browsers by terminating trusted HTTPS with Tailscale
+Serve. Covalent creates `/config/covalent-web.sock` mode `0600`; it is a local
+cleartext bridge to the same token-protected API, not a network listener. Point
+Serve at the host path corresponding to that socket:
+
+```sh
+config_dir=${COVALENT_CONFIG_HOST_DIR:-/srv/covalent/config}
+sudo tailscale serve --bg --https=8443 "unix:$config_dir/covalent-web.sock"
+sudo tailscale serve status
+```
+
+Open the HTTPS URL printed by `tailscale serve` and enter the claimed
+`local-api-token`. Serve remains private to the tailnet and its access policy;
+do not use Tailscale Funnel. The original Covalent HTTPS listener remains
+available on its configured host binding. To remove only this Serve mapping,
+run `sudo tailscale serve --https=8443 off`.
 
 ### Enroll or remove the claimed CA
 

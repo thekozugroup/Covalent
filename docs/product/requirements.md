@@ -1,6 +1,6 @@
 # Product requirements
 
-Updated 2026-09-13. The owner explicitly reaffirmed this reduced scope as the active completion goal.
+Updated 2026-09-20. The owner reaffirmed the reduced product scope and simplified release acceptance.
 
 ## Active completion goal
 
@@ -11,7 +11,10 @@ in one collection. Keep ordinary destination files accessible.
 
 Ship native Android with the Tomato-inspired floating action bar, typography,
 data visuals, and top bar; native Apple HIG macOS with per-link menu bar status
-and a small status icon; and Docker for Unraid and other container hosts. Build
+and a small status icon; and Docker for Unraid and other container hosts. Docker
+and Unraid must also provide a minimal, clean, cohesive web UI for setup, pairing,
+link configuration, and status. Existing server operation alone does not complete
+this interface requirement. Build
 an Unraid plugin only for a demonstrated Docker limitation involving the required
 use case. Explain and test appdata consistency and explicitly mounted boot-file
 limits before making backup or recovery claims.
@@ -99,7 +102,11 @@ Retain authenticated pairing, encrypted transport, restricted folder access, pat
 
 ## Completion
 
-The [completion ledger](../release/completion-progress.md) defines ten complete acceptance checks. Existing foundation evidence is reusable but does not prove new link behavior.
+The owner set the release threshold on 2026-09-20: "as long as we know the apps work on each device and have tested at least 1 combo of syncing, then we can assume it's fine to release."
+
+Accept existing working-app evidence for macOS, Android on an emulator, and Docker on both supported architectures, together with at least one real device-pair sync. The completed Atmos-to-Waypoint and Atmos-to-Mac checks satisfy the sync-combination requirement. Do not require every device pairing, physical Android testing, or repeated exact-package UI journeys unless a material code change invalidates the relevant evidence. Android emulator coverage is not a physical-device claim. Retain historical test failures and known limitations honestly; accepting the reduced threshold does not turn a failed test into a pass.
+
+The [completion ledger](../release/completion-progress.md) retains ten checks under this current scope. Product behavior and safety requirements remain; the release threshold supersedes older demands for exhaustive or repeated platform acceptance. Remaining Mac interaction uses computer use, not XCTest. VoiceOver remains excluded. The later Docker/Unraid web UI request reopens server-interface acceptance; publication waits for that work and its relevant verification. Final package identity, provenance, publication, installation guidance, and owned cleanup still need completion.
 
 Establish stability, then measure idle resources and representative transfer performance. Optimize measured problems. Put builds and test data in dedicated temporary directories. Retain compact evidence and release outputs; remove owned processes, fixtures, obsolete builds, and caches when finished. Never disturb unrelated Atmos services or user files.
 

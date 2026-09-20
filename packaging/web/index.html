@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <title>Covalent node</title>
+    <title>Covalent · Server console</title>
     <link rel="stylesheet" href="/assets/app.css" />
     <script src="/assets/folder-sync-flow.js" defer></script>
     <script src="/assets/pairing-flow.js" defer></script>
@@ -14,45 +14,54 @@
   <body>
     <a class="skip-link" href="#content">Skip to console</a>
     <header>
-      <div>
-        <p class="eyebrow">Private one-way file links</p>
-        <h1>Covalent</h1>
-      </div>
-      <p class="tier">Tier 1 node</p>
+      <div class="brand"><span class="brand-mark" aria-hidden="true">C</span><div><h1>Covalent</h1><p class="muted">Server console</p></div></div>
+      <span class="access-state" data-access-state>Console locked</span>
     </header>
     <main id="content">
       <section class="hero" aria-labelledby="node-heading">
         <div>
-          <p class="eyebrow">This device</p>
+          <p class="eyebrow">This server</p>
           <h2 id="node-heading" data-device-name>Loading node…</h2>
           <p class="muted" data-state aria-live="polite">Connecting to the local service.</p>
         </div>
-        <button type="button" class="secondary" data-refresh>Refresh status</button>
+        <div class="button-row"><button type="button" class="quiet" data-refresh>Refresh status</button><button type="button" class="secondary" data-open-tab="settings">Server help</button></div>
       </section>
 
-      <section class="security-card" aria-labelledby="token-heading">
+      <details class="security-card" data-access-panel open>
+        <summary id="token-heading">Local access <span class="muted">Unlock this browser tab</span></summary>
+        <div class="access-content">
         <div>
-          <h2 id="token-heading">Local access</h2>
+          <h3>Connect securely</h3>
           <p class="muted">Enter the token from the owner-only output directory created by <code>covalent claim</code> on a trusted computer to make changes. This console accepts a token only; it does not accept a setup code. It stays only in this browser tab and is never sent anywhere except this local node.</p>
         </div>
         <form class="inline-form" data-token-form>
           <label for="api-token">Local API token</label>
           <input id="api-token" name="token" type="password" autocomplete="off" spellcheck="false" required />
-          <button>Unlock console</button>
+          <div class="button-row"><button>Unlock console</button><button type="button" class="secondary" data-token-file-choose>Choose token file</button></div>
+          <input id="token-file" type="file" data-token-file aria-label="Choose local API token file" hidden />
+          <p class="muted file-help">Use the token file from your trusted claim output. Setup codes cannot unlock this console.</p>
         </form>
-      </section>
+        </div>
+      </details>
+
+      <output class="toast" data-message aria-live="polite"></output>
+      <details class="toast-details" data-message-details hidden>
+        <summary>Technical details</summary>
+        <pre data-message-detail></pre>
+      </details>
 
       <nav class="tabs" aria-label="Covalent actions" role="tablist">
-        <button id="pair-tab" role="tab" aria-selected="false" aria-controls="pair-panel" tabindex="-1" data-tab="pair">Pair</button>
+        <button id="pair-tab" role="tab" aria-selected="false" aria-controls="pair-panel" tabindex="-1" data-tab="pair">Devices</button>
         <button id="folders-tab" role="tab" aria-selected="true" aria-controls="folders-panel" tabindex="0" data-tab="folders">Links</button>
         <button id="settings-tab" role="tab" aria-selected="false" aria-controls="settings-panel" tabindex="-1" data-tab="settings">Settings</button>
       </nav>
 
       <section id="folders-panel" role="tabpanel" aria-labelledby="folders-tab" tabindex="0" data-panel="folders">
-        <div class="panel-heading"><div><h2>Your links</h2><p class="muted">Send files from one source to one or more destinations. Destination files stay on their own device.</p></div></div>
+        <div class="panel-heading"><div><p class="eyebrow">Overview</p><h2>Your links</h2><p class="muted">Your files, where you need them. One source, one or more destinations.</p></div><div class="button-row"><button type="button" class="secondary" data-open-tab="pair">Pair device</button><button type="button" data-open-create aria-controls="create-link">Create link</button></div></div>
+        <div class="overview" aria-label="Server overview"><p><strong data-link-count>—</strong><span>Links</span></p><p><strong data-peer-count>—</strong><span>Paired devices</span></p><p class="overview-help">Files flow from the source.<br />Destination changes stay on that device.</p></div>
 
-        <section class="card" aria-live="polite">
-          <div class="button-row"><h3>Shared folders</h3><button type="button" class="secondary" data-folders-refresh>Refresh folders</button></div>
+        <section class="card links-card" aria-live="polite">
+          <div class="button-row"><h3>Link activity</h3><button type="button" class="secondary" data-folders-refresh>Refresh</button></div>
           <p data-folders-status>Unlock the console to load folder sync status.</p>
           <p class="muted" data-folders-empty>No shared folders are available yet.</p>
           <ul class="device-list folder-list" data-folders-list></ul>
@@ -89,8 +98,11 @@
           </div>
         </section>
 
-        <form class="card" data-folder-offer-form>
-          <h3>Create a one-way link</h3>
+        <details id="create-link" class="card create-link" data-create-link>
+          <summary>Create a one-way link <span class="muted">Choose a device, folder, and timing</span></summary>
+        <form data-folder-offer-form>
+          <p class="muted">This server sends files. The destination device chooses where to keep its copy.</p>
+          <p class="notice" data-create-guidance>Pair a device first, then choose it below.</p>
           <label>Destination device <select name="peerId" data-folder-peer required disabled><option value="">Unlock the console to load confirmed devices</option></select></label>
           <label>Folder name <input name="label" maxlength="120" placeholder="Shared documents" required /></label>
           <details class="advanced">
@@ -112,6 +124,8 @@
             </label>
             <datalist id="folder-schedule-options"><option value="15" label="15 minutes"></option><option value="60" label="1 hour"></option><option value="1440" label="Daily"></option></datalist>
           </fieldset>
+          <details class="advanced">
+            <summary>Deletion and Android options</summary>
           <fieldset>
             <legend>Android device conditions</legend>
             <label><input type="checkbox" name="wifiOnly" /> Wi-Fi only on Android devices</label>
@@ -125,12 +139,28 @@
             <label><input type="checkbox" name="restoreLocalDeletions" /> Restore files deleted at a destination</label>
             <p class="muted">Off by default: destination deletions stay local, even after source edits. Turning this on copies those files there again from the source.</p>
           </fieldset>
-          <button data-folder-offer-submit data-folder-mutation disabled>Create link</button>
+          </details>
+          <p class="muted">By default, source deletions keep destination copies, and files deleted at a destination stay deleted there.</p>
+          <div class="button-row"><button data-folder-offer-submit data-folder-mutation disabled>Create link</button><button type="button" class="quiet" data-close-create>Cancel</button></div>
         </form>
+        </details>
       </section>
 
       <section id="pair-panel" role="tabpanel" aria-labelledby="pair-tab" tabindex="0" data-panel="pair" hidden>
         <div class="panel-heading"><div><h2>Pair a device</h2><p class="muted">Pairing requires both people to compare the same short code before a device receives any role.</p></div></div>
+
+        <section class="card pairing-consent" data-network-card hidden aria-live="polite">
+          <h3 data-network-peer></h3>
+          <p class="muted" data-network-direction></p>
+          <p>Compare this code on both physical devices. Continue only if every group matches. Once both devices finish, the paired device becomes available as a link destination.</p>
+          <p class="pairing-code" data-network-code role="status"></p>
+          <p class="muted" data-network-expires></p>
+          <p data-network-state></p>
+          <div class="button-row">
+            <button type="button" data-network-confirm disabled>Codes match — pair device</button>
+            <button type="button" class="quiet" data-network-cancel>Cancel pairing</button>
+          </div>
+        </section>
 
         <section class="card">
           <h3>Devices on your network</h3>
@@ -155,35 +185,32 @@
           <p class="muted" data-paired-devices-empty>Unlock the console to load paired devices.</p>
         </section>
 
-        <section class="card pairing-consent" data-network-card hidden aria-live="polite">
-          <h3 data-network-peer></h3>
-          <p class="muted" data-network-direction></p>
-          <p>Compare this code on both physical devices. Continue only if every group matches. Once both devices finish, the paired device becomes available as a link destination.</p>
-          <p class="pairing-code" data-network-code role="status"></p>
-          <p class="muted" data-network-expires></p>
-          <p data-network-state></p>
-          <div class="button-row">
-            <button type="button" data-network-confirm disabled>Codes match — pair device</button>
-            <button type="button" class="quiet" data-network-cancel>Cancel pairing</button>
-          </div>
-        </section>
+
 
       </section>
 
       <section id="settings-panel" role="tabpanel" aria-labelledby="settings-tab" tabindex="0" data-panel="settings" hidden>
         <div class="panel-heading"><div><h2>Settings and reachability</h2><p class="muted">LAN discovery is <strong data-discovery>Unknown</strong>. It can remain off when you use explicit LAN addresses or Tailscale; neither method bypasses pairing.</p></div></div>
+        <section class="card server-help" aria-labelledby="server-help-heading">
+          <h3 id="server-help-heading">Open your server console</h3>
+          <ol class="setup-steps">
+            <li><strong>Open WebUI in Unraid</strong><p class="muted">Choose Covalent’s WebUI from the Docker page, or open your configured HTTPS server address. Use the configured hostname if the shortcut’s IP address does not match the certificate.</p></li>
+            <li><strong>Trust your server, then unlock</strong><p class="muted">Enroll the package certificate authority or use your trusted HTTPS proxy. Enter your local access token only on this server’s trusted page.</p></li>
+            <li><strong>Pair and link a mounted folder</strong><p class="muted">Compare the code on both devices. Map a writable server folder to <code>/sync</code> in Docker; paths entered here refer to the container, not the browser’s computer.</p></li>
+          </ol>
+          <button type="button" class="secondary" data-open-tab="pair">Pair device</button>
+        </section>
+        <details class="advanced settings-tools"><summary>Import and export settings</summary>
         <div class="two-column">
           <section class="card"><h3>Export safe settings</h3><p class="muted">Exports safe node settings. It excludes identity keys, backup keys, grants, and provider credentials.</p><button type="button" data-settings-export>Download settings</button></section>
           <form class="card" data-settings-import><h3>Import safe settings</h3><label>Settings JSON <textarea name="settings" rows="5" required></textarea></label><label class="confirmation"><input type="checkbox" name="confirmed" required /> I understand this replaces safe settings, not identity keys.</label><button>Import settings</button></form>
         </div>
+        </details>
+        <details class="advanced"><summary>Advanced server tools</summary>
         <aside><h3>Advanced archive tools</h3><p>Existing backup, restore, and recovery data remains available through the command line. Run <code>covalent backups</code>, <code>covalent backup --help</code>, <code>covalent restore-preview --help</code>, <code>covalent restore-execute --help</code>, or <code>covalent-node --help</code> from a trusted terminal. Removing these screens does not delete files, keys, archives, or settings. Covalent does not migrate them automatically.</p></aside>
         <aside><h3>Container network choices</h3><p>Bridge mode exposes HTTPS management on TCP 8443 and peer traffic on UDP 8787. Enroll the package CA or use a system-trusted same-host proxy before entering a token. Host networking can improve multicast discovery; a Tailscale sidecar or host Tailnet address is optional.</p></aside>
+        </details>
       </section>
-      <output class="toast" data-message aria-live="polite"></output>
-      <details class="toast-details" data-message-details hidden>
-        <summary>Technical details</summary>
-        <pre data-message-detail></pre>
-      </details>
     </main>
     <footer>Core workflows require no Covalent account or hosted coordinator.</footer>
   </body>

@@ -800,7 +800,20 @@
     async function refresh() {
       if (!unlocked || !pollingEnabled || mutationLocked) return Object.freeze({ applied: false, status: null });
       const requestGeneration = ++generation;
-      const decoded = validateLocalLinkSettings(requireStatus(await options.api("/api/v1/sync/status")), deviceId);
+      let response;
+      try {
+        response = await options.api("/api/v1/sync/status");
+      } catch (error) {
+        // Status can contend with an active run. Keep the last observation and
+        // let the existing poll retry; mutation failures still propagate.
+        if (error?.code !== "folder_sync_busy") throw error;
+        return Object.freeze({
+          applied: false,
+          status: null,
+          busy: requestGeneration === generation && unlocked && pollingEnabled && !mutationLocked,
+        });
+      }
+      const decoded = validateLocalLinkSettings(requireStatus(response), deviceId);
       if (requestGeneration !== generation || !unlocked || !pollingEnabled || mutationLocked) {
         return Object.freeze({ applied: false, status: decoded });
       }

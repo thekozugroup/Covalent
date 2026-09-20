@@ -346,6 +346,31 @@ test("a throwing sessionStorage getter does not prevent independent initializati
   assert.equal(mutationCalls, 0);
 });
 
+test("busy status polling preserves the snapshot while mutation failures still propagate", async () => {
+  const applied = [];
+  const busy = Object.assign(new Error("busy"), { code: "folder_sync_busy" });
+  let statusBusy = false;
+  const controller = folders.coordinator({
+    storage: new MemoryStorage(),
+    api: async (path) => {
+      if (path !== "/api/v1/sync/status" || statusBusy) throw busy;
+      return status();
+    },
+    onStatus: (value) => applied.push(value),
+  });
+  enable(controller);
+  assert.equal((await controller.refresh()).applied, true);
+  const previous = controller.current();
+  statusBusy = true;
+  assert.deepEqual(await controller.refresh(), { applied: false, status: null, busy: true });
+  assert.equal(controller.current(), previous);
+  assert.equal(applied.length, 1);
+  await assert.rejects(controller.retryService(), (error) => error === busy);
+  statusBusy = false;
+  assert.equal((await controller.refresh()).applied, true);
+  assert.equal(applied.length, 2);
+});
+
 test("an older status response cannot overwrite a newer poll", async () => {
   const resolvers = [];
   const applied = [];

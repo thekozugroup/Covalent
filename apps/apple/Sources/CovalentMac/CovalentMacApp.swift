@@ -26,7 +26,8 @@ struct CovalentMacApp: App {
     var body: some Scene {
         Window("Covalent", id: "main") {
             MacRootView(model: model)
-                .frame(minWidth: 900, minHeight: 640)
+                // Leave room for the menu bar and Dock on smaller displays.
+                .frame(minWidth: 900, minHeight: 560)
                 // The window's hosting container carries no description, which
                 // the system accessibility audit reports as "Element has no
                 // description". It sits above every SwiftUI modifier — a

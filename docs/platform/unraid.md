@@ -108,6 +108,34 @@ historical `v0.1.0` image.
     [macOS or Debian/Ubuntu CA enrollment and removal commands](../../packaging/docker/README.md#enroll-or-remove-the-claimed-ca),
     changing only the claim-output path for this Unraid server.
 
+If Tailscale is installed on the Unraid host, its Serve proxy gives the WebUI a
+browser-trusted, tailnet-private HTTPS address without changing Covalent's
+certificate or exposing another TCP port. The container creates a mode-`0600`
+Unix socket in the mapped Configuration directory. On the Unraid terminal, run:
+
+```sh
+tailscale serve --bg --https=8443 \
+  unix:/mnt/user/appdata/covalent/config/covalent-web.sock
+tailscale serve status
+```
+
+Open the HTTPS URL printed by `tailscale serve` and enter `local-api-token`.
+Do not use Tailscale Funnel. Tailnet access rules and Covalent's token checks
+both still apply. Remove only this mapping with
+`tailscale serve --https=8443 off`.
+
+To make Unraid's **WebUI** shortcut open that trusted address, edit the
+container, switch to Advanced View, and append this to **Extra Parameters**:
+
+```text
+--label net.unraid.docker.webui=https://<MagicDNS name>:8443/
+```
+
+Replace `<MagicDNS name>` with the name shown by `tailscale serve status`, then
+apply the container update. Unraid saves the label with its user template. The
+stock template keeps `https://[IP]:[PORT:8443]/` because each server has a
+different MagicDNS name.
+
 To connect an Android phone, follow the
 [verified APK and onboarding guide](android.md). The phone receives only
 `root.crt` and `local-api-token` from the completed CLI claim; never copy or

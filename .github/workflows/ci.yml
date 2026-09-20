@@ -108,16 +108,6 @@ jobs:
           path: ${{ runner.temp }}/covalent-apple-inventory
           if-no-files-found: error
       - run: apps/apple/Scripts/integration-test.sh
-      - name: Run six hosted macOS UI and accessibility checks
-        env:
-          COVALENT_TEST_ARTIFACT_DIR: ${{ runner.temp }}/covalent-macos-ui
-        run: apps/apple/Scripts/macos-ui-test.sh --hosted
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: always()
-        with:
-          name: macos-ui-diagnostics-${{ github.sha }}
-          path: ${{ runner.temp }}/covalent-macos-ui
-          if-no-files-found: warn
 
   # These steps used to sit at the end of `macos-integration-ui`, behind
   # integration-test.sh and the UI gate. Over 27 consecutive runs on main they
@@ -908,4 +898,4 @@ jobs:
             echo "Release candidate rejected: not every software gate concluded success." >&2
             exit 1
           fi
-          echo "Software gates passed. Owner override removes VoiceOver speech/action automation; six macOS functional/native-accessibility checks remain. The published image and isolated Atmos Docker validation remain separate release blockers; Apple Developer ID is excluded and Android production signing is deferred."
+          echo "Software gates passed. Mac UI acceptance is performed manually with computer use against an exact source-bound package and retained evidence. The published image and isolated Atmos Docker validation remain separate release blockers; Apple Developer ID is excluded and Android production signing is deferred."

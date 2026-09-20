@@ -73,6 +73,38 @@ test("console access uses trusted claim output and never a server-state token pa
   assert.doesNotMatch(html, /token from <code>\/data\//);
 });
 
+test("token-file selection validates locally without unlocking or exposing rejected content", async () => {
+  const app = await source("app.js");
+  const handler = /\$\("\[data-token-file\]"\)\.addEventListener\("change", async \(event\) => \{([\s\S]*?)\n\}\);/.exec(app);
+  assert.ok(handler, "token-file selection handler must be present");
+  const field = { value: "", focus() {} };
+  const messages = [];
+  const select = new Function("$", "say", `return async (event) => {${handler[1]}};`)(
+    (selector) => { assert.equal(selector, "#api-token"); return field; },
+    (message, failed = false) => messages.push({ message, failed }),
+  );
+  let reads = 0;
+  const choose = async (value, size = value.length) => {
+    const input = { value: "selected-file", files: [{ size, async text() { reads += 1; return value; } }] };
+    await select({ currentTarget: input });
+    assert.equal(input.value, "", "clear the file input so the same file can be chosen again");
+  };
+  const valid = "a".repeat(64);
+  await choose(`${valid}\n`);
+  assert.equal(field.value, valid);
+  assert.equal(messages.at(-1).failed, false);
+  assert.match(messages.at(-1).message, /Choose Unlock console/);
+  for (const invalid of ["123456", "a".repeat(513), `${valid}\nsecret`, `${valid}"`, `${valid}\\`]) {
+    await choose(invalid);
+    assert.equal(messages.at(-1).failed, true);
+    assert.equal(messages.at(-1).message.includes(invalid), false);
+  }
+  const readsBeforeOversize = reads;
+  await choose("private-content", 4097);
+  assert.equal(reads, readsBeforeOversize, "oversized files must be rejected before reading");
+  assert.equal(messages.at(-1).failed, true);
+});
+
 test("primary console contains one-way Links and keeps legacy data available through the CLI", async () => {
   const html = await source("index.html");
   assert.match(html, /Create a one-way link/);
@@ -100,4 +132,28 @@ test("link cadence controls use shared settings and Run Now contracts without ex
   assert.doesNotMatch(html, /generation|settings revision/i);
   assert.doesNotMatch(app, /textContent\s*=.*(?:generation|revision)/i);
   assert.doesNotMatch(app, /\/api\/v1\/sync\/conditions/);
+});
+
+test("Manual and Scheduled render Run Now while Continuous only renders its status", async () => {
+  const app = await source("app.js");
+  const body = /function renderLinkRun\(container, status, share\) \{([\s\S]*?)\n\}\n/.exec(app)?.[1];
+  assert.ok(body, "link run renderer must exist");
+  const element = () => ({ children: [], append(...items) { this.children.push(...items); }, setAttribute() {} });
+  const render = new Function("document", "folderController", "folderActionButton", "renderFolderError",
+    `return (container, status, share) => {${body}};`)(
+    { createElement: element }, { pendingRun: () => null },
+    (label) => ({ label, disabled: false }), assert.fail,
+  );
+  for (const mode of ["manual", "scheduled", "continuous"]) {
+    const container = element();
+    render(container, {}, {
+      folderId: "folder",
+      linkSettings: { confirmed: true, settings: { cadence: { mode }, paused: false } },
+      linkRun: { phase: null, pendingRequest: null, rejectedRequest: null, nextDueAtUnixMs: null, destinations: [] },
+    });
+    assert.equal(container.children.length, 1);
+    const buttons = container.children[0].children.filter((item) => item.label);
+    assert.deepEqual(buttons.map((item) => item.label), mode === "continuous" ? [] : ["Run Now"]);
+    assert.equal(buttons.some((item) => item.disabled), false);
+  }
 });

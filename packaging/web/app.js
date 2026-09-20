@@ -585,7 +585,7 @@ async function loadStatus() {
       throw new ProtocolMismatchError(status.protocolVersion);
     }
     $("[data-device-name]").textContent = status.deviceName;
-    $("[data-state]").textContent = `Service state: ${status.state}. Protocol ${status.protocolVersion}.`;
+    $("[data-state]").textContent = `Service: ${status.state}`;
     document.querySelectorAll("[data-discovery]").forEach((el) => { el.textContent = status.lanDiscovery ? "On" : "Off"; });
   } catch (error) {
     $("[data-device-name]").textContent = "Node unavailable";
@@ -781,6 +781,11 @@ function renderLinkRun(container, status, share) {
     rejected.setAttribute("role", "alert");
     rejected.textContent = "A Run Now request was not started because the link changed. Refresh and try again.";
     section.append(rejected);
+  }
+  // Continuous links start automatically; the source rejects explicit runs.
+  if (share.linkSettings.settings.cadence.mode === "continuous") {
+    container.append(section);
+    return;
   }
   const active = run.pendingRequest !== null || ["preparing", "running"].includes(run.phase);
   let saved = null;
@@ -1201,11 +1206,14 @@ function renderFolderStatus(status) {
   statusCopy.dataset.kind = summary.kind;
   renderFolderPeers(status);
   renderPairedDevices(status);
+  $("[data-peer-count]").textContent = String(status.peers.length);
+  $("[data-create-guidance]").hidden = status.peers.length > 0;
 
   const retry = $("[data-folders-retry-service]");
   retry.hidden = !(status.lifecycle === "needsAttention" || status.issue !== null);
   const list = $("[data-folders-list]");
   const visibleShares = status.shares.filter((share) => share.phase !== "removed" || share.remoteRemovalPending);
+  $("[data-link-count]").textContent = String(new Set(visibleShares.map((share) => share.folderId)).size);
   let savedSettings = null;
   try { savedSettings = folderController.pendingLinkSettings(); }
   catch (error) { renderFolderError(error); }
@@ -1270,7 +1278,9 @@ function renderFolderStatus(status) {
   empty.hidden = visibleShares.length > 0;
   if (visibleShares.length === 0) {
     empty.textContent = status.availability === "available"
-      ? "No shared folders yet. Choose a confirmed paired device below."
+      ? status.peers.length === 0
+        ? "Your first link starts with a paired device. Choose Pair device to connect another Mac, Android device, or server."
+        : "No links yet. Choose Create link to send a folder to a paired device."
       : "Shared folders cannot be loaded while folder sync is offline.";
   }
 }
@@ -1319,6 +1329,12 @@ function renderPendingLinkRun() {
 async function loadFolders(reportError = false) {
   try {
     const result = await folderController.refresh();
+    if (result.busy) {
+      const status = $("[data-folders-status]");
+      status.textContent = "Updating status…";
+      status.className = "folder-state";
+      status.dataset.kind = "checking";
+    }
     if (result.applied) {
       renderPendingFolderOffer();
       renderPendingLinkSettings();
@@ -1342,6 +1358,8 @@ async function initializeFolderSync() {
 }
 
 function clearFolderSyncAccess() {
+  $("[data-link-count]").textContent = "—";
+  $("[data-peer-count]").textContent = "—";
   folderDeviceId = null;
   folderController.setAccess({ deviceId: null, unlocked: false });
   folderController.setPollingEnabled(false);
@@ -1355,6 +1373,8 @@ function clearFolderSyncAccess() {
 
 function requireUnlocked() {
   if (token) return true;
+  $("[data-access-panel]").open = true;
+  $("#api-token").focus();
   say("Unlock the console with the local access token first.", true);
   return false;
 }
@@ -1451,6 +1471,29 @@ async function startNetworkPairing(candidateAddress) {
   } catch (error) { fail(error); }
 }
 
+$("[data-token-file-choose]").addEventListener("click", () => $("[data-token-file]").click());
+$("[data-token-file]").addEventListener("change", async (event) => {
+  const input = event.currentTarget;
+  const file = input.files?.[0];
+  if (!file) return;
+  try {
+    // Read only the explicitly selected small token file, never a server path.
+    if (file.size > 4096) throw new Error("invalid token file");
+    const value = (await file.text()).trim();
+    // Match the node's local-token bounds and printable-ASCII contract.
+    if (!/^[\x21-\x7e]{32,512}$/.test(value) || /["\\]/.test(value)) {
+      throw new Error("invalid token file");
+    }
+    $("#api-token").value = value;
+    $("#api-token").focus();
+    say("Token file selected. Choose Unlock console to connect.");
+  } catch {
+    say("Choose the local API token file from your trusted claim output, not a setup code or settings file.", true);
+  } finally {
+    input.value = "";
+  }
+});
+
 $("[data-token-form]").addEventListener("submit", async (event) => {
   event.preventDefault();
   token = formData(event.currentTarget).get("token").trim();
@@ -1461,9 +1504,20 @@ $("[data-token-form]").addEventListener("submit", async (event) => {
       refreshPairings: refreshNetworkPairings,
       onLinksError(error) { clearFolderSyncAccess(); renderFolderError(error); },
     });
+    $("[data-access-panel]").open = false;
+    $("[data-access-state]").textContent = "Unlocked in this tab";
+    // Keep the credential only in the existing in-memory token variable.
+    $("#api-token").value = "";
+    $("[data-tab=folders]").focus();
     say("Console unlocked for this tab only.");
   }
-  catch (error) { token = ""; clearFolderSyncAccess(); fail(error); }
+  catch (error) {
+    token = "";
+    $("[data-access-panel]").open = true;
+    $("[data-access-state]").textContent = "Console locked";
+    clearFolderSyncAccess();
+    fail(error);
+  }
 });
 
 $("[data-refresh]").addEventListener("click", async () => {
@@ -1480,6 +1534,12 @@ $("[data-folders-refresh]").addEventListener("click", async () => {
 $("[data-folders-retry-service]").addEventListener("click", () => {
   void runFolderMutation(() => folderController.retryService(), "Folder sync retry started.");
 });
+// A required field inside a closed disclosure must be visible for browser validation.
+$("[data-folder-offer-form]").addEventListener("invalid", (event) => {
+  for (let parent = event.target.parentElement; parent; parent = parent.parentElement) {
+    if (parent.tagName === "DETAILS") parent.open = true;
+  }
+}, true);
 $('[data-folder-offer-form]').addEventListener("change", (event) => {
   if (event.target.name === "cadenceMode") syncOfferScheduleInput();
 });
@@ -1512,6 +1572,8 @@ $("[data-folder-offer-form]").addEventListener("submit", (event) => {
     form.reset();
     form.elements.selectedRoot.value = "/sync";
     syncOfferScheduleInput();
+    $("[data-create-link]").open = false;
+    $("[data-open-create]").focus();
   }, "Folder offer sent to the confirmed paired device.");
 });
 $("[data-folder-offer-retry]").addEventListener("click", () => {
@@ -1554,6 +1616,23 @@ $('[data-link-run-discard]').addEventListener("click", () => {
   } catch (error) { fail(error); }
 });
 tabFlow.install(document);
+document.querySelectorAll("[data-open-tab]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const tab = document.querySelector(`[data-tab="${button.dataset.openTab}"]`);
+    tab.click();
+    tab.focus();
+  });
+});
+$("[data-open-create]").addEventListener("click", () => {
+  if (!requireUnlocked()) return;
+  $("[data-create-link]").open = true;
+  const form = $("[data-folder-offer-form]");
+  (form.elements.peerId.disabled ? form.elements.label : form.elements.peerId).focus();
+});
+$("[data-close-create]").addEventListener("click", () => {
+  $("[data-create-link]").open = false;
+  $("[data-open-create]").focus();
+});
 document.querySelectorAll("[data-tab]").forEach((tab) => {
   tab.addEventListener("click", () => queueMicrotask(() => syncFolderPolling(true)));
   tab.addEventListener("keydown", () => queueMicrotask(() => syncFolderPolling(true)));

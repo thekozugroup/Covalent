@@ -82,17 +82,22 @@ before building anything.
 5. Create an **annotated signed** tag: `git tag -s vX.Y.Z && git push origin vX.Y.Z`.
    That fires the container lane and the unsigned macOS lane.
 6. Build the installable debug-signed Android APK from the tagged source using
-   [the Android setup guide](../platform/android.md). Test that exact APK, then
-   attach it and its `.sha256` file to the same draft using
+   [the Android setup guide](../platform/android.md). Verify its package identity
+   and provenance, then attach it and its `.sha256` file to the same draft using
    `scripts/publish-release-assets.sh vX.Y.Z FILE...`. Include the Android SBOM,
    license inventory, notices, notice manifest, and build receipt recording the
    source commit, source fingerprint, APK and native hashes, and debug
-   certificate SHA-256. Include the separate device-test receipt for that exact
-   APK SHA-256. Use the existing authenticated publishing environment required
-   by the helper; do not put tokens in files or logs. Do not substitute an
-   untested rebuild or the unsigned release APK. Android production signing and
-   store publication are
-   deferred and do not block this release.
+   certificate SHA-256. Include the existing Android emulator acceptance receipt
+   and identify its tested source and APK separately from the final package.
+   Record source equivalence for the behavior covered by that receipt. Under the
+   owner's 2026-09-20 threshold, working apps and at least one tested sync
+   combination suffice; a repeated exact-APK UI journey is required only when
+   a material change invalidates the existing behavior evidence. Do not label
+   the final APK as device-tested if only a prior candidate was exercised, or
+   claim physical Android coverage. Use the existing authenticated publishing
+   environment required by the helper; do not put tokens in files or logs.
+   Publish the debug-signed personal APK, not an unsigned release APK. Android
+   production signing and store publication are deferred and do not block this release.
 7. The CLI lane runs on the tag and publishes source-free Linux amd64, Linux
    arm64, and Apple Silicon macOS arm64 archives only after all three pass
    binary architecture/size, license inventory, SPDX SBOM, Sigstore signature,

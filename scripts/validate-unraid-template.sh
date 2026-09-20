@@ -42,6 +42,9 @@ for required in \
   'test ! -e "$claim_output"' \
   'claim output directory mode 0700' \
   'Android app never accept a setup code' \
+  'unix:/mnt/user/appdata/covalent/config/covalent-web.sock' \
+  'net.unraid.docker.webui=https://&lt;MagicDNS name&gt;:8443/' \
+  'Do not use Tailscale Funnel' \
   'never map /mnt/user/system' \
   'Mode="ro"' \
   'Default="false"'; do

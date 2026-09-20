@@ -40,7 +40,11 @@ install -m 600 /dev/null "$setup_code_file"
 test ! -e "$claim_output"
 covalent claim --https-url https://&lt;HTTPS hostname&gt;:8443 --setup-code-file "$setup_code_file" --output-dir "$claim_output"
 
-The CLI creates the new claim output directory mode 0700, proves the code, verifies the returned CA fingerprint, verifies the exact HTTPS hostname and token, then saves root.crt and local-api-token mode 0600. Enroll that exact root.crt before opening this WebUI and enter only local-api-token. The WebUI and Android app never accept a setup code. Do not use trust-all or bypass hostname verification.</Description>
+The CLI creates the new claim output directory mode 0700, proves the code, verifies the returned CA fingerprint, verifies the exact HTTPS hostname and token, then saves root.crt and local-api-token mode 0600. Enroll that exact root.crt before opening this WebUI and enter only local-api-token. The WebUI and Android app never accept a setup code. Do not use trust-all or bypass hostname verification.
+
+For browser-trusted, tailnet-private access without another TCP port, run on the Unraid host:
+tailscale serve --bg --https=8443 unix:/mnt/user/appdata/covalent/config/covalent-web.sock
+Open the HTTPS URL it prints and enter local-api-token. To make Unraid's WebUI shortcut open that trusted URL, edit the container in Advanced View and append --label net.unraid.docker.webui=https://&lt;MagicDNS name&gt;:8443/ to Extra Parameters, replacing the placeholder with the name Serve reports. Do not use Tailscale Funnel. Tailnet access rules and Covalent token checks both still apply.</Description>
   <Config Name="HTTPS console" Target="8443" Default="8443" Mode="tcp" Description="TLS-only console and API port. Cleartext management is loopback-only inside the container." Type="Port" Display="always" Required="true" Mask="false"/>
   <Config Name="Peer transport" Target="8787" Default="8787" Mode="udp" Description="Authenticated QUIC peer port." Type="Port" Display="always" Required="true" Mask="false"/>
   <Config Name="Folder sync transport" Target="8789" Default="8789" Mode="tcp" Description="Authenticated device-to-device folder synchronization port. Expose only to the private LAN or Tailnet devices you intend to pair." Type="Port" Display="always" Required="true" Mask="false"/>

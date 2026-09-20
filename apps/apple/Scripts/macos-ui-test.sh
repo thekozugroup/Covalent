@@ -271,7 +271,7 @@ data_dir="$test_root/node"
 mkdir -p "$data_dir"
 
 cargo build --locked -p covalent-node --manifest-path "$repo_root/Cargo.toml"
-node_binary="$repo_root/target/debug/covalent-node"
+node_binary="${CARGO_TARGET_DIR:-$repo_root/target}/debug/covalent-node"
 key_file="$test_root/node-kek"
 token_file="$test_root/test-api-token"
 token_nonce=$(uuidgen | tr -d '-' | tr '[:upper:]' '[:lower:]')

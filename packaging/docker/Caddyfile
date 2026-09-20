@@ -17,3 +17,17 @@ https://{$COVALENT_HTTPS_HOST:localhost}:8443 {
 	}
 	reverse_proxy 127.0.0.1:8787
 }
+
+# Optional local ingress for a host TLS proxy such as Tailscale Serve. The
+# Unix socket stays inside /config; no cleartext TCP management port is opened.
+# Tailscale must still restrict the public side to the private tailnet, and the
+# node continues to require its local API token for every mutation.
+http:// {
+	bind unix//config/covalent-web.sock|0600
+	encode zstd gzip
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+	}
+	reverse_proxy 127.0.0.1:8787
+}

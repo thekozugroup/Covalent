@@ -53,7 +53,7 @@ else
     --target "$rust_target"
 fi
 
-source_binary="$repo_root/target/$rust_target/$profile_directory/covalent-node"
+source_binary="${CARGO_TARGET_DIR:-$repo_root/target}/$rust_target/$profile_directory/covalent-node"
 
 destination_directory="$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH"
 destination_binary="$destination_directory/covalent-node"

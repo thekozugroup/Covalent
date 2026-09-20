@@ -340,6 +340,10 @@ final class RealFolderLinkUITests: XCTestCase {
         XCTAssertTrue(settingsTitle.waitForExistence(timeout: transitionTimeout))
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(waitForDisappearance(of: settingsTitle, timeout: transitionTimeout))
+        // Audit the lower controls with their text visible in the scroll viewport.
+        let transfersAfterRelaunch = relaunchedLinks.popUpButtons["folder-link-cadence"]
+        scrollTo(transfersAfterRelaunch, in: relaunchedLinks)
+        XCTAssertTrue(transfersAfterRelaunch.isHittable)
         try auditMainWindow(in: app, timeout: transitionTimeout)
         continueAfterFailure = false
 
