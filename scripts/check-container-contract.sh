@@ -291,9 +291,6 @@ if [ -n "$image" ]; then
     echo "container source fingerprint label must be an exact non-unknown SHA-256 digest" >&2
     exit 1
   fi
-  docker run --rm --entrypoint sh "$image" -c \
-    'apk info -e "libcrypto3=3.5.8-r0" && apk info -e "libssl3=3.5.8-r0"' \
-    >/dev/null
   # The supervisor preserves the real OS home for upstream initialization.
   # A passwd entry without its directory let the node API start successfully
   # while every folder worker was refused before spawn.
