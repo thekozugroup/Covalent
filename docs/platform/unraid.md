@@ -1,27 +1,34 @@
 # Unraid operation
 
-Docker is the accepted Unraid path for the current
-[one-way link product](../product/synchronization.md). Atlas is offline; no
-Atlas runtime validation is claimed. Use the v0.2.1 template and its verified
-immutable image digest.
+Docker is the supported Unraid installation for the current
+[one-way link product](../product/synchronization.md). Import
+[`packaging/unraid/covalent.xml`](../../packaging/unraid/covalent.xml): the app
+is named **Covalent** and follows `ghcr.io/thekozugroup/covalent:stable`.
+Waypoint has been tested; Atlas is offline. Community Applications listing
+is not yet available.
 
-Unraid is Tier 1. The template is intentionally unprivileged (`99:100`),
-read-only, capability-free, and uses `no-new-privileges` with a temporary
-filesystem. It is not listed in Community Applications yet. Do not import or
-start the historical v0.1.0 template. Do not enable privileged mode to solve mount permissions; correct the
-selected host paths instead.
+The template runs unprivileged (`99:100`), read-only, with capabilities dropped
+and `no-new-privileges`. Fix selected host-path permissions rather than enabling
+privileged mode. Do not install the historical v0.1.0 image.
 
-The v0.1.0 template uses a historical immutable GHCR digest, not a mutable tag.
-Docker accepts `image@sha256:…` references and the repository validator rejects
-any other image form. That historical digest predates the mandatory KEK and
-trusted claim client, so **do not install it**. The v0.2.1 template pins the
-current verified digest and supersedes it.
+## Updates
+
+Use Unraid's **Docker → Check for Updates → Update** normally. For unattended
+updates, select only **Covalent** in Unraid's Auto Update Applications plugin,
+or run the [scoped Watchtower updater](../../packaging/docker/README.md#release-installation)
+on the same Docker host. Use one updater, not both. The template includes its
+enable and `covalent` scope labels. The updater must receive the exact container
+name `Covalent`; it must not update every application on the server.
+
+Keep the same appdata, separate KEK, shares, ports and device name when updating.
+The container briefly restarts and retains its paired devices and link settings.
+An immutable digest can be used instead of `stable` to opt out of channel updates.
+Do not give Covalent the Docker socket. Only the optional updater needs it.
 
 ## Setting up
 
-Import the v0.2.1 template from the release and confirm that it pins
-`sha256:393f8a0dafa7f17d8ad964d501f3d33668d547889dc493080e042489ee3e1677`
-before installing it. The historical v0.1.0 image remains blocked.
+Import the current template from this checkout. Its `stable` channel contains
+only images promoted by the signed container release workflow.
 
 1. **Provision and escrow the KEK before installing or applying a template.**
    The reserved path is `/mnt/user/system/covalent-secrets`. It is never a
@@ -46,10 +53,8 @@ before installing it. The historical v0.1.0 image remains blocked.
    and verify one byte-for-byte offline escrow copy on encrypted removable media
    that is never mounted into Covalent. Exclude the live KEK from every host and
    Covalent backup.
-2. After `v0.2.1` publishes, confirm this page and
-   `packaging/unraid/covalent.xml` name that exact signed immutable digest. Only
-   then import the template manually. Community Applications availability is
-   future work and must not be assumed.
+2. Confirm the template repository is `ghcr.io/thekozugroup/covalent:stable`,
+   then import it manually. Keep existing paths when updating an installation.
 3. Set **HTTPS hostname** to the exact name clients use, such as `tower.local`.
 4. Map **Configuration** to `/mnt/user/appdata/covalent/config` and **Encrypted
    storage** to `/mnt/user/appdata/covalent/data`. Create the writable paths

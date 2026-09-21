@@ -70,19 +70,19 @@ grep -Fq 'require_mode /run/secrets/covalent-kek ro' scripts/validate-unraid-tem
 historical_image_digest='sha256:8b8b96bdea7437fecf6d9c3297c248fd9de7eeb25fe7d701aa6f0a5b633cf8a6'
 current_image_digest='sha256:393f8a0dafa7f17d8ad964d501f3d33668d547889dc493080e042489ee3e1677'
 image_digest=$(sed -n 's|^[[:space:]]*<Repository>.*@\(sha256:[0-9a-f]*\)</Repository>[[:space:]]*$|\1|p' packaging/unraid/covalent.xml)
-test "$image_digest" = "$current_image_digest"
+grep -Fq '<Repository>ghcr.io/thekozugroup/covalent:stable</Repository>' packaging/unraid/covalent.xml
 grep -Fq "$historical_image_digest" docs/release/notes/v0.1.0.md
 grep -Fq "$historical_image_digest" docs/platform/atlas-tailscale.md
 grep -Fq "$current_image_digest" README.md
-grep -Fq "$current_image_digest" docs/platform/unraid.md
+grep -Fq 'ghcr.io/thekozugroup/covalent:stable' docs/platform/unraid.md
 grep -Fq "$current_image_digest" docs/platform/atlas-tailscale.md
-grep -Fq "$current_image_digest" packaging/docker/README.md
+grep -Fq 'ghcr.io/thekozugroup/covalent:stable' packaging/docker/README.md
 historical_container_identity='https://github.com/thekozugroup/Covalent/.github/workflows/container-supply-chain.yml@refs/tags/v0.1.0'
 grep -Fq -- "--certificate-identity '$historical_container_identity'" docs/platform/atlas-tailscale.md
 grep -Fq -- "--certificate-identity '$historical_container_identity'" docs/release/notes/v0.1.0.md
 current_container_identity='https://github.com/thekozugroup/Covalent/.github/workflows/container-supply-chain.yml@refs/tags/release-tools-v0.2.1-container'
 grep -Fq "$current_container_identity" docs/platform/atlas-tailscale.md
-grep -Fq "$current_container_identity" packaging/docker/README.md
+grep -Fq 'does not independently enforce signatures.' packaging/docker/README.md
 if rg -q -- '--certificate-identity-regexp.*thekozugroup/Covalent' \
   docs/platform/atlas-tailscale.md docs/release/notes/v0.1.0.md; then
   echo "container install documentation must pin the exact workflow and tag identity" >&2
@@ -256,7 +256,7 @@ grep -Fq 'source-fingerprint: ${{ needs.validate.outputs.source_fingerprint }}' 
 test "$(grep -Fc -- 'COVALENT_SOURCE_FINGERPRINT=${{ steps.docker-source.outputs.fingerprint }}' .github/workflows/ci.yml)" -eq 2
 test "$(grep -Fc -- 'development "${{ steps.docker-source.outputs.fingerprint }}"' .github/workflows/ci.yml)" -eq 2
 grep -Fq 'node scripts/container-latest-version.mjs' "$container_workflow"
-grep -Fq 'latest digest does not match immutable version provenance ${provenance_ref}' "$container_workflow"
+grep -Fq 'test "${provenance_digest}" = "${current_digest}"' "$container_workflow"
 candidate_line=$(grep -n 'Stage the verified index under a non-consumer candidate tag' "$container_workflow" | cut -d: -f1)
 sign_line=$(grep -n 'cosign sign --yes "${subject}"' "$container_workflow" | cut -d: -f1)
 signature_verify_line=$(grep -n 'cosign verify \\' "$container_workflow" | head -n 1 | cut -d: -f1)
@@ -264,9 +264,9 @@ attest_line=$(grep -n 'cosign attest --yes --type spdxjson' "$container_workflow
 attestation_verify_line=$(grep -n 'cosign verify-attestation \\' "$container_workflow" | head -n 1 | cut -d: -f1)
 public_promote_line=$(grep -n 'Promote the verified signed digest to public release tags' "$container_workflow" | cut -d: -f1)
 version_guard_line=$(grep -n 'if existing_digest=$(docker buildx imagetools inspect "${version_ref}"' "$container_workflow" | cut -d: -f1)
-latest_guard_line=$(grep -n 'latest_decision=$(node scripts/container-latest-version.mjs' "$container_workflow" | cut -d: -f1)
+latest_guard_line=$(grep -n 'decision=$(node scripts/container-latest-version.mjs' "$container_workflow" | cut -d: -f1)
 version_tag_line=$(grep -n 'docker buildx imagetools create --tag "${version_ref}" "${subject}"' "$container_workflow" | cut -d: -f1)
-latest_tag_line=$(grep -n 'docker buildx imagetools create --tag "${IMAGE}:latest" "${subject}"' "$container_workflow" | cut -d: -f1)
+latest_tag_line=$(grep -Fn 'docker buildx imagetools create --tag "${IMAGE}:${channels[index]}" "${subject}"' "$container_workflow" | cut -d: -f1)
 if [ -z "$candidate_line" ] || [ -z "$sign_line" ] || [ -z "$signature_verify_line" ] \
   || [ -z "$attest_line" ] || [ -z "$attestation_verify_line" ] \
   || [ -z "$public_promote_line" ] || [ -z "$version_guard_line" ] || [ -z "$latest_guard_line" ] \
@@ -298,11 +298,18 @@ printf '%s\n' "$promote_job" | grep -Fq 'verify-linux-amd64-sbom-attestation: co
 printf '%s\n' "$promote_job" | grep -Fq 'verify-linux-arm64-sbom-attestation: cosign verify-attestation --type spdxjson ${IMAGE}@${ARM64_DIGEST}'
 printf '%s\n' "$promote_job" | grep -Fq 'covalent-container-linux-amd64.spdx.json'
 printf '%s\n' "$promote_job" | grep -Fq 'covalent-container-linux-arm64.spdx.json'
-if [ "$(printf '%s\n' "$promote_job" | grep -Fc 'if [[ "${{ needs.validate.outputs.publish_latest }}" == "true" ]]')" -ne 2 ] \
+if [ "$(printf '%s\n' "$promote_job" | grep -Fc 'if [[ "${{ needs.validate.outputs.publish_latest }}" == "true" ]]')" -ne 1 ] \
   || printf '%s\n' "$promote_job" | grep -Fq 'version_exists}" == false &&'; then
   echo "container reruns must repair and verify latest after an already-correct immutable version tag" >&2
   exit 1
 fi
+
+grep -Fq 'channels=(latest stable)' "$container_workflow"
+grep -Fq 'channels=(stable)' "$container_workflow"
+grep -Fq 'for index in "${!channels[@]}"; do' "$container_workflow"
+grep -Fq 'test "${published_digest}" = "${expected_digests[index]}"' "$container_workflow"
+./scripts/test-container-latest-version.sh
+./scripts/test-container-update-source.sh
 
 # Executable fixtures hold the monotonic latest decision to real semantic
 # versions and digests, including the one-time trusted v0.1.0 migration.

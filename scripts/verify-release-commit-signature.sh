@@ -7,7 +7,7 @@ set -eu
 : "${RELEASE_VERSION:?RELEASE_VERSION is required}"
 
 case "${RELEASE_VERSION}" in
-  v[0-9]*.[0-9]*.[0-9]*) ;;
+  v[0-9]*.[0-9]*.[0-9]*|container-v[0-9]*.[0-9]*.[0-9]*) ;;
   *)
     echo "release tag must be an explicit v-prefixed semantic version: ${RELEASE_VERSION}" >&2
     exit 1

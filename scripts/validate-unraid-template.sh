@@ -56,8 +56,8 @@ done
 
 repository=$(sed -n 's|^[[:space:]]*<Repository>\(.*\)</Repository>[[:space:]]*$|\1|p' "$template")
 if grep -q '<WebUI>http://' "$template" \
-  || ! printf '%s\n' "$repository" | grep -Eq '^ghcr\.io/thekozugroup/covalent@sha256:[0-9a-f]{64}$'; then
-  echo "Unraid template must use TLS management and an immutable Covalent GHCR digest" >&2
+  || ! printf '%s\n' "$repository" | grep -Eq '^ghcr\.io/thekozugroup/covalent(:stable|@sha256:[0-9a-f]{64})$'; then
+  echo "Unraid template must use TLS management and the verified Covalent stable channel or an immutable GHCR digest" >&2
   exit 1
 fi
 

@@ -1,17 +1,58 @@
 # Docker
 
 The current product is [one-way links](../../docs/product/synchronization.md).
-Use the v0.2.1 release image for installation. This page also retains
+Use the published `stable` image for installation. This page also retains
 source-checkout provisioning and older backup/recovery operations; those
 operations do not define the new link workflow.
 
 ## Release installation
 
-Use `ghcr.io/thekozugroup/covalent@sha256:393f8a0dafa7f17d8ad964d501f3d33668d547889dc493080e042489ee3e1677`.
-Verify it with the exact identity
-`https://github.com/thekozugroup/Covalent/.github/workflows/container-supply-chain.yml@refs/tags/release-tools-v0.2.1-container`
-before running it. See the [Atlas/Tailscale runbook](../../docs/platform/atlas-tailscale.md)
-for the `cosign` command, KEK setup, and container mounts.
+Use `ghcr.io/thekozugroup/covalent:stable` and the supplied `compose.yaml`.
+The container is named **Covalent**. The channel moves only after the release
+workflow passes its image checks, vulnerability scans, signatures and SBOM
+verification. Public images need no registry login.
+
+Provision the host paths and KEK as described below, using the published image
+instead of building `covalent:local`. Then run:
+
+```sh
+docker compose -f packaging/docker/compose.yaml pull
+docker compose -f packaging/docker/compose.yaml up -d
+```
+
+For automatic updates, add the optional updater:
+
+```sh
+docker compose -f packaging/docker/compose.yaml \
+  -f packaging/docker/compose.updates.yaml up -d
+```
+
+**Covalent-Updater** checks daily at 04:00 UTC, updates only the container named
+**Covalent** with the matching scope and enable labels, and removes its old
+image after replacement. Change `COVALENT_UPDATE_SCHEDULE` (six-field cron) and
+`COVALENT_UPDATE_TIMEZONE` if needed. It uses the maintained
+[nickfedor Watchtower fork](https://github.com/nicholas-fedor/watchtower).
+Docker socket access belongs only to the updater; Covalent never receives it.
+An update briefly restarts Covalent. Existing state, pairing, links, secrets,
+mounts and hourly schedules persist; interrupted transfers can retry.
+
+For manual updates, omit the updater overlay and use the two commands above.
+To hold a reviewed version, set `COVALENT_IMAGE` to its immutable GHCR digest.
+Watchtower follows the channel; it does not independently enforce signatures.
+Operators requiring client-side enforcement should verify a digest with
+`cosign` and deploy that digest manually. Keep state backups and the separate
+KEK escrow before upgrading; pinning an older image is not a state migration.
+
+### Publishing updates
+
+Push a signed `container-vX.Y.Z` tag to run the existing **Container supply
+chain** workflow. Container-only releases must have unchanged native and
+shared runtime inputs compared with their signed full-release baseline.
+They run fresh WebUI, native-architecture Docker runtime/sync, image-budget,
+vulnerability, SBOM and signing checks before promotion to `stable`.
+Native changes require a full `vX.Y.Z` release and its full acceptance checks.
+Successful releases reach installations at their next update check; ordinary
+branch pushes do not deploy unfinished work.
 
 ## Web console updates
 
@@ -81,6 +122,7 @@ sudo ./scripts/validate-setup-paths.sh \
   --source "$COVALENT_BACKUP_SOURCE" \
   --restore "$COVALENT_RESTORE_TARGET" \
   --kek "$COVALENT_KEK_FILE"
+export COVALENT_IMAGE=covalent:local
 docker compose -f packaging/docker/compose.yaml up -d --no-build
 docker compose -f packaging/docker/compose.yaml logs --tail=100 node
 ```
@@ -101,7 +143,7 @@ file mode `0600` and `COVALENT_KEY_ENCRYPTION_KEY_VERSION=1` for the lifetime of
 this state directory: the current v0.2.1 contract has no automatic rotation.
 The image never generates a missing KEK.
 
-The published v0.1.0 immutable GHCR digest predates this KEK contract and does not contain `provision-key`; it is not an installable release for this workflow. Do not substitute it for `covalent:local`. Use the v0.2.1 release digest above for production installation.
+The published v0.1.0 immutable GHCR digest predates this KEK contract and does not contain `provision-key`; it is not an installable release for this workflow. Do not substitute it for `covalent:local`. Use the published `stable` channel for production installation.
 
 The image is rootless (`65532:65532`), has a read-only root filesystem, drops every Linux capability, enables `no-new-privileges`, and uses a `noexec,nosuid` temporary filesystem. `/data` is the durable encrypted engine state, identity, keys, local API token, and maintained folder-engine database. `/config` is sensitive Caddy state: it contains the local CA certificate and its signing key. Back it up with `/data`, but never treat the directory itself as a settings export or a source share.
 

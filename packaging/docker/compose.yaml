@@ -1,10 +1,11 @@
 name: covalent
 services:
   node:
-    build:
-      context: ../..
-      dockerfile: packaging/docker/Dockerfile
-    image: covalent:local
+    image: "${COVALENT_IMAGE:-ghcr.io/thekozugroup/covalent:stable}"
+    container_name: Covalent
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+      com.centurylinklabs.watchtower.scope: covalent
     # Docker Compose file secrets are bind-mounted by the local implementation,
     # so their host ownership cannot safely follow an arbitrary PUID/PGID.
     # Keep the runtime identity fixed to the same UID that owns the 0400 secret.

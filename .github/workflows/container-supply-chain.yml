@@ -2,11 +2,11 @@ name: Container supply chain
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*", "container-v*"]
   workflow_dispatch:
     inputs:
       version:
-        description: Existing v-prefixed version for this exact commit
+        description: Existing signed vX.Y.Z or container-vX.Y.Z tag for this exact commit
         required: true
         type: string
       artifact_run_id:
@@ -42,6 +42,9 @@ jobs:
       signing_ref: ${{ steps.release.outputs.signing_ref }}
       artifact_run_id: ${{ steps.release.outputs.artifact_run_id }}
       source_fingerprint: ${{ steps.docker-source.outputs.fingerprint }}
+      channel: ${{ steps.release.outputs.channel }}
+      container_only: ${{ steps.release.outputs.container_only }}
+      tag_prefix: ${{ steps.release.outputs.tag_prefix }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -57,7 +60,17 @@ jobs:
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
             version="${INPUT_VERSION}"
           fi
-          if [[ ! "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+          container_only=false
+          channel=latest
+          tag_prefix=v
+          image_version="${version#v}"
+          if [[ "${version}" == container-v* ]]; then
+            container_only=true
+            channel=stable
+            tag_prefix=container-v
+            image_version="${version#container-v}"
+          fi
+          if [[ ! "${image_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "release version must be an explicit v-prefixed semantic version" >&2
             exit 1
           fi
@@ -96,12 +109,12 @@ jobs:
               .conclusion == "failure"
             ' <<<"${prior_run}" >/dev/null
             prior_jobs=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/jobs?per_page=100" | jq -s '[.[].jobs[]]')
-            for required in "Validate source and release gates" "Build private linux/amd64 Docker archive" "Build private linux/arm64 Docker archive"; do
-              jq -e --arg name "${required}" '[.[] | select(.name == $name)] | length == 1 and .[0].conclusion == "success"' <<<"${prior_jobs}" >/dev/null
+            for archive_job in "Validate source and release gates" "Build private linux/amd64 Docker archive" "Build private linux/arm64 Docker archive"; do
+              jq -e --arg name "${archive_job}" '[.[] | select(.name == $name)] | length == 1 and .[0].conclusion == "success"' <<<"${prior_jobs}" >/dev/null
             done
             prior_artifacts=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/artifacts?per_page=100" | jq -s '[.[].artifacts[]]')
-            for required in container-amd64-archive container-arm64-archive; do
-              jq -e --arg name "${required}" '[.[] | select(.name == $name and .expired == false)] | length == 1' <<<"${prior_artifacts}" >/dev/null
+            for archive_name in container-amd64-archive container-arm64-archive; do
+              jq -e --arg name "${archive_name}" '[.[] | select(.name == $name and .expired == false)] | length == 1' <<<"${prior_artifacts}" >/dev/null
             done
             signing_ref="${GITHUB_REF}"
           elif [[ "${GITHUB_REF}" != "refs/tags/${version}" ]] || [[ "${source_sha}" != "${GITHUB_SHA}" ]]; then
@@ -109,28 +122,46 @@ jobs:
             exit 1
           fi
           workspace_version=$(git show "${source_sha}:Cargo.toml" | awk -F'"' '/^version = "/ { print $2; exit }')
-          if [[ "${version#v}" != "${workspace_version}" ]]; then
+          checks_sha="${source_sha}"
+          if [[ "${container_only}" == true ]]; then
+            baseline="v${workspace_version}"
+            checks_sha=$(git rev-list -n 1 "${baseline}")
+            ./scripts/check-container-update-source.sh "${baseline}" "${source_sha}"
+            GITHUB_SHA="${checks_sha}" RELEASE_VERSION="${baseline}" ./scripts/verify-release-commit-signature.sh
+          elif [[ "${image_version}" != "${workspace_version}" ]]; then
             echo "${version} does not match workspace version ${workspace_version}" >&2
             exit 1
           fi
-          checks=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${source_sha}/check-runs?per_page=100")
+          checks=$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/commits/${checks_sha}/check-runs?per_page=100" | jq '[.[].check_runs[]]')
           for required in "Shared Rust and contracts" "macOS integration and UI" "macOS app bundle" "Android foundation" "Android API 37 device" "Container foundation" "Container arm64 image" "CodeQL java-kotlin" "CodeQL swift" "CodeQL policy" "Release candidate software gates"; do
-            if ! jq -e --arg name "${required}" '[.check_runs[] | select(.name == $name)] | sort_by(.started_at // .created_at) | last | select(.status == "completed" and .conclusion == "success")' <<<"${checks}" >/dev/null; then
+            if ! jq -e --arg name "${required}" '[.[] | select(.name == $name)] | sort_by(.started_at // .created_at) | last | select(.status == "completed" and .conclusion == "success")' <<<"${checks}" >/dev/null; then
               echo "latest required exact-commit check is not green: ${required}" >&2
               exit 1
             fi
           done
           GITHUB_SHA="${source_sha}" RELEASE_VERSION="${version}" ./scripts/verify-release-commit-signature.sh
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
-          echo "image_version=${version#v}" >> "${GITHUB_OUTPUT}"
+          echo "image_version=${image_version}" >> "${GITHUB_OUTPUT}"
+          echo "container_only=${container_only}" >> "${GITHUB_OUTPUT}"
+          echo "channel=${channel}" >> "${GITHUB_OUTPUT}"
+          echo "tag_prefix=${tag_prefix}" >> "${GITHUB_OUTPUT}"
           echo "source_sha=${source_sha}" >> "${GITHUB_OUTPUT}"
           echo "signing_ref=${signing_ref}" >> "${GITHUB_OUTPUT}"
           echo "artifact_run_id=${ARTIFACT_RUN_ID}" >> "${GITHUB_OUTPUT}"
-          if [[ "${version}" == *-* ]]; then
+          if [[ "${image_version}" == *-* ]]; then
             echo "publish_latest=false" >> "${GITHUB_OUTPUT}"
           else
             echo "publish_latest=true" >> "${GITHUB_OUTPUT}"
           fi
+      # Container-only tags reuse native gates only after exact native-input
+      # equality with the signed full release. Their exact new images run all
+      # Docker checks below, then the same private scans and signing pipeline.
+      - name: Verify the web console and update policy
+        if: steps.release.outputs.container_only == 'true'
+        run: |
+          node --test packaging/web/tests/*.test.mjs
+          ./scripts/test-container-update-source.sh
+          ./scripts/test-container-latest-version.sh
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ steps.release.outputs.source_sha }}
@@ -190,10 +221,24 @@ jobs:
           # Docker's native archive format is deliberately used because it is
           # unambiguously consumable by `docker load` on the scan runner.
           outputs: type=docker,dest=${{ runner.temp }}/covalent-${{ matrix.artifact }}.tar
+          cache-from: type=gha,version=2,scope=covalent-ci-${{ matrix.artifact }}
+          cache-to: type=gha,version=2,scope=covalent-ci-${{ matrix.artifact }},mode=max,ignore-error=true,timeout=2m
           build-args: |
             VCS_REF=${{ github.sha }}
             RELEASE_VERSION=${{ needs.validate.outputs.image_version }}
             COVALENT_SOURCE_FINGERPRINT=${{ needs.validate.outputs.source_fingerprint }}
+      - name: Verify the exact container update on its native architecture
+        if: needs.validate.outputs.container_only == 'true'
+        run: |
+          set -euo pipefail
+          image="covalent-private:${{ matrix.artifact }}"
+          docker load --input "${RUNNER_TEMP}/covalent-${{ matrix.artifact }}.tar"
+          ./scripts/check-container-contract.sh "${image}" "${GITHUB_SHA}" \
+            "${{ needs.validate.outputs.image_version }}" "${{ needs.validate.outputs.source_fingerprint }}"
+          ./scripts/check-container-runtime.sh "${image}"
+          python3 -B scripts/container-folder-sync-e2e.py "${image}"
+          ./scripts/docker-compose-e2e.sh "${image}"
+          ./scripts/check-artifact-budgets.sh --image-only "${image}" --platform "${{ matrix.platform }}"
       - name: Verify the release Docker source after building
         run: |
           set -euo pipefail
@@ -355,7 +400,8 @@ jobs:
               --arg fingerprint "${{ needs.validate.outputs.source_fingerprint }}" '
               .mediaType = "application/vnd.oci.image.index.v1+json" |
               .annotations["org.opencontainers.image.version"] = $version |
-              .annotations["io.covalent.source.fingerprint"] = $fingerprint
+              .annotations["io.covalent.source.fingerprint"] = $fingerprint |
+              .annotations["io.covalent.release.tag-prefix"] = "${{ needs.validate.outputs.tag_prefix }}"
             ' > private-index-upload.json
           curl --fail --silent --show-error \
             --header 'Content-Type: application/vnd.oci.image.index.v1+json' \
@@ -484,7 +530,8 @@ jobs:
               --arg fingerprint "${{ needs.validate.outputs.source_fingerprint }}" '
               .mediaType = "application/vnd.oci.image.index.v1+json" |
               .annotations["org.opencontainers.image.version"] = $version |
-              .annotations["io.covalent.source.fingerprint"] = $fingerprint
+              .annotations["io.covalent.source.fingerprint"] = $fingerprint |
+              .annotations["io.covalent.release.tag-prefix"] = "${{ needs.validate.outputs.tag_prefix }}"
             ' > private-index-upload.json
           curl --fail --silent --show-error \
             --header 'Content-Type: application/vnd.oci.image.index.v1+json' \
@@ -616,6 +663,10 @@ jobs:
           set -euo pipefail
           subject="${IMAGE}@${{ steps.candidate.outputs.digest }}"
           version_ref="${IMAGE}:${{ needs.validate.outputs.version }}"
+          tag_prefix=v
+          if [[ "${{ needs.validate.outputs.container_only }}" == true ]]; then
+            tag_prefix=container-v
+          fi
           inspect_error=$(mktemp)
           if existing_digest=$(docker buildx imagetools inspect "${version_ref}" --format '{{json .Manifest.Digest}}' 2>"${inspect_error}" | tr -d '"'); then
             if [[ "${existing_digest}" != "${{ steps.candidate.outputs.digest }}" ]]; then
@@ -631,61 +682,58 @@ jobs:
             exit 1
           fi
 
-          latest_action=skip-prerelease
+          channels=()
+          actions=()
+          expected_digests=()
           if [[ "${{ needs.validate.outputs.publish_latest }}" == "true" ]]; then
-            latest_manifest=$(mktemp)
-            latest_error=$(mktemp)
-            if docker buildx imagetools inspect "${IMAGE}:latest" --format '{{json .Manifest}}' >"${latest_manifest}" 2>"${latest_error}"; then
-              jq -e '
-                .mediaType == "application/vnd.oci.image.index.v1+json" and
-                (.digest | test("^sha256:[0-9a-f]{64}$"))
-              ' "${latest_manifest}" >/dev/null
-              current_latest_digest=$(jq -r '.digest' "${latest_manifest}")
-              current_latest_version=$(jq -r '.annotations["org.opencontainers.image.version"] // "unannotated"' "${latest_manifest}")
-            elif grep -Eiq 'manifest unknown|not found|does not exist' "${latest_error}"; then
-              current_latest_digest=absent
-              current_latest_version=absent
-            else
-              echo "could not prove the current latest version and digest" >&2
-              cat "${latest_error}" >&2
-              exit 1
-            fi
-
-            latest_decision=$(node scripts/container-latest-version.mjs \
-              "${{ needs.validate.outputs.image_version }}" \
-              "${{ steps.candidate.outputs.digest }}" \
-              "${current_latest_version}" \
-              "${current_latest_digest}")
-            latest_action=$(jq -r '.action' <<<"${latest_decision}")
-            current_latest_tag=$(jq -r '.currentTag // empty' <<<"${latest_decision}")
-            [[ "${latest_action}" == "promote" || "${latest_action}" == "keep" ]]
-
-            # The annotation alone is not provenance. Require the immutable
-            # stable version tag named by it to resolve to the same digest.
-            if [[ -n "${current_latest_tag}" ]]; then
-              provenance_ref="${IMAGE}:${current_latest_tag}"
-              if ! provenance_digest=$(docker buildx imagetools inspect "${provenance_ref}" --format '{{json .Manifest.Digest}}' | tr -d '"'); then
-                echo "latest version provenance tag is unavailable: ${provenance_ref}" >&2
-                exit 1
-              fi
-              if [[ "${provenance_digest}" != "${current_latest_digest}" ]]; then
-                echo "latest digest does not match immutable version provenance ${provenance_ref}" >&2
-                exit 1
-              fi
+            channels=(stable)
+            if [[ "${{ needs.validate.outputs.container_only }}" != true ]]; then
+              channels=(latest stable)
             fi
           fi
-
-          # All version/latest reads and downgrade checks finish before either
-          # public tag can move. The workflow-wide concurrency group serializes
-          # this preflight and promotion across every release ref.
+          # Plan every channel move before touching any public tag. Both full
+          # and container-only releases advance stable; latest remains full-only.
+          for channel in "${channels[@]}"; do
+            manifest=$(mktemp)
+            inspect_error=$(mktemp)
+            current_prefix="${tag_prefix}"
+            if docker buildx imagetools inspect "${IMAGE}:${channel}" --format '{{json .Manifest}}' >"${manifest}" 2>"${inspect_error}"; then
+              jq -e '.mediaType == "application/vnd.oci.image.index.v1+json" and (.digest | test("^sha256:[0-9a-f]{64}$"))' "${manifest}" >/dev/null
+              current_digest=$(jq -r '.digest' "${manifest}")
+              current_version=$(jq -r '.annotations["org.opencontainers.image.version"] // "unannotated"' "${manifest}")
+              current_prefix=$(jq -r '.annotations["io.covalent.release.tag-prefix"] // "v"' "${manifest}")
+            elif grep -Eiq 'manifest unknown|not found|does not exist' "${inspect_error}"; then
+              current_digest=absent
+              current_version=absent
+            else
+              echo "could not prove the current ${channel} version and digest" >&2
+              cat "${inspect_error}" >&2
+              exit 1
+            fi
+            decision=$(node scripts/container-latest-version.mjs \
+              "${{ needs.validate.outputs.image_version }}" \
+              "${{ steps.candidate.outputs.digest }}" \
+              "${current_version}" "${current_digest}" "${tag_prefix}" "${current_prefix}")
+            action=$(jq -r '.action' <<<"${decision}")
+            current_tag=$(jq -r '.currentTag // empty' <<<"${decision}")
+            [[ "${action}" == "promote" || "${action}" == "keep" ]]
+            # The signed index annotation names the immutable provenance tag;
+            # it must resolve to exactly the digest currently on this channel.
+            if [[ -n "${current_tag}" ]]; then
+              provenance_digest=$(docker buildx imagetools inspect "${IMAGE}:${current_tag}" --format '{{json .Manifest.Digest}}' | tr -d '"')
+              test "${provenance_digest}" = "${current_digest}"
+            fi
+            actions+=("${action}")
+            expected_digests+=("${{ steps.candidate.outputs.digest }}")
+          done
           if [[ "${version_exists}" == false ]]; then
             docker buildx imagetools create --tag "${version_ref}" "${subject}"
           fi
-          # A prior run can have published vX and then failed while moving
-          # latest. Repair that partial state from the already verified digest.
-          if [[ "${latest_action}" == "promote" ]]; then
-            docker buildx imagetools create --tag "${IMAGE}:latest" "${subject}"
-          fi
+          for index in "${!channels[@]}"; do
+            if [[ "${actions[index]}" == promote ]]; then
+              docker buildx imagetools create --tag "${IMAGE}:${channels[index]}" "${subject}"
+            fi
+          done
           docker buildx imagetools inspect "${version_ref}" --format '{{json .Manifest}}' > published-version-index.json
           jq -e \
             --arg digest "${{ steps.candidate.outputs.digest }}" \
@@ -697,18 +745,10 @@ jobs:
               .annotations["io.covalent.source.fingerprint"] == $fingerprint
             ' published-version-index.json >/dev/null
           digest=$(jq -r '.digest' published-version-index.json)
-          if [[ "${{ needs.validate.outputs.publish_latest }}" == "true" ]]; then
-            docker buildx imagetools inspect "${IMAGE}:latest" --format '{{json .Manifest}}' > published-latest-index.json
-            jq -e \
-              --arg digest "${digest}" \
-              --arg version "${{ needs.validate.outputs.image_version }}" \
-              --arg fingerprint "${{ needs.validate.outputs.source_fingerprint }}" '
-                .digest == $digest and
-                .mediaType == "application/vnd.oci.image.index.v1+json" and
-                .annotations["org.opencontainers.image.version"] == $version and
-                .annotations["io.covalent.source.fingerprint"] == $fingerprint
-              ' published-latest-index.json >/dev/null
-          fi
+          for index in "${!channels[@]}"; do
+            published_digest=$(docker buildx imagetools inspect "${IMAGE}:${channels[index]}" --format '{{json .Manifest.Digest}}' | tr -d '"')
+            test "${published_digest}" = "${expected_digests[index]}"
+          done
           echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
       - name: Remove private staging on every exit
         if: always()
@@ -730,6 +770,7 @@ jobs:
           set -euo pipefail
           cat > covalent-container-digest.txt <<EOF
           image: ${IMAGE}:${RELEASE_VERSION}
+          update-channel: ${IMAGE}:${{ needs.validate.outputs.channel }}
           digest: ${IMAGE}@${IMAGE_DIGEST}
           platforms: linux/amd64, linux/arm64
           linux-amd64-digest: ${IMAGE}@${AMD64_DIGEST}
@@ -751,6 +792,7 @@ jobs:
             > covalent-container-SHA256SUMS.txt
           cat covalent-container-digest.txt
       - name: Publish container evidence to the release
+        if: needs.validate.outputs.container_only != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}

@@ -1,9 +1,9 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>Covalent</Name>
-  <Repository>ghcr.io/thekozugroup/covalent@sha256:393f8a0dafa7f17d8ad964d501f3d33668d547889dc493080e042489ee3e1677</Repository>
+  <Repository>ghcr.io/thekozugroup/covalent:stable</Repository>
   <Registry>https://github.com/thekozugroup/Covalent/pkgs/container/covalent</Registry>
-  <TemplateURL>https://github.com/thekozugroup/Covalent/releases/download/v0.2.1/covalent-unraid-v0.2.1.xml</TemplateURL>
+  <TemplateURL>https://raw.githubusercontent.com/thekozugroup/Covalent/main/packaging/unraid/covalent.xml</TemplateURL>
   <Network>bridge</Network>
   <Privileged>false</Privileged>
   <Support>https://github.com/thekozugroup/Covalent/issues</Support>
@@ -12,7 +12,7 @@
   <Category>Backup: Tools:</Category>
   <WebUI>https://[IP]:[PORT:8443]/</WebUI>
   <Icon>https://raw.githubusercontent.com/thekozugroup/Covalent/main/packaging/unraid/icon.svg</Icon>
-  <ExtraParams>--user=99:100 --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m --cap-drop=ALL --security-opt=no-new-privileges</ExtraParams>
+  <ExtraParams>--user=99:100 --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m --cap-drop=ALL --security-opt=no-new-privileges --label=com.centurylinklabs.watchtower.enable=true --label=com.centurylinklabs.watchtower.scope=covalent</ExtraParams>
   <PostArgs>serve</PostArgs>
   <CPUset/>
   <DateInstalled>0</DateInstalled>
@@ -23,7 +23,7 @@
 
 KEK_DIR=/mnt/user/system/covalent-secrets
 install -d -o 99 -g 100 -m 700 "$KEK_DIR"
-docker run --rm --user 99:100 -v "$KEK_DIR:/secrets:rw" ghcr.io/thekozugroup/covalent@sha256:393f8a0dafa7f17d8ad964d501f3d33668d547889dc493080e042489ee3e1677 provision-key --key-file /secrets/key-encryption-key
+docker run --rm --user 99:100 -v "$KEK_DIR:/secrets:rw" ghcr.io/thekozugroup/covalent:stable provision-key --key-file /secrets/key-encryption-key
 
 Do not put this KEK in /data or /config. The command creates the key as the same fixed non-root UID/GID (`99:100`) used by this template, so its `0600` mode remains readable without broadening permissions. Keep its file mode 0600 and KEK version 1. Copying appdata without the separate KEK remains locked, and a backup must never contain both the encrypted state and its only KEK. Covalent never silently creates or replaces it.
 

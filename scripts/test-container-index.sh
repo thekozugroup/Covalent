@@ -13,7 +13,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-workflow = Path(sys.argv[1]).read_text()
+workflow = Path(sys.argv[1]).read_text().replace("${{ needs.validate.outputs.tag_prefix }}", "v")
 version = "0.2.1"
 fingerprint = "f" * 64
 
@@ -91,6 +91,7 @@ if converted["mediaType"] != "application/vnd.oci.image.index.v1+json":
 if converted.get("annotations") != {
     "org.opencontainers.image.version": version,
     "io.covalent.source.fingerprint": fingerprint,
+    "io.covalent.release.tag-prefix": "v",
 }:
     raise SystemExit("conversion did not preserve both release annotations")
 if converted["manifests"] != manifests:
