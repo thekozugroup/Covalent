@@ -490,6 +490,7 @@ const PROTOCOL_VERSION = 1;
 const message = $("[data-message]");
 const messageDetails = $("[data-message-details]");
 const messageDetail = $("[data-message-detail]");
+let messageTimer = null;
 let token = "";
 let networkPairing = null;
 let networkPoll = null;
@@ -537,12 +538,19 @@ class ProtocolMismatchError extends Error {
   }
 }
 
-function say(text, isError = false, detail = null) {
+function say(text, isError = false, detail = null, transient = false) {
+  if (messageTimer !== null) clearTimeout(messageTimer);
   message.textContent = text;
   message.classList.toggle("error", isError);
   messageDetail.textContent = detail ?? "";
   messageDetails.hidden = detail === null;
   messageDetails.open = false;
+  messageTimer = !isError && transient ? setTimeout(() => {
+    message.textContent = "";
+    messageDetail.textContent = "";
+    messageDetails.hidden = true;
+    messageTimer = null;
+  }, 5000) : null;
 }
 
 // The only path from a thrown value to the screen. It never reads `.message`.
@@ -1536,15 +1544,17 @@ $("[data-token-form]").addEventListener("submit", async (event) => {
     });
     $("[data-access-panel]").open = false;
     $("[data-access-state]").textContent = "Unlocked in this tab";
+    $("[data-access-guidance]").textContent = "Unlocked for this tab";
     // Keep the credential only in the existing in-memory token variable.
     $("#api-token").value = "";
     $("[data-tab=folders]").focus();
-    say("Console unlocked for this tab only.");
+    say("Console unlocked for this tab only.", false, null, true);
   }
   catch (error) {
     token = "";
     $("[data-access-panel]").open = true;
     $("[data-access-state]").textContent = "Console locked";
+    $("[data-access-guidance]").textContent = "Unlock this browser tab";
     clearFolderSyncAccess();
     fail(error);
   }

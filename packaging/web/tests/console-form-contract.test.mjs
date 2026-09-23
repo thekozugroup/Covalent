@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 
 const require = createRequire(import.meta.url);
 const consoleRuntime = require("../app.js");
@@ -71,6 +72,28 @@ test("console access uses trusted claim output and never a server-state token pa
   assert.match(html, /This console accepts a token only; it does not accept a setup code\./);
   assert.doesNotMatch(html, /\/data\/local-api-token/);
   assert.doesNotMatch(html, /token from <code>\/data\//);
+});
+
+test("transient confirmation clears without discarding later instructions or errors", async () => {
+  const app = await source("app.js");
+  const saySource = app.slice(app.indexOf("function say("), app.indexOf("\n// The only path from a thrown value"));
+  const timers = new Map();
+  const message = { textContent: "", classList: { toggle() {} } };
+  const context = { message, messageDetail: {}, messageDetails: {}, messageTimer: null,
+    setTimeout(callback) { timers.set(1, callback); return 1; },
+    clearTimeout(id) { timers.delete(id); } };
+  runInNewContext(saySource, context);
+  context.say("Unlocked", false, null, true);
+  timers.get(1)();
+  assert.equal(message.textContent, "");
+  context.say("Unlocked", false, null, true);
+  context.say("Compare the pairing code");
+  assert.equal(timers.size, 0);
+  assert.equal(message.textContent, "Compare the pairing code");
+  context.say("Failed", true, "Retry after checking the address", true);
+  assert.equal(timers.size, 0);
+  assert.equal(context.messageDetails.hidden, false);
+  assert.equal(context.messageDetail.textContent, "Retry after checking the address");
 });
 
 test("token-file selection validates locally without unlocking or exposing rejected content", async () => {

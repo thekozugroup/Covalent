@@ -41,24 +41,15 @@ SOFTWARE.
     <!-- shadcn:sidebar:end -->
     <div class="console-workspace">
     <header>
-      <div class="brand"><span class="brand-mark" aria-hidden="true">C</span><div><h1>Covalent</h1><p class="muted">Server console</p></div></div>
-      <span class="access-state" data-access-state>Console locked</span>
+      <div class="brand"><span class="brand-mark" aria-hidden="true">C</span><div><h1 data-device-name>Loading node…</h1><p class="muted" data-node-state aria-live="polite">Connecting to the local service.</p></div></div>
+      <div class="header-actions"><span class="access-state" data-access-state>Console locked</span><button type="button" class="quiet icon-action" data-refresh aria-label="Refresh server status" title="Refresh server status"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"></path><path d="M20 4v7h-7"></path></svg></button></div>
     </header>
     <main id="content">
-      <section class="hero" aria-labelledby="node-heading">
-        <div>
-          <p class="eyebrow">This server</p>
-          <h2 id="node-heading" data-device-name>Loading node…</h2>
-          <p class="muted" data-node-state aria-live="polite">Connecting to the local service.</p>
-        </div>
-        <div class="button-row"><button type="button" class="quiet" data-refresh>Refresh status</button><button type="button" class="secondary" data-open-tab="settings">Server settings</button></div>
-      </section>
-
       <details class="security-card" data-access-panel open>
-        <summary id="token-heading">Local access <span class="muted">Unlock this browser tab</span></summary>
+        <summary id="token-heading">Local access <span class="muted" data-access-guidance>Unlock this browser tab</span></summary>
         <div class="access-content">
         <div>
-          <h3>Connect securely</h3>
+          <h2>Connect securely</h2>
           <p class="muted">Enter the token from the owner-only output directory created by <code>covalent claim</code> on a trusted computer to make changes. This console accepts a token only; it does not accept a setup code. It stays only in this browser tab and is never sent anywhere except this local node.</p>
         </div>
         <form class="inline-form" data-token-form>
@@ -80,7 +71,7 @@ SOFTWARE.
 
 
       <section id="folders-panel" role="tabpanel" aria-labelledby="folders-tab" tabindex="0" data-panel="folders">
-        <div class="panel-heading"><div><p class="eyebrow">Overview</p><h2>Your links</h2><p class="muted">Your files, where you need them. One source, one or more destinations.</p></div><div class="button-row"><button type="button" class="secondary" data-open-tab="pair">Pair device</button><button type="button" data-open-create aria-controls="create-link">Create link</button></div></div>
+        <div class="panel-heading"><div><h2>Your links</h2><p class="muted">Your files, where you need them. One source, one or more destinations.</p></div><div class="button-row"><button type="button" class="secondary" data-open-tab="pair">Pair device</button><button type="button" data-open-create aria-controls="create-link">Create link</button></div></div>
         <div class="overview" aria-label="Server overview"><p><strong data-link-count>—</strong><span>Links</span></p><p><strong data-peer-count>—</strong><span>Paired devices</span></p><p class="overview-help">Files flow from the source.<br />Link settings are shared across devices.</p></div>
 
         <section class="card links-card" aria-live="polite">
