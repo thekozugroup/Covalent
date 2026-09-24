@@ -1,14 +1,87 @@
 # Docker
 
-For the shortest end-to-end route, start with
-[Back up your first folder](../../docs/getting-started.md). This page contains
-the Docker-specific detail and recovery contract.
+The current product is [one-way links](../../docs/product/synchronization.md).
+Use the published `stable` image for installation. This page also retains
+source-checkout provisioning and older backup/recovery operations; those
+operations do not define the new link workflow.
+
+## Release installation
+
+Use `ghcr.io/thekozugroup/covalent:stable` and the supplied `compose.yaml`.
+The container is named **Covalent**. The channel moves only after the release
+workflow passes its image checks, vulnerability scans, signatures and SBOM
+verification. Public images need no registry login.
+
+Provision the host paths and KEK as described below, using the published image
+instead of building `covalent:local`. Then run:
+
+```sh
+docker compose -f packaging/docker/compose.yaml pull
+docker compose -f packaging/docker/compose.yaml up -d
+```
+
+For automatic updates, add the optional updater:
+
+```sh
+docker compose -f packaging/docker/compose.yaml \
+  -f packaging/docker/compose.updates.yaml up -d
+```
+
+**Covalent-Updater** checks daily at 04:00 UTC, updates only the container named
+**Covalent** with the matching scope and enable labels, and removes its old
+image after replacement. Change `COVALENT_UPDATE_SCHEDULE` (six-field cron) and
+`COVALENT_UPDATE_TIMEZONE` if needed. It uses the maintained
+[nickfedor Watchtower fork](https://github.com/nicholas-fedor/watchtower).
+Docker socket access belongs only to the updater; Covalent never receives it.
+An update briefly restarts Covalent. Existing state, pairing, links, secrets,
+mounts and hourly schedules persist; interrupted transfers can retry.
+
+For manual updates, omit the updater overlay and use the two commands above.
+To hold a reviewed version, set `COVALENT_IMAGE` to its immutable GHCR digest.
+Watchtower follows the channel; it does not independently enforce signatures.
+Operators requiring client-side enforcement should verify a digest with
+`cosign` and deploy that digest manually. Keep state backups and the separate
+KEK escrow before upgrading; pinning an older image is not a state migration.
+
+### Publishing updates
+
+Push a signed `container-vX.Y.Z` tag to run the existing **Container supply
+chain** workflow. Container-only releases must have unchanged native and
+shared runtime inputs compared with their signed full-release baseline.
+They run fresh WebUI, native-architecture Docker runtime/sync, image-budget,
+vulnerability, SBOM and signing checks before promotion to `stable`.
+Native changes require a full `vX.Y.Z` release and its full acceptance checks.
+Successful releases reach installations at their next update check; ordinary
+branch pushes do not deploy unfinished work.
+
+## Web console updates
+
+The console has a collapsible sidebar. Open **Links**, then **Settings** on a
+link to change its shared timing and deletion options from either endpoint.
+**Server** contains settings and help specific to this server. The console
+must be unlocked before it shows private links and their controls.
+
+For a UI-only update, `Dockerfile.webui` retains the pinned release engine and
+adds the current console and Caddy static-file support. Build the proxy from
+the same checkout first, including its license and source evidence:
+
+```sh
+# Use arm64 on an ARM host, amd64 on an Intel/AMD host.
+docker build --target caddy-evidence --build-arg TARGETARCH=amd64 \
+  -f packaging/docker/Dockerfile -t covalent-webui-caddy:local .
+docker build -f packaging/docker/Dockerfile.webui \
+  --build-arg WEBUI_REVISION="$(git rev-parse HEAD)" -t covalent-webui:local .
+```
+
+This is a local derivative, not the signed release image. Keep existing
+container mounts, secrets, ports, resource limits, and security options when
+replacing it. The API still requires the node token; only the explicit public
+HTML, CSS, and JavaScript routes are served as static files.
 
 ## Personal use from this checkout
 
-This path works before a public `v0.2.0` image exists. It builds the exact
-checked-out source, starts in the background, claims the server, and leaves the
-source read-only.
+This path builds the exact checked-out source, starts in the background, claims
+the server, and leaves the source read-only.
 
 Run from the Covalent repository root on Linux or macOS with Docker Desktop.
 The example keeps every bind mount below `$HOME`, which Docker Desktop shares by
@@ -49,6 +122,7 @@ sudo ./scripts/validate-setup-paths.sh \
   --source "$COVALENT_BACKUP_SOURCE" \
   --restore "$COVALENT_RESTORE_TARGET" \
   --kek "$COVALENT_KEK_FILE"
+export COVALENT_IMAGE=covalent:local
 docker compose -f packaging/docker/compose.yaml up -d --no-build
 docker compose -f packaging/docker/compose.yaml logs --tail=100 node
 ```
@@ -66,23 +140,66 @@ behavior. The KEK is mounted read-only as `/run/secrets/covalent-kek`, outside
 `/config`, `/data`, and every backup source; do not include it in a selected
 source. Copying `/config` and `/data` without this file stays locked. Keep the
 file mode `0600` and `COVALENT_KEY_ENCRYPTION_KEY_VERSION=1` for the lifetime of
-this state directory: the current v0.2.0 contract has no automatic rotation.
+this state directory: the current v0.2.1 contract has no automatic rotation.
 The image never generates a missing KEK.
 
-The published v0.1.0 immutable GHCR digest predates this KEK contract and does not contain `provision-key`; it is not an installable release for this workflow. Do not substitute it for `covalent:local`. Production installation stays blocked until a newly signed immutable digest containing this code is published and the Unraid template is updated atomically.
+The published v0.1.0 immutable GHCR digest predates this KEK contract and does not contain `provision-key`; it is not an installable release for this workflow. Do not substitute it for `covalent:local`. Use the published `stable` channel for production installation.
 
-The image is rootless (`65532:65532`), has a read-only root filesystem, drops every Linux capability, enables `no-new-privileges`, and uses a `noexec,nosuid` temporary filesystem. `/data` is the durable encrypted engine state, identity, keys, and local API token. `/config` is sensitive Caddy state: it contains the local CA certificate and its signing key. Back it up with `/data`, but never treat the directory itself as a settings export or a source share.
+The image is rootless (`65532:65532`), has a read-only root filesystem, drops every Linux capability, enables `no-new-privileges`, and uses a `noexec,nosuid` temporary filesystem. `/data` is the durable encrypted engine state, identity, keys, local API token, and maintained folder-engine database. `/config` is sensitive Caddy state: it contains the local CA certificate and its signing key. Back it up with `/data`, but never treat the directory itself as a settings export or a source share.
 
-Compose deliberately fixes the runtime UID/GID at `65532:65532`: Docker Compose mounts file-backed secrets with host ownership, so a configurable `PUID` would make a `0400` KEK unreadable or tempt an unsafe permission change. Create `/config`, `/data`, and the KEK as `65532:65532`; the key file stays `0600` on the host and appears as `0400` in the container. `PUID` and `PGID` overrides are explicitly rejected at startup. `UMASK` accepts a three-digit octal value and defaults to `027`. For a different identity, use an explicit `docker run --user UID:GID` provisioning and runtime contract with a separately owner-readable KEK; do not override the supplied Compose service.
+The maintained folder engine is the restricted rclone `v1.75.1` module
+recorded in the image labels and its installed manifest. Its
+guardian and worker are immutable image files; only an owner-private short
+control directory lives under `/tmp`, while durable engine state stays under
+`/data`. The entry point imports only local, SFTP, and WebDAV backends plus the
+commands used by Covalent. No management port is published. Release promotion
+remains blocked until the generated target-specific third-party notice inventory
+is reviewed and installed alongside rclone's MIT license and source provenance.
 
-`COVALENT_BACKUP_SOURCE` mounts one selected directory at `/source` read-only. Set it to a specific share, never `/mnt/user`. `COVALENT_RESTORE_TARGET` is the only writable example bind mount and appears at `/restore`. Preview first, choose a conflict policy, then explicitly authorize the signed plan in the console or API.
+Compose deliberately fixes the runtime UID/GID at `65532:65532`: Docker Compose mounts file-backed secrets with host ownership, so a configurable `PUID` would make an owner-only KEK unreadable or tempt an unsafe permission change. Create `/config`, `/data`, and the KEK as `65532:65532`; keep the key file `0600` on the host. The secret declaration requests `0400`, but local Compose bind mounts can retain the host's `0600` mode; the read-only mount still prevents writes. `PUID` and `PGID` overrides are explicitly rejected at startup. `UMASK` accepts a three-digit octal value and defaults to `027`. For a different identity, use an explicit `docker run --user UID:GID` provisioning and runtime contract with a separately owner-readable KEK; do not override the supplied Compose service.
+
+`COVALENT_BACKUP_SOURCE` mounts one selected directory at `/source` read-only. Set it to a specific share, never `/mnt/user`. `COVALENT_RESTORE_TARGET` is the writable restore bind mount and appears at `/restore`. Preview first, choose a conflict policy, then explicitly authorize the signed plan in the console or API.
+
+## Choose a folder to sync
+
+Add one existing folder using the optional sync overlay. Covalent needs read,
+write and directory-traverse access as UID/GID `65532:65532`. Choose only the
+folder you intend to share, outside Covalent's private state and key folders.
+When this server is a destination, source changes can reach this folder.
+Source deletions propagate only when that link option is enabled. When this
+server is the source, destination changes do not flow back.
+
+```sh
+export COVALENT_SYNC_FOLDER=/absolute/path/to/your/folder
+docker compose -f packaging/docker/compose.yaml \
+  -f packaging/docker/compose.sync.yaml up -d --no-build
+```
+
+The overlay refuses a missing host folder instead of silently creating one.
+It exposes the selected folder as `/sync` inside the container. Open **Links**
+in the console, keep `/sync` as the source folder, choose a destination device
+and review the deletion options. Accept that invitation on the other device
+and choose its destination folder. To receive files on this server instead,
+create the link on the source device and accept it here. The browser's own file picker cannot grant the server access to
+a folder on your computer.
+
+For an empty test folder, create a new directory owned by the container user;
+do not recursively change ownership or permissions on an existing share just
+to try the app. On Unraid, choose a specific folder in **Folder to sync** in
+the Docker template and grant the configured container user access. Leave the
+optional mapping empty to use backup/recovery without folder sync. Never map
+all of `/mnt/user`, `appdata`, `system`, `/boot`, or a directory containing keys.
+
+After stopping all links using this mount in **Links**, remove the overlay
+from the Compose command to withdraw container access. Stopping sharing keeps
+local files; it does not serve as a backup of changes made before stopping.
 
 ## Console and local API
 
 A same-container Caddy proxy serves `https://localhost:8443` and can reach the
 daemon only over its loopback socket. Claim and enroll the CA before opening
 that address; never click through the browser's certificate warning. The
-responsive no-framework console implements Pair, Backup, Restore, and Settings
+responsive no-framework console implements Links, Pair, and Settings
 against the daemon's real `/api/v1/*` routes. Status is public; changes require
 a token.
 
@@ -107,6 +224,51 @@ test ! -e "$claim_output" # covalent claim must create this new 0700 directory
 The CLI durably saves an owner-only nonce-and-proof request beside the output path before connecting; that pending record contains neither the setup code nor token. It sends the proof rather than the code, decrypts the returned token only if it matches the delivered CA, then verifies that CA, the exact hostname, and the token over a second authenticated HTTPS request. Only then does it create `root.crt` and `local-api-token` mode `0600`, sync them, and remove the pending request. If the command or connection is interrupted, rerun the same command with the same three paths: the CLI reuses the exact request and the server returns the byte-identical sealed response, including after restart. Enroll `root.crt` before opening the console and enter only `local-api-token`; the web console never accepts setup codes.
 
 The first start creates a durable local certificate authority under `/config/caddy/data/caddy/pki/authorities/local/root.crt`. Before entering the token, enroll that exact CA on each native client or operating system and set `COVALENT_HTTPS_HOST` to the DNS name clients use. Never use a trust-all client or bypass hostname verification. Compose publishes HTTPS on host loopback by default; remove `127.0.0.1:` only after the CA is enrolled and the hostname resolves on the intended private network.
+
+If the Docker host already uses Tailscale, expose the WebUI without installing
+Covalent's local CA in browsers by terminating trusted HTTPS with Tailscale
+Serve. Covalent creates `/config/covalent-web.sock` mode `0600`; it is a local
+cleartext bridge to the API, not a network listener. Point
+Serve at the host path corresponding to that socket:
+
+```sh
+config_dir=${COVALENT_CONFIG_HOST_DIR:-/srv/covalent/config}
+sudo tailscale serve --bg --https=8443 "unix:$config_dir/covalent-web.sock"
+sudo tailscale serve status
+```
+
+For an everyday console that opens ready to edit, authorize your Tailscale
+identity once during installation. Run this from the checked-out repository
+on the trusted operator computer, using the token from your claim output:
+
+```sh
+python3 scripts/configure-trusted-console.py \
+  --config-dir "$config_dir" \
+  --token-file "$claim_output/local-api-token" \
+  --origin https://your-server.your-tailnet.ts.net:8443 \
+  --tailscale-user you@example.com
+# On a remote host, securely copy the generated console-access directory into
+# the durable config mount. Its directory/file modes must stay 0700/0600.
+sudo chown -R 65532:65532 "$config_dir/console-access"
+docker restart Covalent
+```
+
+Use the container's actual UID/GID if it differs from Compose's 65532:65532.
+The WebUI opens automatically for that user through Tailscale Serve. The API
+credential stays on the server; the browser never receives it. The rule checks
+the exact HTTPS origin, Tailscale identity, and same-origin browser request
+headers. It is imported only on the private Unix socket, never on the direct
+HTTPS listener. Tailscale Serve strips incoming identity headers and supplies
+the authenticated identity. Tagged clients have no user identity and can use
+the manual token fallback instead.
+
+Keep `console-access` private: it contains the API token. It survives container
+updates in `/config`. Regenerate it if you rotate the API token; remove that
+directory and restart Covalent to return to manual unlocking. An installation
+without this rule retains the manual token form. Serve remains private to the
+tailnet and its access policy; do not use Tailscale Funnel. The original
+Covalent HTTPS listener remains token-protected on its configured host binding.
+To remove only this Serve mapping, run `sudo tailscale serve --https=8443 off`.
 
 ### Enroll or remove the claimed CA
 
@@ -162,9 +324,61 @@ device, explicitly enable it as a backup device, select it on a later backup,
 and Verify from Android or macOS. The complete success checklist is in
 [Back up your first folder](../../docs/getting-started.md#you-are-protected-when).
 
+## Replace a lost owner device
+
+Before a loss, open **Settings → Recover after losing this device** in the
+unlocked console. Explicitly create and download both files. Keep the recovery
+code separately, outside this server and its backup folders. A new backup or
+change to trusted devices requires a fresh pair. Recovery still needs an
+intact copy on an available, previously authorized backup device.
+
+For a replacement server, follow the directory preparation and KEK provisioning
+steps above using a **new, empty** host root. Stop before the ordinary
+`docker compose … up` step: that would create a new identity. Do not reuse or
+clear an existing installation's data. The replacement KEK protects the new
+installation; the separate recovery code unlocks the saved identity.
+
+Copy your two saved files into that new root's secrets directory. The recovery
+file contains raw encrypted bytes, not the API's JSON response. The code file
+contains its matching 43-character code, optionally with a final newline.
+Set the two source variables to the saved files before running:
+
+```sh
+: "${saved_recovery_kit:?Set the path to your saved .covalent-recovery file}"
+: "${saved_recovery_code:?Set the path to its separate .covalent-recovery-key file}"
+: "${covalent_host_root:?Set the newly prepared, empty replacement host root}"
+test ! -e "$covalent_host_root/secrets/owner.covalent-recovery"
+test ! -e "$covalent_host_root/secrets/owner.covalent-recovery-key"
+sudo install -o 65532 -g 65532 -m 600 "$saved_recovery_kit" \
+  "$covalent_host_root/secrets/owner.covalent-recovery"
+sudo install -o 65532 -g 65532 -m 600 "$saved_recovery_code" \
+  "$covalent_host_root/secrets/owner.covalent-recovery-key"
+export COVALENT_RECOVERY_KIT_FILE="$covalent_host_root/secrets/owner.covalent-recovery"
+export COVALENT_RECOVERY_KEY_FILE="$covalent_host_root/secrets/owner.covalent-recovery-key"
+docker compose -f packaging/docker/compose.yaml \
+  -f packaging/docker/compose.recovery.yaml up -d --no-build
+```
+
+The explicit recovery command restores only a fresh or matching interrupted
+recovery root. It refuses unrelated existing identity data. It uses the same
+TLS proxy and process supervision as normal startup. Claim this replacement
+server using a new claim output directory, then open **Settings → Check
+recovery progress**. Partial recovery means newer backups may still exist;
+bring the expected backup devices online and explicitly retry. Once a backup
+appears, use the ordinary named-backup restore preview and choose a new target.
+
+After successful bootstrap, stop this Compose service and start it with only
+`compose.yaml`. This keeps the recovered identity and durable progress while
+removing the recovery-file mounts from the running container. Keep the saved
+pair offline; never include it in a source share. A crash during bootstrap can
+be retried with the exact same pair; do not replace or erase the target state.
+
+This development workflow needs the current source build. Atlas remains
+untested and offline; do not treat this guide as Atlas validation.
+
 ## LAN and Tailscale
 
-LAN discovery defaults to `false`. It is multicast discovery on one local network; it does not discover Tailnet devices. The Compose default keeps TCP 8443 on host loopback and publishes authenticated QUIC UDP 8787 on all host interfaces.
+LAN discovery defaults to `false`. It is multicast discovery on one local network; it does not discover Tailnet devices. The Compose default keeps TCP 8443 on host loopback and publishes authenticated QUIC UDP 8787 and authenticated folder synchronization TCP 8789 on all host interfaces.
 
 To connect an Android phone on an ordinary trusted LAN, first reserve a DNS name
 that resolves to this host from both the host and phone. Then restart with the
@@ -173,6 +387,7 @@ host's exact LAN IPv4 address and that certificate name:
 ```sh
 export COVALENT_HTTPS_BIND_IP=192.168.1.50
 export COVALENT_PEER_BIND_IP=192.168.1.50
+export COVALENT_SYNC_BIND_IP=192.168.1.50
 export COVALENT_HTTPS_HOST=covalent.home.arpa
 export COVALENT_ADVERTISED_PEER_ADDRESS=192.168.1.50:8787
 docker compose -f packaging/docker/compose.yaml up -d --no-build
@@ -180,10 +395,18 @@ docker compose -f packaging/docker/compose.yaml up -d --no-build
 
 Replace both examples. Confirm `covalent.home.arpa` resolves to this host on the
 phone before claiming `https://covalent.home.arpa:8443`; the claim output is
-bound to that exact CA and hostname. Permit TCP 8443 and UDP 8787 only from the
-intended private LAN devices.
+bound to that exact CA and hostname. Permit TCP 8443, UDP 8787, and TCP 8789
+only from the intended private LAN devices.
 
-For a Tailnet-only host, bind both published ports to that host's numeric
+Folder offers use the advertised host IP and TCP port 8789. If you change the
+Compose host port, set `COVALENT_SYNC_PORT` before recreating the container;
+Covalent includes that port in new folder offers automatically. For a separate
+sync address, set `COVALENT_SYNC_ADVERTISED_ADDRESS` to a numeric `IP:port`
+(or `[IPv6]:port`). Existing offers retain their signed address; create a new
+offer after a port change. In Unraid, changing the transport host port also
+requires the advanced **Folder sync address** field.
+
+For a Tailnet-only host, bind all three published ports to that host's numeric
 Tailscale IPv4 address. Keep the HTTPS certificate name as MagicDNS. Leave the
 advertised peer override unset when the container can resolve that name, or set
 it to a numeric `IP:port`; the node's `SocketAddr` contract does not accept a
@@ -192,15 +415,17 @@ hostname there:
 ```sh
 export COVALENT_HTTPS_BIND_IP=100.64.0.10
 export COVALENT_PEER_BIND_IP=100.64.0.10
+export COVALENT_SYNC_BIND_IP=100.64.0.10
+export COVALENT_SYNC_BIND_IP=100.64.0.10
 export COVALENT_HTTPS_HOST=atlas.example-tailnet.ts.net
 export COVALENT_ADVERTISED_PEER_ADDRESS=100.64.0.10:8787
 docker compose -f packaging/docker/compose.yaml up -d --build
 ```
 
 Confirm `100.64.0.10` is this host's current `tailscale ip -4` result before
-using the example. In the Tailnet policy, grant only intended devices TCP 8443
-and UDP 8787 to this host; do not use an allow-all rule. Current Tailscale
-policy uses a grant such as `"ip": ["tcp:8443", "udp:8787"]` with your own
+using the example. In the Tailnet policy, grant only intended devices TCP 8443,
+UDP 8787, and TCP 8789 to this host; do not use an allow-all rule. Current Tailscale
+policy uses a grant such as `"ip": ["tcp:8443", "udp:8787", "tcp:8789"]` with your own
 restricted `src` and Atlas `dst` selectors. The stock container does not run
 `tailscaled` or mount its LocalAPI socket, so it does not enumerate Tailnet
 peers; Tailscale supplies routing and Covalent still requires confirmed pairing
@@ -210,9 +435,22 @@ CA, access-policy, and reachability sequence.
 
 ## Multi-architecture, reproducibility, and supply chain
 
-The image supports exactly `linux/amd64` and `linux/arm64`. It uses a pinned Rust Alpine builder, a throwaway pinned Go Alpine stage that compiles Caddy from source, and a pinned Alpine 3.23 runtime base. The OpenSSL libraries are upgraded to the exact signed Alpine security revision `3.5.8-r0`, published after the base image was assembled; exact package pins make repository drift fail the build instead of selecting an unreviewed version. The OCI labels record the Covalent release version, runtime base name and digest, and OpenSSL security revision so CI can reject version, documentation, or image-metadata drift. The release index repeats the exact version as `org.opencontainers.image.version`; promotion refuses to move `latest` to an older version or to an equal version with a different digest.
+The image copies the complete patched Alpine runtime filesystem into a fresh
+layer. This removes superseded base-package bytes from lower layers while
+retaining the installed files, package database, ownership and permissions.
+The Dockerfile explicitly preserves runtime metadata and `PATH`. Application
+binaries, source evidence and notices remain separate layers. Both final
+architecture images must still pass the unchanged size and runtime gates.
 
-Caddy is compiled rather than copied out of `caddy:2.11.4-alpine`, because that published binary is linked against `go1.26.3` and no official patched Caddy tag exists yet. `packaging/docker/caddy` is the same three-line consumer module `xcaddy` generates — it imports Caddy's standard module set and adds nothing — and pins upstream snapshot `v2.11.5-0.20260711231708-b2693fb63a30` (commit `b2693fb6`), which adapts Caddy's CEL matcher to the post-v0.28 API. This snapshot is 33 commits after v2.11.4; it is not relabeled as v2.11.4. The consumer module selects patched `cel-go` `v0.30.0` for GO-2026-6094, OpenTelemetry `v1.44.0` for GO-2026-5158, `go-chi` `v5.3.0` for the RealIP advisories, and `klauspost/compress` `v1.18.7` for GO-2026-5841. The full intervening delta and review evidence are recorded in `docs/security/container-image-vulnerabilities.md`. The unchanged `Caddyfile` validates against the resulting binary. The Caddy source version, the whole module graph (`go.mod` + `go.sum`, built `-mod=readonly`) and the toolchain image digest are all pinned, and `GOTOOLCHAIN=local` keeps the build from reaching the network for a different compiler.
+The image supports exactly `linux/amd64` and `linux/arm64`. It uses a pinned Rust Alpine builder, a pinned Go Alpine stage that compiles the committed restricted rclone module, a separate pinned Go Alpine stage that compiles Caddy from source, and a pinned Alpine 3.23 runtime base. The engine worker is built with `CGO_ENABLED=0`, module updates disabled, and the exact Go 1.26.7 compiler; the guardian is a static PIE compiled from the byte-pinned shared source. The package gate rejects unexpected interpreter or dynamic-library dependencies and records executable hashes, sizes, architecture, notices, and source provenance in its fixed manifest. The OpenSSL libraries are upgraded to the exact signed Alpine security revision `3.5.8-r0`, published after the base image was assembled; exact package pins make repository drift fail the build instead of selecting an unreviewed version. The OCI labels record the Covalent release version, runtime base name and digest, OpenSSL security revision, and engine source identity so CI can reject version, documentation, or image-metadata drift. The release index repeats the exact version as `org.opencontainers.image.version`; promotion refuses to move `latest` to an older version or to an equal version with a different digest.
+
+Caddy is compiled rather than copied out of `caddy:2.11.4-alpine`, because that published binary is linked against `go1.26.3` and no official patched Caddy tag exists yet. `packaging/docker/caddy` imports the upstream Caddyfile, TLS, internal PKI, file storage, HTTP, reverse-proxy, header, gzip, zstd, event and logging modules used by the shipped configuration and runtime checks. It omits unrelated standard-distribution modules. The consumer pins upstream snapshot `v2.11.5-0.20260711231708-b2693fb63a30` (commit `b2693fb6`), which adapts Caddy's CEL matcher to the post-v0.28 API. This snapshot is 33 commits after v2.11.4; it is not relabeled as v2.11.4. Its compiled graph selects patched `grpc` `v1.83.2`, `cel-go` `v0.30.0`, OpenTelemetry `v1.44.0`, and `klauspost/compress` `v1.18.7`. The full intervening delta and review evidence are recorded in `docs/security/container-image-vulnerabilities.md`. The unchanged `Caddyfile` validates against the resulting binary. The Caddy source version, the whole module graph (`go.mod` + `go.sum`, built `-mod=readonly`) and the toolchain image digest are all pinned, and `GOTOOLCHAIN=local` keeps the build from reaching the network for a different compiler.
+
+Each image also contains exact target-specific Caddy distribution evidence under `/usr/local/share/covalent/caddy`: the compiled-module inventory, deduplicated readable notices, a manifest bound to the Caddy binary, and deterministic source for the sole compiled MPL-2.0 dependency. The build log emits bounded counts and hashes without dumping the texts. [The evidence scope and remaining review](../../docs/security/caddy-target-license-inventory.md) are explicit; generation does not itself approve a release.
+
+The build also verifies the exact Alpine package database and copied CA against reviewed source locks. It places the package inventory, readable notices, and corresponding source under `/usr/local/share/covalent/alpine`. The container contract extracts those files from the final image and checks every source member against the locks, alongside the installed database and actual CA bytes. Python and download caches remain in build stages. [Alpine source evidence](../../docs/security/alpine-runtime-source.md) records the validation scope; final image size and vulnerability checks remain separate release requirements.
+
+The Dockerfile builds Covalent-local BusyBox revision `1.37.0-r1000` from the frozen Alpine recipe and the reviewed CVE-2025-60876 request-target patch. Each target must pass all 13 wire checks before its packages can enter the runtime. Installation uses normal signed APK verification with a temporary command-scoped public key; package archives and that key are mounted read-only and do not enter runtime layers. The runtime compares its installed executable hashes with the tested files. This local revision is not an Alpine or upstream release. Its OCI labels separate the original recipe commit from local package metadata; full final-image acceptance still requires both architecture builds and scans.
 
 Create a local two-architecture OCI archive with Buildx:
 
@@ -222,7 +460,7 @@ docker buildx build --platform linux/amd64,linux/arm64 \
   --output type=oci,dest=covalent-local.oci .
 ```
 
-The release workflow builds the same pinned Rust toolchain and Alpine runtime independently for `linux/amd64` and `linux/arm64`, enforces the 96 MiB budget on both images, then assembles one manifest. It scans each private architecture image, emits a distinct SPDX SBOM for each, and keylessly signs the release index plus both child image digests with Cosign OIDC. Each SBOM is attested only to its matching child digest. Verification commands are recorded with the release artifact; a signature is not implied for local developer tags.
+The release workflow builds the same pinned Rust toolchain and Alpine runtime independently for `linux/amd64` and `linux/arm64`, enforces the 128 MiB budget on both images, then assembles one manifest. It scans each private architecture image, emits a distinct SPDX SBOM for each, and keylessly signs the release index plus both child image digests with Cosign OIDC. Each SBOM is attested only to its matching child digest. Verification commands are recorded with the release artifact; a signature is not implied for local developer tags.
 
 Run deterministic container checks locally:
 

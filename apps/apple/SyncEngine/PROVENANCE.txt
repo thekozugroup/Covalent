@@ -1,0 +1,18 @@
+Covalent maintained folder engine
+
+Engine: rclone v1.75.1
+Upstream source commit: 687d264b689b8c49a67e2e52a8a5e0caa01c04ce
+Restricted wrapper: github.com/thekozugroup/Covalent/packaging/rclone
+Build toolchain: Go 1.26.7, darwin/arm64, CGO disabled
+Build tags: covalent
+License: MIT
+Upstream source: https://github.com/rclone/rclone/tree/687d264b689b8c49a67e2e52a8a5e0caa01c04ce
+
+The Covalent entry point imports only the local, SFTP, and WebDAV backends and
+the copy, copyto, lsjson, serve sftp, sync, and version commands. It uses the
+unmodified upstream transfer implementation. The bundled target manifest and
+Open Source Notices contain byte-exact license and notice evidence for the
+compiled macOS arm64 package graph. That inventory records evidence for review;
+it is not legal approval.
+
+The guardian source and its Covalent license are included in the notice bundle.

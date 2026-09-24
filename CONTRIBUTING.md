@@ -37,4 +37,4 @@ git config user.email thekozugroup@gmail.com
 
 Do not add generated attribution or co-author trailers. Never commit secrets, identity material, `.a5c` run state, build output, or local signing configuration.
 
-Tier 1 regressions on macOS, Android, Docker, or Unraid block release. The iOS target is unsupported and tracked only as informational CI; it does not delay a valid Tier 1 release.
+Tier 1 regressions on macOS, Android, Docker, or Unraid block release. iOS and Windows are unsupported and excluded from builds and release gates.

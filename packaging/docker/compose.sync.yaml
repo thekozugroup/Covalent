@@ -1,0 +1,11 @@
+# Optional folder-sync access. Supply one existing, explicitly selected folder.
+# This mount is independent from read-only backup sources and private state.
+services:
+  node:
+    volumes:
+      - type: bind
+        source: "${COVALENT_SYNC_FOLDER:?Set COVALENT_SYNC_FOLDER to an existing folder you want to sync}"
+        target: /sync
+        read_only: false
+        bind:
+          create_host_path: false

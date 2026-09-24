@@ -3,6 +3,13 @@ set -euo pipefail
 
 repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 fingerprint_tool="$repo_root/scripts/android-source-fingerprint.sh"
+android_check="$repo_root/scripts/check-android.sh"
+
+grep -Fq 'packaging/sync-engine packaging/rclone' "$android_check"
+if grep -Fq 'docs/licenses/sync-engine/OFL-1.1.txt' "$android_check"; then
+  echo "Android build fingerprint retains an obsolete worker license input" >&2
+  exit 1
+fi
 
 tmp_root=${TMPDIR:-/tmp}
 case "$tmp_root" in

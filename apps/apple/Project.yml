@@ -3,12 +3,11 @@ options:
   bundleIdPrefix: life.michaelwong.covalent
   deploymentTarget:
     macOS: "15.0"
-    iOS: "18.0"
   groupSortPosition: top
 settings:
   base:
-    MARKETING_VERSION: "0.2.0"
-    CURRENT_PROJECT_VERSION: "2000"
+    MARKETING_VERSION: "0.2.1"
+    CURRENT_PROJECT_VERSION: "2001"
     SWIFT_VERSION: "6.0"
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED: YES
@@ -34,13 +33,14 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.utilities
         NSHumanReadableCopyright: Copyright © 2026 The Kozu Group
-        NSLocalNetworkUsageDescription: Covalent finds backup devices you choose to pair on your local network.
+        NSLocalNetworkUsageDescription: Covalent finds devices you choose to pair on your local network.
         NSBonjourServices:
           - _covalent._udp
     entitlements:
       path: Config/CovalentMac.entitlements
       properties:
         com.apple.security.app-sandbox: true
+        com.apple.security.files.bookmarks.app-scope: true
         com.apple.security.files.user-selected.read-write: true
         com.apple.security.network.client: true
         com.apple.security.network.server: true
@@ -62,47 +62,6 @@ targets:
       gatherCoverageData: true
       testTargets:
         - CovalentMacUITests
-  CovalentIOS:
-    type: application
-    platform: iOS
-    sources:
-      - path: Sources/CovalentShared
-      - path: Sources/CovalentIOS
-    dependencies:
-      - package: ZIPFoundation
-        product: ZIPFoundation
-    info:
-      path: Config/CovalentIOS-Info.plist
-      properties:
-        CFBundleDisplayName: Covalent
-        CFBundleShortVersionString: $(MARKETING_VERSION)
-        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        NSHumanReadableCopyright: Copyright © 2026 The Kozu Group
-        NSLocalNetworkUsageDescription: Covalent finds backup devices you choose to pair on your local network.
-        NSBonjourServices:
-          - _covalent._udp
-        NSAppTransportSecurity:
-          NSAllowsLocalNetworking: true
-        UIDesignRequiresCompatibility: true
-        UILaunchScreen: {}
-        UIApplicationSceneManifest:
-          UIApplicationSupportsMultipleScenes: false
-        UISupportsDocumentBrowser: false
-        BGTaskSchedulerPermittedIdentifiers:
-          - life.michaelwong.covalent.ios.transfer-continuation
-        UIBackgroundModes:
-          - processing
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: life.michaelwong.covalent.ios
-        PRODUCT_NAME: Covalent
-        CODE_SIGN_STYLE: Automatic
-        GENERATE_INFOPLIST_FILE: NO
-        TARGETED_DEVICE_FAMILY: "1,2"
-    scheme:
-      gatherCoverageData: true
-      testTargets:
-        - CovalentIOSUITests
   CovalentMacUITests:
     type: bundle.ui-testing
     platform: macOS
@@ -123,21 +82,3 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         ARCHS: arm64
         EXCLUDED_ARCHS: x86_64
-  CovalentIOSUITests:
-    type: bundle.ui-testing
-    platform: iOS
-    sources:
-      - path: Tests/CovalentIOSUITests
-    dependencies:
-      - target: CovalentIOS
-    info:
-      path: Config/CovalentIOSUITests-Info.plist
-      properties:
-        CovalentUITestPort: $(COVALENT_UI_TEST_PORT)
-        CovalentUITestTokenFile: $(COVALENT_UI_TEST_TOKEN_FILE)
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: life.michaelwong.covalent.ios-uitests
-        TEST_TARGET_NAME: CovalentIOS
-        CODE_SIGN_STYLE: Automatic
-        GENERATE_INFOPLIST_FILE: NO

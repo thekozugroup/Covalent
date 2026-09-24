@@ -1,0 +1,50 @@
+{
+  "acceptance": {
+    "acceptedAtUnixMs": 1800000000001,
+    "offerDigest": "3f73bb6142702e588e02ed0b738d018765e38e7c8dab0f22d5ba361fb490cb17",
+    "schemaVersion": 1,
+    "signature": "zGwdkPcKZ0cIGcjbRD18IofVjfujUAxSZp7xD7W3Fs74xlLuOxs4__5LJ51yuDoaoQrdysLDDq9P2FIQn5CUCw",
+    "targetDeviceId": "62c574f4-19ed-438d-b5b6-ccb4d9c9a46c",
+    "targetEngine": {
+      "covalentDeviceId": "62c574f4-19ed-438d-b5b6-ccb4d9c9a46c",
+      "directAddress": "[2001:db8::25]:22000",
+      "engineDeviceId": "FZ23CS4-PDV743V-32LS44M-TCIUBAQ-RQ3OC4X-XN6EG66-BGUCZH4-OISTMAE",
+      "schemaVersion": 1
+    }
+  },
+  "commit": {
+    "acceptanceDigest": "7d04b6c0dc3efc4e231422e9d034f0a131a6d06e086f8276107cce398fb02482",
+    "offerDigest": "3f73bb6142702e588e02ed0b738d018765e38e7c8dab0f22d5ba361fb490cb17",
+    "schemaVersion": 1,
+    "signature": "ajK0gINbkXNCFhKZmGIhhuJolBSIKLYtJEvLQ7WgPsswb0J7x15vbHoyMIQe8LHI7ZJw5aMa4gI1EyasuaK9Cg",
+    "sourceDeviceId": "bc4b432c-2b02-4375-bab0-4372e68ec64a"
+  },
+  "offer": {
+    "expiresAtUnixMs": 1800000060000,
+    "folderId": "12345678-1234-5678-1234-567812345678",
+    "issuedAtUnixMs": 1800000000000,
+    "label": "Shared photos",
+    "nonce": "iRw4ZxkTVk0GivwpkI3Gy9z_UPIFm2o9",
+    "offerId": "642d8f52-0fb4-4f10-affe-0b2a0491755a",
+    "schemaVersion": 1,
+    "signature": "zGXngigfbPs5xZSt1dVSPpIdkgw9H7yGFEAdZLdJhM7MBcouHrY1AHeLOhEvinmu1hqyRz3kPYyZZpNwlB9ZBA",
+    "sourceDeviceId": "bc4b432c-2b02-4375-bab0-4372e68ec64a",
+    "sourceEngine": {
+      "covalentDeviceId": "bc4b432c-2b02-4375-bab0-4372e68ec64a",
+      "directAddress": "203.0.113.10:22000",
+      "engineDeviceId": "EA2I6UL-UUWKJDX-NGOC6QS-U2IZR4Z-LXY5CB7-3KBVQRG-4CNFBV7-RACTXQF",
+      "schemaVersion": 1
+    },
+    "targetDeviceId": "62c574f4-19ed-438d-b5b6-ccb4d9c9a46c"
+  },
+  "source": {
+    "deviceId": "bc4b432c-2b02-4375-bab0-4372e68ec64a",
+    "fingerprint": "f2b24065750c426d6376",
+    "publicKey": "l5-s6ckBI77u2XdPDJaLZZ2_nU2XktYVsevIawMHcys"
+  },
+  "target": {
+    "deviceId": "62c574f4-19ed-438d-b5b6-ccb4d9c9a46c",
+    "fingerprint": "4b7b84aca986191dc830",
+    "publicKey": "M04qKtwUQQ_3PCt6aTdWYwp5yKjku3HTe0PDmSRclPk"
+  }
+}

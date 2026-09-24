@@ -163,7 +163,7 @@ test("pending requests are listed and each one is checked", async () => {
 
 test("the pairing summary is display copy with the code spoken group by group", () => {
   const details = network.summary(pendingItem({ direction: "incoming" }));
-  assert.equal(details.direction, "Incoming backup-device request");
+  assert.equal(details.direction, "Incoming pairing request");
   assert.equal(details.stateCopy, "Compare the code, then confirm it here.");
   assert.equal(details.awaitingLocalConfirmation, true);
   assert.equal(details.settled, false);
@@ -178,7 +178,7 @@ test("the pairing summary is display copy with the code spoken group by group", 
   assert.equal(waiting.settled, false);
 
   const done = network.summary(pendingItem({ state: "complete" }));
-  assert.equal(done.stateCopy, "Backup device added, with its signed certificate fingerprint.");
+  assert.equal(done.stateCopy, "Device paired with its signed certificate fingerprint.");
   assert.equal(done.settled, true);
 
   // A failure keeps the engine's code for the console to map, and holds the

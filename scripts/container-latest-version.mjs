@@ -36,7 +36,8 @@ function compare(left, right) {
   return 0;
 }
 
-function evaluate(requestedValue, candidateDigest, currentValue, currentDigest) {
+function evaluate(requestedValue, candidateDigest, currentValue, currentDigest, tagPrefix = "v", currentTagPrefix = tagPrefix) {
+  if (!["v", "container-v"].includes(tagPrefix) || !["v", "container-v"].includes(currentTagPrefix)) fail("unsupported immutable tag prefix");
   requireDigest(candidateDigest, "candidate digest");
   if (PRERELEASE_VERSION.test(requestedValue)) {
     return { action: "skip-prerelease", currentTag: null };
@@ -64,17 +65,22 @@ function evaluate(requestedValue, candidateDigest, currentValue, currentDigest) 
     fail(`refusing to move latest backward from ${current.tag} to ${requested.tag}`);
   }
   if (ordering === 0) {
+    // A full release supersedes its earlier container-only update at the same
+    // version. Neither immutable tag moves, and the reverse would be a downgrade.
+    if (currentDigest !== candidateDigest && tagPrefix === "v" && currentTagPrefix === "container-v") {
+      return { action: "promote", currentTag: `${currentTagPrefix}${current.canonical}` };
+    }
     if (currentDigest !== candidateDigest) {
       fail(`latest ${current.tag} already points to a different digest`);
     }
-    return { action: "keep", currentTag: current.tag };
+    return { action: "keep", currentTag: `${currentTagPrefix}${current.canonical}` };
   }
-  return { action: "promote", currentTag: current.tag };
+  return { action: "promote", currentTag: `${currentTagPrefix}${current.canonical}` };
 }
 
 const args = process.argv.slice(2);
-if (args.length !== 4) {
-  console.error("usage: node scripts/container-latest-version.mjs REQUESTED CANDIDATE_DIGEST CURRENT_VERSION CURRENT_DIGEST");
+if (args.length !== 4 && args.length !== 5 && args.length !== 6) {
+  console.error("usage: node scripts/container-latest-version.mjs REQUESTED CANDIDATE_DIGEST CURRENT_VERSION CURRENT_DIGEST [REQUESTED_PREFIX [CURRENT_PREFIX]]");
   process.exit(64);
 }
 

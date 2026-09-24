@@ -82,6 +82,7 @@ esac
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 mkdir -p "$output_dir"
+output_dir=$(CDPATH= cd -- "$output_dir" && pwd -P)
 stage=$(mktemp -d "${TMPDIR:-/tmp}/covalent-cli-release.XXXXXX")
 trap 'rm -rf "$stage"' EXIT INT TERM
 

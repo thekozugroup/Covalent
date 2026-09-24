@@ -48,6 +48,27 @@ import okhttp3.tls.HeldCertificate
 
 class AndroidRemediationTest {
     @Test
+    fun firstRunAcceptsAnEmptyProviderListWithoutARoster() {
+        val server = MockWebServer().apply {
+            enqueue(MockResponse().setBody("null"))
+            enqueue(MockResponse().setBody("[]"))
+            start()
+        }
+        try {
+            assertTrue(
+                CovalentNodeClient().providers(
+                    server.url("/").toString().removeSuffix("/"),
+                    "token",
+                ).isEmpty(),
+            )
+            assertEquals("/api/v1/rosters/current", server.takeRequest().path)
+            assertEquals("/api/v1/providers", server.takeRequest().path)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
     fun providerClientReadsFreshIdentityBoundCapacity() {
         val server = MockWebServer().apply {
             enqueue(MockResponse().setBody("{\"grants\":[]}"))

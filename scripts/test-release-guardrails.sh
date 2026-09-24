@@ -28,8 +28,8 @@ grep -Fq "QUIC transport v${transport_version}" docs/protocol/protocol.md
 grep -Fq "\`covalent-quic/${transport_version}\`" docs/protocol/protocol.md
 grep -Fq "\`covalent/authenticated-quic/v${transport_version}\`" docs/protocol/protocol.md
 grep -Fq 'v0.1.0 transport-v2 peers' docs/protocol/protocol.md
-grep -Fq 'v0.1.0 peers' docs/release/notes/v0.2.0.md
-grep -Fq 'speak QUIC transport v2 while v0.2.0 peers speak transport v3' docs/release/notes/v0.2.0.md
+grep -Fq 'v0.1.0 transport v2 and v0.2.0 transport v3' docs/release/notes/v0.2.0.md
+grep -Fq 'are deliberately incompatible' docs/release/notes/v0.2.0.md
 if grep -qi 'unraid' scripts/release-version.sh; then
   echo "release-version.sh must not replace the immutable Unraid image digest" >&2
   exit 1
@@ -67,12 +67,22 @@ grep -Fq 'require_mode /source ro' scripts/validate-unraid-template.sh
 grep -Fq 'require_mode /boot-source ro' scripts/validate-unraid-template.sh
 grep -Fq 'require_mode /run/secrets/covalent-kek ro' scripts/validate-unraid-template.sh
 
+historical_image_digest='sha256:8b8b96bdea7437fecf6d9c3297c248fd9de7eeb25fe7d701aa6f0a5b633cf8a6'
+current_image_digest='sha256:393f8a0dafa7f17d8ad964d501f3d33668d547889dc493080e042489ee3e1677'
 image_digest=$(sed -n 's|^[[:space:]]*<Repository>.*@\(sha256:[0-9a-f]*\)</Repository>[[:space:]]*$|\1|p' packaging/unraid/covalent.xml)
-grep -Fq "$image_digest" docs/release/notes/v0.1.0.md
-grep -Fq "$image_digest" docs/platform/atlas-tailscale.md
+grep -Fq '<Repository>ghcr.io/thekozugroup/covalent:stable</Repository>' packaging/unraid/covalent.xml
+grep -Fq "$historical_image_digest" docs/release/notes/v0.1.0.md
+grep -Fq "$historical_image_digest" docs/platform/atlas-tailscale.md
+grep -Fq "$current_image_digest" README.md
+grep -Fq 'ghcr.io/thekozugroup/covalent:stable' docs/platform/unraid.md
+grep -Fq "$current_image_digest" docs/platform/atlas-tailscale.md
+grep -Fq 'ghcr.io/thekozugroup/covalent:stable' packaging/docker/README.md
 historical_container_identity='https://github.com/thekozugroup/Covalent/.github/workflows/container-supply-chain.yml@refs/tags/v0.1.0'
 grep -Fq -- "--certificate-identity '$historical_container_identity'" docs/platform/atlas-tailscale.md
 grep -Fq -- "--certificate-identity '$historical_container_identity'" docs/release/notes/v0.1.0.md
+current_container_identity='https://github.com/thekozugroup/Covalent/.github/workflows/container-supply-chain.yml@refs/tags/release-tools-v0.2.1-container'
+grep -Fq "$current_container_identity" docs/platform/atlas-tailscale.md
+grep -Fq 'does not independently enforce signatures.' packaging/docker/README.md
 if rg -q -- '--certificate-identity-regexp.*thekozugroup/Covalent' \
   docs/platform/atlas-tailscale.md docs/release/notes/v0.1.0.md; then
   echo "container install documentation must pin the exact workflow and tag identity" >&2
@@ -100,8 +110,12 @@ cli_workflow=.github/workflows/cli-release.yml
 # happens to point at the selected branch commit. Cosign records this ref.
 grep -Fq 'GITHUB_REF}" != "refs/tags/${version}"' "$cli_workflow"
 grep -Fq 'GITHUB_REF_TYPE}" != "tag"' "$cli_workflow"
-grep -Fq 'certificate_identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/cli-release.yml@refs/tags/${RELEASE_VERSION}"' "$cli_workflow"
+grep -Fq 'certificate_identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/cli-release.yml@refs/tags/${version}"' "$cli_workflow"
+grep -Fq 'certificate_identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/cli-release.yml@refs/tags/${repair_tag}"' "$cli_workflow"
+grep -Fq 'CERTIFICATE_IDENTITY: ${{ needs.validate.outputs.certificate_identity }}' "$cli_workflow"
 test -x scripts/package-cli-release.sh
+test -x scripts/test-package-cli-release.sh
+./scripts/test-package-cli-release.sh
 test -x scripts/generate-cli-release-inventory.sh
 test -x scripts/test-cli-release-workflow.sh
 ./scripts/test-cli-release-workflow.sh
@@ -122,9 +136,48 @@ fi
 # and handed to the credentialed promotion job only with checksums and its
 # locally reconstructed index digest.
 container_workflow=.github/workflows/container-supply-chain.yml
+./scripts/test-container-index.sh
 grep -q 'outputs: type=docker,dest=${{ runner.temp }}/covalent-' "$container_workflow"
-grep -q 'image: covalent-private:amd64' "$container_workflow"
-grep -q 'image: covalent-private:arm64' "$container_workflow"
+grep -Fq "'\${{ steps.private-images.outputs.amd64_image_id }}'" "$container_workflow"
+grep -Fq "'\${{ steps.private-images.outputs.arm64_image_id }}'" "$container_workflow"
+if rg -q 'anchore/scan-action|curl[^\n]*\|[^\n]*(sh|bash)' \
+  .github/workflows/ci.yml "$container_workflow"; then
+  echo "container scanning must not execute an action-owned or piped installer" >&2
+  exit 1
+fi
+test "$(grep -Fc './scripts/run-pinned-grype-scan.sh' .github/workflows/ci.yml)" -eq 2
+test "$(grep -Fc './scripts/run-pinned-grype-scan.sh' "$container_workflow")" -eq 2
+test "$(grep -Fc 'continue-on-error: true' "$container_workflow")" -ge 2
+grep -Fq './scripts/finalize-container-vulnerability-scans.sh' "$container_workflow"
+test "$(grep -Fc 'private-container-vulnerabilities-' "$container_workflow")" -eq 2
+grep -Fq 'GRYPE_LINUX_AMD64_SHA256=38525dab1e06f162ebaa02f94d82d1f807076b011a44180cf2777edf1a7b9c26' scripts/run-pinned-grype-scan.sh
+grep -Fq 'GRYPE_LINUX_ARM64_SHA256=935f628bdf9331ffdd946931ea5fdb50045d3970ba52670cbeb44a88f127291b' scripts/run-pinned-grype-scan.sh
+test -x scripts/run-pinned-grype-scan.sh
+test -x scripts/finalize-container-vulnerability-scans.sh
+test -x scripts/verify-grype-report.py
+test -x scripts/test-pinned-grype-scan.sh
+./scripts/test-pinned-grype-scan.sh
+scan_amd64_line=$(grep -n 'Scan private linux/amd64 image' "$container_workflow" | cut -d: -f1)
+scan_arm64_line=$(grep -n 'Scan private linux/arm64 image' "$container_workflow" | cut -d: -f1)
+upload_amd64_line=$(grep -n 'Retain the private linux/amd64 vulnerability report' "$container_workflow" | cut -d: -f1)
+upload_arm64_line=$(grep -n 'Retain the private linux/arm64 vulnerability report' "$container_workflow" | cut -d: -f1)
+scan_gate_line=$(grep -n 'Require both exact-image vulnerability scans' "$container_workflow" | cut -d: -f1)
+sbom_line=$(grep -n 'Generate private linux/amd64 SBOM' "$container_workflow" | cut -d: -f1)
+if [ -z "$scan_amd64_line" ] || [ -z "$scan_arm64_line" ] \
+  || [ -z "$upload_amd64_line" ] || [ -z "$upload_arm64_line" ] \
+  || [ -z "$scan_gate_line" ] || [ -z "$sbom_line" ] \
+  || [ "$scan_amd64_line" -ge "$scan_arm64_line" ] \
+  || [ "$scan_arm64_line" -ge "$upload_amd64_line" ] \
+  || [ "$upload_amd64_line" -ge "$upload_arm64_line" ] \
+  || [ "$upload_arm64_line" -ge "$scan_gate_line" ] \
+  || [ "$scan_gate_line" -ge "$sbom_line" ]; then
+  echo "both private scans and reports must complete before the combined release gate and SBOMs" >&2
+  exit 1
+fi
+sed -n "${scan_arm64_line},$((scan_arm64_line + 3))p" "$container_workflow" | grep -Fq 'if: always()'
+sed -n "${upload_amd64_line},$((upload_amd64_line + 3))p" "$container_workflow" | grep -Fq 'if: always()'
+sed -n "${upload_arm64_line},$((upload_arm64_line + 3))p" "$container_workflow" | grep -Fq 'if: always()'
+sed -n "${scan_gate_line},$((scan_gate_line + 3))p" "$container_workflow" | grep -Fq 'if: always()'
 test "$(grep -Fc 'uses: anchore/sbom-action@' "$container_workflow")" -eq 2
 grep -Fq 'output-file: covalent-container-linux-amd64.spdx.json' "$container_workflow"
 grep -Fq 'output-file: covalent-container-linux-arm64.spdx.json' "$container_workflow"
@@ -153,7 +206,7 @@ if ! printf '%s\n' "$scan_job" | grep -q 'contents: read' \
 fi
 if ! printf '%s\n' "$promote_job" | grep -q 'packages: write' \
   || ! printf '%s\n' "$promote_job" | grep -q 'id-token: write' \
-  || printf '%s\n' "$promote_job" | grep -Eq 'anchore/scan-action|anchore/sbom-action'; then
+  || printf '%s\n' "$promote_job" | grep -Eq 'run-pinned-grype-scan|anchore/scan-action|anchore/sbom-action'; then
   echo "promotion job must have publish credentials but no scan action" >&2
   exit 1
 fi
@@ -173,13 +226,18 @@ if [ "$cleanup_count" -lt 2 ]; then
   echo "each private registry stage must have an always cleanup" >&2
   exit 1
 fi
-grep -Fq -- '--certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container-supply-chain.yml@refs/tags/${RELEASE_VERSION}"' "$container_workflow"
+grep -Fq -- '--certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container-supply-chain.yml@${{ needs.validate.outputs.signing_ref }}"' "$container_workflow"
 
 # GHCR receives only a unique non-consumer candidate before Cosign. Public
 # version/latest tags must remain unchanged unless the exact registry digest,
 # signing identity, signature, and current SBOM attestation all verify first.
 grep -Fq 'candidate="${IMAGE}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' "$container_workflow"
-grep -Fq 'certificate_identity="https://github.com/${GITHUB_WORKFLOW_REF}"' "$container_workflow"
+grep -Fq 'certificate_identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container-supply-chain.yml@${{ needs.validate.outputs.signing_ref }}"' "$container_workflow"
+grep -Fq 'test "${source_sha}" = e7943db3d5785294bdbb389cc2f52142da860c87' "$container_workflow"
+grep -Fq 'test "${ARTIFACT_RUN_ID}" = 35515574466' "$container_workflow"
+grep -Fq 'repair_tag="release-tools-${version}-container"' "$container_workflow"
+grep -Fq 'release-tools-v0.2.1-container' docs/release/publishing.md
+grep -Fq 'release-tools-v0.2.1-container' docs/platform/atlas-tailscale.md
 grep -Fq 'group: container-release-${{ github.repository_id }}' "$container_workflow"
 if grep -Fq 'group: container-release-${{ github.repository_id }}-${{ github.ref }}' "$container_workflow"; then
   echo "container promotion concurrency must serialize every release ref" >&2
@@ -195,10 +253,10 @@ grep -Fq 'COVALENT_SOURCE_FINGERPRINT=${{ needs.validate.outputs.source_fingerpr
 grep -Fq 'test "${amd64_fingerprint}" = "${arm64_fingerprint}"' "$container_workflow"
 grep -Fq '.annotations["io.covalent.source.fingerprint"] == $fingerprint' "$container_workflow"
 grep -Fq 'source-fingerprint: ${{ needs.validate.outputs.source_fingerprint }}' "$container_workflow"
-test "$(grep -Fc -- '--build-arg COVALENT_SOURCE_FINGERPRINT=${{ steps.docker-source.outputs.fingerprint }}' .github/workflows/ci.yml)" -eq 2
+test "$(grep -Fc -- 'COVALENT_SOURCE_FINGERPRINT=${{ steps.docker-source.outputs.fingerprint }}' .github/workflows/ci.yml)" -eq 2
 test "$(grep -Fc -- 'development "${{ steps.docker-source.outputs.fingerprint }}"' .github/workflows/ci.yml)" -eq 2
 grep -Fq 'node scripts/container-latest-version.mjs' "$container_workflow"
-grep -Fq 'latest digest does not match immutable version provenance ${provenance_ref}' "$container_workflow"
+grep -Fq 'test "${provenance_digest}" = "${current_digest}"' "$container_workflow"
 candidate_line=$(grep -n 'Stage the verified index under a non-consumer candidate tag' "$container_workflow" | cut -d: -f1)
 sign_line=$(grep -n 'cosign sign --yes "${subject}"' "$container_workflow" | cut -d: -f1)
 signature_verify_line=$(grep -n 'cosign verify \\' "$container_workflow" | head -n 1 | cut -d: -f1)
@@ -206,9 +264,9 @@ attest_line=$(grep -n 'cosign attest --yes --type spdxjson' "$container_workflow
 attestation_verify_line=$(grep -n 'cosign verify-attestation \\' "$container_workflow" | head -n 1 | cut -d: -f1)
 public_promote_line=$(grep -n 'Promote the verified signed digest to public release tags' "$container_workflow" | cut -d: -f1)
 version_guard_line=$(grep -n 'if existing_digest=$(docker buildx imagetools inspect "${version_ref}"' "$container_workflow" | cut -d: -f1)
-latest_guard_line=$(grep -n 'latest_decision=$(node scripts/container-latest-version.mjs' "$container_workflow" | cut -d: -f1)
+latest_guard_line=$(grep -n 'decision=$(node scripts/container-latest-version.mjs' "$container_workflow" | cut -d: -f1)
 version_tag_line=$(grep -n 'docker buildx imagetools create --tag "${version_ref}" "${subject}"' "$container_workflow" | cut -d: -f1)
-latest_tag_line=$(grep -n 'docker buildx imagetools create --tag "${IMAGE}:latest" "${subject}"' "$container_workflow" | cut -d: -f1)
+latest_tag_line=$(grep -Fn 'docker buildx imagetools create --tag "${IMAGE}:${channels[index]}" "${subject}"' "$container_workflow" | cut -d: -f1)
 if [ -z "$candidate_line" ] || [ -z "$sign_line" ] || [ -z "$signature_verify_line" ] \
   || [ -z "$attest_line" ] || [ -z "$attestation_verify_line" ] \
   || [ -z "$public_promote_line" ] || [ -z "$version_guard_line" ] || [ -z "$latest_guard_line" ] \
@@ -240,11 +298,18 @@ printf '%s\n' "$promote_job" | grep -Fq 'verify-linux-amd64-sbom-attestation: co
 printf '%s\n' "$promote_job" | grep -Fq 'verify-linux-arm64-sbom-attestation: cosign verify-attestation --type spdxjson ${IMAGE}@${ARM64_DIGEST}'
 printf '%s\n' "$promote_job" | grep -Fq 'covalent-container-linux-amd64.spdx.json'
 printf '%s\n' "$promote_job" | grep -Fq 'covalent-container-linux-arm64.spdx.json'
-if [ "$(printf '%s\n' "$promote_job" | grep -Fc 'if [[ "${{ needs.validate.outputs.publish_latest }}" == "true" ]]')" -ne 2 ] \
+if [ "$(printf '%s\n' "$promote_job" | grep -Fc 'if [[ "${{ needs.validate.outputs.publish_latest }}" == "true" ]]')" -ne 1 ] \
   || printf '%s\n' "$promote_job" | grep -Fq 'version_exists}" == false &&'; then
   echo "container reruns must repair and verify latest after an already-correct immutable version tag" >&2
   exit 1
 fi
+
+grep -Fq 'channels=(latest stable)' "$container_workflow"
+grep -Fq 'channels=(stable)' "$container_workflow"
+grep -Fq 'for index in "${!channels[@]}"; do' "$container_workflow"
+grep -Fq 'test "${published_digest}" = "${expected_digests[index]}"' "$container_workflow"
+./scripts/test-container-latest-version.sh
+./scripts/test-container-update-source.sh
 
 # Executable fixtures hold the monotonic latest decision to real semantic
 # versions and digests, including the one-time trusted v0.1.0 migration.
@@ -359,16 +424,23 @@ grep -q 'must be an annotated tag' scripts/verify-release-commit-signature.sh
 grep -q 'git tag -s' scripts/verify-release-commit-signature.sh
 grep -q 'historical unsigned annotated tag is grandfathered' scripts/verify-release-commit-signature.sh
 grep -q 'No Android artifact is published in v0.1.0' README.md
-grep -q 'no active deployable release for the current KEK and trusted-claim' README.md
-grep -q 'no verified source-free CLI archive is published yet' README.md
-if grep -q 'published releases after v0.1.0 include verified source-free CLI archives' README.md; then
-  echo "README must not advertise unpublished CLI archives" >&2
+grep -q '`v0.2.1` is the current release for the KEK and trusted-claim contract' README.md
+grep -q 'verified v0.2.1 archive' README.md
+if grep -q 'no active deployable release for the current KEK and trusted-claim' README.md; then
+  echo "README must describe current release availability" >&2
   exit 1
 fi
 grep -Fq '(docs/getting-started.md)' README.md
 grep -Fq '(platform/atlas-tailscale.md)' docs/getting-started.md
 grep -q 'No verified CLI archive is published with the historical v0.1.0 release' docs/release/cli-install.md
-grep -Fq -- '--certificate-identity "https://github.com/thekozugroup/Covalent/.github/workflows/cli-release.yml@refs/tags/${version}"' docs/release/cli-install.md
+grep -Fq 'v0.2.1) signing_ref=release-tools-v0.2.1 ;;' docs/release/cli-install.md
+grep -Fq '*) signing_ref="${version}" ;;' docs/release/cli-install.md
+grep -Fq 'cli_certificate_identity="https://github.com/thekozugroup/Covalent/.github/workflows/cli-release.yml@refs/tags/${signing_ref}"' docs/release/cli-install.md
+grep -Fq -- '--certificate-identity "${cli_certificate_identity}"' docs/release/cli-install.md
+if grep -Fq -- '--certificate-identity-regexp' docs/release/cli-install.md; then
+  echo "CLI install documentation must use an exact workflow and tag identity" >&2
+  exit 1
+fi
 # Platform manifests cover more than the end-user archive. The install guide
 # must select and validate exactly one archive record instead of asking shasum
 # to open SBOM, inventory, and bundle files the reader did not download.
@@ -410,14 +482,17 @@ if rg -q '<string name="(?:setup_handoff|field_node_address)[^"]*">[^<]*covalent
   exit 1
 fi
 grep -Fq '<string name="tailscale_candidate_example">nas.tailnet-name.ts.net:8787</string>' "$android_strings"
-grep -Fq 'nas.tailnet-name.ts.net:8787' apps/apple/Sources/CovalentMac/MacDevicesView.swift
-grep -Fq 'nas.tailnet-name.ts.net:8787' apps/apple/Sources/CovalentIOS/IOSDevicesView.swift
+if ! grep -Eq 'TextField\("Device address".*prompt: Text\("[^"]+:8787"\)' \
+  apps/apple/Sources/CovalentMac/MacDevicesView.swift; then
+  echo "macOS device-address example must use the pairing port 8787" >&2
+  exit 1
+fi
 grep -Fq 'access-token file created by the Covalent claim command on your trusted computer' apps/apple/Sources/CovalentMac/MacSetupViews.swift
 if rg -q 'backup server shows this token' apps/apple/Sources/CovalentMac; then
   echo "macOS setup copy must use trusted CLI claim output" >&2
   exit 1
 fi
-if rg -n 'nas\.tailnet-name\.ts\.net:8788' apps/android apps/apple/Sources/CovalentMac apps/apple/Sources/CovalentIOS docs packaging/docker; then
+if rg -n 'nas\.tailnet-name\.ts\.net:8788' apps/android apps/apple/Sources/CovalentMac docs packaging/docker; then
   echo "user-facing Tailnet peer examples must use UDP 8787" >&2
   exit 1
 fi
@@ -466,7 +541,7 @@ grep -Fq 'sudo ./scripts/validate-setup-paths.sh \' packaging/docker/README.md
 grep -Fq 'export COVALENT_HTTPS_BIND_IP=100.64.0.10' packaging/docker/README.md
 grep -Fq 'export COVALENT_PEER_BIND_IP=100.64.0.10' packaging/docker/README.md
 grep -Fq 'export COVALENT_ADVERTISED_PEER_ADDRESS=100.64.0.10:8787' packaging/docker/README.md
-grep -Fq '"ip": ["tcp:8443", "udp:8787"]' packaging/docker/README.md
+grep -Fq '"ip": ["tcp:8443", "udp:8787", "tcp:8789"]' packaging/docker/README.md
 
 # Atlas must either let the entrypoint resolve HTTPS MagicDNS or use a numeric
 # SocketAddr. It also pins the SSH host key out of band before remote preflight.
@@ -482,7 +557,7 @@ grep -Fq 'ssh-keyscan -H -t ed25519 atlas.example-tailnet.ts.net' docs/platform/
 grep -Fq 'if [ "$scanned_fingerprint" != "$trusted_fingerprint" ]; then' docs/platform/atlas-tailscale.md
 grep -Fq 'Atlas SSH host-key fingerprint mismatch; refusing to trust it' docs/platform/atlas-tailscale.md
 grep -Fq 'StrictHostKeyChecking=yes' docs/platform/atlas-tailscale.md
-grep -Fq '"ip": ["tcp:8443", "udp:8787"]' docs/platform/atlas-tailscale.md
+grep -Fq '"ip": ["tcp:8443", "udp:8787", "tcp:8789"]' docs/platform/atlas-tailscale.md
 # The install flow must name an explicit Tailnet peer endpoint; searching for
 # the product contract rather than a whole sentence keeps this static gate from
 # drifting when the human-facing explanation changes.

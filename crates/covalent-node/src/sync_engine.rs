@@ -1,0 +1,64 @@
+//! Private-process adapter for the pinned maintained folder-sync engine.
+//!
+//! Verified native/container packages opt in through `NodeRuntimeConfig`.
+//! Engine control uses an owner-only Unix socket or pinned loopback TLS; native
+//! clients must use Covalent's own authorization and folder-sharing workflow.
+
+mod access_recovery;
+mod android_saf;
+pub mod config;
+mod connection;
+#[cfg(test)]
+mod connection_tests;
+mod controller;
+mod health;
+mod host;
+mod identity;
+mod installation;
+#[cfg(any(target_os = "linux", test))]
+mod linux_host;
+#[cfg(target_os = "macos")]
+mod mac_host;
+mod rclone;
+mod run_observation;
+mod service;
+#[cfg(test)]
+mod service_tests;
+mod sharing;
+mod state;
+mod supervisor;
+
+pub use access_recovery::FolderSyncAccessRecovery;
+pub use android_saf::{AndroidSafGrantError, AndroidSafGrantRegistry};
+pub use connection::{EnginePeerConnection, EnginePeerConnectionState};
+pub use health::{FolderHealth, FolderLifecycle};
+pub use host::FolderSyncRuntimeConfig;
+pub(crate) use host::FolderSyncRuntimeState;
+pub use identity::{EngineIdentity, EngineIdentityError};
+
+pub use supervisor::{
+    EngineSupervisorError, OwnedEngineWorker, StopOutcome, VerifiedEngineExecutable,
+};
+
+pub use controller::{EngineSessionError, EngineSessionSettings, ManagedEngineSession};
+pub use installation::{EngineInstallation, EngineInstallationError};
+#[cfg(any(target_os = "linux", test))]
+pub use linux_host::{LinuxHostError, discover_packaged_engine as discover_packaged_linux_engine};
+#[cfg(target_os = "macos")]
+pub use mac_host::{MacHostError, discover_packaged_engine};
+pub use run_observation::EngineIndexSnapshot;
+pub use service::{
+    CommittedMutation, FolderHealthFreshness, FolderSyncIssue, FolderSyncLifecycle,
+    FolderSyncService, FolderSyncServiceError, FolderSyncStatus, PeerConnectionFreshness,
+    PeerConnectionState,
+};
+pub use sharing::{
+    AndroidLinkConditions, FolderLinkSettings, FolderRemovalNotice, FolderShareDelivery,
+    FolderShareRecord, FolderSharingJournal, LINK_RUN_DEADLINE_MS, LinkCadence, LinkRunAdmission,
+    LinkRunCommit, LinkRunDestinationResult, LinkRunDestinationState, LinkRunDestinationSummary,
+    LinkRunPhase, LinkRunRejection, LinkRunRejectionReason, LinkRunReport, LinkRunRequest,
+    LinkRunRequestSummary, LinkRunState, LinkRunSummary, LinkRunWorkItem, LinkSettingsCommit,
+    LinkSettingsRequest, LinkSettingsState, MAX_SCHEDULE_INTERVAL_MINUTES,
+    MIN_SCHEDULE_INTERVAL_MINUTES, ShareSummary, SharingError, SharingPhase,
+};
+pub use state::{EngineStateError, EngineStateStore};

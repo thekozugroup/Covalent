@@ -1,14 +1,27 @@
 # Architecture
 
-## Shape
+## One-way links
 
-```text
-Native macOS + bundled node ──────┐
-Native Android/Apple streams ─────├─ local versioned service facade ─ Rust engine
-Docker/Unraid ────────────────────┤                   ├─ encrypted chunk store
-(iOS target, unsupported) ────────┘                   ├─ signed manifest store
-Embedded console ─ local HTTP API ─ node daemon       └─ QUIC peer sessions
-```
+Native macOS and Android clients and the Docker web console use the same node API.
+Covalent owns pairing, folder authorization, shared link settings, scheduling,
+status, and the lifecycle of its bundled rclone transfer worker.
+The source commits setting revisions and distributes them to linked destinations.
+Each destination writes ordinary files into its authorized folder; collection
+links use separate child folders. Manual and scheduled links stop their transfer
+worker between runs. Android reports local Wi-Fi and charging conditions to the
+node; those observations expire and are not shared settings.
+
+The rclone integration uses paired, read-only SFTP source access and scoped
+destination copy operations. Android keeps its folder grant on-device and
+streams through an authenticated loopback WebDAV adapter. It does not stage an
+entire folder. See [ADR 0008](../adr/0008-rclone-one-way-links.md) for the engine
+decision and the completion ledger for integration readiness.
+
+The [product requirements](../product/requirements.md) define deletion behavior,
+platform scope, and the completion gates. The older archive APIs described below
+remain for access to existing data; they do not define the current product scope.
+
+## Legacy archive components
 
 The Rust workspace owns protocol types, identity, pairing, backup traversal, chunking, encryption, durable storage, verification, restore safety, discovery, and peer transport. Native applications own platform access grants and platform UI. Docker and Unraid run the daemon with the same engine and a small embedded console.
 
@@ -17,7 +30,6 @@ The Rust workspace owns protocol types, identity, pairing, backup traversal, chu
 - `covalent-protocol`: canonical versioned messages, manifests, settings exports, errors, and compatibility fixtures. It has no platform UI dependencies.
 - `covalent-core`: filesystem safety, encrypted storage, manifest lifecycle, replica intent, verification, restore planning, and job state.
 - `covalent-node`: long-running peer and local API service with graceful shutdown and embedded assets.
-- `covalent-ffi`: narrow in-process service facade for native bindings. Platform code never reaches storage internals directly.
 - `covalent-cli`: operator workflows and deterministic diagnostics against the same facade/API.
 
 ## Data flow
@@ -41,8 +53,8 @@ One process owns a node state directory through an exclusive lock. Identity, bac
 - macOS Tier 1: bundled app-owned loopback node, private readiness/token files, inheritance-only helper entitlements, security-scoped and coordinated archive streaming without forwarding PowerBox paths, menus, keyboard, and supported background work.
 - Android Tier 1: API 37 targeting, persisted SAF tree grants, file-descriptor archive streaming without forwarding content URIs, exact create-only restore into an empty tree, opt-in local-network permission for LAN discovery, foreground/resumable work, Compose Material 3, and a restrained floating action toolbar.
 - Docker/Unraid Tier 1: explicit read-only source mounts, durable config/data, explicit writable restore roots, rootless runtime, and clear network mode tradeoffs.
-- iOS (not supported): the target exists and uses selected directories only with coordinated access, but iOS is out of scope for now. It is not published, not installable, and not gated on. Process-termination rehydration of the original security-scoped archive request was never completed. Full-device backup is neither designed nor claimed.
+
 
 ## Readiness isolation
 
-Shared engine and contract failures block every affected supported platform, and any supported-platform failure blocks release. iOS is not a supported platform, so iOS-specific UI, signing, simulator, or background gaps never affect release readiness; its informational CI lane runs but is deliberately absent from every release workflow's required-check list.
+Shared engine and contract failures block every affected Tier 1 platform, and any supported-platform failure blocks release. iOS is not a supported platform and has no app target or CI lane.

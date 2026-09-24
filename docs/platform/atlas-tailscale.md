@@ -1,17 +1,16 @@
 # Atlas / Tailscale install runbook
 
-Start with [Back up your first folder](../getting-started.md). This runbook adds
-the Unraid, SSH, and Tailnet checks needed for Atlas.
+Start with [Create your first one-way link](../getting-started-links.md). This
+runbook adds the Unraid, SSH, and Tailnet checks needed for Atlas.
 
-Atlas deployment is currently blocked. The pinned v0.1.0 image is public,
-signed, and multi-architecture, but it predates the required KEK and trusted
-claim client code. Do not install or mutate Atlas until a new signed immutable
-image digest contains this workflow and replaces the template digest.
+Atlas is offline; no Atlas runtime validation is claimed. Release installation
+uses the verified v0.2.1 immutable image and matching template. The historical
+v0.1.0 image predates the required KEK and trusted claim client and must not be
+installed.
 
 ## 1. Historical v0.1.0 boundary (do not install)
 
-The digest currently pinned in `packaging/unraid/covalent.xml` identifies the
-historical v0.1.0 release only:
+The following digest identifies the historical v0.1.0 release only:
 
 ```text
 ghcr.io/thekozugroup/covalent@sha256:8b8b96bdea7437fecf6d9c3297c248fd9de7eeb25fe7d701aa6f0a5b633cf8a6
@@ -26,6 +25,37 @@ cosign verify ghcr.io/thekozugroup/covalent@sha256:8b8b96bdea7437fecf6d9c3297c24
   --certificate-identity 'https://github.com/thekozugroup/Covalent/.github/workflows/container-supply-chain.yml@refs/tags/v0.1.0' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
+
+### Verify the v0.2.1 image
+
+Download `covalent-container-digest.txt` and the matching Unraid template from
+the v0.2.1 release. The digest must be
+`sha256:393f8a0dafa7f17d8ad964d501f3d33668d547889dc493080e042489ee3e1677`.
+The template must contain exactly that immutable digest. Verify it before
+pulling or installing:
+
+```sh
+version=v0.2.1
+digest=$(cat covalent-container-digest.txt)
+printf '%s\n' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$' || exit 1
+case "$version" in
+  v0.2.1) signing_ref=release-tools-v0.2.1-container ;;
+  *) signing_ref="$version" ;;
+esac
+cosign verify "ghcr.io/thekozugroup/covalent@$digest" \
+  --certificate-identity "https://github.com/thekozugroup/Covalent/.github/workflows/container-supply-chain.yml@refs/tags/${signing_ref}" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+For v0.2.1 alone, the exact signing identity is
+`https://github.com/thekozugroup/Covalent/.github/workflows/container-supply-chain.yml@refs/tags/release-tools-v0.2.1-container`.
+The packaging repair must reuse the original scanned v0.2.1 architecture
+archives and retain their source provenance. The runtime source remains the
+signed `v0.2.1` tag. The separate repair tag identifies signing/publication
+code, not a different application version. Preserve the exact identity check;
+do not substitute a branch, wildcard or different repair tag. Verify the
+architecture signatures and SBOM attestations using the release's matching
+verification instructions before deployment.
 
 ## 2. Keep the container boundary small and the KEK separate
 
@@ -57,7 +87,7 @@ The Unraid template maps
 fixed `99:100` identity. The file must remain owner-only (`0600`) and owned by
 that identity. Do not substitute the generic Docker Compose UID, path, or
 secret filename on Atlas. The version must remain `1` for the state directory.
-There is no automatic KEK rotation in v0.2.0. A copied
+There is no automatic KEK rotation in v0.2.1. A copied
 `/config` + `/data` pair without this separate secret fails locked; Covalent
 never creates a replacement key during startup.
 
@@ -151,7 +181,7 @@ group narrower than the client group:
     {
       "src": ["group:covalent-clients"],
       "dst": ["tag:covalent-atlas"],
-      "ip": ["tcp:8443", "udp:8787"]
+      "ip": ["tcp:8443", "udp:8787", "tcp:8789"]
     },
     {
       "src": ["group:covalent-operators"],
@@ -179,12 +209,15 @@ The operator computer needs:
 
 - this exact Covalent source checkout, because the preflight and template
   validator run from it;
-- `ssh`, `ssh-keygen`, `ssh-keyscan`, `jq`, and a working key-only SSH login;
-- an Atlas SSH account written as `USER@atlas.example-tailnet.ts.net`;
+- `ssh`, `ssh-keygen`, `ssh-keyscan`, and a working key-only SSH login;
+- an Atlas SSH account written as `USER@atlas.example-tailnet.ts.net` that logs in as UID 0 (normally Unraid's `root` account); the preflight refuses a weaker identity check;
 - Atlas's ED25519 SSH fingerprint obtained from its local console.
 
 `BatchMode=yes` deliberately rejects password prompts. Set up and test the SSH
-key before running Covalent's preflight.
+key before running Covalent's preflight. Atlas itself needs `docker`,
+`tailscale`, `jq`, `python3`, `setpriv`, `ss`, `find`, `getent`, and GNU `readlink -e` or
+`realpath`; the helper fails closed when an identity or DNS-verification tool is
+unavailable.
 
 Run the read-only Atlas preflight before any host-side install or deployment.
 First pin the SSH host key. On Atlas's local console, obtain the trusted
@@ -214,7 +247,7 @@ fi
 cat "$candidate_key" >> "$HOME/.ssh/known_hosts"
 chmod 600 "$HOME/.ssh/known_hosts"
 ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
-  operator@atlas.example-tailnet.ts.net true
+  root@atlas.example-tailnet.ts.net true
 ```
 
 Do not trust the `ssh-keyscan` result by itself, and do not delete a changed
@@ -222,11 +255,11 @@ known-host entry merely to make SSH connect. Investigate a mismatch first.
 After strict known-host verification succeeds, run:
 
 ```sh
-scripts/atlas-preflight.sh --ssh operator@atlas.example-tailnet.ts.net \
+scripts/atlas-preflight.sh --ssh root@atlas.example-tailnet.ts.net \
   --source /mnt/user/Photos --source /mnt/user/Documents
 
 ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
-  operator@atlas.example-tailnet.ts.net sh -s -- \
+  root@atlas.example-tailnet.ts.net sh -s -- \
   --config /mnt/user/appdata/covalent/config \
   --data /mnt/user/appdata/covalent/data \
   --source /mnt/user/Photos \
@@ -248,31 +281,21 @@ the container is rootless/read-only/no-capabilities; and no Docker or Tailscale
 control socket is mounted. A writable source mapping fails this gate.
 
 Over strict-host-key SSH, it verifies Docker/Tailscale availability, requires
-TCP 8443 and UDP 8787 to have no current listener, and canonicalizes every
-source with `readlink -e` or `realpath`. Each `--source` must be a normalized,
+Tailscale to be running, and checks that every IPv4 or IPv6 address returned by
+MagicDNS for the requested hostname belongs to Atlas itself in `tailscale status
+--json`. It requires TCP 8443 and UDP 8787 to have no current listener, and
+canonicalizes every source with `readlink -e` or `realpath`. Each `--source` must be a normalized,
 non-symlink path below one explicit `/mnt/user` share; `/mnt/user/system`,
 appdata, dot-segment escapes, and paths enclosing the KEK fail closed. The
-remote check actually opens each directory for a bounded one-entry listing.
+remote check actually opens each directory for a bounded one-entry listing
+twice: once as the SSH identity, then under `setpriv --reuid=99 --regid=100
+--clear-groups`, which matches the template's fixed container identity without
+pulling or starting an image. It fails closed if `setpriv` is unavailable or the
+SSH session is not UID 0.
 It does not claim that host readability makes the host path read-only: the
 validated Unraid `ro` bind is the no-write control. The preflight does not
 SSH-mutate, write a source, pull an image, create a directory, or deploy
 anything. Stop or move any existing listener before deployment, then rerun it.
-
-The current helper proves that Tailscale responds and that the requested DNS
-name resolves; it does not yet prove that every returned address equals Atlas's
-own Tailnet address or that UID/GID `99:100` can read every selected source.
-Until those checks move into the helper, verify them on Atlas before deploy:
-
-```sh
-test "$(tailscale status --json | jq -r '.BackendState')" = Running
-atlas_ip=$(tailscale ip -4 | sed -n '1p')
-resolved_ip=$(getent ahostsv4 atlas.example-tailnet.ts.net | awk 'NR == 1 { print $1 }')
-test -n "$atlas_ip"
-test "$resolved_ip" = "$atlas_ip"
-docker run --rm --user 99:100 --entrypoint /bin/sh \
-  -v /mnt/user/Photos:/source:ro covalent:local \
-  -c 'test -r /source && find /source -mindepth 1 -maxdepth 1 -print -quit >/dev/null'
-```
 
 After the container exists, inspect its actual image, user, ports, security
 flags, and bind mounts. Rerun the path validator with the host `Source` values
@@ -289,10 +312,10 @@ device, select it explicitly for the next backup, and Verify. Use the complete
 
 ## 7. Current evidence and remaining deployment work
 
-The v0.1.0 container lane built, scanned, signed, attested, and published both
-Linux architectures, but it cannot satisfy the new KEK contract. `v0.2.0` is
-only a source release candidate: no replacement digest or Atlas deployment
-exists. A replacement signed digest, exact-digest template update, physical
-Unraid installation, Tailnet connectivity, upgrade, boot-device backup, and
-production restore are all required acceptance checks before relying on Atlas
-for important data.
+The historical v0.1.0 container cannot satisfy the current KEK contract.
+Existing validation covers Docker on both Linux architectures and the real
+Atmos-to-Waypoint music link; Waypoint supplies the Unraid runtime evidence.
+Atlas remains offline. Publication and deployment of the final v0.2.1 digest
+must be recorded separately from those earlier results. This runbook does not
+claim a tested Atlas installation or full boot-device recovery. Preserve an
+independent recovery copy before applying the published setup to that server.

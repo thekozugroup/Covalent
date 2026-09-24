@@ -1,9 +1,12 @@
 # Set up Covalent on macOS
 
 Covalent supports macOS 15 or later on Apple Silicon. The app starts its own
-private Covalent node automatically. When Atlas deployment becomes available,
-pair it as a backup device; do not replace the Mac's local connection with
-Atlas.
+private Covalent node automatically. Use the build and installation steps below,
+then [create a one-way link](../getting-started-links.md). Pair a destination
+with the Mac's local node; keep the app connected to its own node.
+
+Atlas is offline. Docker is the accepted server target; current native release
+acceptance remains open.
 
 ## Before you start
 
@@ -11,10 +14,8 @@ You need:
 
 - an Apple Silicon Mac (`arm64`), not an Intel Mac;
 - macOS 15 or later;
-- about 15 minutes;
-- after the replacement image is published, Atlas installed and claimed if you
-  want an off-Mac copy; and
-- one small, expendable folder for the recovery check.
+- another device running the current Covalent build; and
+- a small folder for your first transfer.
 
 Check the Mac architecture:
 
@@ -36,8 +37,8 @@ the app inside still has the ad-hoc code signature verified below.
 
 ### Current path: build the arm64 app from source
 
-Install Xcode 26, open it once, accept its license, and install `rustup`. Then
-run one command from the repository root:
+Install Xcode 26, open it once, accept its license, and install `rustup`. Start
+from a clean source checkout, then run one command from the repository root:
 
 ```sh
 ./scripts/build-personal-macos-app.sh
@@ -45,8 +46,9 @@ run one command from the repository root:
 
 The builder checks the Mac and pinned toolchain, installs checksum-pinned
 XcodeGen into a private temporary directory, builds the locked source, ad-hoc
-signs the app, verifies both arm64 executables, creates the ZIP and checksum,
-then extracts and verifies the ZIP again. Finished install files go only to the
+signs the app, verifies its bundled arm64 executables, creates the ZIP and checksum,
+then extracts and verifies the ZIP again. It also writes a build receipt recording
+the source revision and package hashes. Finished install files go only to the
 ignored `artifacts/install` directory. XcodeGen also creates or refreshes the
 ignored generated project at `apps/apple/Covalent.xcodeproj`; tracked source is
 not changed. The builder refuses to overwrite an existing artifact and never
@@ -66,29 +68,29 @@ open artifacts/install
 ```
 
 Continue only when the checksum prints `OK`. In Finder, double-click the ZIP,
-then drag `Covalent.app` into Applications. If either output already exists,
-move that exact pair elsewhere or remove it only after deciding it is no longer
-needed; the builder will not replace it. Developer build and test details live
+then drag `Covalent.app` into Applications. Keep the ZIP, its `.sha256` file,
+and its `.build-receipt.json` file together. If an output already exists, move
+that version's three files elsewhere or remove them only after deciding they are
+no longer needed; the builder will not replace them. Developer build and test details live
 in the [Apple client README](../../apps/apple/README.md).
 
-### After publication: download the verified release build
+### Download the verified release build
 
-The v0.2.0 macOS assets are not published yet. Do not use this download path
-until the official release page contains both files listed below. The
-historical v0.1.0 archive is not a current Covalent setup.
+Download the v0.2.1 macOS assets from the official release page. The historical
+v0.1.0 archive is not a current Covalent setup.
 
 From the official
 [GitHub Releases page](https://github.com/thekozugroup/Covalent/releases),
 download both files for the same version:
 
-- `Covalent-v0.2.0-macOS-arm64-unsigned.zip`
-- `Covalent-v0.2.0-macOS-arm64-unsigned.zip.sha256`
+- `Covalent-v0.2.1-macOS-arm64-unsigned.zip`
+- `Covalent-v0.2.1-macOS-arm64-unsigned.zip.sha256`
 
 In Terminal, verify the download:
 
 ```sh
 cd "$HOME/Downloads"
-version=v0.2.0
+version=v0.2.1
 archive="Covalent-${version}-macOS-arm64-unsigned.zip"
 checksum="${archive}.sha256"
 test -f "$archive" && test -f "$checksum"
@@ -140,79 +142,41 @@ Launch Covalent and wait for status **Ready**. First launch automatically:
 - starts the bundled node on a private loopback address; and
 - reconnects the app to that node.
 
+The personal build saves its encryption keys in your login Keychain. If macOS
+asks for access after a verified Covalent update, authorize the Covalent app you
+just opened. Denied or locked access stops startup without replacing your keys.
+Unlock the Mac, retry, and respond to the macOS Keychain prompt. Do not delete
+the saved key to resolve an access error.
+
 Nothing needs to be typed into **Service → Connect**. That form is a recovery
 tool, not the Atlas pairing path, and a managed Mac returns to its bundled node
-on refresh. Keep Covalent open and the Mac awake during the first backup.
+on refresh. Keep Covalent open and the Mac awake during the first transfer.
 
-## 4. Complete the local first recovery checkpoint
+## 4. Pair a device and create a link
 
-Use expendable test data first:
+Open **Devices**, choose **Find Devices**, then **Pair with This Device** for a
+discovered device. Alternatively, enter its reachable hostname or IP with port
+8787 in **Device address** and choose **Pair Device**. Compare the confirmation code
+on both devices and confirm it on each.
 
-1. Create a folder containing one small file whose contents you can recognize.
-2. In Covalent, choose **New Backup**.
-3. Choose the test folder, give the backup a clear name, and leave **Extra
-   copies** clear. This first test is deliberately local-only.
-4. Start the backup. Wait until the task completes and the snapshot appears in
-   **Backups**. Do not quit while it is running.
-5. Select that snapshot and choose **Verify**. Continue only when Covalent says
-   the backup is intact.
-6. Choose **Preview Restore…**, select a different empty folder, and keep the
-   safest conflict policy for this first check.
-7. Review the signed preview, choose **Restore**, and wait for **Restore
-   Complete**.
-8. Open the restored file and compare it with the original.
+Open **Links**, choose your source folder and paired destination, then review
+timing and deletion behavior. On a receiving Mac, **Choose Folder…** selects its
+destination and accepts the incoming link. Use **Run Now** for your first transfer.
+The Covalent menu bar item
+shows each link's status and transfer actions.
 
-Checkpoint passes only when all four facts are true:
+Follow [Create your first one-way link](../getting-started-links.md) for additional
+destinations, family collection folders, schedules, and deletion choices. Folder
+links do not require a legacy backup or restore checkpoint.
 
-- backup completed;
-- the snapshot is explicitly treated as a local-only evaluation;
-- verification reported intact; and
-- restore into a separate folder produced matching data.
+For a Docker peer, allow UDP 8787 for pairing and link control. A Docker source
+also needs TCP 8789 for authenticated file transfers. See the
+[Docker network settings](../../packaging/docker/README.md) for the ports needed
+by your chosen source and destination. Tailscale is optional; it must permit
+those connections when used.
 
-This proves the Mac app and recovery path, not Mac-loss protection. Complete it
-before adding any other device.
-
-For a stronger source-loss drill, rename the expendable source folder after
-verification, restore again into another empty folder, compare it, then put the
-source back. Do not test by deleting irreplaceable data.
-
-## 5. Optional after the checkpoint: prepare Atlas
-
-Atlas deployment is currently blocked until a replacement signed immutable
-`v0.2.0` image is published. Do not install the historical image. After the
-replacement is available, follow the
-[Atlas and Tailscale runbook](atlas-tailscale.md) to install and claim Atlas.
-Claiming creates an owner-only directory containing `root.crt` and
-`local-api-token`.
-
-Use those files to trust and unlock the Atlas HTTPS console. Never enter the
-one-time setup code in a browser or native app. Keep the original claim
-directory on the trusted operator computer.
-
-The Mac app does not need Atlas's token or certificate in its local connection
-form. Device pairing carries and pins its own signed transport identity.
-
-## 6. Optional after the checkpoint: pair the Mac with Atlas
-
-Choose one network path:
-
-- **Same LAN:** expose Atlas peer traffic on UDP 8787. In Covalent Settings,
-  enable **Find devices on the local network**. Open **Devices**, choose **Find
-  Devices**, then **Pair with This Device** for Atlas.
-- **Tailnet:** put the Mac and Atlas on the same Tailnet and allow UDP 8787.
-  Open **Devices**, enter Atlas's exact MagicDNS name with port 8787, such as
-  `atlas.example-tailnet.ts.net:8787`, then choose **Use as Backup Device**.
-
-Keep the Atlas web console's **Pair** tab visible. Compare every group of the
-code shown on the Mac and Atlas. Continue only when they match, then choose
-**Codes Match — Use as Backup Device** on both. Wait until the Mac lists Atlas
-under **Connected storage devices**.
-
-LAN discovery is only a hint; the code and signed identities create trust.
-TCP 8443 serves Atlas HTTPS management. UDP 8787 handles device pairing and
-encrypted replica traffic. After pairing, make a second backup with Atlas
-selected under **Extra copies**, then run Verify again. That second result adds
-Mac-loss protection to the local recovery proof.
+The older encrypted backup workflow remains documented in the
+[legacy setup guide](../getting-started.md).
 
 ## Troubleshooting
 
@@ -221,12 +185,10 @@ Mac-loss protection to the local recovery proof.
   after both pass.
 - **Status stays Offline:** choose Refresh. Confirm the app still contains
   `Contents/MacOS/covalent-node`; reinstall the complete app bundle if missing.
-- **Atlas is absent on LAN:** confirm LAN discovery is enabled and UDP 8787 is
-  reachable, or use Atlas's Tailnet address explicitly.
+- **A device is absent on LAN:** confirm LAN discovery is enabled and UDP 8787
+  is reachable, or enter its reachable address explicitly.
 - **Tailnet pairing fails:** confirm both devices are online in the same
   Tailnet, use port 8787, and check the Tailnet policy permits UDP 8787.
-- **Backup cannot select Atlas:** pairing alone is insufficient. Wait for Atlas
-  to report current capacity and appear as Connected.
 - **Folder access was lost:** choose the folder again. Covalent never asks for
   broad disk access. See [Apple directory access](apple-directory-access.md).
 

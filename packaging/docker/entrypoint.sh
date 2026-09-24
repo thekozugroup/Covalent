@@ -18,9 +18,10 @@ esac
 
 # Provisioning a KEK is an explicit, one-time operator action. It does not need
 # the daemon mounts and must never accidentally start Caddy or generate state.
-if [ "${1:-serve}" != "serve" ]; then
-  exec covalent-node "$@"
-fi
+case "${1:-serve}" in
+  serve|recover) : ;; # Recovery also starts a long-lived, TLS-protected node.
+  *) exec covalent-node "$@" ;;
+esac
 
 for directory in "${COVALENT_CONFIG_DIR:-/config}" "${COVALENT_DATA_DIR:-/data}"; do
   if [ ! -d "$directory" ] || [ ! -w "$directory" ]; then
@@ -152,6 +153,22 @@ if [ -n "${COVALENT_ADVERTISED_PEER_ADDRESS:-}" ]; then
     echo "COVALENT_ADVERTISED_PEER_ADDRESS must be a numeric IP:port, not a hostname" >&2
     exit 64
   fi
+fi
+
+# The engine always listens on container port 8789. Offers must name the host's
+# published port, including a Compose override, rather than the container port.
+if [ -z "${COVALENT_SYNC_ADVERTISED_ADDRESS:-}" ] \
+  && [ -n "${COVALENT_ADVERTISED_PEER_ADDRESS:-}" ]; then
+  sync_port=${COVALENT_SYNC_PORT:-8789}
+  case "$sync_port" in
+    ''|*[!0-9]*|??????*) sync_port=invalid ;;
+  esac
+  if [ "$sync_port" = invalid ] || [ "$sync_port" -lt 1 ] || [ "$sync_port" -gt 65535 ]; then
+    echo "COVALENT_SYNC_PORT must be a host port between 1 and 65535" >&2
+    exit 64
+  fi
+  COVALENT_SYNC_ADVERTISED_ADDRESS="${COVALENT_ADVERTISED_PEER_ADDRESS%:*}:$sync_port"
+  export COVALENT_SYNC_ADVERTISED_ADDRESS
 fi
 
 covalent-node "$@" &

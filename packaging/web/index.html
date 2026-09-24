@@ -4,54 +4,222 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <title>Covalent node</title>
+    <title>Covalent · Server console</title>
     <link rel="stylesheet" href="/assets/app.css" />
+    <script src="/assets/folder-sync-flow.js" defer></script>
     <script src="/assets/pairing-flow.js" defer></script>
-    <script src="/assets/restore-plan-flow.js" defer></script>
-    <script src="/assets/backup-terminal-flow.js" defer></script>
     <script src="/assets/tab-flow.js" defer></script>
     <script src="/assets/app.js" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#content">Skip to console</a>
+    <!-- shadcn:sidebar:start -->
+    <!-- shadcn/ui components adapted under the following license:
+MIT License
+
+Copyright (c) 2023 shadcn
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Lucide icons:
+ISC License
+
+Copyright (c) 2026 Lucide Icons and Contributors
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+
+
+The following Lucide icons are derived from the Feather project:
+
+airplay, alert-circle, alert-octagon, alert-triangle, aperture, arrow-down-circle, arrow-down-left, arrow-down-right, arrow-down, arrow-left-circle, arrow-left, arrow-right-circle, arrow-right, arrow-up-circle, arrow-up-left, arrow-up-right, arrow-up, at-sign, calendar, cast, check, chevron-down, chevron-left, chevron-right, chevron-up, chevrons-down, chevrons-left, chevrons-right, chevrons-up, circle, clipboard, clock, code, columns, command, compass, corner-down-left, corner-down-right, corner-left-down, corner-left-up, corner-right-down, corner-right-up, corner-up-left, corner-up-right, crosshair, database, divide-circle, divide-square, dollar-sign, download, external-link, feather, frown, hash, headphones, help-circle, info, italic, key, layout, life-buoy, link-2, link, loader, lock, log-in, log-out, maximize, meh, minimize, minimize-2, minus-circle, minus-square, minus, monitor, moon, more-horizontal, more-vertical, move, music, navigation-2, navigation, octagon, pause-circle, percent, plus-circle, plus-square, plus, power, radio, rss, search, server, share, shopping-bag, sidebar, smartphone, smile, square, table-2, tablet, target, terminal, trash-2, trash, triangle, tv, type, upload, x-circle, x-octagon, x-square, x, zoom-in, zoom-out
+
+The MIT License (MIT) (for the icons listed above)
+
+Copyright (c) 2013-present Cole Bemis
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-->
+    <aside data-slot="sidebar" data-state="expanded" data-collapsible="icon" id="console-sidebar" aria-label="Console navigation"><div data-slot="sidebar-header"><span class="sidebar-brand" aria-label="Covalent" role="img"><svg viewBox="0 0 88 64" width="26" height="20" aria-hidden="true" focusable="false"><path d="M44 11.215a24 24 0 0 1 0 41.57 24 24 0 0 1 0-41.57Z" fill="currentColor" opacity=".22"></path><g fill="none" stroke="currentColor" stroke-width="3.5"><circle cx="32" cy="32" r="24"></circle><circle cx="56" cy="32" r="24"></circle></g></svg></span><button type="button" data-sidebar-toggle="" aria-label="Collapse sidebar" aria-expanded="true" aria-controls="console-sidebar" title="Collapse sidebar"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-panel-left lucide-sidebar" aria-hidden="true" focusable="false"><rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M9 3v18"></path></svg></button></div><div data-slot="sidebar-content"><div data-slot="sidebar-menu" role="tablist" aria-label="Covalent actions" aria-orientation="vertical"><button data-slot="sidebar-menu-button" data-active="true" type="button" id="folders-tab" role="tab" aria-selected="true" aria-controls="folders-panel" tabindex="0" data-tab="folders" title="Links" aria-label="Links"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-link" aria-hidden="true" focusable="false"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg><span class="sidebar-label">Links</span></button><button data-slot="sidebar-menu-button" data-active="false" type="button" id="pair-tab" role="tab" aria-selected="false" aria-controls="pair-panel" tabindex="-1" data-tab="pair" title="Devices" aria-label="Devices"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-monitor-smartphone" aria-hidden="true" focusable="false"><path d="M18 8V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h8"></path><path d="M10 19v-3.96 3.15"></path><path d="M7 19h5"></path><rect width="6" height="10" x="16" y="12" rx="2"></rect></svg><span class="sidebar-label">Devices</span></button><button data-slot="sidebar-menu-button" data-active="false" type="button" id="settings-tab" role="tab" aria-selected="false" aria-controls="settings-panel" tabindex="-1" data-tab="settings" title="Server" aria-label="Server"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-server" aria-hidden="true" focusable="false"><rect width="20" height="8" x="2" y="2" rx="2" ry="2"></rect><rect width="20" height="8" x="2" y="14" rx="2" ry="2"></rect><line x1="6" x2="6.01" y1="6" y2="6"></line><line x1="6" x2="6.01" y1="18" y2="18"></line></svg><span class="sidebar-label">Server</span></button></div></div></aside>
+    <!-- shadcn:sidebar:end -->
+    <div class="console-workspace">
     <header>
-      <div>
-        <p class="eyebrow">Private distributed backup</p>
-        <h1>Covalent</h1>
-      </div>
-      <p class="tier">Tier 1 node</p>
+      <div class="brand"><div><h1>Covalent</h1><p class="muted" data-node-state aria-live="polite">Connecting to the local service.</p></div></div>
+      <div class="header-actions"><span class="access-state" data-access-state hidden>Console locked</span><button type="button" class="quiet icon-action" data-refresh aria-label="Refresh server status" title="Refresh server status"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-refresh-cw" aria-hidden="true" focusable="false"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path><path d="M8 16H3v5"></path></svg></button></div>
     </header>
     <main id="content">
-      <section class="hero" aria-labelledby="node-heading">
+      <details class="security-card" data-access-panel hidden>
+        <summary id="token-heading">Local access <span class="muted" data-access-guidance>Unlock this browser tab</span></summary>
+        <div class="access-content">
         <div>
-          <p class="eyebrow">This device</p>
-          <h2 id="node-heading" data-device-name>Loading node…</h2>
-          <p class="muted" data-state aria-live="polite">Connecting to the local service.</p>
-        </div>
-        <button type="button" class="secondary" data-refresh>Refresh status</button>
-      </section>
-
-      <section class="security-card" aria-labelledby="token-heading">
-        <div>
-          <h2 id="token-heading">Local access</h2>
-          <p class="muted">Enter the token from the owner-only output directory created by <code>covalent claim</code> on a trusted computer to make changes. This console accepts a token only; it does not accept a setup code. It stays only in this browser tab and is never sent anywhere except this local node.</p>
+          <h2>Connect securely</h2>
+          <p class="muted">If this server does not grant trusted access, enter the token from the owner-only output directory created by <code>covalent claim</code> on a trusted computer to make changes. This console accepts a token only; it does not accept a setup code. It stays only in this browser tab and is never sent anywhere except this local node.</p>
         </div>
         <form class="inline-form" data-token-form>
           <label for="api-token">Local API token</label>
           <input id="api-token" name="token" type="password" autocomplete="off" spellcheck="false" required />
-          <button>Unlock console</button>
+          <div class="button-row"><button>Unlock console</button><button type="button" class="secondary" data-token-file-choose>Choose token file</button></div>
+          <input id="token-file" type="file" data-token-file aria-label="Choose local API token file" hidden />
+          <p class="muted file-help">Use the token file from your trusted claim output. Setup codes cannot unlock this console.</p>
         </form>
+        </div>
+      </details>
+
+      <output class="toast" data-message aria-live="polite"></output>
+      <details class="toast-details" data-message-details hidden>
+        <summary>Technical details</summary>
+        <pre data-message-detail></pre>
+      </details>
+
+
+
+      <section id="folders-panel" role="tabpanel" aria-labelledby="folders-tab" tabindex="0" data-panel="folders">
+        <div class="panel-heading"><div><h2>Your links</h2><p class="muted">Your files, where you need them. One source, one or more destinations.</p></div><div class="button-row"><button type="button" class="secondary" data-open-tab="pair">Pair device</button><button type="button" data-open-create aria-controls="create-link">Create link</button></div></div>
+        <div class="overview" aria-label="Server overview"><p><strong data-link-count>—</strong><span>Links</span></p><p><strong data-peer-count>—</strong><span>Paired devices</span></p><p class="overview-help">Files flow from the source.<br />Link settings are shared across devices.</p></div>
+
+        <section class="card links-card" aria-live="polite">
+          <div class="button-row"><h3>Link activity</h3><button type="button" class="secondary" data-folders-refresh>Refresh</button></div>
+          <p data-folders-status>Unlock the console to load folder sync status.</p>
+          <p class="muted" data-folders-empty>No shared folders are available yet.</p>
+          <ul class="device-list folder-list" data-folders-list></ul>
+          <button type="button" class="secondary" data-folders-retry-service data-folder-mutation hidden>Try folder sync again</button>
+        </section>
+
+        <section class="card" data-folder-pending hidden>
+          <h3>Saved folder offer</h3>
+          <p>A previous request may have reached this server. Retry its exact saved folder identity and path to avoid creating a duplicate.</p>
+          <p class="muted" data-folder-pending-summary></p>
+          <div class="button-row">
+            <button type="button" data-folder-offer-retry data-folder-mutation>Retry saved offer</button>
+            <button type="button" class="quiet" data-folder-offer-discard data-folder-mutation>Discard saved retry</button>
+          </div>
+        </section>
+
+        <section class="card" data-link-settings-pending hidden>
+          <h3>Saved link-settings request</h3>
+          <p>The result of a previous request is uncertain. Refresh first, then retry these exact settings. Do not submit different settings until this request is resolved.</p>
+          <p class="muted" data-link-settings-pending-summary></p>
+          <div class="button-row">
+            <button type="button" data-link-settings-retry data-folder-mutation>Retry exact settings</button>
+            <button type="button" class="quiet" data-link-settings-discard data-folder-mutation>Discard after review</button>
+          </div>
+        </section>
+
+        <section class="card" data-link-run-pending hidden>
+          <h3>Saved Run Now request</h3>
+          <p>The result of a previous request is uncertain. Retry the exact request so the source cannot start a duplicate run.</p>
+          <p class="muted" data-link-run-pending-summary></p>
+          <div class="button-row">
+            <button type="button" data-link-run-retry data-folder-mutation>Retry Run Now</button>
+            <button type="button" class="quiet" data-link-run-discard data-folder-mutation>Discard after review</button>
+          </div>
+        </section>
+
+        <details id="create-link" class="card create-link" data-create-link>
+          <summary>Create a one-way link <span class="muted">Choose a device, folder, and timing</span></summary>
+        <form data-folder-offer-form>
+          <p class="muted">This server sends files. The destination device chooses where to keep its copy.</p>
+          <p class="notice" data-create-guidance>Pair a device first, then choose it below.</p>
+          <label>Destination device <select name="peerId" data-folder-peer required disabled><option value="">Unlock the console to load confirmed devices</option></select></label>
+          <label>Folder name <input name="label" maxlength="120" placeholder="Shared documents" required /></label>
+          <details class="advanced">
+            <summary>Advanced server folder path</summary>
+            <p class="muted">Choose a path already mounted into this server. A browser folder picker would select files on the computer running the browser and cannot grant this server access.</p>
+            <label>Folder path on this server <input name="selectedRoot" value="/sync" maxlength="1024" required /></label>
+          </details>
+          <p class="notice">The default <code>/sync</code> path must be a writable folder mounted into the Covalent server.</p>
+          <fieldset>
+            <legend>When should this link run?</legend>
+            <label><input type="radio" name="cadenceMode" value="manual" required /> Manual</label>
+            <p class="muted">Files move only when a link member chooses Run Now.</p>
+            <label><input type="radio" name="cadenceMode" value="scheduled" required /> Scheduled</label>
+            <p class="muted">The source starts one bounded run at each interval.</p>
+            <label><input type="radio" name="cadenceMode" value="continuous" required /> Continuous</label>
+            <p class="muted">Covalent checks for changes automatically and transfers them while the link is available.</p>
+            <label data-folder-schedule-interval hidden>Run every
+              <input name="intervalMinutes" type="number" min="15" max="525600" step="1" value="60" list="folder-schedule-options" disabled required /> minutes
+            </label>
+            <datalist id="folder-schedule-options"><option value="15" label="15 minutes"></option><option value="60" label="1 hour"></option><option value="1440" label="Daily"></option></datalist>
+          </fieldset>
+          <details class="advanced">
+            <summary>Deletion and Android options</summary>
+          <fieldset>
+            <legend>Android device conditions</legend>
+            <label><input type="checkbox" name="wifiOnly" /> Wi-Fi only on Android devices</label>
+            <label><input type="checkbox" name="chargingOnly" /> Charging only on Android devices</label>
+            <p class="muted">These shared choices affect Android devices in this link. They do not change this server or a Mac.</p>
+          </fieldset>
+          <fieldset>
+            <legend>Deletion options</legend>
+            <label><input type="checkbox" name="propagateSourceDeletions" /> Delete destination copies when source files are deleted</label>
+            <p class="muted">Off by default: deleting a source file leaves its destination copies untouched. Turning this on also removes those copies.</p>
+            <label><input type="checkbox" name="restoreLocalDeletions" /> Restore files deleted at a destination</label>
+            <p class="muted">Off by default: destination deletions stay local, even after source edits. Turning this on copies those files there again from the source.</p>
+          </fieldset>
+          </details>
+          <p class="muted">By default, source deletions keep destination copies, and files deleted at a destination stay deleted there.</p>
+          <div class="button-row"><button data-folder-offer-submit data-folder-mutation disabled>Create link</button><button type="button" class="quiet" data-close-create>Cancel</button></div>
+        </form>
+        </details>
       </section>
 
-      <nav class="tabs" aria-label="Covalent actions" role="tablist">
-        <button id="pair-tab" role="tab" aria-selected="true" aria-controls="pair-panel" tabindex="0" data-tab="pair">Pair</button>
-        <button id="backup-tab" role="tab" aria-selected="false" aria-controls="backup-panel" tabindex="-1" data-tab="backup">Backup</button>
-        <button id="restore-tab" role="tab" aria-selected="false" aria-controls="restore-panel" tabindex="-1" data-tab="restore">Restore</button>
-        <button id="settings-tab" role="tab" aria-selected="false" aria-controls="settings-panel" tabindex="-1" data-tab="settings">Settings</button>
-      </nav>
-
-      <section id="pair-panel" role="tabpanel" aria-labelledby="pair-tab" tabindex="0" data-panel="pair">
+      <section id="pair-panel" role="tabpanel" aria-labelledby="pair-tab" tabindex="0" data-panel="pair" hidden>
         <div class="panel-heading"><div><h2>Pair a device</h2><p class="muted">Pairing requires both people to compare the same short code before a device receives any role.</p></div></div>
+
+        <section class="card pairing-consent" data-network-card hidden aria-live="polite">
+          <h3 data-network-peer></h3>
+          <p class="muted" data-network-direction></p>
+          <p>Compare this code on both physical devices. Continue only if every group matches. Once both devices finish, the paired device becomes available as a link destination.</p>
+          <p class="pairing-code" data-network-code role="status"></p>
+          <p class="muted" data-network-expires></p>
+          <p data-network-state></p>
+          <div class="button-row">
+            <button type="button" data-network-confirm disabled>Codes match — pair device</button>
+            <button type="button" class="quiet" data-network-cancel>Cancel pairing</button>
+          </div>
+        </section>
 
         <section class="card">
           <h3>Devices on your network</h3>
@@ -69,120 +237,44 @@
           </form>
         </section>
 
-        <section class="card pairing-consent" data-network-card hidden aria-live="polite">
-          <h3 data-network-peer></h3>
-          <p class="muted" data-network-direction></p>
-          <p>Compare this code on both physical devices. Continue only if every group matches. Once both devices finish, Covalent verifies the connected backup device and its current capacity before it can be selected.</p>
-          <p class="pairing-code" data-network-code role="status"></p>
-          <p class="muted" data-network-expires></p>
-          <p data-network-state></p>
-          <div class="button-row">
-            <button type="button" data-network-confirm disabled>Codes match — use as backup device</button>
-            <button type="button" class="quiet" data-network-cancel>Cancel pairing</button>
-          </div>
+        <section class="card" aria-labelledby="paired-devices-heading">
+          <h3 id="paired-devices-heading">Paired devices</h3>
+          <p class="muted">These are saved, confirmed devices. If one moves to a new network address, verify its new numeric IP address and port here.</p>
+          <ul class="device-list" data-paired-devices></ul>
+          <p class="muted" data-paired-devices-empty>Unlock the console to load paired devices.</p>
         </section>
 
-        <details class="advanced">
-          <summary>Pair by copying a signed invitation instead</summary>
-          <p class="muted">Use this only when the two devices cannot reach each other directly. Every step below has to be copied between the devices by hand.</p>
-        <div class="two-column">
-          <form class="card" data-pair-create>
-            <h3>Create invitation</h3>
-            <label>Reachable endpoint <input name="endpoint" placeholder="node-a.tailnet.ts.net:8787" required /></label>
-            <label>Expires in minutes <input name="minutes" type="number" min="1" max="15" value="10" required /></label>
-            <button>Create invitation</button>
-          </form>
-          <form class="card" data-pair-accept>
-            <h3>Accept invitation</h3>
-            <label>Your device name <input name="name" maxlength="80" required /></label>
-            <label>Invitation JSON <textarea name="invitation" rows="5" required></textarea></label>
-            <fieldset><legend>Roles granted to this accepting device</legend><label><input type="checkbox" name="responderRole" value="storage_provider" /> Store selected encrypted copies</label><label><input type="checkbox" name="responderRole" value="backup_reader" /> Serve restore reads</label></fieldset>
-            <fieldset><legend>Roles granted to the invitation creator</legend><label><input type="checkbox" name="inviterRole" value="backup_writer" /> Send selected encrypted copies</label><label><input type="checkbox" name="inviterRole" value="backup_reader" /> Request restore reads</label></fieldset>
-            <button>Accept and show code</button>
-          </form>
-        </div>
-        <form class="card" data-pair-confirm>
-          <h3>Confirm, exchange, then finish</h3>
-          <p class="muted">Paste the latest session on each device. Compare identities, roles, and code. Each side adds one signature, exchanges the updated JSON, and finalizes only after both signatures are present.</p>
-          <label>Pairing session JSON <textarea name="session" rows="7" required></textarea></label>
-          <label>Code shown on both devices <input name="code" autocomplete="off" required /></label>
-          <section class="pairing-consent" data-pair-consent hidden aria-live="polite">
-            <h4>Signed consent</h4>
-            <dl><div><dt>Creator</dt><dd data-pair-inviter></dd></div><div><dt>Accepter</dt><dd data-pair-responder></dd></div><div><dt>Comparison code</dt><dd data-pair-code></dd></div><div><dt>Signatures</dt><dd data-pair-signatures></dd></div></dl>
-          </section>
-          <div class="button-row"><button name="side" value="responder" data-pair-action="confirm">Add accepter confirmation</button><button name="side" value="inviter" data-pair-action="confirm" class="secondary">Add creator confirmation</button></div>
-          <div class="button-row"><button name="side" value="responder" data-pair-action="finalize" disabled>Finalize as accepter</button><button name="side" value="inviter" data-pair-action="finalize" class="secondary" disabled>Finalize as creator</button><button type="button" class="quiet" data-pair-clear>Clear exchange</button></div>
-        </form>
-        <section class="card pairing-consent" data-manual-provider-card hidden aria-live="polite">
-          <h3>Use this finalized device for backups</h3>
-          <p class="muted" data-manual-provider-summary></p>
-          <p>Use only the signed connection from this completed pairing. Covalent will verify the node retained that exact certificate pin and show its current capacity before it is selectable.</p>
-          <div class="button-row"><button type="button" data-manual-provider-connect>Use as backup device</button></div>
-        </section>
-        </details>
-      </section>
 
-      <section id="backup-panel" role="tabpanel" aria-labelledby="backup-tab" tabindex="0" data-panel="backup" hidden>
-        <div class="panel-heading"><div><h2>Back up selected files</h2><p class="muted">Only read-only source mounts such as <code>/source</code> or <code>/boot-source</code> should be selected. Extra copies are made only on the currently verified backup devices you choose.</p></div></div>
-        <section class="card" aria-live="polite">
-          <div class="button-row"><h3>Remembered backups</h3><button type="button" class="secondary" data-backups-refresh>Refresh list</button></div>
-          <p class="muted" data-backups-empty>Unlock the console to load authoritative node backups.</p>
-          <ul data-backups-list></ul>
-        </section>
-        <form class="card" data-backup-form>
-          <label>Source directory <input name="sourceRoot" value="/source" required /></label>
-          <label>Backup name <input name="displayName" maxlength="120" required /></label>
-          <label>Snapshot ID <input name="snapshotId" pattern="[A-Za-z0-9_-]+" value="snapshot-1" required /></label>
-          <fieldset data-provider-selection>
-            <legend>Backup devices</legend>
-            <p class="muted" data-providers-empty>Unlock the console to inspect connected backup devices.</p>
-            <ul class="device-list" data-providers-list></ul>
-            <button type="button" class="secondary" data-providers-refresh>Refresh device capacity</button>
-          </fieldset>
-          <p class="notice">Provider selection is explicit. Unreachable, out-of-date, unknown, or full devices cannot be selected. Leave all devices clear for a local-only copy.</p>
-          <p data-backup-status role="status" aria-live="polite"></p>
-          <div class="button-row">
-            <button data-backup-submit>Start backup</button>
-            <button type="button" class="secondary" data-backup-retry hidden>Try again</button>
-          </div>
-        </form>
-      </section>
 
-      <section id="restore-panel" role="tabpanel" aria-labelledby="restore-tab" tabindex="0" data-panel="restore" hidden>
-        <div class="panel-heading"><div><h2>Preview before restore</h2><p class="muted">Choose a distinct writable target. Relative restore paths stay under that target; preview is required before any write.</p></div></div>
-        <form class="card" data-restore-preview>
-          <label>Backup ID <input name="backupId" required /></label>
-          <label>Snapshot ID <input name="snapshotId" required /></label>
-          <label>Writable target directory <input name="targetRoot" value="/restore" required /></label>
-          <label>Conflict policy <select name="conflictPolicy"><option value="fail">Stop on conflicts (safest)</option><option value="skip">Skip existing files</option><option value="rename">Create renamed copies</option><option value="replace">Replace regular files</option></select></label>
-          <button>Preview restore</button>
-        </form>
-        <section class="card" aria-live="polite" data-restore-result hidden>
-          <h3>Restore preview</h3><p data-restore-summary></p><pre data-restore-plan></pre>
-          <div class="button-row" aria-label="Restore preview pages">
-            <button type="button" class="secondary" data-restore-previous disabled>Previous page</button>
-            <button type="button" class="secondary" data-restore-next disabled>Next page</button>
-            <button type="button" class="secondary" data-restore-discard>Discard preview</button>
-          </div>
-          <label class="confirmation"><input type="checkbox" data-restore-confirm /> I reviewed this signed preview and authorize this restore to its displayed target.</label>
-          <button type="button" data-restore-execute disabled>Restore this preview</button>
-        </section>
       </section>
 
       <section id="settings-panel" role="tabpanel" aria-labelledby="settings-tab" tabindex="0" data-panel="settings" hidden>
-        <div class="panel-heading"><div><h2>Settings and reachability</h2><p class="muted">LAN discovery is <strong data-discovery>Unknown</strong>. It can remain off when you use explicit LAN addresses or Tailscale; neither method bypasses pairing.</p></div></div>
+        <div class="panel-heading"><div><h2>Server settings</h2><p class="muted">Server: <strong data-device-name>Loading…</strong>. LAN discovery is <strong data-discovery>Unknown</strong>. It can remain off when you use explicit LAN addresses or Tailscale; neither method bypasses pairing.</p></div></div>
+        <section class="card server-help" aria-labelledby="server-help-heading">
+          <h3 id="server-help-heading">Open your server console</h3>
+          <ol class="setup-steps">
+            <li><strong>Open WebUI in Unraid</strong><p class="muted">Choose Covalent’s WebUI from the Docker page, or open your configured HTTPS server address. Use the configured hostname if the shortcut’s IP address does not match the certificate.</p></li>
+            <li><strong>Open and start working</strong><p class="muted">Your approved Tailscale access opens the console automatically. Other connections may ask for a local access token. Enter it only on your server’s trusted HTTPS page.</p></li>
+            <li><strong>Pair and link a mounted folder</strong><p class="muted">Compare the code on both devices. Map a writable server folder to <code>/sync</code> in Docker; paths entered here refer to the container, not the browser’s computer.</p></li>
+          </ol>
+          <button type="button" class="secondary" data-open-tab="pair">Pair device</button>
+        </section>
+        <details class="advanced settings-tools"><summary>Import and export settings</summary>
         <div class="two-column">
-          <section class="card"><h3>Export safe settings</h3><p class="muted">Exports name, discovery preference, and remembered backups. It excludes identity keys, backup keys, grants, and provider credentials.</p><button type="button" data-settings-export>Download settings</button></section>
+          <section class="card"><h3>Export safe settings</h3><p class="muted">Exports safe node settings. It excludes identity keys, backup keys, grants, and provider credentials.</p><button type="button" data-settings-export>Download settings</button></section>
           <form class="card" data-settings-import><h3>Import safe settings</h3><label>Settings JSON <textarea name="settings" rows="5" required></textarea></label><label class="confirmation"><input type="checkbox" name="confirmed" required /> I understand this replaces safe settings, not identity keys.</label><button>Import settings</button></form>
         </div>
+        </details>
+        <details class="advanced"><summary>Advanced server tools</summary>
+        <aside><h3>Advanced archive tools</h3><p>Existing backup, restore, and recovery data remains available through the command line. Run <code>covalent backups</code>, <code>covalent backup --help</code>, <code>covalent restore-preview --help</code>, <code>covalent restore-execute --help</code>, or <code>covalent-node --help</code> from a trusted terminal. Removing these screens does not delete files, keys, archives, or settings. Covalent does not migrate them automatically.</p></aside>
         <aside><h3>Container network choices</h3><p>Bridge mode exposes HTTPS management on TCP 8443 and peer traffic on UDP 8787. Enroll the package CA or use a system-trusted same-host proxy before entering a token. Host networking can improve multicast discovery; a Tailscale sidecar or host Tailnet address is optional.</p></aside>
+        </details>
       </section>
-      <output class="toast" data-message aria-live="polite"></output>
-      <details class="toast-details" data-message-details hidden>
-        <summary>Technical details</summary>
-        <pre data-message-detail></pre>
-      </details>
     </main>
     <footer>Core workflows require no Covalent account or hosted coordinator.</footer>
+    </div>
+    <!-- shadcn:link-settings:start -->
+    <template id="link-settings-card"><section data-slot="card" class="shared-settings-card " hidden=""><div data-slot="card-header"><h4 data-slot="card-title">Shared link settings</h4><p data-slot="card-description">Edit here or on the other device. These choices apply to the whole link.</p></div><div data-slot="card-content"></div></section></template>
+    <!-- shadcn:link-settings:end -->
   </body>
 </html>

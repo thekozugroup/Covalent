@@ -7,7 +7,7 @@ Updated: 2026-08-31
 The exact-current local `v0.2.0` release candidate from
 `dafca8efebaf904ed886d48ba8371b0fde53af56` is validated and ready for its
 milestone commit. Tier 1 is Android, Apple Silicon macOS, Docker, and Unraid.
-iOS is informational only and unsupported. This is not a deployment: no
+iOS and Windows are unsupported and excluded from builds. This is not a deployment: no
 `v0.2.0` tag, replacement immutable image digest, published personal-use native
 artifact, or live Atlas installation exists.
 

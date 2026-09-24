@@ -1,22 +1,34 @@
 # Unraid operation
 
-Start with [Back up your first folder](../getting-started.md), then return here
-for Unraid-specific paths and recovery rules.
+Docker is the supported Unraid installation for the current
+[one-way link product](../product/synchronization.md). Import
+[`packaging/unraid/covalent.xml`](../../packaging/unraid/covalent.xml): the app
+is named **Covalent** and follows `ghcr.io/thekozugroup/covalent:stable`.
+Waypoint has been tested; Atlas is offline. Community Applications listing
+is not yet available.
 
-Unraid is Tier 1. The template is intentionally unprivileged (`99:100`),
-read-only, capability-free, and uses `no-new-privileges` with a temporary
-filesystem. It is not listed in Community Applications yet. Until a new
-immutable `v0.2.0` image is published, do not import or start the historical
-template. Do not enable privileged mode to solve mount permissions; correct the
-selected host paths instead.
+The template runs unprivileged (`99:100`), read-only, with capabilities dropped
+and `no-new-privileges`. Fix selected host-path permissions rather than enabling
+privileged mode. Do not install the historical v0.1.0 image.
 
-The v0.1.0 template uses the released immutable GHCR digest, not a mutable tag. Docker accepts `image@sha256:…` references and the repository validator rejects any other image form. This prevents a later tag rewrite from changing an existing Unraid install. That digest predates the mandatory KEK and trusted claim client, so **do not install it**: deployment is blocked until a newly signed immutable digest includes those features and updates the template atomically.
+## Updates
+
+Use Unraid's **Docker → Check for Updates → Update** normally. For unattended
+updates, select only **Covalent** in Unraid's Auto Update Applications plugin,
+or run the [scoped Watchtower updater](../../packaging/docker/README.md#release-installation)
+on the same Docker host. Use one updater, not both. The template includes its
+enable and `covalent` scope labels. The updater must receive the exact container
+name `Covalent`; it must not update every application on the server.
+
+Keep the same appdata, separate KEK, shares, ports and device name when updating.
+The container briefly restarts and retains its paired devices and link settings.
+An immutable digest can be used instead of `stable` to opt out of channel updates.
+Do not give Covalent the Docker socket. Only the optional updater needs it.
 
 ## Setting up
 
-These steps are ready for the future `v0.2.0` immutable digest. Today they stop
-before template installation because the only public digest is the blocked
-historical `v0.1.0` image.
+Import the current template from this checkout. Its `stable` channel contains
+only images promoted by the signed container release workflow.
 
 1. **Provision and escrow the KEK before installing or applying a template.**
    The reserved path is `/mnt/user/system/covalent-secrets`. It is never a
@@ -41,10 +53,8 @@ historical `v0.1.0` image.
    and verify one byte-for-byte offline escrow copy on encrypted removable media
    that is never mounted into Covalent. Exclude the live KEK from every host and
    Covalent backup.
-2. After `v0.2.0` publishes, confirm this page and
-   `packaging/unraid/covalent.xml` name that exact signed immutable digest. Only
-   then import the template manually. Community Applications availability is
-   future work and must not be assumed.
+2. Confirm the template repository is `ghcr.io/thekozugroup/covalent:stable`,
+   then import it manually. Keep existing paths when updating an installation.
 3. Set **HTTPS hostname** to the exact name clients use, such as `tower.local`.
 4. Map **Configuration** to `/mnt/user/appdata/covalent/config` and **Encrypted
    storage** to `/mnt/user/appdata/covalent/data`. Create the writable paths
@@ -105,6 +115,34 @@ historical `v0.1.0` image.
     [macOS or Debian/Ubuntu CA enrollment and removal commands](../../packaging/docker/README.md#enroll-or-remove-the-claimed-ca),
     changing only the claim-output path for this Unraid server.
 
+If Tailscale is installed on the Unraid host, its Serve proxy gives the WebUI a
+browser-trusted, tailnet-private HTTPS address without changing Covalent's
+certificate or exposing another TCP port. The container creates a mode-`0600`
+Unix socket in the mapped Configuration directory. On the Unraid terminal, run:
+
+```sh
+tailscale serve --bg --https=8443 \
+  unix:/mnt/user/appdata/covalent/config/covalent-web.sock
+tailscale serve status
+```
+
+Open the HTTPS URL printed by `tailscale serve` and enter `local-api-token`.
+Do not use Tailscale Funnel. Tailnet access rules and Covalent's token checks
+both still apply. Remove only this mapping with
+`tailscale serve --https=8443 off`.
+
+To make Unraid's **WebUI** shortcut open that trusted address, edit the
+container, switch to Advanced View, and append this to **Extra Parameters**:
+
+```text
+--label net.unraid.docker.webui=https://<MagicDNS name>:8443/
+```
+
+Replace `<MagicDNS name>` with the name shown by `tailscale serve status`, then
+apply the container update. Unraid saves the label with its user template. The
+stock template keeps `https://[IP]:[PORT:8443]/` because each server has a
+different MagicDNS name.
+
 To connect an Android phone, follow the
 [verified APK and onboarding guide](android.md). The phone receives only
 `root.crt` and `local-api-token` from the completed CLI claim; never copy or
@@ -115,7 +153,24 @@ That shortcut is only a convenience link; it may fail strict certificate
 hostname verification. Open the configured HTTPS hostname shown in the template
 instead. Do not work around this with a hostname bypass.
 
-## First backup and restore check
+## Create the first one-way link
+
+Select one existing folder in **Folder for one-way links (optional)** in the
+template. Covalent sees this folder as `/sync`. Use a small temporary folder
+first, then follow [Create your first one-way link](../getting-started-links.md).
+Pair the devices, create the link on its source, and accept it at its destination.
+Choose `/sync` or a distinct child folder on this server. Select **Manual** and
+run the link, then compare the destination files with the source.
+
+For phone-to-server transfers, the phone is the source. Each family member
+uses a separate child folder on the server, so their files and link settings
+stay independent. The server does not send the combined collection back to the
+phones. Review both deletion choices before enabling automatic transfers.
+
+<details>
+<summary>Existing backup and restore installations</summary>
+
+### First backup and restore check
 
 In the unlocked console, back up `/source` with no backup device selected and
 wait for receipt confirmation. Then restore that snapshot to `/restore` with
@@ -123,6 +178,8 @@ wait for receipt confirmation. Then restore that snapshot to `/restore` with
 file. This proves setup only. Pair and explicitly select another device before
 relying on Covalent for source-loss protection. See the full
 [success checklist](../getting-started.md#you-are-protected-when).
+
+</details>
 
 ## Required and optional mappings
 
@@ -132,14 +189,33 @@ relying on Covalent for source-loss protection. See the full
 | `/data` | `/mnt/user/appdata/covalent/data` | read/write | Encrypted chunks, metadata, identity, keys, and the wrapped local API-token record. |
 | `/run/secrets/covalent-kek` | `/mnt/user/system/covalent-secrets/key-encryption-key` | read-only | Required KEK in the reserved system-share path. `/mnt/user/system` and any enclosing path are forbidden as sources. Keep independent offline escrow. |
 | `/source` | One selected `/mnt/user/<share>` | read-only | A chosen share to back up. Add distinct mappings for more shares; never map all of `/mnt/user`. |
-| `/boot-source` | `/boot` | read-only | Optional boot-drive backup only. |
+| `/boot-source` | `/boot` | read-only | Optional legacy access to readable boot files; this does not establish boot recovery. |
 | `/restore` | A chosen writable destination | read/write | Add only while restoring; Covalent inventories existing files and applies the selected conflict policy. |
 
 Restores write only beneath the exact selected target and chosen conflict policy; traversal, absolute paths, and symlink escapes are rejected by the core before writes.
 
+## Appdata and boot files
+
+Docker can transfer readable files from explicitly mounted folders. A live
+database or an application's changing files may not form a consistent backup.
+Use the application's export or backup command, a consistent snapshot, or stop
+the application while preparing a copy. Place that prepared copy in a dedicated
+share folder outside Covalent's state and secrets, then select it as the source
+of a one-way link. Check the application's restore procedure separately.
+
+Use the same approach for a copy of readable boot files. Keep the source mount
+read-only and select only the intended files; do not put Covalent's keys there.
+A file copy does not test bootability or replace Unraid's recovery procedure.
+Current Docker transfer checks do not yet establish an appdata restore or a
+boot-file drill. Atlas remains offline. No plugin is required by the demonstrated
+file-transfer behavior; a plugin would need a specific Docker limitation.
+
 ## Pairing with phones and laptops
 
-Bridge mode maps TLS management on TCP 8443 and authenticated QUIC on UDP 8787. The daemon's cleartext API listens only on loopback inside the container; a pinned Caddy build terminates HTTPS in the same network namespace.
+Bridge mode maps TLS management on TCP 8443, authenticated QUIC on UDP 8787,
+and rclone's authenticated folder transport on TCP 8789. The daemon's cleartext
+API listens only on loopback inside the container; a pinned Caddy build
+terminates HTTPS in the same network namespace.
 
 Covalent has to tell your other devices which address to dial. On bridge networking — Unraid's default — the only address the container can see is its own, typically `172.17.0.2`, which your phone cannot reach: the peer port is published on the Unraid host, not on the container. Covalent resolves this from the **HTTPS hostname** you already set, which is by definition the name your devices use.
 

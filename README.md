@@ -1,20 +1,30 @@
 # Covalent
 
-Covalent is a lightweight, self-hosted backup and restore system for devices you control. It pairs directly over a LAN or Tailnet, stores encrypted verified chunks on devices you explicitly choose, and restores relative paths only beneath a destination you authorize.
+Covalent is a native, self-hosted wrapper around rclone for one-way file links: choose a source, pair destinations, configure the link once, and monitor transfers. macOS, Android, and Docker/Unraid are the supported targets.
+
+**v0.2.1 release; the rclone switch is complete.** Real one-way transfers,
+fan-out, deletion choices, shared settings, and scheduled runs pass. Follow the
+[current product requirements](docs/product/requirements.md) and [verified
+progress](docs/release/completion-progress.md). Earlier backup features remain
+as legacy support.
 
 ## Start here
 
-**[Back up your first folder](docs/getting-started.md)** is the single setup
-guide. It takes you from prerequisites through a small backup, Verify, and a
-restore test. Start there instead of reading the release or architecture docs.
+**[Create your first one-way link](docs/getting-started-links.md)** is the
+primary setup guide. Pair devices, choose a source folder, review deletion
+settings, then authorize one or more destinations. It describes the current
+release and what is verified.
+
+The previous [backup setup guide](docs/getting-started.md) is a legacy
+reference for the superseded backup workflow.
 
 Current personal-use paths do not require an Apple Developer ID or Android
 production signing:
 
 - Apple Silicon macOS uses the verified ad-hoc app build.
-- Android uses the debug-signed installable APK from this checkout.
-- An always-on server uses Docker built from this checkout until `v0.2.0` is
-  published and pinned by immutable digest.
+- Android uses the published debug-signed personal APK.
+- An always-on server uses the published Docker image pinned by immutable
+  digest.
 
 ## Supported platforms
 
@@ -27,59 +37,42 @@ and each must pass its production gates before a release.
 | macOS on Apple Silicon | arm64-only ad-hoc app bundle for personal use | Must pass product and package gates; Developer ID/notarization is excluded. |
 | Android | Debug-signed APK for personal use | Must pass product and install gates; production signing is deferred. |
 
-**iOS and Windows are not supported.** There is no iOS or Windows build to
-install, neither is covered by the release gates, and neither is being worked
-toward right now. The Apple package in this repository does still contain an iOS
-target built from the same shared sources, and the `iOS Tier 2` CI job still
-compiles and exercises it — that is a statement about what the code contains,
-not a promise of support. That job is deliberately not a required check for any
-release workflow, so it can never block or unblock one.
+**iOS and Windows are not supported.** Neither has a release client or CI lane.
 
 Hosted accounts, automatic replica placement, and restores outside an authorized root are also out of scope.
 
 ## Release status
 
-There is no active deployable release for the current KEK and trusted-claim
-contract. The public `v0.1.0` alpha is historical release evidence only: it
-predates that contract, so do not deploy its Docker/Unraid image or use it for
-Atlas. A replacement signed release must update the template and all active
-install instructions together.
+`v0.2.1` is the current release for the KEK and trusted-claim contract. Use
+its verified CLI archives, personal-use Mac and Android packages, and immutable
+container digest. The public `v0.1.0` alpha is historical evidence only and
+predates this contract; do not deploy its Docker/Unraid image or use it for
+Atlas. No Android artifact is published in v0.1.0.
 
-- Docker and Unraid: deployment is blocked until that replacement immutable image is published. The digest in `packaging/unraid/covalent.xml` remains only to identify the historical release it will replace.
-- macOS on Apple Silicon: the published v0.1.0 `.zip` is an ad-hoc-signed historical evaluation artifact, not a current deployable client workflow.
-- Atlas claim client: no verified source-free CLI archive is published yet. The [CLI install guide](docs/release/cli-install.md) applies only when the replacement release attaches its verified Linux amd64, Linux arm64, and Apple Silicon macOS archives; never use a curl-pipe-shell installer.
-- No Android artifact is published in v0.1.0. The
-  [Android setup guide](docs/platform/android.md) documents the current
-  personal-use debug APK and its upgrade boundary.
+- Docker and Unraid: use `ghcr.io/thekozugroup/covalent@sha256:393f8a0dafa7f17d8ad964d501f3d33668d547889dc493080e042489ee3e1677` and the matching v0.2.1 template.
+- macOS on Apple Silicon: download the v0.2.1 ad-hoc-signed, non-notarized personal-use package.
+- Atlas claim client: use the verified v0.2.1 archive in the [CLI install guide](docs/release/cli-install.md); never use a curl-pipe-shell installer.
+- Android: download the v0.2.1 debug-signed personal APK from the [Android setup guide](docs/platform/android.md). Production Android signing is deferred.
 
-The source tree now carries the `v0.2.0` release candidate. It adds versioned
-key protection, verified CLI-only first-run claiming, and acknowledged terminal
-receipts. It is not published: no replacement immutable image digest or Atlas
-deployment exists yet. Personal-use Android and macOS packages are built and
-verified locally; production Android signing is deferred and Apple Developer
-ID/notarization is excluded. See
-[the v0.2.0 candidate notes](docs/release/notes/v0.2.0.md) before planning an
-upgrade.
-
-Setup belongs in [the getting-started guide](docs/getting-started.md). Per-release
-provenance lives in [docs/release/notes](docs/release/notes), and maintainer-only
-publishing detail lives in [docs/release/publishing.md](docs/release/publishing.md).
+Primary setup belongs in [the one-way link guide](docs/getting-started-links.md).
+The [backup setup guide](docs/getting-started.md) remains a legacy reference.
+Per-release provenance lives in [docs/release/notes](docs/release/notes), and
+maintainer-only publishing detail lives in [docs/release/publishing.md](docs/release/publishing.md).
 
 ## Repository map
 
 - `crates/covalent-core`: storage, verification, restore safety, and shared domain logic.
 - `crates/covalent-protocol`: versioned wire and persisted contract types.
 - `crates/covalent-node`: local daemon, health API, and embedded accessible console.
-- `crates/covalent-ffi`: stable service facade for native clients.
 - `crates/covalent-cli`: deterministic operator and developer commands.
-- `apps/apple`: native SwiftUI macOS app, plus an unsupported iOS target, built from shared code.
+- `apps/apple`: native SwiftUI macOS app and shared Swift models.
 - `apps/android`: native Kotlin and Jetpack Compose app.
 - `packaging`: Docker, Unraid, and embedded web assets.
 - `docs`: product, security, protocol, architecture decisions, and release gates.
 
 ## Contribute
 
-Prerequisites by area: Rust 1.97.1 for the shared engine; an Apple Silicon Mac with Swift 6.3, Xcode 26, and XcodeGen for Apple; JDK 17 through 25 (`17` in CI), `adb`, and Android SDK/API 37 for Android; Docker with Compose/Buildx for containers. Choose a mode so a core-only contributor is not blocked by unrelated platform tools.
+Prerequisites by area: Rust 1.97.1 for the shared service; an Apple Silicon Mac with Swift 6.3 or newer, Xcode 26 or newer, and XcodeGen for Apple; JDK 17 through 25 (`17` in CI), `adb`, and Android SDK/API 37 for Android; Docker with Compose/Buildx for containers. Choose a mode so a core-only contributor is not blocked by unrelated platform tools.
 
 ```sh
 ./scripts/bootstrap.sh core
@@ -87,7 +80,7 @@ Prerequisites by area: Rust 1.97.1 for the shared engine; an Apple Silicon Mac w
 cargo run -p covalent-cli -- doctor
 ```
 
-Use `apple`, `android`, `container`, or `all` with both scripts for broader work. Android headed validation additionally requires the exact `Covalent_API_37` AVD and an explicit `ANDROID_SERIAL`; Apple UI gates use the bounded scripts under `apps/apple/Scripts`. Container validation includes TLS-only management, the three-node disaster drill, and artifact budgets. Public package promotion and a physical Unraid drill remain release gates. Apple Developer ID/notarization is excluded, and Android production signing is deferred.
+Use `apple`, `android`, `container`, or `all` with both scripts for broader work. Android headed validation additionally requires the exact `Covalent_API_37` AVD and an explicit `ANDROID_SERIAL`; Apple UI gates use the bounded scripts under `apps/apple/Scripts`. Container validation includes TLS-only management, three-node one-way transfer drills, and artifact budgets. Public package promotion remains required. Docker is the accepted Unraid validation target while Atlas is offline; a physical Atlas drill does not gate the current scope. Apple Developer ID/notarization is excluded, and Android production signing is deferred.
 
 Bootstrap checks tools; it does not start a node. A headless node requires an
 explicitly provisioned KEK, and network access requires the TLS container path.
@@ -95,7 +88,7 @@ Use the [Docker source setup](packaging/docker/README.md#personal-use-from-this-
 instead of launching `covalent-node serve` without those protections. No secret
 or external account is required for bootstrap or core tests.
 
-The implemented Rust vertical slice includes signed pairing and revocation, streaming encrypted backup, exact explicit replicas, authenticated QUIC providers, corruption repair, signed restore preview, crash recovery, and resumable root-confined restore. A direct CLI disaster-recovery drill is available through `./scripts/smoke.sh`; the full property/adversarial/multi-node suite runs with `cargo test --workspace --all-features`.
+The implemented Rust service includes signed pairing and revocation, authenticated QUIC link control, shared link settings, restricted rclone orchestration, safe deletion handling, interruption recovery, and actionable status. `./scripts/smoke.sh` remains legacy encrypted backup/restore compatibility coverage; it is not the active one-way product journey. The full Rust suite runs with `cargo test --workspace --all-features`.
 
 The persisted/local API contract remains protocol v1. Peer QUIC framing is independently negotiated as transport v3, so framing changes cannot silently reuse an old ALPN or signature domain. Transport v3 intentionally fails closed against v0.1.0 transport-v2 peers. See [local API](docs/api/openapi.yaml), [protocol](docs/protocol/protocol.md), [architecture](docs/architecture/overview.md), [threat model](docs/security/threat-model.md), and [validation matrix](docs/release/validation-matrix.md).
 

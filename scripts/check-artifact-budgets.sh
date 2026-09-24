@@ -31,7 +31,9 @@ fi
 
 max_node_bytes=$((16 * 1024 * 1024))
 max_cli_bytes=$((8 * 1024 * 1024))
-max_image_bytes=$((96 * 1024 * 1024))
+# The integrated pinned sync worker adds ~30 MiB. Reviewed native builds
+# measured 116.51 MiB (amd64) and 108.01 MiB (arm64); keep a 128 MiB ceiling.
+max_image_bytes=$((128 * 1024 * 1024))
 
 check_file() {
   artifact=$1
@@ -73,7 +75,7 @@ if [ -n "$image" ]; then
   # containerd-backed store it reports the *compressed* content size, which
   # measured this image at 25,399,624 bytes when its real on-disk footprint is
   # 63,667,200 — a 2.5x under-measurement that would let a ~250 MiB image pass a
-  # 96 MiB budget. That is a gate failing open. Measure the uncompressed layer
+  # image budget. That is a gate failing open. Measure the uncompressed layer
   # bytes out of `docker save` instead, which is what actually lands on a node.
   image_size=$(docker save "$image" | python3 -c '
 import json

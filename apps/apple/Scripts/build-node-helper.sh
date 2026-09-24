@@ -36,7 +36,8 @@ fi
 
 rust_target=aarch64-apple-darwin
 if [ "$configuration" = "Release" ]; then
-  cargo build \
+  # Rust #157750: stripped proc-macro dylibs cannot be loaded on macOS 27.
+  CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_STRIP=none cargo build \
     --locked \
     --release \
     --manifest-path "$repo_root/Cargo.toml" \
@@ -52,7 +53,7 @@ else
     --target "$rust_target"
 fi
 
-source_binary="$repo_root/target/$rust_target/$profile_directory/covalent-node"
+source_binary="${CARGO_TARGET_DIR:-$repo_root/target}/$rust_target/$profile_directory/covalent-node"
 
 destination_directory="$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH"
 destination_binary="$destination_directory/covalent-node"
@@ -63,6 +64,10 @@ if [ "$(xcrun lipo -archs "$destination_binary")" != "arm64" ]; then
   exit 1
 fi
 chmod 755 "$destination_binary"
+
+sync_engine_resources="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/CovalentSyncEngine"
+"$apple_dir/Scripts/package-sync-engine.sh" \
+  "$destination_directory" "$sync_engine_resources"
 
 if [ "${CODE_SIGNING_ALLOWED:-YES}" = "YES" ]; then
   identity=${EXPANDED_CODE_SIGN_IDENTITY:--}
