@@ -107,6 +107,7 @@ def runtime_check(directory, image):
             assert body == ("authorized" if expected == 200 else "authentication required")
 
         request(good, 200)
+        request({**good, "Host": "localhost"}, 200)
         request({k: v for k, v in good.items() if k != "Origin"}, 200)
         for key in ("Tailscale-User-Login", "X-Covalent-Console", "Sec-Fetch-Site"):
             request({k: v for k, v in good.items() if k != key}, 401)

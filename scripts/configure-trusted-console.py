@@ -28,7 +28,8 @@ def access_rule(origin, login, token):
     header Tailscale-User-Login {quote(login)}
     header X-Covalent-Console "1"
     header Sec-Fetch-Site "same-origin"
-    expression `{{http.request.hostport}} == {quote(url.netloc)} && ({{http.request.header.Origin}} == "" || {{http.request.header.Origin}} == {quote(origin)})`
+    # Serve rewrites Host to localhost when forwarding to a Unix socket.
+    expression `({{http.request.hostport}} == "localhost" || {{http.request.hostport}} == {quote(url.netloc)}) && ({{http.request.header.Origin}} == "" || {{http.request.header.Origin}} == {quote(origin)})`
 }}
 handle @trusted_console {{
     reverse_proxy 127.0.0.1:8787 {{
