@@ -149,6 +149,7 @@ require_text 'COVALENT_KEY_ENCRYPTION_KEY_FILE:=/run/secrets/covalent-kek' "$ent
 require_text 'Covalent never generates a replacement KEK' "$entrypoint"
 require_text 'serve|recover)' "$entrypoint"
 python3 "$repo_root/scripts/test-container-entrypoint.py"
+python3 "$repo_root/scripts/test-trusted-console.py"
 require_text 'COVALENT_KEY_ENCRYPTION_KEY_FILE: /run/secrets/covalent-kek' "$compose"
 require_text 'COVALENT_ADVERTISED_PEER_ADDRESS: "${COVALENT_ADVERTISED_PEER_ADDRESS:-}"' "$compose"
 require_text '${COVALENT_HTTPS_BIND_IP:-127.0.0.1}:${COVALENT_HTTPS_PORT:-8443}:8443/tcp' "$compose"

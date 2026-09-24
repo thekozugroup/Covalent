@@ -228,7 +228,7 @@ The first start creates a durable local certificate authority under `/config/cad
 If the Docker host already uses Tailscale, expose the WebUI without installing
 Covalent's local CA in browsers by terminating trusted HTTPS with Tailscale
 Serve. Covalent creates `/config/covalent-web.sock` mode `0600`; it is a local
-cleartext bridge to the same token-protected API, not a network listener. Point
+cleartext bridge to the API, not a network listener. Point
 Serve at the host path corresponding to that socket:
 
 ```sh
@@ -237,11 +237,38 @@ sudo tailscale serve --bg --https=8443 "unix:$config_dir/covalent-web.sock"
 sudo tailscale serve status
 ```
 
-Open the HTTPS URL printed by `tailscale serve` and enter the claimed
-`local-api-token`. Serve remains private to the tailnet and its access policy;
-do not use Tailscale Funnel. The original Covalent HTTPS listener remains
-available on its configured host binding. To remove only this Serve mapping,
-run `sudo tailscale serve --https=8443 off`.
+For an everyday console that opens ready to edit, authorize your Tailscale
+identity once during installation. Run this from the checked-out repository
+on the trusted operator computer, using the token from your claim output:
+
+```sh
+python3 scripts/configure-trusted-console.py \
+  --config-dir "$config_dir" \
+  --token-file "$claim_output/local-api-token" \
+  --origin https://your-server.your-tailnet.ts.net:8443 \
+  --tailscale-user you@example.com
+# On a remote host, securely copy the generated console-access directory into
+# the durable config mount. Its directory/file modes must stay 0700/0600.
+sudo chown -R 65532:65532 "$config_dir/console-access"
+docker restart Covalent
+```
+
+Use the container's actual UID/GID if it differs from Compose's 65532:65532.
+The WebUI opens automatically for that user through Tailscale Serve. The API
+credential stays on the server; the browser never receives it. The rule checks
+the exact HTTPS origin, Tailscale identity, and same-origin browser request
+headers. It is imported only on the private Unix socket, never on the direct
+HTTPS listener. Tailscale Serve strips incoming identity headers and supplies
+the authenticated identity. Tagged clients have no user identity and can use
+the manual token fallback instead.
+
+Keep `console-access` private: it contains the API token. It survives container
+updates in `/config`. Regenerate it if you rotate the API token; remove that
+directory and restart Covalent to return to manual unlocking. An installation
+without this rule retains the manual token form. Serve remains private to the
+tailnet and its access policy; do not use Tailscale Funnel. The original
+Covalent HTTPS listener remains token-protected on its configured host binding.
+To remove only this Serve mapping, run `sudo tailscale serve --https=8443 off`.
 
 ### Enroll or remove the claimed CA
 

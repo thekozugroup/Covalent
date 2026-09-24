@@ -16,9 +16,14 @@ const markup = renderToStaticMarkup(h(Card, { hidden: true },
   h(CardContent)));
 const block = `<!-- shadcn:link-settings:start -->\n    <template id="link-settings-card">${markup}</template>\n    <!-- shadcn:link-settings:end -->`;
 const icon = (component, size = 20) => h(component, { size, strokeWidth: 1.75, "aria-hidden": true, focusable: false });
+const mark = h("svg", { viewBox: "0 0 88 64", width: 26, height: 20, "aria-hidden": true, focusable: false },
+  h("path", { d: "M44 11.215a24 24 0 0 1 0 41.57 24 24 0 0 1 0-41.57Z", fill: "currentColor", opacity: ".22" }),
+  h("g", { fill: "none", stroke: "currentColor", strokeWidth: 3.5 },
+    h("circle", { cx: 32, cy: 32, r: 24 }),
+    h("circle", { cx: 56, cy: 32, r: 24 })));
 const sidebar = renderToStaticMarkup(h(Sidebar, { id: "console-sidebar", "aria-label": "Console navigation" },
   h(SidebarHeader, null,
-    h("span", { className: "sidebar-brand" }, "Covalent"),
+    h("span", { className: "sidebar-brand", "aria-label": "Covalent", role: "img" }, mark),
     h("button", { type: "button", "data-sidebar-toggle": "", "aria-label": "Collapse sidebar", "aria-expanded": true, "aria-controls": "console-sidebar", title: "Collapse sidebar" }, icon(PanelLeft))),
   h(SidebarContent, null,
     h(SidebarMenu, { role: "tablist", "aria-label": "Covalent actions", "aria-orientation": "vertical" },

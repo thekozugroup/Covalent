@@ -68,10 +68,90 @@ test("unlock initializes Links without archive APIs and primary tabs work", asyn
 
 test("console access uses trusted claim output and never a server-state token path", async () => {
   const html = await source("index.html");
+  assert.match(html, /data-access-state hidden>Console locked/);
+  assert.match(html, /data-access-panel hidden>/);
   assert.match(html, /owner-only output directory created by <code>covalent claim<\/code> on a trusted computer/);
   assert.match(html, /This console accepts a token only; it does not accept a setup code\./);
   assert.doesNotMatch(html, /\/data\/local-api-token/);
   assert.doesNotMatch(html, /token from <code>\/data\//);
+});
+
+test("trusted access initializes Links and pairings before showing its state", async () => {
+  const app = await source("app.js");
+  const body = app.slice(app.indexOf("function initializeConsoleAccess()"), app.indexOf('$("[data-token-file-choose]")'));
+  const calls = [];
+  const elements = new Map([
+    ["[data-access-panel]", { hidden: true, open: false }],
+    ["[data-access-state]", { hidden: true, textContent: "Console locked" }],
+  ]);
+  const context = {
+    accessReady: false,
+    errorCopy: consoleRuntime,
+    api: async (path, options) => { calls.push([path, options.method]); },
+    initializeFolderSync: () => { assert.equal(context.accessReady, true); calls.push(["Links"]); },
+    refreshNetworkPairings: () => { assert.equal(context.accessReady, true); calls.push(["pairings"]); },
+    clearFolderSyncAccess: assert.fail,
+    renderFolderError: assert.fail,
+    $: (selector) => elements.get(selector),
+    fail: assert.fail,
+  };
+  runInNewContext(body + "\nthis.tryTrustedAccess = tryTrustedAccess;", context);
+  await context.tryTrustedAccess();
+  assert.deepEqual(calls, [["/api/v1/config/export", "POST"], ["Links"], ["pairings"]]);
+  assert.equal(elements.get("[data-access-panel]").hidden, true);
+  assert.equal(elements.get("[data-access-state]").textContent, "Trusted access");
+});
+
+test("failed trusted access reveals token fallback and preserves network failures", async () => {
+  const app = await source("app.js");
+  const body = app.slice(app.indexOf("function initializeConsoleAccess()"), app.indexOf('$("[data-token-file-choose]")'));
+  const elements = new Map([
+    ["[data-access-panel]", { hidden: true, open: false }],
+    ["[data-access-state]", { hidden: true, textContent: "Console locked" }],
+  ]);
+  const failures = [];
+  const context = {
+    accessReady: false,
+    errorCopy: consoleRuntime,
+    api: async () => { throw new TypeError("network unavailable"); },
+    initializeFolderSync: assert.fail,
+    refreshNetworkPairings: assert.fail,
+    clearFolderSyncAccess() {},
+    renderFolderError: assert.fail,
+    $: (selector) => elements.get(selector),
+    fail: (error) => failures.push(error),
+    NodeApiError: class extends Error { constructor(status) { super(); this.status = status; } },
+  };
+  runInNewContext(body + "\nthis.tryTrustedAccess = tryTrustedAccess;", context);
+  await context.tryTrustedAccess();
+  assert.equal(context.accessReady, false);
+  assert.equal(elements.get("[data-access-panel]").hidden, false);
+  assert.equal(elements.get("[data-access-panel]").open, true);
+  assert.equal(failures.length, 1);
+
+  elements.get("[data-access-panel]").hidden = true;
+  context.api = async () => { throw new context.NodeApiError(401); };
+  await context.tryTrustedAccess();
+  assert.equal(elements.get("[data-access-panel]").hidden, false);
+  assert.equal(failures.length, 1, "expected authorization denial should only show token fallback");
+});
+
+test("API requests identify the console without a token and guards use access state", async () => {
+  const app = await source("app.js");
+  const responseSource = app.slice(app.indexOf("async function apiResponse("), app.indexOf("\nasync function api("));
+  const requests = [];
+  const apiResponse = new Function("Headers", "fetch", "token", "PROTOCOL_VERSION", "NodeApiError", "ProtocolMismatchError",
+    responseSource + "\nreturn apiResponse;")(Headers, async (path, options) => {
+      requests.push({ path, options });
+      return { ok: true, status: 204, headers: new Headers() };
+    }, "", 1, Error, Error);
+  await apiResponse("/api/v1/config/export", { method: "POST" });
+  assert.equal(requests[0].options.headers.get("X-Covalent-Console"), "1");
+  assert.equal(requests[0].options.headers.has("Authorization"), false);
+  assert.match(app, /function folderPollingEligible\(\)[\s\S]*?accessReady\s*&&/);
+  assert.match(app, /async function refreshNetworkPairings\(\) \{\s*if \(!accessReady\) return;/);
+  assert.match(app, /function requireUnlocked\(\) \{\s*if \(accessReady\) return true;/);
+  assert.match(app, /\[data-refresh\][\s\S]*?if \(!accessReady\) return;/);
 });
 
 test("transient confirmation clears without discarding later instructions or errors", async () => {
@@ -234,8 +314,18 @@ test("sidebar navigation handles vertical arrow keys", () => {
 });
 
 test("service refresh updates node status without replacing shadcn sidebar contents", async () => {
-  const [app, html] = await Promise.all([source("app.js"), source("index.html")]);
+  const [app, html, css] = await Promise.all([source("app.js"), source("index.html"), source("app.css")]);
   assert.match(html, /<aside[^>]*data-state="expanded"/);
+  const sidebarHeader = /<div data-slot="sidebar-header">([\s\S]*?)<\/div>/.exec(html)?.[1];
+  assert.match(sidebarHeader, /<span class="sidebar-brand"[^>]*aria-label="Covalent"[^>]*>/);
+  assert.match(sidebarHeader, /<svg viewBox="0 0 88 64"/);
+  assert.match(sidebarHeader, /<button[^>]*data-sidebar-toggle[^>]*>[\s\S]*lucide-panel-left/);
+  assert.doesNotMatch(sidebarHeader, />Covalent</);
+  assert.match(css, /\[data-state="collapsed"\] \.sidebar-brand,\[data-state="collapsed"\] \.sidebar-label \{ display:none; \}/);
+  const header = /<header>([\s\S]*?)<\/header>/.exec(html)?.[1];
+  assert.match(header, /<h1>Covalent<\/h1>/);
+  assert.doesNotMatch(header, /brand-mark|data-device-name/);
+  assert.match(html, /Server: <strong data-device-name>Loading…<\/strong>/);
   assert.match(html, /<p[^>]*data-node-state[^>]*aria-live="polite"/);
   const body = /async function loadStatus\(\) \{([\s\S]*?)\n\}\n/.exec(app)?.[1];
   assert.ok(body);

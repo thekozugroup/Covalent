@@ -8,7 +8,7 @@
 }
 
 # Keep the console independent of the transfer engine. Only these public
-# assets are served from disk; all API requests retain node authentication.
+# assets are served from disk; the node always checks its API credential.
 (console) {
 	@console path / /assets/app.css /assets/app.js /assets/folder-sync-flow.js /assets/pairing-flow.js /assets/tab-flow.js
 	handle @console {
@@ -28,20 +28,23 @@ https://{$COVALENT_HTTPS_HOST:localhost}:8443 {
 		Strict-Transport-Security "max-age=31536000"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"
+		X-Frame-Options "DENY"
 	}
 	import console
 }
 
 # Optional local ingress for a host TLS proxy such as Tailscale Serve. The
 # Unix socket stays inside /config; no cleartext TCP management port is opened.
-# Tailscale must still restrict the public side to the private tailnet, and the
-# node continues to require its local API token for every mutation.
+# Only this owner-only socket accepts an optional Tailscale identity rule.
+# The network-facing HTTPS listener above never imports that rule.
 http:// {
 	bind unix//config/covalent-web.sock|0600
 	encode zstd gzip
 	header {
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"
+		X-Frame-Options "DENY"
 	}
+	import /config/console-access/*.caddy
 	import console
 }

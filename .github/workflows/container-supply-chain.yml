@@ -236,6 +236,7 @@ jobs:
           ./scripts/check-container-contract.sh "${image}" "${GITHUB_SHA}" \
             "${{ needs.validate.outputs.image_version }}" "${{ needs.validate.outputs.source_fingerprint }}"
           ./scripts/check-container-runtime.sh "${image}"
+          python3 ./scripts/test-trusted-console.py --image "${image}"
           python3 -B scripts/container-folder-sync-e2e.py "${image}"
           ./scripts/docker-compose-e2e.sh "${image}"
           ./scripts/check-artifact-budgets.sh --image-only "${image}" --platform "${{ matrix.platform }}"

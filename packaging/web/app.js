@@ -492,6 +492,7 @@ const messageDetails = $("[data-message-details]");
 const messageDetail = $("[data-message-detail]");
 let messageTimer = null;
 let token = "";
+let accessReady = false;
 let networkPairing = null;
 let networkPoll = null;
 const pairing = globalThis.CovalentPairingFlow;
@@ -564,6 +565,7 @@ function fail(error) {
 async function apiResponse(path, options = {}, readJson = (response) => response.json()) {
   const headers = new Headers(options.headers || {});
   headers.set("Accept", "application/json");
+  headers.set("X-Covalent-Console", "1");
   if (token) headers.set("Authorization", `Bearer ${token}`);
   if (options.body) headers.set("Content-Type", "application/json");
   const response = await fetch(path, { ...options, headers, cache: "no-store" });
@@ -606,7 +608,7 @@ function folderPollingEligible() {
   const foldersSelected = $("[data-tab=folders]").getAttribute("aria-selected") === "true";
   const pairSelected = $("[data-tab=pair]").getAttribute("aria-selected") === "true";
   return Boolean(
-    token
+    accessReady
     && folderDeviceId
     && document.visibilityState === "visible"
     && (foldersSelected || pairSelected),
@@ -1410,7 +1412,7 @@ function clearFolderSyncAccess() {
 }
 
 function requireUnlocked() {
-  if (token) return true;
+  if (accessReady) return true;
   $("[data-access-panel]").open = true;
   $("#api-token").focus();
   say("Unlock the console with the local access token first.", true);
@@ -1483,7 +1485,7 @@ function renderNetworkPairing(item) {
 }
 
 async function refreshNetworkPairings() {
-  if (!token) return;
+  if (!accessReady) return;
   const pending = await pairing.network.pending(api);
   if (networkPairing !== null) {
     const priorState = networkPairing.state;
@@ -1507,6 +1509,41 @@ async function startNetworkPairing(candidateAddress) {
     renderNetworkPairing(await pairing.network.start(api, candidateAddress));
     say("Compare the code below on both devices before confirming.");
   } catch (error) { fail(error); }
+}
+
+function initializeConsoleAccess() {
+  return errorCopy.initializeUnlockedConsole({
+    authorize: async () => {
+      await api("/api/v1/config/export", { method: "POST" });
+      accessReady = true;
+    },
+    initializeLinks: initializeFolderSync,
+    refreshPairings: refreshNetworkPairings,
+    onLinksError(error) { clearFolderSyncAccess(); renderFolderError(error); },
+  });
+}
+
+async function tryTrustedAccess() {
+  try {
+    await initializeConsoleAccess();
+    $("[data-access-panel]").hidden = true;
+    $("[data-access-state]").hidden = false;
+    $("[data-access-state]").textContent = "Trusted access";
+  } catch (error) {
+    if (accessReady) {
+      $("[data-access-state]").hidden = false;
+      $("[data-access-state]").textContent = "Trusted access";
+      fail(error);
+      return;
+    }
+    accessReady = false;
+    clearFolderSyncAccess();
+    $("[data-access-panel]").hidden = false;
+    $("[data-access-panel]").open = true;
+    $("[data-access-state]").hidden = false;
+    $("[data-access-state]").textContent = "Console locked";
+    if (!(error instanceof NodeApiError && (error.status === 401 || error.status === 403))) fail(error);
+  }
 }
 
 $("[data-token-file-choose]").addEventListener("click", () => $("[data-token-file]").click());
@@ -1536,14 +1573,10 @@ $("[data-token-form]").addEventListener("submit", async (event) => {
   event.preventDefault();
   token = formData(event.currentTarget).get("token").trim();
   try {
-    await errorCopy.initializeUnlockedConsole({
-      authorize: () => api("/api/v1/config/export", { method: "POST" }),
-      initializeLinks: initializeFolderSync,
-      refreshPairings: refreshNetworkPairings,
-      onLinksError(error) { clearFolderSyncAccess(); renderFolderError(error); },
-    });
+    await initializeConsoleAccess();
     $("[data-access-panel]").open = false;
     $("[data-access-state]").textContent = "Unlocked in this tab";
+    $("[data-access-state]").hidden = false;
     $("[data-access-guidance]").textContent = "Unlocked for this tab";
     // Keep the credential only in the existing in-memory token variable.
     $("#api-token").value = "";
@@ -1552,6 +1585,7 @@ $("[data-token-form]").addEventListener("submit", async (event) => {
   }
   catch (error) {
     token = "";
+    accessReady = false;
     $("[data-access-panel]").open = true;
     $("[data-access-state]").textContent = "Console locked";
     $("[data-access-guidance]").textContent = "Unlock this browser tab";
@@ -1562,7 +1596,7 @@ $("[data-token-form]").addEventListener("submit", async (event) => {
 
 $("[data-refresh]").addEventListener("click", async () => {
   await loadStatus();
-  if (!token) return;
+  if (!accessReady) return;
   try { await Promise.all([loadFolders(false), refreshNetworkPairings()]); }
   catch (error) { fail(error); }
 });
@@ -1752,5 +1786,6 @@ compactSidebar.addEventListener("change", (event) => {
   if (event.matches) setSidebarExpanded(false);
 });
 
+void tryTrustedAccess();
 loadStatus();
 }

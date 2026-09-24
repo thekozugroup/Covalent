@@ -30,7 +30,6 @@ details.advanced[open] > summary { margin-bottom:14px; }
 [hidden] { display:none !important; }
 .brand { min-width:0; display:flex; align-items:center; gap:12px; }
 .brand p { margin:2px 0 0; font-size:.8rem; }
-.brand-mark { flex:none; display:grid; place-items:center; width:42px; height:42px; border-radius:13px; background:var(--accent); color:var(--accent-contrast); font-size:1.6rem; font-weight:750; }
 .access-state { font-size:.8rem; color:var(--muted); border:1px solid var(--line); padding:7px 12px; border-radius:999px; }
 .security-card { display:block; padding:0; }
 .security-card > summary,.create-link > summary { padding:20px 24px; font-weight:650; cursor:pointer; }
@@ -94,7 +93,6 @@ body { background:#fafafa; }
 .console-workspace > header,.console-workspace > main,.console-workspace > footer { width:min(100%,1080px); }
 .console-workspace > header { padding:18px 0 14px; }
 .console-workspace > header h1 { font-size:1.15rem; letter-spacing:-.02em; }
-.console-workspace .brand-mark { width:30px; height:30px; border-radius:8px; font-size:1.1rem; }
 button { font-weight:600; }
 .header-actions { display:flex; align-items:center; gap:8px; }
 .icon-action { display:grid; place-items:center; width:44px; min-height:44px; padding:0; border-radius:9px; }
@@ -124,7 +122,7 @@ button { font-weight:600; }
 .folder-actions > details.advanced { order:4; }
 [data-slot="sidebar"] { position:fixed; inset:0 auto 0 0; z-index:10; width:232px; padding:16px 12px; border:0; border-right:1px solid var(--line); border-radius:0; background:var(--sidebar); display:flex; flex-direction:column; gap:24px; }
 [data-slot="sidebar-header"] { display:flex; align-items:center; justify-content:space-between; min-height:44px; padding-left:10px; gap:8px; }
-.sidebar-brand { font-size:1.2rem; letter-spacing:-.025em; font-weight:650; }
+.sidebar-brand { display:grid; place-items:center; flex:none; width:44px; height:44px; border-radius:10px; background:var(--accent); color:var(--accent-contrast); }
 [data-sidebar-toggle] { display:grid; place-items:center; width:44px; min-height:44px; padding:10px; border-radius:8px; background:transparent; color:var(--muted); }
 [data-sidebar-toggle]:hover { background:var(--sidebar-selected); }
 [data-slot="sidebar-menu"] { display:grid; gap:5px; }
