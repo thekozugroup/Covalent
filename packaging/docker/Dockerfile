@@ -1,4 +1,4 @@
-FROM rust:1.97.1-alpine3.23@sha256:c4a364ddbf684fe038e6fa6a4f25b30c8dc85247423e0e660676ece0d17be4a2 AS builder
+FROM rust:1.98.1-alpine3.23@sha256:94a43bda4fd9b71fa3a74621c0982a646f83c7d1a3ba52bb4b7ddfd76d4dca93 AS builder
 WORKDIR /source
 ENV CARGO_INCREMENTAL=0
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
@@ -31,7 +31,7 @@ RUN cargo build --locked --release -p covalent-node -p covalent-cli
 #   - GOTOOLCHAIN=local, so the `go 1.26.7` directive in that go.mod is enforced
 #     by the image's own compiler instead of being papered over by an automatic
 #     toolchain download from the network.
-FROM golang:1.26.7-alpine3.23@sha256:b17af760035fc2f338eed92d448a6c67f2d45438844fc6c60678fa5f99e44b57 AS caddy
+FROM golang:1.27.1-alpine3.23@sha256:0908ac9b9319e09d7c238aabe914e0395c51d63c4e3d0ae8c554fda9158a5769 AS caddy
 ENV CGO_ENABLED=0 \
     GOTOOLCHAIN=local \
     GOFLAGS=-mod=readonly
@@ -73,7 +73,7 @@ RUN set -eu; \
 COPY packaging/docker/Caddyfile /tmp/Caddyfile
 RUN /caddy.unprivileged validate --config /tmp/Caddyfile --adapter caddyfile
 
-FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 ARG VCS_REF=unknown
 ARG COVALENT_SOURCE_FINGERPRINT=unknown
 ARG RELEASE_VERSION=development
