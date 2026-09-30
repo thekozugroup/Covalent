@@ -336,7 +336,10 @@ impl FolderSharingJournal {
             // A delayed authenticated older commit cannot roll settings back.
             return Ok(());
         }
-        if commit.revision > current.revision
+        // An unconfirmed placeholder is dated at this recipient's invitation;
+        // the source's existing settings can legitimately be older.
+        if current.confirmed
+            && commit.revision > current.revision
             && commit.accepted_at_unix_ms < current.accepted_at_unix_ms
         {
             return Err(SharingError::InvalidRecord);

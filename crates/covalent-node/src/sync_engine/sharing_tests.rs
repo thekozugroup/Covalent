@@ -1016,6 +1016,84 @@ fn batch_settings(cadence: LinkCadence) -> FolderLinkSettings {
 }
 
 #[test]
+fn new_recipient_accepts_settings_committed_before_its_invitation() {
+    let a = Device::new("Source", 43971);
+    let b = Device::new("Existing", 43972);
+    let c = Device::new("New", 43973);
+    pair(&a, &b);
+    pair(&a, &c);
+    let mut source = a.journal();
+    let mut existing = b.journal();
+    let mut recipient = c.journal();
+    let folder = Uuid::new_v4();
+    establish_batch_link(
+        &a,
+        &b,
+        &mut source,
+        &mut existing,
+        folder,
+        batch_settings(LinkCadence::Manual),
+    );
+    let settings = batch_settings(LinkCadence::Scheduled {
+        interval_minutes: 60,
+    });
+    source
+        .request_link_settings_at(folder, Uuid::new_v4(), 0, settings, 21_000)
+        .unwrap();
+    let offer = source
+        .offer_with_settings(
+            c.engine.device_id(),
+            folder,
+            "Batch",
+            &a.files(),
+            22_000,
+            settings,
+        )
+        .unwrap();
+    recipient.receive_offer(offer.clone(), 22_001).unwrap();
+    let acceptance = recipient
+        .accept(offer.offer_id, &c.files(), 22_002)
+        .unwrap();
+    let commit = source
+        .receive_acceptance(offer.offer_id, acceptance, 22_003)
+        .unwrap();
+    recipient.receive_commit(offer.offer_id, commit).unwrap();
+    let before = recipient.summaries().unwrap();
+    assert_eq!(before[0].phase, SharingPhase::AwaitingCommit);
+    assert!(!before[0].link_settings.as_ref().unwrap().confirmed);
+    deliver_link_settings(&mut source, &mut recipient);
+    let after = recipient.summaries().unwrap();
+    assert_eq!(after[0].phase, SharingPhase::Ready);
+    let confirmed = after[0].link_settings.as_ref().unwrap();
+    assert!(confirmed.confirmed);
+    assert_eq!(confirmed.revision, 1);
+    assert_eq!(confirmed.accepted_at_unix_ms, 21_000);
+    assert_eq!(confirmed.settings, settings);
+
+    // Once confirmed, a higher revision still cannot move its timestamp back.
+    let mut rollback = source
+        .outbound_records()
+        .unwrap()
+        .into_iter()
+        .find_map(|delivery| match delivery.record {
+            FolderShareRecord::SettingsCommit(commit)
+                if commit.target_id == c.engine.device_id() =>
+            {
+                Some(commit)
+            }
+            _ => None,
+        })
+        .unwrap();
+    rollback.revision += 1;
+    rollback.change_id = Uuid::new_v4();
+    rollback.accepted_at_unix_ms -= 1;
+    assert_eq!(
+        recipient.receive_link_settings_commit(&rollback),
+        Err(SharingError::InvalidRecord)
+    );
+}
+
+#[test]
 fn scheduled_cadence_uses_the_public_camel_case_shape() {
     let cadence = LinkCadence::Scheduled {
         interval_minutes: 30,
