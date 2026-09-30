@@ -2,6 +2,7 @@
 
 pub mod advertised_address;
 pub mod discovery;
+mod display_names;
 pub mod first_run_claim;
 pub mod network_pairing;
 pub mod pairing_transport;
@@ -529,6 +530,7 @@ pub struct AppState {
     provider_state_path: Option<Arc<PathBuf>>,
     transport_certificate: Option<Arc<Vec<u8>>>,
     network_pairing: Arc<NetworkPairingManager>,
+    display_names: Arc<display_names::DisplayNameStore>,
     first_run_claim: Option<Arc<first_run_claim::FirstRunClaim>>,
     discovery_controller: Option<Arc<discovery::DiscoveryController>>,
     archive_limits: ArchiveLimits,
@@ -576,6 +578,9 @@ impl AppState {
             Arc::clone(&engine),
             data_directory.join("network-pairing.json"),
         )?);
+        let display_names = Arc::new(display_names::DisplayNameStore::open(
+            data_directory.join("display-names.json"),
+        )?);
         Ok(Self {
             engine,
             platform_tier,
@@ -586,6 +591,7 @@ impl AppState {
             provider_state_path: None,
             transport_certificate: None,
             network_pairing,
+            display_names,
             first_run_claim: None,
             discovery_controller: None,
             archive_limits: ArchiveLimits::default(),
@@ -1346,6 +1352,7 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(health))
         .route("/api/v1/status", get(status))
         .route("/api/v1/sync/status", get(sync_api::status))
+        .route("/api/v1/sync/display-names", post(sync_api::display_name))
         .route("/api/v1/sync/folders", post(sync_api::offer))
         .route("/api/v1/sync/accept", post(sync_api::accept))
         .route("/api/v1/sync/renew", post(sync_api::renew))
@@ -2025,10 +2032,17 @@ async fn transport_identity(
     }))
 }
 
+#[derive(Default, Deserialize)]
+struct DiscoveryQuery {
+    #[serde(default)]
+    details: bool,
+}
+
 async fn discovery_candidates(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<axum::Json<Vec<discovery::DiscoveryCandidate>>, ApiError> {
+    Query(query): Query<DiscoveryQuery>,
+) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let enabled = state
         .engine
@@ -2039,9 +2053,19 @@ async fn discovery_candidates(
         .peer_address
         .ok_or_else(ApiError::peer_endpoint_unavailable)?
         .port();
-    let candidates = tokio::task::spawn_blocking(move || {
-        let mut candidates = discovery::LanDiscovery::browse(enabled, Duration::from_secs(1))?;
-        candidates.extend(discovery::discover_tailscale_candidates(peer_port)?);
+    let report = tokio::task::spawn_blocking(move || {
+        use discovery::DiscoveryAvailability;
+        let (mut candidates, lan) = if enabled {
+            match discovery::LanDiscovery::browse(true, Duration::from_secs(1)) {
+                Ok(candidates) => (candidates, DiscoveryAvailability::Available),
+                Err(_) => (Vec::new(), DiscoveryAvailability::Error),
+            }
+        } else {
+            (Vec::new(), DiscoveryAvailability::Disabled)
+        };
+        let (tailnet_candidates, tailscale) =
+            discovery::discover_tailscale_with_availability(peer_port);
+        candidates.extend(tailnet_candidates);
         candidates.sort_by_key(|candidate| {
             (
                 candidate.source,
@@ -2054,12 +2078,19 @@ async fn discovery_candidates(
                 && left.endpoint == right.endpoint
                 && left.service_id == right.service_id
         });
-        Ok::<_, CoreError>(candidates)
+        discovery::DiscoveryReport {
+            candidates,
+            lan,
+            tailscale,
+        }
     })
     .await
-    .map_err(|_| ApiError::internal("discovery worker failed"))?
-    .map_err(ApiError::from_core)?;
-    Ok(axum::Json(candidates))
+    .map_err(|_| ApiError::internal("discovery worker failed"))?;
+    if query.details {
+        Ok(axum::Json(report).into_response())
+    } else {
+        Ok(axum::Json(report.candidates).into_response())
+    }
 }
 
 async fn config_export(

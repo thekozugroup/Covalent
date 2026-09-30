@@ -597,13 +597,25 @@ impl FolderSyncService {
         peer_id: DeviceId,
         folder_id: Uuid,
         label: &str,
-        selected_root: &Path,
+        selected_root: Option<&Path>,
         now: u64,
         settings: super::FolderLinkSettings,
     ) -> Result<CommittedMutation<FolderShareOffer>, FolderSyncServiceError> {
-        self.shared.launcher.validate_selected_root(selected_root)?;
+        let selected_root = match selected_root {
+            Some(root) => root.to_path_buf(),
+            None => self
+                .try_inner()?
+                .journal
+                .outgoing_root(folder_id)
+                .ok_or(FolderSyncServiceError::InvalidConfiguration)?,
+        };
+        self.shared
+            .launcher
+            .validate_selected_root(&selected_root)?;
         self.mutate(|journal| {
-            journal.offer_with_settings(peer_id, folder_id, label, selected_root, now, settings)
+            // The journal revalidates the root and its retained identity under
+            // the mutation lock, including if folder access changed meanwhile.
+            journal.offer_with_settings(peer_id, folder_id, label, &selected_root, now, settings)
         })
         .await
     }

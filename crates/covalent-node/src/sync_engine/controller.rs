@@ -394,11 +394,28 @@ impl ManagedEngineSession {
             .ok_or(EngineSessionError::InvalidConfiguration)?
             .role();
         if matches!(role, EngineFolderRole::Source) {
-            return Ok(super::run_observation::EngineRunObservation {
-                local_index: Some(self.runtime.source_index(folder).await?),
-                completions: BTreeMap::new(),
-                failures: BTreeSet::new(),
-            });
+            if self.jobs.get(&folder).is_some_and(JoinHandle::is_finished) {
+                let index = self
+                    .jobs
+                    .remove(&folder)
+                    .expect("finished inventory checked")
+                    .await
+                    .map_err(|_| EngineSessionError::EngineUnavailable)??;
+                return Ok(super::run_observation::EngineRunObservation {
+                    local_index: Some(index),
+                    ..Default::default()
+                });
+            }
+            // Hashing a large source must not hold the service mutation lock.
+            // The session owns and reaps this job just like destination copies.
+            if !self.jobs.contains_key(&folder) {
+                let runtime = Arc::clone(&self.runtime);
+                self.jobs.insert(
+                    folder,
+                    tokio::spawn(async move { runtime.source_index(folder).await }),
+                );
+            }
+            return Ok(super::run_observation::EngineRunObservation::default());
         }
         let expected = expected.ok_or(EngineSessionError::InvalidConfiguration)?;
         if self.jobs.get(&folder).is_some_and(JoinHandle::is_finished) {
@@ -580,6 +597,130 @@ fn revalidate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn source_inventory_is_polled_without_waiting_and_stop_drains_it() {
+        use sha2::{Digest as _, Sha256};
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(directory.path()).unwrap();
+        let state = root.join("state");
+        let files = root.join("files");
+        for path in [&state, &files] {
+            std::fs::create_dir(path).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let installation = Arc::new(
+            EngineInstallation::create(
+                &state,
+                &covalent_core::StaticKeyProtector::new(1, [7; 32]).unwrap(),
+            )
+            .unwrap(),
+        );
+        // Preparation verifies the executable; this test controls jobs before
+        // they launch any process, so it needs no installed rclone or guardian.
+        let executable = root.join("worker");
+        let script = b"#!/bin/sh\nexit 1\n";
+        std::fs::write(&executable, script).unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let executable =
+            VerifiedEngineExecutable::open(&executable, Sha256::digest(script).into()).unwrap();
+        let folder = Uuid::new_v4();
+        let mut session = ManagedEngineSession::start(
+            Arc::clone(&installation),
+            &executable,
+            &executable,
+            &root,
+            EngineSessionSettings {
+                device_name: "source".into(),
+                listener: None,
+                peers: Vec::new(),
+                folders: vec![
+                    EngineFolderConfig::new(folder, "files", files, Vec::new())
+                        .unwrap()
+                        .with_role(EngineFolderRole::Source),
+                ],
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            session.run_observation(folder, None).await.unwrap(),
+            Default::default()
+        );
+        let launched = session
+            .jobs
+            .remove(&folder)
+            .expect("inventory runs in background");
+        launched.abort();
+        assert!(launched.await.unwrap_err().is_cancelled());
+
+        let index = EngineIndexSnapshot {
+            index_id: "0x0123456789ABCDEF".into(),
+            sequence: 1,
+        };
+        let (complete, pending) = tokio::sync::oneshot::channel();
+        session.jobs.insert(
+            folder,
+            tokio::spawn(async move { Ok(pending.await.unwrap()) }),
+        );
+        let task_id = session.jobs[&folder].id();
+        for _ in 0..2 {
+            let observed = tokio::time::timeout(
+                Duration::from_millis(100),
+                session.run_observation(folder, None),
+            )
+            .await
+            .expect("pending inventory must not block status and consent")
+            .unwrap();
+            assert_eq!(observed, Default::default());
+            assert_eq!(
+                session.jobs[&folder].id(),
+                task_id,
+                "do not restart an active inventory"
+            );
+        }
+        complete.send(index.clone()).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !session.jobs[&folder].is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            session
+                .run_observation(folder, None)
+                .await
+                .unwrap()
+                .local_index,
+            Some(index)
+        );
+        assert!(session.jobs.is_empty());
+
+        let lease = session.worker_lease.as_ref().unwrap().clone();
+        session.jobs.insert(
+            folder,
+            tokio::spawn(async move {
+                let _lease = lease;
+                std::future::pending::<Result<EngineIndexSnapshot, EngineSessionError>>().await
+            }),
+        );
+        tokio::task::yield_now().await;
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), session.stop())
+                .await
+                .unwrap()
+                .unwrap(),
+            StopOutcome::Exited(_)
+        ));
+        assert!(session.jobs.is_empty());
+        assert!(
+            installation.claim_worker().is_ok(),
+            "cancelled inventory must release its worker lease"
+        );
+    }
 
     #[test]
     fn missing_saf_grant_does_not_remove_an_available_folder() {

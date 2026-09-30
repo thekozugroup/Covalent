@@ -1053,6 +1053,20 @@ impl FolderSharingJournal {
         Ok(result)
     }
 
+    /// Reuse only a retained outgoing source, never a recipient's destination.
+    pub(super) fn outgoing_root(&self, folder_id: Uuid) -> Option<PathBuf> {
+        self.snapshot
+            .shares
+            .iter()
+            .find(|share| {
+                !share.removed
+                    && share.offer.folder_id == folder_id
+                    && share.offer.source_device_id == self.engine.device_id()
+            })
+            .and_then(|share| share.root.as_ref())
+            .map(|root| root.path.clone())
+    }
+
     /// Retain the source user's selected folder before returning a signed offer.
     pub fn offer(
         &mut self,

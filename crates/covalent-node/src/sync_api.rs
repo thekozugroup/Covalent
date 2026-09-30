@@ -12,7 +12,7 @@ pub(crate) struct OfferRequest {
     peer_id: covalent_protocol::DeviceId,
     folder_id: uuid::Uuid,
     label: String,
-    selected_root: std::path::PathBuf,
+    selected_root: Option<std::path::PathBuf>,
     link_policy: covalent_protocol::FolderLinkPolicy,
     #[serde(default)]
     cadence: crate::sync_engine::LinkCadence,
@@ -294,12 +294,32 @@ pub(crate) async fn offer(
         // rejects mismatched settings if an edit races this snapshot.
         let paused =
             confirmed_settings(&status, request.folder_id).is_some_and(|settings| settings.paused);
+        // A local display name does not rewrite the signed folder identity.
+        // An existing source keeps its original offer label for new recipients.
+        let names = state
+            .display_names
+            .snapshot()
+            .map_err(ApiError::from_core)?;
+        let label = if names.folders.get(&request.folder_id) == Some(&request.label) {
+            status
+                .shares()
+                .iter()
+                .find(|share| {
+                    share.folder_id == request.folder_id
+                        && !share.incoming
+                        && share.phase != crate::sync_engine::SharingPhase::Removed
+                })
+                .map(|share| share.label.as_str())
+                .unwrap_or(&request.label)
+        } else {
+            &request.label
+        };
         let committed = service
             .offer_with_settings(
                 request.peer_id,
                 request.folder_id,
-                &request.label,
-                &request.selected_root,
+                label,
+                request.selected_root.as_deref(),
                 crate::now_unix_ms(),
                 crate::sync_engine::FolderLinkSettings {
                     deletion_policy: request.link_policy,
@@ -1135,7 +1155,73 @@ impl SyncStatusResponse {
     }
 }
 
+/// Sets a presentation-only name on this node; no network consent or identity changes.
+pub(crate) async fn display_name(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ContractJson(request): ContractJson<crate::display_names::DisplayNameRequest>,
+) -> Result<StatusCode, ApiError> {
+    use crate::display_names::DisplayNameRequest;
+    authorize(&state, &headers)?;
+    let known = match &request {
+        DisplayNameRequest::Peer {
+            peer_id,
+            name: Some(_),
+        } => {
+            let config = state.engine.config().map_err(ApiError::from_core)?;
+            config
+                .trusted_peers
+                .get(peer_id)
+                .is_some_and(|grant| !grant.revoked && grant.confirmed_at_unix_ms != 0)
+                && config.trusted_peer_transports.contains_key(peer_id)
+        }
+        DisplayNameRequest::Folder {
+            folder_id,
+            name: Some(_),
+        } => {
+            let status = status_without_display_names(State(state.clone()), headers).await?;
+            status
+                .shares
+                .iter()
+                .any(|share| share.folder_id == *folder_id)
+        }
+        _ => true, // Clearing a local override never grants authority.
+    };
+    if !known {
+        return Err(ApiError::from_core(covalent_core::CoreError::InvalidState(
+            "unknown local display-name target".to_owned(),
+        )));
+    }
+    state
+        .display_names
+        .set(request)
+        .map_err(ApiError::from_core)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub(crate) async fn status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<axum::Json<SyncStatusResponse>, ApiError> {
+    let mut response = status_without_display_names(State(state.clone()), headers).await?;
+    let names = state
+        .display_names
+        .snapshot()
+        .map_err(ApiError::from_core)?;
+    for peer in &mut response.peers {
+        if let Some(name) = names.peers.get(&peer.peer_id) {
+            peer.display_name.clone_from(name);
+        }
+    }
+    for share in &mut response.shares {
+        if let Some(name) = names.folders.get(&share.folder_id) {
+            share.label.clone_from(name);
+        }
+    }
+    Ok(response)
+}
+
+async fn status_without_display_names(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<axum::Json<SyncStatusResponse>, ApiError> {

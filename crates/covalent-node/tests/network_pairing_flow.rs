@@ -137,6 +137,18 @@ async fn discovery_start_pending_and_confirm_pairs_two_real_nodes() {
     let discovery = call(&initiator, "GET", "/api/v1/discovery", None).await;
     assert_eq!(discovery.status, 200, "{}", discovery.body);
     assert!(discovery.json().is_array(), "{}", discovery.body);
+    let detailed = call(&initiator, "GET", "/api/v1/discovery?details=true", None).await;
+    assert_eq!(detailed.status, 200, "{}", detailed.body);
+    let detailed = detailed.json();
+    assert!(detailed["candidates"].is_array());
+    assert_eq!(detailed["lan"], "disabled");
+    assert!(
+        ["available", "unavailable", "stale", "error"].contains(
+            &detailed["tailscale"]
+                .as_str()
+                .expect("Tailscale discovery availability")
+        )
+    );
 
     // A discovered candidate is an address plus port, exactly what the clients
     // post to start pairing.

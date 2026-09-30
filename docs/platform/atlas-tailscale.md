@@ -198,10 +198,11 @@ access. The authoritative syntax is the
 [Tailscale grants reference](https://tailscale.com/docs/reference/syntax/grants).
 
 The stock image does not run `tailscaled` and does not receive a Tailscale
-LocalAPI socket. Therefore it cannot list Tailnet peers itself. Do not mount the
-host socket or state directory just to gain discovery; use the explicit address
-flow. Pairing still compares identities and a confirmation code, then pins the
-peer transport certificate.
+LocalAPI socket. Enable the [host discovery refresh](tailscale-discovery.md) to
+list online Tailnet candidates through the existing configuration mount, or use
+the explicit address flow. Do not mount the host socket or state directory just
+to gain discovery. Pairing still compares identities and a confirmation code,
+then pins the peer transport certificate.
 
 ## 5. Run the read-only preflight
 

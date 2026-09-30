@@ -23,7 +23,9 @@ case "${1:-serve}" in
   *) exec covalent-node "$@" ;;
 esac
 
-for directory in "${COVALENT_CONFIG_DIR:-/config}" "${COVALENT_DATA_DIR:-/data}"; do
+: "${COVALENT_CONFIG_DIR:=/config}"
+export COVALENT_CONFIG_DIR
+for directory in "$COVALENT_CONFIG_DIR" "${COVALENT_DATA_DIR:-/data}"; do
   if [ ! -d "$directory" ] || [ ! -w "$directory" ]; then
     echo "Covalent requires a writable durable mount at $directory" >&2
     exit 73

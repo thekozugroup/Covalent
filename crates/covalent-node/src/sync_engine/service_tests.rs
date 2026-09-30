@@ -292,7 +292,7 @@ async fn unavailable_source_folder_interrupts_only_its_active_run() {
                 second.engine.device_id(),
                 *folder,
                 "Documents",
-                source_root,
+                Some(source_root),
                 2000,
                 settings,
             )
@@ -513,7 +513,7 @@ async fn pending_copy_recovery_fails_only_its_destination_run() {
                 second.engine.device_id(),
                 folder,
                 "Documents",
-                source_root,
+                Some(source_root),
                 2000,
                 settings,
             )
@@ -2506,7 +2506,107 @@ async fn folder_offer_api_preserves_shared_pause_and_rejects_other_setting_misma
             crate::ContractJson(serde_json::from_value(request).unwrap()),
         )
     };
+    let mut missing_root = request.clone();
+    missing_root.as_object_mut().unwrap().remove("selectedRoot");
+    assert!(
+        offer(missing_root).await.is_err(),
+        "new source requires a selected root"
+    );
+    assert!(source.status().await.unwrap().shares().is_empty());
     let _ = offer(request.clone()).await.unwrap();
+    let trust_before_names = first.engine.config().unwrap();
+    let records_before_names: Vec<_> = source
+        .outbound_records()
+        .await
+        .unwrap()
+        .into_value()
+        .into_iter()
+        .map(|delivery| delivery.record)
+        .collect();
+    let rename = |request| {
+        crate::sync_api::display_name(
+            State(state.clone()),
+            headers.clone(),
+            crate::ContractJson(serde_json::from_value(request).unwrap()),
+        )
+    };
+    let folder_name = json!({"type":"folder", "folderId":folder, "name":"Music"});
+    assert!(
+        serde_json::from_value::<crate::display_names::DisplayNameRequest>(
+            json!({"type":"folder", "folderId":folder})
+        )
+        .is_err(),
+        "omitting name must not silently clear a preference"
+    );
+    assert!(
+        crate::sync_api::display_name(
+            State(state.clone()),
+            HeaderMap::new(),
+            crate::ContractJson(serde_json::from_value(folder_name.clone()).unwrap()),
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        rename(json!({"type":"folder", "folderId":Uuid::new_v4(), "name":"Unknown"}))
+            .await
+            .is_err()
+    );
+    assert!(
+        rename(json!({"type":"peer", "peerId":Uuid::new_v4(), "name":"Unknown"}))
+            .await
+            .is_err()
+    );
+    assert!(
+        rename(json!({"type":"folder", "folderId":folder, "name":"bad\nname"}))
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        rename(folder_name).await.unwrap(),
+        axum::http::StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        rename(json!({"type":"peer", "peerId":second.engine.device_id(), "name":"Waypoint"}))
+            .await
+            .unwrap(),
+        axum::http::StatusCode::NO_CONTENT
+    );
+    assert_eq!(first.engine.config().unwrap(), trust_before_names);
+    let records_after_names: Vec<_> = source
+        .outbound_records()
+        .await
+        .unwrap()
+        .into_value()
+        .into_iter()
+        .map(|delivery| delivery.record)
+        .collect();
+    assert_eq!(
+        records_before_names, records_after_names,
+        "signed records are unchanged"
+    );
+    let reopened_state = crate::AppState::new(
+        Arc::clone(&first.engine),
+        crate::PlatformTier::Tier1,
+        token.into(),
+    )
+    .unwrap()
+    .with_folder_sync(FolderSyncRuntimeState::Ready(Arc::clone(&source)));
+    let renamed = crate::sync_api::status(State(reopened_state), headers.clone())
+        .await
+        .unwrap();
+    let renamed = serde_json::to_value(renamed.0).unwrap();
+    assert_eq!(renamed["shares"][0]["label"], "Music");
+    assert!(
+        renamed["peers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |peer| peer["peerId"] == second.engine.device_id().to_string()
+                    && peer["displayName"] == "Waypoint"
+            )
+    );
     let initial = source.status().await.unwrap().shares()[0]
         .link_settings
         .clone()
@@ -2522,6 +2622,7 @@ async fn folder_offer_api_preserves_shared_pause_and_rejects_other_setting_misma
         .unwrap();
 
     request["peerId"] = json!(third.engine.device_id());
+    request["label"] = json!("Music");
     let mut mismatched = request.clone();
     mismatched["cadence"] = json!({"mode": "continuous"});
     assert_eq!(
@@ -2533,6 +2634,16 @@ async fn folder_offer_api_preserves_shared_pause_and_rejects_other_setting_misma
         "link_settings_conflict"
     );
     assert_eq!(source.status().await.unwrap().shares().len(), 1);
+    let another_root = first.root.join("wrong-source");
+    std::fs::create_dir(&another_root).unwrap();
+    let mut wrong_root = request.clone();
+    wrong_root["selectedRoot"] = json!(another_root);
+    assert!(
+        offer(wrong_root).await.is_err(),
+        "supplied root cannot replace existing source"
+    );
+    assert_eq!(source.status().await.unwrap().shares().len(), 1);
+    request.as_object_mut().unwrap().remove("selectedRoot");
     let _ = offer(request.clone()).await.unwrap();
     let snapshot = source.status().await.unwrap();
     assert_eq!(snapshot.shares().len(), 2);
@@ -2577,7 +2688,7 @@ async fn manual_batch_waits_for_fresh_scan_and_exact_completion_then_reaps_worke
             second.engine.device_id(),
             folder,
             "Photos",
-            &first.files(),
+            Some(&first.files()),
             2000,
             FolderLinkSettings {
                 deletion_policy: covalent_protocol::FolderLinkPolicy::default(),
@@ -2826,7 +2937,7 @@ async fn android_continuous_conditions_stop_pending_scans_and_never_override_exp
             second.engine.device_id(),
             folder,
             "Photos",
-            &first.files(),
+            Some(&first.files()),
             3000,
             FolderLinkSettings {
                 deletion_policy: covalent_protocol::FolderLinkPolicy::default(),

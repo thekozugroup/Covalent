@@ -245,7 +245,7 @@ test("Manual and Scheduled render Run Now while Continuous only renders its stat
   const render = new Function("document", "folderController", "folderActionButton", "renderFolderError",
     `return (container, status, share) => {${body}};`)(
     { createElement: element }, { pendingRun: () => null },
-    (label) => ({ label, disabled: false }), assert.fail,
+    (label) => ({ label, disabled: false, dataset: {} }), assert.fail,
   );
   for (const mode of ["manual", "scheduled", "continuous"]) {
     const container = element();
@@ -254,8 +254,8 @@ test("Manual and Scheduled render Run Now while Continuous only renders its stat
       linkSettings: { confirmed: true, settings: { cadence: { mode }, paused: false } },
       linkRun: { phase: null, pendingRequest: null, rejectedRequest: null, nextDueAtUnixMs: null, destinations: [] },
     });
-    assert.equal(container.children.length, 1);
-    const buttons = container.children[0].children.filter((item) => item.label);
+    const buttons = container.children.filter((item) => item.label);
+    assert.equal(container.children.filter((item) => !item.label).length, 1, "transfer details remain available");
     assert.deepEqual(buttons.map((item) => item.label), mode === "continuous" ? [] : ["Run Now"]);
     assert.equal(buttons.some((item) => item.disabled), false);
   }
@@ -321,7 +321,8 @@ test("service refresh updates node status without replacing shadcn sidebar conte
   assert.match(sidebarHeader, /<svg viewBox="0 0 88 64"/);
   assert.match(sidebarHeader, /<button[^>]*data-sidebar-toggle[^>]*>[\s\S]*lucide-panel-left/);
   assert.doesNotMatch(sidebarHeader, />Covalent</);
-  assert.match(css, /\[data-state="collapsed"\] \.sidebar-brand,\[data-state="collapsed"\] \.sidebar-label \{ display:none; \}/);
+  assert.match(css, /\[data-state="collapsed"\] \.sidebar-label \{ display:none; \}/);
+  assert.doesNotMatch(css, /\[data-state="collapsed"\] \.sidebar-brand[^}]*display:none/);
   const header = /<header>([\s\S]*?)<\/header>/.exec(html)?.[1];
   assert.match(header, /<h1>Covalent<\/h1>/);
   assert.doesNotMatch(header, /brand-mark|data-device-name/);
@@ -345,6 +346,124 @@ test("service refresh updates node status without replacing shadcn sidebar conte
     );
     await load();
     assert.equal(name.textContent, offline ? "Node unavailable" : "Waypoint");
-    assert.equal(status.textContent, offline ? "Server unavailable" : "Service: ready");
+    assert.equal(status.textContent, offline ? "Server unavailable" : "Waypoint · Connected");
   }
+});
+
+
+test("Add recipient sends the existing share identity without asking for a source path", async () => {
+  const app = await source("app.js");
+  const body = /function renderAddDestination\(container, status, share\) \{([\s\S]*?)\n\}\n/.exec(app)?.[1];
+  assert.ok(body);
+  const element = () => ({ children: [], dataset: {}, listeners: {}, value: "", append(...items) { this.children.push(...items); }, addEventListener(name, callback) { this.listeners[name] = callback; } });
+  const sent = [];
+  const render = new Function("document", "folderController", "runFolderMutation", `return (container, status, share) => {${body}};`)(
+    { createElement: element }, { sendOffer: (body) => sent.push(body) }, (action) => action(),
+  );
+  const container = element();
+  const share = { folderId: "music", peerId: "waypoint", label: "Music", phase: "ready", linkPolicy: { propagateSourceDeletions: false, restoreLocalDeletions: false }, linkSettings: { settings: { cadence: { mode: "scheduled", intervalMinutes: 60 }, androidConditions: { wifiOnly: false, chargingOnly: false } } } };
+  render(container, { shares: [share], peers: [{ peerId: "waypoint", displayName: "Waypoint" }, { peerId: "atlas", displayName: "Atlas" }] }, share);
+  const details = container.children[0];
+  assert.equal(details.children[0].textContent, "Add recipient");
+  const form = details.children[2];
+  assert.equal(form.children.length, 2, "only recipient selection and submit are needed");
+  const select = form.children[0].children[0];
+  assert.deepEqual(select.children.slice(1).map((option) => option.value), ["atlas"]);
+  select.value = "atlas";
+  form.listeners.submit({ preventDefault() {} });
+  assert.deepEqual(sent, [{ peerId: "atlas", folderId: "music", label: "Music", linkPolicy: share.linkPolicy, cadence: share.linkSettings.settings.cadence, androidConditions: share.linkSettings.settings.androidConditions }]);
+});
+
+test("polling errors and busy feedback reveal a previously hidden healthy status", async () => {
+  const app = await source("app.js");
+  const status = { hidden: true, dataset: {} };
+  const context = {
+    $: () => status,
+    errorCopy: { describe: () => ({ summary: "Server unavailable. Try again." }) },
+    folderController: { refresh: async () => ({ busy: true, applied: false }) },
+    fail: assert.fail,
+  };
+  for (const name of ["renderFolderError", "loadFolders"]) {
+    const definition = new RegExp(`(?:async )?function ${name}\\([^]*?\\n\\}`).exec(app)?.[0];
+    assert.ok(definition);
+    runInNewContext(definition, context);
+  }
+  await context.loadFolders();
+  assert.equal(status.hidden, false);
+  assert.equal(status.dataset.kind, "checking");
+  status.hidden = true;
+  context.folderController.refresh = async () => { throw new Error("offline"); };
+  await context.loadFolders();
+  assert.equal(status.hidden, false);
+  assert.equal(status.dataset.kind, "attention");
+  assert.equal(status.textContent, "Server unavailable. Try again.");
+});
+
+test("transfer polling updates run details while retaining settings drafts, recipient selection, and focus", async () => {
+  const app = await source("app.js");
+  const element = () => ({
+    children: [], dataset: {}, className: "", parent: null,
+    append(...items) { for (const item of items) { item.parent = this; this.children.push(item); } },
+    setAttribute() {},
+    replaceChildren() { this.children = []; },
+    remove() { this.parent.children.splice(this.parent.children.indexOf(this), 1); },
+    insertBefore(item, reference) {
+      if (item.parent) item.remove();
+      item.parent = this;
+      this.children.splice(reference === null ? this.children.length : this.children.indexOf(reference), 0, item);
+    },
+    querySelector(selector) {
+      return this.children.find((item) => selector === ".link-run"
+        ? item.className === "link-run" : Object.hasOwn(item.dataset, "linkRunButton")) ?? null;
+    },
+  });
+  const list = element();
+  const nodes = new Map([["[data-folders-list]", list]]);
+  const document = { createElement: element, activeElement: null };
+  let controlRenders = 0;
+  let runRenders = 0;
+  const context = {
+    document, folderDeviceId: "atmos",
+    $: (selector) => { if (!nodes.has(selector)) nodes.set(selector, element()); return nodes.get(selector); },
+    folderSync: { statusSummary: () => ({ kind: "ready", text: "Ready" }), groupShares: (shares) => [shares], shareView: () => ({ kind: "ready", text: "Ready" }) },
+    folderController: { pendingLinkSettings: () => null, pendingRun: () => null },
+    renderFolderPeers() {}, renderPairedDevices() {}, renderFolderError: assert.fail,
+    folderPeerName: () => "Waypoint", firstLinkMember: () => true, renderFolderActions() {},
+    renderSharedFolderActions(container) {
+      controlRenders += 1;
+      const settings = element(); settings.value = "60";
+      const recipient = element(); recipient.value = "";
+      container.append(settings, recipient);
+    },
+    renderLinkRun(container, status, share) {
+      runRenders += 1;
+      const details = element(); details.className = "link-run"; details.textContent = share.linkRun.phase;
+      const button = element(); button.dataset.linkRunButton = "";
+      container.append(button, details);
+    },
+  };
+  for (const name of ["refreshLinkRun", "renderFolderStatus"]) {
+    const definition = new RegExp(`function ${name}\\([^]*?\\n\\}`).exec(app)?.[0];
+    assert.ok(definition);
+    runInNewContext(definition, context);
+  }
+  const share = { folderId: "music", offerId: "waypoint-offer", peerId: "waypoint", label: "Music", incoming: false, phase: "ready", expired: false,
+    linkSettings: { confirmed: true, settings: { cadence: { mode: "scheduled", intervalMinutes: 60 }, paused: false } }, linkRun: { phase: null, generation: 0 } };
+  const status = { shares: [share], peers: [{ peerId: "waypoint", displayName: "Waypoint" }], issue: null };
+  context.renderFolderStatus(status);
+  const controls = list.children[0].children[2];
+  const [settings, recipient] = controls.children;
+  settings.value = "120";
+  recipient.value = "atlas";
+  document.activeElement = settings;
+  controls.querySelector(".link-run").open = true;
+  context.renderFolderStatus({ ...status, shares: [{ ...share, linkRun: { phase: "running", generation: 1 } }] });
+  assert.equal(controlRenders, 1, "run state must not rebuild editable controls");
+  assert.equal(runRenders, 2, "transfer display still updates");
+  assert.equal(controls.children[0], settings);
+  assert.equal(settings.value, "120");
+  assert.equal(recipient.value, "atlas");
+  assert.equal(document.activeElement, settings);
+  assert.equal(controls.querySelector(".link-run").textContent, "running");
+  assert.equal(controls.querySelector(".link-run").open, true);
 });

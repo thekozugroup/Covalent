@@ -260,7 +260,7 @@
       peerId: uuid(body.peerId, "Choose a currently paired device."),
       folderId: uuid(body.folderId),
       label: string(body.label, 120, "Enter a folder name up to 120 characters.").trim(),
-      selectedRoot: selectedRoot(body.selectedRoot),
+      ...(Object.hasOwn(body, "selectedRoot") ? { selectedRoot: selectedRoot(body.selectedRoot) } : {}),
       linkPolicy: linkPolicy(body.linkPolicy),
     };
     if (Object.hasOwn(body, "cadence") || Object.hasOwn(body, "androidConditions")) {
@@ -498,6 +498,15 @@
     return settings.settings.cadence.mode === "manual"
       ? Object.freeze({ kind: "ready", text: "Ready for Run Now" })
       : Object.freeze({ kind: "waiting", text: "Waiting for the next scheduled run" });
+  }
+
+  function groupShares(shares) {
+    const groups = new Map();
+    for (const share of shares) {
+      if (!groups.has(share.folderId)) groups.set(share.folderId, []);
+      groups.get(share.folderId).push(share);
+    }
+    return Array.from(groups.values());
   }
 
   function statusSummary(status) {
@@ -1236,5 +1245,6 @@
     readJson,
     shareView,
     statusSummary,
+    groupShares,
   });
 });

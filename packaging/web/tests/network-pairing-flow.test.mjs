@@ -221,3 +221,23 @@ test("the network flow never asks anyone to copy JSON", async () => {
   assert.ok(!("invitation" in started), "a network pairing carries no invitation to copy");
   assert.ok(!("session" in started), "a network pairing carries no session to copy");
 });
+
+
+test("discovery availability distinguishes no results from disconnected Tailscale discovery", async () => {
+  const response = { candidates: [], lan: "disabled", tailscale: "unavailable" };
+  const found = recorder(() => response);
+  assert.deepEqual(await network.discovery(found.api), response);
+  assert.equal(found.calls[0].path, "/api/v1/discovery?details=true");
+  assert.deepEqual(await network.discovery(async () => []), { candidates: [], lan: "unknown", tailscale: "unknown" });
+  await assert.rejects(network.discovery(async () => ({ ...response, tailscale: "invented" })), /discovery status/);
+  await assert.rejects(network.discovery(async () => ({ ...response, candidates: [{ source: "tailscale", endpoint: "" }] })), /nearby device/);
+});
+
+
+test("Tailnet discovery preserves readable hostnames without changing the pairing endpoint", async () => {
+  const result = await network.discovery(async () => ({ lan: "disabled", tailscale: "available", candidates: [
+    { source: "tailscale", serviceId: "atlas.tailnet.ts.net.", endpoint: "100.64.0.7:8787" },
+  ] }));
+  assert.equal(result.candidates[0].name, "atlas");
+  assert.equal(result.candidates[0].endpoint, "100.64.0.7:8787");
+});

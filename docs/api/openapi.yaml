@@ -174,6 +174,59 @@ paths:
           $ref: "#/components/responses/Conflict"
         "503":
           $ref: "#/components/responses/Conflict"
+  /api/v1/sync/display-names:
+    post:
+      summary: Set or clear a local device or folder display name
+      description: Presentation preference on this node only. Does not rename historical signed offers, change peer identity or permissions, or propagate to other devices. Set the same preference separately on each desired node. A null name clears the override.
+      operationId: setLocalDisplayName
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  additionalProperties: false
+                  required: [type, peerId, name]
+                  properties:
+                    type:
+                      const: peer
+                    peerId:
+                      $ref: "#/components/schemas/DeviceId"
+                    name:
+                      type: [string, "null"]
+                      minLength: 1
+                      maxLength: 80
+                - type: object
+                  additionalProperties: false
+                  required: [type, folderId, name]
+                  properties:
+                    type:
+                      const: folder
+                    folderId:
+                      type: string
+                      format: uuid
+                    name:
+                      type: [string, "null"]
+                      minLength: 1
+                      maxLength: 256
+      responses:
+        "204":
+          description: Local display preference persisted; sync status now uses it.
+        "400":
+          description: Invalid display name or unknown local target.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          description: Folder status is temporarily busy; retry the folder naming request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /api/v1/sync/settings:
     post:
       summary: Change settings for the entire one-way link
@@ -364,16 +417,25 @@ paths:
     get:
       summary: List untrusted discovery candidates
       operationId: discoveryCandidates
+      parameters:
+        - name: details
+          in: query
+          description: Include discovery source availability; omitted or false preserves the legacy array response.
+          schema:
+            type: boolean
+            default: false
       responses:
         "200":
-          description: Untrusted LAN and Tailscale reachability hints. An empty list is valid when discovery is disabled.
+          description: Untrusted reachability hints, with source availability when details=true. Tailnet hints do not prove a Covalent service is running.
           content:
             application/json:
               schema:
-                type: array
-                maxItems: 1024
-                items:
-                  $ref: "#/components/schemas/DiscoveryCandidate"
+                oneOf:
+                  - type: array
+                    maxItems: 1024
+                    items:
+                      $ref: "#/components/schemas/DiscoveryCandidate"
+                  - $ref: "#/components/schemas/DiscoveryReport"
         "401":
           $ref: "#/components/responses/Unauthorized"
   /api/v1/config/export:
@@ -1725,7 +1787,7 @@ components:
     FolderOfferRequest:
       type: object
       additionalProperties: false
-      required: [peerId, folderId, label, selectedRoot, linkPolicy]
+      required: [peerId, folderId, label, linkPolicy]
       properties:
         peerId:
           $ref: "#/components/schemas/DeviceId"
@@ -1740,7 +1802,7 @@ components:
           type: string
           minLength: 1
           maxLength: 4096
-          description: Absolute folder selected by the local user; native hosts retain its OS access grant.
+          description: Absolute folder selected by the local user; native hosts retain its OS access grant. Required for a new folderId. Omit when adding a recipient to an existing outgoing folder to reuse its retained source; an explicitly different source is rejected.
         linkPolicy:
           $ref: "#/components/schemas/FolderLinkPolicy"
         cadence:
@@ -2384,6 +2446,21 @@ components:
           type: string
         certificateFingerprint:
           $ref: "#/components/schemas/HexDigest"
+    DiscoveryReport:
+      type: object
+      additionalProperties: false
+      required: [candidates, lan, tailscale]
+      properties:
+        candidates:
+          type: array
+          maxItems: 1024
+          items:
+            $ref: "#/components/schemas/DiscoveryCandidate"
+        lan:
+          enum: [disabled, available, error]
+        tailscale:
+          description: Available may include zero peers; stale means the host snapshot expired or has a future timestamp. Native discovery is attempted when a snapshot is unavailable, stale, or invalid.
+          enum: [available, unavailable, stale, error]
     DiscoveryCandidate:
       type: object
       additionalProperties: false

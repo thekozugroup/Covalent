@@ -11,8 +11,8 @@ const license = await readFile(new URL("./LICENSE", import.meta.url), "utf8");
 const iconLicense = await readFile(new URL("./LUCIDE-LICENSE", import.meta.url), "utf8");
 const markup = renderToStaticMarkup(h(Card, { hidden: true },
   h(CardHeader, null,
-    h(CardTitle, null, "Shared link settings"),
-    h(CardDescription, null, "Edit here or on the other device. These choices apply to the whole link.")),
+    h(CardTitle, null, "Share settings"),
+    h(CardDescription, null, "Timing and deletion choices apply to every recipient.")),
   h(CardContent)));
 const block = `<!-- shadcn:link-settings:start -->\n    <template id="link-settings-card">${markup}</template>\n    <!-- shadcn:link-settings:end -->`;
 const icon = (component, size = 20) => h(component, { size, strokeWidth: 1.75, "aria-hidden": true, focusable: false });
@@ -28,9 +28,9 @@ const sidebar = renderToStaticMarkup(h(Sidebar, { id: "console-sidebar", "aria-l
   h(SidebarContent, null,
     h(SidebarMenu, { role: "tablist", "aria-label": "Covalent actions", "aria-orientation": "vertical" },
       ...[
-        ["folders", "Links", Link],
+        ["folders", "Shares", Link],
         ["pair", "Devices", MonitorSmartphone],
-        ["settings", "Server", Server],
+        ["settings", "Settings", Server],
       ].map(([id, label, component]) => h(SidebarMenuButton, { key: id, id: `${id}-tab`, role: "tab", isActive: id === "folders", "aria-selected": id === "folders", "aria-controls": `${id}-panel`, tabIndex: id === "folders" ? 0 : -1, "data-tab": id, title: label, "aria-label": label }, icon(component), h("span", { className: "sidebar-label" }, label)))))));
 let updated = html.replace(/<!-- shadcn:link-settings:start -->[\s\S]*?<!-- shadcn:link-settings:end -->/, block);
 updated = updated.replace(/<!-- shadcn:sidebar:start -->[\s\S]*?<!-- shadcn:sidebar:end -->/, `<!-- shadcn:sidebar:start -->\n    <!-- shadcn/ui components adapted under the following license:\n${license}

@@ -800,13 +800,13 @@ test("initial scanning reports local checking before offered or ready phases", (
   assert.equal(folders.shareView(decoded, decoded.shares[0]).text, "Checking folder");
 });
 
-test("the primary Links tab uses server paths, confirmed names, and visible unlocked polling", async () => {
+test("the primary Shares tab uses server paths, confirmed names, and visible unlocked polling", async () => {
   const root = new URL("../", import.meta.url);
   const [html, app] = await Promise.all([
     readFile(new URL("index.html", root), "utf8"),
     readFile(new URL("app.js", root), "utf8"),
   ]);
-  assert.match(html, /data-tab="folders"[^>]*>[\s\S]*?class="sidebar-label">Links<\/span><\/button>/);
+  assert.match(html, /data-tab="folders"[^>]*>[\s\S]*?class="sidebar-label">Shares<\/span><\/button>/);
   assert.ok(html.indexOf('data-tab="folders"') < html.indexOf('data-tab="pair"'));
   assert.ok(html.indexOf('data-tab="folders"') < html.indexOf('data-tab="settings"'));
   assert.doesNotMatch(html, /data-tool-panel|data-backup-form|data-restore-preview/);
@@ -1142,4 +1142,34 @@ test("authoritative Run Now conflicts clear retry state while offline pending st
   errorCode = "link_run_pending";
   await assert.rejects(controller.retryPendingRun(), (error) => /Another Run Now/.test(error.covalentGuidance));
   assert.equal(controller.pendingRun(), null);
+});
+
+
+test("one share groups its recipients without losing invitation or removal state", () => {
+  const waypoint = share({ label: "Music", incoming: false });
+  const atlas = share({ label: "Music", offerId: secondOfferId, peerId: otherDeviceId, incoming: false, phase: "offered" });
+  const removed = share({ label: "Music", offerId: changeId, phase: "removed", remoteRemovalPending: true });
+  const documents = share({ folderId: changeId, label: "Documents" });
+  assert.deepEqual(folders.groupShares([waypoint, documents, atlas, removed]), [[waypoint, atlas, removed], [documents]]);
+  assert.deepEqual(folders.groupShares([]), []);
+});
+
+
+test("adding a recipient reuses the existing source and retains the exact path-free retry", async () => {
+  const storage = new MemoryStorage();
+  const body = { peerId, folderId, label: "Music", linkPolicy };
+  const calls = [];
+  let loseReply = true;
+  const controller = folders.coordinator({ storage, api: async (path, options) => {
+    calls.push({ path, body: JSON.parse(options.body) });
+    if (loseReply) { loseReply = false; throw new TypeError("connection closed after request"); }
+    return { schemaVersion: 1, offerId, lifecycle: "running", issue: null };
+  } });
+  enable(controller);
+  await assert.rejects(controller.sendOffer(body), TypeError);
+  assert.deepEqual(controller.loadPending(), body);
+  await controller.retryPendingOffer();
+  assert.deepEqual(calls, [1, 2].map(() => ({ path: "/api/v1/sync/folders", body })));
+  assert.equal(controller.loadPending(), null);
+  assert.throws(() => folders.offerBody({ ...body, selectedRoot: "" }), /folder sync guidance/);
 });

@@ -98,6 +98,27 @@
     });
   }
 
+  async function networkDiscovery(api) {
+    const response = await api("/api/v1/discovery?details=true");
+    // Older nodes return the original array even when a query is supplied.
+    const rawCandidates = Array.isArray(response) ? response : response?.candidates;
+    const candidates = await networkCandidates(async () => rawCandidates);
+    for (const [index, candidate] of candidates.entries()) {
+      const serviceId = rawCandidates[index].serviceId;
+      if (candidate.source === "tailscale" && typeof serviceId === "string"
+        && serviceId.length <= 253 && /^[a-z0-9][a-z0-9.-]*$/i.test(serviceId)) {
+        candidate.name = serviceId.replace(/\.$/, "").split(".")[0];
+      }
+    }
+    const lan = Array.isArray(response) ? "unknown" : response.lan;
+    const tailscale = Array.isArray(response) ? "unknown" : response.tailscale;
+    if (!["unknown", "disabled", "available", "error"].includes(lan)
+      || !["unknown", "available", "unavailable", "stale", "error"].includes(tailscale)) {
+      throw guidance("Covalent could not read discovery status. Enter the other device’s address to pair.");
+    }
+    return { candidates, lan, tailscale };
+  }
+
   async function networkStart(api, candidateAddress) {
     const address = typeof candidateAddress === "string" ? candidateAddress.trim() : "";
     if (address.length === 0 || address.length > 512) {
@@ -174,6 +195,7 @@
 
   const network = Object.freeze({
     candidates: networkCandidates,
+    discovery: networkDiscovery,
     start: networkStart,
     pending: networkPending,
     confirm: networkConfirm,

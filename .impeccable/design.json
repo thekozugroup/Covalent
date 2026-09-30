@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-30T00:00:00Z",
+  "title": "Covalent server console",
+  "extensions": {
+    "motion": [
+      {
+        "name": "control-state",
+        "value": "160ms ease",
+        "purpose": "Hover and press feedback; disabled for reduced motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "compact",
+        "value": "700px"
+      },
+      {
+        "name": "medium",
+        "value": "1000px"
+      }
+    ],
+    "shadows": [
+      {
+        "name": "mobile-sidebar",
+        "value": "12px 0 24px #0002",
+        "purpose": "Expanded navigation overlay only."
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Primary share and pairing action.",
+      "html": "<button class=\"button-primary\">Add recipient</button>",
+      "css": ".button-primary { min-height:44px; padding:10px 17px; border:1px solid transparent; border-radius:9px; background:#2563eb; color:#ffffff; font:550 15px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; } .button-primary:hover { background:#1d4ed8; } .button-primary:focus-visible { outline:3px solid #2563eb; outline-offset:3px; }"
+    }
+  ],
+  "narrative": {
+    "overview": "Quiet sidebar, serif headings, generous space, and one share with its recipients together.",
+    "keyCharacteristics": [
+      "Pale zinc surfaces",
+      "Serif headings",
+      "Native controls",
+      "Visible recipient actions"
+    ],
+    "rules": [
+      {
+        "name": "Share hierarchy",
+        "body": "One card per share; recipients are rows within it.",
+        "section": "layout"
+      }
+    ],
+    "dos": [
+      "Keep the logo visible when navigation collapses.",
+      "Preserve pairing code comparison."
+    ],
+    "donts": [
+      "Do not add metric cards or decorative motion."
+    ]
+  }
+}

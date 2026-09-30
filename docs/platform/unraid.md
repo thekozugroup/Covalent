@@ -13,6 +13,11 @@ privileged mode. Do not install the historical v0.1.0 image.
 
 ## Updates
 
+For online Tailnet devices in **Add device**, enable the
+[host discovery refresh](tailscale-discovery.md#unraid). It uses the existing
+configuration mount and a persistent User Scripts schedule, without granting
+the container access to the host Tailscale socket.
+
 Use Unraid's **Docker → Check for Updates → Update** normally. For unattended
 updates, select only **Covalent** in Unraid's Auto Update Applications plugin,
 or run the [scoped Watchtower updater](../../packaging/docker/README.md#release-installation)

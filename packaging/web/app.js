@@ -595,7 +595,7 @@ async function loadStatus() {
       throw new ProtocolMismatchError(status.protocolVersion);
     }
     $("[data-device-name]").textContent = status.deviceName;
-    $("[data-node-state]").textContent = `Service: ${status.state}`;
+    $("[data-node-state]").textContent = `${status.deviceName} · ${status.state === "ready" ? "Connected" : status.state}`;
     document.querySelectorAll("[data-discovery]").forEach((el) => { el.textContent = status.lanDiscovery ? "On" : "Off"; });
   } catch (error) {
     $("[data-device-name]").textContent = "Node unavailable";
@@ -627,6 +627,7 @@ function renderFolderError(error) {
   status.textContent = failure.summary;
   status.className = "folder-state";
   status.dataset.kind = "attention";
+  status.hidden = false;
 }
 
 const folderMutationDisabledState = new WeakMap();
@@ -749,10 +750,10 @@ function runDestinationName(status, peerId) {
 function renderLinkRun(container, status, share) {
   const run = share.linkRun;
   if (run === null || !share.linkSettings.confirmed) return;
-  const section = document.createElement("section");
+  const section = document.createElement("details");
   section.className = "link-run";
-  const heading = document.createElement("strong");
-  heading.textContent = "Transfer";
+  const heading = document.createElement("summary");
+  heading.textContent = run.phase === "running" ? "Transfer in progress" : "Transfer details";
   const summary = document.createElement("p");
   summary.setAttribute("role", "status");
   if (run.pendingRequest !== null) summary.textContent = "Run requested. Waiting for the source to come online and start it.";
@@ -774,7 +775,7 @@ function renderLinkRun(container, status, share) {
     schedule.className = "muted";
     schedule.textContent = run.nextDueAtUnixMs === null
       ? "The source owns this schedule. The next run time is not available yet."
-      : `The source owns this schedule. Next run: ${new Date(run.nextDueAtUnixMs).toLocaleString()}.`;
+      : `Next run: ${new Date(run.nextDueAtUnixMs).toLocaleString()}.`;
     section.append(schedule);
   }
   if (run.destinations.length > 0) {
@@ -807,10 +808,26 @@ function renderLinkRun(container, status, share) {
       "Run request saved. Link status shows progress for every destination.",
     );
   });
+  button.dataset.linkRunButton = "";
   button.disabled = button.disabled || active || share.linkSettings.settings.paused
     || (saved !== null && saved.folderId !== share.folderId);
-  section.append(button);
-  container.append(section);
+  container.append(button, section);
+}
+
+function refreshLinkRun(container, status, share) {
+  const state = JSON.stringify([share.linkRun, share.linkSettings, folderController.pendingRun()]);
+  if (container.dataset.runState === state) return;
+  const previous = container.querySelector(".link-run");
+  const button = container.querySelector("[data-link-run-button]");
+  const focused = button !== null && document.activeElement === button;
+  const open = previous?.open ?? false;
+  previous?.remove();
+  button?.remove();
+  if (share.linkSettings !== null && firstLinkMember(status, share)) renderLinkRun(container, status, share);
+  const updated = container.querySelector(".link-run");
+  if (updated) updated.open = open;
+  if (focused) container.querySelector("[data-link-run-button]")?.focus();
+  container.dataset.runState = state;
 }
 
 const expandedLinkSettings = new Set();
@@ -936,24 +953,28 @@ function renderAddDestination(container, status, share) {
     .map((item) => item.peerId));
   const peers = status.peers.filter((peer) => !memberIds.has(peer.peerId));
   const details = document.createElement("details");
-  details.className = "advanced";
+  details.className = "add-recipient";
   const summary = document.createElement("summary");
-  summary.textContent = "Add destination";
+  summary.textContent = "Add recipient";
   const explanation = document.createElement("p");
   explanation.className = "muted";
-  explanation.textContent = "Enter the same source path used by this link. The server verifies the existing folder identity before adding a destination.";
+  explanation.textContent = "Choose a device. It will receive this share with the same timing and settings.";
   details.append(summary, explanation);
   if (peers.length === 0) {
     const empty = document.createElement("p");
-    empty.textContent = "Every paired device is already a destination for this link.";
-    details.append(empty);
+    empty.textContent = "Pair another device to add it to this share.";
+    const pairButton = document.createElement("button");
+    pairButton.type = "button";
+    pairButton.textContent = "Pair a device";
+    pairButton.addEventListener("click", () => { $("[data-tab=pair]").click(); $("#network-pair-address").focus(); });
+    details.append(empty, pairButton);
     container.append(details);
     return;
   }
   const form = document.createElement("form");
   form.className = "inline-form";
   const peerLabel = document.createElement("label");
-  peerLabel.textContent = "Destination device ";
+  peerLabel.textContent = "Recipient ";
   const select = document.createElement("select");
   select.name = "peerId";
   select.required = true;
@@ -968,37 +989,51 @@ function renderAddDestination(container, status, share) {
     select.append(option);
   }
   peerLabel.append(select);
-  const pathLabel = document.createElement("label");
-  pathLabel.textContent = "Existing source path on this server ";
-  const path = document.createElement("input");
-  path.name = "selectedRoot";
-  path.maxLength = 1024;
-  path.required = true;
-  path.placeholder = "/sync";
-  pathLabel.append(path);
   const submit = document.createElement("button");
   submit.dataset.folderMutation = "";
-  submit.textContent = "Send destination invitation";
+  submit.textContent = "Add recipient";
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     const body = {
       peerId: select.value,
       folderId: share.folderId,
       label: share.label,
-      selectedRoot: path.value,
       linkPolicy: share.linkPolicy,
       cadence: share.linkSettings.settings.cadence,
       androidConditions: share.linkSettings.settings.androidConditions,
     };
-    if (!globalThis.confirm(`Confirm that ${path.value} is the same source folder already used by ${share.label}. Add this destination?`)) return;
     void runFolderMutation(
       () => folderController.sendOffer(body),
-      "Destination invitation sent with this link's existing identity and settings.",
+      "Recipient invited. Open Covalent on that device to choose where to keep the folder.",
     );
   });
-  form.append(peerLabel, pathLabel, submit);
+  form.append(peerLabel, submit);
   details.append(form);
   container.append(details);
+}
+
+function renderSharedFolderActions(container, status, share) {
+  const firstMember = share.linkSettings === null || firstLinkMember(status, share);
+  if (firstMember && !share.expired && !(share.incoming && share.phase === "offered")) {
+    const paused = share.phase === "paused";
+    const pause = folderActionButton(share.linkPolicy === null
+      ? (paused ? "Resume" : "Pause") : (paused ? "Resume link" : "Pause link"), () => {
+      void runFolderMutation(
+        () => folderController.pause(share.offerId, !paused),
+        share.linkPolicy === null ? (paused ? "Folder sync resumed." : "Folder sync paused.")
+          : "Link pause change saved. It applies to all devices when the source confirms it.",
+      );
+    });
+    container.append(pause);
+  }
+
+  if (share.linkSettings !== null && firstMember) {
+    renderLinkSettings(container, status, share);
+    if (!share.incoming && share.linkSettings.confirmed && ["ready", "paused"].includes(share.phase)) {
+      renderAddDestination(container, status, share);
+    }
+  }
+
 }
 
 function renderFolderActions(container, status, share, view) {
@@ -1020,28 +1055,6 @@ function renderFolderActions(container, status, share, view) {
     container.append(pathLabel, accept);
   }
 
-  const firstMember = share.linkSettings === null || firstLinkMember(status, share);
-  if (firstMember && !share.expired && !(share.incoming && share.phase === "offered")) {
-    const paused = share.phase === "paused";
-    const pause = folderActionButton(share.linkPolicy === null
-      ? (paused ? "Resume" : "Pause") : (paused ? "Resume link" : "Pause link"), () => {
-      void runFolderMutation(
-        () => folderController.pause(share.offerId, !paused),
-        share.linkPolicy === null ? (paused ? "Folder sync resumed." : "Folder sync paused.")
-          : "Link pause change saved. It applies to all devices when the source confirms it.",
-      );
-    });
-    container.append(pause);
-  }
-
-  if (share.linkSettings !== null && firstMember) {
-    renderLinkRun(container, status, share);
-    renderLinkSettings(container, status, share);
-    if (!share.incoming && share.linkSettings.confirmed && ["ready", "paused"].includes(share.phase)) {
-      renderAddDestination(container, status, share);
-    }
-  }
-
   if (share.expired && !share.incoming && ["offered", "paused"].includes(share.phase)) {
     container.append(folderActionButton("Send new invitation", () => {
       void runFolderMutation(
@@ -1051,7 +1064,7 @@ function renderFolderActions(container, status, share, view) {
     }));
   }
 
-  const removeLabel = share.incoming && share.phase === "offered" && !share.expired ? "Decline" : "Remove…";
+  const removeLabel = share.incoming ? (share.phase === "offered" && !share.expired ? "Decline" : "Stop receiving…") : "Remove recipient…";
   const confirmation = document.createElement("div");
   confirmation.className = "folder-removal-confirmation";
   confirmation.hidden = true;
@@ -1244,6 +1257,7 @@ function renderFolderStatus(status) {
   statusCopy.textContent = summary.text;
   statusCopy.className = "folder-state";
   statusCopy.dataset.kind = summary.kind;
+  statusCopy.hidden = summary.kind === "ready" && status.shares.length > 0;
   renderFolderPeers(status);
   renderPairedDevices(status);
   $("[data-peer-count]").textContent = String(status.peers.length);
@@ -1257,61 +1271,77 @@ function renderFolderStatus(status) {
   let savedSettings = null;
   try { savedSettings = folderController.pendingLinkSettings(); }
   catch (error) { renderFolderError(error); }
-  const retained = new Map(Array.from(list.children).map((item) => [item.dataset.folderOfferId, item]));
-  const visibleIds = new Set(visibleShares.map((share) => share.offerId));
-  for (const [id, item] of retained) {
-    if (!visibleIds.has(id)) item.remove();
-  }
-  for (const [index, share] of visibleShares.entries()) {
-    const view = folderSync.shareView(status, share);
-    let item = retained.get(share.offerId);
+  const groups = folderSync.groupShares(visibleShares);
+  const retained = new Map(Array.from(list.children).map((item) => [item.dataset.folderId, item]));
+  for (const [id, item] of retained) if (!groups.some((group) => group[0].folderId === id)) item.remove();
+  for (const [index, members] of groups.entries()) {
+    const share = members.find((member) => member.phase !== "removed") ?? members[0];
+    let item = retained.get(share.folderId);
     if (!item) {
       item = document.createElement("li");
-      item.dataset.folderOfferId = share.offerId;
-      const details = document.createElement("div");
-      const name = document.createElement("strong");
-      const peer = document.createElement("span");
-      const state = document.createElement("span");
-      state.className = "folder-state";
-      const policy = document.createElement("span");
-      policy.className = "muted";
-      const linkState = document.createElement("span");
-      linkState.className = "muted";
-      details.append(name, peer, state, policy, linkState);
+      item.dataset.folderId = share.folderId;
+      const heading = document.createElement("div");
+      heading.className = "share-heading";
+      const name = document.createElement("h3");
+      const description = document.createElement("p");
+      description.className = "muted";
+      heading.append(name, description);
+      const recipients = document.createElement("ul");
+      recipients.className = "recipient-list";
+      recipients.setAttribute("aria-label", "Recipients");
       const actions = document.createElement("div");
       actions.className = "folder-actions";
-      item.append(details, actions);
+      item.append(heading, recipients, actions);
     }
-    const [details, actions] = item.children;
-    const [name, peer, state, policy, linkState] = details.children;
-    name.textContent = share.label;
-    const peerName = folderPeerName(status, share.peerId);
-    peer.textContent = share.linkPolicy === null ? `${peerName} · Legacy two-way`
-      : share.incoming ? `${peerName} → This server` : `This server → ${peerName}`;
-    policy.textContent = folderSync.policyExplanation(share.linkPolicy);
-    linkState.textContent = share.linkSettings === null ? ""
-      : !share.linkSettings.confirmed ? "Waiting for source-confirmed link settings before transfer starts."
-        : share.linkSettings.pendingChange !== null ? "A change is waiting for the source; current settings remain active."
-          : share.linkSettings.conflictedChange !== null ? "A stale settings request needs review; current settings remain active."
-            : share.linkSettings.settings.paused ? "Whole link paused."
-              : "Link settings confirmed by the source.";
-    state.dataset.kind = view.kind;
-    state.textContent = view.text;
-    // Routine health polling must preserve typed paths, keyboard focus, and
-    // explicit confirmation. Rebuild controls only when their meaning changes.
-    const linkMembers = status.shares.filter((item) => item.folderId === share.folderId && item.phase !== "removed")
-      .map((item) => item.peerId);
+    const [heading, recipients, actions] = item.children;
+    heading.children[0].textContent = share.label;
+    const cadence = share.linkSettings?.settings.cadence;
+    const timing = !cadence ? "Legacy two-way sync" : cadence.mode === "manual" ? "On demand"
+      : cadence.mode === "continuous" ? "Continuous" : cadence.intervalMinutes === 60 ? "Every hour"
+        : cadence.intervalMinutes === 1440 ? "Every day" : `Every ${cadence.intervalMinutes} minutes`;
+    heading.children[1].textContent = `${share.incoming ? `From ${folderPeerName(status, share.peerId)}` : "From this server"} · ${timing}${share.linkSettings?.settings.paused ? " · Paused" : ""}`;
+    const retainedRecipients = new Map(Array.from(recipients.children).map((row) => [row.dataset.folderOfferId, row]));
+    for (const [id, row] of retainedRecipients) if (!members.some((member) => member.offerId === id)) row.remove();
+    for (const [recipientIndex, member] of members.entries()) {
+      const view = folderSync.shareView(status, member);
+      let row = retainedRecipients.get(member.offerId);
+      if (!row) {
+        row = document.createElement("li");
+        row.dataset.folderOfferId = member.offerId;
+        const identity = document.createElement("div");
+        identity.className = "recipient-identity";
+        identity.append(document.createElement("strong"), document.createElement("span"));
+        const controls = document.createElement("div");
+        controls.className = "recipient-actions";
+        row.append(identity, controls);
+      }
+      row.children[0].children[0].textContent = member.incoming ? "This server" : folderPeerName(status, member.peerId);
+      const state = row.children[0].children[1];
+      state.className = "folder-state";
+      state.dataset.kind = view.kind;
+      state.textContent = view.text;
+      const controls = row.children[1];
+      const memberState = JSON.stringify([member.phase, member.expired, view.kind]);
+      if (controls.dataset.state !== memberState) {
+        controls.replaceChildren();
+        renderFolderActions(controls, status, member, view);
+        controls.dataset.state = memberState;
+      }
+      if (recipients.children[recipientIndex] !== row) recipients.insertBefore(row, recipients.children[recipientIndex] ?? null);
+    }
+    // Preserve typed fields and focus while routine health polling updates text.
     const actionState = JSON.stringify([
-      folderDeviceId, share.incoming, share.phase, share.expired, share.linkSettings, share.linkRun,
-      linkMembers, status.peers.map((item) => [item.peerId, item.displayName]),
+      folderDeviceId, share.incoming, share.phase, share.expired, share.linkSettings,
+      members.map((member) => member.peerId), status.peers.map((peer) => [peer.peerId, peer.displayName]),
       savedSettings?.folderId === share.folderId ? savedSettings : null,
-      folderController.pendingRun()?.folderId === share.folderId,
     ]);
     if (actions.dataset.state !== actionState) {
       actions.replaceChildren();
-      renderFolderActions(actions, status, share, view);
+      renderSharedFolderActions(actions, status, share);
       actions.dataset.state = actionState;
+      delete actions.dataset.runState;
     }
+    refreshLinkRun(actions, status, share);
     if (list.children[index] !== item) list.insertBefore(item, list.children[index] ?? null);
   }
   const empty = $("[data-folders-empty]");
@@ -1319,8 +1349,8 @@ function renderFolderStatus(status) {
   if (visibleShares.length === 0) {
     empty.textContent = status.availability === "available"
       ? status.peers.length === 0
-        ? "Your first link starts with a paired device. Choose Pair device to connect another Mac, Android device, or server."
-        : "No links yet. Choose Create link to send a folder to a paired device."
+        ? "Your first share starts with a paired device. Choose Pair device to connect another Mac, Android device, or server."
+        : "No shares yet. Choose New share to send a folder to a paired device."
       : "Shared folders cannot be loaded while folder sync is offline.";
   }
 }
@@ -1340,7 +1370,7 @@ function renderPendingFolderOffer() {
   const peerName = folderController.current()
     ? folderPeerName(folderController.current(), pending.peerId)
     : "the saved confirmed device";
-  $("[data-folder-pending-summary]").textContent = `${pending.label} for ${peerName}, using ${pending.selectedRoot}.`;
+  $("[data-folder-pending-summary]").textContent = `${pending.label} for ${peerName}${pending.selectedRoot ? `, using ${pending.selectedRoot}` : ", using the existing source folder"}.`;
 }
 
 function renderPendingLinkSettings() {
@@ -1374,6 +1404,7 @@ async function loadFolders(reportError = false) {
       status.textContent = "Updating status…";
       status.className = "folder-state";
       status.dataset.kind = "checking";
+      status.hidden = false;
     }
     if (result.applied) {
       renderPendingFolderOffer();
@@ -1389,6 +1420,12 @@ async function loadFolders(reportError = false) {
 async function initializeFolderSync() {
   const identity = await folderApi("/api/v1/transport/identity");
   folderDeviceId = identity?.deviceId ?? null;
+  const hostname = globalThis.location.hostname;
+  if (Number.isInteger(identity?.peerPort) && identity.peerPort > 0 && identity.peerPort <= 65535
+    && !["localhost", "127.0.0.1", "[::1]"].includes(hostname)) {
+    $("[data-own-address]").textContent = `${hostname}:${identity.peerPort}`;
+    $("[data-own-address-panel]").hidden = false;
+  }
   folderController.setAccess({ deviceId: folderDeviceId, unlocked: true });
   renderPendingFolderOffer();
   renderPendingLinkSettings();
@@ -1434,7 +1471,13 @@ function renderNetworkCandidates(candidates) {
   candidates.forEach((candidate) => {
     const item = document.createElement("li");
     const label = document.createElement("span");
-    label.textContent = `${candidate.where} · ${candidate.endpoint}`;
+    const name = document.createElement("strong");
+    name.textContent = candidate.name ?? candidate.endpoint.replace(/:\d+$/, "");
+    const address = document.createElement("span");
+    address.className = "muted";
+    address.textContent = candidate.name ? `${candidate.where} · ${candidate.endpoint}` : candidate.where;
+    label.className = "candidate-identity";
+    label.append(name, address);
     const action = document.createElement("button");
     action.type = "button";
     action.className = "secondary";
@@ -1459,6 +1502,9 @@ function startNetworkPolling() {
 
 function renderNetworkPairing(item) {
   networkPairing = item;
+  const review = $("[data-review-pairing]");
+  review.hidden = item === null || item.direction !== "incoming" || item.state !== "awaiting_local_confirmation";
+  if (!review.hidden) review.textContent = `Pairing request from ${item.peerName} — review code`;
   const card = $("[data-network-card]");
   if (item === null) {
     card.hidden = true;
@@ -1713,24 +1759,53 @@ document.querySelectorAll("[data-tab]").forEach((tab) => {
 });
 document.addEventListener("visibilitychange", () => syncFolderPolling(true));
 setInterval(() => {
-  if (folderPollingEligible()) void loadFolders(false);
+  if (folderPollingEligible()) {
+    void loadFolders(false);
+    if (networkPoll === null) void refreshNetworkPairings().catch(() => {});
+  }
 }, 5000);
 
-$("[data-network-discover]").addEventListener("click", async () => {
+$("[data-network-discover]").addEventListener("click", async (event) => {
   if (!requireUnlocked()) return;
+  const button = event.currentTarget;
   const state = $("[data-network-discovery-state]");
-  state.textContent = "Searching…";
+  button.disabled = true;
+  state.textContent = "Finding devices…";
   try {
-    const candidates = await pairing.network.candidates(api);
-    renderNetworkCandidates(candidates);
-    state.textContent = candidates.length === 0 ? "" : `${candidates.length} device(s) answered.`;
+    const result = await pairing.network.discovery(api);
+    renderNetworkCandidates(result.candidates);
+    const notes = [];
+    if (result.tailscale === "unavailable") notes.push("Tailscale discovery isn’t connected to this server. Enter a Tailscale name above.");
+    if (result.tailscale === "stale") notes.push("The Tailscale device list is out of date. Enter a name above or try again shortly.");
+    if (result.tailscale === "error") notes.push("Tailscale discovery could not load. You can still pair by name above.");
+    if (result.lan === "disabled") notes.push("Nearby discovery is off.");
+    if (result.lan === "error") notes.push("Nearby discovery could not load.");
+    state.textContent = notes.join(" ") || `${result.candidates.length} ${result.candidates.length === 1 ? "device" : "devices"} found.`;
     await refreshNetworkPairings();
-  } catch (error) { state.textContent = ""; fail(error); }
+  } catch (error) { state.textContent = "Discovery could not finish. Enter a device address above."; fail(error); }
+  finally { button.disabled = false; }
+});
+
+$("[data-copy-address]").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText($("[data-own-address]").textContent);
+    say("Peer address copied.", false, null, true);
+  } catch { say("Select the peer address and copy it from your browser."); }
+});
+$("[data-review-pairing]").addEventListener("click", () => {
+  $("[data-tab=pair]").click();
+  $("[data-network-card]").scrollIntoView({ block: "start" });
+  $("[data-network-confirm]").focus();
 });
 
 $("[data-network-manual]").addEventListener("submit", async (event) => {
   event.preventDefault();
-  await startNetworkPairing(formData(event.currentTarget).get("candidateAddress"));
+  const form = event.currentTarget;
+  const button = form.querySelector("button");
+  button.disabled = true;
+  button.textContent = "Sending invitation…";
+  try { await startNetworkPairing(formData(form).get("candidateAddress")); }
+  finally { button.disabled = false; button.textContent = "Send invitation"; }
 });
 
 $("[data-network-confirm]").addEventListener("click", async () => {
