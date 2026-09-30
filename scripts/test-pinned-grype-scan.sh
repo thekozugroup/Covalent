@@ -133,7 +133,10 @@ grep -q 'Grype medium: id=CVE-2099-0002 package=fixture-medium version=1.0 type=
 
 # Independent disk/resource failures remain fatal, but a valid report from a
 # policy-failing scan is validated and summarized before the aggregate exit.
-if run_scan finding "$fixture/disk-excess.json" 3145729 \
+# The complete 2026-09-30 database and the exact limit must fit.
+run_scan success "$fixture/current-database.json" 3182704
+run_scan success "$fixture/disk-limit.json" 4194304
+if run_scan finding "$fixture/disk-excess.json" 4194305 \
   >"$fixture/disk-excess.log" 2>"$fixture/disk-excess.err"; then
   echo "disk excess and a high-severity finding did not fail" >&2
   exit 1
@@ -144,7 +147,7 @@ fi
 grep -q 'severities=Critical:1' "$fixture/disk-excess.log"
 grep -q 'id=CVE-2099-0001 package=fixture-package version=1.0 type=apk fixed=none' \
   "$fixture/disk-excess.log"
-grep -q 'private Grype data exceeded the disk bound (3221226496 > 3221225472 bytes)' \
+grep -q 'private Grype data exceeded the disk bound (4294968320 > 4294967296 bytes)' \
   "$fixture/disk-excess.err"
 grep -q 'high or critical vulnerability found' "$fixture/disk-excess.err"
 [ -f "$fixture/disk-excess.json" ]

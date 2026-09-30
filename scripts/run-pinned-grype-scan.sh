@@ -7,10 +7,10 @@ GRYPE_LINUX_AMD64_SHA256=38525dab1e06f162ebaa02f94d82d1f807076b011a44180cf2777ed
 GRYPE_LINUX_ARM64_SHA256=935f628bdf9331ffdd946931ea5fdb50045d3970ba52670cbeb44a88f127291b
 MAX_ARCHIVE_BYTES=67108864
 MAX_ARCHIVE_CONTENT_BYTES=134217728
-# Exact checkpoint-37 scans used 2,273,193,984 bytes (amd64) and 2,264,055,808
-# bytes (arm64) for the database, scanner and update files. Retain a finite
-# 3 GiB allowance above those observed complete scans; excess still fails.
-MAX_PRIVATE_BYTES=3221225472
+# The 2026-09-30 database used 3,259,088,896 bytes (amd64) and 3,249,950,720
+# bytes (arm64) with the scanner and update files. Allow finite 4 GiB storage
+# capacity for database growth; excess still fails independently of findings.
+MAX_PRIVATE_BYTES=4294967296
 SCAN_TIMEOUT=12m
 
 fail() {

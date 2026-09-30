@@ -394,6 +394,12 @@ The pinned hashes are `38525dab...9c26` for Linux amd64 and
 The workflow does not execute an installer or a GitHub action's mutable bundled
 download code. The scanner verifies the database hash and age, requires a live
 update check, includes findings without fixes, and uses no ignore rules or VEX.
+The private scanner directory has a 4 GiB disk allowance and a 12-minute scan
+deadline. On 2026-09-30, the database, scanner, and update files occupied
+3,259,088,896 bytes on amd64 and 3,249,950,720 bytes on arm64, exceeding the
+previous 3 GiB allowance despite complete scans with no high or critical
+findings. The larger storage allowance accommodates database growth; excess
+still fails, and vulnerability, freshness, and integrity checks are unchanged.
 Grype's documented `docker:` source selects the local Docker daemon, and a
 bounded validator rejects a JSON report unless both its requested input and
 resolved image ID equal the immutable ID recorded before the scan. The release
