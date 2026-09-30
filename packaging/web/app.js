@@ -595,6 +595,7 @@ async function loadStatus() {
       throw new ProtocolMismatchError(status.protocolVersion);
     }
     $("[data-device-name]").textContent = status.deviceName;
+    $("[data-device-name]").dataset.name = status.deviceName;
     $("[data-node-state]").textContent = `${status.deviceName} · ${status.state === "ready" ? "Connected" : status.state}`;
     document.querySelectorAll("[data-discovery]").forEach((el) => { el.textContent = status.lanDiscovery ? "On" : "Off"; });
   } catch (error) {
@@ -1252,6 +1253,7 @@ function renderPairedDevices(status) {
 }
 
 function renderFolderStatus(status) {
+  const ownDeviceName = $("[data-device-name]").dataset.name;
   const summary = folderSync.statusSummary(status);
   const statusCopy = $("[data-folders-status]");
   statusCopy.textContent = summary.text;
@@ -1299,7 +1301,7 @@ function renderFolderStatus(status) {
     const timing = !cadence ? "Legacy two-way sync" : cadence.mode === "manual" ? "On demand"
       : cadence.mode === "continuous" ? "Continuous" : cadence.intervalMinutes === 60 ? "Every hour"
         : cadence.intervalMinutes === 1440 ? "Every day" : `Every ${cadence.intervalMinutes} minutes`;
-    heading.children[1].textContent = `${share.incoming ? `From ${folderPeerName(status, share.peerId)}` : "From this server"} · ${timing}${share.linkSettings?.settings.paused ? " · Paused" : ""}`;
+    heading.children[1].textContent = `${share.incoming ? `From ${folderPeerName(status, share.peerId)}` : `From ${ownDeviceName || "this server"}`} · ${timing}${share.linkSettings?.settings.paused ? " · Paused" : ""}`;
     const retainedRecipients = new Map(Array.from(recipients.children).map((row) => [row.dataset.folderOfferId, row]));
     for (const [id, row] of retainedRecipients) if (!members.some((member) => member.offerId === id)) row.remove();
     for (const [recipientIndex, member] of members.entries()) {
@@ -1315,7 +1317,7 @@ function renderFolderStatus(status) {
         controls.className = "recipient-actions";
         row.append(identity, controls);
       }
-      row.children[0].children[0].textContent = member.incoming ? "This server" : folderPeerName(status, member.peerId);
+      row.children[0].children[0].textContent = member.incoming ? (ownDeviceName || "This server") : folderPeerName(status, member.peerId);
       const state = row.children[0].children[1];
       state.className = "folder-state";
       state.dataset.kind = view.kind;

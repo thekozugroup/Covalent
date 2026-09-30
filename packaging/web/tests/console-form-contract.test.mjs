@@ -331,7 +331,7 @@ test("service refresh updates node status without replacing shadcn sidebar conte
   const body = /async function loadStatus\(\) \{([\s\S]*?)\n\}\n/.exec(app)?.[1];
   assert.ok(body);
   for (const offline of [false, true]) {
-    const name = { textContent: "" };
+    const name = { textContent: "", dataset: {} };
     const status = { textContent: "" };
     const sidebar = { set textContent(value) { assert.fail(`Service refresh destroyed navigation: ${value}`); } };
     const load = new Function("$", "api", "document", "PROTOCOL_VERSION", "ProtocolMismatchError", "errorCopy", "fail",
@@ -451,6 +451,10 @@ test("transfer polling updates run details while retaining settings drafts, reci
     linkSettings: { confirmed: true, settings: { cadence: { mode: "scheduled", intervalMinutes: 60 }, paused: false } }, linkRun: { phase: null, generation: 0 } };
   const status = { shares: [share], peers: [{ peerId: "waypoint", displayName: "Waypoint" }], issue: null };
   context.renderFolderStatus(status);
+  assert.equal(list.children[0].children[0].children[1].textContent, "From this server · Every hour");
+  nodes.get("[data-device-name]").dataset.name = "Atmos";
+  context.renderFolderStatus(status);
+  assert.equal(list.children[0].children[0].children[1].textContent, "From Atmos · Every hour");
   const controls = list.children[0].children[2];
   const [settings, recipient] = controls.children;
   settings.value = "120";
@@ -466,4 +470,11 @@ test("transfer polling updates run details while retaining settings drafts, reci
   assert.equal(document.activeElement, settings);
   assert.equal(controls.querySelector(".link-run").textContent, "running");
   assert.equal(controls.querySelector(".link-run").open, true);
+  const incoming = { ...status, shares: [{ ...share, incoming: true }] };
+  for (const ownName of ["Atlas", "Waypoint", undefined]) {
+    nodes.get("[data-device-name]").dataset.name = ownName;
+    context.renderFolderStatus(incoming);
+    const recipientName = list.children[0].children[1].children[0].children[0].children[0].textContent;
+    assert.equal(recipientName, ownName ?? "This server");
+  }
 });
