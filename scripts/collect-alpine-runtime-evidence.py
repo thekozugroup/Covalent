@@ -24,6 +24,7 @@ MAX_NOTICE = 2 * 1024 * 1024
 MAX_SOURCE = 12 * 1024 * 1024
 MAX_ARCHIVE_EXPANDED = 256 * 1024 * 1024
 MAX_INVENTORY = 4 * 1024 * 1024
+OPENSSL_RELEASE_URL = 'https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz'
 LOCK_LIMITS = {'fileBytes': MAX_FILE, 'totalSourceBytes': MAX_INPUTS,
                'sourceBundleBytes': MAX_SOURCE, 'inventoryBytes': MAX_INVENTORY,
                'noticeBytes': MAX_NOTICE}
@@ -356,7 +357,8 @@ def load_lock(path: Path) -> tuple[dict, bytes]:
         expected_archive = f"/distfiles/v3.23/{key[1]}"
         if (url.scheme != 'https' or url.query or url.fragment or url.username or url.password
                 or url.port or not ((url.netloc == 'raw.githubusercontent.com' and url.path == expected_recipe)
-                or (url.netloc == 'distfiles.alpinelinux.org' and url.path == expected_archive))):
+                or (url.netloc == 'distfiles.alpinelinux.org' and url.path == expected_archive)
+                or (key == ('openssl', 'openssl-3.5.9.tar.gz') and row['url'] == OPENSSL_RELEASE_URL))):
             raise EvidenceError('source URL is not a reviewed upstream location')
     check_recipe_trees(lock, origins)
     if lock['schema'] == 2:
@@ -387,7 +389,15 @@ def load_lock(path: Path) -> tuple[dict, bytes]:
 
 class HTTPSRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, request, fp, code, msg, headers, newurl):
-        # Inputs are available at canonical URLs; an unexpected redirect requires review.
+        # Alpine's new OpenSSL source may precede its distfiles mirror. Allow
+        # only this reviewed release's single GitHub asset redirect; downloaded
+        # bytes still require the exact size, SHA256 and APKBUILD SHA512.
+        target = urllib.parse.urlsplit(newurl)
+        if (request.full_url == OPENSSL_RELEASE_URL and target.scheme == 'https'
+                and target.netloc == 'release-assets.githubusercontent.com'
+                and not target.fragment and not target.username and not target.password
+                and not target.port):
+            return super().redirect_request(request, fp, code, msg, headers, newurl)
         raise EvidenceError('source download redirected from reviewed URL')
 
 

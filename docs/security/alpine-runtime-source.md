@@ -6,7 +6,7 @@ Covalent; it does not relicense those dependencies.
 
 `packaging/docker/alpine/runtime-source-lock.json` records the exact thirteen
 installed packages, their eight source origins, architecture, version, declared
-license and base aports provenance. It applies the two pinned OpenSSL 3.5.8-r0
+license and base aports provenance. It applies the two pinned OpenSSL 3.5.9-r0
 updates and the three Covalent-local BusyBox 1.37.0-r1000 packages to the pinned
 Alpine 3.23.5 base. Schema 2 declares those three local packages explicitly:
 their `installedDatabaseCommit` is null because their actual APK records omit
@@ -93,7 +93,12 @@ symlink traversal even if a parent path changes between checks. It rejects dupli
 incomplete metadata, bounds downloads and archive inspection, and requires new
 output. Archive inspection reads required regular members without extracting
 paths to disk. Downloads use exact reviewed HTTPS locations and reject
-redirects. Source and notice bounds are independent of the container size gate.
+redirects except the exact reviewed OpenSSL 3.5.9 GitHub release URL's single
+HTTPS redirect to `release-assets.githubusercontent.com`. Alpine's source mirror
+did not yet contain that release when the binary packages replaced 3.5.8.
+The release archive must still match its size, SHA-256, and the exact aports
+recipe's SHA-512; other redirect origins and destinations remain rejected.
+Source and notice bounds are independent of the container size gate.
 The lock's declared byte limits must exactly match the collector's enforced
 limits. Output creation also uses held directory descriptors and exclusive
 creation. A replaced parent cannot redirect writes, and existing output is

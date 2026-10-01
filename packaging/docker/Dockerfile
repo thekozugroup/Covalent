@@ -155,7 +155,7 @@ RUN apk add --no-cache \
       build-base=0.5-r3 \
       git=2.52.0-r0 \
       linux-headers=6.16.12-r0 \
-      openssl-dev=3.5.8-r0 \
+      openssl-dev=3.5.9-r0 \
       perl=5.42.2-r0 \
       python3=3.12.14-r0 \
       sudo=1.9.17_p2-r0 \
@@ -205,10 +205,10 @@ FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc
 # are statically linked and do not load OpenSSL. BusyBox ssl_client retains both.
 RUN apk add --no-cache --upgrade \
       ca-certificates-bundle=20260611-r0 \
-      libcrypto3=3.5.8-r0 \
-      libssl3=3.5.8-r0 \
-    && apk info -e 'libcrypto3=3.5.8-r0' \
-    && apk info -e 'libssl3=3.5.8-r0' \
+      libcrypto3=3.5.9-r0 \
+      libssl3=3.5.9-r0 \
+    && apk info -e 'libcrypto3=3.5.9-r0' \
+    && apk info -e 'libssl3=3.5.9-r0' \
     && addgroup -S -g 65532 covalent \
     && adduser -S -D -H -u 65532 -G covalent -s /sbin/nologin covalent \
     && install -d -m 0700 -o 65532 -g 65532 /home/covalent /config /data /restore
@@ -302,7 +302,7 @@ LABEL org.opencontainers.image.title="Covalent" \
       io.covalent.sync-engine.name="rclone" \
       io.covalent.sync-engine.version="v1.75.1" \
       io.covalent.sync-engine.commit="687d264b689b8c49a67e2e52a8a5e0caa01c04ce" \
-      io.covalent.runtime.openssl.version="3.5.8-r0"
+      io.covalent.runtime.openssl.version="3.5.9-r0"
 
 LABEL io.covalent.runtime.busybox.version="1.37.0-r1000" \
       io.covalent.runtime.busybox.source-sha256="3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4" \

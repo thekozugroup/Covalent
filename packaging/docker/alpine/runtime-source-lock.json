@@ -61,17 +61,17 @@
     },
     {
       "name": "libcrypto3",
-      "version": "3.5.8-r0",
+      "version": "3.5.9-r0",
       "origin": "openssl",
       "license": "Apache-2.0",
-      "aportsCommit": "2b4b2590f782b95276d31dcaaf41554b1a597a0b"
+      "aportsCommit": "adcf4978067013c3c0917e54542f3b762d7bfc48"
     },
     {
       "name": "libssl3",
-      "version": "3.5.8-r0",
+      "version": "3.5.9-r0",
       "origin": "openssl",
       "license": "Apache-2.0",
-      "aportsCommit": "2b4b2590f782b95276d31dcaaf41554b1a597a0b"
+      "aportsCommit": "adcf4978067013c3c0917e54542f3b762d7bfc48"
     },
     {
       "name": "musl",
@@ -1435,15 +1435,15 @@
     {
       "origin": "openssl",
       "name": "APKBUILD",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/2b4b2590f782b95276d31dcaaf41554b1a597a0b/main/openssl/APKBUILD",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/adcf4978067013c3c0917e54542f3b762d7bfc48/main/openssl/APKBUILD",
       "bytes": 7297,
-      "sha256": "612ccf2841efe957089e825b50292a20efb0d9ba8ca3f2a292cefa2515963d21",
-      "gitBlob": "cfc6fc58b828d2f0411773e91132e1015cac9d57"
+      "sha256": "ea459c051ee8d846c06f1d47d09d0f737778502c01de88c9696e96a208de5943",
+      "gitBlob": "6c7ac59fec9063a925a6ecac2b61d45cbe659f5b"
     },
     {
       "origin": "openssl",
       "name": "auxv.patch",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/2b4b2590f782b95276d31dcaaf41554b1a597a0b/main/openssl/auxv.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/adcf4978067013c3c0917e54542f3b762d7bfc48/main/openssl/auxv.patch",
       "bytes": 2013,
       "sha256": "0b3a36c0f1b3d8e0adcf02c251374ce4d2578b0c9f4b88207bf85c5c1b58c7d8",
       "gitBlob": "7803ef811cc802650a1a3b3808899fb8202c7b34",
@@ -1451,16 +1451,16 @@
     },
     {
       "origin": "openssl",
-      "name": "openssl-3.5.8.tar.gz",
-      "url": "https://distfiles.alpinelinux.org/distfiles/v3.23/openssl-3.5.8.tar.gz",
-      "bytes": 53213818,
-      "sha256": "a8f84a39918ec6415ce765d9b429d313ba97b8143169c172e734b9514464f5b2",
-      "apkbuildSHA512": "62a1dbed0fad75245b332e41b85a1f7c2379189525e7628a7cf68947d115e90a47f179e3f87d27641e5b2d357c357292179fc0e64eccecdebc81c083f7a8ebe4"
+      "name": "openssl-3.5.9.tar.gz",
+      "url": "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz",
+      "bytes": 53279637,
+      "sha256": "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a",
+      "apkbuildSHA512": "c4c8136fd2c98d13bb85a57bfb0def25c906f47f1fe97675cd114594944eab957b5b81a3e0f48826e1a0f093afff5e83766b539d49768f6db68310fd678d7de6"
     },
     {
       "origin": "openssl",
       "name": "openssl-fips.post-install",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/2b4b2590f782b95276d31dcaaf41554b1a597a0b/main/openssl/openssl-fips.post-install",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/adcf4978067013c3c0917e54542f3b762d7bfc48/main/openssl/openssl-fips.post-install",
       "bytes": 235,
       "sha256": "c0a577c5bc04764084adc337135e05bdfc29a641983def7c6514e9dd2affc586",
       "gitBlob": "cba1ad8ae8c8bb62b636409eff9cf003735ac577"
@@ -1566,15 +1566,15 @@
     },
     {
       "origin": "openssl",
-      "archive": "openssl-3.5.8.tar.gz",
-      "member": "openssl-3.5.8/LICENSE.txt",
+      "archive": "openssl-3.5.9.tar.gz",
+      "member": "openssl-3.5.9/LICENSE.txt",
       "bytes": 10175,
       "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a"
     },
     {
       "origin": "openssl",
-      "archive": "openssl-3.5.8.tar.gz",
-      "member": "openssl-3.5.8/AUTHORS.md",
+      "archive": "openssl-3.5.9.tar.gz",
+      "member": "openssl-3.5.9/AUTHORS.md",
       "bytes": 1022,
       "sha256": "b9f638dfc06b59c2d3b808186c3b30f713805a5db390f5b77b1703ac58acb83e"
     },
@@ -1612,8 +1612,8 @@
       "GPL-2.0.txt"
     ],
     "openssl": [
-      "openssl-3.5.8/LICENSE.txt",
-      "openssl-3.5.8/AUTHORS.md"
+      "openssl-3.5.9/LICENSE.txt",
+      "openssl-3.5.9/AUTHORS.md"
     ],
     "pax-utils": [
       "pax-utils-1.3.8/COPYING"
@@ -2379,13 +2379,13 @@
     },
     {
       "origin": "openssl",
-      "aportsCommit": "2b4b2590f782b95276d31dcaaf41554b1a597a0b",
-      "treeSHA1": "fe393605f21a8532a7bd0e941790b0114621deb8",
+      "aportsCommit": "adcf4978067013c3c0917e54542f3b762d7bfc48",
+      "treeSHA1": "26b22b25267ef6006f081df4e54f212286f0643d",
       "entries": [
         {
           "name": "APKBUILD",
           "mode": "100644",
-          "gitBlob": "cfc6fc58b828d2f0411773e91132e1015cac9d57"
+          "gitBlob": "6c7ac59fec9063a925a6ecac2b61d45cbe659f5b"
         },
         {
           "name": "auxv.patch",

@@ -1,12 +1,12 @@
 {
   "schema": 1,
-  "sourceLockSHA256": "cc765855a3cab8dc92e86993ddfdf3f658501765be353f4c2c402d5838c14e97",
+  "sourceLockSHA256": "20591f042cf01ec684358efe00c4d68204ff9b67ae3826413a1a2d77e764c3a1",
   "targets": {
     "amd64": {
       "noticeBundle": {
         "path": "THIRD-PARTY-NOTICES.txt",
         "bytes": 130550,
-        "sha256": "c40fd70d5b8ab19ccc59c47e61741e0c8b0f9168d276e7f18cf0d2f1389a1c20"
+        "sha256": "03520a298be5a1ef3f5c6bf6573d1d7e139918254dd7fe8db2b1d812738cc36f"
       },
       "sourceReadmeSHA256": "ce088c422e53653cc1f2c77feeb01e740629194499d745b4464f5f949b4a5686",
       "sourceManifestSHA256": "a799a11283be38c47819ba0716d3592b9e60af7be1e9076000fec2bbe7bd961e",
@@ -17,7 +17,7 @@
       "noticeBundle": {
         "path": "THIRD-PARTY-NOTICES.txt",
         "bytes": 130562,
-        "sha256": "2b5b7c0440f24e2695741d41abecdd0fa7816bfb8acfbd2da5560aaa50420f59"
+        "sha256": "97e185233d494e28e537c48192b4d4d690d6eba03e30d6e75d83928a00612aef"
       },
       "sourceReadmeSHA256": "ce088c422e53653cc1f2c77feeb01e740629194499d745b4464f5f949b4a5686",
       "sourceManifestSHA256": "a799a11283be38c47819ba0716d3592b9e60af7be1e9076000fec2bbe7bd961e",
@@ -25,5 +25,5 @@
       "builderInstalledDatabaseSHA256": "4eca637e7036de8f5e9d90689853e2bf8b9bbc7d3a5f810a7a902c6d4f9505b2"
     }
   },
-  "scope": "Reviewed source/readme/notices from retained exact source inputs. arm64 collection uses the actual isolated runtime-patched APK database; amd64 collection uses an explicitly marked candidate database. Final images and their actual database identities still require separate runtime contract validation."
+  "scope": "Reviewed OpenSSL 3.5.9 source/recipe checksums and unchanged license texts. Notice hashes regenerated from the previously verified bundle with exact version, recipe and notice-path changes. Corresponding-source and builder identities are unchanged; final cold images require separate runtime contract validation."
 }

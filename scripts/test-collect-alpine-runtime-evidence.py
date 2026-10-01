@@ -37,6 +37,22 @@ def archive_bytes(kind='regular'):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_only_reviewed_openssl_release_can_redirect_to_https_github_assets(self):
+        handler = M.HTTPSRedirect()
+        request = M.urllib.request.Request(M.OPENSSL_RELEASE_URL)
+        target = 'https://release-assets.githubusercontent.com/asset?signature=fixture'
+        redirected = handler.redirect_request(request, None, 302, 'Found', {}, target)
+        self.assertEqual(redirected.full_url, target)
+        for source, destination in (
+            (M.OPENSSL_RELEASE_URL, 'http://release-assets.githubusercontent.com/asset'),
+            (M.OPENSSL_RELEASE_URL, 'https://example.com/asset'),
+            (M.OPENSSL_RELEASE_URL, 'https://release-assets.githubusercontent.com.evil.test/asset'),
+            (M.OPENSSL_RELEASE_URL.replace('3.5.9', '3.5.10'), target),
+            (target, target),
+        ):
+            with self.subTest(source=source, destination=destination), self.assertRaises(M.EvidenceError):
+                handler.redirect_request(M.urllib.request.Request(source), None, 302, 'Found', {}, destination)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='covalent-alpine-evidence-')
         self.addCleanup(self.temp.cleanup)

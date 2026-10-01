@@ -128,7 +128,7 @@ require_text 'ARG RELEASE_VERSION=development' "$dockerfile"
 require_text 'org.opencontainers.image.version="$RELEASE_VERSION"' "$dockerfile"
 require_text 'ARG COVALENT_SOURCE_FINGERPRINT=unknown' "$dockerfile"
 require_text 'io.covalent.source.fingerprint="$COVALENT_SOURCE_FINGERPRINT"' "$dockerfile"
-require_text 'io.covalent.runtime.openssl.version="3.5.8-r0"' "$dockerfile"
+require_text 'io.covalent.runtime.openssl.version="3.5.9-r0"' "$dockerfile"
 require_text 'FROM runtime-base AS busybox-package-test' "$dockerfile"
 require_text 'FROM runtime-base AS runtime-patched' "$dockerfile"
 require_text 'HOME=/home/covalent' "$dockerfile"
@@ -138,10 +138,10 @@ require_text '/test_wget_request_target.py --busybox /bin/busybox' "$dockerfile"
 require_text 'io.covalent.runtime.busybox.version="1.37.0-r1000"' "$dockerfile"
 require_text 'io.covalent.runtime.busybox.patch-sha256="bdd8391fa2e4020079df71557d880e475f5f517fa949b5e80ef633cdafc71a2a"' "$dockerfile"
 require_text 'Covalent-local BusyBox revision `1.37.0-r1000`' "$documentation"
-require_text 'libcrypto3=3.5.8-r0' "$dockerfile"
-require_text 'libssl3=3.5.8-r0' "$dockerfile"
+require_text 'libcrypto3=3.5.9-r0' "$dockerfile"
+require_text 'libssl3=3.5.9-r0' "$dockerfile"
 require_text 'Alpine 3.23 runtime base' "$documentation"
-require_text 'OpenSSL libraries are upgraded to the exact signed Alpine security revision `3.5.8-r0`' "$documentation"
+require_text 'OpenSSL libraries are upgraded to the exact signed Alpine security revision `3.5.9-r0`' "$documentation"
 # Markdown backticks are literal documentation text.
 # shellcheck disable=SC2016
 require_text '`linux/amd64` and `linux/arm64`' "$documentation"
@@ -282,7 +282,7 @@ if [ -n "$image" ]; then
   test "$(docker image inspect "$image" --format '{{.Config.User}}')" = 65532:65532
   test "$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.base.name"}}')" = docker.io/library/alpine:3.23
   test "$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.base.digest"}}')" = "$runtime_digest"
-  test "$(docker image inspect "$image" --format '{{index .Config.Labels "io.covalent.runtime.openssl.version"}}')" = 3.5.8-r0
+  test "$(docker image inspect "$image" --format '{{index .Config.Labels "io.covalent.runtime.openssl.version"}}')" = 3.5.9-r0
   test "$(docker image inspect "$image" --format '{{index .Config.Labels "io.covalent.runtime.busybox.version"}}')" = 1.37.0-r1000
   test "$(docker image inspect "$image" --format '{{index .Config.Labels "io.covalent.runtime.busybox.source-sha256"}}')" = 3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4
   test "$(docker image inspect "$image" --format '{{index .Config.Labels "io.covalent.runtime.busybox.patch-sha256"}}')" = bdd8391fa2e4020079df71557d880e475f5f517fa949b5e80ef633cdafc71a2a
