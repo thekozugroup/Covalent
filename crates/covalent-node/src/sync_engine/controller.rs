@@ -449,11 +449,14 @@ impl ManagedEngineSession {
                 }
                 // A completed attempt has failed. Preserve its recovery state
                 // and report failure instead of silently restarting the job.
-                Err(_) => Ok(super::run_observation::EngineRunObservation {
-                    local_index: None,
-                    completions: BTreeMap::new(),
-                    failures: BTreeSet::from([source]),
-                }),
+                Err(error) => {
+                    super::rclone::report_transfer_error("destination", error);
+                    Ok(super::run_observation::EngineRunObservation {
+                        local_index: None,
+                        completions: BTreeMap::new(),
+                        failures: BTreeSet::from([source]),
+                    })
+                }
             };
         }
         if !self.jobs.contains_key(&folder) {

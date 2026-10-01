@@ -929,6 +929,26 @@ extern "system" fn native_unregister_folder_grant<'local>(
     }
 }
 
+#[cfg(target_os = "android")]
+fn log_transfer_diagnostic(message: &str) {
+    #[link(name = "log")]
+    unsafe extern "C" {
+        fn __android_log_write(
+            priority: std::ffi::c_int,
+            tag: *const std::ffi::c_char,
+            text: *const std::ffi::c_char,
+        ) -> std::ffi::c_int;
+    }
+    let Ok(message) = std::ffi::CString::new(message) else {
+        return;
+    };
+    // SAFETY: both arguments are live, NUL-terminated C strings for the call.
+    // liblog copies the text; it retains neither pointer. Priority 5 is WARN.
+    unsafe {
+        __android_log_write(5, c"CovalentSyncDiagnostic".as_ptr(), message.as_ptr());
+    }
+}
+
 /// Registers the fixed Kotlin ABI.  A failed registration leaves the library unusable.
 ///
 /// # Safety
@@ -1019,7 +1039,11 @@ pub unsafe extern "system" fn JNI_OnLoad(
         })
     }));
     match outcome {
-        Ok(Ok(())) => JNI_VERSION_1_6,
+        Ok(Ok(())) => {
+            #[cfg(target_os = "android")]
+            covalent_node::sync_engine::set_transfer_diagnostic_sink(log_transfer_diagnostic);
+            JNI_VERSION_1_6
+        }
         _ => JNI_ERR,
     }
 }

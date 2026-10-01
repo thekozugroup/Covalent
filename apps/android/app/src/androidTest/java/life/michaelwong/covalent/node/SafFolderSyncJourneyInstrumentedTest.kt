@@ -516,11 +516,31 @@ class SafFolderSyncJourneyInstrumentedTest {
                 SAF_PROPAGATE_CONTENT,
             )
             val seedVisibleAtUnixMs = System.currentTimeMillis()
+            val seedWaitStarted = System.nanoTime()
+            val seedRunHistory = ArrayDeque<String>()
+            var lastSeedRunObservation: String? = null
+            fun recordSeedRun(observation: String) {
+                if (observation == lastSeedRunObservation) return
+                lastSeedRunObservation = observation
+                if (seedRunHistory.size == 24) seedRunHistory.removeFirst()
+                val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - seedWaitStarted)
+                seedRunHistory.addLast("COVALENT_SOURCE_DELETION_WAIT elapsedMs=$elapsed $observation")
+            }
             // Readable SAF bytes can precede copy acknowledgement. This phase
             // verifies deletion of a completed, owned copy.
             try {
                 await("source deletion seed acknowledged", TRANSFER_TIMEOUT_MILLIS) {
-                    sourceShare(repairedA).linkRun?.let {
+                    val run = try {
+                        sourceShare(repairedA).linkRun
+                    } catch (error: Exception) {
+                        recordSeedRun("error=${error.javaClass.name}")
+                        throw error
+                    }
+                    recordSeedRun(
+                        "generation=${run?.generation} phase=${run?.phase} " +
+                            "destinationResults=${run?.destinations?.map { it.result }}",
+                    )
+                    run?.let {
                         it.generation > generationBeforeDeletionSeed && it.phase == FolderLinkRunPhase.SUCCEEDED
                     } == true
                 }
@@ -528,6 +548,7 @@ class SafFolderSyncJourneyInstrumentedTest {
                 throw AssertionError(
                     "${failure.message} generationBeforeSeed=$generationBeforeDeletionSeed " +
                         "seedVisibleAtUnixMs=$seedVisibleAtUnixMs\n" +
+                        seedRunHistory.joinToString("\n") + "\n" +
                         recoveryDiagnostic("source", repairedA, "source-deletion-seed") +
                         "\n" +
                         recoveryDiagnostic("destination", connectionB, "source-deletion-seed") +
@@ -791,6 +812,7 @@ class SafFolderSyncJourneyInstrumentedTest {
         "COVALENT_SOURCE_DELETION_POLICY " +
             "pending=${pending != null} copyCompleted=${folder.optBoolean("copyCompleted")} " +
             "owned=${folder.getJSONArray("owned").toStringList().contains(name)} " +
+            "delivered=${folder.getJSONObject("delivered").has(name)} " +
             "pendingSource=${pending?.getJSONObject("source")?.has(name)} " +
             "pendingAllowed=${pending?.getJSONArray("allowed")?.toStringList()?.contains(name)} " +
             "propagateSourceDeletions=${pending?.optBoolean("propagateSourceDeletions")}"

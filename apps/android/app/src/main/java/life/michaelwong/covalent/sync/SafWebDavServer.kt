@@ -43,6 +43,10 @@ internal class SafWebDavServer(
     private val password: String,
 ) : Closeable {
     private val resolver = context.applicationContext.contentResolver
+    // Serialize tree snapshots and namespace mutations, never file-byte transfer.
+    // Provider cursors can otherwise retain IDs invalidated by another request's rename.
+    private val treeLock = Any()
+    private val activeUploads = hashSetOf<String>()
     private val running = AtomicBoolean(false)
     private val clients = ThreadPoolExecutor(
         4,
@@ -154,20 +158,25 @@ internal class SafWebDavServer(
             "GET" -> readFile(path, request, output, includeBody = true)
             "HEAD" -> readFile(path, request, output, includeBody = false)
             "PUT" -> put(path, request, input, output)
-            "MKCOL" -> makeCollection(path, output)
-            "DELETE" -> delete(path, output)
-            "MOVE" -> move(path, request, output)
+            "MKCOL" -> synchronized(treeLock) { makeCollection(path, output) }
+            "DELETE" -> synchronized(treeLock) { delete(path, output) }
+            "MOVE" -> synchronized(treeLock) { move(path, request, output) }
             else -> writeResponse(output, 405, "Method Not Allowed")
         }
     }
 
     private fun propfind(path: List<String>, request: Request, output: OutputStream) {
+        val xml = synchronized(treeLock) { propfindBody(path, request) }
+        writeResponse(output, 207, "Multi-Status", xml, mapOf("Content-Type" to "application/xml; charset=utf-8"))
+    }
+
+    private fun propfindBody(path: List<String>, request: Request): ByteArray {
         val tree = DirectTree(resolver, treeUri)
         val target = tree.require(path)
         val depth = request.headers["depth"] ?: "0"
         require(depth == "0" || depth == "1")
         val nodes = if (depth == "1" && target.directory) listOf(target) + tree.children(target) else listOf(target)
-        val xml = buildString {
+        return buildString {
             append("<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\">")
             nodes.forEach { node ->
                 append("<D:response><D:href>").append(xmlEscape(encodedPath(node.path, node.directory))).append("</D:href>")
@@ -184,35 +193,38 @@ internal class SafWebDavServer(
             }
             append("</D:multistatus>")
         }.encodeToByteArray()
-        writeResponse(output, 207, "Multi-Status", xml, mapOf("Content-Type" to "application/xml; charset=utf-8"))
     }
 
     private fun readFile(path: List<String>, request: Request, output: OutputStream, includeBody: Boolean) {
-        val tree = DirectTree(resolver, treeUri)
-        val target = tree.require(path)
-        if (target.directory) throw Conflict()
-        val size = target.size ?: throw Conflict()
-        val range = request.headers["range"]?.let { parseRange(it, size) }
-        val start = range?.first ?: 0L
-        val end = range?.last ?: (size - 1L)
-        val responseSize = if (size == 0L) 0L else end - start + 1L
-        val headers = linkedMapOf(
-            "Content-Type" to target.mimeType,
-            "Content-Length" to responseSize.toString(),
-            "Accept-Ranges" to "bytes",
-        )
-        if (range != null) headers["Content-Range"] = "bytes $start-$end/$size"
-        if (!includeBody) {
+        val (target, source) = synchronized(treeLock) {
+            val tree = DirectTree(resolver, treeUri)
+            val target = tree.require(path)
+            if (target.directory || target.size == null) throw Conflict()
+            target to if (includeBody) {
+                resolver.openInputStream(tree.uri(target)) ?: throw SecurityException()
+            } else null
+        }
+        source.use {
+            val size = checkNotNull(target.size)
+            val range = request.headers["range"]?.let { parseRange(it, size) }
+            val start = range?.first ?: 0L
+            val end = range?.last ?: (size - 1L)
+            val responseSize = if (size == 0L) 0L else end - start + 1L
+            val headers = linkedMapOf(
+                "Content-Type" to target.mimeType,
+                "Content-Length" to responseSize.toString(),
+                "Accept-Ranges" to "bytes",
+            )
+            if (range != null) headers["Content-Range"] = "bytes $start-$end/$size"
+            if (!includeBody) {
+                writeHead(output, if (range == null) 200 else 206, if (range == null) "OK" else "Partial Content", headers)
+                return
+            }
             writeHead(output, if (range == null) 200 else 206, if (range == null) "OK" else "Partial Content", headers)
-            return
-        }
-        writeHead(output, if (range == null) 200 else 206, if (range == null) "OK" else "Partial Content", headers)
-        resolver.openInputStream(tree.uri(target))?.use { source ->
-            skipExactly(source, start)
+            skipExactly(checkNotNull(source), start)
             copyExactly(source, output, responseSize)
+            output.flush()
         }
-            ?: throw SecurityException()
-        output.flush()
     }
 
     private fun put(path: List<String>, request: Request, input: InputStream, output: OutputStream) {
@@ -220,60 +232,80 @@ internal class SafWebDavServer(
         val length = request.headers["content-length"]?.toLongOrNull()
             ?: throw IllegalArgumentException("A bounded upload length is required.")
         require(length in 0..MAX_FILE_BYTES && request.headers["transfer-encoding"] == null)
-        val tree = DirectTree(resolver, treeUri)
-        val parent = tree.require(path.dropLast(1))
-        if (!parent.directory) throw Conflict()
-        val existing = tree.find(path)
-        if (existing?.directory == true) throw Conflict()
         val contentType = request.headers["content-type"]?.takeIf(::validMimeType) ?: "application/octet-stream"
-        val temporaryName = tree.availableTemporaryName(parent, "upload")
-        var temporaryUri = DocumentsContract.createDocument(
-            resolver,
-            tree.uri(parent),
-            contentType,
-            temporaryName,
-        ) ?: throw SecurityException()
-        tree.requireChild(parent, temporaryName, temporaryUri)
+        var temporaryUri: Uri? = null
+        var replaced = false
         try {
-            resolver.openOutputStream(temporaryUri, "rwt")?.use { destination -> copyExactly(input, destination, length) }
-                ?: throw SecurityException()
-            if (existing == null) {
-                temporaryUri = DocumentsContract.renameDocument(resolver, temporaryUri, path.last())
+            val destination = synchronized(treeLock) {
+                val tree = DirectTree(resolver, treeUri)
+                val parent = tree.require(path.dropLast(1))
+                if (!parent.directory || tree.find(path)?.directory == true) throw Conflict()
+                val temporaryName = tree.availableTemporaryName(parent, "upload")
+                val created = DocumentsContract.createDocument(resolver, tree.uri(parent), contentType, temporaryName)
                     ?: throw SecurityException()
-                tree.requireChild(parent, path.last(), temporaryUri)
-            } else {
-                val backupName = tree.availableTemporaryName(parent, "replaced")
-                var backupUri = DocumentsContract.renameDocument(resolver, tree.uri(existing), backupName)
-                    ?: throw SecurityException()
-                tree.requireChild(parent, backupName, backupUri)
+                tree.requireOwnedDocument(parent, temporaryName, created)
+                temporaryUri = created
+                tree.requireChild(parent, temporaryName, created)
+                activeUploads += DocumentsContract.getDocumentId(created)
+                resolver.openOutputStream(created, "rwt") ?: throw SecurityException()
+            }
+            destination.use { copyExactly(input, it, length) }
+            synchronized(treeLock) {
+                activeUploads -= DocumentsContract.getDocumentId(checkNotNull(temporaryUri))
+                val tree = DirectTree(resolver, treeUri)
+                val parent = tree.require(path.dropLast(1))
+                val existing = tree.find(path)
+                if (existing?.directory == true) throw Conflict()
+                replaced = existing != null
+                var backupUri: Uri? = null
                 try {
-                    temporaryUri = DocumentsContract.renameDocument(resolver, temporaryUri, path.last())
-                        ?: throw SecurityException()
-                    tree.requireChild(parent, path.last(), temporaryUri)
-                } catch (error: Throwable) {
-                    runCatching { DocumentsContract.deleteDocument(resolver, temporaryUri) }
-                    runCatching {
-                        backupUri = DocumentsContract.renameDocument(resolver, backupUri, path.last())
+                    if (existing != null) {
+                        val backupName = tree.availableTemporaryName(parent, "replaced")
+                        val backup = DocumentsContract.renameDocument(resolver, tree.uri(existing), backupName)
                             ?: throw SecurityException()
-                        tree.requireChild(parent, path.last(), backupUri)
+                        tree.requireOwnedDocument(parent, backupName, backup)
+                        backupUri = backup
+                        tree.requireChild(parent, backupName, backup)
+                    }
+                    val published = DocumentsContract.renameDocument(resolver, checkNotNull(temporaryUri), path.last())
+                        ?: throw SecurityException()
+                    tree.requireOwnedDocument(parent, path.last(), published)
+                    temporaryUri = published
+                    tree.requireChild(parent, path.last(), published)
+                } catch (error: Throwable) {
+                    val failedUpload = temporaryUri
+                    // Relinquish this URI before restoring: path-based providers reuse
+                    // the final URI for the original, which must never be cleaned twice.
+                    temporaryUri = null
+                    failedUpload?.let { runCatching { DocumentsContract.deleteDocument(resolver, it) } }
+                    backupUri?.let { backup ->
+                        runCatching {
+                            if (tree.find(path) != null) throw Conflict()
+                            val restored = DocumentsContract.renameDocument(resolver, backup, path.last())
+                                ?: throw SecurityException()
+                            tree.requireChild(parent, path.last(), restored)
+                        }
                     }
                     throw error
                 }
-                if (!DocumentsContract.deleteDocument(resolver, backupUri)) {
-                    runCatching { DocumentsContract.deleteDocument(resolver, temporaryUri) }
-                    runCatching {
-                        backupUri = DocumentsContract.renameDocument(resolver, backupUri, path.last())
-                            ?: throw SecurityException()
-                        tree.requireChild(parent, path.last(), backupUri)
+                // The validated final document is no longer a temporary. A failed
+                // backup cleanup must preserve it, even if the provider already deleted the backup.
+                temporaryUri = null
+                backupUri?.let {
+                    if (!DocumentsContract.deleteDocument(resolver, it)) {
+                        throw SecurityException("The replaced document could not be removed.")
                     }
-                    throw SecurityException("The replaced document could not be removed.")
                 }
             }
-        } catch (error: Throwable) {
-            runCatching { DocumentsContract.deleteDocument(resolver, temporaryUri) }
-            throw error
+        } finally {
+            synchronized(treeLock) {
+                temporaryUri?.let {
+                    activeUploads -= DocumentsContract.getDocumentId(it)
+                    runCatching { DocumentsContract.deleteDocument(resolver, it) }
+                }
+            }
         }
-        writeResponse(output, if (existing == null) 201 else 204, if (existing == null) "Created" else "No Content")
+        writeResponse(output, if (replaced) 204 else 201, if (replaced) "No Content" else "Created")
     }
 
     private fun makeCollection(path: List<String>, output: OutputStream) {
@@ -362,22 +394,22 @@ internal class SafWebDavServer(
     private class Conflict : Exception()
     private class RangeNotSatisfiable(val size: Long) : Exception()
 
-    private class DirectTree(
+    private data class Node(
+        val id: String,
+        val name: String,
+        val directory: Boolean,
+        val mimeType: String,
+        val size: Long?,
+        val modified: Long?,
+        val path: List<String>,
+    )
+
+    private inner class DirectTree(
         private val resolver: android.content.ContentResolver,
         private val treeUri: Uri,
     ) {
         private val rootId = DocumentsContract.getTreeDocumentId(treeUri)
         private val source = ContentResolverMetadataSource(resolver, treeUri, CancellationSignal())
-
-        data class Node(
-            val id: String,
-            val name: String,
-            val directory: Boolean,
-            val mimeType: String,
-            val size: Long?,
-            val modified: Long?,
-            val path: List<String>,
-        )
 
         fun find(path: List<String>): Node? {
             var node = root()
@@ -398,6 +430,9 @@ internal class SafWebDavServer(
             val names = hashSetOf<String>()
             var nameBytes = 0L
             source.queryChildren(parent.id) { raw ->
+                // These exact IDs were validated when this bridge created them.
+                // They stay private until their byte stream is closed and published.
+                if (raw.documentId in activeUploads) return@queryChildren
                 require(children.size < MAX_CHILDREN)
                 require(ids.add(raw.documentId) && raw.documentId != parent.id)
                 val name = requirePortableObservedName(raw.displayName)
@@ -414,6 +449,14 @@ internal class SafWebDavServer(
             val expectedId = DocumentsContract.getDocumentId(expectedUri)
             return children(parent).singleOrNull { it.id == expectedId && it.name == name }
                 ?: throw SecurityException()
+        }
+
+        fun requireOwnedDocument(parent: Node, name: String, documentUri: Uri) {
+            val id = DocumentsContract.getDocumentId(documentUri)
+            require(isWithinGrantedTree(resolver, treeUri, uri(rootId), documentUri))
+            val raw = source.queryDocument(id)
+            require(raw.documentId == id && raw.displayName == name)
+            node(raw, parent.path + name)
         }
 
         fun availableTemporaryName(parent: Node, purpose: String): String {

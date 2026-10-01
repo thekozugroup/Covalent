@@ -11,6 +11,9 @@ import androidx.documentfile.provider.DocumentFile
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.ByteArrayOutputStream
 import java.net.Socket
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -143,6 +146,64 @@ class SafWebDavServerInstrumentedTest {
     }
 
     @Test
+    fun concurrentUploadPublishesOnlyAfterTheMetadataSnapshotFinishes() {
+        providerControl(SafWebDavTestDocumentsProvider.METHOD_PATH_IDS)
+        val endpoint = start()
+        val executor = Executors.newFixedThreadPool(2)
+        val content = "complete upload".encodeToByteArray()
+        val openedBefore = queryCounts().getInt("openedWrites")
+        try {
+            Socket("127.0.0.1", endpoint.port).use { socket ->
+                socket.soTimeout = 5_000
+                val output = socket.getOutputStream()
+                output.write(requestHead(endpoint, "PUT", "/concurrent.bin", mapOf(
+                    "Content-Length" to content.size.toString(),
+                )))
+                output.write(content, 0, 1)
+                output.flush()
+                awaitProvider { queryCounts().getInt("openedWrites") > openedBefore }
+                // An incomplete upload must not prevent an unrelated file read.
+                assertArrayEquals("hello\nworld\n".encodeToByteArray(), request(endpoint, "GET", "/Gr%C3%BC%C3%9Fe.txt").body)
+                providerControl(SafWebDavTestDocumentsProvider.METHOD_HOLD_QUERY)
+                val listing = executor.submit<Response> {
+                    request(endpoint, "PROPFIND", "/", headers = mapOf("Depth" to "1"))
+                }
+                awaitProvider { queryCounts().getBoolean("queryBlocked") }
+                output.write(content, 1, content.size - 1)
+                output.flush()
+                val upload = executor.submit<Response> { readResponse(socket) }
+                org.junit.Assert.assertThrows(TimeoutException::class.java) {
+                    upload.get(300, TimeUnit.MILLISECONDS)
+                }
+                providerControl(SafWebDavTestDocumentsProvider.METHOD_RELEASE_QUERY)
+                val snapshot = listing.get(5, TimeUnit.SECONDS)
+                assertEquals(207, snapshot.code)
+                assertFalse(snapshot.body.decodeToString().contains(".covalent-"))
+                assertEquals(201, upload.get(5, TimeUnit.SECONDS).code)
+                assertArrayEquals(content, request(endpoint, "GET", "/concurrent.bin").body)
+            }
+        } finally {
+            providerControl(SafWebDavTestDocumentsProvider.METHOD_RELEASE_QUERY)
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun failedReplacementValidationRestoresOriginalWithPathBasedDocumentIds() {
+        providerControl(SafWebDavTestDocumentsProvider.METHOD_PATH_IDS)
+        val endpoint = start()
+        val original = "original bytes must survive".encodeToByteArray()
+        assertEquals(201, request(endpoint, "PUT", "/existing.bin", original).code)
+        for (stage in listOf("backup", "publish")) {
+            providerControl(SafWebDavTestDocumentsProvider.METHOD_FAIL_RENAME_VALIDATION, stage)
+            assertTrue(request(endpoint, "PUT", "/existing.bin", "replacement".encodeToByteArray()).code >= 400)
+            assertArrayEquals(original, request(endpoint, "GET", "/existing.bin").body)
+            assertFalse(request(endpoint, "PROPFIND", "/", headers = mapOf("Depth" to "1"))
+                .body.decodeToString().contains(".covalent-"))
+        }
+    }
+
+    @Test
     fun oneFileReadQueriesOnlyItsImmediateDirectory() {
         val endpoint = start()
         assertArrayEquals("hello\nworld\n".encodeToByteArray(), request(endpoint, "GET", "/Gr%C3%BC%C3%9Fe.txt").body)
@@ -203,6 +264,18 @@ class SafWebDavServerInstrumentedTest {
         ))
     }
 
+    private fun providerControl(method: String, argument: String? = null) = withProviderControl {
+        context.contentResolver.call("content://${SafWebDavTestDocumentsProvider.AUTHORITY}".toUri(), method, argument, null)
+    }
+
+    private fun awaitProvider(condition: () -> Boolean) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (!condition()) {
+            check(System.nanoTime() < deadline) { "Provider operation did not reach its checkpoint" }
+            Thread.sleep(20)
+        }
+    }
+
     private fun request(
         endpoint: SafWebDavEndpoint,
         method: String,
@@ -211,6 +284,7 @@ class SafWebDavServerInstrumentedTest {
         headers: Map<String, String> = emptyMap(),
         authenticated: Boolean = true,
     ): Response = Socket("127.0.0.1", endpoint.port).use { socket ->
+        socket.soTimeout = 5_000
         val requestHeaders = linkedMapOf<String, String>()
         if (body.isNotEmpty() || method == "PUT") requestHeaders["Content-Length"] = body.size.toString()
         requestHeaders.putAll(headers)
@@ -219,12 +293,16 @@ class SafWebDavServerInstrumentedTest {
         output.write(requestHead(endpoint, method, path, requestHeaders, includeAuthorization = false))
         output.write(body)
         output.flush()
+        readResponse(socket)
+    }
+
+    private fun readResponse(socket: Socket): Response {
         val bytes = socket.getInputStream().readBytes()
         val separator = bytes.indexOfSubsequence("\r\n\r\n".encodeToByteArray())
         check(separator >= 0)
         val head = bytes.copyOfRange(0, separator).decodeToString()
         val code = head.lineSequence().first().split(' ')[1].toInt()
-        Response(code, bytes.copyOfRange(separator + 4, bytes.size))
+        return Response(code, bytes.copyOfRange(separator + 4, bytes.size))
     }
 
     private fun requestHead(

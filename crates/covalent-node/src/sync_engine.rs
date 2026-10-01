@@ -35,6 +35,7 @@ pub use health::{FolderHealth, FolderLifecycle};
 pub use host::FolderSyncRuntimeConfig;
 pub(crate) use host::FolderSyncRuntimeState;
 pub use identity::{EngineIdentity, EngineIdentityError};
+pub use rclone::set_transfer_diagnostic_sink;
 
 pub use supervisor::{
     EngineSupervisorError, OwnedEngineWorker, StopOutcome, VerifiedEngineExecutable,

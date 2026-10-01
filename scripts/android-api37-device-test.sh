@@ -30,7 +30,6 @@ tls_client_token_directory=""
 tls_client_token_file=""
 tls_token_file_name=covalent-api37-tls-token
 instrumentation_log=""
-instrumentation_directory=""
 expected_suite=""
 base_suite=""
 journey_suite=""
@@ -73,9 +72,6 @@ cleanup() {
   fi
   if [ -n "$instrumentation_log" ] && [ -f "$instrumentation_log" ]; then
     rm -f "$instrumentation_log"
-  fi
-  if [ -n "$instrumentation_directory" ] && [ -d "$instrumentation_directory" ]; then
-    rm -rf "$instrumentation_directory"
   fi
   if [ -n "$expected_suite" ] && [ -f "$expected_suite" ]; then
     rm -f "$expected_suite"
@@ -519,6 +515,8 @@ fi
 
 apk="$repo_root/apps/android/app/build/outputs/apk/debug/app-debug.apk"
 test_apk="$repo_root/apps/android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
+evidence_dir=${COVALENT_ANDROID_EVIDENCE_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/covalent-api37.XXXXXX")}
+mkdir -p "$evidence_dir"
 # When instrumentation dies the message `am` prints is the symptom, never the
 # cause: a DeadObjectException on the ActivityManager binder says only that
 # system_server was gone by the time the call landed, and an
@@ -530,6 +528,11 @@ test_apk="$repo_root/apps/android/app/build/outputs/apk/androidTest/debug/app-de
 # path that has already decided to exit 1, it never changes the exit code, and
 # it adds no load while the tests are actually running.
 dump_guest_failure_evidence() {
+  echo "--- sanitized Covalent sync diagnostics ---" >&2
+  "$adb" -s "$serial" logcat -d -b main -v brief -s 'CovalentSyncDiagnostic:I' '*:S' \
+    > "$evidence_dir/sync-diagnostic.log" 2>/dev/null || true
+  cat "$evidence_dir/sync-diagnostic.log" >&2 || true
+  echo "Evidence: $evidence_dir" >&2
   echo "--- API-37-gate post-mortem: guest death evidence ---" >&2
   echo "--- host load at failure ---" >&2
   { nproc; uptime; free -m; } >&2 2>/dev/null || true
@@ -828,13 +831,11 @@ framework_pids_before=$(framework_pids)
 echo "$framework_pids_before"
 echo "--- end guest state ---"
 
-instrumentation_directory=$(mktemp -d "${TMPDIR:-/tmp}/covalent-api37-instrumentation.XXXXXX")
-
 run_instrumentation_phase() {
   phase_name=$1
   phase_expectation=$2
   shift 2
-  phase_log="$instrumentation_directory/$phase_name.log"
+  phase_log="$evidence_dir/instrumentation-$phase_name.log"
   if ! "$adb" -s "$serial" shell am instrument -w -r "$@" \
     life.michaelwong.covalent.test/androidx.test.runner.AndroidJUnitRunner >"$phase_log" 2>&1; then
     cat "$phase_log" >&2
@@ -909,8 +910,6 @@ elif ! mobilecli apps launch life.michaelwong.covalent --device "$avd_name"; the
   "$adb" -s "$serial" shell am start -W -n life.michaelwong.covalent/.MainActivity
 fi
 
-evidence_dir=${COVALENT_ANDROID_EVIDENCE_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/covalent-api37.XXXXXX")}
-mkdir -p "$evidence_dir"
 if [ "$headless_ci" = true ]; then
   "$adb" -s "$serial" exec-out screencap -p > "$evidence_dir/first-launch.png"
   "$adb" -s "$serial" shell uiautomator dump "$device_ui_dump" >/dev/null

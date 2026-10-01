@@ -19,6 +19,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /** Mutable test-APK-only SAF provider used to exercise the loopback WebDAV adapter. */
 public final class SafWebDavTestDocumentsProvider extends DocumentsProvider {
@@ -26,6 +28,10 @@ public final class SafWebDavTestDocumentsProvider extends DocumentsProvider {
     public static final String ROOT_ID = "root:opaque";
     public static final String METHOD_RESET = "reset";
     public static final String METHOD_QUERY_COUNTS = "query-counts";
+    public static final String METHOD_PATH_IDS = "path-ids";
+    public static final String METHOD_FAIL_RENAME_VALIDATION = "fail-rename-validation";
+    public static final String METHOD_HOLD_QUERY = "hold-query";
+    public static final String METHOD_RELEASE_QUERY = "release-query";
 
     private static final String[] DOCUMENT_PROJECTION = new String[] {
         Document.COLUMN_DOCUMENT_ID,
@@ -47,6 +53,14 @@ public final class SafWebDavTestDocumentsProvider extends DocumentsProvider {
     private int documentQueries;
     private int childQueries;
     private int childRows;
+    private int createdDocuments;
+    private int openedWrites;
+    private boolean pathIds;
+    private String failRenameValidation;
+    private boolean failChildQuery;
+    private boolean holdNextQuery;
+    private CountDownLatch queryBlocked = new CountDownLatch(1);
+    private CountDownLatch releaseQuery = new CountDownLatch(1);
 
     @Override
     public synchronized boolean onCreate() {
@@ -68,9 +82,17 @@ public final class SafWebDavTestDocumentsProvider extends DocumentsProvider {
             counts.putInt("documentQueries", documentQueries);
             counts.putInt("childQueries", childQueries);
             counts.putInt("childRows", childRows);
+            counts.putInt("createdDocuments", createdDocuments);
+            counts.putInt("openedWrites", openedWrites);
+            counts.putBoolean("queryBlocked", queryBlocked.getCount() == 0);
             return counts;
         }
-        return null;
+        if (METHOD_PATH_IDS.equals(method)) pathIds = true;
+        else if (METHOD_FAIL_RENAME_VALIDATION.equals(method)) failRenameValidation = argument;
+        else if (METHOD_HOLD_QUERY.equals(method)) holdNextQuery = true;
+        else if (METHOD_RELEASE_QUERY.equals(method)) releaseQuery.countDown();
+        else return null;
+        return Bundle.EMPTY;
     }
 
     @Override
@@ -98,19 +120,39 @@ public final class SafWebDavTestDocumentsProvider extends DocumentsProvider {
     }
 
     @Override
-    public synchronized Cursor queryChildDocuments(
+    public Cursor queryChildDocuments(
             String parentDocumentId,
             String[] projection,
             String sortOrder
     ) throws FileNotFoundException {
-        requireDirectory(parentDocumentId);
-        List<Node> children = new ArrayList<>();
-        for (Node node : nodes.values()) {
-            if (parentDocumentId.equals(node.parentId)) children.add(node);
+        Cursor snapshot;
+        boolean hold;
+        synchronized (this) {
+            if (failChildQuery) {
+                failChildQuery = false;
+                throw new FileNotFoundException("Injected post-rename validation failure");
+            }
+            requireDirectory(parentDocumentId);
+            List<Node> children = new ArrayList<>();
+            for (Node node : nodes.values()) {
+                if (parentDocumentId.equals(node.parentId)) children.add(node);
+            }
+            childQueries += 1;
+            childRows += children.size();
+            snapshot = documents(projection, children);
+            hold = holdNextQuery;
+            holdNextQuery = false;
         }
-        childQueries += 1;
-        childRows += children.size();
-        return documents(projection, children);
+        if (hold) {
+            queryBlocked.countDown();
+            try {
+                if (!releaseQuery.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("Query not released");
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(error);
+            }
+        }
+        return snapshot;
     }
 
     @Override
@@ -119,14 +161,15 @@ public final class SafWebDavTestDocumentsProvider extends DocumentsProvider {
         Node parent = requireDirectory(parentDocumentId);
         requireAvailableName(parentDocumentId, displayName, null);
         boolean directory = Document.MIME_TYPE_DIR.equals(mimeType);
-        String id = "doc:" + UUID.randomUUID();
-        File file = new File(storage, id.substring(4));
+        String id = pathIds ? parentDocumentId + "/" + displayName : "doc:" + UUID.randomUUID();
+        File file = new File(storage, UUID.randomUUID().toString());
         try {
             if (directory ? !file.mkdir() : !file.createNewFile()) throw new IOException("create failed");
         } catch (IOException error) {
             throw new FileNotFoundException("Could not create test document");
         }
         nodes.put(id, new Node(id, parent.id, displayName, mimeType, file));
+        createdDocuments += 1;
         return id;
     }
 
@@ -143,8 +186,18 @@ public final class SafWebDavTestDocumentsProvider extends DocumentsProvider {
         Node node = requireNode(documentId);
         if (ROOT_ID.equals(documentId)) throw new FileNotFoundException("Cannot rename root");
         requireAvailableName(node.parentId, displayName, documentId);
+        boolean publishing = node.name.startsWith(".covalent-upload-") && !displayName.startsWith(".covalent-");
+        boolean backingUp = displayName.startsWith(".covalent-replaced-");
         node.name = displayName;
-        return documentId;
+        String renamedId = pathIds ? node.parentId + "/" + displayName : documentId;
+        nodes.remove(documentId);
+        nodes.put(renamedId, new Node(renamedId, node.parentId, displayName, node.mimeType, node.file));
+        if ((publishing && "publish".equals(failRenameValidation)) ||
+                (backingUp && "backup".equals(failRenameValidation))) {
+            failRenameValidation = null;
+            failChildQuery = true;
+        }
+        return renamedId;
     }
 
     @Override
@@ -183,6 +236,7 @@ public final class SafWebDavTestDocumentsProvider extends DocumentsProvider {
     ) throws FileNotFoundException {
         Node node = requireNode(documentId);
         if (node.directory()) throw new FileNotFoundException("Directory has no content");
+        if (mode.contains("w")) openedWrites += 1;
         return ParcelFileDescriptor.open(node.file, ParcelFileDescriptor.parseMode(mode));
     }
 
@@ -245,6 +299,15 @@ public final class SafWebDavTestDocumentsProvider extends DocumentsProvider {
         documentQueries = 0;
         childQueries = 0;
         childRows = 0;
+        createdDocuments = 0;
+        openedWrites = 0;
+        pathIds = false;
+        failRenameValidation = null;
+        failChildQuery = false;
+        holdNextQuery = false;
+        releaseQuery.countDown();
+        queryBlocked = new CountDownLatch(1);
+        releaseQuery = new CountDownLatch(1);
         nodes.put(ROOT_ID, new Node(ROOT_ID, null, "Fixture root", Document.MIME_TYPE_DIR, storage));
         try {
             String unicodeId = createDocument(ROOT_ID, "text/plain", "Grüße.txt");

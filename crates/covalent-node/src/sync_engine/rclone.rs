@@ -7,7 +7,7 @@ use std::io::{Read as _, Write as _};
 use std::net::SocketAddr;
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _, symlink};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -26,6 +26,194 @@ use super::{EngineIndexSnapshot, EngineSessionError, VerifiedEngineExecutable};
 const MAX_OUTPUT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_POLICY_BYTES: u64 = 64 * 1024 * 1024;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+
+// Embedded Android has no tracing subscriber. Its JNI boundary installs the
+// platform log sink; the node crate keeps its existing unsafe-code prohibition.
+static TRANSFER_DIAGNOSTIC_SINK: OnceLock<fn(&str)> = OnceLock::new();
+
+pub fn set_transfer_diagnostic_sink(sink: fn(&str)) {
+    let _ = TRANSFER_DIAGNOSTIC_SINK.set(sink);
+}
+
+pub(super) fn report_transfer_error(operation: &str, error: EngineSessionError) {
+    emit_transfer_diagnostic(operation, &format!("{error:?}"), None, &[]);
+}
+
+fn emit_transfer_diagnostic(
+    operation: &str,
+    category: &str,
+    exit_code: Option<i32>,
+    stderr: &[u8],
+) {
+    let message = transfer_diagnostic_message(operation, category, exit_code, stderr);
+    if let Some(sink) = TRANSFER_DIAGNOSTIC_SINK.get() {
+        sink(&message);
+    } else {
+        tracing::warn!(target: "covalent_sync_diagnostic", "{message}");
+    }
+}
+
+fn transfer_diagnostic_message(
+    operation: &str,
+    category: &str,
+    exit_code: Option<i32>,
+    stderr: &[u8],
+) -> String {
+    let operation = match operation {
+        "lsjson" | "copy" | "sync" | "check" | "destination" | "source-index"
+        | "source-after-copy" | "target-verify" => operation,
+        _ => "other",
+    };
+    let category = match category {
+        "InvalidConfiguration"
+        | "RuntimeUnavailable"
+        | "FolderUnavailable"
+        | "LaunchFailed"
+        | "StartupTimeout"
+        | "StartupMismatch"
+        | "EngineUnavailable"
+        | "TransferFailed"
+        | "PendingCopyRecoveryRequired"
+        | "NonzeroExit"
+        | "TimedOut"
+        | "WaitFailed" => category,
+        _ => "Unknown",
+    };
+    let mut causes = BTreeSet::new();
+    // Inspect only a bounded stderr tail. JSON object/path fields are never
+    // emitted. Plain-text check/list errors use the same fixed classifier.
+    for line in stderr[stderr.len().saturating_sub(65_536)..]
+        .rsplit(|byte| *byte == b'\n')
+        .take(256)
+    {
+        if line.len() > 8192 {
+            continue;
+        }
+        if let Ok(record) = serde_json::from_slice::<serde_json::Value>(line) {
+            if record
+                .get("level")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|level| !matches!(level, "error" | "fatal" | "warning"))
+            {
+                continue;
+            }
+            for field in ["msg", "error"] {
+                if let Some(message) = record.get(field).and_then(serde_json::Value::as_str) {
+                    classify_transfer_cause(message, &mut causes);
+                }
+            }
+        } else if let Ok(message) = std::str::from_utf8(line) {
+            classify_transfer_cause(message, &mut causes);
+        }
+    }
+    let causes = if causes.is_empty() {
+        "unclassified".to_owned()
+    } else {
+        causes.into_iter().collect::<Vec<_>>().join(",")
+    };
+    let exit_code = exit_code.map_or_else(|| "none".to_owned(), |value| value.to_string());
+    format!(
+        "COVALENT_SYNC_DIAGNOSTIC operation={operation} category={category} exitCode={exit_code} causes={causes}"
+    )
+}
+
+fn classify_transfer_cause(message: &str, causes: &mut BTreeSet<&'static str>) {
+    let message = message.to_ascii_lowercase();
+    for (category, patterns) in [
+        (
+            "permission",
+            &[
+                "permission denied",
+                "access denied",
+                "forbidden",
+                "unauthorized",
+            ][..],
+        ),
+        ("readOnly", &["read-only", "read only"][..]),
+        (
+            "notFound",
+            &["not found", "no such file", "does not exist"][..],
+        ),
+        (
+            "timeout",
+            &["timeout", "timed out", "deadline exceeded"][..],
+        ),
+        (
+            "network",
+            &[
+                "connection refused",
+                "connection reset",
+                "broken pipe",
+                "network is unreachable",
+                "no route to host",
+                "dial tcp",
+                "unexpected eof",
+                "closed network connection",
+            ][..],
+        ),
+        (
+            "unsupported",
+            &[
+                "not implemented",
+                "method not allowed",
+                "unsupported",
+                "not supported",
+            ][..],
+        ),
+        (
+            "integrityMismatch",
+            &[
+                "size differ",
+                "sizes differ",
+                "size mismatch",
+                "size changed",
+                "hash differ",
+                "hashes differ",
+                "hash mismatch",
+                "checksum mismatch",
+                "corrupted on transfer",
+            ][..],
+        ),
+        (
+            "noSpace",
+            &["no space left", "disk full", "insufficient storage"][..],
+        ),
+        (
+            "conflict",
+            &["locked", "conflict", "precondition failed"][..],
+        ),
+        ("rateLimited", &["too many requests"][..]),
+    ] {
+        if patterns.iter().any(|pattern| message.contains(pattern)) {
+            causes.insert(category);
+        }
+    }
+    for (code, reason, category) in [
+        (400, "bad request", "http400"),
+        (401, "unauthorized", "http401"),
+        (403, "forbidden", "http403"),
+        (404, "not found", "http404"),
+        (405, "method not allowed", "http405"),
+        (408, "request timeout", "http408"),
+        (409, "conflict", "http409"),
+        (412, "precondition failed", "http412"),
+        (423, "locked", "http423"),
+        (429, "too many requests", "http429"),
+        (500, "internal server error", "http500"),
+        (501, "not implemented", "http501"),
+        (502, "bad gateway", "http502"),
+        (503, "service unavailable", "http503"),
+        (504, "gateway timeout", "http504"),
+        (507, "insufficient storage", "http507"),
+    ] {
+        if message.contains(&format!("{code} {reason}"))
+            || message.contains(&format!("status code: {code}"))
+            || message.contains(&format!("status code {code}"))
+        {
+            causes.insert(category);
+        }
+    }
+}
 
 #[derive(Clone)]
 pub(super) enum FolderBackend {
@@ -377,6 +565,7 @@ impl RcloneRuntime {
         let source_entries = self.list_sftp(folder.id, peer).await?;
         let source_index = inventory_index(&source_entries);
         if &source_index != expected {
+            report_transfer_error("source-index", EngineSessionError::TransferFailed);
             return Err(EngineSessionError::TransferFailed);
         }
         let source = source_entries
@@ -438,6 +627,7 @@ impl RcloneRuntime {
                 .map(|entry| (entry.path.clone(), entry))
                 .collect::<BTreeMap<_, _>>();
             if !pending_paths_are_unchanged(&pending, &after_copy) {
+                report_transfer_error("source-after-copy", EngineSessionError::TransferFailed);
                 return Err(EngineSessionError::TransferFailed);
             }
             if verified.is_empty() {
@@ -460,7 +650,9 @@ impl RcloneRuntime {
             .into_iter()
             .map(|entry| (entry.path.clone(), entry))
             .collect::<BTreeMap<_, _>>();
-        verify_transfer(&pending, &target_after)?;
+        verify_transfer(&pending, &target_after).inspect_err(|error| {
+            report_transfer_error("target-verify", *error);
+        })?;
         let mut next = load_policy(&policy_path, &policy_staged)?;
         let state = next.folders.entry(folder_id).or_default();
         if state
@@ -689,6 +881,10 @@ impl RcloneRuntime {
         args: &[OsString],
         environment: &[(OsString, OsString)],
     ) -> Result<Vec<u8>, RcloneCommandFailure> {
+        let operation = args
+            .first()
+            .and_then(|value| value.to_str())
+            .unwrap_or("other");
         let mut owned_environment = environment.to_vec();
         owned_environment.extend([
             (OsString::from("RCLONE_CONFIG"), OsString::from("/dev/null")),
@@ -721,12 +917,27 @@ impl RcloneRuntime {
                 worker_lease,
             )),
         )
-        .map_err(|_| RcloneCommandFailure::Uncertain(EngineSessionError::LaunchFailed))?;
+        .map_err(|_| {
+            emit_transfer_diagnostic(operation, "LaunchFailed", None, &[]);
+            RcloneCommandFailure::Uncertain(EngineSessionError::LaunchFailed)
+        })?;
         let output = tokio::time::timeout(COMMAND_TIMEOUT, command.wait())
             .await
-            .map_err(|_| RcloneCommandFailure::Uncertain(EngineSessionError::EngineUnavailable))?
-            .map_err(|_| RcloneCommandFailure::Uncertain(EngineSessionError::EngineUnavailable))?;
+            .map_err(|_| {
+                emit_transfer_diagnostic(operation, "TimedOut", None, &[]);
+                RcloneCommandFailure::Uncertain(EngineSessionError::EngineUnavailable)
+            })?
+            .map_err(|_| {
+                emit_transfer_diagnostic(operation, "WaitFailed", None, &[]);
+                RcloneCommandFailure::Uncertain(EngineSessionError::EngineUnavailable)
+            })?;
         if !output.status.success() {
+            emit_transfer_diagnostic(
+                operation,
+                "NonzeroExit",
+                output.status.code(),
+                &output.stderr,
+            );
             return Err(RcloneCommandFailure::ReapedNonzero {
                 stderr: output.stderr,
             });
@@ -1233,6 +1444,75 @@ fn save_policy(path: &Path, staged: &Path, state: &PolicyState) -> Result<(), En
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transfer_diagnostics_classify_errors_without_disclosing_messages_or_paths() {
+        let cases = [
+            (
+                "HTTP error 403 Forbidden: /private/secret-token",
+                "http403,permission",
+            ),
+            (
+                "405 Method Not Allowed: https://user:password@127.0.0.1/secret",
+                "http405,unsupported",
+            ),
+            ("404 Not Found /private/document", "http404,notFound"),
+            ("503 Service Unavailable: secret-token", "http503"),
+            ("409 Conflict: secret-token", "conflict,http409"),
+            ("423 Locked: secret-token", "conflict,http423"),
+            ("507 Insufficient Storage: secret-token", "http507,noSpace"),
+            (
+                "permission denied on read-only filesystem: secret-token",
+                "permission,readOnly",
+            ),
+            ("connection reset by peer: secret-token", "network"),
+            ("context deadline exceeded: secret-token", "timeout"),
+            ("sizes differ: secret-token", "integrityMismatch"),
+            ("sha256 hashes differ: secret-token", "integrityMismatch"),
+        ];
+        for (message, causes) in cases {
+            let stderr = serde_json::to_vec(&serde_json::json!({
+                "level": "error", "msg": message, "object": "/private/secret-token"
+            }))
+            .unwrap();
+            assert_eq!(
+                transfer_diagnostic_message("sync", "NonzeroExit", Some(3), &stderr),
+                format!(
+                    "COVALENT_SYNC_DIAGNOSTIC operation=sync category=NonzeroExit exitCode=3 causes={causes}"
+                )
+            );
+        }
+        let input = b"ERROR : secret-token: corrupted on transfer
+";
+        assert_eq!(
+            transfer_diagnostic_message("check", "NonzeroExit", Some(1), input),
+            "COVALENT_SYNC_DIAGNOSTIC operation=check category=NonzeroExit exitCode=1 causes=integrityMismatch"
+        );
+        let output = transfer_diagnostic_message(
+            "/private/secret-token",
+            "password=secret-token",
+            None,
+            br#"{"level":"info","msg":"Copied (new)","object":"permission denied secret-token"}"#,
+        );
+        assert_eq!(
+            output,
+            "COVALENT_SYNC_DIAGNOSTIC operation=other category=Unknown exitCode=none causes=unclassified"
+        );
+    }
+
+    #[test]
+    fn transfer_diagnostics_bound_untrusted_stderr_and_accept_invalid_utf8() {
+        let mut stderr = vec![0xff; 100_000];
+        stderr.extend_from_slice(
+            b"\n{\"level\":\"error\",\"error\":\"status code: 401 secret-token\"}\n",
+        );
+        let output = transfer_diagnostic_message("lsjson", "NonzeroExit", Some(2), &stderr);
+        assert_eq!(
+            output,
+            "COVALENT_SYNC_DIAGNOSTIC operation=lsjson category=NonzeroExit exitCode=2 causes=http401"
+        );
+        assert!(output.len() < 160);
+    }
 
     #[test]
     fn temporary_files_list_is_removed_on_early_return() {
