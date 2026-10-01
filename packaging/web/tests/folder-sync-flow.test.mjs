@@ -1173,3 +1173,61 @@ test("adding a recipient reuses the existing source and retains the exact path-f
   assert.equal(controller.loadPending(), null);
   assert.throws(() => folders.offerBody({ ...body, selectedRoot: "" }), /folder sync guidance/);
 });
+
+
+function roster(overrides = {}) {
+  return { revision: 1, label: "Music", source: { deviceId, displayName: "Atmos" }, destinations: [
+    { deviceId: peerId, displayName: "Waypoint" }, { deviceId: otherDeviceId, displayName: "Atlas" },
+  ], ...overrides };
+}
+
+test("recipient roster is optional, bounded, immutable, and rejects malformed identities", () => {
+  const decode = (endpointRoster) => folders.requireStatus(status({ shares: [share({ endpointRoster })] })).shares[0];
+  assert.equal(decode(undefined).endpointRoster, null);
+  assert.equal(decode(null).endpointRoster, null);
+  const decoded = decode(roster());
+  assert.deepEqual(decoded.endpointRoster, roster());
+  assert.equal(Object.isFrozen(decoded.endpointRoster.destinations[0]), true);
+  const invalid = [
+    {}, [], roster({ revision: 0 }), roster({ revision: -1 }), roster({ revision: Number.MAX_SAFE_INTEGER + 1 }),
+    roster({ label: "" }), roster({ label: "x".repeat(257) }),
+    roster({ source: { deviceId: "wrong", displayName: "Atmos" } }),
+    roster({ source: { deviceId, displayName: "x".repeat(121) } }),
+    roster({ destinations: "wrong" }), roster({ destinations: [] }), roster({ destinations: Array(129).fill(roster().destinations[0]) }),
+    roster({ destinations: [{ deviceId: peerId, displayName: "" }] }),
+    roster({ destinations: [roster().source] }),
+    roster({ destinations: [roster().destinations[0], roster().destinations[0]] }),
+  ];
+  for (const value of invalid) assert.throws(() => decode(value), /folder sync guidance/);
+});
+
+test("members of one share must agree on the authenticated roster", () => {
+  const first = share({ incoming: false, phase: "ready", linkPolicy, linkSettings: linkState({ confirmed: true }), endpointRoster: roster() });
+  const second = { ...first, offerId: secondOfferId, peerId: otherDeviceId };
+  assert.equal(folders.requireStatus(status({ shares: [first, second] })).shares.length, 2);
+  for (const endpointRoster of [null, roster({ revision: 2 }), roster({ destinations: [roster().destinations[0]] })]) {
+    assert.throws(() => folders.requireStatus(status({ shares: [first, { ...second, endpointRoster }] })), /folder sync guidance/);
+  }
+});
+
+test("a roster for a different source is rejected even without shared settings", async () => {
+  for (const settings of [null, linkState({ confirmed: true })]) {
+    const controller = folders.coordinator({ storage: new MemoryStorage(), api: async () => status({ shares: [share({
+      incoming: false, phase: "ready", linkPolicy: settings === null ? null : linkPolicy, linkSettings: settings,
+      endpointRoster: roster({ source: { deviceId: offerId, displayName: "Another source" } }),
+    })] }) });
+    enable(controller);
+    await assert.rejects(controller.refresh(), (error) => /another source/.test(error.covalentGuidance));
+  }
+});
+
+test("protocol-length share labels remain readable and usable when adding recipients", () => {
+  for (const length of [160, 256]) {
+    const label = "M".repeat(length);
+    const decoded = folders.requireStatus(status({ shares: [share({ label, endpointRoster: roster({ label }) })] })).shares[0];
+    assert.equal(decoded.label, label);
+    assert.equal(decoded.endpointRoster.label, label);
+    assert.equal(folders.offerBody({ peerId, folderId, label, linkPolicy }).label, label);
+  }
+  assert.throws(() => folders.requireStatus(status({ shares: [share({ label: "M".repeat(257) })] })), /folder sync guidance/);
+});

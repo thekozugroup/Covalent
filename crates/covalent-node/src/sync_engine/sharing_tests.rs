@@ -2781,3 +2781,224 @@ fn invitation_renewal_can_carry_the_authenticated_current_route() {
         .unwrap();
     assert_eq!(second.snapshot.shares[0].offer, renewed);
 }
+
+#[test]
+fn endpoint_roster_propagates_pending_add_remove_names_and_restart_without_sibling_authority() {
+    use crate::display_names::DisplayNames;
+    let a = Device::new("Source", 44211);
+    let b = Device::new("First", 44212);
+    let c = Device::new("Second", 44213);
+    pair(&a, &b);
+    pair(&a, &c);
+    let mut source = a.journal();
+    let mut first = b.journal();
+    let mut second = c.journal();
+    let folder = Uuid::new_v4();
+    let mut names = DisplayNames::default();
+    let offer = source
+        .offer_with_policy(
+            b.engine.device_id(),
+            folder,
+            "Files",
+            &a.files(),
+            2000,
+            Some(covalent_protocol::FolderLinkPolicy::default()),
+        )
+        .unwrap();
+    first.receive_offer(offer.clone(), 2001).unwrap();
+    let acceptance = first.accept(offer.offer_id, &b.files(), 2002).unwrap();
+    let commit = source
+        .receive_acceptance(offer.offer_id, acceptance, 2003)
+        .unwrap();
+    first.receive_commit(offer.offer_id, commit).unwrap();
+    deliver_link_settings(&mut source, &mut first);
+    let records = source.endpoint_roster_records(&names).unwrap();
+    let FolderShareRecord::EndpointRoster(initial) = &records[0].record else {
+        panic!()
+    };
+    first.receive_endpoint_roster(initial).unwrap();
+    assert_eq!(initial.roster.destinations.len(), 1);
+    let later = source
+        .offer_with_policy(
+            c.engine.device_id(),
+            folder,
+            "Files",
+            &a.files(),
+            2010,
+            Some(covalent_protocol::FolderLinkPolicy::default()),
+        )
+        .unwrap();
+    second.receive_offer(later.clone(), 2011).unwrap();
+    names.folders.insert(folder, "Library".into());
+    names
+        .peers
+        .insert(c.engine.device_id(), "Other receiver".into());
+    let records = source.endpoint_roster_records(&names).unwrap();
+    for record in &records {
+        let FolderShareRecord::EndpointRoster(commit) = &record.record else {
+            panic!()
+        };
+        if commit.target_id == b.engine.device_id() {
+            first.receive_endpoint_roster(commit).unwrap();
+        } else {
+            second.receive_endpoint_roster(commit).unwrap();
+        }
+        assert_eq!(
+            commit.roster.destinations.len(),
+            2,
+            "pending recipients are visible"
+        );
+        assert!(commit.roster.revision > initial.roster.revision);
+    }
+    let roster = first.summaries().unwrap()[0]
+        .endpoint_roster
+        .clone()
+        .unwrap();
+    assert_eq!(roster.label, "Library");
+    assert_eq!(
+        second.summaries().unwrap()[0].endpoint_roster.as_ref(),
+        Some(&roster)
+    );
+    assert!(
+        !b.engine
+            .config()
+            .unwrap()
+            .trusted_peers
+            .contains_key(&c.engine.device_id())
+    );
+    assert_eq!(
+        first.desired_settings().unwrap().folders[0].members().len(),
+        2
+    );
+    assert_eq!(second.summaries().unwrap()[0].phase, SharingPhase::Offered);
+    assert_eq!(
+        first.receive_endpoint_roster(initial).unwrap_err(),
+        SharingError::InvalidRecord
+    );
+    let mut overlay = roster.clone();
+    let mut local = DisplayNames::default();
+    local.folders.insert(folder, "Local label".into());
+    local
+        .peers
+        .insert(a.engine.device_id(), "Local source".into());
+    overlay.apply_display_names(folder, &local);
+    assert_eq!(overlay.label, "Local label");
+    assert_eq!(overlay.source.display_name, "Local source");
+    assert_eq!(
+        first.summaries().unwrap()[0].endpoint_roster.as_ref(),
+        Some(&roster)
+    );
+    drop(first);
+    let mut first = b.reopen();
+    assert_eq!(
+        first.summaries().unwrap()[0].endpoint_roster.as_ref(),
+        Some(&roster)
+    );
+    source.remove(later.offer_id).unwrap();
+    let records = source.endpoint_roster_records(&names).unwrap();
+    assert_eq!(records.len(), 1);
+    let FolderShareRecord::EndpointRoster(removed) = &records[0].record else {
+        panic!()
+    };
+    first.receive_endpoint_roster(removed).unwrap();
+    assert_eq!(removed.roster.destinations.len(), 1);
+    assert!(removed.roster.revision > roster.revision);
+    let mut config = covalent_core::import_settings(&a.engine.export_settings().unwrap()).unwrap();
+    config.device_name = "Renamed source".into();
+    a.engine
+        .import_settings(&covalent_core::export_settings(&config).unwrap(), true)
+        .unwrap();
+    let renamed = source.endpoint_roster_records(&names).unwrap();
+    let FolderShareRecord::EndpointRoster(renamed) = &renamed[0].record else {
+        panic!()
+    };
+    assert_eq!(renamed.roster.source.display_name, "Renamed source");
+    assert!(renamed.roster.revision > removed.roster.revision);
+    first.receive_endpoint_roster(renamed).unwrap();
+    assert_eq!(
+        serde_json::to_value(&source.endpoint_roster_records(&names).unwrap()[0].record).unwrap(),
+        serde_json::to_value(FolderShareRecord::EndpointRoster(renamed.clone())).unwrap()
+    );
+}
+
+#[test]
+fn endpoint_roster_rejects_wrong_authority_binding_and_unbounded_metadata() {
+    use crate::display_names::DisplayNames;
+    let a = Device::new("Source", 44311);
+    let b = Device::new("Receiver", 44312);
+    let c = Device::new("Sibling", 44313);
+    pair(&a, &b);
+    pair(&a, &c);
+    pair(&b, &c); // Even independently paired siblings cannot author this share.
+    let mut source = a.journal();
+    let mut receiver = b.journal();
+    let offer = source
+        .offer_with_policy(
+            b.engine.device_id(),
+            Uuid::new_v4(),
+            "Files",
+            &a.files(),
+            2000,
+            Some(covalent_protocol::FolderLinkPolicy::default()),
+        )
+        .unwrap();
+    receiver.receive_offer(offer.clone(), 2001).unwrap();
+    let mut records = source
+        .endpoint_roster_records(&DisplayNames::default())
+        .unwrap();
+    let FolderShareRecord::EndpointRoster(valid) = records.remove(0).record else {
+        panic!()
+    };
+    let mut invalid = Vec::new();
+    let mut wrong = valid.clone();
+    wrong.source_id = c.engine.device_id();
+    wrong.roster.source.device_id = wrong.source_id;
+    invalid.push(wrong);
+    let mut wrong = valid.clone();
+    wrong.target_id = c.engine.device_id();
+    invalid.push(wrong);
+    let mut wrong = valid.clone();
+    wrong.offer_id = Uuid::new_v4();
+    invalid.push(wrong);
+    let mut wrong = valid.clone();
+    wrong.folder_id = Uuid::new_v4();
+    invalid.push(wrong);
+    let mut wrong = valid.clone();
+    wrong.roster.destinations.clear();
+    invalid.push(wrong);
+    let mut wrong = valid.clone();
+    wrong
+        .roster
+        .destinations
+        .push(wrong.roster.destinations[0].clone());
+    invalid.push(wrong);
+    let mut wrong = valid.clone();
+    wrong.roster.label = "x".repeat(257);
+    invalid.push(wrong);
+    let mut wrong = valid.clone();
+    wrong.roster.source.display_name = "bad\nname".into();
+    invalid.push(wrong);
+    let mut wrong = valid.clone();
+    wrong.roster.revision = 0;
+    invalid.push(wrong);
+    let mut wrong = valid.clone();
+    wrong.roster.destinations = (1..=129)
+        .map(|id| RosterEndpoint {
+            device_id: DeviceId::from_uuid(Uuid::from_u128(id)),
+            display_name: "Name".into(),
+        })
+        .collect();
+    invalid.push(wrong);
+    for wrong in invalid {
+        assert!(receiver.receive_endpoint_roster(&wrong).is_err());
+    }
+    assert!(receiver.summaries().unwrap()[0].endpoint_roster.is_none());
+    receiver.receive_endpoint_roster(&valid).unwrap();
+    receiver.receive_endpoint_roster(&valid).unwrap(); // Exact retransmission is idempotent.
+    let mut conflict = valid.clone();
+    conflict.roster.label = "Conflicting".into();
+    assert!(receiver.receive_endpoint_roster(&conflict).is_err());
+    receiver.remove(offer.offer_id).unwrap();
+    assert!(receiver.receive_endpoint_roster(&valid).is_err());
+    assert!(receiver.summaries().unwrap()[0].endpoint_roster.is_none());
+}

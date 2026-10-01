@@ -148,6 +148,16 @@ test("API requests identify the console without a token and guards use access st
   await apiResponse("/api/v1/config/export", { method: "POST" });
   assert.equal(requests[0].options.headers.get("X-Covalent-Console"), "1");
   assert.equal(requests[0].options.headers.has("Authorization"), false);
+  assert.equal(requests[0].options.headers.has("X-Covalent-Endpoint-Roster"), false);
+  for (const options of [{}, { method: "GET" }, { method: "get" }]) {
+    await apiResponse("/api/v1/sync/status", options);
+    assert.equal(requests.at(-1).path, "/api/v1/sync/status");
+    assert.equal(requests.at(-1).options.headers.get("X-Covalent-Endpoint-Roster"), "1");
+  }
+  await apiResponse("/api/v1/sync/status", { method: "POST" });
+  assert.equal(requests.at(-1).options.headers.has("X-Covalent-Endpoint-Roster"), false);
+  await apiResponse("/api/v1/status");
+  assert.equal(requests.at(-1).options.headers.has("X-Covalent-Endpoint-Roster"), false);
   assert.match(app, /function folderPollingEligible\(\)[\s\S]*?accessReady\s*&&/);
   assert.match(app, /async function refreshNetworkPairings\(\) \{\s*if \(!accessReady\) return;/);
   assert.match(app, /function requireUnlocked\(\) \{\s*if \(accessReady\) return true;/);
@@ -425,7 +435,7 @@ test("transfer polling updates run details while retaining settings drafts, reci
   const context = {
     document, folderDeviceId: "atmos",
     $: (selector) => { if (!nodes.has(selector)) nodes.set(selector, element()); return nodes.get(selector); },
-    folderSync: { statusSummary: () => ({ kind: "ready", text: "Ready" }), groupShares: (shares) => [shares], shareView: () => ({ kind: "ready", text: "Ready" }) },
+    folderSync: { statusSummary: () => ({ kind: "ready", text: "Ready" }), groupShares: (shares) => [shares], shareRecipients: require("../folder-sync-flow.js").shareRecipients, shareView: () => ({ kind: "ready", text: "Ready" }) },
     folderController: { pendingLinkSettings: () => null, pendingRun: () => null },
     renderFolderPeers() {}, renderPairedDevices() {}, renderFolderError: assert.fail,
     folderPeerName: () => "Waypoint", firstLinkMember: () => true, renderFolderActions() {},
@@ -476,5 +486,41 @@ test("transfer polling updates run details while retaining settings drafts, reci
     context.renderFolderStatus(incoming);
     const recipientName = list.children[0].children[1].children[0].children[0].children[0].textContent;
     assert.equal(recipientName, ownName ?? "This server");
+  }
+  const roster = { revision: 1, label: "Music", source: { deviceId: "atmos", displayName: "Atmos" }, destinations: [
+    { deviceId: "waypoint", displayName: "Waypoint" }, { deviceId: "atlas", displayName: "Atlas" },
+  ] };
+  const removed = [];
+  context.folderActionButton = (label, action) => Object.assign(element(), { textContent: label, action });
+  context.runFolderMutation = (action) => action();
+  context.folderController.remove = (id) => removed.push(id);
+  runInNewContext(/function renderFolderActions\([^]*?\n\}/.exec(app)[0], context);
+  for (const ownId of ["atmos", "waypoint", "atlas"]) {
+    context.folderDeviceId = ownId;
+    const shares = ownId === "atmos"
+      ? roster.destinations.map((destination) => ({ ...share, endpointRoster: roster, label: "My music", peerId: destination.deviceId, offerId: destination.deviceId + "-offer" }))
+      : [{ ...share, endpointRoster: roster, label: "My music", incoming: true, peerId: "atmos", offerId: ownId + "-offer" }];
+    context.renderFolderStatus({ ...status, shares });
+    const card = list.children[0];
+    assert.equal(card.children[0].children[0].textContent, "My music", "keep the locally resolved share alias");
+    assert.equal(card.children[0].children[1].textContent, "From Atmos · Every hour");
+    const rows = card.children[1].children;
+    assert.deepEqual(rows.map((row) => row.children[0].children[0].textContent), ["Waypoint", "Atlas"]);
+    for (const [index, row] of rows.entries()) {
+      const local = ownId === "atmos" || ownId === roster.destinations[index].deviceId;
+      const controls = row.children[1].children;
+      if (!local) {
+        assert.equal(row.children[0].children[1].textContent, "Receives this share");
+        assert.equal(row.children[0].children[1].dataset.kind, "info");
+        assert.equal(controls.length, 0, "a receiver cannot control another recipient");
+      } else {
+        assert.equal(controls[0].textContent, ownId === "atmos" ? "Remove recipient…" : "Stop receiving…");
+        controls[1].children.at(-1).action();
+        assert.equal(removed.at(-1), roster.destinations[index].deviceId + "-offer");
+      }
+    }
+    const originalRows = [...rows];
+    context.renderFolderStatus({ ...status, shares: shares.map((item) => ({ ...item, endpointRoster: { ...roster, revision: 2 } })) });
+    assert.deepEqual(card.children[1].children, originalRows, "roster polling preserves recipient controls");
   }
 });

@@ -3046,3 +3046,44 @@ async fn android_continuous_conditions_stop_pending_scans_and_never_override_exp
     );
     source.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn endpoint_roster_changes_and_rejections_do_not_interrupt_healthy_workers() {
+    let a = Device::new("Source", 44911);
+    let b = Device::new("Receiver", 44912);
+    pair(&a, &b);
+    let source_backend = Arc::new(TestBackend::default());
+    let target_backend = Arc::new(TestBackend::default());
+    let source = a.service(a.journal(), Arc::clone(&source_backend));
+    let target = b.service(b.journal(), Arc::clone(&target_backend));
+    let folder = Uuid::new_v4();
+    make_ready_folder(&a, &b, &source, &target, folder).await;
+    let before_source = source_backend.snapshot();
+    let before_target = target_backend.snapshot();
+    let source_lifecycle = source.status().await.unwrap().lifecycle();
+    let target_lifecycle = target.status().await.unwrap().lifecycle();
+    let records = source
+        .endpoint_roster_records(&crate::display_names::DisplayNames::default())
+        .await
+        .unwrap();
+    let FolderShareRecord::EndpointRoster(commit) = &records[0].record else {
+        panic!()
+    };
+    target.receive_endpoint_roster(commit).await.unwrap();
+    let mut invalid = commit.clone();
+    invalid.roster.revision += 1;
+    invalid.offer_id = Uuid::new_v4();
+    assert!(target.receive_endpoint_roster(&invalid).await.is_err());
+    assert_eq!(source.status().await.unwrap().lifecycle(), source_lifecycle);
+    assert_eq!(target.status().await.unwrap().lifecycle(), target_lifecycle);
+    for (before, after) in [
+        (before_source, source_backend.snapshot()),
+        (before_target, target_backend.snapshot()),
+    ] {
+        assert_eq!(before.launches, after.launches);
+        assert_eq!(before.stop_calls, after.stop_calls);
+        assert_eq!(before.active, after.active);
+    }
+    source.stop().await.unwrap();
+    target.stop().await.unwrap();
+}

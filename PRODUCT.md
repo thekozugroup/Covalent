@@ -22,6 +22,7 @@ The current deployment uses Atmos as the source of Music, with Waypoint and Atla
 
 - The file-transfer engine uses rclone. Shares can run manually, on a schedule, or continuously.
 - Timing and deletion settings belong to the share and apply to all recipients.
+- Each member sees the share's source and all recipients. The source manages recipients; a receiver can stop receiving its own copy.
 - Propagating source deletions and restoring recipient deletions are separate opt-in choices.
 - Pairing requires comparison and confirmation of the same code on both devices. Discovery does not establish trust.
 - The WebUI remains static HTML, CSS, and JavaScript. Shadcn components and Lucide icons are rendered at build time. No browser framework migration is required.

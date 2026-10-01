@@ -566,6 +566,9 @@ async function apiResponse(path, options = {}, readJson = (response) => response
   const headers = new Headers(options.headers || {});
   headers.set("Accept", "application/json");
   headers.set("X-Covalent-Console", "1");
+  if (path === "/api/v1/sync/status" && (options.method ?? "GET").toUpperCase() === "GET") {
+    headers.set("X-Covalent-Endpoint-Roster", "1");
+  }
   if (token) headers.set("Authorization", `Bearer ${token}`);
   if (options.body) headers.set("Content-Type", "application/json");
   const response = await fetch(path, { ...options, headers, cache: "no-store" });
@@ -1301,15 +1304,19 @@ function renderFolderStatus(status) {
     const timing = !cadence ? "Legacy two-way sync" : cadence.mode === "manual" ? "On demand"
       : cadence.mode === "continuous" ? "Continuous" : cadence.intervalMinutes === 60 ? "Every hour"
         : cadence.intervalMinutes === 1440 ? "Every day" : `Every ${cadence.intervalMinutes} minutes`;
-    heading.children[1].textContent = `${share.incoming ? `From ${folderPeerName(status, share.peerId)}` : `From ${ownDeviceName || "this server"}`} · ${timing}${share.linkSettings?.settings.paused ? " · Paused" : ""}`;
-    const retainedRecipients = new Map(Array.from(recipients.children).map((row) => [row.dataset.folderOfferId, row]));
-    for (const [id, row] of retainedRecipients) if (!members.some((member) => member.offerId === id)) row.remove();
-    for (const [recipientIndex, member] of members.entries()) {
-      const view = folderSync.shareView(status, member);
-      let row = retainedRecipients.get(member.offerId);
+    const sourceName = share.endpointRoster?.source.displayName
+      ?? (share.incoming ? folderPeerName(status, share.peerId) : ownDeviceName || "this server");
+    heading.children[1].textContent = `From ${sourceName} · ${timing}${share.linkSettings?.settings.paused ? " · Paused" : ""}`;
+    const recipientRows = folderSync.shareRecipients(status, members, folderDeviceId, ownDeviceName);
+    const retainedRecipients = new Map(Array.from(recipients.children).map((row) => [row.dataset.recipientKey, row]));
+    for (const [id, row] of retainedRecipients) if (!recipientRows.some((recipient) => recipient.key === id)) row.remove();
+    for (const [recipientIndex, recipient] of recipientRows.entries()) {
+      const member = recipient.member;
+      const view = member === null ? { kind: "info", text: "Receives this share" } : folderSync.shareView(status, member);
+      let row = retainedRecipients.get(recipient.key);
       if (!row) {
         row = document.createElement("li");
-        row.dataset.folderOfferId = member.offerId;
+        row.dataset.recipientKey = recipient.key;
         const identity = document.createElement("div");
         identity.className = "recipient-identity";
         identity.append(document.createElement("strong"), document.createElement("span"));
@@ -1317,16 +1324,16 @@ function renderFolderStatus(status) {
         controls.className = "recipient-actions";
         row.append(identity, controls);
       }
-      row.children[0].children[0].textContent = member.incoming ? (ownDeviceName || "This server") : folderPeerName(status, member.peerId);
+      row.children[0].children[0].textContent = recipient.displayName;
       const state = row.children[0].children[1];
       state.className = "folder-state";
       state.dataset.kind = view.kind;
       state.textContent = view.text;
       const controls = row.children[1];
-      const memberState = JSON.stringify([member.phase, member.expired, view.kind]);
+      const memberState = member === null ? "display-only" : JSON.stringify([member.offerId, member.incoming, member.phase, member.expired, view.kind]);
       if (controls.dataset.state !== memberState) {
         controls.replaceChildren();
-        renderFolderActions(controls, status, member, view);
+        if (member !== null) renderFolderActions(controls, status, member, view);
         controls.dataset.state = memberState;
       }
       if (recipients.children[recipientIndex] !== row) recipients.insertBefore(row, recipients.children[recipientIndex] ?? null);

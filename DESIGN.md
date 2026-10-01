@@ -2,8 +2,8 @@
 name: Covalent server console
 description: A quiet share manager with serif headings and restrained controls.
 colors:
-  primary: "#2563eb"
-  primary-hover: "#1d4ed8"
+  primary: "#475569"
+  primary-hover: "#334155"
   canvas: "#fafafa"
   surface: "#ffffff"
   sidebar: "#f4f4f5"
@@ -30,10 +30,10 @@ typography:
     fontSize: "15px"
     lineHeight: 1.6
 rounded:
-  control: "9px"
+  control: "999px"
   card: "14px"
 spacing:
-  control: "10px"
+  control: "6px"
   section: "24px"
   card: "28px"
   workspace: "48px"
@@ -42,8 +42,8 @@ components:
     backgroundColor: "{colors.primary}"
     textColor: "{colors.surface}"
     rounded: "{rounded.control}"
-    padding: "10px 17px"
-    height: "44px"
+    padding: "6px 16px"
+    height: "36px"
   button-primary-hover:
     backgroundColor: "{colors.primary-hover}"
   share-card:
@@ -60,7 +60,7 @@ Use the user’s supplied reference: pale sidebar, off-white canvas, serif headi
 
 ## Colors
 
-Use the existing Tailwind zinc palette for surfaces and typography. Blue identifies primary actions and focus. Emerald and red convey actual status. Dark mode follows the system preference using the existing zinc, blue, emerald, and red counterparts in `packaging/web/app.css`.
+Use the existing Tailwind zinc palette for surfaces and typography. Muted Tailwind slate-600 identifies primary actions and focus; slate-700 is the hover state. Emerald and red convey actual status. Dark mode follows the system preference: actions use slate-300, hover uses slate-200, and labels use slate-900. Zinc surfaces and semantic status colors retain their existing dark counterparts in `packaging/web/app.css`.
 
 ## Typography
 
@@ -76,11 +76,11 @@ Use borders and tonal surfaces. Cards have no shadows. The expanded mobile navig
 
 ## Shapes
 
-Cards use a 14px radius. Buttons use 9px, inputs 8px. Controls have a 44px minimum height. Focus uses a 3px blue outline with a 3px offset.
+Cards use a 14px radius. Action buttons and the Add recipient disclosure use a pill shape and a 36px minimum desktop height. Coarse-pointer devices retain 44px minimum action targets. Navigation retains 9px corners and 44px targets; inputs retain 8px corners and a 44px minimum height. Focus uses a 3px slate outline with a 3px offset.
 
 ## Components
 
-Shadcn Sidebar and Card are generated static HTML. Lucide icons use a consistent 1.75 stroke. Native disclosures reveal recipient setup, transfer details, and advanced settings. Routine status polling retains typed input and focus. Settings affect all recipients; removing a recipient keeps existing files.
+Shadcn Sidebar and Card are generated static HTML. Lucide icons use a consistent 1.75 stroke. Native disclosures reveal recipient setup, transfer details, and advanced settings. Every member sees the source and complete recipient list. Other recipients are informational rows on a receiver; its controls apply only to its own copy. Routine status polling retains typed input and focus. Settings affect all recipients; removing a recipient keeps existing files.
 
 ## Do's and Don'ts
 

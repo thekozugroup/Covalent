@@ -907,6 +907,73 @@ mod lifecycle_tests {
     }
 
     #[test]
+    fn endpoint_roster_requires_explicit_http_capability_and_stays_out_of_native_summary() {
+        use super::share_responses;
+        use crate::sync_engine::{EndpointRoster, RosterEndpoint, ShareSummary};
+        use axum::http::HeaderMap;
+        let source = DeviceIdentity::generate().public_identity().device_id;
+        let target = DeviceIdentity::generate().public_identity().device_id;
+        let roster = EndpointRoster {
+            revision: 1,
+            label: "Library".into(),
+            source: RosterEndpoint {
+                device_id: source,
+                display_name: "Source".into(),
+            },
+            destinations: vec![RosterEndpoint {
+                device_id: target,
+                display_name: "Receiver".into(),
+            }],
+        };
+        let summary = ShareSummary {
+            offer_id: uuid::Uuid::new_v4(),
+            superseded_offer_ids: Vec::new(),
+            folder_id: uuid::Uuid::new_v4(),
+            label: "Old label".into(),
+            endpoint_roster: Some(roster.clone()),
+            peer_id: source,
+            incoming: true,
+            pairing_upgrade_required: false,
+            link_policy: None,
+            link_settings: None,
+            link_run: None,
+            waiting_for_conditions: false,
+            phase: SharingPhase::Ready,
+            expires_at_unix_ms: None,
+            remote_removal_pending: false,
+        };
+        assert!(
+            serde_json::to_value(&summary)
+                .unwrap()
+                .get("endpointRoster")
+                .is_none()
+        );
+        for capability in [None, Some("0"), Some("1")] {
+            let mut headers = HeaderMap::new();
+            if let Some(value) = capability {
+                headers.insert("X-Covalent-Endpoint-Roster", value.parse().unwrap());
+            }
+            let responses = share_responses(std::slice::from_ref(&summary), &headers, |_| {
+                PeerConnectionState::Unknown
+            });
+            let response = serde_json::to_value(&responses[0]).unwrap();
+            if capability == Some("1") {
+                assert_eq!(
+                    response["endpointRoster"],
+                    serde_json::to_value(&roster).unwrap()
+                );
+                assert!(
+                    response["endpointRoster"]["destinations"][0]
+                        .get("offerId")
+                        .is_none()
+                );
+            } else {
+                assert!(response.get("endpointRoster").is_none());
+            }
+        }
+    }
+
+    #[test]
     fn pending_and_removed_shares_never_inherit_an_active_peer_connection() {
         for phase in [
             SharingPhase::Offered,
@@ -1040,6 +1107,7 @@ mod lifecycle_tests {
             incoming: false,
             link_policy: None,
             link_settings: None,
+            endpoint_roster: None,
             link_run: Some(LinkRunSummary {
                 generation: 3,
                 state_revision: 5,
@@ -1111,6 +1179,9 @@ struct ShareResponse {
     link_settings: Option<crate::sync_engine::LinkSettingsState>,
     #[cfg(unix)]
     link_run: Option<crate::sync_engine::LinkRunSummary>,
+    #[cfg(unix)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    endpoint_roster: Option<crate::sync_engine::EndpointRoster>,
     phase: &'static str,
     expires_at_unix_ms: Option<u64>,
     expired: bool,
@@ -1203,17 +1274,31 @@ pub(crate) async fn status(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<axum::Json<SyncStatusResponse>, ApiError> {
-    let mut response = status_without_display_names(State(state.clone()), headers).await?;
+    authorize(&state, &headers)?;
     let names = state
         .display_names
         .snapshot()
         .map_err(ApiError::from_core)?;
+    #[cfg(unix)]
+    if endpoint_roster_requested(&headers)
+        && let crate::sync_engine::FolderSyncRuntimeState::Ready(service) = &state.folder_sync
+    {
+        // Optional presentation refresh must not fail a healthy status read.
+        let _ = service.endpoint_roster_records(&names).await;
+    }
+    let mut response = status_without_display_names(State(state.clone()), headers).await?;
     for peer in &mut response.peers {
         if let Some(name) = names.peers.get(&peer.peer_id) {
             peer.display_name.clone_from(name);
         }
     }
     for share in &mut response.shares {
+        #[cfg(unix)]
+        if let Some(roster) = &mut share.endpoint_roster {
+            // Overlay only the response clone, retaining authenticated bytes.
+            roster.apply_display_names(share.folder_id, &names);
+            share.label.clone_from(&roster.label);
+        }
         if let Some(name) = names.folders.get(&share.folder_id) {
             share.label.clone_from(name);
         }
@@ -1261,7 +1346,7 @@ async fn status_without_display_names(
                     health_freshness: "neverObserved",
                     connection_freshness: "neverObserved",
                     peers: peer_responses(&config),
-                    shares: share_responses(&summaries, |_| {
+                    shares: share_responses(&summaries, &headers, |_| {
                         crate::sync_engine::PeerConnectionState::Unknown
                     }),
                     folders: Vec::new(),
@@ -1273,7 +1358,9 @@ async fn status_without_display_names(
         let config = state.engine.config().map_err(ApiError::from_core)?;
         let peers = peer_responses(&config);
         let (lifecycle, issue) = lifecycle_fields(snapshot.lifecycle());
-        let shares = share_responses(snapshot.shares(), |peer| snapshot.peer_connection(peer));
+        let shares = share_responses(snapshot.shares(), &headers, |peer| {
+            snapshot.peer_connection(peer)
+        });
         let folders = snapshot
             .folder_health()
             .iter()
@@ -1431,8 +1518,16 @@ fn peer_responses(config: &covalent_core::NodeConfig) -> Vec<PeerResponse> {
 }
 
 #[cfg(unix)]
+fn endpoint_roster_requested(headers: &HeaderMap) -> bool {
+    headers
+        .get("X-Covalent-Endpoint-Roster")
+        .is_some_and(|value| value == "1")
+}
+
+#[cfg(unix)]
 fn share_responses(
     summaries: &[crate::sync_engine::ShareSummary],
+    headers: &HeaderMap,
     connection: impl Fn(covalent_protocol::DeviceId) -> crate::sync_engine::PeerConnectionState,
 ) -> Vec<ShareResponse> {
     use crate::sync_engine::SharingPhase;
@@ -1449,6 +1544,9 @@ fn share_responses(
             link_policy: share.link_policy,
             link_settings: share.link_settings.clone(),
             link_run: share.link_run.clone(),
+            endpoint_roster: endpoint_roster_requested(headers)
+                .then(|| share.endpoint_roster.clone())
+                .flatten(),
             expires_at_unix_ms: share.expires_at_unix_ms,
             expired: share
                 .expires_at_unix_ms

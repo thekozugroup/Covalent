@@ -25,12 +25,14 @@ struct Pending {
 struct DeliveryCursor {
     acknowledged: BTreeSet<[u8; 32]>,
     last_peer: Option<DeviceId>,
+    roster_retry_after: BTreeMap<[u8; 32], u64>,
 }
 
 impl DeliveryCursor {
     fn batch(
         &mut self,
         deliveries: Vec<FolderShareDelivery>,
+        rosters_complete: bool,
         now: u64,
         busy_peers: &BTreeSet<DeviceId>,
         limit: usize,
@@ -53,13 +55,24 @@ impl DeliveryCursor {
             retained.insert(key);
             if !busy_peers.contains(&delivery.peer_transport.peer_id)
                 && !self.acknowledged.contains(&key)
+                && self
+                    .roster_retry_after
+                    .get(&key)
+                    .is_none_or(|retry| now >= *retry)
             {
                 per_peer
                     .entry(delivery.peer_transport.peer_id)
                     .or_insert(Pending { key, delivery });
             }
         }
-        self.acknowledged.retain(|key| retained.contains(key));
+        self.acknowledged.retain(|key| {
+            retained.contains(key)
+                || (!rosters_complete && self.roster_retry_after.contains_key(key))
+        });
+        if rosters_complete {
+            self.roster_retry_after
+                .retain(|key, _| retained.contains(key));
+        }
         let peers = per_peer.keys().copied().collect::<Vec<_>>();
         if peers.is_empty() {
             return Vec::new();
@@ -72,6 +85,15 @@ impl DeliveryCursor {
             let peer = peers[(start + offset) % peers.len()];
             self.last_peer = Some(peer);
             if let Some(pending) = per_peer.remove(&peer) {
+                if matches!(
+                    pending.delivery.record,
+                    FolderShareRecord::EndpointRoster(_)
+                ) {
+                    // Legacy peers reject this optional operation. Keep retries
+                    // independent and slow, while ordinary records stay first.
+                    self.roster_retry_after
+                        .insert(pending.key, now.saturating_add(300_000));
+                }
                 selected.push(pending);
             }
         }
@@ -101,6 +123,7 @@ fn record_completion(
 pub(crate) async fn run(
     engine: Arc<Engine>,
     service: Arc<FolderSyncService>,
+    display_names: Arc<crate::display_names::DisplayNameStore>,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut interval = tokio::time::interval(CADENCE);
@@ -148,8 +171,17 @@ pub(crate) async fn run(
                     records = service.outbound_records() => records,
                 };
                 let Ok(records) = records else { continue; };
+                let mut records = records.into_value();
+                let mut rosters_complete = false;
+                if let Ok(names) = display_names.snapshot()
+                    && let Ok(rosters) = service.endpoint_roster_records(&names).await
+                {
+                    records.extend(rosters);
+                    rosters_complete = true;
+                }
                 let batch = cursor.batch(
-                    records.into_value(),
+                    records,
+                    rosters_complete,
                     crate::now_unix_ms(),
                     &busy_peers,
                     capacity,
@@ -222,6 +254,11 @@ async fn deliver(
         return Some(pending.key);
     }
     let (operation, acceptance_id, removal_ack) = match pending.delivery.record {
+        FolderShareRecord::EndpointRoster(commit) => (
+            FolderControlOperation::CommitEndpointRoster(commit),
+            None,
+            None,
+        ),
         FolderShareRecord::SettingsCommit(commit) => (
             FolderControlOperation::CommitLinkSettings(commit),
             None,
@@ -308,13 +345,134 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_endpoint_roster_retries_slowly_without_blocking_new_control_records() {
+        use crate::sync_engine::{EndpointRoster, EndpointRosterCommit, RosterEndpoint};
+        let peer = DeviceId::from_uuid(Uuid::from_u128(1));
+        let source = DeviceId::from_uuid(Uuid::from_u128(2));
+        let normal = delivery(peer, Uuid::new_v4());
+        let mut metadata = normal.clone();
+        metadata.record = FolderShareRecord::EndpointRoster(EndpointRosterCommit {
+            source_id: source,
+            target_id: peer,
+            folder_id: Uuid::new_v4(),
+            offer_id: Uuid::new_v4(),
+            roster: EndpointRoster {
+                revision: 1,
+                label: "Files".into(),
+                source: RosterEndpoint {
+                    device_id: source,
+                    display_name: "Source".into(),
+                },
+                destinations: vec![RosterEndpoint {
+                    device_id: peer,
+                    display_name: "Receiver".into(),
+                }],
+            },
+        });
+        let mut cursor = DeliveryCursor::default();
+        let first = cursor.batch(
+            vec![normal.clone(), metadata.clone()],
+            true,
+            1,
+            &BTreeSet::new(),
+            4,
+        );
+        assert!(matches!(
+            first[0].delivery.record,
+            FolderShareRecord::Commit { .. }
+        ));
+        cursor.acknowledged.insert(first[0].key);
+        let first_roster = cursor.batch(
+            vec![normal.clone(), metadata.clone()],
+            true,
+            2,
+            &BTreeSet::new(),
+            4,
+        );
+        assert!(matches!(
+            first_roster[0].delivery.record,
+            FolderShareRecord::EndpointRoster(_)
+        ));
+        // No acknowledgement: old peer rejected the unknown operation.
+        assert!(
+            cursor
+                .batch(vec![normal.clone()], false, 5001, &BTreeSet::new(), 4)
+                .is_empty(),
+            "temporary roster collection failure preserves retry state"
+        );
+        assert!(
+            cursor
+                .batch(
+                    vec![normal.clone(), metadata.clone()],
+                    true,
+                    5002,
+                    &BTreeSet::new(),
+                    4
+                )
+                .is_empty()
+        );
+        let next_control = delivery(peer, Uuid::new_v4());
+        let next = cursor.batch(
+            vec![normal.clone(), next_control, metadata.clone()],
+            true,
+            5003,
+            &BTreeSet::new(),
+            4,
+        );
+        assert!(matches!(
+            next[0].delivery.record,
+            FolderShareRecord::Commit { .. }
+        ));
+        assert_eq!(
+            cursor
+                .batch(
+                    vec![normal.clone(), metadata.clone()],
+                    true,
+                    300002,
+                    &BTreeSet::new(),
+                    4
+                )
+                .len(),
+            1
+        );
+        cursor.acknowledged.insert(first_roster[0].key);
+        assert!(
+            cursor
+                .batch(vec![normal.clone()], false, 300003, &BTreeSet::new(), 4)
+                .is_empty()
+        );
+        assert!(
+            cursor
+                .batch(
+                    vec![normal.clone(), metadata.clone()],
+                    true,
+                    600003,
+                    &BTreeSet::new(),
+                    4
+                )
+                .is_empty(),
+            "temporary roster collection failure also preserves acknowledgement"
+        );
+        if let FolderShareRecord::EndpointRoster(commit) = &mut metadata.record {
+            commit.roster.revision += 1;
+        }
+        assert_eq!(
+            cursor
+                .batch(vec![normal, metadata], true, 300003, &BTreeSet::new(), 4)
+                .len(),
+            1,
+            "a changed roster is a fresh delivery"
+        );
+    }
+
+    #[test]
     fn offline_peers_do_not_starve_later_peers_and_cold_restart_replays_durable_records() {
         let deliveries = (1..=8)
             .map(|i| delivery(DeviceId::from_uuid(Uuid::from_u128(i)), Uuid::new_v4()))
             .collect::<Vec<_>>();
         let mut cursor = DeliveryCursor::default();
-        let first = cursor.batch(deliveries.clone(), 1, &BTreeSet::new(), usize::MAX);
-        let second = cursor.batch(deliveries.clone(), 2, &BTreeSet::new(), 4);
+        let first = cursor.batch(deliveries.clone(), true, 1, &BTreeSet::new(), usize::MAX);
+        let second = cursor.batch(deliveries.clone(), true, 2, &BTreeSet::new(), 4);
         assert_eq!(first.len(), 4);
         assert_eq!(second.len(), 4);
         let first_peers = first
@@ -331,16 +489,20 @@ mod tests {
             .extend(first.iter().chain(second.iter()).map(|item| item.key));
         assert!(
             cursor
-                .batch(deliveries.clone(), 3, &BTreeSet::new(), 4)
+                .batch(deliveries.clone(), true, 3, &BTreeSet::new(), 4)
                 .is_empty()
         );
         assert_eq!(
             DeliveryCursor::default()
-                .batch(deliveries, 4, &BTreeSet::new(), 4)
+                .batch(deliveries, true, 4, &BTreeSet::new(), 4)
                 .len(),
             4
         );
-        assert!(cursor.batch(Vec::new(), 5, &BTreeSet::new(), 4).is_empty());
+        assert!(
+            cursor
+                .batch(Vec::new(), true, 5, &BTreeSet::new(), 4)
+                .is_empty()
+        );
         assert!(cursor.acknowledged.is_empty());
     }
 
@@ -355,7 +517,7 @@ mod tests {
             delivery(ready, Uuid::from_u128(4)),
         ];
         let mut cursor = DeliveryCursor::default();
-        let first = cursor.batch(records.clone(), 1, &BTreeSet::new(), 4);
+        let first = cursor.batch(records.clone(), true, 1, &BTreeSet::new(), 4);
         assert_eq!(first.len(), 2);
         assert_eq!(
             first
@@ -371,7 +533,7 @@ mod tests {
             .find(|pending| pending.delivery.peer_transport.peer_id == ready)
             .unwrap();
         cursor.acknowledged.insert(ready_first.key);
-        let next = cursor.batch(records, 2, &BTreeSet::from([slow]), 3);
+        let next = cursor.batch(records, true, 2, &BTreeSet::from([slow]), 3);
         assert_eq!(next.len(), 1);
         assert_eq!(next[0].delivery.peer_transport.peer_id, ready);
     }

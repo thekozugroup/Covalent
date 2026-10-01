@@ -685,6 +685,27 @@ impl FolderSyncService {
         Ok(reconcile_committed(&self.shared, &mut inner).await)
     }
 
+    // Presentation updates do not stop/restart workers or change transfer health.
+    pub(crate) async fn endpoint_roster_records(
+        &self,
+        names: &crate::display_names::DisplayNames,
+    ) -> Result<Vec<super::FolderShareDelivery>, FolderSyncServiceError> {
+        self.try_inner()?
+            .journal
+            .endpoint_roster_records(names)
+            .map_err(map_journal_error)
+    }
+
+    pub async fn receive_endpoint_roster(
+        &self,
+        commit: &super::EndpointRosterCommit,
+    ) -> Result<(), FolderSyncServiceError> {
+        self.try_inner()?
+            .journal
+            .receive_endpoint_roster(commit)
+            .map_err(map_journal_error)
+    }
+
     /// Read durable retransmission records while reconciling any intervening
     /// revocation with the owned worker before returning them to the dialer.
     pub async fn outbound_records(

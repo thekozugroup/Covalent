@@ -53,12 +53,13 @@ pub use service::{
     PeerConnectionState,
 };
 pub use sharing::{
-    AndroidLinkConditions, FolderLinkSettings, FolderRemovalNotice, FolderShareDelivery,
-    FolderShareRecord, FolderSharingJournal, LINK_RUN_DEADLINE_MS, LinkCadence, LinkRunAdmission,
-    LinkRunCommit, LinkRunDestinationResult, LinkRunDestinationState, LinkRunDestinationSummary,
-    LinkRunPhase, LinkRunRejection, LinkRunRejectionReason, LinkRunReport, LinkRunRequest,
-    LinkRunRequestSummary, LinkRunState, LinkRunSummary, LinkRunWorkItem, LinkSettingsCommit,
-    LinkSettingsRequest, LinkSettingsState, MAX_SCHEDULE_INTERVAL_MINUTES,
-    MIN_SCHEDULE_INTERVAL_MINUTES, ShareSummary, SharingError, SharingPhase,
+    AndroidLinkConditions, EndpointRoster, EndpointRosterCommit, FolderLinkSettings,
+    FolderRemovalNotice, FolderShareDelivery, FolderShareRecord, FolderSharingJournal,
+    LINK_RUN_DEADLINE_MS, LinkCadence, LinkRunAdmission, LinkRunCommit, LinkRunDestinationResult,
+    LinkRunDestinationState, LinkRunDestinationSummary, LinkRunPhase, LinkRunRejection,
+    LinkRunRejectionReason, LinkRunReport, LinkRunRequest, LinkRunRequestSummary, LinkRunState,
+    LinkRunSummary, LinkRunWorkItem, LinkSettingsCommit, LinkSettingsRequest, LinkSettingsState,
+    MAX_SCHEDULE_INTERVAL_MINUTES, MIN_SCHEDULE_INTERVAL_MINUTES, RosterEndpoint, ShareSummary,
+    SharingError, SharingPhase,
 };
 pub use state::{EngineStateError, EngineStateStore};

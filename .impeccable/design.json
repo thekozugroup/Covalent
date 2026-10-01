@@ -33,9 +33,9 @@
       "name": "Primary button",
       "kind": "button",
       "refersTo": "button-primary",
-      "description": "Primary share and pairing action.",
+      "description": "Pill-shaped share and pairing action; 36px desktop and 44px coarse-pointer target.",
       "html": "<button class=\"button-primary\">Add recipient</button>",
-      "css": ".button-primary { min-height:44px; padding:10px 17px; border:1px solid transparent; border-radius:9px; background:#2563eb; color:#ffffff; font:550 15px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; } .button-primary:hover { background:#1d4ed8; } .button-primary:focus-visible { outline:3px solid #2563eb; outline-offset:3px; }"
+      "css": ".button-primary { min-height:36px; padding:6px 16px; border:1px solid transparent; border-radius:999px; background:#475569; color:#ffffff; font:550 15px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; } .button-primary:hover { background:#334155; } .button-primary:focus-visible { outline:3px solid #475569; outline-offset:3px; } @media (any-pointer:coarse) { .button-primary { min-height:44px; } } @media (prefers-color-scheme:dark) { .button-primary { background:#cbd5e1; color:#0f172a; } .button-primary:hover { background:#e2e8f0; } .button-primary:focus-visible { outline-color:#cbd5e1; } }"
     }
   ],
   "narrative": {
@@ -44,7 +44,8 @@
       "Pale zinc surfaces",
       "Serif headings",
       "Native controls",
-      "Visible recipient actions"
+      "Visible recipient actions",
+      "Muted slate pill actions"
     ],
     "rules": [
       {

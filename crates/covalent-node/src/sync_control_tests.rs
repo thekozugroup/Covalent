@@ -141,7 +141,7 @@ fn signed_request_and_response_bind_identity_nonce_digest_and_certificate() {
 }
 
 #[test]
-fn link_settings_are_bound_to_the_source_member_revision_and_explicit_protocol() {
+fn link_settings_and_endpoint_roster_bind_source_member_and_explicit_protocol() {
     let source = test_engine();
     let target = test_engine();
     let outsider = test_engine();
@@ -170,6 +170,24 @@ fn link_settings_are_bound_to_the_source_member_revision_and_explicit_protocol()
             change_id: uuid::Uuid::new_v4(),
             changed_by: target.engine.device_id(),
             accepted_at_unix_ms: 1,
+        }),
+        FolderControlOperation::CommitEndpointRoster(crate::sync_engine::EndpointRosterCommit {
+            source_id: source.engine.device_id(),
+            target_id: target.engine.device_id(),
+            folder_id: uuid::Uuid::new_v4(),
+            offer_id: uuid::Uuid::new_v4(),
+            roster: crate::sync_engine::EndpointRoster {
+                revision: 1,
+                label: "Files".into(),
+                source: crate::sync_engine::RosterEndpoint {
+                    device_id: source.engine.device_id(),
+                    display_name: "Source".into(),
+                },
+                destinations: vec![crate::sync_engine::RosterEndpoint {
+                    device_id: target.engine.device_id(),
+                    display_name: "Receiver".into(),
+                }],
+            },
         }),
     ];
     assert_eq!(
@@ -203,6 +221,7 @@ fn link_settings_are_bound_to_the_source_member_revision_and_explicit_protocol()
                 settings.expected_revision += 1
             }
             FolderControlOperation::CommitLinkSettings(settings) => settings.revision += 1,
+            FolderControlOperation::CommitEndpointRoster(commit) => commit.roster.revision += 1,
             _ => unreachable!(),
         }
         assert_eq!(verify(&altered), Err(FolderControlError::Rejected));
@@ -215,6 +234,9 @@ fn link_settings_are_bound_to_the_source_member_revision_and_explicit_protocol()
             }
             FolderControlOperation::CommitLinkSettings(settings) => {
                 settings.source_id = outsider.engine.device_id()
+            }
+            FolderControlOperation::CommitEndpointRoster(commit) => {
+                commit.source_id = outsider.engine.device_id()
             }
             _ => unreachable!(),
         }

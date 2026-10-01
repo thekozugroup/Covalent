@@ -28,6 +28,9 @@ use uuid::Uuid;
 use super::config::{EngineDeviceId, EngineFolderConfig, EngineFolderRole, EnginePeerConfig};
 use super::{EngineInstallation, EngineSessionSettings, EngineStateStore};
 
+mod endpoint_roster;
+pub use endpoint_roster::{EndpointRoster, EndpointRosterCommit, RosterEndpoint};
+
 mod link_settings;
 pub use link_settings::{
     AndroidLinkConditions, FolderLinkSettings, LinkCadence, LinkSettingsCommit,
@@ -113,6 +116,9 @@ pub struct ShareSummary {
     pub superseded_offer_ids: Vec<Uuid>,
     pub folder_id: Uuid,
     pub label: String,
+    // Opt-in HTTP presentation only; preserve strict native summary decoders.
+    #[serde(skip)]
+    pub endpoint_roster: Option<EndpointRoster>,
     pub peer_id: DeviceId,
     pub incoming: bool,
     /// This retained link predates authenticated rclone transport or one-way policy.
@@ -165,6 +171,7 @@ pub enum FolderShareRecord {
     RunRequest(LinkRunRequest),
     RunCommit(LinkRunCommit),
     RunReport(LinkRunReport),
+    EndpointRoster(EndpointRosterCommit),
 }
 
 #[derive(Clone)]
@@ -236,6 +243,8 @@ struct Snapshot {
     link_settings: BTreeMap<Uuid, LinkSettingsState>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     link_runs: BTreeMap<Uuid, link_runs::LinkRunLinkState>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    endpoint_rosters: BTreeMap<Uuid, EndpointRoster>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -402,6 +411,7 @@ impl FolderSharingJournal {
             completed_peer_address_refreshes: BTreeMap::new(),
             link_settings: BTreeMap::new(),
             link_runs: BTreeMap::new(),
+            endpoint_rosters: BTreeMap::new(),
         };
         validate_snapshot(&snapshot, &engine, &installation)?;
         let payload = serde_json::to_vec(&snapshot).map_err(|_| SharingError::InvalidState)?;
@@ -887,6 +897,14 @@ impl FolderSharingJournal {
                     .collect(),
                 folder_id: share.offer.folder_id,
                 label: share.offer.label.clone(),
+                endpoint_roster: (!share.removed)
+                    .then(|| {
+                        self.snapshot
+                            .endpoint_rosters
+                            .get(&share.offer.folder_id)
+                            .cloned()
+                    })
+                    .flatten(),
                 peer_id: share.peer_identity.device_id,
                 incoming: share.offer.target_device_id == self.engine.device_id(),
                 pairing_upgrade_required: self.pairing_upgrade_required(share),
@@ -968,6 +986,7 @@ impl FolderSharingJournal {
                     superseded_offer_ids: removed.superseded_offer_ids.clone(),
                     folder_id: removed.folder_id,
                     label: removed.label.clone(),
+                    endpoint_roster: None,
                     peer_id: removed.peer_id,
                     incoming: removed.incoming,
                     pairing_upgrade_required: false,
@@ -2292,6 +2311,7 @@ impl FolderSharingJournal {
             link_runs::current_unix_ms(),
         )?;
         compact_removed(&mut candidate);
+        endpoint_roster::reconcile(&mut candidate);
         link_settings::reconcile_link_states(&mut candidate);
         link_runs::reconcile_run_states(&mut candidate);
         validate_snapshot(&candidate, &self.engine, &self.installation)?;
@@ -2321,6 +2341,7 @@ fn validate_snapshot(
     engine: &Engine,
     installation: &EngineInstallation,
 ) -> Result<(), SharingError> {
+    endpoint_roster::validate(snapshot)?;
     link_settings::validate_link_states(snapshot)?;
     link_runs::validate_run_states(snapshot)?;
     let advertised = snapshot

@@ -664,6 +664,7 @@ async fn supervise_runtime(
             Some(tokio::spawn(crate::sync_delivery::run(
                 Arc::clone(&state.engine),
                 Arc::clone(service),
+                Arc::clone(&state.display_names),
                 shutdown.clone(),
             )))
         }

@@ -78,6 +78,7 @@ pub enum FolderControlOperation {
     RequestLinkRun(crate::sync_engine::LinkRunRequest),
     CommitLinkRun(crate::sync_engine::LinkRunCommit),
     ReportLinkRun(crate::sync_engine::LinkRunReport),
+    CommitEndpointRoster(crate::sync_engine::EndpointRosterCommit),
     ProbeAddress {
         requester_id: DeviceId,
         target_id: DeviceId,
@@ -98,7 +99,8 @@ impl FolderControlOperation {
             | Self::CommitLinkSettings(_)
             | Self::RequestLinkRun(_)
             | Self::CommitLinkRun(_)
-            | Self::ReportLinkRun(_) => true,
+            | Self::ReportLinkRun(_)
+            | Self::CommitEndpointRoster(_) => true,
             Self::SendRemoval(_) | Self::ProbeAddress { .. } => false,
         };
         if one_way {
@@ -119,6 +121,7 @@ impl FolderControlOperation {
             Self::RequestLinkRun(request) => request.requester_id,
             Self::CommitLinkRun(commit) => commit.source_id,
             Self::ReportLinkRun(report) => report.reporter_id,
+            Self::CommitEndpointRoster(commit) => commit.source_id,
             Self::ProbeAddress { requester_id, .. } => *requester_id,
         }
     }
@@ -135,6 +138,7 @@ impl FolderControlOperation {
             Self::RequestLinkRun(request) => Some(request.source_id),
             Self::CommitLinkRun(commit) => Some(commit.target_id),
             Self::ReportLinkRun(report) => Some(report.source_id),
+            Self::CommitEndpointRoster(commit) => Some(commit.target_id),
             Self::ProbeAddress { target_id, .. } => Some(*target_id),
         }
     }
@@ -709,6 +713,13 @@ async fn apply_remote(
     operation: FolderControlOperation,
 ) -> FolderControlPayload {
     match operation {
+        FolderControlOperation::CommitEndpointRoster(commit) => {
+            match service.receive_endpoint_roster(&commit).await {
+                Ok(()) => FolderControlPayload::Ack,
+                Err(crate::sync_engine::FolderSyncServiceError::Busy) => FolderControlPayload::Busy,
+                Err(_) => FolderControlPayload::Rejected,
+            }
+        }
         FolderControlOperation::SendOffer(offer) => {
             let Ok(now) = now_ms() else {
                 return FolderControlPayload::NeedsAttention;

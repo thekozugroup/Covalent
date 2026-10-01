@@ -259,7 +259,7 @@
     const decoded = {
       peerId: uuid(body.peerId, "Choose a currently paired device."),
       folderId: uuid(body.folderId),
-      label: string(body.label, 120, "Enter a folder name up to 120 characters.").trim(),
+      label: string(body.label, 256, "Enter a folder name up to 256 characters.").trim(),
       ...(Object.hasOwn(body, "selectedRoot") ? { selectedRoot: selectedRoot(body.selectedRoot) } : {}),
       linkPolicy: linkPolicy(body.linkPolicy),
     };
@@ -325,6 +325,30 @@
     });
   }
 
+  function endpointRoster(value) {
+    if (value === undefined || value === null) return null;
+    const message = "The node returned an invalid share recipient list.";
+    const roster = object(value, message);
+    const endpoint = (value) => {
+      const item = object(value, message);
+      return Object.freeze({ deviceId: uuid(item.deviceId, message), displayName: string(item.displayName, 120, message) });
+    };
+    const source = endpoint(roster.source);
+    const destinations = boundedArray(roster.destinations, message).map(endpoint);
+    if (destinations.length === 0 || destinations.length > 128 || roster.revision === 0) throw guidance(message);
+    const ids = new Set([source.deviceId]);
+    for (const destination of destinations) {
+      if (ids.has(destination.deviceId)) throw guidance(message);
+      ids.add(destination.deviceId);
+    }
+    return Object.freeze({
+      revision: unsigned(roster.revision, message),
+      label: string(roster.label, 256, message),
+      source,
+      destinations: Object.freeze(destinations),
+    });
+  }
+
   function requireStatus(value) {
     const status = object(value, "The node returned an invalid folder status.");
     const connectionFreshness = Object.prototype.hasOwnProperty.call(status, "connectionFreshness")
@@ -376,12 +400,13 @@
       return Object.freeze({
         offerId: uuid(share.offerId),
         folderId: uuid(share.folderId),
-        label: string(share.label, 120, "The node returned an invalid folder name."),
+        label: string(share.label, 256, "The node returned an invalid folder name."),
         peerId: uuid(share.peerId, "The node returned an invalid paired device."),
         incoming: share.incoming,
         linkPolicy: policy,
         linkSettings: settings,
         linkRun: run,
+        endpointRoster: endpointRoster(share.endpointRoster),
         phase: share.phase,
         expiresAtUnixMs: share.expiresAtUnixMs ?? null,
         // The server owns expiry. Browser clock arithmetic must never override it.
@@ -404,7 +429,7 @@
     }
     const links = new Map();
     for (const share of shares.filter((item) => item.linkSettings !== null && item.phase !== "removed")) {
-      const encoded = JSON.stringify([share.label, share.linkPolicy, share.linkSettings, share.linkRun]);
+      const encoded = JSON.stringify([share.label, share.linkPolicy, share.linkSettings, share.linkRun, share.endpointRoster]);
       if (links.has(share.folderId) && links.get(share.folderId) !== encoded) {
         throw guidance("The node returned different settings for members of one link.");
       }
@@ -443,8 +468,11 @@
   function validateLocalLinkSettings(status, localDeviceId) {
     for (const share of status.shares) {
       const state = share.linkSettings;
-      if (state === null) continue;
       const sourceId = share.incoming ? share.peerId : localDeviceId;
+      if (share.endpointRoster !== null && share.endpointRoster.source.deviceId !== sourceId) {
+        throw guidance("The node returned a recipient list for another source.");
+      }
+      if (state === null) continue;
       if (!share.incoming && !state.confirmed) {
         throw guidance("The node returned unconfirmed source link settings.");
       }
@@ -498,6 +526,25 @@
     return settings.settings.cadence.mode === "manual"
       ? Object.freeze({ kind: "ready", text: "Ready for Run Now" })
       : Object.freeze({ kind: "waiting", text: "Waiting for the next scheduled run" });
+  }
+
+  function shareRecipients(status, members, localDeviceId, ownName) {
+    const share = members.find((member) => member.phase !== "removed") ?? members[0];
+    const name = (member) => member.incoming ? (ownName || "This server")
+      : status.peers.find((peer) => peer.peerId === member.peerId)?.displayName ?? "Confirmed paired device unavailable";
+    const rows = (share.endpointRoster?.destinations ?? []).map((destination) => {
+      const member = members.find((item) => share.incoming
+        ? item.incoming && destination.deviceId === localDeviceId
+        : !item.incoming && item.peerId === destination.deviceId) ?? null;
+      return { key: destination.deviceId, displayName: destination.displayName, member };
+    });
+    // Keep local invitations and pending removals visible even before roster propagation.
+    for (const member of members) {
+      if (!rows.some((row) => row.member === member)) {
+        rows.push({ key: member.offerId, displayName: name(member), member });
+      }
+    }
+    return rows;
   }
 
   function groupShares(shares) {
@@ -1246,5 +1293,6 @@
     shareView,
     statusSummary,
     groupShares,
+    shareRecipients,
   });
 });
