@@ -196,11 +196,12 @@ internal class SafWebDavServer(
     }
 
     private fun readFile(path: List<String>, request: Request, output: OutputStream, includeBody: Boolean) {
-        val (target, source) = synchronized(treeLock) {
+        val target: Node
+        val source = synchronized(treeLock) {
             val tree = DirectTree(resolver, treeUri)
-            val target = tree.require(path)
+            target = tree.require(path)
             if (target.directory || target.size == null) throw Conflict()
-            target to if (includeBody) {
+            if (includeBody) {
                 resolver.openInputStream(tree.uri(target)) ?: throw SecurityException()
             } else null
         }
