@@ -106,7 +106,10 @@ The owner set the release threshold on 2026-09-20: "as long as we know the apps 
 
 Accept existing working-app evidence for macOS, Android on an emulator, and Docker on both supported architectures, together with at least one real device-pair sync. The completed Atmos-to-Waypoint and Atmos-to-Mac checks satisfy the sync-combination requirement. Do not require every device pairing, physical Android testing, or repeated exact-package UI journeys unless a material code change invalidates the relevant evidence. Android emulator coverage is not a physical-device claim. Retain historical test failures and known limitations honestly; accepting the reduced threshold does not turn a failed test into a pass.
 
-The [completion ledger](../release/completion-progress.md) retains ten checks under this current scope. Product behavior and safety requirements remain; the release threshold supersedes older demands for exhaustive or repeated platform acceptance. Remaining Mac interaction uses computer use, not XCTest. VoiceOver remains excluded. The later Docker/Unraid web UI request reopens server-interface acceptance; publication waits for that work and its relevant verification. Final package identity, provenance, publication, installation guidance, and owned cleanup still need completion.
+The [completion ledger](../release/completion-progress.md) retains ten checks under this current scope. Product behavior and safety requirements remain; the release threshold supersedes older demands for exhaustive or repeated platform acceptance. Remaining Mac interaction uses computer use, not XCTest. VoiceOver remains excluded. The later Docker/Unraid web UI request required additional server-interface
+acceptance. The completion ledger records that acceptance, package publication,
+and owned cleanup for v0.2.1. Future changes require relevant verification;
+publication is not evidence for every device pairing or a new local build.
 
 Establish stability, then measure idle resources and representative transfer performance. Optimize measured problems. Put builds and test data in dedicated temporary directories. Retain compact evidence and release outputs; remove owned processes, fixtures, obsolete builds, and caches when finished. Never disturb unrelated Atmos services or user files.
 

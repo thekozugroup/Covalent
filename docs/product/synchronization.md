@@ -5,9 +5,11 @@ never shares files: select a source folder, invite a paired device, then choose
 and accept its destination folder on that device. A destination does not send
 its contents back to the source or to another destination.
 
-This is the current development contract. The complete product is not yet
-released; see the [acceptance ledger](../release/completion-progress.md) for
-verified behavior and remaining failures. The original two-way design remains
+This is the current product contract. v0.2.1 is published for personal use;
+see the [acceptance ledger](../release/completion-progress.md) for verified
+behavior, the accepted release threshold, and historical failures. Publication
+does not establish every device pairing, production signing, or physical-phone
+validation. The original two-way design remains
 in Git history at checkpoint 46. Existing two-way records keep their original
 behavior and are explicitly labeled as legacy; they are not silently converted.
 
@@ -34,7 +36,8 @@ Manual, scheduled and continuous operation use the link's shared settings.
 Android also applies Wi-Fi and charging conditions within its background
 execution limits. Batch workers stop between runs; status distinguishes waiting,
 active transfer, paused, and errors. These runtime journeys pass the checks
-recorded in the acceptance ledger; final native app and release checks remain.
+recorded in the acceptance ledger. New builds still require the checks relevant
+to their changes; existing release acceptance is not new-build verification.
 
 ## Collections and access
 

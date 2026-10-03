@@ -1,78 +1,97 @@
 # Covalent
 
-Covalent is a native, self-hosted wrapper around rclone for one-way file links: choose a source, pair destinations, configure the link once, and monitor transfers. macOS, Android, and Docker/Unraid are the supported targets.
+**One-way file transfers between your own devices.**
 
-**v0.2.1 release; the rclone switch is complete.** Real one-way transfers,
-fan-out, deletion choices, shared settings, and scheduled runs pass. Follow the
-[current product requirements](docs/product/requirements.md) and [verified
-progress](docs/release/completion-progress.md). Earlier backup features remain
-as legacy support.
+Covalent pairs your devices, copies a source folder to one or more destinations,
+and shows transfer status. Use it to send phone photos to a server, copy a Mac
+folder to another device, or collect each family member's files in separate
+folders. Destination copies remain ordinary files you can open with other apps.
+No hosted account or subscription is required.
 
-## Start here
+![Covalent's file links and transfer status](docs/website/screenshots/01-share-overview.jpg)
 
-**[Create your first one-way link](docs/getting-started-links.md)** is the
-primary setup guide. Pair devices, choose a source folder, review deletion
-settings, then authorize one or more destinations. It describes the current
-release and what is verified.
+Covalent uses rclone for file transfers, with native macOS and Android apps and
+a web console for Docker and Unraid. It manages pairing, folder permissions,
+shared settings, and transfer timing around that engine.
 
-The previous [backup setup guide](docs/getting-started.md) is a legacy
-reference for the superseded backup workflow.
+## Get started
 
-Current personal-use paths do not require an Apple Developer ID or Android
-production signing:
+The current published release is **[v0.2.1](https://github.com/thekozugroup/Covalent/releases/tag/v0.2.1)**.
+Download packages and their checksums from that release, then follow your
+platform's installation guide:
 
-- Apple Silicon macOS uses the verified ad-hoc app build.
-- Android uses the published debug-signed personal APK.
-- An always-on server uses the published Docker image pinned by immutable
-  digest.
-
-## Supported platforms
-
-Covalent supports Unraid, macOS, and Android. These are the Tier 1 platforms,
-and each must pass its production gates before a release.
-
-| Tier 1 platform | Delivery | Release policy |
+| Platform | Installation | Availability |
 | --- | --- | --- |
-| Unraid | Docker container, `linux/amd64` and `linux/arm64` | Must pass production gates before a release. |
-| macOS on Apple Silicon | arm64-only ad-hoc app bundle for personal use | Must pass product and package gates; Developer ID/notarization is excluded. |
-| Android | Debug-signed APK for personal use | Must pass product and install gates; production signing is deferred. |
+| macOS 15 or later, Apple Silicon | [Mac setup](docs/platform/macos.md) | Personal-use app; ad-hoc signed and not notarized. |
+| Android | [Android setup](docs/platform/android.md) | Debug-signed personal APK; release testing uses Android 17 / API 37 on an emulator. |
+| Unraid | [Unraid setup](docs/platform/unraid.md) | Docker template; Community Applications listing is not yet available. |
+| Other Docker hosts | [Docker setup](packaging/docker/README.md#release-installation) | Linux `amd64` and `arm64` images. |
 
-**iOS and Windows are not supported.** Neither has a release client or CI lane.
+These are early, pre-1.0 personal-use packages. Mac installation may require a
+one-time Gatekeeper exception after verification; never disable Gatekeeper
+globally. Android production signing and physical-phone validation remain
+outstanding. The Android manifest allows API 26 and later, but older versions
+are not release-tested. Intel Macs, iOS, and Windows have no supported client.
+Do not use the historical v0.1.0 packages for a current installation.
 
-Hosted accounts, automatic replica placement, and restores outside an authorized root are also out of scope.
+After installation, **[Create your first one-way link](docs/getting-started-links.md)**:
 
-## Release status
+1. Pair two devices and confirm that their displayed codes match.
+2. Choose a source folder, destination device, and transfer timing. Review the
+   deletion choices before confirming.
+3. On the receiving device, choose its destination folder and accept the link.
+4. Use **Run Now** with a small test folder. Add more destinations when ready.
 
-`v0.2.1` is the current release for the KEK and trusted-claim contract. Use
-its verified CLI archives, personal-use Mac and Android packages, and immutable
-container digest. The public `v0.1.0` alpha is historical evidence only and
-predates this contract; do not deploy its Docker/Unraid image or use it for
-Atlas. No Android artifact is published in v0.1.0.
+Server installation needs an explicitly provisioned encryption key and HTTPS
+for network management. Follow the Docker guide and, when needed, the
+[verified CLI install guide](docs/release/cli-install.md). Keep server keys and
+access tokens private; do not use a curl-pipe-shell installer or bypass TLS.
 
-- Docker and Unraid: use `ghcr.io/thekozugroup/covalent@sha256:393f8a0dafa7f17d8ad964d501f3d33668d547889dc493080e042489ee3e1677` and the matching v0.2.1 template.
-- macOS on Apple Silicon: download the v0.2.1 ad-hoc-signed, non-notarized personal-use package.
-- Atlas claim client: use the verified v0.2.1 archive in the [CLI install guide](docs/release/cli-install.md); never use a curl-pipe-shell installer.
-- Android: download the v0.2.1 debug-signed personal APK from the [Android setup guide](docs/platform/android.md). Production Android signing is deferred.
+## How links behave
 
-Primary setup belongs in [the one-way link guide](docs/getting-started-links.md).
-The [backup setup guide](docs/getting-started.md) remains a legacy reference.
-Per-release provenance lives in [docs/release/notes](docs/release/notes), and
-maintainer-only publishing detail lives in [docs/release/publishing.md](docs/release/publishing.md).
+Each link has one source and one or more destinations. File content travels
+from the source to its destinations. Destination changes never modify the
+source or another destination. An offline destination does not stop the others.
+For a shared collection, give each contributor a separate child folder;
+Covalent rejects overlapping link roots.
 
-## Repository map
+Choose **Manual**, **Scheduled**, or **Continuous** transfers. Continuous mode
+checks for changes periodically. Shared settings apply across the link, and
+the source confirms changes proposed by its authorized members. Android can
+wait for Wi-Fi or charging; operating-system background limits can delay work.
+Schedules do not guarantee exact delivery times.
 
-- `crates/covalent-core`: storage, verification, restore safety, and shared domain logic.
-- `crates/covalent-protocol`: versioned wire and persisted contract types.
-- `crates/covalent-node`: local daemon, health API, and embedded accessible console.
-- `crates/covalent-cli`: deterministic operator and developer commands.
-- `apps/apple`: native SwiftUI macOS app and shared Swift models.
-- `apps/android`: native Kotlin and Jetpack Compose app.
-- `packaging`: Docker, Unraid, and embedded web assets.
-- `docs`: product, security, protocol, architecture decisions, and release gates.
+The two deletion choices are independent and **off by default**:
+
+- **Delete destination copies when source files are deleted:** leave it off to
+  retain those copies. Turn it on only if source deletion should also delete
+  copies made by the link.
+- **Restore files deleted at the destination:** leave it off to keep a
+  destination deletion in place. Turn it on to copy the file again on the next
+  run, if it still exists at the source.
+
+Removing a link stops transfers and keeps existing files. One-way links do not
+provide bidirectional editing or historical file versions. Keep an independent
+backup of important data. For live databases or server appdata, use a stopped
+application or a consistent snapshot as the source; ordinary file copying is
+not a guaranteed live-database backup.
+
+## Documentation and support
+
+- [First link and deletion settings](docs/getting-started-links.md)
+- [Website content pack](docs/website/HANDOFF.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Product scope](docs/product/requirements.md) and [release evidence](docs/release/completion-progress.md)
+- [Legacy encrypted backup setup](docs/getting-started.md), for existing backup data
+
+For bugs or setup questions, use [GitHub Issues](https://github.com/thekozugroup/Covalent/issues).
+For suspected vulnerabilities, follow [SECURITY.md](SECURITY.md) and report
+privately. Covalent has not completed an external cryptographic audit. See the
+[threat model](docs/security/threat-model.md) for assumptions and limits.
 
 ## Contribute
 
-Prerequisites by area: Rust 1.97.1 for the shared service; an Apple Silicon Mac with Swift 6.3 or newer, Xcode 26 or newer, and XcodeGen for Apple; JDK 17 through 25 (`17` in CI), `adb`, and Android SDK/API 37 for Android; Docker with Compose/Buildx for containers. Choose a mode so a core-only contributor is not blocked by unrelated platform tools.
+Start with [CONTRIBUTING.md](CONTRIBUTING.md). For shared Rust code:
 
 ```sh
 ./scripts/bootstrap.sh core
@@ -80,18 +99,13 @@ Prerequisites by area: Rust 1.97.1 for the shared service; an Apple Silicon Mac 
 cargo run -p covalent-cli -- doctor
 ```
 
-Use `apple`, `android`, `container`, or `all` with both scripts for broader work. Android headed validation additionally requires the exact `Covalent_API_37` AVD and an explicit `ANDROID_SERIAL`; Apple UI gates use the bounded scripts under `apps/apple/Scripts`. Container validation includes TLS-only management, three-node one-way transfer drills, and artifact budgets. Public package promotion remains required. Docker is the accepted Unraid validation target while Atlas is offline; a physical Atlas drill does not gate the current scope. Apple Developer ID/notarization is excluded, and Android production signing is deferred.
-
-Bootstrap checks tools; it does not start a node. A headless node requires an
-explicitly provisioned KEK, and network access requires the TLS container path.
-Use the [Docker source setup](packaging/docker/README.md#personal-use-from-this-checkout)
-instead of launching `covalent-node serve` without those protections. No secret
-or external account is required for bootstrap or core tests.
-
-The implemented Rust service includes signed pairing and revocation, authenticated QUIC link control, shared link settings, restricted rclone orchestration, safe deletion handling, interruption recovery, and actionable status. `./scripts/smoke.sh` remains legacy encrypted backup/restore compatibility coverage; it is not the active one-way product journey. The full Rust suite runs with `cargo test --workspace --all-features`.
-
-The persisted/local API contract remains protocol v1. Peer QUIC framing is independently negotiated as transport v3, so framing changes cannot silently reuse an old ALPN or signature domain. Transport v3 intentionally fails closed against v0.1.0 transport-v2 peers. See [local API](docs/api/openapi.yaml), [protocol](docs/protocol/protocol.md), [architecture](docs/architecture/overview.md), [threat model](docs/security/threat-model.md), and [validation matrix](docs/release/validation-matrix.md).
+Bootstrap checks prerequisites; it does not start a node. Platform build
+instructions live in the [Apple](apps/apple/README.md),
+[Android](apps/android/README.md), and [Docker](packaging/docker/README.md) guides.
+The shared service and CLI live under `crates/`; native clients under `apps/`;
+distribution files under `packaging/`; and specifications under `docs/`.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Covalent is [MIT licensed](LICENSE). Bundled dependencies retain their own
+licenses and release notices.

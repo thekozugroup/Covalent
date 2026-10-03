@@ -15,7 +15,9 @@ The rclone integration uses paired, read-only SFTP source access and scoped
 destination copy operations. Android keeps its folder grant on-device and
 streams through an authenticated loopback WebDAV adapter. It does not stage an
 entire folder. See [ADR 0008](../adr/0008-rclone-one-way-links.md) for the engine
-decision and the completion ledger for integration readiness.
+decision and the [completion ledger](../release/completion-progress.md) for
+release evidence. v0.2.1 is published for personal use; historical acceptance
+does not verify a new build.
 
 The [product requirements](../product/requirements.md) define deletion behavior,
 platform scope, and the completion gates. The older archive APIs described below
@@ -25,14 +27,14 @@ remain for access to existing data; they do not define the current product scope
 
 The Rust workspace owns protocol types, identity, pairing, backup traversal, chunking, encryption, durable storage, verification, restore safety, discovery, and peer transport. Native applications own platform access grants and platform UI. Docker and Unraid run the daemon with the same engine and a small embedded console.
 
-## Components
+## Shared components
 
 - `covalent-protocol`: canonical versioned messages, manifests, settings exports, errors, and compatibility fixtures. It has no platform UI dependencies.
 - `covalent-core`: filesystem safety, encrypted storage, manifest lifecycle, replica intent, verification, restore planning, and job state.
 - `covalent-node`: long-running peer and local API service with graceful shutdown and embedded assets.
 - `covalent-cli`: operator workflows and deterministic diagnostics against the same facade/API.
 
-## Data flow
+## Legacy archive data flow
 
 1. A platform obtains durable access to a selected source. Unsandboxed filesystem clients pass an authorized local path. Android keeps SAF `content://` identifiers on-device and Apple keeps security-scoped URLs in-app; both stream a validated ZIP to a daemon-owned private staging path.
 2. The engine anchors a source directory handle, traverses without following symlinks, streams file content into bounded chunks, hashes plaintext, encrypts each chunk, and checkpoints completed entries.
@@ -42,7 +44,11 @@ The Rust workspace owns protocol types, identity, pairing, backup traversal, chu
 
 ## Discovery and transport
 
-LAN discovery is mDNS-based and separately disableable from inbound service operation. When disabled, no mDNS daemon is created and browsing returns no LAN results. Tailnet candidates come from the bounded Tailscale LocalAPI socket contract or explicit remembered addresses. Tailscale supplies routing only; Covalent still requires its own confirmed identity roles and pinned certificate. Data uses TLS 1.3 QUIC with signed request/response binding, strict transport-v2 ALPN/range negotiation, freshness/replay windows, byte-aware per-peer pacing, deadlines, bounded frames, and bounded global/stream work. HTTP/archive contracts remain protocol v1 and are versioned independently from QUIC framing.
+LAN discovery is mDNS-based and separately disableable from inbound service operation. When disabled, no mDNS daemon is created and browsing returns no LAN results. Tailnet candidates come from the bounded Tailscale LocalAPI socket contract or explicit remembered addresses. Tailscale supplies routing only; Covalent still requires its own confirmed identity roles and pinned certificate. Peer control and legacy archive traffic use TLS 1.3 QUIC with signed
+request/response binding, transport-v3 ALPN/range negotiation, freshness/replay
+windows, byte-aware per-peer pacing, deadlines, bounded frames, and bounded
+global/stream work. Current folder content uses paired SFTP with host-key
+verification, as described above. HTTP/archive contracts remain protocol v1 and are versioned independently from QUIC framing.
 
 ## Durable state
 

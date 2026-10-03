@@ -1,20 +1,56 @@
 # Set up Covalent on Android
 
-Use this page to build and install the personal APK, then follow
+Install the published personal APK, or build from source, then follow
 [Create your first one-way link](../getting-started-links.md). Rclone transfers
 use Android's system folder picker. Folder links pair devices directly; legacy
 server enrollment is optional.
 
-Current personal-use path: build the debug APK from this repository. Gradle
-signs that APK with your local debug key, so Android can install it. Never
-install `app-release-unsigned.apk`; an unsigned release APK is not an
-alternative.
+The published v0.2.1 APK is debug-signed for personal use, not production-signed.
+Source builds use your computer's debug key. Different signers cannot update
+each other. Never install `app-release-unsigned.apk`; an unsigned release APK is
+not an alternative.
 
 Android 17 / API 37 is the supported and release-tested target. The manifest
 allows API 26 and later, but older Android versions are not Tier 1 release
 evidence.
 
-## Before you start
+## Download and install v0.2.1
+
+For v0.2.1, download the published
+[debug-signed personal APK](https://github.com/thekozugroup/Covalent/releases/download/v0.2.1/Covalent-v0.2.1-android-personal-debug-7157b555a2c9f684.apk)
+and its
+[SHA-256 checksum](https://github.com/thekozugroup/Covalent/releases/download/v0.2.1/Covalent-v0.2.1-android-personal-debug-7157b555a2c9f684.apk.sha256).
+This is a personal-use debug APK, not a production-signed package.
+
+Download both files into the same folder and verify the checksum there:
+
+```sh
+shasum -a 256 -c Covalent-v0.2.1-android-personal-debug-7157b555a2c9f684.apk.sha256
+```
+
+Continue only when it prints `OK`. Transfer the verified APK to the phone,
+open it from the Files app, and use Android's installer. If Android requires
+permission to install from that app, grant it only to the app opening this APK
+and remove it afterward. Alternatively, install through `adb` on a trusted
+computer with one explicitly selected device:
+
+```sh
+adb devices
+adb -s DEVICE_SERIAL install Covalent-v0.2.1-android-personal-debug-7157b555a2c9f684.apk
+```
+
+Replace `DEVICE_SERIAL` with that device's exact serial. This command is for a
+new install. Read [Install or update](#install-or-update) before replacing an
+existing installation; do not uninstall to bypass a signer mismatch. Then
+[pair a device and create a link](#pair-a-device-and-create-a-link).
+
+Current acceptance is API 37 emulator evidence, not physical-phone validation.
+See the [release ledger](../release/completion-progress.md) for accepted scope
+and retained historical failures.
+
+## Optional: build from source
+
+### Before you start
 
 You need:
 
@@ -27,7 +63,7 @@ You need:
 - an Android device with USB debugging enabled; and
 - another device running the current Covalent build.
 
-## Build the installable personal APK
+### Build the installable personal APK
 
 From the repository root, run one command:
 
@@ -62,12 +98,6 @@ Existing artifacts are never overwritten. Identical verified files are reused;
 a conflicting file stops the command. For a release, retain the exact APK's
 separate device-test receipt beside this build evidence.
 
-For v0.2.1, download the published
-[debug-signed personal APK](https://github.com/thekozugroup/Covalent/releases/download/v0.2.1/Covalent-v0.2.1-android-personal-debug-7157b555a2c9f684.apk)
-and its
-[SHA-256 checksum](https://github.com/thekozugroup/Covalent/releases/download/v0.2.1/Covalent-v0.2.1-android-personal-debug-7157b555a2c9f684.apk.sha256).
-This is a personal-use debug APK, not a production-signed package.
-
 If the prerequisite check reports missing tools, install the exact Android and
 Rust inputs below. Set `ANDROID_HOME` to your SDK directory first. On macOS,
 Android Studio normally uses `$HOME/Library/Android/sdk`.
@@ -95,6 +125,10 @@ file. The printed certificate SHA-256 identifies this computer's debug signer.
 Neither turns a personal debug key into a publisher identity.
 
 ## Install or update
+
+The commands below build a new APK with this computer's debug key. They do not
+install the published download. For any update, preserve important data and
+confirm the installed and replacement packages use the same signer.
 
 Connect one unlocked Android device, approve its USB-debugging prompt, then
 copy its exact serial from:
@@ -130,8 +164,10 @@ Stop on `INSTALL_FAILED_UPDATE_INCOMPATIBLE`: the installed app and new APK use
 different signers. Building on another computer normally creates another debug
 key. Uninstalling fixes the signer conflict but deletes Covalent's app-local
 settings, protected connection, pending work, and Android folder grants. Do
-not uninstall until completed backups have passed a restore check and the
-claim files remain available.
+not uninstall until important files have independent copies and node state
+and claim files are preserved. If you use legacy encrypted backups, verify them
+and test a restore first. Reinstallation also requires pairing and folder grants
+again.
 
 A future production-signed APK also cannot update this debug-signed install.
 Moving to that permanent signer will require one deliberate uninstall and

@@ -87,13 +87,17 @@ stops transfers and keeps existing files.
 
 ## Current limits
 
-Fan-out destinations, separate family collection folders, destination-deletion
-retention and explicit restoration, and shared link settings have verified
-three-node journeys. Manual transfers, restart, and an actual 15-minute
-scheduled transfer pass. Real Android charging and Wi-Fi conditions also block
-and resume transfers. Mac HIG, keyboard, and native-accessibility acceptance, final package acceptance,
-and laptop–Atmos validation remain open. Do not treat a local build as a
-release-ready package.
+v0.2.1 is published for personal use. The release ledger records working native
+Mac, Android emulator, and Docker evidence, including one-way transfers and
+server-console acceptance under the owner's reduced release threshold. That
+acceptance does not establish every device pairing or certify a new local build.
+
+Mac packages are ad-hoc signed and not notarized. Android packages are
+debug-signed, and current Android acceptance uses an API 37 emulator rather
+than a physical phone. Historical intermittent Android deletion and Mac UI
+findings remain in the ledger; later accepted runs do not explain every earlier
+failure. Keep independent backups and test a small folder before transferring
+important data.
 
 See [product requirements](product/requirements.md) and the
 [completion ledger](release/completion-progress.md) for current scope and

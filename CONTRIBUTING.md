@@ -1,6 +1,15 @@
 # Contributing
 
-Covalent develops directly on `main` during the foundation phase. Keep changes atomic, tested, and scoped to pairing, backup, restore, device settings, explicit replicas, verified storage, or LAN/Tailnet discovery.
+Covalent develops directly on `main` during the foundation phase. Keep changes
+atomic, tested, and scoped to the current one-way file product: pairing, folder
+authorization, rclone transfers, shared link settings, scheduling, status, native
+clients, the Docker web console, and LAN/Tailnet discovery.
+
+Use the existing bundled rclone engine rather than adding a transfer algorithm
+or alternative backend. Preserve existing files, identities, and access to
+legacy encrypted backups; do not silently convert legacy behavior. See the
+[product requirements](docs/product/requirements.md) and
+[architecture](docs/architecture/overview.md) for the current contract.
 
 ## Local checks
 

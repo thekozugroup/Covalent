@@ -5,8 +5,10 @@ private Covalent node automatically. Use the build and installation steps below,
 then [create a one-way link](../getting-started-links.md). Pair a destination
 with the Mac's local node; keep the app connected to its own node.
 
-Atlas is offline. Docker is the accepted server target; current native release
-acceptance remains open.
+v0.2.1 is available as a personal-use release. The
+[release ledger](../release/completion-progress.md) records native Mac and
+server-transfer acceptance under the owner's reduced threshold and retains
+historical UI findings. This does not verify a new source build.
 
 ## Before you start
 
@@ -34,45 +36,6 @@ globally.
 
 `unsigned` in the archive name means no Apple distribution identity was used;
 the app inside still has the ad-hoc code signature verified below.
-
-### Current path: build the arm64 app from source
-
-Install Xcode 26, open it once, accept its license, and install `rustup`. Start
-from a clean source checkout, then run one command from the repository root:
-
-```sh
-./scripts/build-personal-macos-app.sh
-```
-
-The builder checks the Mac and pinned toolchain, installs checksum-pinned
-XcodeGen into a private temporary directory, builds the locked source, ad-hoc
-signs the app, verifies its bundled arm64 executables, creates the ZIP and checksum,
-then extracts and verifies the ZIP again. It also writes a build receipt recording
-the source revision and package hashes. Finished install files go only to the
-ignored `artifacts/install` directory. XcodeGen also creates or refreshes the
-ignored generated project at `apps/apple/Covalent.xcodeproj`; tracked source is
-not changed. The builder refuses to overwrite an existing artifact and never
-installs or replaces an app.
-
-The output names use the current repository version. Verify the finished ZIP
-once more before installing it:
-
-```sh
-version="$(./scripts/release-version.sh print)"
-archive="Covalent-v${version}-macOS-arm64-personal.zip"
-(
-  cd artifacts/install
-  shasum -a 256 -c "${archive}.sha256"
-)
-open artifacts/install
-```
-
-Continue only when the checksum prints `OK`. In Finder, double-click the ZIP,
-then drag `Covalent.app` into Applications. Keep the ZIP, its `.sha256` file,
-and its `.build-receipt.json` file together. If an output already exists, move
-that version's three files elsewhere or remove them only after deciding they are
-no longer needed; the builder will not replace them. Developer build and test details live
-in the [Apple client README](../../apps/apple/README.md).
 
 ### Download the verified release build
 
@@ -114,10 +77,49 @@ test "$(xcrun lipo -archs "$app/Contents/MacOS/covalent-node")" = arm64
 Every command must exit successfully. `Signature=adhoc` and the two `arm64`
 checks confirm the expected personal-use bundle.
 
-These are first-install steps. If an older Covalent app already exists, do not
-merge or replace its bundle until its backups pass Verify and a separate-folder
-restore; personal ad-hoc update continuity must be proven for that exact
-version pair.
+These are first-install steps. Before replacing an existing app, preserve its
+node state and independent copies of important files. If you use legacy backups,
+verify them and test a restore into a separate folder. Personal ad-hoc update
+continuity must be proven for that exact version pair.
+
+### Optional: build the arm64 app from source
+
+Install Xcode 26, open it once, accept its license, and install `rustup`. Start
+from a clean source checkout, then run one command from the repository root:
+
+```sh
+./scripts/build-personal-macos-app.sh
+```
+
+The builder checks the Mac and pinned toolchain, installs checksum-pinned
+XcodeGen into a private temporary directory, builds the locked source, ad-hoc
+signs the app, verifies its bundled arm64 executables, creates the ZIP and checksum,
+then extracts and verifies the ZIP again. It also writes a build receipt recording
+the source revision and package hashes. Finished install files go only to the
+ignored `artifacts/install` directory. XcodeGen also creates or refreshes the
+ignored generated project at `apps/apple/Covalent.xcodeproj`; tracked source is
+not changed. The builder refuses to overwrite an existing artifact and never
+installs or replaces an app.
+
+The output names use the current repository version. Verify the finished ZIP
+once more before installing it:
+
+```sh
+version="$(./scripts/release-version.sh print)"
+archive="Covalent-v${version}-macOS-arm64-personal.zip"
+(
+  cd artifacts/install
+  shasum -a 256 -c "${archive}.sha256"
+)
+open artifacts/install
+```
+
+Continue only when the checksum prints `OK`. In Finder, double-click the ZIP,
+then drag `Covalent.app` into Applications. Keep the ZIP, its `.sha256` file,
+and its `.build-receipt.json` file together. If an output already exists, move
+that version's three files elsewhere or remove them only after deciding they are
+no longer needed; the builder will not replace them. Developer build and test details live
+in the [Apple client README](../../apps/apple/README.md).
 
 ## 2. Open it without weakening macOS
 
