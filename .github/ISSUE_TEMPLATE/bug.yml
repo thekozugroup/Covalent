@@ -10,14 +10,14 @@ body:
     id: platform
     attributes:
       label: Platform
-      options: [Rust core or daemon, macOS, Android, Docker, Unraid, iOS]
+      options: [macOS on Apple Silicon, Android, Docker web console, Unraid, Rust core or daemon]
     validations:
       required: true
   - type: input
     id: version
     attributes:
       label: Version or commit
-      placeholder: v0.1.0 or full commit SHA
+      placeholder: Release version, image digest, or full commit SHA
     validations:
       required: true
   - type: textarea
@@ -31,6 +31,6 @@ body:
     id: safety
     attributes:
       label: Data-safety impact
-      description: State whether source, backup, restore, or identity data may be at risk.
+      description: State whether source files, destination files, or identity data may be at risk. Include timing and deletion choices, but no private paths or credentials.
     validations:
       required: true
