@@ -139,6 +139,10 @@ allows API 26+, but older versions and physical phones are not release-tested.
 Unraid has an importable template; a Community Applications listing is not yet
 available. Intel Mac, iOS, and Windows clients are unsupported.
 
+macOS, Android, Docker, and Unraid are the Tier 1 release targets.
+iOS is not supported; any retained iOS diagnostics are informational,
+not a required check.
+
 ## Deliberate limits
 
 Covalent focuses on one-way file sharing. It does not provide two-way
@@ -185,7 +189,8 @@ data-safety rules in the shared implementation.
 - [Architecture][architecture] · [Product scope][requirements] · [Design][design]
 - [Release notes][release-notes] · [Verification record][release-evidence]
 - [Screenshots and website content pack][website-pack]
-- [Legacy encrypted backup guide][legacy-backups], for existing archive data
+- [Back up your first folder](docs/getting-started.md), for existing legacy
+  encrypted archives only; [current legacy guidance][legacy-backups]
 
 Report reproducible bugs through [GitHub Issues](https://github.com/thekozugroup/Covalent/issues).
 For vulnerabilities, follow [SECURITY.md](SECURITY.md) and report privately.
