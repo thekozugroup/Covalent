@@ -23,7 +23,7 @@ case "$transport_version" in
 esac
 grep -Fq "const ALPN: &[u8] = b\"covalent-quic/${transport_version}\";" crates/covalent-node/src/transport.rs
 grep -Fq "const TRANSPORT_SIGNATURE_DOMAIN: &[u8] = b\"covalent/authenticated-quic/v${transport_version}\";" crates/covalent-node/src/transport.rs
-grep -Fq "transport v${transport_version}" README.md
+grep -Fq "transport v${transport_version}" docs/release/notes/v0.2.0.md
 grep -Fq "QUIC transport v${transport_version}" docs/protocol/protocol.md
 grep -Fq "\`covalent-quic/${transport_version}\`" docs/protocol/protocol.md
 grep -Fq "\`covalent/authenticated-quic/v${transport_version}\`" docs/protocol/protocol.md
@@ -73,7 +73,7 @@ image_digest=$(sed -n 's|^[[:space:]]*<Repository>.*@\(sha256:[0-9a-f]*\)</Repos
 grep -Fq '<Repository>ghcr.io/thekozugroup/covalent:stable</Repository>' packaging/unraid/covalent.xml
 grep -Fq "$historical_image_digest" docs/release/notes/v0.1.0.md
 grep -Fq "$historical_image_digest" docs/platform/atlas-tailscale.md
-grep -Fq "$current_image_digest" README.md
+grep -Eq '^\[docker-setup\]: https://github.com/thekozugroup/Covalent/blob/[a-f0-9]{40}/packaging/docker/README.md$' README.md
 grep -Fq 'ghcr.io/thekozugroup/covalent:stable' docs/platform/unraid.md
 grep -Fq "$current_image_digest" docs/platform/atlas-tailscale.md
 grep -Fq 'ghcr.io/thekozugroup/covalent:stable' packaging/docker/README.md
@@ -423,9 +423,12 @@ grep -Fq 'cd "$(dirname "${output}")" && shasum -a 256 "$(basename "${output}")"
 grep -q 'must be an annotated tag' scripts/verify-release-commit-signature.sh
 grep -q 'git tag -s' scripts/verify-release-commit-signature.sh
 grep -q 'historical unsigned annotated tag is grandfathered' scripts/verify-release-commit-signature.sh
-grep -q 'No Android artifact is published in v0.1.0' README.md
-grep -q '`v0.2.1` is the current release for the KEK and trusted-claim contract' README.md
-grep -q 'verified v0.2.1 archive' README.md
+grep -Fq 'No Android artifact is published in this release.' docs/release/notes/v0.1.0.md
+grep -Fq 'public native packages are **v0.2.1**, for personal use' README.md
+grep -Fq 'https://github.com/thekozugroup/Covalent/releases/latest' README.md
+grep -Fq 'ad-hoc signed and not notarized' README.md
+grep -Fq 'Android APK is debug-signed' README.md
+grep -Fq 'published v0.2.1 CLI archives' docs/release/cli-install.md
 if grep -q 'no active deployable release for the current KEK and trusted-claim' README.md; then
   echo "README must describe current release availability" >&2
   exit 1
@@ -458,7 +461,7 @@ fi
 # builder to enrolled CA/token credentials. No Android or browser surface may
 # receive the one-time setup code.
 test -s docs/platform/android.md
-grep -Fq '(docs/platform/android.md)' README.md
+grep -Eq '^\[android-setup\]: https://github.com/thekozugroup/Covalent/blob/[a-f0-9]{40}/docs/platform/android.md$' README.md
 grep -Fq '(../../docs/platform/android.md)' apps/android/README.md
 grep -Fq '[Android install and onboarding guide](android.md)' docs/platform/atlas-tailscale.md
 grep -Fq '[verified APK and onboarding guide](android.md)' docs/platform/unraid.md
