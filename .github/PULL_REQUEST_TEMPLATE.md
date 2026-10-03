@@ -4,8 +4,9 @@ Describe the user-visible result and affected platforms.
 
 ## Safety and compatibility
 
-- [ ] Restore writes remain confined beneath the authorized target root.
-- [ ] Replica placement remains explicit.
+- [ ] Source and destination access stays within authorized folders.
+- [ ] One-way transfers, shared settings, and deletion choices remain consistent across recipients.
+- [ ] Existing files and access to legacy backups are preserved.
 - [ ] Persisted and wire-format compatibility was preserved or migrated.
 - [ ] No credentials, private identity material, or generated build output is included.
 

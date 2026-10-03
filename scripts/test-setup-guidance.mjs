@@ -82,7 +82,11 @@ function requireText(file, needle, purpose) {
   if (!text.includes(needle)) errors.push(`${file}: missing ${purpose}: ${needle}`);
 }
 
-requireText("README.md", "[Create your first one-way link](docs/getting-started-links.md)", "primary setup link");
+const readme = documents.get("README.md");
+const localFirstLink = readme.includes("[Create your first one-way link](docs/getting-started-links.md)");
+const pinnedFirstLink = readme.includes("[Create your first one-way link][first-link]")
+  && /^\[first-link\]: https:\/\/github\.com\/thekozugroup\/Covalent\/blob\/[a-f0-9]{40}\/docs\/getting-started-links\.md$/m.test(readme);
+if (!localFirstLink && !pinnedFirstLink) errors.push("README.md: missing verified primary setup link");
 requireText("docs/getting-started.md", "Apple Developer ID/notarization is not part", "macOS personal-use scope");
 requireText("docs/getting-started.md", "Android production signing is deferred", "Android personal-use scope");
 requireText("docs/getting-started.md", "Unraid template and Atlas deployment remain blocked", "honest unavailable-server scope");

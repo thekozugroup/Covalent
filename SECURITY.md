@@ -37,4 +37,4 @@ create a new backup ID/master key and fresh replicas. These archive protections
 do not describe ordinary files copied by current folder links.
 
 The detailed assumptions and abuse cases are in
-[docs/security/threat-model.md](docs/security/threat-model.md).
+[current threat model](https://github.com/thekozugroup/Covalent/blob/9088b50416f686d533d75e27b8d89804dab51139/docs/security/threat-model.md).

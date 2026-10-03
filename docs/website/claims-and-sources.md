@@ -53,7 +53,7 @@ The first-person text is a founder narrative drafted from the supplied brief, no
 
 The public release list identifies **v0.2.1** as the latest release when checked on 2026-10-03. This checkout also contains v0.2.2 and v0.2.3 release-note drafts; their presence is not publication evidence. The copy uses a release-list CTA rather than advertising an unpublished version.
 
-Source: [public releases](https://github.com/thekozugroup/Covalent/releases), [v0.2.1 release](https://github.com/thekozugroup/Covalent/releases/tag/v0.2.1), [README installation status](../../README.md#get-started), [publishing runbook](../release/publishing.md).
+Source: [public releases](https://github.com/thekozugroup/Covalent/releases), [v0.2.1 release](https://github.com/thekozugroup/Covalent/releases/tag/v0.2.1), [README installation status](../../README.md#quick-start), [publishing runbook](../release/publishing.md).
 
 - **macOS:** Apple Silicon personal-use package, ad-hoc signed and not notarized. Do not claim Developer ID signing, notarization, App Store distribution, or Intel Mac support.
 - **Android:** debug-signed personal-use APK. Production signing and store publication are deferred. Do not call it a Play Store release or production-signed package.
