@@ -39,3 +39,11 @@ signer, and current Android acceptance is emulator evidence. Unraid has a Docker
 template but no Community Applications listing. The project is pre-1.0 and has
 not completed an external cryptographic audit. These limits must remain visible
 in launch material; this presentation review does not resolve them.
+
+When the documentation branch was pushed on 2026-10-03, GitHub reported nine
+dependency alerts on the repository's default branch: two high, three moderate,
+and four low. This presentation pass did not investigate their applicability
+to the newer development branch or change dependencies. The source snapshot
+and website pack are not a security clearance or a new production release.
+Maintainers can review the current findings in the repository's
+[dependency alerts](https://github.com/thekozugroup/Covalent/security/dependabot).
