@@ -238,7 +238,9 @@ class AccessibilityGateTest {
                 CovalentTheme { CovalentApp(store, state) }
             }
         }
-        assertClean(density, "on $screen at ${fontScale}x text", MINIMUM_SCREEN_CONTROLS)
+        // Setup offers two entry actions; connected screens retain their wider control set.
+        val minimumControls = if (screen == Screen.SETUP) 2 else MINIMUM_SCREEN_CONTROLS
+        assertClean(density, "on $screen at ${fontScale}x text", minimumControls)
     }
 
     private fun assertClean(density: Density, where: String, minimumInteractive: Int) {
@@ -303,7 +305,7 @@ class AccessibilityGateTest {
         const val LARGEST_FONT_SCALE = 2.0f
 
         /**
-         * Every real app screen puts at least this many controls on screen. Falling
+         * Connected app screens put at least this many controls on screen. Falling
          * below it means the screen failed to render its content and the audit had
          * nothing to check.
          */

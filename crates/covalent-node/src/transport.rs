@@ -3,9 +3,11 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::fs;
-use std::io::{BufReader, Read, Seek, SeekFrom, Write};
+use std::future::Future;
+use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -16,12 +18,12 @@ use covalent_core::{
     ChunkProvider, CoreError, Engine, JobControl, JobState, KeyProtector, ProviderHealth,
     ProviderWriteLeaseIntent, PublicIdentity, RecoveryCapsule, RecoveryCapsuleDescriptor,
     RecoveryCapsuleLeaseIntent, RecoveryCapsuleUploadAttempt, RecoveryCapsuleUploadAttemptPhase,
-    WrappedSecret, state_secret_context,
+    RecoveryCatalogSink, WrappedSecret, state_secret_context,
 };
 use covalent_protocol::{BackupId, DeviceId, PeerRole, SignedRoster, StorageLease};
 use quinn::{
-    ClientConfig, ConnectionError, Endpoint, ServerConfig, TransportConfig, TransportErrorCode,
-    VarInt,
+    AsyncTimer, AsyncUdpSocket, ClientConfig, ConnectionError, Endpoint, EndpointConfig, Runtime,
+    ServerConfig, TokioRuntime, TransportConfig, TransportErrorCode, VarInt,
 };
 use rand_core::{OsRng, RngCore};
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
@@ -428,7 +430,16 @@ impl TlsIdentity {
     }
 
     fn server_config(&self) -> Result<ServerConfig, CoreError> {
-        self.server_config_with_alpns(&[ALPN, PAIRING_ALPN])
+        #[cfg(unix)]
+        let alpns: &[&[u8]] = &[
+            ALPN,
+            PAIRING_ALPN,
+            crate::sync_control::FOLDER_CONTROL_ALPN,
+            crate::sync_control::LINK_CONTROL_ALPN,
+        ];
+        #[cfg(not(unix))]
+        let alpns: &[&[u8]] = &[ALPN, PAIRING_ALPN];
+        self.server_config_with_alpns(alpns)
     }
 
     #[cfg(test)]
@@ -436,7 +447,10 @@ impl TlsIdentity {
         self.server_config_with_alpns(&[alpn])
     }
 
-    fn server_config_with_alpns(&self, alpns: &[&[u8]]) -> Result<ServerConfig, CoreError> {
+    pub(crate) fn server_config_with_alpns(
+        &self,
+        alpns: &[&[u8]],
+    ) -> Result<ServerConfig, CoreError> {
         let certificate = CertificateDer::from(self.certificate_der.clone());
         let key = PrivatePkcs8KeyDer::from(self.private_key_der.to_vec());
         let mut crypto = rustls::ServerConfig::builder()
@@ -465,7 +479,9 @@ impl fmt::Debug for TlsIdentity {
 /// Running QUIC storage endpoint.
 pub struct QuicNode {
     endpoint: Endpoint,
+    runtime: Arc<OwnedQuinnRuntime>,
     engine: Arc<Engine>,
+    local_provider_enabled: bool,
     certificate_fingerprint: String,
     replay_window: Arc<Mutex<ReplayWindow>>,
     rate_limiter: Arc<Mutex<PeerRateLimiter>>,
@@ -475,17 +491,99 @@ pub struct QuicNode {
     blocking_limit: Arc<Semaphore>,
     source_connections: Arc<Mutex<BTreeMap<IpAddr, usize>>>,
     pairing_service: Option<Arc<NetworkPairingService>>,
+    #[cfg(unix)]
+    folder_service: Option<Arc<crate::sync_engine::FolderSyncService>>,
+    #[cfg(unix)]
+    folder_admission: Arc<crate::sync_control::FolderControlAdmission>,
 }
 
 /// Close capability retained after a node enters its serving task.
 pub(crate) struct QuicNodeShutdown {
     endpoint: Endpoint,
+    runtime: Arc<OwnedQuinnRuntime>,
 }
 
 impl QuicNodeShutdown {
     pub(crate) fn close(&self) {
         self.endpoint
             .close(VarInt::from_u32(0), b"node shutting down");
+    }
+
+    /// Waits until Quinn has drained every connection driver and dropped the
+    /// endpoint driver that owns the bound UDP socket.
+    ///
+    /// `Endpoint::wait_idle` alone only observes Quinn's connection map. The
+    /// endpoint driver is a detached runtime task and can retain the socket for
+    /// another scheduling turn after the final public endpoint handle drops.
+    /// Call this only after the `QuicNode::run` task has exited, so this handle
+    /// is the final application-owned endpoint reference.
+    pub(crate) async fn wait_for_release(self) -> Result<(), CoreError> {
+        let Self { endpoint, runtime } = self;
+        endpoint.wait_idle().await;
+        drop(endpoint);
+        runtime.join().await
+    }
+}
+
+/// Tokio runtime scoped to one server endpoint.
+///
+/// Quinn intentionally detaches its internal endpoint and connection drivers.
+/// Retaining their join handles lets graceful shutdown wait for the endpoint
+/// driver's future to be dropped, which is the point at which its UDP socket is
+/// actually released by Quinn.
+#[derive(Debug, Default)]
+struct OwnedQuinnRuntime {
+    tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+}
+
+impl OwnedQuinnRuntime {
+    async fn join(&self) -> Result<(), CoreError> {
+        let mut first_failure = None;
+        loop {
+            let tasks = {
+                let mut tasks = self
+                    .tasks
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                std::mem::take(&mut *tasks)
+            };
+            if tasks.is_empty() {
+                return match first_failure {
+                    Some(error) => Err(CoreError::InvalidState(error)),
+                    None => Ok(()),
+                };
+            }
+            for task in tasks {
+                if let Err(error) = task.await
+                    && first_failure.is_none()
+                {
+                    first_failure = Some(format!("join QUIC runtime task: {error}"));
+                }
+            }
+        }
+    }
+}
+
+impl Runtime for OwnedQuinnRuntime {
+    fn new_timer(&self, instant: Instant) -> Pin<Box<dyn AsyncTimer>> {
+        TokioRuntime.new_timer(instant)
+    }
+
+    fn spawn(&self, future: Pin<Box<dyn Future<Output = ()> + Send>>) {
+        let mut tasks = self
+            .tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        tasks.retain(|task| !task.is_finished());
+        tasks.push(tokio::spawn(future));
+    }
+
+    fn wrap_udp_socket(&self, socket: std::net::UdpSocket) -> io::Result<Arc<dyn AsyncUdpSocket>> {
+        TokioRuntime.wrap_udp_socket(socket)
+    }
+
+    fn now(&self) -> Instant {
+        TokioRuntime.now()
     }
 }
 
@@ -496,17 +594,28 @@ impl QuicNode {
         engine: Arc<Engine>,
         tls_identity: &TlsIdentity,
     ) -> Result<Self, CoreError> {
-        let endpoint =
-            Endpoint::server(tls_identity.server_config()?, address).map_err(|source| {
-                CoreError::Io {
-                    operation: "bind QUIC peer endpoint",
-                    path: PathBuf::from(address.to_string()),
-                    source,
-                }
-            })?;
+        let socket = std::net::UdpSocket::bind(address).map_err(|source| CoreError::Io {
+            operation: "bind QUIC peer endpoint",
+            path: PathBuf::from(address.to_string()),
+            source,
+        })?;
+        let runtime = Arc::new(OwnedQuinnRuntime::default());
+        let endpoint = Endpoint::new(
+            EndpointConfig::default(),
+            Some(tls_identity.server_config()?),
+            socket,
+            Arc::clone(&runtime) as Arc<dyn Runtime>,
+        )
+        .map_err(|source| CoreError::Io {
+            operation: "bind QUIC peer endpoint",
+            path: PathBuf::from(address.to_string()),
+            source,
+        })?;
         Ok(Self {
             endpoint,
+            runtime,
             engine,
+            local_provider_enabled: true,
             certificate_fingerprint: tls_identity.certificate_fingerprint(),
             replay_window: Arc::new(Mutex::new(ReplayWindow::default())),
             rate_limiter: Arc::new(Mutex::new(PeerRateLimiter::default())),
@@ -516,7 +625,19 @@ impl QuicNode {
             blocking_limit: Arc::new(Semaphore::new(MAX_BLOCKING_OPERATIONS)),
             source_connections: Arc::new(Mutex::new(BTreeMap::new())),
             pairing_service: None,
+            #[cfg(unix)]
+            folder_service: None,
+            #[cfg(unix)]
+            folder_admission: Arc::new(crate::sync_control::FolderControlAdmission::default()),
         })
+    }
+
+    /// Keeps pairing and folder control available without accepting any remote
+    /// backup storage stream, including capacity advertisements and reads.
+    #[must_use]
+    pub fn with_local_provider_enabled(mut self, enabled: bool) -> Self {
+        self.local_provider_enabled = enabled;
+        self
     }
 
     /// Serves the pairing-only ALPN on this same endpoint, so the advertised and
@@ -524,6 +645,15 @@ impl QuicNode {
     #[must_use]
     pub fn with_pairing_service(mut self, service: Arc<NetworkPairingService>) -> Self {
         self.pairing_service = Some(service);
+        self
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn with_folder_service(
+        mut self,
+        service: Arc<crate::sync_engine::FolderSyncService>,
+    ) -> Self {
+        self.folder_service = Some(service);
         self
     }
 
@@ -540,6 +670,7 @@ impl QuicNode {
     pub(crate) fn shutdown_handle(&self) -> QuicNodeShutdown {
         QuicNodeShutdown {
             endpoint: self.endpoint.clone(),
+            runtime: Arc::clone(&self.runtime),
         }
     }
 
@@ -572,6 +703,7 @@ impl QuicNode {
                 continue;
             };
             let engine = Arc::clone(&self.engine);
+            let local_provider_enabled = self.local_provider_enabled;
             let fingerprint = self.certificate_fingerprint.clone();
             let replay_window = Arc::clone(&self.replay_window);
             let rate_limiter = Arc::clone(&self.rate_limiter);
@@ -579,6 +711,10 @@ impl QuicNode {
             let pairing_stream_limit = Arc::clone(&self.pairing_stream_limit);
             let blocking_limit = Arc::clone(&self.blocking_limit);
             let pairing_service = self.pairing_service.clone();
+            #[cfg(unix)]
+            let folder_service = self.folder_service.clone();
+            #[cfg(unix)]
+            let folder_admission = Arc::clone(&self.folder_admission);
             connections.spawn(async move {
                 let _connection_permit = connection_permit;
                 let _source_permit = source_permit;
@@ -591,6 +727,30 @@ impl QuicNode {
                     if let Some(service) = pairing_service {
                         serve_pairing_connection(connection, service, pairing_stream_limit).await;
                     }
+                    return;
+                }
+                #[cfg(unix)]
+                if let Some(alpn) = negotiated_alpn(&connection)
+                    && (alpn == crate::sync_control::FOLDER_CONTROL_ALPN
+                        || alpn == crate::sync_control::LINK_CONTROL_ALPN)
+                {
+                    if let Some(service) = folder_service {
+                        let _ = crate::sync_control::serve_folder_control_connection(
+                            connection,
+                            alpn,
+                            engine,
+                            service,
+                            fingerprint,
+                            folder_admission,
+                        )
+                        .await;
+                    } else {
+                        connection.close(VarInt::from_u32(1), b"folder sync unavailable");
+                    }
+                    return;
+                }
+                if !local_provider_enabled {
+                    connection.close(VarInt::from_u32(1), b"backup storage disabled");
                     return;
                 }
                 serve_storage_connection(
@@ -1544,28 +1704,82 @@ impl ChunkProvider for QuicProvider {
     }
 
     fn list_recovery_capsules(&self) -> Result<Vec<RecoveryCapsule>, CoreError> {
-        let mut all = Vec::new();
+        #[derive(Default)]
+        struct Collector(Vec<RecoveryCapsule>);
+
+        impl RecoveryCatalogSink for Collector {
+            fn reserve(&mut self, _serialized_bytes: u64) -> Result<(), CoreError> {
+                Ok(())
+            }
+
+            fn accept(&mut self, capsule: RecoveryCapsule) -> Result<(), CoreError> {
+                if self.0.len() >= 1_000_000 {
+                    return Err(CoreError::ResourceLimit("recovery capsule listing"));
+                }
+                self.0.push(capsule);
+                Ok(())
+            }
+        }
+
+        let mut collector = Collector::default();
+        self.visit_recovery_capsules(&JobControl::new(), &mut collector)?;
+        Ok(collector.0)
+    }
+
+    fn visit_recovery_capsules(
+        &self,
+        control: &JobControl,
+        sink: &mut dyn RecoveryCatalogSink,
+    ) -> Result<(), CoreError> {
+        const PAGE_SIZE: usize = 128;
+
+        check_job_control(control)?;
+        let expected_signer = self.local_engine()?.device_id();
+        let mut capsule_count = 0_usize;
         let mut cursor = None;
         loop {
-            match self.request(Operation::ListRecoveryCapsules {
-                backup_id: None,
-                cursor: cursor.clone(),
-                limit: 128,
-            })? {
+            check_job_control(control)?;
+            match self.request_controlled(
+                Operation::ListRecoveryCapsules {
+                    backup_id: None,
+                    cursor: cursor.clone(),
+                    limit: PAGE_SIZE as u16,
+                },
+                control,
+            )? {
                 ResponsePayload::RecoveryCapsuleDescriptors {
                     descriptors,
                     next_cursor,
                 } => {
-                    for descriptor in descriptors {
-                        all.push(self.fetch_recovery_capsule(&descriptor)?);
+                    if descriptors.len() > PAGE_SIZE
+                        || (descriptors.is_empty() && next_cursor.is_some())
+                    {
+                        return Err(CoreError::AuthenticationFailed);
                     }
-                    if all.len() > 1_000_000 {
-                        return Err(CoreError::ResourceLimit("recovery capsule listing"));
+                    for descriptor in descriptors {
+                        check_job_control(control)?;
+                        capsule_count = capsule_count
+                            .checked_add(1)
+                            .ok_or(CoreError::ResourceLimit("recovery capsule listing"))?;
+                        if capsule_count > 1_000_000 {
+                            return Err(CoreError::ResourceLimit("recovery capsule listing"));
+                        }
+                        validate_remote_recovery_capsule_descriptor(&descriptor, expected_signer)?;
+                        sink.reserve(descriptor.total_bytes)?;
+                        check_job_control(control)?;
+                        let capsule =
+                            self.fetch_recovery_capsule_controlled(&descriptor, control)?;
+                        check_job_control(control)?;
+                        sink.accept(capsule)?;
                     }
                     let Some(next) = next_cursor else {
-                        return Ok(all);
+                        return check_job_control(control);
                     };
-                    if cursor.as_ref().is_some_and(|previous| previous >= &next) {
+                    if next.is_empty()
+                        || next.len() > 256
+                        || next.chars().any(char::is_control)
+                        || cursor.as_ref().is_some_and(|previous| previous >= &next)
+                    {
                         return Err(CoreError::AuthenticationFailed);
                     }
                     cursor = Some(next);
@@ -2146,9 +2360,10 @@ impl QuicProvider {
         })
     }
 
-    fn fetch_recovery_capsule(
+    fn fetch_recovery_capsule_controlled(
         &self,
         descriptor: &RecoveryCapsuleDescriptor,
+        control: &JobControl,
     ) -> Result<RecoveryCapsule, CoreError> {
         if descriptor.total_bytes == 0 || descriptor.total_bytes > MAX_RECOVERY_CAPSULE_BYTES {
             return Err(CoreError::ResourceLimit("recovery capsule"));
@@ -2161,12 +2376,16 @@ impl QuicProvider {
         let mut hasher = blake3::Hasher::new();
         let mut offset = 0_u64;
         while offset < descriptor.total_bytes {
-            match self.request(Operation::GetRecoveryCapsuleSegment {
-                backup_id: descriptor.backup_id,
-                snapshot_id: descriptor.snapshot_id.clone(),
-                offset,
-                maximum_bytes: RECOVERY_CAPSULE_SEGMENT_BYTES as u32,
-            })? {
+            check_job_control(control)?;
+            match self.request_controlled(
+                Operation::GetRecoveryCapsuleSegment {
+                    backup_id: descriptor.backup_id,
+                    snapshot_id: descriptor.snapshot_id.clone(),
+                    offset,
+                    maximum_bytes: RECOVERY_CAPSULE_SEGMENT_BYTES as u32,
+                },
+                control,
+            )? {
                 ResponsePayload::RecoveryCapsuleSegment {
                     segment,
                     total_bytes,
@@ -2205,6 +2424,7 @@ impl QuicProvider {
                 _ => return Err(CoreError::AuthenticationFailed),
             }
         }
+        check_job_control(control)?;
         if offset != descriptor.total_bytes
             || hasher.finalize().to_hex().as_str() != descriptor.capsule_digest
         {
@@ -2227,6 +2447,42 @@ impl QuicProvider {
         }
         Ok(capsule)
     }
+}
+
+fn check_job_control(control: &JobControl) -> Result<(), CoreError> {
+    match control.state() {
+        JobState::Running => Ok(()),
+        JobState::Paused => Err(CoreError::Paused),
+        JobState::Cancelled => Err(CoreError::Cancelled),
+    }
+}
+
+fn validate_remote_recovery_capsule_descriptor(
+    descriptor: &RecoveryCapsuleDescriptor,
+    expected_signer: DeviceId,
+) -> Result<(), CoreError> {
+    if descriptor.total_bytes == 0 || descriptor.total_bytes > MAX_RECOVERY_CAPSULE_BYTES {
+        return Err(CoreError::ResourceLimit("recovery capsule"));
+    }
+    let valid_snapshot_id = !descriptor.snapshot_id.is_empty()
+        && descriptor.snapshot_id.len() <= 128
+        && descriptor
+            .snapshot_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
+    let valid_digest = descriptor.capsule_digest.len() == 64
+        && descriptor
+            .capsule_digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'));
+    if descriptor.signer_device_id != expected_signer
+        || descriptor.key_epoch == 0
+        || !valid_snapshot_id
+        || !valid_digest
+    {
+        return Err(CoreError::AuthenticationFailed);
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -3685,6 +3941,240 @@ mod tests {
         }
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn disabled_provider_refuses_storage_but_serves_pairing() {
+        use crate::network_pairing::{
+            NetworkPairingManager, NetworkPairingWireOperation, NetworkPairingWireResponse,
+        };
+        use crate::pairing_transport::PairingConnection;
+
+        let owner_data = tempdir().unwrap();
+        let provider_data = tempdir().unwrap();
+        let owner = Arc::new(Engine::open(test_options(owner_data.path())).unwrap());
+        let provider_engine = Arc::new(Engine::open(test_options(provider_data.path())).unwrap());
+        trust_all(&owner, &provider_engine);
+        trust_all(&provider_engine, &owner);
+        let owner_pairing =
+            NetworkPairingManager::open(Arc::clone(&owner), owner_data.path().join("pairing.json"))
+                .unwrap();
+        let provider_pairing = Arc::new(
+            NetworkPairingManager::open(
+                Arc::clone(&provider_engine),
+                provider_data.path().join("pairing.json"),
+            )
+            .unwrap(),
+        );
+        let tls = test_tls(provider_data.path(), "tls");
+        let node = QuicNode::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            Arc::clone(&provider_engine),
+            &tls,
+        )
+        .unwrap()
+        .with_local_provider_enabled(false)
+        .with_pairing_service(Arc::new(NetworkPairingService::new(
+            Arc::clone(&provider_engine),
+            provider_pairing,
+            None,
+        )));
+        let address = node.local_addr().unwrap();
+        let shutdown = node.shutdown_handle();
+        let task = tokio::spawn(node.run());
+        let client = QuicProvider::new(
+            address,
+            provider_engine.public_identity(),
+            tls.certificate_der().to_vec(),
+            Arc::clone(&owner),
+        )
+        .unwrap();
+        let store_files = regular_files_below(provider_engine.store().root());
+        let probe = tokio::task::spawn_blocking(move || client.probe_capability());
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), probe)
+                .await
+                .expect("disabled admission is prompt")
+                .unwrap()
+                .is_err()
+        );
+        assert_eq!(
+            regular_files_below(provider_engine.store().root()),
+            store_files
+        );
+        let pairing = PairingConnection::connect(address).await.unwrap();
+        let request = owner_pairing
+            .sign_wire_request(
+                NetworkPairingWireOperation::Probe,
+                current_unix_ms().unwrap(),
+            )
+            .unwrap();
+        assert!(matches!(
+            pairing.request(&request).await.unwrap(),
+            NetworkPairingWireResponse::Probe { .. }
+        ));
+        drop(pairing);
+        shutdown.close();
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), shutdown.wait_for_release())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(std::net::UdpSocket::bind(address).is_ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn graceful_shutdown_releases_udp_socket_after_live_connection() {
+        let owner_data = tempdir().expect("owner");
+        let provider_data = tempdir().expect("provider");
+        let owner = Arc::new(Engine::open(test_options(owner_data.path())).expect("owner"));
+        let provider_engine =
+            Arc::new(Engine::open(test_options(provider_data.path())).expect("provider"));
+        trust_all(&owner, &provider_engine);
+        trust_all(&provider_engine, &owner);
+        let tls = test_tls(provider_data.path(), "tls");
+        let node = QuicNode::bind(
+            "127.0.0.1:0".parse().expect("address"),
+            Arc::clone(&provider_engine),
+            &tls,
+        )
+        .expect("node");
+        let address = node.local_addr().expect("local address");
+        let shutdown = node.shutdown_handle();
+        let task = tokio::spawn(node.run());
+        let provider = QuicProvider::new(
+            address,
+            provider_engine.public_identity(),
+            tls.certificate_der().to_vec(),
+            Arc::clone(&owner),
+        )
+        .expect("provider client");
+        // A client-side handshake can complete before the server has accepted
+        // and dispatched its `Incoming`. Complete a signed storage operation so
+        // this test exercises shutdown of a live application connection rather
+        // than Quinn's unsampled initial-PTO draining path.
+        let probe_provider = provider.clone();
+        let capability = tokio::task::spawn_blocking(move || probe_provider.probe_capability())
+            .await
+            .expect("join capability probe")
+            .expect("complete authenticated storage request");
+        assert_eq!(capability.provider_device_id, provider_engine.device_id());
+        let connection = provider
+            .connection()
+            .await
+            .expect("retained QUIC connection");
+        assert!(connection.close_reason().is_none());
+
+        shutdown.close();
+        tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .expect("serving task must stop")
+            .expect("join serving task");
+        tokio::time::timeout(Duration::from_secs(3), shutdown.wait_for_release())
+            .await
+            .expect("Quinn drivers must stop")
+            .expect("release server endpoint");
+
+        let rebound = std::net::UdpSocket::bind(address)
+            .expect("graceful completion must release the exact UDP address");
+        assert_eq!(rebound.local_addr().expect("rebound address"), address);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn aborted_serving_task_releases_udp_socket_after_explicit_close() {
+        let owner_data = tempdir().expect("owner");
+        let provider_data = tempdir().expect("provider");
+        let owner = Arc::new(Engine::open(test_options(owner_data.path())).expect("owner"));
+        let provider_engine =
+            Arc::new(Engine::open(test_options(provider_data.path())).expect("provider"));
+        trust_all(&owner, &provider_engine);
+        trust_all(&provider_engine, &owner);
+        let tls = test_tls(provider_data.path(), "tls");
+        let node = QuicNode::bind(
+            "127.0.0.1:0".parse().expect("address"),
+            Arc::clone(&provider_engine),
+            &tls,
+        )
+        .expect("node");
+        let address = node.local_addr().expect("local address");
+        let shutdown = node.shutdown_handle();
+        let task = tokio::spawn(node.run());
+        let provider = QuicProvider::new(
+            address,
+            provider_engine.public_identity(),
+            tls.certificate_der().to_vec(),
+            Arc::clone(&owner),
+        )
+        .expect("provider client");
+        // Prove the server accepted and dispatched this connection before its
+        // serving task is aborted; a client handshake alone does not prove it.
+        let probe_provider = provider.clone();
+        let capability = tokio::task::spawn_blocking(move || probe_provider.probe_capability())
+            .await
+            .expect("join capability probe")
+            .expect("complete authenticated storage request");
+        assert_eq!(capability.provider_device_id, provider_engine.device_id());
+        let connection = provider
+            .connection()
+            .await
+            .expect("retained QUIC connection");
+        assert!(connection.close_reason().is_none());
+
+        task.abort();
+        assert!(
+            task.await
+                .expect_err("serving task must be cancelled")
+                .is_cancelled(),
+            "serving task must end through cancellation"
+        );
+        shutdown.close();
+        tokio::time::timeout(Duration::from_secs(3), shutdown.wait_for_release())
+            .await
+            .expect("Quinn drivers must stop after explicit close")
+            .expect("release cancelled server endpoint");
+
+        let rebound = std::net::UdpSocket::bind(address)
+            .expect("cancel cleanup must release the exact UDP address");
+        assert_eq!(rebound.local_addr().expect("rebound address"), address);
+    }
+
+    #[tokio::test]
+    async fn owned_quinn_runtime_prunes_completed_driver_handles_during_churn() {
+        const COMPLETED_TASKS: usize = 1_024;
+        let runtime = OwnedQuinnRuntime::default();
+        let (completed, mut completions) = tokio::sync::mpsc::unbounded_channel();
+        for _ in 0..COMPLETED_TASKS {
+            let completed = completed.clone();
+            runtime.spawn(Box::pin(async move {
+                completed.send(()).expect("observe completion");
+            }));
+        }
+        drop(completed);
+        while completions.recv().await.is_some() {}
+        while runtime
+            .tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .any(|task| !task.is_finished())
+        {
+            tokio::task::yield_now().await;
+        }
+
+        runtime.spawn(Box::pin(async {}));
+        assert_eq!(
+            runtime
+                .tasks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
+            1,
+            "completed Quinn driver handles must not accumulate for the endpoint lifetime"
+        );
+        runtime.join().await.expect("join final driver");
+    }
+
     #[test]
     fn provider_read_batch_rejects_partial_reordered_wrong_scope_and_oversized_responses() {
         let backup_id = BackupId::new();
@@ -4324,6 +4814,178 @@ mod tests {
             0
         );
         task.abort();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn recovery_visitor_reservation_refusal_prevents_second_capsule_fetch() {
+        struct RejectSecond {
+            reservations: Vec<u64>,
+            accepted: usize,
+        }
+
+        impl RecoveryCatalogSink for RejectSecond {
+            fn reserve(&mut self, serialized_bytes: u64) -> Result<(), CoreError> {
+                self.reservations.push(serialized_bytes);
+                if self.reservations.len() == 2 {
+                    return Err(CoreError::ResourceLimit("test recovery budget"));
+                }
+                Ok(())
+            }
+
+            fn accept(&mut self, _capsule: RecoveryCapsule) -> Result<(), CoreError> {
+                self.accepted += 1;
+                Ok(())
+            }
+        }
+
+        let owner_data = tempdir().expect("owner");
+        let provider_data = tempdir().expect("provider");
+        let owner = Arc::new(Engine::open(test_options(owner_data.path())).expect("owner"));
+        let remote = Arc::new(Engine::open(test_options(provider_data.path())).expect("provider"));
+        trust_all(&owner, &remote);
+        trust_all(&remote, &owner);
+        let backup_id = BackupId::new();
+        let capsules = [("first", 1), ("second", 2)]
+            .into_iter()
+            .map(|(snapshot_id, committed_at_unix_ms)| RecoveryCapsule {
+                schema_version: 1,
+                cipher_suite: "XCHACHA20-POLY1305-HKDF-SHA256".to_owned(),
+                backup_id,
+                snapshot_id: snapshot_id.to_owned(),
+                key_epoch: 1,
+                committed_at_unix_ms,
+                nonce: "opaque".to_owned(),
+                ciphertext: "opaque".to_owned(),
+                signer_device_id: owner.device_id(),
+                signature: "opaque".to_owned(),
+            })
+            .collect::<Vec<_>>();
+        let tls = test_tls(provider_data.path(), "tls");
+        let node = QuicNode::bind(
+            "127.0.0.1:0".parse().expect("address"),
+            Arc::clone(&remote),
+            &tls,
+        )
+        .expect("node");
+        let address = node.local_addr().expect("local address");
+        let task = tokio::spawn(node.run());
+        let provider = QuicProvider::new(
+            address,
+            remote.public_identity(),
+            tls.certificate_der().to_vec(),
+            Arc::clone(&owner),
+        )
+        .expect("provider");
+
+        tokio::task::spawn_blocking(move || {
+            for capsule in &capsules {
+                provider
+                    .put_recovery_capsule_scoped(backup_id, capsule)
+                    .expect("store capsule");
+            }
+            let operations_before_visit = provider.operation_trace().len();
+            let mut sink = RejectSecond {
+                reservations: Vec::new(),
+                accepted: 0,
+            };
+            let result = provider.visit_recovery_capsules(&JobControl::new(), &mut sink);
+            assert!(
+                matches!(
+                    result,
+                    Err(CoreError::ResourceLimit("test recovery budget"))
+                ),
+                "unexpected visitor result: {result:?}"
+            );
+            assert_eq!(sink.reservations.len(), 2);
+            assert_eq!(sink.accepted, 1);
+            assert_eq!(
+                provider
+                    .operation_trace()
+                    .into_iter()
+                    .skip(operations_before_visit)
+                    .filter(|operation| *operation == OperationType::GetRecoveryCapsuleSegment)
+                    .count(),
+                1
+            );
+        })
+        .await
+        .expect("worker");
+        task.abort();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn recovery_visitor_cancels_in_flight_descriptor_listing() {
+        struct IgnoringSink;
+
+        impl RecoveryCatalogSink for IgnoringSink {
+            fn reserve(&mut self, _serialized_bytes: u64) -> Result<(), CoreError> {
+                Ok(())
+            }
+
+            fn accept(&mut self, _capsule: RecoveryCapsule) -> Result<(), CoreError> {
+                Ok(())
+            }
+        }
+
+        let local_data = tempdir().expect("local");
+        let remote_data = tempdir().expect("remote");
+        let local = Arc::new(Engine::open(test_options(local_data.path())).expect("local"));
+        let remote = Arc::new(Engine::open(test_options(remote_data.path())).expect("remote"));
+        let tls = test_tls(remote_data.path(), "tls");
+        let endpoint = Endpoint::server(
+            tls.server_config().expect("server config"),
+            "127.0.0.1:0".parse().expect("address"),
+        )
+        .expect("endpoint");
+        let address = endpoint.local_addr().expect("local address");
+        let (request_seen_send, request_seen_receive) = tokio::sync::oneshot::channel();
+        let (tail_send, tail_receive) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let incoming = endpoint.accept().await.expect("incoming");
+            let connection = incoming.await.expect("connection");
+            let (send, mut receive) = connection.accept_bi().await.expect("stream");
+            read_frame(&mut receive, MAX_HELLO_FRAME_BYTES)
+                .await
+                .expect("hello");
+            read_frame(&mut receive, MAX_OPERATION_FRAME_BYTES)
+                .await
+                .expect("operation");
+            request_seen_send.send(()).ok();
+            let stopped = tokio::time::timeout(Duration::from_secs(5), send.stopped()).await;
+            tail_send.send(stopped.is_ok()).ok();
+        });
+        let provider = QuicProvider::new(
+            address,
+            remote.public_identity(),
+            tls.certificate_der().to_vec(),
+            Arc::clone(&local),
+        )
+        .expect("provider");
+        let control = JobControl::new();
+        let mut worker = tokio::task::spawn_blocking({
+            let provider = provider.clone();
+            let control = control.clone();
+            move || provider.visit_recovery_capsules(&control, &mut IgnoringSink)
+        });
+        tokio::select! {
+            seen = request_seen_receive => seen.expect("request signal"),
+            result = &mut worker => panic!("client completed before request reached server: {result:?}"),
+            () = tokio::time::sleep(Duration::from_secs(5)) => panic!("request did not reach server within five seconds"),
+        }
+        control.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(5), worker)
+            .await
+            .expect("client cancellation deadline")
+            .expect("client worker");
+        assert!(matches!(result, Err(CoreError::Cancelled)));
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), tail_receive)
+                .await
+                .expect("server tail deadline")
+                .expect("server tail signal")
+        );
+        assert_eq!(provider.metrics().cancellations, 1);
+        server.await.expect("server");
     }
 
     #[tokio::test(flavor = "multi_thread")]

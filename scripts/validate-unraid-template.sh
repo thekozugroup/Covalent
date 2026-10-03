@@ -42,6 +42,9 @@ for required in \
   'test ! -e "$claim_output"' \
   'claim output directory mode 0700' \
   'Android app never accept a setup code' \
+  'unix:/mnt/user/appdata/covalent/config/covalent-web.sock' \
+  'net.unraid.docker.webui=https://&lt;MagicDNS name&gt;:8443/' \
+  'Do not use Tailscale Funnel' \
   'never map /mnt/user/system' \
   'Mode="ro"' \
   'Default="false"'; do
@@ -53,8 +56,8 @@ done
 
 repository=$(sed -n 's|^[[:space:]]*<Repository>\(.*\)</Repository>[[:space:]]*$|\1|p' "$template")
 if grep -q '<WebUI>http://' "$template" \
-  || ! printf '%s\n' "$repository" | grep -Eq '^ghcr\.io/thekozugroup/covalent@sha256:[0-9a-f]{64}$'; then
-  echo "Unraid template must use TLS management and an immutable Covalent GHCR digest" >&2
+  || ! printf '%s\n' "$repository" | grep -Eq '^ghcr\.io/thekozugroup/covalent(:stable|@sha256:[0-9a-f]{64})$'; then
+  echo "Unraid template must use TLS management and the verified Covalent stable channel or an immutable GHCR digest" >&2
   exit 1
 fi
 
@@ -92,15 +95,17 @@ require_mode() {
 
 # These are the intended deployment mounts. Generic occurrences of Mode=ro
 # are insufficient: every input and the separate KEK must be read-only, while
-# only state and the explicit restore destination may be writable.
+# only state, the selected sync folder and the explicit restore destination may be writable.
 require_mode /source ro
 require_mode /boot-source ro
 require_mode /run/secrets/covalent-kek ro
 require_mode /config rw
 require_mode /data rw
 require_mode /restore rw
+require_mode /sync rw
 require_mode 8443 tcp
 require_mode 8787 udp
+require_mode 8789 tcp
 
 if grep -Eiq '(docker|tailscale)\.sock|/var/run/docker|/var/run/tailscale' "$template"; then
   echo "Unraid template must not mount Docker or Tailscale control sockets" >&2

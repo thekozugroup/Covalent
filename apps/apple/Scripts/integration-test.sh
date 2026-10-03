@@ -65,7 +65,7 @@ restore_dir="$test_root/restore"
 mkdir -p "$data_dir" "$source_dir" "$restore_dir"
 
 cargo build --locked -p covalent-node --manifest-path "$repo_root/Cargo.toml"
-node_binary="$repo_root/target/debug/covalent-node"
+node_binary="${CARGO_TARGET_DIR:-$repo_root/target}/debug/covalent-node"
 key_file="$test_root/node-kek"
 wrong_key_file="$test_root/wrong-node-kek"
 token_file="$test_root/test-api-token"

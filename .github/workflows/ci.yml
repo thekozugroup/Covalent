@@ -50,10 +50,7 @@ jobs:
           rg --version
           jq --version
       - run: ./scripts/validate-foundation.sh
-      # Every release workflow re-lists the checks it demands be green. Those
-      # lists read as exhaustive and were not - "iOS Tier 2" was in none of them.
-      # Derive the list from this file so a new lane cannot be added without a
-      # release workflow being taught to require it.
+      # Release workflows must require every unconditional CI lane.
       - run: ./scripts/check-required-checks.sh
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
@@ -87,12 +84,18 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6
+        with:
+          go-version: "1.26.7"
+          cache: false
       - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
         with:
           targets: aarch64-apple-darwin
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Require an Apple Silicon runner
         run: test "$(uname -m)" = arm64
+      - run: ./scripts/test-macos-open-source-notices.sh
+      - run: ./scripts/test-macos-sync-engine-packaging.sh
       - run: brew install xcodegen
       - run: swift test --package-path apps/apple
       - name: Generate Apple dependency inventories
@@ -105,16 +108,6 @@ jobs:
           path: ${{ runner.temp }}/covalent-apple-inventory
           if-no-files-found: error
       - run: apps/apple/Scripts/integration-test.sh
-      - name: Run bounded macOS UI and accessibility gates
-        env:
-          COVALENT_TEST_ARTIFACT_DIR: ${{ runner.temp }}/covalent-macos-ui
-        run: apps/apple/Scripts/macos-ui-test.sh
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: always()
-        with:
-          name: macos-ui-diagnostics-${{ github.sha }}
-          path: ${{ runner.temp }}/covalent-macos-ui
-          if-no-files-found: warn
 
   # These steps used to sit at the end of `macos-integration-ui`, behind
   # integration-test.sh and the UI gate. Over 27 consecutive runs on main they
@@ -131,6 +124,10 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6
+        with:
+          go-version: "1.26.7"
+          cache: false
       - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
         with:
           targets: aarch64-apple-darwin
@@ -158,11 +155,17 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6
+        with:
+          go-version: "1.26.7"
+          cache: false
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: "17"
       - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
+        with:
+          packages: platform-tools
       # check-android.sh runs assembleRelease, which builds the pinned JNI
       # libraries through the NDK. Install the exact pinned NDK so the gate can
       # actually run instead of failing on a missing toolchain.
@@ -191,6 +194,29 @@ jobs:
       # existed with no caller anywhere in the repo, so it gated nothing.
       - run: ./scripts/check-android-jni-contract.sh
       - run: ./scripts/check-android.sh
+      - name: Preserve Android foundation failure reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-foundation-reports-${{ github.sha }}
+          path: |
+            apps/android/app/build/reports/lint-results-*
+            apps/android/app/build/test-results
+            apps/android/app/build/generated/syncEngine/reports
+            apps/android/app/build/generated/jniLibs/provenance
+            apps/android/app/build/generated/jniLibs/covalent-android-native-provenance.sha256
+          if-no-files-found: warn
+      - name: Retain the exact Android native distribution evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-native-distribution-evidence-${{ github.sha }}
+          path: |
+            apps/android/app/build/outputs/apk/debug/app-debug.apk
+            apps/android/app/build/generated/syncEngine/reports
+            apps/android/app/build/generated/jniLibs/provenance
+            apps/android/app/build/generated/jniLibs/covalent-android-native-provenance.sha256
+          if-no-files-found: error
+          retention-days: 14
       - run: ./apps/android/gradlew -p apps/android :app:generateAndroidSbom
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -206,11 +232,17 @@ jobs:
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6
+        with:
+          go-version: "1.26.7"
+          cache: false
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: "17"
       - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
+        with:
+          packages: platform-tools
       # This gate runs scripts/check-android.sh through the device script, so it
       # needs the same JNI cross-compile toolchain as the Android foundation job:
       # the pinned NDK, a rustup toolchain with both Android targets, and
@@ -234,6 +266,31 @@ jobs:
       # nothing, which is indistinguishable from the step not running at all.
       - name: Enable and prove KVM acceleration
         run: ./scripts/require-kvm-acceleration.sh
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Compute the exact Docker source fingerprint
+        id: android-docker-source
+        run: |
+          set -euo pipefail
+          COVALENT_SOURCE_FINGERPRINT=$(./scripts/docker-source-fingerprint.sh . | sha256sum | awk '{print $1}')
+          [[ "${COVALENT_SOURCE_FINGERPRINT}" =~ ^[0-9a-f]{64}$ ]]
+          echo "fingerprint=${COVALENT_SOURCE_FINGERPRINT}" >> "${GITHUB_OUTPUT}"
+      - name: Build the exact device fixture with reusable layers
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+        with:
+          context: .
+          file: packaging/docker/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: covalent:android-api37-e2e
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            COVALENT_SOURCE_FINGERPRINT=${{ steps.android-docker-source.outputs.fingerprint }}
+          cache-from: |
+            type=gha,version=2,scope=covalent-ci-android-device
+            type=gha,version=2,scope=covalent-ci-amd64
+          cache-to: type=gha,version=2,scope=covalent-ci-android-device,mode=max,ignore-error=true,timeout=2m
       # api-level 37.0 is intentional and verified: sdkmanager installs
       # system-images;android-37.0;google_apis;x86_64 on the hosted runner today.
       # The emulator boots under KVM; do not downgrade this pin.
@@ -305,68 +362,17 @@ jobs:
           disable-animations: true
           disable-linux-hw-accel: false
           emulator-boot-timeout: 900
-          # Two things happen before launch, and the second one is why this job
-          # was red.
-          #
-          # Start the adb server before the emulator so it can register itself
-          # instead of logging "Unable to connect to adb daemon on port: 5037" and
-          # leaving the action to discover the device by port scan.
-          #
-          # Then do the gate's cold build work while no guest is running.
-          # scripts/android-api37-device-test.sh runs check-android.sh and then
-          # builds packaging/docker/Dockerfile, and both are full cold Rust
-          # release compiles. Reached through this action's `script:` payload they
-          # ran with the API 37 guest already booted, so a 4-vCPU runner sat at
-          # full load for 20-23 minutes while the guest was descheduled, and the
-          # guest did not survive it:
-          #
-          #   * Run 32481440600, before the Direct Boot fix, reached
-          #     instrumentation with user 0 STILL LOCKED twenty minutes after
-          #     sys.boot_completed - the app died with "SharedPreferences in
-          #     credential encrypted storage are not available until after user
-          #     (id 0) is unlocked". A healthy API 37 guest reports
-          #     sys.user.0.ce_available=true in the same second it reports
-          #     sys.boot_completed=1; measured cold on this AVD, both flip at 17s.
-          #   * Runs 32488425852 and 32491119888 reported
-          #     "INSTRUMENTATION_ABORTED: System has crashed." with ZERO tests
-          #     recorded. That is the string `am instrument`'s death recipient on
-          #     the system_server binder prints when system_server dies under it,
-          #     so no test had run and none could have caused it.
-          #
-          # These two lines are not a cache warm-up. They are the gate's build
-          # half, run in full, here, where no guest exists to starve. The device
-          # script is then told so with COVALENT_ANDROID_PREBUILT=true below and
-          # skips the *rebuild* only - it still runs check-android.sh, in
-          # --verify-prebuilt mode, which proves every artifact these two lines
-          # were supposed to produce is present and newer than every source it is
-          # built from, re-reads the unit test and lint reports to confirm they
-          # were a clean pass, applies the same freshness proof to the image
-          # tagged here, and runs the instrumentation-result contract battery
-          # unchanged. Nothing the gate proves changes; the work moves off the
-          # window where the guest is fragile instead of being done twice.
-          #
-          # Warming a cache was the previous attempt at this and it was not
-          # enough. With every cache warm the device script's own re-run of these
-          # two still cost 68 seconds of full-load 4-vCPU time, and run
-          # 32499985083 died inside it: `adb install` hit a null
-          # PackageManagerInternal in StorageManagerService 68 seconds after an
-          # identical install had succeeded. The load has to be absent, not fast.
-          #
-          # Every line below is one whole command. This action does not run these
-          # payloads as a script: it splits them on newlines and runs each line in
-          # its own `sh -c`, so continuations, multi-line `while`/`if`, and shell
-          # variables carried between lines all break. The docker build here used
-          # backslash continuations and had been failing since it was added -
-          # `sh -c "docker build \"` passes a literal backslash as the context and
-          # dies with `unable to prepare context: path "\" not found`, which this
-          # action reports and then continues past. So the warm BuildKit layer this
-          # comment describes was never actually warmed, and the gate script's own
-          # cold docker build ran with the guest already up - the exact starvation
-          # the reordering exists to prevent. One line, no continuations.
+          # Build and load the Docker fixture above before this action starts. Run
+          # the full Android build here before the guest boots so compilation
+          # cannot starve the emulator. COVALENT_ANDROID_PREBUILT skips duplicate
+          # builds but still verifies source and image freshness, test and lint
+          # reports, native evidence and the expected instrumentation results.
+          # Start adb before the emulator so the device can register immediately.
+          # This action runs each payload line in a separate `sh -c`, so keep every
+          # command complete on one line without cross-line shell state.
           pre-emulator-launch-script: |
             "$ANDROID_HOME/platform-tools/adb" start-server
             ./scripts/check-android.sh
-            docker build --file packaging/docker/Dockerfile --build-arg VCS_REF=$(git rev-parse HEAD) --build-arg COVALENT_SOURCE_FINGERPRINT=$(./scripts/docker-source-fingerprint.sh . | shasum -a 256 | awk '{print $1}') --tag covalent:android-api37-e2e .
           # This lane dies of one graphics-transport fault reached by several
           # different callers. The caller that made the guest unbootable is removed
           # in scripts/disable-android-guest-launcher.sh, and that part is fixed.
@@ -674,7 +680,13 @@ jobs:
         if: always()
         with:
           name: android-api37-evidence-${{ github.sha }}
-          path: ${{ runner.temp }}/covalent-android-api37
+          path: |
+            ${{ runner.temp }}/covalent-android-api37
+            apps/android/app/build/reports/lint-results-*
+            apps/android/app/build/test-results
+            apps/android/app/build/generated/syncEngine/reports
+            apps/android/app/build/generated/jniLibs/provenance
+            apps/android/app/build/generated/jniLibs/covalent-android-native-provenance.sha256
           if-no-files-found: warn
 
   container-foundation:
@@ -696,13 +708,67 @@ jobs:
           fingerprint=$(./scripts/docker-source-fingerprint.sh . | sha256sum | awk '{print $1}')
           [[ "${fingerprint}" =~ ^[0-9a-f]{64}$ ]]
           echo "fingerprint=${fingerprint}" >> "${GITHUB_OUTPUT}"
-      - run: docker buildx build --platform linux/amd64 --load --build-arg VCS_REF=${{ github.sha }} --build-arg COVALENT_SOURCE_FINGERPRINT=${{ steps.docker-source.outputs.fingerprint }} -f packaging/docker/Dockerfile -t covalent:ci .
+      - name: Build the exact amd64 image with reusable layers
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+        with:
+          context: .
+          file: packaging/docker/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: covalent:ci
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            COVALENT_SOURCE_FINGERPRINT=${{ steps.docker-source.outputs.fingerprint }}
+          cache-from: type=gha,version=2,scope=covalent-ci-amd64
+          cache-to: type=gha,version=2,scope=covalent-ci-amd64,mode=max,ignore-error=true,timeout=2m
       - run: ./scripts/check-container-contract.sh covalent:ci "${GITHUB_SHA}" development "${{ steps.docker-source.outputs.fingerprint }}"
+      - name: Retain the exact amd64 engine distribution evidence
+        id: container-evidence
+        run: |
+          set -euo pipefail
+          image_id=$(docker image inspect --format '{{.Id}}' covalent:ci)
+          [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          container_id=$(docker create --network none --read-only --entrypoint /bin/true "$image_id")
+          [[ "$container_id" =~ ^[0-9a-f]{64}$ ]]
+          trap 'docker rm -v "$container_id" >/dev/null' EXIT
+          echo "image_id=$image_id" >> "$GITHUB_OUTPUT"
+          output="$RUNNER_TEMP/covalent-linux-engine-evidence-amd64"
+          test ! -e "$output"
+          mkdir "$output" "$output/engine"
+          # Docker's directory copier applies 0555 before writing children.
+          # GNU tar restores directory permissions after extracting their files.
+          docker cp "$container_id:/usr/local/share/covalent/sync-engine/." - \
+            | tar --extract --file - --no-same-owner --delay-directory-restore --directory "$output/engine"
+          docker image inspect "$image_id" > "$output/image-metadata.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-sync-engine-evidence-amd64-${{ github.sha }}
+          path: ${{ runner.temp }}/covalent-linux-engine-evidence-amd64
+          if-no-files-found: error
       - run: docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp --entrypoint covalent covalent:ci doctor
       - run: ./scripts/check-container-runtime.sh covalent:ci
-      - run: ./scripts/check-artifact-budgets.sh --image-only covalent:ci --platform linux/amd64
       - run: ./scripts/validate-unraid-template.sh
+      - name: Validate packaged folder sync with isolated writable volumes
+        run: python3 -B scripts/container-folder-sync-e2e.py covalent:ci
       - run: ./scripts/docker-compose-e2e.sh covalent:ci
+      - name: Scan the exact amd64 runtime image
+        id: container-vulnerabilities
+        run: >-
+          ./scripts/run-pinned-grype-scan.sh
+          '${{ steps.container-evidence.outputs.image_id }}'
+          '${{ runner.temp }}/covalent-container-vulnerabilities-amd64.json'
+      # A size failure must preserve the functional and security results above.
+      - run: ./scripts/check-artifact-budgets.sh --image-only covalent:ci --platform linux/amd64
+      - name: Retain the amd64 vulnerability report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: container-vulnerabilities-amd64-${{ github.sha }}
+          path: ${{ runner.temp }}/covalent-container-vulnerabilities-amd64.json
+          if-no-files-found: error
+          retention-days: 14
 
   container-arm64:
     name: Container arm64 image
@@ -726,40 +792,62 @@ jobs:
           fingerprint=$(./scripts/docker-source-fingerprint.sh . | sha256sum | awk '{print $1}')
           [[ "${fingerprint}" =~ ^[0-9a-f]{64}$ ]]
           echo "fingerprint=${fingerprint}" >> "${GITHUB_OUTPUT}"
-      - run: docker buildx build --platform linux/arm64 --load --build-arg VCS_REF=${{ github.sha }} --build-arg COVALENT_SOURCE_FINGERPRINT=${{ steps.docker-source.outputs.fingerprint }} -f packaging/docker/Dockerfile -t covalent:ci-arm64 .
-      - run: ./scripts/check-container-contract.sh covalent:ci-arm64 "${GITHUB_SHA}" development "${{ steps.docker-source.outputs.fingerprint }}"
-      - run: ./scripts/check-artifact-budgets.sh --image-only covalent:ci-arm64 --platform linux/arm64
-
-  ios-tier2:
-    name: iOS Tier 2
-    runs-on: macos-26
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
-        with:
-          targets: aarch64-apple-darwin
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-      - name: Require an Apple Silicon runner
-        run: test "$(uname -m)" = arm64
-      - run: brew install xcodegen
-      - run: cd apps/apple && xcodegen generate --quiet
-      - run: xcodebuild -project apps/apple/Covalent.xcodeproj -scheme CovalentIOS -configuration Debug -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO build
-      # Building the iOS app proved only that it compiles. The UI and
-      # accessibility assertions in apps/apple/Scripts/ios-ui-test.sh existed but
-      # ran in no job, so nothing gated on them; the macOS equivalent caught a
-      # real 4.0:1 contrast regression, which this tier could not have caught.
-      # Run the bounded iOS gate here and let its failure fail the workflow.
-      - name: Run bounded iOS UI and accessibility gates
+      - name: Build the exact arm64 image with reusable layers
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         env:
-          COVALENT_TEST_ARTIFACT_DIR: ${{ runner.temp }}/covalent-ios-ui
-        run: apps/apple/Scripts/ios-ui-test.sh
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: always()
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
         with:
-          name: ios-ui-diagnostics-${{ github.sha }}
-          path: ${{ runner.temp }}/covalent-ios-ui
-          if-no-files-found: warn
+          context: .
+          file: packaging/docker/Dockerfile
+          platforms: linux/arm64
+          load: true
+          tags: covalent:ci-arm64
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            COVALENT_SOURCE_FINGERPRINT=${{ steps.docker-source.outputs.fingerprint }}
+          cache-from: type=gha,version=2,scope=covalent-ci-arm64
+          cache-to: type=gha,version=2,scope=covalent-ci-arm64,mode=max,ignore-error=true,timeout=2m
+      - run: ./scripts/check-container-contract.sh covalent:ci-arm64 "${GITHUB_SHA}" development "${{ steps.docker-source.outputs.fingerprint }}"
+      - name: Retain the exact arm64 engine distribution evidence
+        id: container-evidence
+        run: |
+          set -euo pipefail
+          image_id=$(docker image inspect --format '{{.Id}}' covalent:ci-arm64)
+          [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          container_id=$(docker create --network none --read-only --entrypoint /bin/true "$image_id")
+          [[ "$container_id" =~ ^[0-9a-f]{64}$ ]]
+          trap 'docker rm -v "$container_id" >/dev/null' EXIT
+          echo "image_id=$image_id" >> "$GITHUB_OUTPUT"
+          output="$RUNNER_TEMP/covalent-linux-engine-evidence-arm64"
+          test ! -e "$output"
+          mkdir "$output" "$output/engine"
+          # Docker's directory copier applies 0555 before writing children.
+          # GNU tar restores directory permissions after extracting their files.
+          docker cp "$container_id:/usr/local/share/covalent/sync-engine/." - \
+            | tar --extract --file - --no-same-owner --delay-directory-restore --directory "$output/engine"
+          docker image inspect "$image_id" > "$output/image-metadata.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-sync-engine-evidence-arm64-${{ github.sha }}
+          path: ${{ runner.temp }}/covalent-linux-engine-evidence-arm64
+          if-no-files-found: error
+      - name: Validate packaged arm64 folder sync with isolated writable volumes
+        run: python3 -B scripts/container-folder-sync-e2e.py covalent:ci-arm64
+      - name: Scan the exact arm64 runtime image
+        id: container-vulnerabilities
+        run: >-
+          ./scripts/run-pinned-grype-scan.sh
+          '${{ steps.container-evidence.outputs.image_id }}'
+          '${{ runner.temp }}/covalent-container-vulnerabilities-arm64.json'
+      - run: ./scripts/check-artifact-budgets.sh --image-only covalent:ci-arm64 --platform linux/arm64
+      - name: Retain the arm64 vulnerability report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: container-vulnerabilities-arm64-${{ github.sha }}
+          path: ${{ runner.temp }}/covalent-container-vulnerabilities-arm64.json
+          if-no-files-found: error
+          retention-days: 14
 
   release-candidate-software:
     name: Release candidate software gates
@@ -768,11 +856,6 @@ jobs:
       - rust-and-contracts
       - macos-integration-ui
       - macos-app-bundle
-      # ios-tier2 is deliberately absent. Supported platforms are Unraid,
-      # macOS, and Android; iOS is out of scope for now. The job still runs on
-      # every commit and is still green - it just must not block a release.
-      # scripts/check-required-checks.sh enforces that this omission is
-      # declared rather than accidental, and fails if the two ever disagree.
       - android-foundation
       - android-device
       - container-foundation
@@ -815,4 +898,4 @@ jobs:
             echo "Release candidate rejected: not every software gate concluded success." >&2
             exit 1
           fi
-          echo "Software gates passed. The published image and live Unraid evidence remain separate release blockers; Apple Developer ID is excluded and Android production signing is deferred."
+          echo "Software gates passed. Mac UI acceptance is performed manually with computer use against an exact source-bound package and retained evidence. The published image and isolated Atmos Docker validation remain separate release blockers; Apple Developer ID is excluded and Android production signing is deferred."

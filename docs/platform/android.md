@@ -1,15 +1,56 @@
 # Set up Covalent on Android
 
-Current personal-use path: build the debug APK from this repository. Gradle
-signs that APK with your local debug key, so Android can install it. Never
-install `app-release-unsigned.apk`; an unsigned release APK is not an
-alternative.
+Install the published personal APK, or build from source, then follow
+[Create your first one-way link](../getting-started-links.md). Rclone transfers
+use Android's system folder picker. Folder links pair devices directly; legacy
+server enrollment is optional.
+
+The published v0.2.1 APK is debug-signed for personal use, not production-signed.
+Source builds use your computer's debug key. Different signers cannot update
+each other. Never install `app-release-unsigned.apk`; an unsigned release APK is
+not an alternative.
 
 Android 17 / API 37 is the supported and release-tested target. The manifest
 allows API 26 and later, but older Android versions are not Tier 1 release
 evidence.
 
-## Before you start
+## Download and install v0.2.1
+
+For v0.2.1, download the published
+[debug-signed personal APK](https://github.com/thekozugroup/Covalent/releases/download/v0.2.1/Covalent-v0.2.1-android-personal-debug-7157b555a2c9f684.apk)
+and its
+[SHA-256 checksum](https://github.com/thekozugroup/Covalent/releases/download/v0.2.1/Covalent-v0.2.1-android-personal-debug-7157b555a2c9f684.apk.sha256).
+This is a personal-use debug APK, not a production-signed package.
+
+Download both files into the same folder and verify the checksum there:
+
+```sh
+shasum -a 256 -c Covalent-v0.2.1-android-personal-debug-7157b555a2c9f684.apk.sha256
+```
+
+Continue only when it prints `OK`. Transfer the verified APK to the phone,
+open it from the Files app, and use Android's installer. If Android requires
+permission to install from that app, grant it only to the app opening this APK
+and remove it afterward. Alternatively, install through `adb` on a trusted
+computer with one explicitly selected device:
+
+```sh
+adb devices
+adb -s DEVICE_SERIAL install Covalent-v0.2.1-android-personal-debug-7157b555a2c9f684.apk
+```
+
+Replace `DEVICE_SERIAL` with that device's exact serial. This command is for a
+new install. Read [Install or update](#install-or-update) before replacing an
+existing installation; do not uninstall to bypass a signer mismatch. Then
+[pair a device and create a link](#pair-a-device-and-create-a-link).
+
+Current acceptance is API 37 emulator evidence, not physical-phone validation.
+See the [release ledger](../release/completion-progress.md) for accepted scope
+and retained historical failures.
+
+## Optional: build from source
+
+### Before you start
 
 You need:
 
@@ -20,9 +61,9 @@ You need:
 - `rustup` with the repository's pinned Rust toolchain;
 - `cargo-ndk` 4.1.2;
 - an Android device with USB debugging enabled; and
-- a claimed Docker or Unraid server, such as Atlas.
+- another device running the current Covalent build.
 
-## Build the installable personal APK
+### Build the installable personal APK
 
 From the repository root, run one command:
 
@@ -31,9 +72,12 @@ From the repository root, run one command:
 ```
 
 It checks prerequisites, builds both native ABIs, verifies the debug signer,
-package, version, alignment, and native libraries, then writes an APK and its
-SHA-256 file under the ignored `artifacts/install/` directory. It does not
-connect to or change any Android device. Gradle's intermediate file is
+package, version, alignment, and native libraries, then writes an APK, its
+SHA-256 file, the Android SBOM and license inventory, readable third-party
+notices and their manifest, and a source/native/signing build receipt under the
+ignored `artifacts/install/` directory. The receipt marks device testing as
+required separately and binds that requirement to the exact APK SHA-256. It
+does not connect to or change any Android device. Gradle's intermediate file is
 `apps/android/app/build/outputs/apk/debug/app-debug.apk`; install the verified
 copy under `artifacts/install/`.
 
@@ -43,10 +87,16 @@ SHA-256, for example:
 ```text
 artifacts/install/Covalent-v0.2.0-android-personal-debug-0123456789abcdef.apk
 artifacts/install/Covalent-v0.2.0-android-personal-debug-0123456789abcdef.apk.sha256
+artifacts/install/Covalent-v0.2.0-android-personal-debug-0123456789abcdef-SBOM.cdx.json
+artifacts/install/Covalent-v0.2.0-android-personal-debug-0123456789abcdef-license-inventory.json
+artifacts/install/Covalent-v0.2.0-android-personal-debug-0123456789abcdef-THIRD-PARTY-NOTICES.txt
+artifacts/install/Covalent-v0.2.0-android-personal-debug-0123456789abcdef-notices-manifest.json
+artifacts/install/Covalent-v0.2.0-android-personal-debug-0123456789abcdef-build-receipt.json
 ```
 
-Existing artifacts are never overwritten. An identical verified build is
-reused; a conflicting file stops the command.
+Existing artifacts are never overwritten. Identical verified files are reused;
+a conflicting file stops the command. For a release, retain the exact APK's
+separate device-test receipt beside this build evidence.
 
 If the prerequisite check reports missing tools, install the exact Android and
 Rust inputs below. Set `ANDROID_HOME` to your SDK directory first. On macOS,
@@ -75,6 +125,10 @@ file. The printed certificate SHA-256 identifies this computer's debug signer.
 Neither turns a personal debug key into a publisher identity.
 
 ## Install or update
+
+The commands below build a new APK with this computer's debug key. They do not
+install the published download. For any update, preserve important data and
+confirm the installed and replacement packages use the same signer.
 
 Connect one unlocked Android device, approve its USB-debugging prompt, then
 copy its exact serial from:
@@ -110,12 +164,40 @@ Stop on `INSTALL_FAILED_UPDATE_INCOMPATIBLE`: the installed app and new APK use
 different signers. Building on another computer normally creates another debug
 key. Uninstalling fixes the signer conflict but deletes Covalent's app-local
 settings, protected connection, pending work, and Android folder grants. Do
-not uninstall until completed backups have passed a restore check and the
-claim files remain available.
+not uninstall until important files have independent copies and node state
+and claim files are preserved. If you use legacy encrypted backups, verify them
+and test a restore first. Reinstallation also requires pairing and folder grants
+again.
 
 A future production-signed APK also cannot update this debug-signed install.
 Moving to that permanent signer will require one deliberate uninstall and
 re-enrollment. After that move, every update must keep the same production key.
+
+## Pair a device and create a link
+
+Choose **Set up file transfers**, then **Start folder sync on this phone**.
+Allow local-network access and pair your other device. Compare the confirmation
+code and confirm it on both devices.
+Open **Shared folders** and choose only the folder to share through Android's
+system picker. Review timing and deletion behavior before **Create link**.
+On the receiving Android device, choose **Choose an existing folder**, confirm
+**Use this folder** in the picker, then choose **Accept invitation**.
+
+Use **Run now** for a first transfer, then choose Manual, Scheduled, or Continuous
+for that link. Android's Wi-Fi and charging conditions can pause transfers;
+background execution follows Android's limits. See
+[Create your first one-way link](../getting-started-links.md) for the shared
+settings, one-to-many transfers, and deletion choices.
+
+Keep both devices on a reachable LAN or Tailnet. UDP 8787 carries pairing and
+link control. A Docker source also needs TCP 8789 for authenticated file
+transfers. See [Docker network settings](../../packaging/docker/README.md).
+
+<details>
+<summary>Optional legacy encrypted backup setup</summary>
+
+These steps apply only to the older backup and restore workflow. They are not
+needed to pair devices or use rclone folder links.
 
 ## Claim the backup server
 
@@ -150,9 +232,11 @@ The hostname in the URL must match the server certificate. Do not replace it
 with a raw IP unless that IP is in the certificate. Do not use cleartext HTTP
 or a trust-all tool.
 
-UDP 8787 is needed only when this phone pairs with another Covalent device or
-uses one as an extra-copy provider. Allow it on the chosen LAN or Tailnet path.
-TCP 8443 remains the HTTPS console/API path.
+UDP 8787 carries Covalent pairing and link control. A Docker source also needs
+TCP 8789 for authenticated rclone transfers; see the
+[Docker network settings](../../packaging/docker/README.md). Allow the needed
+ports on the chosen LAN or Tailnet path. TCP 8443 remains the HTTPS console/API
+path.
 
 ## Connect in Covalent
 
@@ -200,6 +284,8 @@ For a stronger source-loss drill, move the expendable source file elsewhere
 after verification, restore it into another empty folder, compare it, then put
 the source back. Do not test with irreplaceable data.
 
+</details>
+
 ## Troubleshooting
 
 - **`sdkmanager` missing:** install Android SDK Command-line Tools in Android
@@ -209,12 +295,13 @@ the source back. Do not test with irreplaceable data.
   targets are installed.
 - **`adb` shows unauthorized:** unlock the phone, accept its debugging prompt,
   then run `adb devices` again.
-- **Server cannot be verified:** use the exact claimed HTTPS hostname, correct
-  `root.crt`, and exact `local-api-token`. Never bypass TLS.
+- **Legacy server cannot be verified:** use the exact claimed HTTPS hostname,
+  correct `root.crt`, and exact `local-api-token`. Never bypass TLS.
 - **LAN works on a computer but not Android:** grant local-network access and
   confirm Wi-Fi client isolation is off.
-- **Tailnet fails:** confirm the phone is online in the intended Tailnet and its
-  policy allows TCP 8443. Add UDP 8787 only for device pairing/replicas.
+- **Tailnet fails:** confirm both devices are online in the intended Tailnet and
+  its policy permits the pairing and transfer ports above. TCP 8443 is needed
+  separately for the legacy HTTPS server connection.
 - **Folder access was revoked:** choose the folder again. Reinstalling the app
   always removes its saved folder grants.
 

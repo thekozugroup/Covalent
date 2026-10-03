@@ -10,9 +10,9 @@ use std::time::Instant;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use covalent_protocol::{
-    BackupId, BackupSummary, DeviceId, ExportedDeviceSettings, Manifest, PairingInvitation,
-    PeerGrant, PeerRole, RememberedBackup, ReplicaAvailability, ReplicaIntent, SignedRoster,
-    StorageLease, TransportBinding,
+    BackupId, BackupSummary, DeviceId, ExportedDeviceSettings, MAX_REMEMBERED_BACKUPS, Manifest,
+    PairingInvitation, PeerGrant, PeerRole, RememberedBackup, ReplicaAvailability, ReplicaIntent,
+    SignedRoster, StorageLease, TransportBinding,
 };
 use fs2::FileExt as _;
 use serde::{Deserialize, Serialize};
@@ -36,6 +36,9 @@ use crate::{
     StoredSnapshot, WrappedSecret, decrypt_manifest, encrypt_manifest, export_settings,
     import_settings, state_secret_context,
 };
+
+mod recovery_import;
+mod transport_update;
 
 const NODE_CONFIG_SCHEMA_VERSION: u16 = 1;
 const LEGACY_BACKUP_KEY_SCHEMA_VERSION: u16 = 1;
@@ -75,6 +78,28 @@ fn backup_completion_failpoint(boundary: u8) -> Result<(), CoreError> {
 
 #[cfg(not(test))]
 const fn backup_completion_failpoint(_boundary: u8) -> Result<(), CoreError> {
+    Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    static RECOVERY_IMPORT_FAILPOINT: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn recovery_import_failpoint(boundary: u8) -> Result<(), CoreError> {
+    RECOVERY_IMPORT_FAILPOINT.with(|failpoint| {
+        if failpoint.get() == boundary {
+            failpoint.set(0);
+            Err(CoreError::Cancelled)
+        } else {
+            Ok(())
+        }
+    })
+}
+
+#[cfg(not(test))]
+const fn recovery_import_failpoint(_boundary: u8) -> Result<(), CoreError> {
     Ok(())
 }
 
@@ -121,6 +146,46 @@ pub struct RecoveredBackup {
     pub source_providers: BTreeSet<DeviceId>,
 }
 
+/// Exact evidence retained while importing owner-signed catalogs from connected providers.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RecoveryImportReport {
+    /// Authenticated backup snapshots committed by this attempt.
+    pub recovered_backups: Vec<RecoveredBackup>,
+    /// Providers from which a complete bounded catalog response was received.
+    pub queried_provider_ids: BTreeSet<DeviceId>,
+    /// Safe per-provider failure categories. No missing provider is reported as complete.
+    pub failures: Vec<ProviderFailure>,
+    /// True when unavailable or rejected evidence means a newer snapshot may exist.
+    pub newer_snapshot_may_exist: bool,
+    /// True when no catalog was committed because the authenticated evidence was unusable.
+    pub blocked: bool,
+}
+
+/// Durable anti-rollback watermark written before recovery publishes any snapshot.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecoverySnapshotCursor {
+    /// Owner-authenticated snapshot creation time.
+    pub committed_at_unix_ms: u64,
+    /// Stable snapshot identifier, used as the deterministic tie breaker.
+    pub snapshot_id: String,
+}
+
+struct ConfigSizeBudget(usize);
+
+impl std::io::Write for ConfigSizeBudget {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0 = self
+            .0
+            .checked_sub(bytes.len())
+            .ok_or_else(|| std::io::Error::other("node configuration exceeds read budget"))?;
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// Versioned durable node configuration. Private identity and backup keys live separately.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -131,11 +196,18 @@ pub struct NodeConfig {
     pub device_name: String,
     /// Persistent multicast discovery preference.
     pub lan_discovery_enabled: bool,
+    /// Durable handoff marker until the runtime has restored provider connections and recovery progress.
+    #[serde(default)]
+    pub recovery_bootstrap_pending: bool,
+    /// Recovery watermarks survive interruption before remembered-backup publication.
+    #[serde(default)]
+    pub recovery_snapshot_cursors: BTreeMap<BackupId, RecoverySnapshotCursor>,
     /// Remembered backups keyed by stable identifier.
     pub remembered_backups: BTreeMap<BackupId, RememberedBackupState>,
     /// Explicitly confirmed peer grants, including revocation tombstones.
     pub trusted_peers: BTreeMap<DeviceId, PeerGrant>,
-    /// Exact peer transport pins retained only from a mutually signed pairing transcript.
+    /// Peer certificate pins retained from mutually signed pairing, with any
+    /// subsequent address-only update authenticated under that same identity.
     #[serde(default)]
     pub trusted_peer_transports: BTreeMap<DeviceId, TransportBinding>,
     /// Highest locally issued roster epoch.
@@ -159,6 +231,8 @@ impl NodeConfig {
             schema_version: NODE_CONFIG_SCHEMA_VERSION,
             device_name: settings.device_name,
             lan_discovery_enabled,
+            recovery_bootstrap_pending: false,
+            recovery_snapshot_cursors: BTreeMap::new(),
             remembered_backups: BTreeMap::new(),
             trusted_peers: BTreeMap::new(),
             trusted_peer_transports: BTreeMap::new(),
@@ -172,6 +246,16 @@ impl NodeConfig {
         if self.schema_version != NODE_CONFIG_SCHEMA_VERSION {
             return Err(CoreError::InvalidState(
                 "unsupported node config schema".to_owned(),
+            ));
+        }
+        if self.recovery_snapshot_cursors.len() > MAX_REMEMBERED_BACKUPS
+            || self
+                .recovery_snapshot_cursors
+                .values()
+                .any(|cursor| !valid_identifier(&cursor.snapshot_id))
+        {
+            return Err(CoreError::InvalidState(
+                "invalid recovery snapshot cursor".to_owned(),
             ));
         }
         let remembered_backups: Vec<_> = self
@@ -249,6 +333,11 @@ impl NodeConfig {
                 ));
             }
         }
+        // Every published config must remain readable under the same disk budget.
+        // Count the exact pretty JSON encoding without allocating another full copy.
+        let mut budget = ConfigSizeBudget(MAX_NODE_CONFIG_BYTES);
+        serde_json::to_writer_pretty(&mut budget, self)
+            .map_err(|_| CoreError::ResourceLimit("node configuration"))?;
         Ok(())
     }
 
@@ -506,6 +595,7 @@ const RECOVERY_BOOTSTRAP_JOURNAL_SCHEMA_VERSION: u16 = 1;
 const RECOVERY_BOOTSTRAP_JOURNAL_FILE: &str = "recovery-bootstrap.json";
 const MAX_RECOVERY_BOOTSTRAP_JOURNAL_BYTES: usize = 4 * 1_024;
 const MAX_RECOVERY_BOOTSTRAP_IDENTITY_BYTES: usize = 16 * 1_024;
+const MAX_RECOVERY_IMPORT_FAILURES: usize = 256;
 
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -905,6 +995,7 @@ impl Engine {
             key_protector.as_ref(),
         )?;
         let mut recovered_config = NodeConfig::new(opened.display_name.clone(), false)?;
+        recovered_config.recovery_bootstrap_pending = true;
         for entry in opened.provider_directory {
             let peer_id = entry.grant.peer_device_id;
             recovered_config.trusted_peers.insert(peer_id, entry.grant);
@@ -967,8 +1058,28 @@ impl Engine {
         Ok(engine)
     }
 
+    /// Acknowledges the durable runtime handoff after recovery state and transports are saved.
+    pub fn acknowledge_recovery_bootstrap(&self) -> Result<(), CoreError> {
+        let _guard = self
+            .backup_lock
+            .lock()
+            .map_err(|_| CoreError::Synchronization)?;
+        let mut config = self.config.lock().map_err(|_| CoreError::Synchronization)?;
+        if config.recovery_bootstrap_pending {
+            let mut candidate = config.clone();
+            candidate.recovery_bootstrap_pending = false;
+            write_json_atomic(&self.config_path, &candidate, true)?;
+            *config = candidate;
+        }
+        Ok(())
+    }
+
     /// Exports one stable kit. Future snapshot capsules remain recoverable without re-export.
     pub fn export_recovery_kit(&self, unlock: &RecoveryUnlockKey) -> Result<Vec<u8>, CoreError> {
+        let _backup_guard = self
+            .backup_lock
+            .lock()
+            .map_err(|_| CoreError::Synchronization)?;
         let config = self.config.lock().map_err(|_| CoreError::Synchronization)?;
         let provider_directory = recovery_provider_directory(&config, None)?;
         let kit = RecoveryKit::seal(
@@ -987,41 +1098,116 @@ impl Engine {
 
     /// Authenticates connected-provider catalogs and imports the latest snapshot per backup.
     pub fn import_recovery_catalogs(&self) -> Result<Vec<RecoveredBackup>, CoreError> {
+        let report = self.import_recovery_catalogs_report()?;
+        if report.blocked {
+            return Err(CoreError::AuthenticationFailed);
+        }
+        Ok(report.recovered_backups)
+    }
+
+    /// Imports authenticated catalogs while retaining exact partial-provider evidence.
+    pub fn import_recovery_catalogs_report(&self) -> Result<RecoveryImportReport, CoreError> {
+        self.import_recovery_catalogs_report_controlled(&JobControl::new())
+    }
+
+    /// Streams catalogs with bounded retained memory and cooperative cancellation.
+    pub fn import_recovery_catalogs_report_controlled(
+        &self,
+        control: &JobControl,
+    ) -> Result<RecoveryImportReport, CoreError> {
+        let _backup_guard = loop {
+            control.check()?;
+            match self.backup_lock.try_lock() {
+                Ok(guard) => break guard,
+                Err(std::sync::TryLockError::Poisoned(_)) => {
+                    return Err(CoreError::Synchronization);
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    std::thread::sleep(std::time::Duration::from_millis(10))
+                }
+            }
+        };
         let scheduler = self
             .scheduler
             .lock()
             .map_err(|_| CoreError::Synchronization)?
             .clone();
-        let mut candidates =
-            BTreeMap::<(BackupId, String), (RecoveryCapsule, BTreeSet<DeviceId>)>::new();
-        for (provider_id, capsule) in scheduler.recovery_capsules()? {
-            let key = (capsule.backup_id, capsule.snapshot_id.clone());
-            match candidates.get_mut(&key) {
-                Some((incumbent, providers)) => {
-                    if incumbent != &capsule {
-                        return Err(CoreError::AuthenticationFailed);
-                    }
-                    providers.insert(provider_id);
-                }
-                None => {
-                    candidates.insert(key, (capsule, BTreeSet::from([provider_id])));
-                }
-            }
-        }
-        let mut latest = BTreeMap::<BackupId, (RecoveryCapsule, BTreeSet<DeviceId>)>::new();
-        for ((backup_id, _), candidate) in candidates {
-            let replace = latest.get(&backup_id).is_none_or(|(current, _)| {
-                (candidate.0.committed_at_unix_ms, &candidate.0.snapshot_id)
-                    > (current.committed_at_unix_ms, &current.snapshot_id)
+        let recovery_import::CatalogSelection {
+            latest,
+            queried,
+            mut failures,
+            blocked,
+        } = recovery_import::CatalogSelection::collect(self, &scheduler, control)?;
+        control.check()?;
+        if blocked {
+            return Ok(RecoveryImportReport {
+                recovered_backups: Vec::new(),
+                queried_provider_ids: queried,
+                newer_snapshot_may_exist: true,
+                failures,
+                blocked: true,
             });
-            if replace {
-                latest.insert(backup_id, candidate);
-            }
         }
         let mut recovered = Vec::with_capacity(latest.len());
         let mut config = self.config.lock().map_err(|_| CoreError::Synchronization)?;
         let mut candidate_config = config.clone();
+        // Watermarks are persisted before any snapshot/key mutation, including the
+        // first import. A crash after committing a snapshot but before publishing its
+        // remembered entry cannot make an older provider copy acceptable on restart.
+        for (backup_id, (capsule, providers)) in &latest {
+            control.check()?;
+            let candidate_order = (capsule.committed_at_unix_ms, capsule.snapshot_id.as_str());
+            let mut older = candidate_config
+                .recovery_snapshot_cursors
+                .get(backup_id)
+                .is_some_and(|cursor| {
+                    (cursor.committed_at_unix_ms, cursor.snapshot_id.as_str()) > candidate_order
+                });
+            if let Some(snapshot_id) = candidate_config
+                .remembered_backups
+                .get(backup_id)
+                .and_then(|state| state.latest_snapshot_id.as_deref())
+            {
+                let previous = self.store.load_snapshot(*backup_id, snapshot_id)?;
+                older |= (previous.committed_at_unix_ms, previous.snapshot_id.as_str())
+                    > candidate_order;
+            }
+            if older {
+                for provider_id in providers {
+                    retain_recovery_failure(
+                        &mut failures,
+                        ProviderFailure {
+                            provider_id: *provider_id,
+                            locator: Some(capsule.snapshot_id.clone()),
+                            reason: "recovery_catalog_older_than_local".to_owned(),
+                        },
+                    );
+                }
+                return Ok(RecoveryImportReport {
+                    recovered_backups: Vec::new(),
+                    queried_provider_ids: queried,
+                    failures,
+                    newer_snapshot_may_exist: true,
+                    blocked: true,
+                });
+            }
+            candidate_config.recovery_snapshot_cursors.insert(
+                *backup_id,
+                RecoverySnapshotCursor {
+                    committed_at_unix_ms: capsule.committed_at_unix_ms,
+                    snapshot_id: capsule.snapshot_id.clone(),
+                },
+            );
+        }
+        control.check()?;
+        candidate_config.validate()?;
+        if candidate_config != *config {
+            write_json_atomic(&self.config_path, &candidate_config, true)?;
+            *config = candidate_config.clone();
+        }
+        recovery_import_failpoint(1)?;
         for (backup_id, (capsule, providers)) in latest {
+            control.check()?;
             let opened = capsule.open(&self.recovery_master, &self.identity.public_identity())?;
             let manifest = decrypt_manifest(
                 &opened.snapshot.envelope,
@@ -1046,6 +1232,7 @@ impl Engine {
             {
                 return Err(CoreError::AuthenticationFailed);
             }
+            control.check()?;
             persist_or_validate_backup_key_file(
                 &self.key_path(backup_id),
                 &self.options.data_directory,
@@ -1058,6 +1245,7 @@ impl Engine {
                 .map_err(|_| CoreError::Synchronization)?
                 .insert(backup_id, opened.backup_key);
             self.store.commit_recovery_snapshot(&opened.snapshot)?;
+            recovery_import_failpoint(2)?;
             candidate_config.remembered_backups.insert(
                 backup_id,
                 RememberedBackupState {
@@ -1077,11 +1265,19 @@ impl Engine {
                 source_providers: providers,
             });
         }
+        control.check()?;
         candidate_config.validate()?;
         write_json_atomic(&self.config_path, &candidate_config, true)?;
         *config = candidate_config;
         recovered.sort_by_key(|item| item.backup_id);
-        Ok(recovered)
+        let newer_snapshot_may_exist = !failures.is_empty();
+        Ok(RecoveryImportReport {
+            recovered_backups: recovered,
+            queried_provider_ids: queried,
+            failures,
+            newer_snapshot_may_exist,
+            blocked: false,
+        })
     }
 
     /// Public local identity.
@@ -1209,6 +1405,87 @@ impl Engine {
         transcript: &[u8],
     ) -> String {
         self.identity.sign(domain, transcript)
+    }
+
+    /// Sign a folder invitation for a currently trusted peer without exposing
+    /// the owner key. This alone does not authorize a local folder or launch sync.
+    #[allow(clippy::too_many_arguments)]
+    pub fn issue_folder_share_offer(
+        &self,
+        target: DeviceId,
+        folder_id: uuid::Uuid,
+        label: &str,
+        binding: covalent_protocol::SyncEngineBinding,
+        pairing_id: Option<&str>,
+        now_unix_ms: u64,
+        lifetime_ms: u64,
+    ) -> Result<covalent_protocol::FolderShareOffer, crate::FolderSharingError> {
+        self.issue_folder_share_offer_with_policy(
+            target,
+            folder_id,
+            label,
+            binding,
+            pairing_id,
+            now_unix_ms,
+            lifetime_ms,
+            None,
+        )
+    }
+
+    /// Sign the exact one-way link policy for a currently trusted peer.
+    #[allow(clippy::too_many_arguments)]
+    pub fn issue_folder_share_offer_with_policy(
+        &self,
+        target: DeviceId,
+        folder_id: uuid::Uuid,
+        label: &str,
+        binding: covalent_protocol::SyncEngineBinding,
+        pairing_id: Option<&str>,
+        now_unix_ms: u64,
+        lifetime_ms: u64,
+        link_policy: Option<covalent_protocol::FolderLinkPolicy>,
+    ) -> Result<covalent_protocol::FolderShareOffer, crate::FolderSharingError> {
+        self.trusted_peer_identity(target)
+            .map_err(|_| crate::FolderSharingError::WrongPeer)?;
+        crate::create_folder_share_offer_with_policy(
+            &self.identity,
+            target,
+            folder_id,
+            label,
+            binding,
+            pairing_id,
+            now_unix_ms,
+            lifetime_ms,
+            link_policy,
+        )
+    }
+
+    /// Sign acceptance of a trusted peer's invitation. The node must durably
+    /// record the user's selected local folder before returning this signature.
+    pub fn accept_folder_share(
+        &self,
+        offer: &covalent_protocol::FolderShareOffer,
+        binding: covalent_protocol::SyncEngineBinding,
+        now_unix_ms: u64,
+    ) -> Result<covalent_protocol::FolderShareAcceptance, crate::FolderSharingError> {
+        let source = self
+            .trusted_peer_identity(offer.source_device_id)
+            .map_err(|_| crate::FolderSharingError::WrongPeer)?;
+        crate::accept_folder_share_offer(offer, &source, &self.identity, binding, now_unix_ms)
+    }
+
+    /// Sign the final record after both peers consent. Durable state and worker
+    /// reconciliation remain the enclosing node coordinator's responsibility.
+    pub fn commit_folder_share_offer(
+        &self,
+        offer: &covalent_protocol::FolderShareOffer,
+        acceptance: &covalent_protocol::FolderShareAcceptance,
+        now_unix_ms: u64,
+    ) -> Result<covalent_protocol::FolderShareCommit, crate::FolderSharingError> {
+        let target = self
+            .trusted_peer_identity(offer.target_device_id)
+            .map_err(|_| crate::FolderSharingError::WrongPeer)?;
+        crate::commit_folder_share(offer, acceptance, &self.identity, &target, now_unix_ms)
     }
 
     /// Issues and durably reserves one backup-scoped remote storage lease.
@@ -1681,7 +1958,7 @@ impl Engine {
         Ok(roster)
     }
 
-    /// Returns an exact transport pin retained from a mutually signed pairing transcript.
+    /// Returns the paired certificate pin and its current authenticated address.
     pub fn trusted_peer_transport(
         &self,
         peer_id: DeviceId,
@@ -3285,6 +3562,27 @@ fn manifest_locators_match(manifest: &Manifest, expected: &BTreeSet<String>) -> 
             .all(|(actual, expected)| actual == expected)
 }
 
+fn retain_latest_recovery_evidence(
+    evidence: &mut BTreeMap<BackupId, (u64, String)>,
+    capsule: &RecoveryCapsule,
+) {
+    let candidate = (capsule.committed_at_unix_ms, capsule.snapshot_id.clone());
+    evidence
+        .entry(capsule.backup_id)
+        .and_modify(|current| {
+            if candidate > *current {
+                *current = candidate.clone();
+            }
+        })
+        .or_insert(candidate);
+}
+
+fn retain_recovery_failure(failures: &mut Vec<ProviderFailure>, failure: ProviderFailure) {
+    if failures.len() < MAX_RECOVERY_IMPORT_FAILURES {
+        failures.push(failure);
+    }
+}
+
 fn ensure_private_state_directory(path: &Path) -> Result<(), CoreError> {
     fs::create_dir_all(path).map_err(|source| CoreError::Io {
         operation: "create private state directory",
@@ -3588,6 +3886,101 @@ mod tests {
         EngineOptions::new(path).with_key_protector(test_protector())
     }
 
+    struct FailingRecoveryProvider {
+        id: DeviceId,
+    }
+
+    struct StaticRecoveryProvider {
+        id: DeviceId,
+        capsules: Vec<RecoveryCapsule>,
+    }
+
+    impl ChunkProvider for FailingRecoveryProvider {
+        fn device_id(&self) -> DeviceId {
+            self.id
+        }
+
+        fn health(&self) -> crate::ProviderHealth {
+            crate::ProviderHealth::Online
+        }
+
+        fn put(&self, _locator: &str, _record: &[u8]) -> Result<(), CoreError> {
+            Err(CoreError::AuthenticationFailed)
+        }
+
+        fn get(&self, _locator: &str) -> Result<Vec<u8>, CoreError> {
+            Err(CoreError::AuthenticationFailed)
+        }
+
+        fn contains(&self, _locator: &str) -> Result<bool, CoreError> {
+            Ok(false)
+        }
+
+        fn list_recovery_capsules(&self) -> Result<Vec<RecoveryCapsule>, CoreError> {
+            Err(CoreError::AuthenticationFailed)
+        }
+
+        fn visit_recovery_capsules(
+            &self,
+            control: &JobControl,
+            _sink: &mut dyn crate::RecoveryCatalogSink,
+        ) -> Result<(), CoreError> {
+            control.check()?;
+            Err(CoreError::AuthenticationFailed)
+        }
+    }
+
+    impl ChunkProvider for StaticRecoveryProvider {
+        fn device_id(&self) -> DeviceId {
+            self.id
+        }
+
+        fn health(&self) -> crate::ProviderHealth {
+            crate::ProviderHealth::Online
+        }
+
+        fn put(&self, _locator: &str, _record: &[u8]) -> Result<(), CoreError> {
+            Err(CoreError::AuthenticationFailed)
+        }
+
+        fn get(&self, _locator: &str) -> Result<Vec<u8>, CoreError> {
+            Err(CoreError::AuthenticationFailed)
+        }
+
+        fn contains(&self, _locator: &str) -> Result<bool, CoreError> {
+            Ok(false)
+        }
+
+        fn list_recovery_capsules(&self) -> Result<Vec<RecoveryCapsule>, CoreError> {
+            Ok(self.capsules.clone())
+        }
+
+        fn visit_recovery_capsules(
+            &self,
+            control: &JobControl,
+            sink: &mut dyn crate::RecoveryCatalogSink,
+        ) -> Result<(), CoreError> {
+            for capsule in &self.capsules {
+                control.check()?;
+                sink.reserve(serde_json::to_vec(capsule)?.len() as u64)?;
+                control.check()?;
+                sink.accept(capsule.clone())?;
+            }
+            control.check()
+        }
+    }
+
+    fn storage_grant(identity: &PublicIdentity, name: &str) -> PeerGrant {
+        PeerGrant {
+            peer_device_id: identity.device_id,
+            public_key: identity.public_key.clone(),
+            display_name: name.to_owned(),
+            roles: BTreeSet::from([PeerRole::StorageProvider]),
+            confirmed_at_unix_ms: 1,
+            revoked: false,
+        }
+    }
+
     #[test]
     fn legacy_config_migrates_without_identity_material() {
         let migrated = decode_or_migrate_config(br#"{"name":"Old node","lanDiscovery":true}"#)
@@ -3666,6 +4059,202 @@ mod tests {
                 .expect("completed recovery is idempotent");
             assert_eq!(reopened.device_id(), original_device_id);
         }
+    }
+
+    #[test]
+    fn recovery_catalog_import_survives_one_failed_replica() {
+        let root = tempdir().expect("root");
+        let owner_path = root.path().join("owner");
+        let recovered_path = root.path().join("recovered");
+        let provider_path = root.path().join("provider");
+        let source = root.path().join("source");
+        fs::create_dir(&source).expect("source");
+        fs::write(source.join("document.txt"), b"replica recovery").expect("source file");
+
+        let owner = Engine::open(test_options(&owner_path)).expect("owner");
+        let provider = Engine::open(test_options(&provider_path)).expect("provider");
+        owner
+            .trust_peer(storage_grant(&provider.public_identity(), "Good provider"))
+            .expect("trust provider");
+        let good_provider = Arc::new(StoreProvider::new(
+            provider.device_id(),
+            provider.store().clone(),
+        )) as Arc<dyn ChunkProvider>;
+        owner
+            .set_connected_providers(vec![Arc::clone(&good_provider)])
+            .expect("connect provider");
+        let unlock = RecoveryUnlockKey::generate();
+        let kit = owner.export_recovery_kit(&unlock).expect("recovery kit");
+        let backup_id = BackupId::new();
+        let mut options = BackupOptions::new(backup_id, "snapshot-0001", "backup-job");
+        options.replica_intent = ReplicaIntent::explicit([provider.device_id()]);
+        owner
+            .backup(&source, &options, &JobControl::new(), |_| {})
+            .expect("backup");
+        drop(owner);
+        fs::remove_dir_all(&owner_path).expect("lose owner state");
+
+        let recovered = Engine::recover_from_kit(test_options(&recovered_path), &kit, &unlock)
+            .expect("recover");
+        recovered
+            .trust_peer(storage_grant(&provider.public_identity(), "Good provider"))
+            .expect("retrust provider");
+        let failed_identity = DeviceIdentity::generate().public_identity();
+        recovered
+            .trust_peer(storage_grant(&failed_identity, "Failed provider"))
+            .expect("trust failed provider");
+        let failed_provider = Arc::new(FailingRecoveryProvider {
+            id: failed_identity.device_id,
+        }) as Arc<dyn ChunkProvider>;
+        recovered
+            .set_connected_providers(vec![good_provider, failed_provider])
+            .expect("connect providers");
+
+        let report = recovered
+            .import_recovery_catalogs_report()
+            .expect("recover from intact replica");
+        let imported = &report.recovered_backups;
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0].backup_id, backup_id);
+        assert_eq!(imported[0].snapshot_id, "snapshot-0001");
+        assert_eq!(
+            imported[0].source_providers,
+            BTreeSet::from([provider.device_id()])
+        );
+        assert!(report.newer_snapshot_may_exist);
+        assert!(!report.blocked);
+        assert!(report.failures.iter().any(|failure| {
+            failure.provider_id == failed_identity.device_id
+                && failure.reason == "recovery_catalog_corrupt_chunk"
+        }));
+    }
+
+    #[test]
+    fn recovery_catalog_import_reports_failure_when_no_replica_supplies_a_catalog() {
+        let directory = tempdir().expect("directory");
+        let engine = Engine::open(test_options(directory.path())).expect("engine");
+        let failed_identity = DeviceIdentity::generate().public_identity();
+        engine
+            .trust_peer(storage_grant(&failed_identity, "Failed provider"))
+            .expect("trust failed provider");
+        engine
+            .set_connected_providers(vec![Arc::new(FailingRecoveryProvider {
+                id: failed_identity.device_id,
+            }) as Arc<dyn ChunkProvider>])
+            .expect("connect provider");
+
+        let report = engine
+            .import_recovery_catalogs_report()
+            .expect("typed blocked report");
+        assert!(report.blocked);
+        assert!(report.newer_snapshot_may_exist);
+        assert!(report.recovered_backups.is_empty());
+        assert!(matches!(
+            engine.import_recovery_catalogs(),
+            Err(CoreError::AuthenticationFailed)
+        ));
+    }
+
+    #[test]
+    fn recovery_catalog_import_rejects_bad_copy_without_blocking_intact_replica() {
+        let root = tempdir().expect("root");
+        let owner_path = root.path().join("owner");
+        let recovered_path = root.path().join("recovered");
+        let provider_path = root.path().join("provider");
+        let source = root.path().join("source");
+        fs::create_dir(&source).expect("source");
+        fs::write(source.join("document.txt"), b"authenticated recovery").expect("source file");
+
+        let owner = Engine::open(test_options(&owner_path)).expect("owner");
+        let provider = Engine::open(test_options(&provider_path)).expect("provider");
+        owner
+            .trust_peer(storage_grant(&provider.public_identity(), "Good provider"))
+            .expect("trust provider");
+        let good_provider = Arc::new(StoreProvider::new(
+            provider.device_id(),
+            provider.store().clone(),
+        )) as Arc<dyn ChunkProvider>;
+        owner
+            .set_connected_providers(vec![Arc::clone(&good_provider)])
+            .expect("connect provider");
+        let unlock = RecoveryUnlockKey::generate();
+        let kit = owner.export_recovery_kit(&unlock).expect("recovery kit");
+        let backup_id = BackupId::new();
+        let mut options = BackupOptions::new(backup_id, "snapshot-0001", "backup-job");
+        options.replica_intent = ReplicaIntent::explicit([provider.device_id()]);
+        let result = owner
+            .backup(&source, &options, &JobControl::new(), |_| {})
+            .expect("backup");
+        let mut inconsistent_snapshot = result.stored_snapshot.clone();
+        inconsistent_snapshot.snapshot_id = "snapshot-0002".to_owned();
+        inconsistent_snapshot.committed_at_unix_ms = 2;
+        let signed_inconsistent = RecoveryCapsule::seal(
+            &inconsistent_snapshot,
+            &options.display_name,
+            &owner.load_backup_key(backup_id).expect("backup key"),
+            &owner.recovery_master,
+            &owner.identity,
+            Vec::new(),
+        )
+        .expect("owner-signed inconsistent capsule");
+        let signed_bad_identity = DeviceIdentity::generate().public_identity();
+        owner
+            .trust_peer(storage_grant(
+                &signed_bad_identity,
+                "Signed inconsistent provider",
+            ))
+            .expect("trust signed inconsistent provider");
+        owner
+            .set_connected_providers(vec![
+                Arc::clone(&good_provider),
+                Arc::new(StaticRecoveryProvider {
+                    id: signed_bad_identity.device_id,
+                    capsules: vec![signed_inconsistent],
+                }) as Arc<dyn ChunkProvider>,
+            ])
+            .expect("connect signed inconsistent provider");
+        assert!(matches!(
+            owner.import_recovery_catalogs(),
+            Err(CoreError::AuthenticationFailed)
+        ));
+        let mut invalid_capsule = provider
+            .store()
+            .list_recovery_capsules()
+            .expect("provider capsules")
+            .into_iter()
+            .next()
+            .expect("replicated capsule");
+        invalid_capsule.signature.push('x');
+        drop(owner);
+        fs::remove_dir_all(&owner_path).expect("lose owner state");
+
+        let recovered = Engine::recover_from_kit(test_options(&recovered_path), &kit, &unlock)
+            .expect("recover");
+        recovered
+            .trust_peer(storage_grant(&provider.public_identity(), "Good provider"))
+            .expect("retrust provider");
+        let bad_identity = DeviceIdentity::generate().public_identity();
+        recovered
+            .trust_peer(storage_grant(&bad_identity, "Bad provider"))
+            .expect("trust bad provider");
+        let bad_provider = Arc::new(StaticRecoveryProvider {
+            id: bad_identity.device_id,
+            capsules: vec![invalid_capsule],
+        }) as Arc<dyn ChunkProvider>;
+        recovered
+            .set_connected_providers(vec![good_provider, bad_provider])
+            .expect("connect providers");
+
+        let imported = recovered
+            .import_recovery_catalogs()
+            .expect("recover from authenticated copy");
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0].backup_id, backup_id);
+        assert_eq!(imported[0].snapshot_id, "snapshot-0001");
+        assert_eq!(
+            imported[0].source_providers,
+            BTreeSet::from([provider.device_id()])
+        );
     }
 
     #[test]

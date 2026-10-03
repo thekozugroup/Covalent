@@ -22,6 +22,42 @@ const MAX_DISCOVERY_RESULTS: usize = 256;
 const MAX_TAILSCALE_STATUS_BYTES: usize = 4 * 1_024 * 1_024;
 const MAX_TAILSCALE_HTTP_BYTES: usize = MAX_TAILSCALE_STATUS_BYTES + 64 * 1_024;
 const DEFAULT_TAILSCALE_SOCKET: &str = "/var/run/tailscale/tailscaled.sock";
+const TAILSCALE_SNAPSHOT_MAX_AGE_MS: u64 = 3 * 60 * 1_000;
+
+/// Availability is independent of whether any untrusted candidates were found.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscoveryAvailability {
+    Disabled,
+    Available,
+    Unavailable,
+    Stale,
+    Error,
+}
+
+/// Optional discovery details; the default API response remains a candidate array.
+#[derive(Serialize)]
+pub struct DiscoveryReport {
+    pub candidates: Vec<DiscoveryCandidate>,
+    pub lan: DiscoveryAvailability,
+    pub tailscale: DiscoveryAvailability,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TailscaleSnapshot {
+    schema_version: u16,
+    generated_at_unix_ms: u64,
+    status: serde_json::Value,
+}
+
+const fn advertised_capabilities(local_provider_enabled: bool) -> &'static str {
+    if local_provider_enabled {
+        "chunks"
+    } else {
+        "pairing"
+    }
+}
 
 /// Untrusted connection hint. Pairing identity validation remains mandatory.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -58,6 +94,14 @@ pub struct LanDiscovery {
 impl LanDiscovery {
     /// Starts a minimal ephemeral advertisement, or performs no network action when disabled.
     pub fn start(enabled: bool, peer_port: u16) -> Result<Self, CoreError> {
+        Self::start_with_provider(enabled, peer_port, true)
+    }
+
+    fn start_with_provider(
+        enabled: bool,
+        peer_port: u16,
+        local_provider_enabled: bool,
+    ) -> Result<Self, CoreError> {
         if !enabled {
             return Ok(Self {
                 daemon: None,
@@ -73,7 +117,7 @@ impl LanDiscovery {
         let properties = [
             ("min", protocol.as_str()),
             ("max", protocol.as_str()),
-            ("caps", "chunks"),
+            ("caps", advertised_capabilities(local_provider_enabled)),
         ];
         let info = ServiceInfo::new(
             SERVICE_TYPE,
@@ -173,15 +217,30 @@ impl Drop for LanDiscovery {
 /// Reconfigures the live mDNS advertiser when the persisted privacy setting changes.
 pub struct DiscoveryController {
     peer_port: u16,
+    local_provider_enabled: bool,
     current: Mutex<LanDiscovery>,
 }
 
 impl DiscoveryController {
     /// Starts the controller in the persisted state.
     pub fn new(enabled: bool, peer_port: u16) -> Result<Self, CoreError> {
+        Self::new_with_provider(enabled, peer_port, true)
+    }
+
+    /// Retains the host's provider admission policy across discovery toggles.
+    pub(crate) fn new_with_provider(
+        enabled: bool,
+        peer_port: u16,
+        local_provider_enabled: bool,
+    ) -> Result<Self, CoreError> {
         Ok(Self {
             peer_port,
-            current: Mutex::new(LanDiscovery::start(enabled, peer_port)?),
+            local_provider_enabled,
+            current: Mutex::new(LanDiscovery::start_with_provider(
+                enabled,
+                peer_port,
+                local_provider_enabled,
+            )?),
         })
     }
 
@@ -194,7 +253,11 @@ impl DiscoveryController {
         if current.is_active() == enabled {
             return Ok(());
         }
-        let replacement = LanDiscovery::start(enabled, self.peer_port)?;
+        let replacement = LanDiscovery::start_with_provider(
+            enabled,
+            self.peer_port,
+            self.local_provider_enabled,
+        )?;
         let previous = std::mem::replace(&mut *current, replacement);
         drop(current);
         previous.stop();
@@ -213,15 +276,106 @@ impl DiscoveryController {
 
 /// Reads bounded Tailscale LocalAPI or CLI status as routing hints. No Tailscale identity is trusted.
 pub fn discover_tailscale_candidates(peer_port: u16) -> Result<Vec<DiscoveryCandidate>, CoreError> {
+    Ok(discover_tailscale_with_availability(peer_port).0)
+}
+
+/// Containers can consume a host-refreshed, non-secret snapshot without receiving
+/// the host's privileged Tailscale socket. Native LocalAPI/CLI discovery remains
+/// a fallback when no fresh snapshot exists.
+pub fn discover_tailscale_with_availability(
+    peer_port: u16,
+) -> (Vec<DiscoveryCandidate>, DiscoveryAvailability) {
+    let snapshot = env::var_os("COVALENT_CONFIG_DIR")
+        .map(PathBuf::from)
+        .map(|directory| {
+            read_tailscale_snapshot(
+                &directory.join("tailscale-discovery.json"),
+                peer_port,
+                crate::now_unix_ms(),
+            )
+        })
+        .unwrap_or_else(|| (Vec::new(), DiscoveryAvailability::Unavailable));
+    if snapshot.1 == DiscoveryAvailability::Available {
+        return snapshot;
+    }
+    match discover_native_tailscale_candidates(peer_port) {
+        Ok(Some(candidates)) => (candidates, DiscoveryAvailability::Available),
+        Ok(None) => snapshot,
+        Err(_) => (Vec::new(), DiscoveryAvailability::Error),
+    }
+}
+
+fn read_tailscale_snapshot(
+    path: &std::path::Path,
+    peer_port: u16,
+    now_unix_ms: u64,
+) -> (Vec<DiscoveryCandidate>, DiscoveryAvailability) {
+    let unavailable = |availability| (Vec::new(), availability);
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return unavailable(DiscoveryAvailability::Unavailable);
+        }
+        Err(_) => return unavailable(DiscoveryAvailability::Error),
+    };
+    if !metadata.file_type().is_file() || metadata.len() > MAX_TAILSCALE_STATUS_BYTES as u64 {
+        return unavailable(DiscoveryAvailability::Error);
+    }
+    let read = || -> Result<TailscaleSnapshot, CoreError> {
+        let file = std::fs::File::open(path).map_err(|source| CoreError::Io {
+            operation: "read Tailscale discovery snapshot",
+            path: path.to_path_buf(),
+            source,
+        })?;
+        let mut bytes = Vec::new();
+        file.take(MAX_TAILSCALE_STATUS_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|source| CoreError::Io {
+                operation: "read Tailscale discovery snapshot",
+                path: path.to_path_buf(),
+                source,
+            })?;
+        if bytes.len() > MAX_TAILSCALE_STATUS_BYTES {
+            return Err(CoreError::ResourceLimit("Tailscale discovery snapshot"));
+        }
+        Ok(serde_json::from_slice(&bytes)?)
+    };
+    let snapshot = match read() {
+        Ok(snapshot)
+            if snapshot.schema_version == 1
+                && snapshot
+                    .status
+                    .get("Peer")
+                    .is_some_and(serde_json::Value::is_object) =>
+        {
+            snapshot
+        }
+        _ => return unavailable(DiscoveryAvailability::Error),
+    };
+    if snapshot.generated_at_unix_ms == 0
+        || snapshot.generated_at_unix_ms > now_unix_ms
+        || now_unix_ms - snapshot.generated_at_unix_ms > TAILSCALE_SNAPSHOT_MAX_AGE_MS
+    {
+        return unavailable(DiscoveryAvailability::Stale);
+    }
+    (
+        parse_tailscale_peers(&snapshot.status, peer_port),
+        DiscoveryAvailability::Available,
+    )
+}
+
+fn discover_native_tailscale_candidates(
+    peer_port: u16,
+) -> Result<Option<Vec<DiscoveryCandidate>>, CoreError> {
     if let Some(bytes) = tailscale_localapi_status()? {
-        return parse_tailscale_status(&bytes, peer_port);
+        return parse_tailscale_status(&bytes, peer_port).map(Some);
     }
     let output = match Command::new("tailscale")
         .args(["status", "--json", "--timeout=2s"])
         .output()
     {
         Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(source) => {
             return Err(CoreError::Io {
                 operation: "query Tailscale status",
@@ -231,12 +385,12 @@ pub fn discover_tailscale_candidates(peer_port: u16) -> Result<Vec<DiscoveryCand
         }
     };
     if !output.status.success() {
-        return Ok(Vec::new());
+        return Ok(None);
     }
     if output.stdout.len() > MAX_TAILSCALE_STATUS_BYTES {
         return Err(CoreError::ResourceLimit("Tailscale status"));
     }
-    parse_tailscale_status(&output.stdout, peer_port)
+    parse_tailscale_status(&output.stdout, peer_port).map(Some)
 }
 
 #[cfg(unix)]
@@ -410,14 +564,24 @@ fn parse_tailscale_status(
     peer_port: u16,
 ) -> Result<Vec<DiscoveryCandidate>, CoreError> {
     let value: serde_json::Value = serde_json::from_slice(bytes)?;
+    Ok(parse_tailscale_peers(&value, peer_port))
+}
+
+fn parse_tailscale_peers(value: &serde_json::Value, peer_port: u16) -> Vec<DiscoveryCandidate> {
     let mut candidates = BTreeSet::new();
     if let Some(peers) = value.get("Peer").and_then(serde_json::Value::as_object) {
         for (stable_hint, peer) in peers {
+            if peer.get("Online").and_then(serde_json::Value::as_bool) == Some(false) {
+                continue;
+            }
             let service_id = peer
                 .get("DNSName")
                 .and_then(serde_json::Value::as_str)
                 .filter(|name| !name.is_empty())
                 .unwrap_or(stable_hint);
+            if service_id.len() > 253 || service_id.chars().any(char::is_control) {
+                continue;
+            }
             if let Some(addresses) = peer
                 .get("TailscaleIPs")
                 .and_then(serde_json::Value::as_array)
@@ -426,15 +590,22 @@ fn parse_tailscale_status(
                     if let Some(address) = address
                         .as_str()
                         .and_then(|value| value.parse::<IpAddr>().ok())
+                        .filter(is_tailscale_address)
                     {
                         candidates
                             .insert((service_id.to_owned(), SocketAddr::new(address, peer_port)));
+                        if candidates.len() >= MAX_DISCOVERY_RESULTS {
+                            break;
+                        }
                     }
                 }
             }
+            if candidates.len() >= MAX_DISCOVERY_RESULTS {
+                break;
+            }
         }
     }
-    Ok(candidates
+    candidates
         .into_iter()
         .take(MAX_DISCOVERY_RESULTS)
         .map(|(service_id, endpoint)| DiscoveryCandidate {
@@ -444,7 +615,16 @@ fn parse_tailscale_status(
             maximum_protocol_version: PROTOCOL_VERSION,
             source: DiscoverySource::Tailscale,
         })
-        .collect())
+        .collect()
+}
+
+fn is_tailscale_address(address: &IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => {
+            address.octets()[0] == 100 && (64..=127).contains(&address.octets()[1])
+        }
+        IpAddr::V6(address) => address.segments()[..3] == [0xfd7a, 0x115c, 0xa1e0],
+    }
 }
 
 fn property_u16(info: &mdns_sd::ResolvedService, key: &str) -> Option<u16> {
@@ -454,6 +634,16 @@ fn property_u16(info: &mdns_sd::ResolvedService, key: &str) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disabled_provider_never_advertises_chunk_storage() {
+        assert_eq!(advertised_capabilities(false), "pairing");
+        assert_eq!(advertised_capabilities(true), "chunks");
+        let controller = DiscoveryController::new_with_provider(false, 4433, false).unwrap();
+        controller.set_enabled(false).unwrap();
+        assert!(!controller.local_provider_enabled);
+        assert!(!controller.is_active().unwrap());
+    }
 
     #[test]
     fn disabled_lan_discovery_has_no_daemon_or_results() {
@@ -480,6 +670,76 @@ mod tests {
             candidates
                 .iter()
                 .all(|candidate| candidate.source == DiscoverySource::Tailscale)
+        );
+    }
+
+    #[test]
+    fn host_snapshot_expires_and_never_admits_non_tailnet_routes() {
+        let directory = tempfile::tempdir().expect("snapshot directory");
+        let path = directory.path().join("tailscale-discovery.json");
+        let now = 1_000_000;
+        let mut snapshot = serde_json::json!({
+            "schemaVersion": 1,
+            "generatedAtUnixMs": now,
+            "status": {"Peer": {
+                "online": {"DNSName": "atlas.tail.test.", "TailscaleIPs": [
+                    "100.64.0.2", "100.64.0.2", "fd7a:115c:a1e0::2",
+                    "127.0.0.1", "192.168.1.1", "8.8.8.8", "100.63.0.1", "fd00::1"
+                ]},
+                "offline": {"Online": false, "DNSName": "offline.tail.test.",
+                            "TailscaleIPs": ["100.64.0.3"]}
+            }}
+        });
+        assert_eq!(
+            read_tailscale_snapshot(&path, 8787, now).1,
+            DiscoveryAvailability::Unavailable
+        );
+        std::fs::write(&path, serde_json::to_vec(&snapshot).unwrap()).unwrap();
+        let (candidates, availability) = read_tailscale_snapshot(&path, 8787, now);
+        assert_eq!(availability, DiscoveryAvailability::Available);
+        assert_eq!(candidates.len(), 2);
+        assert!(
+            candidates
+                .iter()
+                .all(|candidate| candidate.endpoint.port() == 8787)
+        );
+        assert_eq!(
+            read_tailscale_snapshot(&path, 8787, now + 180_000).1,
+            DiscoveryAvailability::Available
+        );
+        assert_eq!(
+            read_tailscale_snapshot(&path, 8787, now + 180_001).1,
+            DiscoveryAvailability::Stale
+        );
+        assert_eq!(
+            read_tailscale_snapshot(&path, 8787, now - 1).1,
+            DiscoveryAvailability::Stale
+        );
+
+        snapshot["status"]["Peer"] = serde_json::json!({});
+        std::fs::write(&path, serde_json::to_vec(&snapshot).unwrap()).unwrap();
+        assert_eq!(
+            read_tailscale_snapshot(&path, 8787, now),
+            (Vec::new(), DiscoveryAvailability::Available)
+        );
+        snapshot["schemaVersion"] = serde_json::json!(2);
+        std::fs::write(&path, serde_json::to_vec(&snapshot).unwrap()).unwrap();
+        assert_eq!(
+            read_tailscale_snapshot(&path, 8787, now).1,
+            DiscoveryAvailability::Error
+        );
+        std::fs::write(&path, b"invalid JSON").unwrap();
+        assert_eq!(
+            read_tailscale_snapshot(&path, 8787, now).1,
+            DiscoveryAvailability::Error
+        );
+        std::fs::File::create(&path)
+            .unwrap()
+            .set_len(MAX_TAILSCALE_STATUS_BYTES as u64 + 1)
+            .unwrap();
+        assert_eq!(
+            read_tailscale_snapshot(&path, 8787, now).1,
+            DiscoveryAvailability::Error
         );
     }
 

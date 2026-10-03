@@ -10,8 +10,9 @@ GitHub Release for the tag.
 | macOS, unsigned | `apple-unsigned-release.yml` | `push` tag `v*` | none |
 | Trusted CLI | `cli-release.yml` | `push` tag `v*` | GitHub OIDC keyless signing |
 
-The installable debug-signed Android APK is built and retained through the
-personal-use setup path. Android production signing is deferred. The Apple
+The installable debug-signed Android APK is built through the personal-use setup
+path, tested, and attached to the same draft release with its checksum and build
+evidence. Android production signing is deferred. The Apple
 Developer ID/notarization workflow is outside this release scope and must not
 be run.
 
@@ -34,10 +35,40 @@ published v0.1.0 index, which predates the version annotation.
 The release is created as a **draft**, and no lane ever publishes it. Assembly is
 incremental, but visibility is not: no lane knows whether it is the last to
 finish, so a lane that published on its own way out would expose a
-half-assembled page. Publishing is a deliberate human step once every expected
-asset is present — see step 8 below.
+half-assembled page. The authorized publisher reviews the complete draft before
+publishing it — see steps 9 and 10 below.
 
 Release notes come from `docs/release/notes/<tag>.md` when that file exists.
+
+## v0.2.1 packaging repair
+
+The runtime source tag `v0.2.1` remains immutable. CLI signing/publication repair
+uses the separate annotated signed `release-tools-v0.2.1` tag. Container
+signing/publication repair uses the separate annotated signed
+`release-tools-v0.2.1-container` tag. These are exceptions for v0.2.1 only;
+they repair packaging and publication without moving the runtime tag.
+
+The repair must reuse the original CLI archive/SBOM bytes and scanned container
+architecture archives from their source-bound workflow runs. Record those run
+IDs, artifact hashes and source revision in the final provenance. Do not rebuild
+runtime code or relabel different bytes as the original source. The repair
+workflows must verify the handoffs before signing and publishing.
+
+Require these exact GitHub OIDC certificate identities for repaired v0.2.1
+assets, with issuer `https://token.actions.githubusercontent.com`:
+
+- CLI: `https://github.com/thekozugroup/Covalent/.github/workflows/cli-release.yml@refs/tags/release-tools-v0.2.1`
+- Container: `https://github.com/thekozugroup/Covalent/.github/workflows/container-supply-chain.yml@refs/tags/release-tools-v0.2.1-container`
+
+The runtime tag controls the application version and source; the repair tag
+identifies the reviewed packaging code. Both must retain verified signatures.
+Do not broaden the trust rule to a branch, arbitrary repair tags or an identity
+regular expression. Other releases continue to use their exact version-tag
+workflow identity. The CLI install guide and container verification instructions
+must use the same explicit v0.2.1 exception, including SBOM attestation checks.
+The verified v0.2.1 container digest is
+`sha256:393f8a0dafa7f17d8ad964d501f3d33668d547889dc493080e042489ee3e1677`;
+use the matching `covalent-container-digest.txt` when completing step 11.
 
 ## The version of record
 
@@ -57,11 +88,11 @@ with a mutable tag.
 `versionCode` and `CURRENT_PROJECT_VERSION` are both the monotonic integer
 `major * 1000000 + minor * 1000 + patch`, so they increase automatically and can
 never regress across releases. `0.1.0` is build `1000`; `0.2.0` is build
-`2000`.
+`2000`; `0.2.1` is build `2001`.
 
 ```sh
 scripts/release-version.sh check        # fails on any drift
-scripts/release-version.sh set 0.2.0    # rewrite every surface at once
+scripts/release-version.sh set 0.2.1    # rewrite every surface at once
 ```
 
 `version-sync.yml` runs the check on every push and pull request, so drift fails
@@ -70,16 +101,33 @@ before building anything.
 
 ## Cutting a release
 
-1. `scripts/release-version.sh set X.Y.Z` and `cargo update --workspace`.
-2. Commit and push. Wait for all nine Tier 1 checks to go green on that commit.
+1. `scripts/release-version.sh set X.Y.Z` and `cargo update --workspace`. Write
+   `docs/release/notes/vX.Y.Z.md` before committing.
+2. Commit and push. Wait for every required Tier 1 check to go green on that
+   exact commit, including the release notes.
 3. Confirm the commit has a verified signature — see
    [commit-signing.md](commit-signing.md). This is a hard gate.
-4. Write `docs/release/notes/vX.Y.Z.md`.
+4. Confirm the release notes and version files belong to that verified commit;
+   any further source change needs a new commit and its required checks.
 5. Create an **annotated signed** tag: `git tag -s vX.Y.Z && git push origin vX.Y.Z`.
    That fires the container lane and the unsigned macOS lane.
-6. Build and retain the installable debug-signed Android APK for personal use
-   using [the Android setup guide](../platform/android.md). Android production
-   signing and store publication are deferred and do not block this release.
+6. Build the installable debug-signed Android APK from the tagged source using
+   [the Android setup guide](../platform/android.md). Verify its package identity
+   and provenance, then attach it and its `.sha256` file to the same draft using
+   `scripts/publish-release-assets.sh vX.Y.Z FILE...`. Include the Android SBOM,
+   license inventory, notices, notice manifest, and build receipt recording the
+   source commit, source fingerprint, APK and native hashes, and debug
+   certificate SHA-256. Include the existing Android emulator acceptance receipt
+   and identify its tested source and APK separately from the final package.
+   Record source equivalence for the behavior covered by that receipt. Under the
+   owner's 2026-09-20 threshold, working apps and at least one tested sync
+   combination suffice; a repeated exact-APK UI journey is required only when
+   a material change invalidates the existing behavior evidence. Do not label
+   the final APK as device-tested if only a prior candidate was exercised, or
+   claim physical Android coverage. Use the existing authenticated publishing
+   environment required by the helper; do not put tokens in files or logs.
+   Publish the debug-signed personal APK, not an unsigned release APK. Android
+   production signing and store publication are deferred and do not block this release.
 7. The CLI lane runs on the tag and publishes source-free Linux amd64, Linux
    arm64, and Apple Silicon macOS arm64 archives only after all three pass
    binary architecture/size, license inventory, SPDX SBOM, Sigstore signature,
@@ -94,9 +142,10 @@ before building anything.
    use the by-tag endpoint for this pre-publish check:
 
    ```sh
+   version=vX.Y.Z
    release_id=$(gh api --paginate --slurp \
      'repos/OWNER/REPO/releases?per_page=100' \
-     --jq '.[][] | select(.tag_name == "vX.Y.Z") | .id')
+     | jq -r --arg version "$version" '.[][] | select(.tag_name == $version) | .id')
    gh api "repos/OWNER/REPO/releases/${release_id}" \
      --jq '.assets[] | [.name, .size] | @tsv'
    ```
@@ -177,7 +226,10 @@ Confirm with an unauthenticated pull by digest:
 
 ```sh
 docker logout ghcr.io
-docker pull ghcr.io/thekozugroup/covalent@sha256:8b8b96bdea7437fecf6d9c3297c248fd9de7eeb25fe7d701aa6f0a5b633cf8a6
+# Use the digest file from the completed, verified release lane.
+digest=$(cat covalent-container-digest.txt)
+printf '%s\n' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$' || exit 1
+docker pull "ghcr.io/thekozugroup/covalent@$digest"
 ```
 
 ### macOS personal-use package

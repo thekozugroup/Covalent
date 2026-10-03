@@ -28,9 +28,6 @@ check_apple() {
   swift test --package-path apps/apple
   (cd apps/apple && xcodegen generate --quiet)
   xcodebuild -project apps/apple/Covalent.xcodeproj -scheme CovalentMac -configuration Debug -destination 'platform=macOS,arch=arm64' ARCHS=arm64 EXCLUDED_ARCHS=x86_64 CODE_SIGNING_ALLOWED=NO build
-  if [ "${COVALENT_INCLUDE_IOS:-0}" = "1" ]; then
-    xcodebuild -project apps/apple/Covalent.xcodeproj -scheme CovalentIOS -configuration Debug -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO build
-  fi
 }
 
 check_android() {

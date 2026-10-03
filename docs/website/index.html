@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Covalent — website asset gallery</title>
+<style>
+  :root{color-scheme:light;font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#27272a;background:#fafafa}
+  body{max-width:1120px;margin:0 auto;padding:40px 24px 80px}
+  h1,h2{font-family:Georgia,serif;line-height:1.15;font-weight:400;letter-spacing:-.02em}
+  h1{font-size:clamp(36px,5vw,60px);margin:24px 0} h2{font-size:30px;margin:56px 0 12px}
+  p{max-width:72ch}a{color:#334155;text-underline-offset:4px}a:hover{color:#0f172a}a:focus-visible{outline:3px solid #475569;outline-offset:4px}
+  ::selection{background:#cbd5e1}nav{display:flex;gap:24px;flex-wrap:wrap}figure{margin:0}img{display:block;max-width:100%;height:auto}figure img{border:1px solid #e4e4e7;border-radius:12px;box-sizing:border-box}figcaption{color:#52525b;margin:12px 0 24px;font-size:14px}.phone{max-width:390px}
+  .brand{display:flex;align-items:center;gap:20px;margin-top:24px}.brand img{width:88px;height:64px}.dark{background:#334155;padding:16px;border-radius:12px}
+</style>
+<header>
+  <img src="brand/covalent-mark.svg" alt="" width="66" height="48">
+  <h1>Covalent, ready to introduce.</h1>
+  <p>Website copy and current server-interface screenshots. The devices and data
+  shown are examples. This gallery is a handoff reference, not a running sync app.</p>
+  <nav aria-label="Handoff files"><a href="HANDOFF.md">Agent instructions</a><a href="copy.md">Website copy</a><a href="content.json">Structured content</a><a href="claims-and-sources.md">Claims and sources</a></nav>
+</header>
+<main>
+  <h2>One share, several recipients</h2>
+  <figure><a href="screenshots/01-share-overview.jpg"><img src="screenshots/01-share-overview.jpg" width="1280" height="807" alt="Covalent Music share from Studio to Home NAS and Archive NAS, scheduled hourly."></a><figcaption>Lead image. Current server interface with example devices and data.</figcaption></figure>
+  <h2>Shared timing and clear deletion choices</h2>
+  <figure><a href="screenshots/02-share-settings.jpg"><img src="screenshots/02-share-settings.jpg" width="1280" height="1403" loading="lazy" alt="Music share settings: Scheduled every 60 minutes, with deletion propagation and restoration both off."></a><figcaption>Use in the settings feature section. Keep the deletion explanation in view.</figcaption></figure>
+  <h2>Add another recipient</h2>
+  <figure><a href="screenshots/03-add-recipient.jpg"><img src="screenshots/03-add-recipient.jpg" width="1280" height="1055" loading="lazy" alt="The inline Add recipient form with Laptop selected for the Music share."></a><figcaption>The form is shown before submission.</figcaption></figure>
+  <h2>The same share at the receiving end</h2>
+  <figure><a href="screenshots/04-receiver-view.jpg"><img src="screenshots/04-receiver-view.jpg" width="1280" height="807" loading="lazy" alt="Home NAS receiving Music from Studio, with both Home NAS and Archive NAS listed as recipients."></a><figcaption>Recipients see the source and the full recipient list.</figcaption></figure>
+  <h2>The console on a small screen</h2>
+  <figure class="phone"><a href="screenshots/05-mobile-web.jpg"><img src="screenshots/05-mobile-web.jpg" width="390" height="964" loading="lazy" alt="The server console at phone width, with icon navigation and the Music share's two recipients."></a><figcaption>Responsive web console. This is not the native Android app.</figcaption></figure>
+  <h2>Social preview and logo</h2>
+  <figure><img src="brand/social-card.png" width="1200" height="630" loading="lazy" alt="Covalent: Share a folder. Choose where it goes. Open source, powered by rclone."><figcaption>1200 × 630 social card. Editable SVG included.</figcaption></figure>
+  <div class="brand"><img src="brand/covalent-mark.svg" alt="Slate Covalent mark" width="88" height="64"><div class="dark"><img src="brand/covalent-mark-light.svg" alt="Light Covalent mark" width="88" height="64"></div><a href="brand/USAGE.md">Brand usage</a></div>
+</main>
+</html>

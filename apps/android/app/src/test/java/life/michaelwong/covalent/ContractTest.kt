@@ -32,7 +32,7 @@ class ContractTest {
 
     @Test
     fun primaryToolbarHasOnlyLockedScopeActions() {
-        assertEquals(listOf("PAIR", "BACKUP", "RESTORE"), PrimaryAction.entries.map { it.name })
+        assertEquals(listOf("PAIR", "LINKS"), PrimaryAction.entries.map { it.name })
         assertFalse(PrimaryAction.entries.any { it.name.contains("SYNC") })
     }
 
@@ -52,6 +52,8 @@ class ContractTest {
         listOf(Screen.PAIR, Screen.BACKUP, Screen.RESTORE, Screen.SETTINGS).forEach {
             assertEquals(Screen.HOME, it.systemBackTarget())
         }
+        assertEquals(Screen.HOME, Screen.FOLDERS.systemBackTarget(hasBackupConnection = true))
+        assertEquals(Screen.SETUP, Screen.FOLDERS.systemBackTarget(hasBackupConnection = false))
         assertEquals(null, Screen.HOME.systemBackTarget())
         assertEquals(null, Screen.SETUP.systemBackTarget())
     }

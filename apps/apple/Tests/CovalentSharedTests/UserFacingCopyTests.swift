@@ -5,11 +5,8 @@ import Testing
 
 /// Holds the line on the words the apps show people.
 ///
-/// Android ran this sweep once and went from 62 offenders to 0; Apple ran it
-/// later and went from 132 to 0. Neither number stays at 0 on its own — the
-/// vocabulary that leaks is the vocabulary the code is written in, so every
-/// new screen re-imports it unless something objects. `IOSHomeView` showed a
-/// reader the literal string "Tier 2" for months.
+/// The vocabulary that leaks is the vocabulary the code is written in, so new
+/// screens re-import it unless something objects.
 ///
 /// This scans the view sources for user-facing string literals containing
 /// engineering nouns. It is deliberately a *word list*, not a judgement: it
@@ -77,31 +74,29 @@ import Testing
         #expect(scanned.contains("NodeErrorCopy.swift"))
         #expect(scanned.contains("CovalentAppModel.swift"))
         #expect(scanned.contains("MacOverviewView.swift"))
-        #expect(scanned.contains("IOSHomeView.swift"))
     }
 
-    @Test func appleSurfacesNameBothBackupIdentifiersAndDescribeIOSSupport() throws {
-        let sources = try Dictionary(uniqueKeysWithValues: Self.viewSources().map {
-            ($0.lastPathComponent, try! String(contentsOf: $0, encoding: .utf8))
-        })
-        for name in ["MacBackupsView.swift", "IOSBackupsView.swift"] {
-            let source = try #require(sources[name])
-            #expect(source.contains("Backup ID"))
-            #expect(source.contains("Backup version ID"))
-        }
-        let settings = try #require(sources["IOSSettingsView.swift"])
-        #expect(settings.contains("Preview — not released"))
-        #expect(!settings.contains("PlatformTier.tier2.label"))
-    }
+    @Test func managedMacLegacyBackupsKeepNativeRestoreWithoutBackupCreation() throws {
+        let sources = try Self.viewSources()
+        let backupsURL = try #require(sources.first { $0.lastPathComponent == "MacBackupsView.swift" })
+        let rootURL = try #require(sources.first { $0.lastPathComponent == "MacRootView.swift" })
+        let backups = try String(contentsOf: backupsURL, encoding: .utf8)
+        let root = try String(contentsOf: rootURL, encoding: .utf8)
 
-    @Test func macRestoreLabelsOnlyActionsTheExecutorCanPerform() throws {
-        let source = try String(contentsOf: Self.source(named: "MacBackupsView.swift"), encoding: .utf8)
-        #expect(source.contains("Skip existing file"))
-        #expect(source.contains("Create renamed copy"))
-        #expect(source.contains("Replace existing file"))
-        #expect(source.contains("Replace and Restore"))
-        #expect(source.contains("hasSignedTargetInventory"))
-        #expect(!source.contains("Blocked conflict"))
+        #expect(backups.contains("struct MacLegacyBackupsView"))
+        #expect(backups.contains("Button(\"Preview Restore…\")"))
+        #expect(backups.contains("struct MacRestoreSetupView"))
+        #expect(backups.contains("struct MacRestorePreviewView"))
+        #expect(backups.contains("struct MacRestoreResultView"))
+        #expect(root.contains("MacRestorePreviewView(model: model"))
+        #expect(root.contains("MacRestoreResultView(result: result"))
+
+        let macViews = try sources
+            .filter { $0.path.contains("/CovalentMac/") }
+            .map { try String(contentsOf: $0, encoding: .utf8) }
+            .joined(separator: "\n")
+        #expect(!macViews.contains("requestNewBackup("))
+        #expect(!macViews.contains("Button(\"New Backup"))
     }
 
     // MARK: - Scanner
@@ -234,7 +229,7 @@ import Testing
         // summary a person reads is authored in `NodeErrorCopy.swift`, and a
         // scan that skipped it would have let the whole error catalog drift
         // back into engine vocabulary while reporting zero offenders.
-        for platform in ["CovalentMac", "CovalentIOS", "CovalentShared"] {
+        for platform in ["CovalentMac", "CovalentShared"] {
             let directory = root.appending(path: platform, directoryHint: .isDirectory)
             let names = try FileManager.default.contentsOfDirectory(atPath: directory.path)
             found += names
@@ -248,13 +243,4 @@ import Testing
         return found
     }
 
-    private static func source(named name: String) -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appending(path: "Sources", directoryHint: .isDirectory)
-            .appending(path: "CovalentMac", directoryHint: .isDirectory)
-            .appending(path: name, directoryHint: .notDirectory)
-    }
 }

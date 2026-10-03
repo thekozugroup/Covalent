@@ -1,0 +1,41 @@
+{
+  "offer": {
+    "schemaVersion": 1,
+    "offerId": "12345678-1234-5678-1234-567812345678",
+    "folderId": "87654321-4321-6789-4321-678987654321",
+    "label": "Shared photos",
+    "sourceDeviceId": "b73ed4f4-84af-4493-9d81-a8c54a932c7b",
+    "targetDeviceId": "3a5b603d-c787-46d8-aa48-f6d0fcdaca88",
+    "sourceEngine": {
+      "schemaVersion": 1,
+      "covalentDeviceId": "b73ed4f4-84af-4493-9d81-a8c54a932c7b",
+      "engineDeviceId": "EA2I6UL-UUWKJDX-NGOC6QS-U2IZR4Z-LXY5CB7-3KBVQRG-4CNFBV7-RACTXQF",
+      "directAddress": "203.0.113.10:22000"
+    },
+    "pairingId": "AAECAwQFBgcICQoLDA0ODw",
+    "issuedAtUnixMs": 1800000000000,
+    "expiresAtUnixMs": 1800000060000,
+    "nonce": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcY",
+    "signature": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-Pw"
+  },
+  "acceptance": {
+    "schemaVersion": 1,
+    "offerDigest": "1111111111111111111111111111111111111111111111111111111111111111",
+    "targetDeviceId": "3a5b603d-c787-46d8-aa48-f6d0fcdaca88",
+    "targetEngine": {
+      "schemaVersion": 1,
+      "covalentDeviceId": "3a5b603d-c787-46d8-aa48-f6d0fcdaca88",
+      "engineDeviceId": "FZ23CS4-PDV743V-32LS44M-TCIUBAQ-RQ3OC4X-XN6EG66-BGUCZH4-OISTMAE",
+      "directAddress": "[2001:db8::25]:22000"
+    },
+    "acceptedAtUnixMs": 1800000000001,
+    "signature": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-Pw"
+  },
+  "commit": {
+    "schemaVersion": 1,
+    "sourceDeviceId": "b73ed4f4-84af-4493-9d81-a8c54a932c7b",
+    "offerDigest": "1111111111111111111111111111111111111111111111111111111111111111",
+    "acceptanceDigest": "2222222222222222222222222222222222222222222222222222222222222222",
+    "signature": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-Pw"
+  }
+}
