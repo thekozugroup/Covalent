@@ -9,7 +9,7 @@
 
 **Share a folder. Choose where it goes.**
 
-Simple, self-hosted file sharing powered by rclone. One source, one or more
+Simple, self-hosted one-way file sharing powered by rclone. One source, one or more
 recipients, and the same settings on every device.
 
 [![Release](https://img.shields.io/github/v/release/thekozugroup/Covalent?color=475569)](https://github.com/thekozugroup/Covalent/releases/latest)
@@ -22,6 +22,8 @@ recipients, and the same settings on every device.
 </div>
 
 ---
+
+<img alt="Your files. Where you want them. Covalent's desktop web console showing a Music share with two recipients over a colorful motion-blurred background" src="docs/website/mockups/exports/01-desktop-and-phone.png" width="100%">
 
 ## Why
 
@@ -87,6 +89,11 @@ and deletion settings; its owner chooses where the files belong.
 *Current server interface with example devices and data. These are web-console
 captures; native apps have their own interfaces. The pictured console is newer
 than the v0.2.1 native packages.*
+
+The [product preview pack](docs/website/mockups/README.md) includes the latest
+desktop hero, a real native Android setup capture in a Pixel 6 frame, and previews
+of adding recipients, shared settings, and transfer status. PNG and WebP exports,
+editable layouts, alt text, and asset notices are included for website use.
 
 ## What it does
 
@@ -214,5 +221,5 @@ For vulnerabilities, follow [SECURITY.md](SECURITY.md) and report privately.
 [troubleshooting]: https://github.com/thekozugroup/Covalent/blob/9088b50416f686d533d75e27b8d89804dab51139/docs/troubleshooting.md
 [release-notes]: https://github.com/thekozugroup/Covalent/tree/9088b50416f686d533d75e27b8d89804dab51139/docs/release/notes
 [release-evidence]: https://github.com/thekozugroup/Covalent/blob/9088b50416f686d533d75e27b8d89804dab51139/docs/release/completion-progress.md
-[website-pack]: https://github.com/thekozugroup/Covalent/blob/9088b50416f686d533d75e27b8d89804dab51139/docs/website/HANDOFF.md
+[website-pack]: docs/website/HANDOFF.md
 [legacy-backups]: https://github.com/thekozugroup/Covalent/blob/9088b50416f686d533d75e27b8d89804dab51139/docs/getting-started.md
