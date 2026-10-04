@@ -4,6 +4,24 @@ Covalent copy and original brand artwork retain the repository MIT license.
 Screenshots depict the Covalent UI, which includes shadcn and Lucide components.
 No competitor logos, stock images, or third-party font binaries are included.
 
+## Google Pixel 6 device artwork
+
+`mockups/assets/pixel-6-back.png` and `pixel-6-front.png` are unmodified layers
+from Google's [Device Art Generator](https://developer.android.com/distribute/marketing-tools/device-art-generator),
+retrieved 2026-10-04. The generator describes this artwork for websites and other
+promotional materials, and recommends unframed screenshots for Google Play listings.
+These assets retain Google's [content-license terms](https://developer.android.com/license)
+and are not relicensed under Covalent's MIT license. Google and Pixel are Google's
+trademarks. No endorsement is implied. Exact asset URLs and geometry appear in
+[the provenance file](mockups/assets/README.md).
+
+## Abstract background
+
+`mockups/assets/motion-meadow.png` and its WebP derivative were generated for
+Covalent using the built-in image-generation tool on 2026-10-04. The prompt and
+usage are recorded in [the provenance file](mockups/assets/README.md). No app
+screenshots or device frames were AI-generated.
+
 ## Covalent
 
 ```text

@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Covalent — Product previews</title>
+<link rel="stylesheet" href="previews.css">
+<body>
+<header class="gallery-header">
+  <a href="../index.html">Covalent website pack</a>
+  <h1>Product previews</h1>
+  <p>Product previews with real web-console and Android app captures. The phone uses Google's Pixel 6 artwork around an unaltered 1080 × 2400 Android screenshot.</p>
+  <a href="README.md">Usage and editable source</a>
+</header>
+<main id="gallery"></main>
+<template id="hero">
+  <section class="artboard hero" aria-label="Your files. Where you want them.">
+    <div class="brand"><img src="../brand/covalent-mark.svg" alt=""><span>Covalent</span></div>
+    <div class="platform-note">Open source. Powered by rclone.</div>
+    <h2>Your files. Where you want them.</h2>
+    <p class="lead">One source. A few destinations. A clear view of every copy.</p>
+    <div class="browser hero-desktop"><img src="captures/overview-active.png" alt="Music sharing from Studio to Home NAS and Archive NAS, with both recipients syncing."></div>
+  </section>
+</template>
+<template id="destinations">
+  <section class="artboard portrait destinations" aria-label="Your folders. On your phone.">
+    <div class="brand"><img src="../brand/covalent-mark.svg" alt=""><span>Covalent</span></div>
+    <h2>Your folders.<br>On your phone.</h2>
+    <p class="lead">Pair a device. Choose a folder.<br>Decide when files move.</p>
+    <div class="pixel portrait-phone"><img class="pixel-back" src="assets/pixel-6-back.png" alt=""><img class="pixel-screen" src="captures/android-pixel-6.png" alt="An actual native Android screenshot showing Shared folders, device pairing, and Android folder selection."><img class="pixel-front" src="assets/pixel-6-front.png" alt=""></div>
+    <div class="disclosure">Native Android · Pixel 6 emulator · Setup screen</div>
+  </section>
+</template>
+<template id="recipient">
+  <section class="artboard portrait recipient dark" aria-label="Another device. Same share.">
+    <div class="brand"><img src="../brand/covalent-mark-light.svg" alt=""><span>Covalent</span></div>
+    <h2>Another device.<br>Same share.</h2>
+    <p class="lead">Add a paired recipient.<br>They choose the destination folder.</p>
+    <div class="focus-window recipient-window"><div class="chrome"><span class="traffic"><i></i><i></i><i></i></span><span>Covalent · Add recipient</span></div><div class="recipient-crop"><img src="../screenshots/03-add-recipient.jpg" alt="The Music share with Laptop selected in the Add recipient form."></div></div>
+    <p class="support">The same timing.<br>The same deletion choices.</p>
+    <div class="disclosure">Web console detail · Example data</div>
+  </section>
+</template>
+<template id="settings">
+  <section class="artboard portrait settings" aria-label="Your timing. Your choices.">
+    <div class="brand"><img src="../brand/covalent-mark.svg" alt=""><span>Covalent</span></div>
+    <h2>Your timing.<br>Your choices.</h2>
+    <p class="lead">A schedule for the whole share.<br>Clear choices about deleted files.</p>
+    <div class="focus-window settings-window"><div class="chrome"><span class="traffic"><i></i><i></i><i></i></span><span>Covalent · Share settings</span></div><div class="settings-crop"><img src="../screenshots/02-share-settings.jpg" alt="The shared settings form: scheduled hourly, with both deletion options off."></div></div>
+    <p class="support">Both deletion options start off.<br>You decide when they change.</p>
+    <div class="disclosure">Web console detail · Example data</div>
+  </section>
+</template>
+<template id="status">
+  <section class="artboard portrait status" aria-label="See where every copy stands.">
+    <div class="brand"><img src="../brand/covalent-mark.svg" alt=""><span>Covalent</span></div>
+    <h2>See where<br>every copy stands.</h2>
+    <p class="lead">One place to check your share<br>and each of its recipients.</p>
+    <div class="focus-window status-window"><div class="chrome"><span class="traffic"><i></i><i></i><i></i></span><span>Covalent · Transfer status</span></div><div class="status-crop"><img src="captures/transfer-active.png" alt="An illustrative active run: Home NAS is complete and Archive NAS is waiting."></div></div>
+    <p class="support">Know what has finished.<br>See what is still waiting.</p>
+    <div class="disclosure">Web console · Illustrative transfer state</div>
+  </section>
+</template>
+<script>
+const previews = [
+  { id: 'hero', file: '01-desktop-and-phone', width: 1920, height: 1200, title: 'Desktop hero' },
+  { id: 'destinations', file: '02-native-android', width: 1080, height: 1920, title: 'Native Android on Google Pixel 6' },
+  { id: 'recipient', file: '03-add-a-recipient', width: 1080, height: 1920, title: 'Add a recipient' },
+  { id: 'settings', file: '04-shared-settings', width: 1080, height: 1920, title: 'Shared timing and deletion choices' },
+  { id: 'status', file: '05-transfer-status', width: 1080, height: 1920, title: 'Per-recipient status' },
+];
+const selected = new URLSearchParams(location.search).get('export');
+const gallery = document.getElementById('gallery');
+if (selected) {
+  const item = previews.find(item => item.id === selected);
+  if (!item) { gallery.textContent = 'Unknown preview.'; }
+  else {
+    document.body.classList.add('export');
+    document.title = `Covalent — ${item.title}`;
+    gallery.append(document.getElementById(item.id).content.cloneNode(true));
+  }
+} else {
+  for (const item of previews) {
+    const figure = document.createElement('figure');
+    figure.className = item.id === 'hero' ? 'hero-figure' : 'portrait-figure';
+    const canvas = document.createElement('div'); canvas.className = 'canvas';
+    canvas.style.aspectRatio = `${item.width} / ${item.height}`;
+    canvas.append(document.getElementById(item.id).content.cloneNode(true));
+    const caption = document.createElement('figcaption');
+    const name = document.createElement('strong'); name.textContent = item.title; caption.append(name);
+    for (const [label, href] of [['Open layout', `?export=${item.id}`], ['PNG', `exports/${item.file}.png`], ['WebP', `exports/${item.file}.webp`]]) {
+      const link = document.createElement('a'); link.textContent = label; link.href = href; caption.append(link);
+    }
+    figure.append(canvas, caption); gallery.append(figure);
+    new ResizeObserver(entries => { canvas.firstElementChild.style.transform = `scale(${entries[0].contentRect.width / item.width})`; }).observe(canvas);
+  }
+}
+</script>
+</body>
+</html>
