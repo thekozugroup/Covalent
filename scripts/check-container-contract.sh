@@ -61,11 +61,11 @@ require_text 'ARG RELEASE_VERSION=development' "$dockerfile"
 require_text 'org.opencontainers.image.version="$RELEASE_VERSION"' "$dockerfile"
 require_text 'ARG COVALENT_SOURCE_FINGERPRINT=unknown' "$dockerfile"
 require_text 'io.covalent.source.fingerprint="$COVALENT_SOURCE_FINGERPRINT"' "$dockerfile"
-require_text 'io.covalent.runtime.openssl.version="3.5.8-r0"' "$dockerfile"
-require_text 'libcrypto3=3.5.8-r0' "$dockerfile"
-require_text 'libssl3=3.5.8-r0' "$dockerfile"
+require_text 'io.covalent.runtime.openssl.version="3.5.9-r0"' "$dockerfile"
+require_text 'libcrypto3=3.5.9-r0' "$dockerfile"
+require_text 'libssl3=3.5.9-r0' "$dockerfile"
 require_text 'Alpine 3.23 runtime base' "$documentation"
-require_text 'OpenSSL libraries are upgraded to the exact signed Alpine security revision `3.5.8-r0`' "$documentation"
+require_text 'OpenSSL libraries are upgraded to the exact signed Alpine security revision `3.5.9-r0`' "$documentation"
 # Markdown backticks are literal documentation text.
 # shellcheck disable=SC2016
 require_text '`linux/amd64` and `linux/arm64`' "$documentation"
@@ -199,7 +199,7 @@ if [ -n "$image" ]; then
   test "$(docker image inspect "$image" --format '{{.Config.User}}')" = 65532:65532
   test "$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.base.name"}}')" = docker.io/library/alpine:3.23
   test "$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.base.digest"}}')" = "$runtime_digest"
-  test "$(docker image inspect "$image" --format '{{index .Config.Labels "io.covalent.runtime.openssl.version"}}')" = 3.5.8-r0
+  test "$(docker image inspect "$image" --format '{{index .Config.Labels "io.covalent.runtime.openssl.version"}}')" = 3.5.9-r0
   test "$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.licenses"}}')" = MIT
   actual_version=$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')
   [ -n "$actual_version" ] || { echo "container OCI version label is empty" >&2; exit 1; }
@@ -209,7 +209,7 @@ if [ -n "$image" ]; then
     exit 1
   fi
   docker run --rm --entrypoint sh "$image" -c \
-    'apk info -e "libcrypto3=3.5.8-r0" && apk info -e "libssl3=3.5.8-r0"' \
+    'apk info -e "libcrypto3=3.5.9-r0" && apk info -e "libssl3=3.5.9-r0"' \
     >/dev/null
   # The Dockerfile asserts the build inputs; this asserts the artefact. A
   # from-source Caddy that silently drifted from the reviewed upstream

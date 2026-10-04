@@ -13,11 +13,15 @@ the *set* of distinct findings is the same.
 | --- | --- |
 | Caddy 2.10.2-alpine | **49** — 47 in the vendored Caddy binary, 2 in the Alpine base |
 | Caddy 2.11.4-alpine | **12** — 10 in the vendored Caddy binary, 2 in the Alpine base |
-| Caddy upstream snapshot `v2.11.5-0.20260711231708-b2693fb63a30` built from source, with exact Alpine security revisions (current) | **0** |
+| Caddy upstream snapshot `v2.11.5-0.20260711231708-b2693fb63a30` built from source, with Alpine OpenSSL `3.5.8-r0` (previous measurement) | **0** |
 
-Measured with Grype 0.117.0 against locally built images. The final current-row
+Measured with Grype 0.117.0 against locally built images. The final row's
 measurement is the local `linux/arm64` candidate; the release workflow repeats
 the same strict scan independently on both architectures before promotion.
+
+The current source pins Alpine OpenSSL `3.5.9-r0` and Rustls `0.23.45`.
+The measurements below predate those updates; a fresh image build and scan are
+required before attributing their results to the current source.
 
 The bump cleared 39 findings and introduced 2 (both Go stdlib, superseded by the
 same toolchain gap described below). Notably cleared: both step-ca criticals,
@@ -197,11 +201,17 @@ CVE-2026-14457, CVE-2026-18798, CVE-2026-54874, CVE-2026-63072,
 CVE-2026-63075, and CVE-2026-63076.
 
 The runtime stage now retains the reviewed base digest and upgrades only those
-two libraries to the exact signed Alpine version `3.5.8-r0`. The package
+two libraries to the exact signed Alpine version `3.5.9-r0`. The package
 version is also an OCI label and a static/runtime contract assertion. This is
 fail closed: if Alpine's signed repository cannot supply that exact revision,
 the build stops rather than floating to another package. No scanner exception
 or severity change is used.
+
+On 2026-10-03, [CI run 37126926339](https://github.com/thekozugroup/Covalent/actions/runs/37126926339)
+failed for both image architectures because the repository offered `3.5.9-r0`
+instead of the pinned `3.5.8-r0`. The package pins, OCI label, and contract
+assertions now select `3.5.9-r0`. This records the observed package availability,
+not a new vulnerability scan result.
 
 ### Historical reachability evidence for CVE-2026-14456
 
@@ -258,10 +268,10 @@ read-only-rootfs, `--cap-drop=ALL`, `--security-opt=no-new-privileges`.
 
 ### Is the pinned base itself fixed? Not yet; its stable repository is.
 
-The official `alpine:3.23` tag still resolves to 3.23.5 and the reviewed digest
-`sha256:fd791d74...daf40`, assembled with OpenSSL `3.5.7-r0`. Alpine's v3.23
-package repository now supplies signed `3.5.8-r0` packages for every supported
-image architecture. Pinning those two security revisions preserves the known
+The pinned Alpine 3.23.5 base has the reviewed digest
+`sha256:fd791d74...daf40`, assembled with OpenSSL `3.5.7-r0`. The 2026-10-03
+CI logs show `3.5.9-r0` packages in Alpine's v3.23 repository for both supported
+image architectures. Pinning those two security revisions preserves the known
 base filesystem while taking the available fixes immediately; the next Alpine
 point-release digest can replace this narrow package layer after independent
 multi-architecture scanning.
