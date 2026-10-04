@@ -20,6 +20,9 @@ or change the running installations as part of the website work.
 6. Use [the product preview set](mockups/index.html) for a framed hero and
    portrait feature graphics. It includes PNG/WebP exports, editable layouts,
    dimensions, alt text, and [usage guidance](mockups/README.md).
+   The revised phone previews use a native Android capture in Google's Pixel 6
+   frame. Their colorful abstract background is generated imagery. The separate
+   `screenshots/05-mobile-web.jpg` remains a mobile-web capture.
 
 ## Suggested page order
 

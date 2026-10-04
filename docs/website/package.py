@@ -32,6 +32,10 @@ def main():
         assert (WEB / name).is_file(), name
     previews = json.loads((WEB / 'mockups/manifest.json').read_text())
     assert len(previews['assets']) == 5
+    android = previews['androidCapture']
+    capture = (WEB / 'mockups' / android['file']).read_bytes()
+    assert capture.startswith(b'\x89PNG\r\n\x1a\n')
+    assert struct.unpack('>II', capture[16:24]) == (1080, 2400)
     for item in previews['assets']:
         image = (WEB / 'mockups' / (item['file'] + '.png')).read_bytes()
         assert image.startswith(b'\x89PNG\r\n\x1a\n'), item['file']
@@ -66,7 +70,9 @@ Repository: https://github.com/thekozugroup/Covalent
 This is a source/content handoff, not an installer or a new release. The source
 snapshot does not imply its development branch has been merged into main.
 No live server data, keys, deployment artifacts or build caches are included.
-All product screenshots depict example devices and data. Mobile capture is web.
+Server captures use example data. Framed phone previews use a real native Android
+setup capture; the separate narrow server screenshot is mobile web. See the
+preview asset notices for Google's Pixel frame and the generated background.
 
 MANIFEST.json records file checksums and the source revision. To verify on
 macOS/Linux, run `shasum -a 256 -c SHA256SUMS` from this directory.

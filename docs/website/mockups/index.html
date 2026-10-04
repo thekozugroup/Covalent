@@ -8,7 +8,7 @@
 <header class="gallery-header">
   <a href="../index.html">Covalent website pack</a>
   <h1>Product previews</h1>
-  <p>Store-preview-style artwork built around the actual server interface. Example devices and data; phone views show the responsive web console.</p>
+  <p>Product previews with real web-console and Android app captures. The phone uses Google's Pixel 6 artwork around an unaltered 1080 × 2400 Android screenshot.</p>
   <a href="README.md">Usage and editable source</a>
 </header>
 <main id="gallery"></main>
@@ -18,20 +18,18 @@
     <div class="platform-note">Open source. Powered by rclone.</div>
     <h2>Your files. Where you want them.</h2>
     <p class="lead">One source. A few destinations. A clear view of every copy.</p>
-    <div class="bond-art" aria-hidden="true"><i></i><i></i></div>
     <div class="browser hero-desktop"><div class="chrome"><span class="traffic"><i></i><i></i><i></i></span><span>Covalent · Music</span></div><img src="captures/overview-active.png" alt="Music sharing from Studio to Home NAS and Archive NAS, with both recipients syncing."></div>
-    <div class="phone hero-phone"><div class="phone-top"><i></i></div><div class="phone-screen"><img src="../screenshots/05-mobile-web.jpg" alt="The same Music share shown in the responsive web console."></div><div class="phone-bottom"><i></i></div></div>
-    <div class="disclosure">Web console · Example devices and data</div>
+    <div class="pixel hero-phone"><img class="pixel-back" src="assets/pixel-6-back.png" alt=""><img class="pixel-screen" src="captures/android-pixel-6.png" alt="The native Covalent Android app, on its Shared folders setup screen."><img class="pixel-front" src="assets/pixel-6-front.png" alt=""></div>
+    <div class="disclosure">Web console + native Android · Example setup · Pixel 6 emulator</div>
   </section>
 </template>
 <template id="destinations">
-  <section class="artboard portrait destinations" aria-label="One folder. More destinations.">
+  <section class="artboard portrait destinations" aria-label="Your folders. On your phone.">
     <div class="brand"><img src="../brand/covalent-mark.svg" alt=""><span>Covalent</span></div>
-    <h2>One folder.<br>More destinations.</h2>
-    <p class="lead">Keep your music on the devices<br>where you want to use it.</p>
-    <div class="bond-art" aria-hidden="true"><i></i><i></i></div>
-    <div class="phone portrait-phone"><div class="phone-top"><i></i></div><div class="phone-screen"><img src="../screenshots/05-mobile-web.jpg" alt="Music has two recipients: Home NAS and Archive NAS."></div><div class="phone-bottom"><i></i></div></div>
-    <div class="disclosure">Responsive web console · Example data</div>
+    <h2>Your folders.<br>On your phone.</h2>
+    <p class="lead">Pair a device. Choose a folder.<br>Decide when files move.</p>
+    <div class="pixel portrait-phone"><img class="pixel-back" src="assets/pixel-6-back.png" alt=""><img class="pixel-screen" src="captures/android-pixel-6.png" alt="An actual native Android screenshot showing Shared folders, device pairing, and Android folder selection."><img class="pixel-front" src="assets/pixel-6-front.png" alt=""></div>
+    <div class="disclosure">Native Android · Pixel 6 emulator · Setup screen</div>
   </section>
 </template>
 <template id="recipient">
@@ -67,7 +65,7 @@
 <script>
 const previews = [
   { id: 'hero', file: '01-desktop-and-phone', width: 1920, height: 1200, title: 'Desktop and phone hero' },
-  { id: 'destinations', file: '02-one-folder-many-destinations', width: 1080, height: 1920, title: 'One folder, more destinations' },
+  { id: 'destinations', file: '02-native-android', width: 1080, height: 1920, title: 'Native Android on Google Pixel 6' },
   { id: 'recipient', file: '03-add-a-recipient', width: 1080, height: 1920, title: 'Add a recipient' },
   { id: 'settings', file: '04-shared-settings', width: 1080, height: 1920, title: 'Shared timing and deletion choices' },
   { id: 'status', file: '05-transfer-status', width: 1080, height: 1920, title: 'Per-recipient status' },
