@@ -107,7 +107,10 @@ The refreshed README and setup, contribution, product, and security documentatio
 are included. [repo-review.md](repo-review.md) describes their scope and the
 distribution limitations that remain.
 
-To inspect the screenshot scenes from a checkout:
+To inspect the screenshot scenes, use an implementation checkout of
+`codex/production-readiness`, or the ZIP's complete implementation snapshot.
+The documentation PR adds the assets to `main` independently; its older runtime
+does not reproduce the pictured console.
 
 ```sh
 python3 docs/website/preview.py
@@ -116,4 +119,4 @@ python3 docs/website/preview.py --receiver
 
 Open the printed localhost URLs. These are read-only example servers with no
 real pairing, file transfers, or setting writes. Stop each with Ctrl-C. For
-repackaging a clean checkout, run `python3 docs/website/package.py`.
+repackaging a clean implementation checkout, run `python3 docs/website/package.py`.
