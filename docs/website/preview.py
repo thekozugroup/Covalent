@@ -21,7 +21,7 @@ FOLDER = '55555555-5555-4555-8555-555555555555'
 NAMES = {SOURCE: 'Studio', HOME: 'Home NAS', ARCHIVE: 'Archive NAS', LAPTOP: 'Laptop'}
 
 
-def example(receiver=False):
+def example(receiver=False, running=False):
     now = int(time() * 1000)
     policy = dict(propagateSourceDeletions=False, restoreLocalDeletions=False)
     settings = dict(revision=1, settings=dict(deletionPolicy=policy, paused=False,
@@ -35,6 +35,9 @@ def example(receiver=False):
         pendingRequest=None, rejectedRequest=None,
         destinations=[dict(peerId=p, result='succeeded', endedAtUnixMs=now-540000)
                       for p in (HOME, ARCHIVE)])
+    if running:
+        run.update(phase='running', endedAtUnixMs=None, nextDueAtUnixMs=None)
+        run['destinations'][1].update(result='pending', endedAtUnixMs=None)
     endpoint = lambda p: dict(deviceId=p, displayName=NAMES[p])
     roster = dict(revision=2, label='Music', source=endpoint(SOURCE),
                   destinations=[endpoint(HOME), endpoint(ARCHIVE)])
@@ -44,7 +47,7 @@ def example(receiver=False):
         linkPolicy=policy, linkSettings=settings, linkRun=run, endpointRoster=roster)
         for n, peer in enumerate((HOME,) if receiver else (HOME, ARCHIVE), 1)]
     peers = (SOURCE,) if receiver else (HOME, ARCHIVE, LAPTOP)
-    return dict(schemaVersion=1, availability='available', lifecycle='stopped', issue=None,
+    return dict(schemaVersion=1, availability='available', lifecycle='running' if running else 'stopped', issue=None,
         healthFreshness='fresh', connectionFreshness='fresh',
         peers=[dict(peerId=p, displayName=NAMES[p], address=f'192.0.2.{i+10}:8787')
                for i, p in enumerate(peers)], shares=shares, folders=[])
@@ -53,9 +56,10 @@ def example(receiver=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--receiver', action='store_true')
+    parser.add_argument('--running', action='store_true', help='Illustrative run: one recipient complete, one pending')
     parser.add_argument('--port', type=int, default=0)
     args = parser.parse_args()
-    state = example(args.receiver)
+    state = example(args.receiver, args.running)
     local = HOME if args.receiver else SOURCE
 
     class Handler(BaseHTTPRequestHandler):

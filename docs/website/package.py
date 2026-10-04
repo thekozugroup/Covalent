@@ -3,6 +3,7 @@
 import hashlib
 import json
 import subprocess
+import struct
 import zipfile
 from pathlib import Path
 
@@ -29,6 +30,14 @@ def main():
                  'repo-review.md', 'ASSET-NOTICES.md', 'brand/covalent-mark.svg',
                  'brand/covalent-mark-light.svg', 'brand/social-card.svg'):
         assert (WEB / name).is_file(), name
+    previews = json.loads((WEB / 'mockups/manifest.json').read_text())
+    assert len(previews['assets']) == 5
+    for item in previews['assets']:
+        image = (WEB / 'mockups' / (item['file'] + '.png')).read_bytes()
+        assert image.startswith(b'\x89PNG\r\n\x1a\n'), item['file']
+        assert struct.unpack('>II', image[16:24]) == (item['width'], item['height']), item['file']
+        webp = (WEB / 'mockups' / (item['file'] + '.webp')).read_bytes()
+        assert webp[:4] == b'RIFF' and webp[8:12] == b'WEBP', item['file']
 
     # A Git archive includes only committed files, never local runtime state.
     archived = git('archive', '--format=zip', 'HEAD')
@@ -42,10 +51,12 @@ def main():
 
 Open **repository/docs/website/HANDOFF.md** first.
 Open **repository/docs/website/index.html** for the local screenshot gallery.
+Open **repository/docs/website/mockups/index.html** for five promotional previews.
 
 The pack contains five current WebUI screenshots with example data, editable
 logos, a social image, complete website copy and metadata, a founder case study,
-source notes, and the full polished repository source snapshot.
+source notes, five PNG/WebP promotional compositions with editable layouts,
+and the full polished repository source snapshot.
 
 Website assets and copy: repository/docs/website/
 Repository introduction: repository/README.md
@@ -64,15 +75,17 @@ macOS/Linux, run `shasum -a 256 -c SHA256SUMS` from this directory.
     checksums = {name: hashlib.sha256(body).hexdigest() for name, (body, _) in sorted(entries.items())}
     manifest = dict(schemaVersion=1, sourceCommit=revision,
                     screenshotSourceCommit='1b7a38cbd05e3fb1d585fc10c648b9bc2a4f9c7d',
-                    capturedOn='2026-10-03', exampleData=True, files=checksums)
+                    capturedOn='2026-10-03', previewCreatedOn=previews['createdOn'],
+                    exampleData=True, files=checksums)
     entries['MANIFEST.json'] = ((json.dumps(manifest, indent=2)+'\n').encode(), 0o100644 << 16)
     checksums['MANIFEST.json'] = hashlib.sha256(entries['MANIFEST.json'][0]).hexdigest()
     entries['SHA256SUMS'] = (''.join(f'{digest}  {name}\n' for name, digest in sorted(checksums.items())).encode(), 0o100644 << 16)
     output = ROOT / 'artifacts' / 'website' / 'Covalent-website-pack.zip'
     output.parent.mkdir(parents=True, exist_ok=True)
+    archive_date = (*map(int, previews['createdOn'].split('-')), 0, 0, 0)
     with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as bundle:
         for name, (body, mode) in sorted(entries.items()):
-            info = zipfile.ZipInfo('Covalent-website-pack/' + name, (2026, 10, 3, 0, 0, 0))
+            info = zipfile.ZipInfo('Covalent-website-pack/' + name, archive_date)
             info.external_attr = mode
             info.compress_type = zipfile.ZIP_DEFLATED
             bundle.writestr(info, body)

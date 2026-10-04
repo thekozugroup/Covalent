@@ -17,6 +17,9 @@ or change the running installations as part of the website work.
    directory. Update their paths in the website implementation.
 5. Keep the personal-use installation note beside downloads. Review
    [claims-and-sources.md](claims-and-sources.md) when editing product claims.
+6. Use [the product preview set](mockups/index.html) for a framed hero and
+   portrait feature graphics. It includes PNG/WebP exports, editable layouts,
+   dimensions, alt text, and [usage guidance](mockups/README.md).
 
 ## Suggested page order
 
