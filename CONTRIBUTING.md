@@ -1,6 +1,18 @@
 # Contributing
 
-Covalent develops directly on `main` during the foundation phase. Keep changes atomic, tested, and scoped to pairing, backup, restore, device settings, explicit replicas, verified storage, or LAN/Tailnet discovery.
+The current rclone implementation is on
+[`codex/production-readiness`](https://github.com/thekozugroup/Covalent/tree/codex/production-readiness)
+in [PR #32](https://github.com/thekozugroup/Covalent/pull/32). Start from that
+branch for current product work; `main` still contains older source. Keep changes
+atomic, tested, and scoped to the current one-way file product: pairing, folder
+authorization, rclone transfers, shared link settings, scheduling, status, native
+clients, the Docker web console, and LAN/Tailnet discovery.
+
+Use the existing bundled rclone engine rather than adding a transfer algorithm
+or alternative backend. Preserve existing files, identities, and access to
+legacy encrypted backups; do not silently convert legacy behavior. See the
+[product requirements](https://github.com/thekozugroup/Covalent/blob/9088b50416f686d533d75e27b8d89804dab51139/docs/product/requirements.md) and
+[architecture](https://github.com/thekozugroup/Covalent/blob/9088b50416f686d533d75e27b8d89804dab51139/docs/architecture/overview.md) for the current contract.
 
 ## Local checks
 
@@ -37,4 +49,4 @@ git config user.email thekozugroup@gmail.com
 
 Do not add generated attribution or co-author trailers. Never commit secrets, identity material, `.a5c` run state, build output, or local signing configuration.
 
-Tier 1 regressions on macOS, Android, Docker, or Unraid block release. The iOS target is unsupported and tracked only as informational CI; it does not delay a valid Tier 1 release.
+Tier 1 regressions on macOS, Android, Docker, or Unraid block release. iOS and Windows are unsupported and excluded from builds and release gates.

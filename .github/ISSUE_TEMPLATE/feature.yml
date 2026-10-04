@@ -1,5 +1,5 @@
 name: Feature request
-description: Propose an improvement within Covalent's local-first product scope.
+description: Propose a simpler way to pair devices, share folders, or monitor transfers.
 title: "[Feature]: "
 labels: [enhancement]
 body:
@@ -14,7 +14,7 @@ body:
     id: proposal
     attributes:
       label: Proposed behavior
-      description: Include platform, privacy, restore-safety, and compatibility expectations.
+      description: Include the affected platform, source and recipient behavior, deletion choices, and compatibility expectations.
     validations:
       required: true
   - type: checkboxes
@@ -24,7 +24,7 @@ body:
       options:
         - label: Core workflows remain local-first with no required hosted account.
           required: true
-        - label: Replica placement remains explicit.
+        - label: Source and destination folders remain explicitly authorized.
           required: true
-        - label: Restore remains confined beneath a user-authorized root.
+        - label: File direction and deletion behavior remain clear and preserve existing data-safety rules.
           required: true

@@ -1,0 +1,210 @@
+{
+  "schemaVersion": 1,
+  "product": "Covalent",
+  "reviewedOn": "2026-10-03",
+  "navigation": [
+    {
+      "label": "How it works",
+      "href": "#how-it-works"
+    },
+    {
+      "label": "Features",
+      "href": "#features"
+    },
+    {
+      "label": "Why Covalent",
+      "href": "#story"
+    },
+    {
+      "label": "Source",
+      "href": "https://github.com/thekozugroup/Covalent"
+    }
+  ],
+  "hero": {
+    "eyebrow": "Self-hosted file sharing, powered by rclone",
+    "heading": "Share a folder. Choose where it goes.",
+    "description": "Covalent pairs your devices and copies files from one source to one or more recipients. Set the timing once, review deletion choices, and see each recipient’s status.",
+    "supportingLine": "Native apps for Apple Silicon Mac and Android. A browser console for Docker and Unraid.",
+    "primaryCta": {
+      "label": "Get Covalent",
+      "href": "https://github.com/thekozugroup/Covalent/releases/latest"
+    },
+    "secondaryCta": {
+      "label": "Read the setup guide",
+      "href": "https://github.com/thekozugroup/Covalent/blob/1b7a38cbd05e3fb1d585fc10c648b9bc2a4f9c7d/docs/getting-started-links.md"
+    },
+    "installationNote": "Personal-use packages: the Mac app is ad-hoc signed and not notarized; the Android APK is debug-signed. Read the installation guide for your device."
+  },
+  "shortBlurb": "Covalent is a self-hosted rclone wrapper for people who want a folder copied to their own devices without managing a broad set of sync controls. Choose one source and one or more recipients, share timing and deletion settings, and keep ordinary files at each destination.",
+  "howItWorks": {
+    "heading": "One source, one set of choices.",
+    "description": "Each share has a source folder, paired recipients, and settings that apply to everyone in that share.",
+    "steps": [
+      {
+        "title": "Pair your devices",
+        "description": "Compare the confirmation code on both devices and confirm the connection."
+      },
+      {
+        "title": "Choose the folders",
+        "description": "Select the source folder. Each recipient accepts the share and chooses where its copy belongs."
+      },
+      {
+        "title": "Set timing and deletion choices",
+        "description": "Run a transfer yourself, choose a schedule, or let Continuous mode check for changes. Review both deletion options before starting."
+      },
+      {
+        "title": "See each recipient",
+        "description": "Check status and progress for each recipient. An offline recipient does not prevent transfers to the others."
+      }
+    ]
+  },
+  "features": [
+    {
+      "id": "one-to-many",
+      "title": "Send one folder to several devices",
+      "description": "Add paired recipients to an existing share. Changes travel from the source to recipients; recipient changes do not flow back to the source or across to other recipients."
+    },
+    {
+      "id": "shared-settings",
+      "title": "Set timing once per share",
+      "description": "Manual, Scheduled, and Continuous timing apply to every recipient. Settings awaiting confirmation stay visible."
+    },
+    {
+      "id": "deletion-choices",
+      "title": "Choose what deletion means",
+      "description": "Source deletions keep recipient copies by default. Files deleted at a recipient stay deleted there by default. Propagation and restoration are separate choices."
+    },
+    {
+      "id": "plain-files",
+      "title": "Keep ordinary files",
+      "description": "Recipient folders contain files you can open with your usual tools. Removing a share stops transfers and preserves the files already there."
+    },
+    {
+      "id": "collections",
+      "title": "Collect from several sources",
+      "description": "Give each contributor a separate child folder within a collection. Their files stay separate, and contributors do not receive the collection’s other contents."
+    },
+    {
+      "id": "native-and-web",
+      "title": "Manage shares where you use them",
+      "description": "Use the native Mac app and menu bar, the native Android app, or the responsive server console. The console manages folders mounted into your server."
+    }
+  ],
+  "safeguards": {
+    "heading": "Clear choices before files change.",
+    "items": [
+      "Pairing requires the same confirmation code on both devices.",
+      "Devices receive access to the folders you authorize.",
+      "Both deletion options are off by default.",
+      "Lost folder access or an incomplete scan is not treated as a source deletion."
+    ],
+    "limitations": "Covalent provides one-way file synchronization. It does not provide content deduplication or historical backup versions. A mirrored deletion is not a recoverable backup. Continuous mode checks for changes periodically and follows each platform’s background limits."
+  },
+  "caseStudy": {
+    "id": "story",
+    "eyebrow": "Why I built Covalent",
+    "title": "I wanted to move files. I wanted fewer decisions.",
+    "summary": "Covalent began with a specific frustration: I wanted fewer controls and clearer choices when copying a folder to my devices.",
+    "paragraphs": [
+      "I wanted a straightforward way to copy a folder from one of my devices to the others. Choose the source, choose the recipients, decide when to transfer, and see whether each copy is ready. That was the job I needed the software to do.",
+      "Tools such as Syncthing and Resilio Sync felt more granular than I wanted for that job. Both support one-way workflows, and their controls can be useful when you need them. For my own use, I did not want to spend time choosing conflict or version policies, or sorting accumulating copies. I wanted fewer decisions between choosing a folder and getting it onto another device.",
+      "That frustration became Covalent. I chose rclone for the file transfers and built an interface around a narrower workflow: one source folder, one or more paired recipients, and settings shared across the whole share. Covalent handles pairing, folder selection, timing, and status around the transfer engine.",
+      "The direction stays explicit. Files go from the source to its recipients. Changes at a recipient do not become edits on the source or on another recipient. If I want another device to receive the same folder, I add it to the existing share instead of configuring a separate set of timing rules.",
+      "Deletion needed more care than a single sync switch. By default, deleting a source file leaves its recipient copies in place. Deleting a file at one recipient leaves it deleted there. Propagating source deletions and restoring recipient deletions are separate choices, explained before they are enabled. Stopping a share preserves the files already on each device.",
+      "I also wanted the results to be easy to use outside the app. Recipient folders hold ordinary files. A family collection can use a separate child folder for each contributor, without sending the rest of the collection back to every source.",
+      "The tradeoff is deliberate. Covalent offers less control than a general-purpose sync tool. Its narrower model avoids two-way conflict workflows, but it is not a duplicate cleaner: renamed files can coexist, and retaining copies is a choice. It does not deduplicate content or keep historical backup versions. Continuous mode checks periodically, and Android follows the operating system’s background limits.",
+      "I wanted a file-transfer workflow I could understand from the interface. Covalent makes the source, recipients, shared settings, and deletion behavior visible together. The aim is practical: spend less time configuring the transfer, and know what the software will do."
+    ],
+    "sources": [
+      {
+        "label": "Syncthing folder types",
+        "href": "https://docs.syncthing.net/users/foldertypes.html"
+      },
+      {
+        "label": "Resilio Sync one-way synchronization",
+        "href": "https://help.resilio.com/hc/en-us/articles/204754279-Is-one-way-synchronization-possible"
+      }
+    ]
+  },
+  "cta": {
+    "heading": "Start with one folder.",
+    "description": "Pair two devices, choose a source and a recipient, then review the shared settings before your first transfer.",
+    "primary": {
+      "label": "Read the setup guide",
+      "href": "https://github.com/thekozugroup/Covalent/blob/1b7a38cbd05e3fb1d585fc10c648b9bc2a4f9c7d/docs/getting-started-links.md"
+    },
+    "secondary": {
+      "label": "View source on GitHub",
+      "href": "https://github.com/thekozugroup/Covalent"
+    },
+    "note": "No hosted account or subscription required. Use separate backup software when you need recoverable history."
+  },
+  "seo": {
+    "title": "Covalent | Simple one-way folder sharing with rclone",
+    "description": "Copy a folder to your own devices with Covalent. One-way rclone transfers, shared settings, native Mac and Android apps, and a Docker web console.",
+    "canonicalUrl": null,
+    "canonicalNote": "Set the final public URL before publication; no website hostname has been supplied."
+  },
+  "social": {
+    "title": "Covalent: share a folder, choose where it goes",
+    "description": "A self-hosted rclone wrapper with one source, shared settings, explicit deletion choices, and ordinary files at each destination.",
+    "post": "I built Covalent because I wanted fewer decisions when copying files between my devices. It wraps rclone in a focused one-way workflow: one source, several recipients, shared settings, and clear deletion choices.",
+    "imagePath": "brand/social-card.png",
+    "imageAlt": "Covalent logo with the message: Share a folder. Choose where it goes.",
+    "imageNote": "Use the supplied brand/social-card.png asset; resolve its URL against the final public website address."
+  },
+  "screenshots": [
+    {
+      "id": "desktop-overview",
+      "file": "screenshots/01-share-overview.jpg",
+      "alt": "Covalent Music share from Studio, with Home NAS and Archive NAS waiting for the next scheduled run.",
+      "caption": "See the source and each recipient in one share.",
+      "verification": "Inspected capture of the shipped server console using synthetic example data.",
+      "width": 1280,
+      "height": 807
+    },
+    {
+      "id": "share-settings",
+      "file": "screenshots/02-share-settings.jpg",
+      "alt": "Covalent Music share settings with a 60-minute schedule and both deletion options unchecked.",
+      "caption": "One set of timing and deletion choices applies to the share.",
+      "verification": "Inspected capture. Both deletion choices are disabled in this example.",
+      "width": 1280,
+      "height": 1403
+    },
+    {
+      "id": "add-recipient",
+      "file": "screenshots/03-add-recipient.jpg",
+      "alt": "Covalent inline Add recipient form with Laptop selected for the Music share.",
+      "caption": "Add a paired recipient to an existing share.",
+      "verification": "Inspected capture. This is an inline form, not a dialog.",
+      "width": 1280,
+      "height": 1055
+    },
+    {
+      "id": "receiver-view",
+      "file": "screenshots/04-receiver-view.jpg",
+      "alt": "Covalent recipient view of the Music share showing Studio as source and Home NAS and Archive NAS as recipients.",
+      "caption": "Recipients can see the source and everyone receiving the share.",
+      "verification": "Inspected capture of the shipped server console using synthetic example data. Studio is the source; Home NAS and Archive NAS are recipients.",
+      "width": 1280,
+      "height": 807
+    },
+    {
+      "id": "mobile-web",
+      "file": "screenshots/05-mobile-web.jpg",
+      "alt": "Covalent server console in a mobile browser showing the Music share from Studio to Home NAS and Archive NAS.",
+      "caption": "Check your server’s shares from a mobile browser.",
+      "verification": "Inspected responsive server-console capture using synthetic example data. This is not a native Android or iOS application.",
+      "width": 390,
+      "height": 964
+    }
+  ],
+  "footer": {
+    "description": "One-way folder sharing. Self-hosted. Powered by rclone.",
+    "platformNote": "Apple Silicon Mac, Android, Docker, and Unraid. Intel Mac, iOS, and Windows clients are unsupported.",
+    "sourceLabel": "Open source on GitHub",
+    "sourceHref": "https://github.com/thekozugroup/Covalent"
+  },
+  "screenshotDisclosure": "Screenshots show the shipped server console with synthetic example data. Studio, Home NAS, Archive NAS, Laptop, and Music are illustrative names."
+}

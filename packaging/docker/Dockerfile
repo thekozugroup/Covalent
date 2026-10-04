@@ -86,7 +86,7 @@ LABEL org.opencontainers.image.title="Covalent" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.base.name="docker.io/library/alpine:3.23" \
       org.opencontainers.image.base.digest="sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40" \
-      io.covalent.runtime.openssl.version="3.5.8-r0"
+      io.covalent.runtime.openssl.version="3.5.9-r0"
 
 # Alpine published the fixed OpenSSL security revision after the pinned 3.23.5
 # base image was assembled. Install only those two signed repository packages
@@ -95,10 +95,10 @@ LABEL org.opencontainers.image.title="Covalent" \
 # apk-tools and BusyBox ssl_client require them even though Covalent and Caddy
 # are statically linked and do not load OpenSSL.
 RUN apk add --no-cache --upgrade \
-      libcrypto3=3.5.8-r0 \
-      libssl3=3.5.8-r0 \
-    && apk info -e 'libcrypto3=3.5.8-r0' \
-    && apk info -e 'libssl3=3.5.8-r0' \
+      libcrypto3=3.5.9-r0 \
+      libssl3=3.5.9-r0 \
+    && apk info -e 'libcrypto3=3.5.9-r0' \
+    && apk info -e 'libssl3=3.5.9-r0' \
     && addgroup -S -g 65532 covalent \
     && adduser -S -D -H -u 65532 -G covalent -s /sbin/nologin covalent \
     && install -d -m 0700 -o 65532 -g 65532 /config /data /restore
