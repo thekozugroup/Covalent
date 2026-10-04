@@ -6,7 +6,7 @@
   "source": "Editable HTML/CSS with real web-console and Android emulator captures; Google Pixel 6 frame; generated abstract background",
   "androidCapture": {"file":"captures/android-pixel-6.png","width":1080,"height":2400,"device":"Pixel 6 emulator","androidVersion":16,"appVersion":"0.2.1","build":"7157b555a2c9f684","screen":"Shared folders setup","capturedOn":"2026-10-04"},
   "assets": [
-    {"file": "exports/01-desktop-and-phone", "width": 1920, "height": 1200, "alt": "Your files. Where you want them. Covalent's web console and native Android app in a Google Pixel 6 frame over a colorful motion-blurred background."},
+    {"file": "exports/01-desktop-and-phone", "width": 1920, "height": 1200, "alt": "Your files. Where you want them. Covalent's desktop web console centered over a colorful motion-blurred background."},
     {"file": "exports/02-native-android", "width": 1080, "height": 1920, "alt": "Your folders. On your phone. A real native Covalent Android screenshot in Google's Pixel 6 frame shows device pairing and folder selection."},
     {"file": "exports/03-add-a-recipient", "width": 1080, "height": 1920, "alt": "Another device. Same share. The Music share's Add recipient form has Laptop selected."},
     {"file": "exports/04-shared-settings", "width": 1080, "height": 1920, "alt": "Your timing. Your choices. Covalent share settings show an hourly schedule and both deletion options off."},

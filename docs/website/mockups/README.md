@@ -1,12 +1,12 @@
 # Covalent product preview pack
 
-Five finished promotional compositions inspired by app-store previews: one desktop-and-phone hero and four feature portraits. These are website and social assets, not store submission files or evidence of store availability.
+Five finished promotional compositions inspired by app-store previews: one desktop hero and four feature portraits. These are website and social assets, not store submission files or evidence of store availability.
 
 Open `index.html` to view the set locally. The layouts work offline with the included image assets. PNG files are the masters; WebP files are smaller website versions. Use the supplied dimensions and alt text in `manifest.json`.
 
 | Asset | Dimensions | Use |
 | --- | --- | --- |
-| `exports/01-desktop-and-phone` | 1920 × 1200 | Project hero; desktop and phone composition |
+| `exports/01-desktop-and-phone` | 1920 × 1200 | Project hero; desktop-only composition (existing filename retained) |
 | `exports/02-native-android` | 1080 × 1920 | Portrait feature: native Android folder setup on Pixel 6 |
 | `exports/03-add-a-recipient` | 1080 × 1920 | Portrait feature: extend an existing share |
 | `exports/04-shared-settings` | 1080 × 1920 | Portrait feature: timing and deletion choices |
