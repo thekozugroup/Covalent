@@ -11,6 +11,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -68,6 +69,7 @@ internal fun FolderSyncPairing(manager: EmbeddedNodeManager, onPeersChanged: () 
     val installationMessage = stringResource(R.string.folder_sync_pair_installation)
     val needsAttentionMessage = stringResource(R.string.folder_sync_pair_needs_attention)
     var address by remember { mutableStateOf("") }
+    var expanded by remember { mutableStateOf(false) }
     var pending by remember { mutableStateOf<List<NetworkPairing>>(emptyList()) }
     var candidates by remember { mutableStateOf<List<DiscoveryCandidate>>(emptyList()) }
     var pairedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -139,6 +141,13 @@ internal fun FolderSyncPairing(manager: EmbeddedNodeManager, onPeersChanged: () 
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(stringResource(R.string.folder_sync_pair_title), fontWeight = FontWeight.SemiBold)
+            if (pairedIds.isNotEmpty() && pending.isEmpty()) {
+                Text(stringResource(R.string.folder_sync_devices_paired, pairedIds.size))
+                TextButton(onClick = { expanded = !expanded }) {
+                    Text(stringResource(if (expanded) R.string.action_cancel else R.string.folder_sync_connect_another))
+                }
+            }
+            if (pairedIds.isEmpty() || pending.isNotEmpty() || expanded) {
             Text(stringResource(R.string.folder_sync_pair_detail))
             if (!ready) Text(stringResource(R.string.folder_sync_pair_waiting))
             OutlinedButton(
@@ -175,6 +184,7 @@ internal fun FolderSyncPairing(manager: EmbeddedNodeManager, onPeersChanged: () 
                     Text(candidate.endpoint)
                 }
             }
+            Text(stringResource(R.string.folder_sync_tailnet_hint))
             OutlinedTextField(
                 value = address,
                 onValueChange = { if (it.length <= 512) address = it },
@@ -220,6 +230,7 @@ internal fun FolderSyncPairing(manager: EmbeddedNodeManager, onPeersChanged: () 
                         null -> null
                     },
                 )
+            }
             }
         }
     }

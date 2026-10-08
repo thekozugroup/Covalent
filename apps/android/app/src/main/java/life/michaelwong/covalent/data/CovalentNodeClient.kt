@@ -96,6 +96,19 @@ data class EnrolledTrust(
 class CovalentNodeClient(
     private val trustProvider: () -> EnrolledTrust? = { null },
 ) {
+    /** Bounded local polling must not stall the service actor during recovery. */
+    internal fun discoveryEnabled(baseUrl: String): Boolean {
+        val connection = openConnection(baseUrl, "/api/v1/status", "GET", null, "application/json", 1_500)
+        connection.connectTimeout = 1_500
+        connection.instanceFollowRedirects = false
+        try {
+            check(connection.responseCode == 200) { "Node status unavailable." }
+            return JSONObject(connection.inputStream.use {
+                it.readBoundedText(16_384, "The node status")
+            }).getBoolean("lanDiscovery")
+        } finally { connection.disconnect() }
+    }
+
     fun status(baseUrl: String): NodeStatus {
         val json = request(baseUrl, "GET", "/api/v1/status", null, null).body
         val protocolVersion = json.getInt("protocolVersion")

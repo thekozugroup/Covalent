@@ -78,6 +78,7 @@ class NodeProviderService : Service() {
     // Every field below is confined to actorThread. In particular, a stop failure retains `handle`
     // and no queued command can launch a replacement before that exact handle confirms exit.
     private var handle: Long = 0L
+    private var launchedRoute: String? = null
     private var launchedAccessUnavailable = false
     private var launchedDemand = NodeServiceDemand(backupEnabled = false, folderSyncRequested = false)
     private var latestStartId = 0
@@ -111,11 +112,12 @@ class NodeProviderService : Service() {
     private val accessCheck = object : Runnable {
         override fun run() {
             if (handle <= 0L) return
+            manager.refreshDiscoveryPermission()
             conditionFeed.heartbeat()
             if (reapState.reaping) {
                 stopProvider()
             } else if (
-                nodeServiceConfigurationChanged(
+                preferredPeerRoute() != launchedRoute || nodeServiceConfigurationChanged(
                     launchedAccessUnavailable,
                     launchedDemand,
                     manager.folderSyncAccessUnavailable(),
@@ -331,6 +333,7 @@ class NodeProviderService : Service() {
         accessUnavailableAtLaunch: Boolean,
         demandAtLaunch: NodeServiceDemand,
     ) {
+        launchedRoute = preferredPeerRoute()
         handle = response.handle ?: 0L
         launchedAccessUnavailable = accessUnavailableAtLaunch
         launchedDemand = demandAtLaunch

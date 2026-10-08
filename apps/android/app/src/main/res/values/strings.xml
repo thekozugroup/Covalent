@@ -591,7 +591,7 @@
     <string name="folder_sync_pair_detail">Pair this phone with your Mac, server, or another phone. Compare the code on both devices before confirming.</string>
     <string name="folder_sync_pair_compare">Compare this code on both physical devices. Continue only if every group matches. Pairing copies nothing now; choose a folder separately after pairing.</string>
     <string name="folder_sync_pair_address">Device address</string>
-    <string name="folder_sync_pair_address_example">192.168.1.20:8787</string>
+    <string name="folder_sync_pair_address_example">100.x.y.z:8787</string>
     <string name="folder_sync_update_address">Update address</string>
     <string name="folder_sync_update_address_title">Update address for %1$s</string>
     <string name="folder_sync_update_address_detail">Enter the device’s new numeric IP address and port. Covalent will verify the same trusted device before saving it.</string>
@@ -666,4 +666,13 @@
     <string name="folder_link_run_ready">Ready</string>
     <string name="folder_link_waiting_conditions">Waiting for transfer conditions</string>
     <string name="folder_link_waiting_conditions_detail">This link uses shared Android Wi-Fi or charging requirements. Change them in shared settings on any linked device.</string>
+    <string name="folder_sync_safe_defaults">One-way sync. Originals stay on this phone. Deleting a received copy will not copy it back.</string>
+    <string name="folder_sync_show_options">Sync options</string>
+    <string name="folder_sync_hide_options">Hide options</string>
+    <string name="folder_sync_change_folder">Change folder</string>
+    <string name="folder_sync_devices_paired">%1$d paired devices</string>
+    <string name="folder_sync_connect_another">Connect another device</string>
+    <string name="folder_sync_tailnet_hint">For syncing away from home, connect both devices to Tailscale and enter the other device’s Tailscale address. Wi-Fi addresses only work on that network.</string>
+    <string name="folder_sync_custom_options">Custom deletion rules selected. Review Sync options before sharing.</string>
+    <string name="folder_sync_retry_startup">Retry startup</string>
 </resources>

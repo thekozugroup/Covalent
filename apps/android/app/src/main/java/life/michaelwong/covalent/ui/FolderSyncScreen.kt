@@ -140,6 +140,7 @@ internal fun FolderSyncScreen(
     var selectedFolder by remember { mutableStateOf<String?>(null) }
     var selectedFolderLabel by remember { mutableStateOf<String?>(null) }
     var label by remember { mutableStateOf("") }
+    var showSyncOptions by remember { mutableStateOf(false) }
     var selectedPeer by remember { mutableStateOf<String?>(null) }
     var propagateSourceDeletions by remember { mutableStateOf(false) }
     var restoreLocalDeletions by remember { mutableStateOf(false) }
@@ -167,7 +168,7 @@ internal fun FolderSyncScreen(
                 manager.localConnectionForFolderSync()?.let { return@withContext it }
                 delay(250)
             }
-            throw IllegalStateException("not ready")
+            throw IllegalStateException(manager.state.value.statusMessage)
         }
         return withContext(Dispatchers.IO) {
             val previousChoices = grants.records().mapNotNull { it.offerId }.toSet()
@@ -211,10 +212,9 @@ internal fun FolderSyncScreen(
     fun refresh() {
         if (busy) return
         busy = true
-        error = null
         scope.launch {
             runCatching { loadStatus() }
-                .onSuccess { applyStatus(it) }
+                .onSuccess { applyStatus(it); error = null }
                 .onFailure { error = folderSyncErrorText(it) }
             busy = false
         }
@@ -445,6 +445,7 @@ internal fun FolderSyncScreen(
                     selectedFolder = grant.selectedRoot
                     selectedFolderLabel = DocumentFile.fromTreeUri(context, uri)?.name
                         ?: selectedFolderFallback
+                    if (label.isBlank()) label = selectedFolderLabel.orEmpty()
                     manager.refreshFolderSyncAccess()
                 }
                 .onFailure { error = folderSyncErrorText(it) }
@@ -455,6 +456,7 @@ internal fun FolderSyncScreen(
 
     LaunchedEffect(hostRequested) {
         while (hostRequested && isActive) {
+            if (status == null && error != null) break
             refresh()
             delay(3_000)
         }
@@ -584,7 +586,7 @@ internal fun FolderSyncScreen(
         LazyColumn(
             Modifier.weight(1f).fillMaxWidth().testTag("folder-sync-list"),
             state = listState,
-            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 14.dp),
+            contentPadding = PaddingValues(20.dp, 14.dp, 20.dp, 112.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
         item {
@@ -598,6 +600,15 @@ internal fun FolderSyncScreen(
             error?.let { message ->
                 Spacer(Modifier.height(14.dp))
                 Text(message, color = MaterialTheme.colorScheme.error)
+                if (hostRequested && status == null) {
+                    OutlinedButton(onClick = {
+                        error = null
+                        manager.reconnectIfEnabled()
+                        refresh()
+                    }, enabled = !busy) {
+                        Text(stringResource(R.string.folder_sync_retry_startup))
+                    }
+                }
             }
             addressUpdateNotice?.let { message ->
                 Spacer(Modifier.height(14.dp))
@@ -753,6 +764,13 @@ internal fun FolderSyncScreen(
                         }
                     }
                     item {
+                        Text(stringResource(if (propagateSourceDeletions || restoreLocalDeletions) R.string.folder_sync_custom_options else R.string.folder_sync_safe_defaults))
+                        TextButton(onClick = { showSyncOptions = !showSyncOptions }) {
+                            Text(stringResource(if (showSyncOptions) R.string.folder_sync_hide_options else R.string.folder_sync_show_options))
+                        }
+                    }
+                    if (showSyncOptions) {
+                    item {
                         LinkPolicyControl(
                             checked = propagateSourceDeletions,
                             onCheckedChange = { propagateSourceDeletions = it },
@@ -785,6 +803,7 @@ internal fun FolderSyncScreen(
                             { wifiOnly = it },
                             { chargingOnly = it },
                         )
+                    }
                     }
                     item {
                         Button(
@@ -1021,7 +1040,7 @@ private fun FolderChooser(
             Text(stringResource(R.string.folder_sync_choose_folder), fontWeight = FontWeight.SemiBold)
             Text(selected ?: stringResource(R.string.folder_sync_no_folder))
             Button(onClick = onChoose, enabled = !busy) {
-                Text(stringResource(R.string.folder_sync_use_folder))
+                Text(stringResource(if (selected == null) R.string.folder_sync_choose_folder else R.string.folder_sync_change_folder))
             }
         }
     }

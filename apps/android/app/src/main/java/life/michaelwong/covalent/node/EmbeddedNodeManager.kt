@@ -533,7 +533,7 @@ class EmbeddedNodeManager(context: Context) {
             }
         return try {
             val lanEnabled = acquireLanDiscoveryPermission(
-                backupEnabled && preferences.getBoolean(KEY_LAN_REQUESTED, false),
+                preferences.getBoolean(KEY_LAN_REQUESTED, false),
             )
             val syncEngine = PackagedSyncEngine.load(applicationContext)
             val accessUnavailable = folderSyncAccessUnavailable()
@@ -653,13 +653,27 @@ class EmbeddedNodeManager(context: Context) {
     private fun acquireLanDiscoveryPermission(
         requested: Boolean = preferences.getBoolean(KEY_LAN_REQUESTED, false),
     ): Boolean {
-        if (!requested || !hasLanDiscoveryPermission()) return false
+        if (!requested || !hasLanDiscoveryPermission()) {
+            releaseMulticastLock()
+            return false
+        }
+        if (multicastLock?.isHeld == true) return true
         val wifiManager = applicationContext.getSystemService(WifiManager::class.java) ?: return false
         multicastLock = wifiManager.createMulticastLock("covalent-local-discovery").apply {
             setReferenceCounted(false)
             acquire()
         }
         return true
+    }
+
+    /** Native settings are authoritative, including toggles made from the local console. */
+    internal fun refreshDiscoveryPermission() {
+        val enabled = runCatching {
+            val connection = localConnectionForFolderSync() ?: localConnectionForActiveMode()
+                ?: return@runCatching false
+            CovalentNodeClient().discoveryEnabled(connection.baseUrl)
+        }.getOrDefault(false)
+        acquireLanDiscoveryPermission(enabled)
     }
 
     /** Permission for the wildcard QUIC peer socket; multicast is optional. */

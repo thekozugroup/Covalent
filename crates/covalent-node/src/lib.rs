@@ -2056,7 +2056,7 @@ async fn discovery_candidates(
     let report = tokio::task::spawn_blocking(move || {
         use discovery::DiscoveryAvailability;
         let (mut candidates, lan) = if enabled {
-            match discovery::LanDiscovery::browse(true, Duration::from_secs(1)) {
+            match discovery::LanDiscovery::browse(true, Duration::from_secs(3)) {
                 Ok(candidates) => (candidates, DiscoveryAvailability::Available),
                 Err(_) => (Vec::new(), DiscoveryAvailability::Error),
             }
@@ -2066,6 +2066,12 @@ async fn discovery_candidates(
         let (tailnet_candidates, tailscale) =
             discovery::discover_tailscale_with_availability(peer_port);
         candidates.extend(tailnet_candidates);
+        let local = crate::advertised_address::observed_interface_addresses();
+        candidates.retain(|candidate| {
+            let ip = candidate.endpoint.ip();
+            !ip.is_loopback() && !ip.is_unspecified() && !local.contains(&ip)
+                && !matches!(ip, std::net::IpAddr::V6(v6) if v6.is_unicast_link_local())
+        });
         candidates.sort_by_key(|candidate| {
             (
                 candidate.source,
