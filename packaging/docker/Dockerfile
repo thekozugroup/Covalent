@@ -10,8 +10,8 @@ COPY --chmod=0555 scripts/collect-sync-engine-notices.py /usr/local/bin/collect-
 COPY --chmod=0444 packaging/sync-engine/engine-guardian.c /tmp/engine-guardian.c
 COPY --chmod=0444 LICENSE /tmp/Covalent-LICENSE.txt
 RUN apk add --no-cache \
-      python3=3.12.14-r0 \
-    && test "$(python3 --version)" = "Python 3.12.14" \
+      python3=3.12.15-r0 \
+    && test "$(python3 --version)" = "Python 3.12.15" \
     && build-linux-sync-engine worker /tmp/rclone-source /engine-worker "$TARGETARCH" \
     && mkdir -m 0700 /engine-evidence \
     && collect-go-target-license-inventory \
@@ -125,7 +125,7 @@ COPY --chmod=0444 LICENSE /build/LICENSE
 # Root owns the evidence directories; owner write permits unprivileged docker cp extraction.
 RUN set -eu; \
     case "$TARGETARCH" in amd64|arm64) ;; *) echo 'unsupported Caddy target architecture' >&2; exit 64 ;; esac; \
-    apk add --no-cache python3=3.12.14-r0; \
+    apk add --no-cache python3=3.12.15-r0; \
     GOOS=linux GOARCH="$TARGETARCH" CGO_ENABLED=0 \
       go list -mod=readonly -deps -json . > "/tmp/caddy-go-target-deps-linux-${TARGETARCH}.ndjson"; \
     test -s "/tmp/caddy-go-target-deps-linux-${TARGETARCH}.ndjson"; \
@@ -157,7 +157,7 @@ RUN apk add --no-cache \
       linux-headers=6.16.12-r0 \
       openssl-dev=3.5.9-r0 \
       perl=5.42.2-r0 \
-      python3=3.12.14-r0 \
+      python3=3.12.15-r0 \
       sudo=1.9.17_p2-r0 \
       utmps-dev=0.1.3.1-r0 \
       utmps-static=0.1.3.1-r0 \
@@ -217,7 +217,7 @@ RUN apk add --no-cache --upgrade \
 FROM runtime-base AS busybox-package-test
 COPY --from=busybox-package-builder /home/package-builder/output/ /packages/
 COPY --chmod=0555 packaging/docker/alpine/busybox-cve-2025-60876/tests/test_wget_request_target.py /test_wget_request_target.py
-RUN apk add --no-cache python3=3.12.14-r0 \
+RUN apk add --no-cache python3=3.12.15-r0 \
     && set -- \
       /packages/busybox-1.37.0-r1000.apk \
       /packages/busybox-binsh-1.37.0-r1000.apk \

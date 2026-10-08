@@ -2069,7 +2069,9 @@ async fn discovery_candidates(
         let local = crate::advertised_address::observed_interface_addresses();
         candidates.retain(|candidate| {
             let ip = candidate.endpoint.ip();
-            !ip.is_loopback() && !ip.is_unspecified() && !local.contains(&ip)
+            !ip.is_loopback()
+                && !ip.is_unspecified()
+                && !local.contains(&ip)
                 && !matches!(ip, std::net::IpAddr::V6(v6) if v6.is_unicast_link_local())
         });
         candidates.sort_by_key(|candidate| {

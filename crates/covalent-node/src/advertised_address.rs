@@ -193,8 +193,12 @@ pub fn select_advertised_address(
 /// folder transports both bind IPv4; never advertise a v6 address on those sockets.
 pub fn select_android_address(observed: &[IpAddr]) -> Result<IpAddr, AddressRefusal> {
     let v4: Vec<_> = observed.iter().copied().filter(IpAddr::is_ipv4).collect();
-    if let Some(address) = v4.iter().copied()
-        .filter(|address| classify(*address) == Some(AddressClass::Tailnet)).min() {
+    if let Some(address) = v4
+        .iter()
+        .copied()
+        .filter(|address| classify(*address) == Some(AddressClass::Tailnet))
+        .min()
+    {
         return Ok(address);
     }
     select_advertised_address(&v4, false)
@@ -215,9 +219,12 @@ pub fn observed_interface_addresses() -> Vec<IpAddr> {
                 .filter(|interface| !interface.is_loopback())
                 // Cellular carriers also use CGNAT. Only a VPN interface may
                 // supply a Tailnet candidate on Android.
-                .filter(|interface| !cfg!(target_os = "android")
-                    || classify(interface.ip()) != Some(AddressClass::Tailnet)
-                    || interface.name.starts_with("tun") || interface.name == "tailscale0")
+                .filter(|interface| {
+                    !cfg!(target_os = "android")
+                        || classify(interface.ip()) != Some(AddressClass::Tailnet)
+                        || interface.name.starts_with("tun")
+                        || interface.name == "tailscale0"
+                })
                 .map(|interface| interface.ip())
                 .collect()
         },
@@ -290,7 +297,10 @@ mod tests {
         for lan in ["192.168.1.50", "10.10.0.2"] {
             assert_eq!(select_android_address(&[ip(lan), tailnet]), Ok(tailnet));
         }
-        assert_eq!(select_android_address(&[ip("192.168.1.50")]), Ok(ip("192.168.1.50")));
+        assert_eq!(
+            select_android_address(&[ip("192.168.1.50")]),
+            Ok(ip("192.168.1.50"))
+        );
         assert!(select_android_address(&[ip("fe80::1"), ip("127.0.0.1")]).is_err());
     }
 

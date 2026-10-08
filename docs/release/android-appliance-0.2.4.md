@@ -10,8 +10,12 @@ The app now uses the shared overlapping-circle brand mark, adaptive and themed i
 
 - Strict dependency verification and release assembly passed; 198 Android unit tests passed.
 - The minified, non-debuggable release started on a physical Android phone, paired with a Raspberry Pi appliance through Tailscale addresses, selected Pictures using Android's folder permission screen, and transferred files.
-- APK SHA-256: `d6e3cc371bd09927608a6d3b022be69da2632f22f5720198e83c9f5b88900a0d`.
+- Initial physical test APK SHA-256: `d6e3cc371bd09927608a6d3b022be69da2632f22f5720198e83c9f5b88900a0d`.
 - The receiving appliance offered an editable destination folder before acceptance. That appliance implementation is maintained separately in Interlink.
 - Full Pictures completion, whole-folder hash comparison, discovery from the phone, and Wi-Fi-to-cellular handoff remain acceptance checks. This is a test build, not a completed production certification.
 
 No account credentials, signing keys, pairing secrets, or personal photos are included in this change.
+
+## CI follow-up
+
+Paired-device counts use Android plurals, and adaptive icons use the unqualified resource directory supported by the minimum Android version. Rust formatting is normalized. The pinned Alpine Python package and its version assertion move together to 3.12.15-r0 because 3.12.14-r0 is no longer in the repository. Android debug lint and all 198 unit tests pass; the updated package resolves in a disposable pinned Alpine container. Full GitHub CI remains the merge gate.

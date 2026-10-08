@@ -23,6 +23,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -142,7 +143,7 @@ internal fun FolderSyncPairing(manager: EmbeddedNodeManager, onPeersChanged: () 
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(stringResource(R.string.folder_sync_pair_title), fontWeight = FontWeight.SemiBold)
             if (pairedIds.isNotEmpty() && pending.isEmpty()) {
-                Text(stringResource(R.string.folder_sync_devices_paired, pairedIds.size))
+                Text(pluralStringResource(R.plurals.folder_sync_devices_paired, pairedIds.size, pairedIds.size))
                 TextButton(onClick = { expanded = !expanded }) {
                     Text(stringResource(if (expanded) R.string.action_cancel else R.string.folder_sync_connect_another))
                 }

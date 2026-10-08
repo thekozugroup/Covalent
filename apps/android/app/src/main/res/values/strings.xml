@@ -670,7 +670,10 @@
     <string name="folder_sync_show_options">Sync options</string>
     <string name="folder_sync_hide_options">Hide options</string>
     <string name="folder_sync_change_folder">Change folder</string>
-    <string name="folder_sync_devices_paired">%1$d paired devices</string>
+    <plurals name="folder_sync_devices_paired">
+        <item quantity="one">%1$d paired device</item>
+        <item quantity="other">%1$d paired devices</item>
+    </plurals>
     <string name="folder_sync_connect_another">Connect another device</string>
     <string name="folder_sync_tailnet_hint">For syncing away from home, connect both devices to Tailscale and enter the other device’s Tailscale address. Wi-Fi addresses only work on that network.</string>
     <string name="folder_sync_custom_options">Custom deletion rules selected. Review Sync options before sharing.</string>
