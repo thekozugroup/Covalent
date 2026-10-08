@@ -62,7 +62,6 @@
     <string name="folder_sync_no_folder">No folder selected</string>
     <string name="folder_sync_selected_folder">Selected Android folder</string>
     <string name="folder_sync_saf_access_explanation">Covalent opens only folders you choose with Android’s folder picker. You can revoke each folder in Android settings.</string>
-    <string name="folder_sync_use_folder">Use this folder</string>
     <string name="folder_sync_label">Folder name shown to the other device</string>
     <string name="folder_sync_pair_first">Pair another device with this phone before sharing a folder.</string>
     <string name="folder_sync_choose_peer">Share with</string>
