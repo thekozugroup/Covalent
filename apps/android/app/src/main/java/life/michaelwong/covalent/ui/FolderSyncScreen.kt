@@ -1039,7 +1039,7 @@ private fun FolderChooser(
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(stringResource(R.string.folder_sync_choose_folder), fontWeight = FontWeight.SemiBold)
             Text(selected ?: stringResource(R.string.folder_sync_no_folder))
-            Button(onClick = onChoose, enabled = !busy) {
+            Button(onClick = onChoose, enabled = !busy, modifier = Modifier.testTag("folder-sync-choose-folder")) {
                 Text(stringResource(if (selected == null) R.string.folder_sync_choose_folder else R.string.folder_sync_change_folder))
             }
         }

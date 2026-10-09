@@ -926,7 +926,7 @@ class SafFolderSyncJourneyInstrumentedTest {
         val store = SafFolderGrantStore(context)
         val before = store.records().mapTo(mutableSetOf()) { it.id }
         println("COVALENT_SYSTEM_PICKER_REQUEST=$label")
-        clickScreenText(context.getString(R.string.folder_sync_use_folder))
+        clickFolderChooser()
         selectSystemPickerFolder(fixture, folder)
         return awaitValue("$label system folder grant") {
             instrumentation.waitForIdleSync()
@@ -944,7 +944,7 @@ class SafFolderSyncJourneyInstrumentedTest {
     ): SafFolderGrant {
         val store = SafFolderGrantStore(context)
         println("COVALENT_SYSTEM_PICKER_REQUEST=$label")
-        clickScreenText(context.getString(R.string.folder_sync_use_folder))
+        clickFolderChooser()
         selectSystemPickerFolder(fixture, folder)
         return awaitValue("$label restored system folder grant") {
             instrumentation.waitForIdleSync()
@@ -957,6 +957,16 @@ class SafFolderSyncJourneyInstrumentedTest {
                 }
                 ?.also { selectedUris += it.treeUri }
         }.also { assertExactPickerTree(it, fixture, folder) }
+    }
+
+    private fun clickFolderChooser() {
+        val target = compose.onNodeWithTag("folder-sync-choose-folder")
+        compose.onNodeWithTag("folder-sync-list").performScrollToNode(hasTestTag("folder-sync-choose-folder"))
+        target.performScrollTo()
+        compose.waitUntil(timeoutMillis = DEFAULT_TIMEOUT_MILLIS) {
+            runCatching { target.assertIsEnabled(); true }.getOrDefault(false)
+        }
+        target.performClick()
     }
 
     private fun prepareSystemPickerFixture(fixture: String) {

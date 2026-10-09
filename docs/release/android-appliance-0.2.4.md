@@ -19,3 +19,9 @@ No account credentials, signing keys, pairing secrets, or personal photos are in
 ## CI follow-up
 
 Paired-device counts use Android plurals, and adaptive icons use the unqualified resource directory supported by the minimum Android version. Rust formatting is normalized. The pinned Alpine Python package and its version assertion move together to 3.12.15-r0 because 3.12.14-r0 is no longer in the repository. Android debug lint and all 198 unit tests pass; the updated package resolves in a disposable pinned Alpine container. Full GitHub CI remains the merge gate.
+
+## Startup and test repair — 2026-10-09
+
+Android can create the application before its activity is visible, including while the screen is locked after an earlier unlock. Foreground-service denial now defers the provider without erasing its opt-in, credentials, or prior running state. The activity retries on resume. Unrelated storage and permission failures still propagate. Device tests exercise denial followed by a successful retry and propagation of an unrelated failure.
+
+The real SAF folder journey now selects the folder chooser by its semantic tag. It no longer references the removed button string or ambiguously matches the identical heading. Strict release assembly, debug/release lint, all 198 unit tests, and instrumentation compilation pass locally. Physical-device and hosted checks follow publication.

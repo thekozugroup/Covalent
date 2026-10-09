@@ -1,6 +1,7 @@
 package life.michaelwong.covalent.node
 
 import android.Manifest
+import android.app.ForegroundServiceStartNotAllowedException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -8,6 +9,7 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.storage.StorageManager
 import android.util.Base64
+import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import java.io.File
@@ -59,6 +61,20 @@ internal fun folderSyncAccessUnavailable(
 ): Boolean = requested && (
     !safGrantStoreReadable || runCatching(hasPendingCapabilityChange).getOrDefault(true)
 )
+
+/** Android may refuse a background launch even after credential storage is unlocked. */
+internal fun requestProviderForegroundStart(context: Context, intent: Intent): Boolean {
+    try {
+        ContextCompat.startForegroundService(context, intent)
+        return true
+    } catch (failure: IllegalStateException) {
+        if (Build.VERSION.SDK_INT < 31 || failure !is ForegroundServiceStartNotAllowedException) {
+            throw failure
+        }
+        Log.i("CovalentProvider", "Background start deferred until Covalent is visible.")
+        return false
+    }
+}
 
 internal fun completeDeferredFolderSyncStart(
     accessUnavailableAtLaunch: Boolean,
@@ -327,7 +343,7 @@ class EmbeddedNodeManager(context: Context) {
         if (!serviceNeeded()) return
         val intent = Intent(applicationContext, NodeProviderService::class.java)
             .setAction(NodeProviderService.ACTION_REFRESH_ACCESS)
-        ContextCompat.startForegroundService(applicationContext, intent)
+        requestServiceStart(intent)
     }
 
     /** The selected controller mode; external remains the default and fallback. */
@@ -638,7 +654,21 @@ class EmbeddedNodeManager(context: Context) {
     private fun startService() {
         val intent = Intent(applicationContext, NodeProviderService::class.java)
             .setAction(NodeProviderService.ACTION_START)
-        ContextCompat.startForegroundService(applicationContext, intent)
+        requestServiceStart(intent)
+    }
+
+    private fun requestServiceStart(intent: Intent) {
+        if (requestProviderForegroundStart(applicationContext, intent)) return
+        // Keep the opt-in, credentials and prior running state. A denied launch is not
+        // evidence that an existing native process exited. MainActivity retries on resume.
+        val enabled = preferences.getBoolean(KEY_ENABLED, false)
+        publish(
+            enabled = enabled,
+            running = preferences.getBoolean(KEY_RUNNING, false),
+            message = "Open Covalent to resume this phone's sync service.",
+            reservedBytes = if (enabled) preferences.getLong(KEY_MAX_BYTES, DEFAULT_MAX_BYTES) else 0L,
+            availableBytes = availableBytes(),
+        )
     }
 
     /**

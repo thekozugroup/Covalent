@@ -9,6 +9,8 @@ import androidx.activity.viewModels
 import life.michaelwong.covalent.ui.CovalentApp
 import life.michaelwong.covalent.ui.CovalentViewModel
 import life.michaelwong.covalent.ui.theme.CovalentTheme
+import life.michaelwong.covalent.node.DirectBoot
+import life.michaelwong.covalent.node.EmbeddedNodeManager
 
 class MainActivity : ComponentActivity() {
     private val covalentViewModel: CovalentViewModel by viewModels()
@@ -27,6 +29,13 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         readSetupLink(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Application startup can happen in the background, where Android refuses a
+        // foreground-service launch. Retry only after our activity becomes visible.
+        DirectBoot.whenUserUnlocked(this) { EmbeddedNodeManager(this).reconnectIfEnabled() }
     }
 
     /**
