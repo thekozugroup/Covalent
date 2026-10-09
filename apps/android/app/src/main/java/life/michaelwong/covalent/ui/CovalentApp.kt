@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -96,6 +97,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -177,9 +179,11 @@ private const val UI_LOG_TAG = "CovalentUi"
 
 internal enum class Screen { HOME, SETUP, PAIR, FOLDERS, BACKUP, RESTORE, SETTINGS }
 
-internal fun Screen.systemBackTarget(hasBackupConnection: Boolean = true): Screen? = when (this) {
-    Screen.FOLDERS -> if (hasBackupConnection) Screen.HOME else Screen.SETUP
-    Screen.PAIR, Screen.BACKUP, Screen.RESTORE, Screen.SETTINGS -> Screen.HOME
+internal fun Screen.systemBackTarget(hasBackupConnection: Boolean = true, hasFolderConnection: Boolean = false): Screen? = when (this) {
+    Screen.FOLDERS -> if (hasFolderConnection && !hasBackupConnection) null
+        else if (hasBackupConnection) Screen.HOME else Screen.SETUP
+    Screen.PAIR, Screen.BACKUP, Screen.RESTORE, Screen.SETTINGS ->
+        if (hasFolderConnection && !hasBackupConnection) Screen.FOLDERS else Screen.HOME
     Screen.HOME, Screen.SETUP -> null
 }
 
@@ -982,8 +986,9 @@ internal fun CovalentApp(
         snackbar.showSnackbar(notice)
         state.notice = null
     }
-    BackHandler(enabled = state.screen.systemBackTarget(activeConnection != null) != null) {
-        state.screen.systemBackTarget(activeConnection != null)?.let { state.screen = it }
+    val backTarget = state.screen.systemBackTarget(activeConnection != null, embeddedManager.folderSyncRequested())
+    BackHandler(enabled = backTarget != null) {
+        backTarget?.let { state.screen = it }
     }
 
     val compactActions = LocalDensity.current.fontScale >= 1.3f
@@ -991,11 +996,12 @@ internal fun CovalentApp(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.app_name)) },
-                navigationIcon = if (state.screen != Screen.HOME && state.screen != Screen.SETUP) {
+                title = { Text(stringResource(R.string.app_name), fontFamily = FontFamily.Serif,
+                    style = MaterialTheme.typography.headlineSmall) },
+                navigationIcon = if (state.screen !in setOf(Screen.HOME, Screen.SETUP, Screen.FOLDERS)) {
                     {
                         IconButton(onClick = {
-                            state.screen = state.screen.systemBackTarget(activeConnection != null) ?: Screen.HOME
+                            backTarget?.let { state.screen = it }
                         }) {
                             Icon(
                                 Icons.AutoMirrored.Rounded.ArrowBack,
@@ -1003,9 +1009,13 @@ internal fun CovalentApp(
                             )
                         }
                     }
-                } else ({}) ,
+                } else ({
+                    Icon(painterResource(R.drawable.ic_brand_mark), contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(start = 20.dp, end = 12.dp).size(36.dp))
+                }) ,
                 actions = {
-                    if (state.screen == Screen.HOME) {
+                    if (state.screen == Screen.HOME || state.screen == Screen.FOLDERS) {
                         IconButton(onClick = { state.screen = Screen.SETTINGS }) {
                             Icon(Icons.Rounded.Settings, stringResource(R.string.action_settings))
                         }

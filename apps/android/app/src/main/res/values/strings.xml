@@ -50,8 +50,8 @@
     <string name="action_share_invitation">Share invitation</string>
     <string name="action_share_signed_session">Share signed session</string>
     <string name="action_verify">Verify</string>
-    <string name="folder_sync_title">Shared folders</string>
-    <string name="folder_sync_subtitle">Keep one folder in sync with a paired device. You choose the folder and device explicitly.</string>
+    <string name="folder_sync_title">Your links</string>
+    <string name="folder_sync_subtitle">Choose what moves, and where it goes.</string>
     <string name="folder_sync_access_title">Enable shared folders</string>
     <string name="folder_sync_enable">Start folder sync on this phone</string>
     <string name="folder_sync_host_unavailable">Android could not durably enable folder sync.</string>
@@ -71,8 +71,6 @@
     <string name="folder_link_direction">One-way link</string>
     <string name="folder_link_source_folder">Source: This phone · %1$s</string>
     <string name="folder_link_source_this_phone">Source: This phone</string>
-    <string name="folder_link_source_peer">Source: %1$s</string>
-    <string name="folder_link_destination_this_phone">Destination: This phone</string>
     <string name="folder_link_destination_peer">Destination: %1$s</string>
     <string name="folder_link_source_deletions">Delete destination copies when source files are deleted</string>
     <string name="folder_link_source_deletions_detail">Off keeps destination copies. On deletes them when the source files are deleted.</string>
@@ -98,7 +96,7 @@
     <string name="folder_link_settings_pending_error">Another settings change is waiting for the source. Review link status before changing it again.</string>
     <string name="folder_link_settings_conflict_error">Link settings changed on another device. Review the current settings and your attempted settings.</string>
     <string name="folder_link_settings_paused">This whole link is paused.</string>
-    <string name="folder_link_settings_edit">Edit shared settings</string>
+    <string name="folder_link_settings_edit">Settings</string>
     <string name="folder_link_settings_edit_title">Edit settings for %1$s</string>
     <string name="folder_link_settings_save">Save settings</string>
     <string name="folder_link_settings_retry_exact">Retry exact change</string>
@@ -586,7 +584,7 @@
     <string name="setup_backup_section">Legacy backup server</string>
     <string name="setup_show_legacy">Legacy backups and recovery</string>
     <string name="setup_hide_legacy">Hide legacy backup setup</string>
-    <string name="folder_sync_pair_title">Connect another device</string>
+    <string name="folder_sync_pair_title">Pair a device</string>
     <string name="folder_sync_pair_detail">Pair this phone with your Mac, server, or another phone. Compare the code on both devices before confirming.</string>
     <string name="folder_sync_pair_compare">Compare this code on both physical devices. Continue only if every group matches. Pairing copies nothing now; choose a folder separately after pairing.</string>
     <string name="folder_sync_pair_address">Device address</string>
@@ -677,4 +675,12 @@
     <string name="folder_sync_tailnet_hint">For syncing away from home, connect both devices to Tailscale and enter the other device’s Tailscale address. Wi-Fi addresses only work on that network.</string>
     <string name="folder_sync_custom_options">Custom deletion rules selected. Review Sync options before sharing.</string>
     <string name="folder_sync_retry_startup">Retry startup</string>
+    <string name="folder_sync_new_link">New link</string>
+    <string name="folder_link_source_heading">Source</string>
+    <string name="folder_link_destination_heading">Destination</string>
+    <string name="folder_link_remote_destination">Chosen on destination</string>
+    <string name="folder_link_choose_destination">Choose a folder to accept</string>
+    <string name="folder_link_source_folder_heading">Source folder</string>
+    <string name="folder_link_destination_folder">Destination folder</string>
+    <string name="folder_link_details">Details</string>
 </resources>

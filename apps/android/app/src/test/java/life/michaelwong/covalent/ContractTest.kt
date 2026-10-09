@@ -54,6 +54,9 @@ class ContractTest {
         }
         assertEquals(Screen.HOME, Screen.FOLDERS.systemBackTarget(hasBackupConnection = true))
         assertEquals(Screen.SETUP, Screen.FOLDERS.systemBackTarget(hasBackupConnection = false))
+        assertEquals(null, Screen.FOLDERS.systemBackTarget(hasBackupConnection = false, hasFolderConnection = true))
+        assertEquals(Screen.FOLDERS, Screen.SETTINGS.systemBackTarget(hasBackupConnection = false, hasFolderConnection = true))
+        assertEquals(Screen.FOLDERS, Screen.PAIR.systemBackTarget(hasBackupConnection = false, hasFolderConnection = true))
         assertEquals(null, Screen.HOME.systemBackTarget())
         assertEquals(null, Screen.SETUP.systemBackTarget())
     }

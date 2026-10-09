@@ -5,8 +5,8 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
@@ -25,6 +25,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -37,10 +38,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.pluralStringResource
@@ -75,7 +76,6 @@ import life.michaelwong.covalent.model.FolderSyncIssue
 import life.michaelwong.covalent.model.FolderShareSummary
 import life.michaelwong.covalent.model.summaryFor
 import life.michaelwong.covalent.model.NodeConnection
-import life.michaelwong.covalent.model.PrimaryAction
 import life.michaelwong.covalent.node.EmbeddedNodeManager
 import life.michaelwong.covalent.sync.FolderSyncActions
 import life.michaelwong.covalent.sync.FolderSyncGrantStore
@@ -94,6 +94,7 @@ private data class LoadedFolderSyncStatus(
     val retiredFolderChoice: Boolean,
     val savedSettingsChanges: List<SavedFolderLinkSettingsChange>,
     val savedRunRequests: List<SavedFolderLinkRunRequest>,
+    val localFolderNames: Map<String, String>,
 )
 
 private data class LinkSettingsEditor(
@@ -141,6 +142,7 @@ internal fun FolderSyncScreen(
     var selectedFolderLabel by remember { mutableStateOf<String?>(null) }
     var label by remember { mutableStateOf("") }
     var showSyncOptions by remember { mutableStateOf(false) }
+    var creatingLink by rememberSaveable { mutableStateOf(false) }
     var selectedPeer by remember { mutableStateOf<String?>(null) }
     var propagateSourceDeletions by remember { mutableStateOf(false) }
     var restoreLocalDeletions by remember { mutableStateOf(false) }
@@ -153,6 +155,7 @@ internal fun FolderSyncScreen(
     var pendingRepairOffers by remember { mutableStateOf<Set<String>>(emptySet()) }
     var savedSettingsChanges by remember { mutableStateOf<List<SavedFolderLinkSettingsChange>>(emptyList()) }
     var savedRunRequests by remember { mutableStateOf<List<SavedFolderLinkRunRequest>>(emptyList()) }
+    var localFolderNames by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var settingsEditor by remember { mutableStateOf<LinkSettingsEditor?>(null) }
     var settingsConfirmation by remember { mutableStateOf<LinkSettingsEditor?>(null) }
     var addressEditor by remember { mutableStateOf<PeerAddressUpdateDraft?>(null) }
@@ -190,6 +193,12 @@ internal fun FolderSyncScreen(
                 retiredChoice,
                 settingsChanges.records(),
                 settingsChanges.runRecords(),
+                grants.records().mapNotNull { grant ->
+                    val offerId = grant.offerId ?: return@mapNotNull null
+                    val uri = safGrants.records().firstOrNull { it.selectedRoot == grant.root }?.treeUri
+                    val name = uri?.let { runCatching { DocumentFile.fromTreeUri(context, it)?.name }.getOrNull() }
+                    name?.let { offerId to it }
+                }.toMap(),
             )
         }
     }
@@ -199,6 +208,7 @@ internal fun FolderSyncScreen(
         pendingRepairOffers = loaded.pendingRepairOffers
         savedSettingsChanges = loaded.savedSettingsChanges
         savedRunRequests = loaded.savedRunRequests
+        localFolderNames = loaded.localFolderNames
         if (loaded.retiredFolderChoice) selectedFolder = null
         if (
             addressUpdateNotice == addressSavedRefreshNeededMessage ||
@@ -586,7 +596,7 @@ internal fun FolderSyncScreen(
         LazyColumn(
             Modifier.weight(1f).fillMaxWidth().testTag("folder-sync-list"),
             state = listState,
-            contentPadding = PaddingValues(20.dp, 14.dp, 20.dp, 112.dp),
+            contentPadding = PaddingValues(20.dp, 14.dp, 20.dp, 28.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
         item {
@@ -667,19 +677,43 @@ internal fun FolderSyncScreen(
                 }
             }
         }
-        item(key = "phone-pairing") {
-            FolderSyncPairing(manager = manager, onPeersChanged = ::refresh)
-        }
-        item {
-            FolderChooser(
-                selected = selectedFolderLabel,
-                busy = busy,
-                onChoose = { folderPicker.launch(null) },
-            )
-        }
         val snapshot = status
+        val activeShares = snapshot?.shares.orEmpty().filter {
+            it.phase != FolderSharePhase.REMOVED || it.remoteRemovalPending
+        }
+        val needsFolderChoice = snapshot?.issue == FolderSyncIssue.FOLDER_ACCESS ||
+            activeShares.any { it.incoming && it.phase == FolderSharePhase.OFFERED }
+        val choosingDestination = activeShares.any { share ->
+            share.incoming && (share.phase == FolderSharePhase.OFFERED ||
+                snapshot?.folders?.any { it.folderId == share.folderId && it.accessUnavailable } == true)
+        }
+        val showSetup = snapshot != null && (creatingLink || activeShares.isEmpty())
+        if (snapshot != null && activeShares.isNotEmpty()) {
+            item {
+                TextButton(onClick = { creatingLink = !creatingLink }, enabled = !busy,
+                    modifier = Modifier.testTag("folder-sync-new-link")) {
+                    Text(stringResource(if (creatingLink) R.string.action_cancel else R.string.folder_sync_new_link))
+                }
+            }
+        }
+        if (showSetup) {
+            item(key = "phone-pairing") {
+                FolderSyncPairing(manager = manager, onPeersChanged = ::refresh)
+            }
+        }
+        if (showSetup || needsFolderChoice) {
+            item {
+                FolderChooser(
+                    selected = selectedFolderLabel,
+                    busy = busy,
+                    onChoose = { folderPicker.launch(null) },
+                    title = stringResource(if (choosingDestination && !showSetup)
+                        R.string.folder_link_destination_folder else R.string.folder_link_source_folder_heading),
+                )
+            }
+        }
         if (snapshot != null) {
-            if (snapshot.issue != FolderSyncIssue.FOLDER_ACCESS) {
+            if (showSetup && snapshot.issue != FolderSyncIssue.FOLDER_ACCESS) {
                 item {
                     OutlinedTextField(
                         value = label,
@@ -711,7 +745,7 @@ internal fun FolderSyncScreen(
                     ) { Text(stringResource(R.string.action_retry)) }
                 }
             }
-            if (snapshot.issue != FolderSyncIssue.FOLDER_ACCESS) {
+            if (showSetup && snapshot.issue != FolderSyncIssue.FOLDER_ACCESS) {
                 if (snapshot.peers.isEmpty()) {
                     item { Text(stringResource(R.string.folder_sync_pair_first)) }
                 } else {
@@ -833,6 +867,14 @@ internal fun FolderSyncScreen(
                                             )
                                         }
                                     }.onFailure { error = folderSyncErrorText(it) }
+                                        .onSuccess {
+                                            creatingLink = false
+                                            selectedFolder = null
+                                            selectedFolderLabel = null
+                                            selectedPeer = null
+                                            label = ""
+                                            showSyncOptions = false
+                                        }
                                     busy = false
                                     refresh()
                                 }
@@ -841,11 +883,7 @@ internal fun FolderSyncScreen(
                     }
                 }
             }
-            items(snapshot.shares.filter { it.phase != FolderSharePhase.REMOVED || it.remoteRemovalPending }, key = FolderShare::offerId) { share ->
-                val settingsCardOfferId = snapshot.shares.firstOrNull {
-                    it.folderId == share.folderId && it.linkPolicy != null &&
-                        (it.phase != FolderSharePhase.REMOVED || it.remoteRemovalPending)
-                }?.offerId
+            items(activeShares, key = FolderShare::offerId) { share ->
                 FolderShareCard(
                     status = snapshot,
                     share = share,
@@ -855,9 +893,11 @@ internal fun FolderSyncScreen(
                     hasPendingRepair = share.offerId in pendingRepairOffers,
                     busy = busy,
                     addDestination = { destinationSource = share },
-                    showLinkSettings = share.offerId == settingsCardOfferId,
+                    showLinkSettings = true,
+                    settingsApplyToAllDestinations = activeShares.count { it.folderId == share.folderId } > 1,
                     savedSettingsChange = savedSettingsChanges.singleOrNull { it.folderId == share.folderId },
                     savedRunRequest = savedRunRequests.singleOrNull { it.folderId == share.folderId },
+                    localFolderName = localFolderNames[share.offerId],
                     editSettings = { state, policy ->
                         settingsEditor = LinkSettingsEditor(
                             share.folderId,
@@ -917,6 +957,11 @@ internal fun FolderSyncScreen(
                                         else -> throw IllegalArgumentException("unknown action")
                                     }
                                 }
+                            }.onSuccess {
+                                if (action == "accept" || action == "repair") {
+                                    selectedFolder = null
+                                    selectedFolderLabel = null
+                                }
                             }.onFailure { error = folderSyncErrorText(it) }
                             busy = false
                             refresh()
@@ -947,28 +992,18 @@ internal fun FolderSyncScreen(
                                 .onFailure { error = folderSyncErrorText(it) }
                         }
                     },
-                )
-            }
-        }
-        }
-        if (hostRequested) {
-            Box(Modifier.align(Alignment.CenterHorizontally).padding(bottom = 12.dp)) {
-                PrimaryActionToolbar(
-                    enabled = true,
-                    compact = LocalDensity.current.fontScale >= 1.3f,
-                    onAction = { action ->
-                        scope.launch {
-                            // Notices stay in the header, so status, pairing, and chooser remain items 1 through 3.
-                            listState.animateScrollToItem(
-                                when (action) {
-                                    PrimaryAction.PAIR -> 2
-                                    PrimaryAction.LINKS -> 3
-                                },
-                            )
+                    updateAddress = snapshot.peers.firstOrNull { it.peerId == share.peerId }?.address?.let { address ->
+                        {
+                            addressEditor = PeerAddressUpdateDraft(share.peerId,
+                                snapshot.peers.firstOrNull { it.peerId == share.peerId }?.displayName ?: pairedDeviceName,
+                                address)
+                            addressEditorError = null
+                            addressUpdateNotice = null
                         }
                     },
                 )
             }
+        }
         }
     }
     destinationSource?.let { source ->
@@ -1034,10 +1069,11 @@ private fun FolderChooser(
     selected: String?,
     busy: Boolean,
     onChoose: () -> Unit,
+    title: String,
 ) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(stringResource(R.string.folder_sync_choose_folder), fontWeight = FontWeight.SemiBold)
+            Text(title, fontWeight = FontWeight.SemiBold)
             Text(selected ?: stringResource(R.string.folder_sync_no_folder))
             Button(onClick = onChoose, enabled = !busy, modifier = Modifier.testTag("folder-sync-choose-folder")) {
                 Text(stringResource(if (selected == null) R.string.folder_sync_choose_folder else R.string.folder_sync_change_folder))
@@ -1046,6 +1082,7 @@ private fun FolderChooser(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun FolderShareCard(
     status: FolderSyncStatus,
@@ -1064,8 +1101,12 @@ internal fun FolderShareCard(
     mutate: (String) -> Unit,
     runNow: (SavedFolderLinkRunRequest?) -> Unit,
     reviewRun: () -> Unit,
+    updateAddress: (() -> Unit)? = null,
+    localFolderName: String? = null,
+    settingsApplyToAllDestinations: Boolean = false,
 ) {
     var showingRemovalConfirmation by remember(share.offerId) { mutableStateOf(false) }
+    var showingDetails by remember(share.offerId) { mutableStateOf(false) }
     if (showingRemovalConfirmation) {
         AlertDialog(
             onDismissRequest = { showingRemovalConfirmation = false },
@@ -1087,24 +1128,36 @@ internal fun FolderShareCard(
             },
         )
     }
-    Card(Modifier.fillMaxWidth()) {
+    Card(Modifier.fillMaxWidth().testTag("folder-link-card-${share.offerId}")) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(share.label, fontWeight = FontWeight.SemiBold)
-            Text(
-                if (share.incoming) stringResource(R.string.folder_link_source_peer, peerName)
-                else stringResource(R.string.folder_link_source_this_phone),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                if (share.incoming) stringResource(R.string.folder_link_destination_this_phone)
-                else stringResource(R.string.folder_link_destination_peer, peerName),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Text(share.label, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(stringResource(R.string.folder_link_source_heading),
+                        style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(if (share.incoming) peerName else stringResource(R.string.folder_link_this_phone),
+                        fontWeight = FontWeight.Medium)
+                    Text(if (share.incoming) share.label else localFolderName ?: stringResource(R.string.folder_sync_selected_folder),
+                        style = MaterialTheme.typography.bodyMedium)
+                }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(stringResource(R.string.folder_link_destination_heading),
+                        style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(if (share.incoming) stringResource(R.string.folder_link_this_phone) else peerName,
+                        fontWeight = FontWeight.Medium)
+                    Text(if (share.incoming) localFolderName ?: stringResource(R.string.folder_link_choose_destination)
+                        else stringResource(R.string.folder_link_remote_destination),
+                        style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+            HorizontalDivider(Modifier.padding(vertical = 4.dp))
             share.linkPolicy?.let { policy ->
-                Text(stringResource(R.string.folder_link_one_way), fontWeight = FontWeight.SemiBold)
-                LinkPolicySummary(policy)
+                if (showingDetails || policy.propagateSourceDeletions || policy.restoreLocalDeletions) {
+                    Text(stringResource(R.string.folder_link_one_way), fontWeight = FontWeight.SemiBold)
+                    LinkPolicySummary(policy)
+                }
             } ?: Text(stringResource(R.string.folder_link_legacy_two_way), fontWeight = FontWeight.SemiBold)
-            if (!share.incoming && share.linkPolicy != null && share.phase != FolderSharePhase.REMOVED) {
+            if (showingDetails && !share.incoming && share.linkPolicy != null && share.phase != FolderSharePhase.REMOVED) {
                 OutlinedButton(
                     onClick = addDestination,
                     enabled = !busy,
@@ -1114,6 +1167,10 @@ internal fun FolderShareCard(
                 }
             }
             if (showLinkSettings && share.linkPolicy != null) {
+                if (settingsApplyToAllDestinations) {
+                    Text(stringResource(R.string.folder_link_settings_every_destination),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 FolderLinkSettingsSummary(
                     state = share.linkSettings,
                     savedChange = savedSettingsChange,
@@ -1156,6 +1213,14 @@ internal fun FolderShareCard(
                 FolderShareSummary.READY -> stringResource(R.string.folder_link_run_ready)
             }
             Text(summary)
+            TextButton(onClick = { showingDetails = !showingDetails }, enabled = !busy) {
+                Text(stringResource(if (showingDetails) R.string.folder_sync_hide_options else R.string.folder_link_details))
+            }
+            if (showingDetails && updateAddress != null) {
+                TextButton(onClick = updateAddress, enabled = !busy) {
+                    Text(stringResource(R.string.folder_sync_update_address))
+                }
+            }
             if (shareSummary == FolderShareSummary.WAITING_FOR_CONDITIONS) {
                 Text(
                     stringResource(R.string.folder_link_waiting_conditions_detail),
@@ -1191,7 +1256,7 @@ internal fun FolderShareCard(
                     )
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (!folderAccessUnavailable && !share.incoming && share.expired &&
                     share.phase in setOf(FolderSharePhase.OFFERED, FolderSharePhase.PAUSED)
                 ) {
@@ -1331,10 +1396,6 @@ private fun FolderLinkSettingsSummary(
         Text(stringResource(R.string.folder_link_settings_unavailable), color = MaterialTheme.colorScheme.error)
         return
     }
-    Text(
-        stringResource(R.string.folder_link_settings_every_destination),
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
     if (!state.confirmed) {
         Text(stringResource(R.string.folder_link_settings_unconfirmed))
         return
@@ -1377,10 +1438,10 @@ private fun FolderLinkSettingsSummary(
     }
     if (state.settings.paused) Text(stringResource(R.string.folder_link_settings_paused))
     LinkSettingsSummary(state.settings, includePolicy = false)
-    OutlinedButton(
+    TextButton(
         onClick = { edit(state, state.settings.deletionPolicy) },
         enabled = !busy,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.testTag("folder-link-settings"),
     ) { Text(stringResource(R.string.folder_link_settings_edit)) }
 }
 

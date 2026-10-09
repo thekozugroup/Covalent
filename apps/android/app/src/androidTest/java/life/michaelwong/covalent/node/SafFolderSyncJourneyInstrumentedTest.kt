@@ -152,6 +152,7 @@ class SafFolderSyncJourneyInstrumentedTest {
             visibleScreenText(
                 context.getString(R.string.folder_link_destination_peer, "API 37 isolated peer"),
             ).assertIsDisplayed()
+            clickScreenText(context.getString(R.string.folder_sync_show_options))
             visibleScreenText(context.getString(R.string.folder_link_source_deletions_detail)).assertIsDisplayed()
             visibleScreenText(context.getString(R.string.folder_link_destination_deletions_detail)).assertIsDisplayed()
             clickScreenText(context.getString(R.string.folder_link_cadence_manual))

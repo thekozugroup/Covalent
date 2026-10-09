@@ -25,3 +25,9 @@ Paired-device counts use Android plurals, and adaptive icons use the unqualified
 Android can create the application before its activity is visible, including while the screen is locked after an earlier unlock. Foreground-service denial now defers the provider without erasing its opt-in, credentials, or prior running state. The activity retries on resume. Unrelated storage and permission failures still propagate. Device tests exercise denial followed by a successful retry and propagation of an unrelated failure.
 
 The real SAF folder journey now selects the folder chooser by its semantic tag. It no longer references the removed button string or ambiguously matches the identical heading. Strict release assembly, debug/release lint, all 198 unit tests, and instrumentation compilation pass locally. Physical-device and hosted checks follow publication.
+
+## Mobile links view — 2026-10-09
+
+Saved links lead the screen. New link opens pairing, source-folder selection, destination selection and optional controls. Each link card shows source and destination devices, the local folder name, status and settings. A destination's private path remains on that device; the source labels it as chosen on the destination rather than guessing a path. Settings stay available in each destination card, with an explicit notice when they affect multiple destinations of the same source folder.
+
+The main screen uses the shared logo and a serif Covalent wordmark. Back navigation remains on secondary screens and returns to the links screen in folder-only mode. Accepting or repairing a share clears the transient folder choice so the next received share requires a fresh selection. The SAF journey opens advanced options before checking their controls.
