@@ -79,13 +79,13 @@ internal fun requestProviderForegroundStart(context: Context, intent: Intent): B
 internal fun completeDeferredFolderSyncStart(
     accessUnavailableAtLaunch: Boolean,
     registerPersisted: () -> Boolean,
-    replayPendingRepairs: () -> Boolean,
+    replayPendingCapabilityChanges: () -> Boolean,
     retryFolderSync: () -> Unit,
     cleanup: () -> Unit,
 ): Boolean {
     val completed = try {
         registerPersisted() && run {
-            val repaired = replayPendingRepairs()
+            val repaired = replayPendingCapabilityChanges()
             // Recovery-only native runtimes need the service restart before transfers can start.
             if (repaired && !accessUnavailableAtLaunch) retryFolderSync()
             true
@@ -472,8 +472,8 @@ class EmbeddedNodeManager(context: Context) {
                         registerPersisted = {
                             AndroidSafGrantCoordinator.registerPersisted(applicationContext, response.handle)
                         },
-                        replayPendingRepairs = {
-                            replayPendingFolderSyncRepairs(response.apiBaseUrl)
+                        replayPendingCapabilityChanges = {
+                            replayPendingFolderSyncCapabilityChanges(response.apiBaseUrl)
                         },
                         retryFolderSync = {
                             CovalentNodeClient().retryFolderSync(response.apiBaseUrl, localStore.token)
@@ -573,8 +573,8 @@ class EmbeddedNodeManager(context: Context) {
                             registerPersisted = {
                                 AndroidSafGrantCoordinator.registerPersisted(applicationContext, response.handle)
                             },
-                            replayPendingRepairs = {
-                                replayPendingFolderSyncRepairs(response.apiBaseUrl)
+                            replayPendingCapabilityChanges = {
+                                replayPendingFolderSyncCapabilityChanges(response.apiBaseUrl)
                             },
                             retryFolderSync = {
                                 CovalentNodeClient().retryFolderSync(response.apiBaseUrl, localStore.token)
@@ -603,14 +603,14 @@ class EmbeddedNodeManager(context: Context) {
         }
     }
 
-    private fun replayPendingFolderSyncRepairs(baseUrl: String): Boolean = FolderSyncActions(
+    private fun replayPendingFolderSyncCapabilityChanges(baseUrl: String): Boolean = FolderSyncActions(
         grants = FolderSyncGrantStore(applicationContext),
         api = NodeFolderSyncApi(CovalentNodeClient()),
         ensureNodeReady = { NodeConnection(baseUrl, localStore.token) },
         validateRoot = SafFolderGrantStore(applicationContext)::requireSelectedRoot,
         // The service's existing access check restarts once all pending changes are acknowledged.
-        onRepairAcknowledged = {},
-    ).replayPendingRepairs()
+        onCapabilityChangeAcknowledged = {},
+    ).replayPendingCapabilityChanges()
 
     internal fun serviceStop(handle: Long): NativeNodeResponse {
         releaseMulticastLock()

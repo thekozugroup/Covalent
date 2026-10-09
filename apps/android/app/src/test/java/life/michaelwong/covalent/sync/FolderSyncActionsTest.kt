@@ -172,12 +172,12 @@ class FolderSyncActionsTest {
                 assertEquals(NEW_ROOT, it)
                 it
             },
-            onRepairAcknowledged = {},
+            onCapabilityChangeAcknowledged = {},
         )
         assertTrue(completeDeferredFolderSyncStart(
             accessUnavailableAtLaunch = false,
             registerPersisted = { registered = true; true },
-            replayPendingRepairs = startup::replayPendingRepairs,
+            replayPendingCapabilityChanges = startup::replayPendingCapabilityChanges,
             retryFolderSync = {
                 val reopened = FolderSyncGrantStore(disk)
                 assertFalse(reopened.hasPendingCapabilityChange())
@@ -188,7 +188,7 @@ class FolderSyncActionsTest {
         ))
         assertEquals(listOf(Triple(freshConnection, OFFER, NEW_ROOT)), freshApi.repairs)
         assertEquals("retry", events.last())
-        assertTrue(startup.replayPendingRepairs())
+        assertTrue(startup.replayPendingCapabilityChanges())
         assertEquals(1, freshApi.repairs.size)
     }
 
@@ -209,9 +209,9 @@ class FolderSyncActionsTest {
             val startup = FolderSyncActions(
                 grants, api, { CONNECTION },
                 validateRoot = { check(failure != "missing-grant"); it },
-                onRepairAcknowledged = {},
+                onCapabilityChangeAcknowledged = {},
             )
-            assertFalse(startup.replayPendingRepairs())
+            assertFalse(startup.replayPendingCapabilityChanges())
             val reopened = FolderSyncGrantStore(disk)
             assertTrue(reopened.hasPendingCapabilityChange())
             assertEquals(OLD_ROOT, reopened.records().single().root)
@@ -242,7 +242,7 @@ class FolderSyncActionsTest {
             assertTrue(requestEntered.await(5, TimeUnit.SECONDS))
             val startup = executor.submit<Boolean> {
                 replayStarted.countDown()
-                actions(mutableListOf(), FolderSyncGrantStore(disk), startupApi).replayPendingRepairs()
+                actions(mutableListOf(), FolderSyncGrantStore(disk), startupApi).replayPendingCapabilityChanges()
             }
             assertTrue(replayStarted.await(5, TimeUnit.SECONDS))
             acknowledge.countDown()
@@ -267,8 +267,88 @@ class FolderSyncActionsTest {
 
         events.clear()
         actions(events, journal, RecordingApi(events)).remove(OFFER)
-        assertEquals(listOf("prepare-remove", "node", "api-remove", "finish-remove"), events)
+        assertEquals(listOf("prepare-remove", "node", "api-remove", "finish-remove", "restart"), events)
         assertEquals(false, journal.removalPending)
+    }
+
+    @Test
+    fun startupCompletesRemovalInterruptedByTheClosingLocalRuntime() {
+        val disk = MemoryPersistence()
+        val grants = FolderSyncGrantStore(disk)
+        grants.prepareAcceptance(OFFER, OLD_ROOT)
+        val closingApi = RecordingApi(mutableListOf(), failRemove = true)
+        assertThrows(IllegalStateException::class.java) {
+            actions(mutableListOf(), grants, closingApi).remove(OFFER)
+        }
+        assertTrue(FolderSyncGrantStore(disk).records().single().pendingRemoval)
+        val freshConnection = NodeConnection("http://127.0.0.1:8788", "fresh-token")
+        val freshApi = RecordingApi(mutableListOf())
+        val startup = FolderSyncActions(
+            FolderSyncGrantStore(disk), freshApi, { freshConnection },
+            validateRoot = { error("Removal does not require access to the old folder.") },
+            onCapabilityChangeAcknowledged = {},
+        )
+        assertTrue(startup.replayPendingCapabilityChanges())
+        assertEquals(listOf(freshConnection to OFFER), freshApi.removals)
+        assertTrue(FolderSyncGrantStore(disk).records().isEmpty())
+        assertTrue(startup.replayPendingCapabilityChanges())
+        assertEquals(1, freshApi.removals.size)
+    }
+
+    @Test
+    fun removalReplayRetainsTheTombstoneUntilExactAcknowledgementIsDurable() {
+        for (failure in listOf("wrong-offer", "network", "save")) {
+            val disk = MemoryPersistence()
+            val grants = FolderSyncGrantStore(disk)
+            grants.prepareAcceptance(OFFER, OLD_ROOT)
+            grants.prepareRemoval(OFFER)
+            val api = RecordingApi(
+                mutableListOf(), failRemove = failure == "network",
+                responseOffer = if (failure == "wrong-offer") OTHER_OFFER else OFFER,
+            )
+            disk.failWrites = failure == "save"
+            assertFalse(actions(mutableListOf(), grants, api).replayPendingCapabilityChanges())
+            assertEquals(listOf(CONNECTION to OFFER), api.removals)
+            assertTrue(FolderSyncGrantStore(disk).records().single().pendingRemoval)
+            disk.failWrites = false
+            assertTrue(actions(mutableListOf(), grants, RecordingApi(mutableListOf())).replayPendingCapabilityChanges())
+            assertTrue(FolderSyncGrantStore(disk).records().isEmpty())
+        }
+    }
+
+    @Test
+    fun startupDoesNotReplayAnInteractiveRemovalWhoseAcknowledgementIsInFlight() {
+        val disk = MemoryPersistence()
+        val grants = FolderSyncGrantStore(disk)
+        grants.prepareAcceptance(OFFER, OLD_ROOT)
+        val requestEntered = CountDownLatch(1)
+        val acknowledge = CountDownLatch(1)
+        val replayStarted = CountDownLatch(1)
+        val interactiveApi = RecordingApi(mutableListOf(), beforeRemoveReply = {
+            requestEntered.countDown()
+            check(acknowledge.await(5, TimeUnit.SECONDS))
+        })
+        val startupApi = RecordingApi(mutableListOf())
+        val executor = Executors.newFixedThreadPool(2)
+        try {
+            val interactive = executor.submit<FolderSyncMutation> {
+                actions(mutableListOf(), grants, interactiveApi).remove(OFFER)
+            }
+            assertTrue(requestEntered.await(5, TimeUnit.SECONDS))
+            val startup = executor.submit<Boolean> {
+                replayStarted.countDown()
+                actions(mutableListOf(), FolderSyncGrantStore(disk), startupApi).replayPendingCapabilityChanges()
+            }
+            assertTrue(replayStarted.await(5, TimeUnit.SECONDS))
+            acknowledge.countDown()
+            assertEquals(OFFER, interactive.get(5, TimeUnit.SECONDS).offerId)
+            assertTrue(startup.get(5, TimeUnit.SECONDS))
+            assertTrue(startupApi.removals.isEmpty())
+            assertTrue(FolderSyncGrantStore(disk).records().isEmpty())
+        } finally {
+            acknowledge.countDown()
+            executor.shutdownNow()
+        }
     }
 
     @Test
@@ -338,7 +418,7 @@ class FolderSyncActionsTest {
             events += "validate-root"
             normalizeRoot(it)
         },
-        onRepairAcknowledged = { events += "restart" },
+        onCapabilityChangeAcknowledged = { events += "restart" },
     )
 
     private class MemoryPersistence : FolderSyncGrantPersistence {
@@ -410,8 +490,11 @@ class FolderSyncActionsTest {
         private val responseStatus: FolderSyncStatus = STATUS,
         private val addressResponseOffer: String? = null,
         private val beforeRepairReply: () -> Unit = {},
+        private val failRemove: Boolean = false,
+        private val beforeRemoveReply: () -> Unit = {},
     ) : FolderSyncApi {
         val repairs = mutableListOf<Triple<NodeConnection, String, String>>()
+        val removals = mutableListOf<Pair<NodeConnection, String>>()
         var offeredRoot: String? = null
             private set
         var offeredPolicy: FolderLinkPolicy? = null
@@ -471,6 +554,9 @@ class FolderSyncActionsTest {
         }
         override fun remove(connection: NodeConnection, offerId: String): FolderSyncMutation {
             events += "api-remove"
+            removals += connection to offerId
+            if (failRemove) error("closing runtime")
+            beforeRemoveReply()
             return mutation(responseOffer)
         }
         override fun repair(connection: NodeConnection, offerId: String, selectedRoot: String): FolderSyncMutation {

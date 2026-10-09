@@ -12,7 +12,7 @@ internal class FolderSyncActions(
     private val api: FolderSyncApi,
     private val ensureNodeReady: () -> NodeConnection,
     private val validateRoot: (String) -> String,
-    private val onRepairAcknowledged: () -> Unit,
+    private val onCapabilityChangeAcknowledged: () -> Unit,
 ) {
     fun offer(
         peerId: String,
@@ -79,29 +79,33 @@ internal class FolderSyncActions(
         return mutation
     }
 
-    fun repair(offerId: String, root: String): FolderSyncMutation = synchronized(REPAIR_LOCK) {
+    fun repair(offerId: String, root: String): FolderSyncMutation = synchronized(CAPABILITY_CHANGE_LOCK) {
         val selectedRoot = validateRoot(root)
         grants.prepareRepair(offerId, selectedRoot)
         api.repair(ensureNodeReady(), offerId, selectedRoot).also { mutation ->
             requireMutationOffer(mutation, offerId)
             grants.finishRepair(offerId, selectedRoot)
-            onRepairAcknowledged()
+            onCapabilityChangeAcknowledged()
         }
     }
 
-    fun retryRepair(offerId: String): FolderSyncMutation = synchronized(REPAIR_LOCK) {
+    fun retryRepair(offerId: String): FolderSyncMutation = synchronized(CAPABILITY_CHANGE_LOCK) {
         repair(
             offerId,
             checkNotNull(grants.pendingRepairRoot(offerId)) { "There is no saved folder repair to retry." },
         )
     }
 
-    /** Replays exact saved choices after grant registration, before deferred transfers start. */
-    fun replayPendingRepairs(): Boolean = synchronized(REPAIR_LOCK) {
+    /** Replays exact saved repairs/removals before deferred transfers start. */
+    fun replayPendingCapabilityChanges(): Boolean = synchronized(CAPABILITY_CHANGE_LOCK) {
         grants.records().forEach { grant ->
             val root = grant.pendingRoot
             val offerId = grant.offerId
-            if (root != null && offerId != null && !grant.pendingRemoval) {
+            if (offerId != null && grant.pendingRemoval) {
+                // Removal needs the authenticated offer ID, even if its old folder grant is gone.
+                // A closing private API or uncertain save leaves this tombstone available to retry.
+                runCatching { remove(offerId) }
+            } else if (root != null && offerId != null) {
                 // A failed or uncertain acknowledgement leaves the saved choice available to retry.
                 runCatching { repair(offerId, root) }
             }
@@ -109,11 +113,12 @@ internal class FolderSyncActions(
         grants.records().none { it.pendingRoot != null || it.pendingRemoval }
     }
 
-    fun remove(offerId: String): FolderSyncMutation {
+    fun remove(offerId: String): FolderSyncMutation = synchronized(CAPABILITY_CHANGE_LOCK) {
         grants.prepareRemoval(offerId)
-        return api.remove(ensureNodeReady(), offerId).also { mutation ->
+        api.remove(ensureNodeReady(), offerId).also { mutation ->
             requireMutationOffer(mutation, offerId)
             grants.finishRemoval(offerId)
+            onCapabilityChangeAcknowledged()
         }
     }
 
@@ -129,7 +134,7 @@ internal class FolderSyncActions(
     }
 
     private companion object {
-        // Startup replay must not resubmit a repair whose interactive acknowledgement is in flight.
-        val REPAIR_LOCK = Any()
+        // Startup replay must not resubmit a capability change whose acknowledgement is in flight.
+        val CAPABILITY_CHANGE_LOCK = Any()
     }
 }

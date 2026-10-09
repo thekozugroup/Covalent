@@ -16,7 +16,7 @@ class FolderSyncLifecycleContractTest {
                     successfulEvents += "register"
                     true
                 },
-                replayPendingRepairs = {
+                replayPendingCapabilityChanges = {
                     successfulEvents += "repair"
                     true
                 },
@@ -34,7 +34,7 @@ class FolderSyncLifecycleContractTest {
                     registrationFailureEvents += "register"
                     false
                 },
-                replayPendingRepairs = {
+                replayPendingCapabilityChanges = {
                     registrationFailureEvents += "repair"
                     true
                 },
@@ -52,7 +52,7 @@ class FolderSyncLifecycleContractTest {
                     registrationExceptionEvents += "register"
                     error("grant registration failed")
                 },
-                replayPendingRepairs = {
+                replayPendingCapabilityChanges = {
                     registrationExceptionEvents += "repair"
                     true
                 },
@@ -70,7 +70,7 @@ class FolderSyncLifecycleContractTest {
                     retryFailureEvents += "register"
                     true
                 },
-                replayPendingRepairs = {
+                replayPendingCapabilityChanges = {
                     retryFailureEvents += "repair"
                     true
                 },
@@ -92,7 +92,7 @@ class FolderSyncLifecycleContractTest {
         assertTrue(completeDeferredFolderSyncStart(
             accessUnavailableAtLaunch = accessUnavailable,
             registerPersisted = { events += "register"; true },
-            replayPendingRepairs = { accessUnavailable = false; events += "repair"; true },
+            replayPendingCapabilityChanges = { accessUnavailable = false; events += "repair"; true },
             retryFolderSync = { error("recovery-only runtime rejects transfer startup") },
             cleanup = { error("recovery API must survive for the service restart") },
         ))
@@ -108,7 +108,7 @@ class FolderSyncLifecycleContractTest {
             completeDeferredFolderSyncStart(
                 accessUnavailableAtLaunch = false,
                 registerPersisted = { events += "register"; true },
-                replayPendingRepairs = { events += "repair-pending"; false },
+                replayPendingCapabilityChanges = { events += "repair-pending"; false },
                 retryFolderSync = { events += "retry" },
                 cleanup = { events += "cleanup" },
             ),
@@ -120,7 +120,7 @@ class FolderSyncLifecycleContractTest {
             completeDeferredFolderSyncStart(
                 accessUnavailableAtLaunch = false,
                 registerPersisted = { events += "register"; true },
-                replayPendingRepairs = { error("unreadable grant journal") },
+                replayPendingCapabilityChanges = { error("unreadable grant journal") },
                 retryFolderSync = { events += "retry" },
                 cleanup = { events += "cleanup" },
             ),
