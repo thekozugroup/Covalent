@@ -33,6 +33,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.lifecycle.SavedStateHandle
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.espresso.Espresso.pressBack
 import life.michaelwong.covalent.ui.CovalentApp
 import life.michaelwong.covalent.ui.ConnectionHealth
 import life.michaelwong.covalent.ui.CovalentViewModel
@@ -90,8 +91,9 @@ class CovalentAppTest {
 
         compose.onNodeWithText("Welcome to Covalent").assertIsDisplayed()
         compose.onNodeWithTag("setup.folderSync").assertIsDisplayed().performClick()
-        compose.onNodeWithText("Shared folders").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Back").performClick()
+        compose.onNodeWithText("Your links").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Back").assertDoesNotExist()
+        pressBack()
         compose.onNodeWithText("Welcome to Covalent").assertIsDisplayed()
         compose.onNodeWithText("Server access token").performScrollTo().assertIsDisplayed()
         compose.runOnIdle {
